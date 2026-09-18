@@ -15,7 +15,9 @@ from .prior_output_support import (
 )
 from .prior_output_contracts import _resolve_upstream_analysis_method
 from ..reporting.publication_bundles import (
-    _explicit_false_figure_value, _sensitivity_plot_label, _truthy_figure_value,
+    explicit_false_figure_value as _explicit_false_figure_value,
+    sensitivity_plot_label as _sensitivity_plot_label,
+    truthy_figure_value as _truthy_figure_value,
 )
 
 

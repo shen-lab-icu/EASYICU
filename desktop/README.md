@@ -26,31 +26,79 @@ validation and regulatory process establishes a broader claim.
 
 Requirements for the build machine only:
 
-- macOS 12+
+- macOS 14+ on Apple Silicon (the minimum is set in `tauri.conf.json` to match
+  the locked NumPy/SciPy binaries)
 - Rust/Cargo
 - Node 22.19+
-- Python 3.10+
+- Python 3.11 (the Python library itself continues to support Python 3.10+)
 
 Run:
 
 ```bash
 cd desktop
-python3 scripts/build_macos.py
+python3.11 scripts/build_macos.py
 ```
 
-The build script creates an isolated build venv, installs the exact locked Pi
-runtime, freezes FastAPI and its Python runtime as an installed onedir runtime
+The build script creates an isolated build venv, installs hash-checked Python
+dependencies from `requirements-macos-arm64-py311.lock`, installs EasyICU as a
+wheel, and installs the locked Pi runtime into that installed package. It then
+freezes FastAPI and its Python runtime as an installed onedir runtime
 with PyInstaller, bundles Node, then builds both `EasyICU.app` and a DMG. The
 installed runtime avoids decompressing hundreds of megabytes on every launch.
 End users do not need Python, Node, Git, or the EasyICU source tree.
 
-Local builds receive an ad-hoc signature and are suitable for internal testing.
+Build from a clean Git checkout. The backend freezes the installed package;
+it does not add the source checkout to PyInstaller's import path. Build inputs
+(commit, dirty flag, Python/Node versions, and dependency lock hashes) are
+recorded in `.build/build-inputs.json`. Keep that receipt with the artifacts.
+
+Build caches can be kept outside a synchronized Documents checkout:
+
+```bash
+EASYICU_DESKTOP_BUILD_DIR="$TMPDIR/easyicu-build" \
+CARGO_TARGET_DIR="$TMPDIR/easyicu-cargo-target" \
+python3.11 desktop/scripts/build_macos.py
+```
+
+With these overrides, `build-inputs.json` is in `EASYICU_DESKTOP_BUILD_DIR`
+and the DMG is in `CARGO_TARGET_DIR/release/bundle/dmg/`. Copy the receipt and
+final DMG to a retained release directory before the temporary area is cleared.
+
+## Updating Python dependencies
+
+The committed lock is for macOS arm64 / Python 3.11 only. Its initial runtime
+pins were seeded from the existing product development environment. Installing
+the lock checks the distribution hashes; `pip check` then verifies the installed
+dependency relationships. A lock update still requires packaging and user-flow
+validation before release.
+
+From the repository root, using uv:
+
+```bash
+uv pip compile pyproject.toml desktop/build-requirements.in \
+  --extra webapp --python-version 3.11 --python-platform aarch64-apple-darwin \
+  --generate-hashes --no-emit-package easyicu \
+  --output-file desktop/requirements-macos-arm64-py311.lock
+```
+
+Existing pins are retained unless an upgrade is requested. Review intentional
+updates with `--upgrade-package <name>` and commit the resulting lock. Node uses
+the two committed `package-lock.json` files, and Rust uses `Cargo.lock`. Build
+tools are maintainer dependencies; they are not required on an end user's Mac.
+
+## Distribution
+
+The app inside a locally built DMG receives an ad-hoc signature and is suitable
+for internal testing. The Tauri target `.app` is an intermediate; distribute the
+DMG. Its payload is copied into the system temporary directory before metadata
+cleanup and signing, because File Provider can restore Finder metadata inside
+a Documents checkout. Source files are untouched.
 Public distribution requires an Apple Developer ID, hardened-runtime signing,
 and notarization; set `APPLE_SIGNING_IDENTITY` and use the standard Tauri/Apple
 release credentials when producing a public release.
 
 ## Current platform boundary
 
-This branch produces and verifies the macOS Apple Silicon distribution. The
+The build target is macOS Apple Silicon. The
 Tauri shell and Python entry point are platform-neutral, but Windows artifacts
 must be built and tested on Windows before they are claimed as supported.

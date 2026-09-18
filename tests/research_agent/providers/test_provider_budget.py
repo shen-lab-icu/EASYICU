@@ -456,12 +456,12 @@ def test_schema_v6_initial_generation_loads_into_generation_ledger(tmp_path):
 def test_cohort_translation_budget_owner_is_structural_not_prose_routed():
     cohort_only = SimpleNamespace(
         step_id="01_cohort",
-        expected_outputs=["table:analysis_cohort"],
+        expected_outputs=["table:analysis_cohort"], icu_rule_refs=[],
         intent="Any prose is irrelevant to budget ownership.",
     )
     model = SimpleNamespace(
         step_id="02_model",
-        expected_outputs=["table:effect_estimates"],
+        expected_outputs=["table:effect_estimates"], icu_rule_refs=[],
         intent="cohort cohort cohort",
     )
     assert (
@@ -473,7 +473,7 @@ def test_cohort_translation_budget_owner_is_structural_not_prose_routed():
 
     host_cohort_with_flow = SimpleNamespace(
         step_id="01_host_cohort_with_flow",
-        expected_outputs=["artifact:analysis_cohort", "table:cohort_flow"],
+        expected_outputs=["artifact:analysis_cohort", "table:cohort_flow"], icu_rule_refs=[],
         intent="Materialize the selected cohort and exact attrition ledger.",
     )
     assert (
@@ -485,7 +485,7 @@ def test_cohort_translation_budget_owner_is_structural_not_prose_routed():
 
     mixed = SimpleNamespace(
         step_id="01_mixed",
-        expected_outputs=["table:analysis_cohort", "table:cohort_flow"],
+        expected_outputs=["table:analysis_cohort", "table:cohort_flow"], icu_rule_refs=[],
         intent="Define the cohort.",
     )
     assert (

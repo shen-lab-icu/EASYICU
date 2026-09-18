@@ -16,9 +16,18 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from easyicu.outcome_availability import (
+    OUTCOME_CONCEPT_SUPPORTED_DATABASES,
+    OutcomeConceptUnavailability,
+    structural_outcome_unavailability,
+)
+
+if TYPE_CHECKING:
+    from .schema import ConceptDescriptor
 
 PUBLIC_DATABASES = ("mimic", "miiv", "eicu", "aumc", "hirid", "sic")
 
@@ -106,16 +115,20 @@ def concept_database_availability_from_load_record(
     """Map a runtime load availability record onto the RA availability model."""
 
     reason = str(record.reason)
-    status = str(record.status)
-    structural = reason in {"unmapped", "source_unavailable"}
+    prohibition = structural_outcome_unavailability(
+        normalize_concept_name(str(record.concept)),
+        normalize_database_name(str(record.database)),
+    )
+    status = "blocked" if prohibition else str(record.status)
+    structural = prohibition is not None or reason in {"unmapped", "source_unavailable"}
     return ConceptDatabaseAvailability(
         concept=str(record.concept),
         requested_concept=str(requested_concept or record.concept),
         database=str(record.database),
         status=status,
         available=status != "blocked",
-        direct_source=reason in {"mapped_present", "data_missing"},
-        reason=reason,
+        direct_source=prohibition is None and reason in {"mapped_present", "data_missing"},
+        reason=prohibition.reason_code if prohibition else reason,
         runtime_reason=reason,
         source_missing_tables=list(getattr(record, "missing_tables", ()) or ()),
         structural_unavailable=structural,
@@ -179,12 +192,73 @@ class RealDataConceptFeasibility(BaseModel):
 
 def normalize_database_name(database: str) -> str:
     key = (database or "").strip().lower().replace("_", "-")
-    return _DATABASE_ALIASES.get(key, key)
+    demo = key.endswith("-demo")
+    base = key.removesuffix("-demo") if demo else key
+    canonical = _DATABASE_ALIASES.get(base, base)
+    return canonical + ("_demo" if demo else "")
 
 
 def normalize_concept_name(concept: str) -> str:
     key = (concept or "").strip().lower().replace(" ", "_")
     return _CONCEPT_ALIASES.get(key, key)
+
+
+def variable_source_unavailability(
+    variable: ConceptDescriptor,
+    database: str,
+) -> tuple[OutcomeConceptUnavailability, ...]:
+    """Project known source prohibitions, never infer them from observed values.
+
+    Unknown local concepts are outside the extraction registry's authority.
+    Renaming or deriving a column does not erase its declared source lineage.
+    ``source_databases`` lists possible mappings, not the actual study source.
+    """
+
+    sources = dict.fromkeys(
+        normalize_concept_name(value)
+        for value in (
+            variable.source_concept or variable.name,
+            *variable.derived_from_concepts,
+        )
+        if value
+    )
+    return tuple(
+        receipt for concept in sources
+        if (receipt := structural_outcome_unavailability(
+            concept, normalize_database_name(database),
+        )) is not None
+    )
+
+
+class ConceptSourceUnavailableError(ValueError):
+    """A physical input whose clinical source is explicitly unsupported."""
+
+    def __init__(
+        self, column: str, receipts: tuple[OutcomeConceptUnavailability, ...],
+    ) -> None:
+        self.column = column
+        self.receipts = receipts
+        reasons = "; ".join(
+            f"{item.reason_code}: {item.concept_id} on {item.database}"
+            for item in receipts
+        )
+        super().__init__(
+            f"Input {column!r} is structurally unavailable ({reasons}). "
+            "Physical presence and nonmissing values do not establish a valid "
+            "clinical source. Omit optional unsupported inputs from a fresh "
+            "plan; a required endpoint or exposure needs source-owner support, "
+            "not an automatic substitute."
+        )
+
+
+def require_supported_variable_source(
+    variable: ConceptDescriptor, database: str,
+) -> None:
+    """Shared fail-closed boundary for planning and executable raw inputs."""
+
+    receipts = variable_source_unavailability(variable, database)
+    if receipts:
+        raise ConceptSourceUnavailableError(variable.name, receipts)
 
 
 def default_public_databases() -> List[str]:
@@ -447,9 +521,21 @@ def _explain_concept_availability_cached(
     from easyicu.resources import load_data_sources, load_dictionary
 
     db = normalize_database_name(database)
+    canonical = normalize_concept_name(concept)
+    if canonical in OUTCOME_CONCEPT_SUPPORTED_DATABASES:
+        unavailable = structural_outcome_unavailability(canonical, db)
+        return ConceptDatabaseAvailability(
+            concept=canonical,
+            requested_concept=requested_concept,
+            database=db,
+            status="blocked" if unavailable else "full",
+            available=unavailable is None,
+            direct_source=False,
+            reason=(unavailable.reason_code if unavailable else "derived_outcome_supported"),
+            structural_unavailable=unavailable is not None,
+        )
     dictionary = load_dictionary(include_sofa2=True)
     registry = load_data_sources()
-    canonical = normalize_concept_name(concept)
     definition = dictionary.get(canonical)
     if definition is None:
         return ConceptDatabaseAvailability(
@@ -1031,6 +1117,7 @@ def _missingness_severity(fraction_missing: float) -> Literal["low", "medium", "
 
 __all__ = [
     "ConceptDatabaseAvailability",
+    "ConceptSourceUnavailableError",
     "PUBLIC_DATABASES",
     "RealDataConceptFeasibility",
     "concept_database_availability_from_load_record",
@@ -1041,4 +1128,6 @@ __all__ = [
     "normalize_concept_name",
     "normalize_database_name",
     "real_data_concept_feasibility",
+    "require_supported_variable_source",
+    "variable_source_unavailability",
 ]

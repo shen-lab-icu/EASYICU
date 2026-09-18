@@ -55,6 +55,7 @@ from ..schema import (
     PlannedModelRequirement,
     TableOneSpec,
     TableOneVariableSpec,
+    TrajectoryStabilitySpec,
 )
 from ..research_context.prompt_variables import opaque_level_tokens
 
@@ -156,6 +157,65 @@ def _artifact_consumption_transport_schema(
             ),
         ]
     }
+
+
+_TRAJECTORY_STABILITY_TRANSPORT_FIELDS = (
+    "n_resamples",
+    "sample_fraction",
+    "sample_size",
+    "minimum_mean_stability",
+    "base_seed",
+    "refit_max_iter",
+    "refit_tolerance",
+    "refit_regularization",
+)
+_TRAJECTORY_STABILITY_NULLABLE_OVERRIDE_FIELDS = (
+    "base_seed",
+    "refit_max_iter",
+    "refit_tolerance",
+    "refit_regularization",
+)
+
+
+def _trajectory_stability_transport_schema(
+    definition: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Expose only the stability decisions and overrides the Planner owns.
+
+    The authority model records the other fields as closed v1 constants or
+    derived values.  The wire contract omits those fields, and Pydantic restores
+    them after decoding, so the model neither repeats nor misspells a value it
+    has no authority to choose.
+    """
+
+    properties = definition.get("properties")
+    if not isinstance(properties, dict):
+        raise PlannerStructuredOutputSchemaError(
+            "TrajectoryStabilitySpec properties are unavailable"
+        )
+    excluded = set(properties) - set(_TRAJECTORY_STABILITY_TRANSPORT_FIELDS)
+    required_excluded = {
+        field
+        for field in excluded
+        if TrajectoryStabilitySpec.model_fields[field].is_required()
+    }
+    if required_excluded:
+        raise PlannerStructuredOutputSchemaError(
+            "TrajectoryStabilitySpec gained host-unfilled required fields: "
+            f"{sorted(required_excluded)}"
+        )
+
+    transport: Dict[str, Any] = {}
+    for field in _TRAJECTORY_STABILITY_TRANSPORT_FIELDS:
+        if field not in properties:
+            raise PlannerStructuredOutputSchemaError(
+                f"TrajectoryStabilitySpec transport field is missing: {field}"
+            )
+        field_schema = copy.deepcopy(properties[field])
+        if field in _TRAJECTORY_STABILITY_NULLABLE_OVERRIDE_FIELDS:
+            field_schema = {"anyOf": [field_schema, {"type": "null"}]}
+        transport[field] = field_schema
+    return _closed_object_schema(transport)
 
 
 def _literature_design_binding_transport_schema(
@@ -302,6 +362,17 @@ def _share_planner_transport_shapes(schema: Dict[str, Any]) -> Dict[str, Any]:
         "JsonScalar": _json_scalar_schema(),
         "NullableText": _nullable_string_schema(),
         "NullableTextList": _nullable_string_list_schema(),
+        "ReaderText": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 1200,
+        },
+        "NullableReaderText": {
+            "anyOf": [
+                {"type": "string", "maxLength": 1200},
+                {"type": "null"},
+            ]
+        },
     }
     used: set[str] = set()
 
@@ -446,6 +517,11 @@ def _planner_transport_schema(
         definitions["ArtifactConsumptionContract"] = (
             _artifact_consumption_transport_schema(
                 definitions["ArtifactConsumptionContract"]
+            )
+        )
+        definitions["TrajectoryStabilitySpec"] = (
+            _trajectory_stability_transport_schema(
+                definitions["TrajectoryStabilitySpec"]
             )
         )
         if allowed_literature_citation_keys is not None:
@@ -678,6 +754,9 @@ def decode_planner_transport_payload(data: Mapping[str, Any]) -> Dict[str, Any]:
         for raw_step in raw_steps:
             if not isinstance(raw_step, dict):
                 continue
+            stability_spec = raw_step.get("trajectory_stability_spec")
+            if isinstance(stability_spec, dict):
+                _decode_trajectory_stability_decisions(stability_spec)
             requirements = raw_step.get("model_requirements")
             if isinstance(requirements, list):
                 for requirement in requirements:
@@ -732,6 +811,14 @@ def _decode_model_covariate_decisions(requirement: Dict[str, Any]) -> None:
                 raise PlannerStructuredOutputSchemaError(f"{field} repeats key {key!r}")
             values[key] = row["value"]
         requirement[field] = values
+
+
+def _decode_trajectory_stability_decisions(spec: Dict[str, Any]) -> None:
+    """Drop null override placeholders so the authority defaults are applied."""
+
+    for field in _TRAJECTORY_STABILITY_NULLABLE_OVERRIDE_FIELDS:
+        if spec.get(field) is None:
+            spec.pop(field, None)
 
 
 def planner_descriptive_method_guidance(analysis_type: str) -> str:
@@ -886,6 +973,7 @@ def bind_literature_citation_authority(
     *,
     direct_comparator_keys: Sequence[str] = (),
     required_method_layers: Sequence[str] = (),
+    include_examples: bool = True,
 ) -> str:
     """Append role-bound LiteratureBundle authority to the Planner profile.
 
@@ -893,6 +981,11 @@ def bind_literature_citation_authority(
     to know which source supports which methodological decision, and which
     retrieved records survived the direct-comparator screen.  This projection
     is deliberately assembled by the host from the sealed pre-plan bundle.
+
+    ``include_examples=False`` drops only the illustrative schema-valid
+    binding JSON, for strict-transport requests where the enforced schema
+    already carries that shape; the keys, roles, method cards and every
+    binding requirement stay.
     """
 
     if not allowed_keys:
@@ -987,7 +1080,11 @@ def bind_literature_citation_authority(
                 ensure_ascii=False,
                 sort_keys=True,
             )
-            + "\n- Minimal schema-valid examples by required layer (copy only "
+            if required_binding_options
+            else ""
+        )
+        + (
+            "\n- Minimal schema-valid examples by required layer (copy only "
             "the layers that truly govern a scientific estimator; support "
             "steps remain auxiliary): "
             + json.dumps(
@@ -995,7 +1092,7 @@ def bind_literature_citation_authority(
                 ensure_ascii=False,
                 sort_keys=True,
             )
-            if required_binding_options
+            if required_binding_options and include_examples
             else ""
         )
     )

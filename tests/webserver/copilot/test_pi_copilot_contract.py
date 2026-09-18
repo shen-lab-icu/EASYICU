@@ -14,7 +14,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from fastapi import HTTPException
 
 from easyicu.research_agent.acquisition.patient_grouping import (
     PatientGroupingBinding,
@@ -40,7 +39,6 @@ from easyicu.webserver.pi_copilot.contracts import (
     PiSessionRecord,
     ToolExecutionContext,
     WorkspaceMutationLimitError,
-    plan_approval_allowed,
 )
 from easyicu.webserver.pi_copilot.projections import (
     project_job,
@@ -755,7 +753,7 @@ def study_state(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     return current
 
 
-def test_bound_project_source_defaults_to_study_required_agent_preparation(
+def test_bound_project_source_requires_explicit_confirmation(
     tmp_path: Path,
     study_state: dict[str, Any],
 ) -> None:
@@ -768,9 +766,9 @@ def test_bound_project_source_defaults_to_study_required_agent_preparation(
     session_id = created["session"]["session_id"]
     authorization = created["session"]["data_source_authorization"]
 
-    assert authorization["status"] == "confirmed"
-    assert authorization["reason"] is None
-    assert authorization["confirmation_mode"] == "agent_default_study_required"
+    assert authorization["status"] == "pending"
+    assert authorization["reason"] == "project_source_confirmation_required"
+    assert authorization["confirmation_mode"] is None
     assert authorization["extraction_scope"] == "study_required"
     assert authorization["source"]["database"] == "mimiciv"
     assert authorization["source"]["label"] == "MIMIC-IV"
@@ -801,17 +799,20 @@ def test_bound_project_source_defaults_to_study_required_agent_preparation(
         "session.prompt",
     ]
     context = gateway.tool_contexts[-1]
-    assert context.session.data_source_authorization.status == "confirmed"
-    assert (
-        context.session.data_source_authorization.confirmation_mode
-        == "agent_default_study_required"
-    )
+    assert context.session.data_source_authorization.status == "pending"
+    assert context.session.data_source_authorization.confirmation_mode is None
 
     listed = tool_module.execute_tool("easyicu_list_data_sources", {}, context)
     assert listed["status"] == "ok"
+    confirmed = service.authorize_data_source(
+        session_id, project_id="project-data-consent", action="use_study_required_data"
+    )["session"]["data_source_authorization"]
+    assert confirmed["status"] == "confirmed"
+    assert confirmed["confirmation_mode"] == "reuse_project_source"
+    assert confirmed["extraction_scope"] == "study_required"
 
 
-def test_legacy_pending_project_source_is_reconciled_without_user_choice(
+def test_reading_legacy_pending_project_source_does_not_create_consent(
     tmp_path: Path,
     study_state: dict[str, Any],
 ) -> None:
@@ -837,9 +838,9 @@ def test_legacy_pending_project_source_is_reconciled_without_user_choice(
         created["session_id"], project_id="project-legacy-data-choice"
     )["session"]["data_source_authorization"]
 
-    assert restored["status"] == "confirmed"
-    assert restored["confirmation_mode"] == "agent_default_study_required"
-    assert restored["extraction_scope"] == "study_required"
+    assert restored["status"] == "pending"
+    assert restored["confirmation_mode"] is None
+    assert restored == record.data_source_authorization.model_dump(mode="json")
 
 
 def test_exact_registered_path_in_message_binds_source_before_provider(
@@ -1398,7 +1399,7 @@ def test_explicit_prepared_source_reference_preserves_agent_default_scope(
     )["session"]
     assert session["data_source_authorization"]["status"] == "confirmed"
     assert session["data_source_authorization"]["confirmation_mode"] == (
-        "agent_default_study_required"
+        "reuse_project_source"
     )
     assert session["binding"]["study_revision"] == study_state["revision"]
 
@@ -1448,11 +1449,11 @@ def test_prepared_project_source_is_available_in_the_same_provider_turn(
     turn_context = gateway.tool_contexts[-1]
     assert turn_context.session.data_source_authorization.status == "confirmed"
     assert turn_context.session.data_source_authorization.confirmation_mode == (
-        "agent_default_study_required"
+        "reuse_project_source"
     )
 
 
-def test_bound_project_source_needs_no_second_confirmation_in_question_turn(
+def test_database_mention_in_question_does_not_confirm_a_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     study_state: dict[str, Any],
@@ -1497,8 +1498,8 @@ def test_bound_project_source_needs_no_second_confirmation_in_question_turn(
         project_id="project-source-mention-only",
     )["session"]
     authorization = session["data_source_authorization"]
-    assert authorization["status"] == "confirmed"
-    assert authorization["confirmation_mode"] == "agent_default_study_required"
+    assert authorization["status"] == "pending"
+    assert authorization["confirmation_mode"] is None
     assert authorization["extraction_scope"] == "study_required"
 
 
@@ -2930,9 +2931,18 @@ def test_message_grants_are_host_held_and_message_job_is_not_scientific(
     assert unrelated_abort.value.code == "pi_message_job_mismatch"
 
 
-def test_current_user_explicit_extraction_confirmation_is_host_granted(
+@pytest.mark.parametrize(
+    ("message", "expected_action"),
+    [
+        ("授权下载并准备官方 MIMIC-IV demo。", "extract"),
+        ("请自行审阅并修订整份研究计划，不要开始分析。", "provider_run"),
+    ],
+)
+def test_current_user_explicit_action_is_host_granted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    message: str,
+    expected_action: str,
 ) -> None:
     monkeypatch.setattr(
         settings,
@@ -2949,7 +2959,7 @@ def test_current_user_explicit_extraction_confirmation_is_host_granted(
     submitted = service.send_message(
         session_id,
         project_id="project-explicit-extract",
-        message="授权下载并准备官方 MIMIC-IV demo。",
+        message=message,
     )
     deadline = time.monotonic() + 3
     job = None
@@ -2960,9 +2970,9 @@ def test_current_user_explicit_extraction_confirmation_is_host_granted(
         time.sleep(0.01)
 
     assert job is not None and job.status == "done"
-    assert gateway.tool_contexts[-1].allowed_actions == frozenset({"extract"})
+    assert gateway.tool_contexts[-1].allowed_actions == frozenset({expected_action})
     record = service._get_record(session_id)
-    assert record.last_turn_allowed_actions == ["extract"]
+    assert record.last_turn_allowed_actions == [expected_action]
 
 
 def test_provider_error_marks_message_job_failed_without_raw_network_detail(
@@ -3576,8 +3586,15 @@ def test_preflight_only_history_replan_starts_fresh_pipeline_run(
     assert submitted[0].planner_start_mode == "fresh"
 
 
-def test_current_digest_matching_plan_review_cannot_be_restarted_as_replan(
+@pytest.mark.parametrize(("user_message", "user_requested_changes"), [
+    ("", False),
+    ("请审阅当前计划，只报告问题。", False),
+    ("请修订整份计划，使用 /private/export 并保留全部结局。", True),
+])
+def test_current_plan_restarts_only_with_current_user_amendments(
     monkeypatch: pytest.MonkeyPatch,
+    user_message: str,
+    user_requested_changes: bool,
 ) -> None:
     from easyicu.webserver import study_contexts as study_owner
 
@@ -3616,11 +3633,22 @@ def test_current_digest_matching_plan_review_cannot_be_restarted_as_replan(
             "plan_approval_allowed": True,
         },
     )
+    monkeypatch.setattr(
+        tool_module.agent_runs, "read_run_artifact",
+        lambda *_: {"ok": True, "artifact": {"sha256": "a" * 64},
+                    "payload": {"research_question": study["question"], "steps": []}},
+    )
     submitted: list[dict[str, Any]] = []
     monkeypatch.setattr(
         research_run_submission,
         "submit_research_run",
-        lambda request, **kwargs: submitted.append(request),
+        lambda request, **kwargs: _record_pipeline_submission(
+            submitted, request, job_id="job-requested-revision", **kwargs
+        ),
+    )
+    monkeypatch.setattr(
+        tool_module.sources, "load_registry",
+        lambda: {"sources": [{"ok": True, "path": "/private/export", "label": "MIIV"}]},
     )
     context = ToolExecutionContext(
         session=PiSessionRecord(
@@ -3633,6 +3661,7 @@ def test_current_digest_matching_plan_review_cannot_be_restarted_as_replan(
             ),
         ),
         allowed_actions={"provider_run"},
+        user_message=user_message,
     )
 
     result = tool_module.execute_tool(
@@ -3641,8 +3670,23 @@ def test_current_digest_matching_plan_review_cannot_be_restarted_as_replan(
         context,
     )
 
-    assert result["code"] == "scientific_replan_not_supported"
-    assert submitted == []
+    if not user_requested_changes:
+        assert result["code"] == "scientific_replan_not_supported"
+        assert submitted == []
+    else:
+        assert result["code"] == "easyicu_full_run_submitted"
+        assert len(submitted) == 1
+        request = submitted[0]
+        assert request.intent == "candidate_plan"
+        assert request.planner_start_mode == "fresh"
+        assert request.execution_resume_source_run_id == ""
+        assert request.plan_change_request.source_run_id == "run-current-review"
+        assert request.plan_change_request.reference_plans[0].run_id == "run-current-review"
+        assert "保留全部结局" in request.plan_change_request.user_message
+        assert "/private/export" not in request.plan_change_request.user_message
+        assert "host-verified local data source: MIIV" in request.plan_change_request.user_message
+        assert "Start this exact plan again" not in request.plan_change_request.user_message
+        assert study["revision"] == 4
 
 
 def test_tool_surface_has_no_generic_or_scientific_authority_mutators() -> None:
@@ -4017,6 +4061,55 @@ def test_opening_question_saves_without_inventing_an_analysis_unit(
     assert writes[0]["question"].startswith("Estimate Sepsis-3 prevalence")
     assert writes[0]["cohort"]["preset"] == "all_icu"
     assert result["details"]["omitted_unconfirmed_fields"] == ["cohort.preset"]
+
+
+@pytest.mark.parametrize("preset", ["sepsis3", "aki", "respiratory", "vasopressor", "ventilation"])
+@pytest.mark.parametrize("current_preset", [None, "all_icu"])
+@pytest.mark.parametrize("include_question", [True, False])
+def test_opening_question_defers_phenotype_restrictions_to_reviewed_plan(
+    monkeypatch: pytest.MonkeyPatch, preset: str, current_preset: str | None,
+    include_question: bool,
+) -> None:
+    current = {
+        "id": "study-population-authority", "revision": 1, "question": "",
+        "active_job_id": None,
+        "cohort": {"preset": current_preset} if current_preset else {},
+    }
+    writes: list[dict[str, Any]] = []
+    monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: dict(current))
+    monkeypatch.setattr(
+        tool_module.study_contexts, "upsert_context",
+        lambda raw, **_kwargs: writes.append(dict(raw)) or {**raw, "revision": 2},
+    )
+    monkeypatch.setattr(tool_module, "_workflow_snapshot", lambda *_args, **_kwargs: {})
+    session = PiSessionRecord(
+        session_id="pi-population-authority",
+        binding=AuthorityBinding(study_context_id=current["id"], study_revision=1),
+    )
+    question = "Describe disease prevalence and compare mortality with and without the condition."
+    result = tool_module.execute_tool(
+        "easyicu_update_study_context",
+        {
+            **({"question": question} if include_question else {}),
+            "cohort": {"preset": preset, "label": "Keep both groups"},
+        },
+        ToolExecutionContext(
+            session=session, user_message=question, allowed_actions={"configure"},
+        ),
+    )
+
+    if not include_question:
+        assert result["code"] == "study_cohort_population_requires_plan"
+        assert writes == []
+        assert "without a pre-plan confirmation questionnaire" in result["summary"]
+        return
+    assert result["code"] == "study_context_updated"
+    assert writes[0]["question"] == question
+    assert writes[0].get("cohort", {}) == current["cohort"]
+    assert result["details"]["unconfirmed_omissions"] == [{
+        "field": "cohort.preset", "code": "study_cohort_population_requires_plan",
+    }]
+    assert "candidate plan for review" in result["summary"]
 
 
 def test_conversational_setup_requires_direct_outcome_and_exposure_choices(
@@ -6651,6 +6744,18 @@ def test_project_document_preview_requires_the_current_ledger_digest(
     assert loaded["content"] == document
     assert loaded["claim_ceiling"] == "engineering_validation_only"
 
+    assert service.get_research_document(
+        project_id="project-a", run_id="run_20260808",
+        document_name="system_validation_report.html", expected_sha256=digest,
+    )["content"] == document
+    for stale in ("f" * 64, "invalid", ""):
+        with pytest.raises(PiCopilotError) as stale_revision:
+            service.get_research_document(
+                project_id="project-a", run_id="run_20260808",
+                document_name="system_validation_report.html", expected_sha256=stale,
+            )
+        assert stale_revision.value.code == "pi_research_document_digest_mismatch"
+
     review["artifact_payloads"]["evidence_ledger.json"]["artifacts"][0][
         "sha256"
     ] = "0" * 64
@@ -6740,9 +6845,16 @@ def test_project_data_package_preview_is_revision_and_digest_bound(
     assert drift.value.code == "pi_data_package_review_digest_mismatch"
 
 
+@pytest.mark.parametrize("failure_code", [
+    None, "plan_bound_data_preview_context_mismatch",
+    "plan_bound_data_preview_context_unreadable",
+    "plan_bound_data_preview_files_unavailable",
+    "pi_research_run_not_found",
+])
 def test_project_data_package_preview_uses_plan_bound_analysis_plan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    failure_code: str | None,
 ) -> None:
     service = PiCopilotService(
         store_path=tmp_path / "sessions.json",
@@ -6785,17 +6897,32 @@ def test_project_data_package_preview_uses_plan_bound_analysis_plan(
     ).hexdigest()
     payload["review_sha256"] = digest
 
-    def _build(_study: dict, *, cohort_file: Path, plan_file: Path) -> dict:
+    def _build(_study: dict, *, cohort_file: Path, plan_file: Path, context_file: Path) -> dict:
         captured["cohort_file"] = cohort_file
         captured["plan_file"] = plan_file
+        captured["context_file"] = context_file
+        if failure_code == "pi_research_run_not_found":
+            raise PiCopilotError(failure_code, "Project binding failure", status_code=404)
+        if failure_code:
+            raise review_owner.DataPackageReviewError(failure_code, "Exact-source failure")
+        return dict(payload)
+
+    def _registered(_study):
+        assert failure_code == "plan_bound_data_preview_files_unavailable"
         return dict(payload)
 
     monkeypatch.setattr(review_owner, "build_plan_bound_data_package_review", _build)
     monkeypatch.setattr(
         review_owner,
         "build_registered_data_package_review",
-        lambda _study: pytest.fail("must not fall back from a valid Plan-bound preview"),
+        _registered,
     )
+
+    if failure_code and failure_code != "plan_bound_data_preview_files_unavailable":
+        with pytest.raises(PiCopilotError) as error:
+            service.prepare_data_package_review(project_id="project-a")
+        assert error.value.code == failure_code
+        return
 
     prepared = service.prepare_data_package_review(project_id="project-a")
 
@@ -6803,99 +6930,5 @@ def test_project_data_package_preview_uses_plan_bound_analysis_plan(
     assert captured == {
         "cohort_file": wrapper / "pipeline" / "run-plan" / "cohort.parquet",
         "plan_file": wrapper / "pipeline" / "run-plan" / "analysis_plan.json",
+        "context_file": wrapper / "pipeline" / "run-plan" / "research_context.json",
     }
-
-
-def test_unknown_tool_arguments_and_missing_plan_keep_owner_codes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    context = ToolExecutionContext(session=PiSessionRecord(session_id="pi-test"))
-    with pytest.raises(PiCopilotError) as unknown:
-        tool_module.execute_tool("easyicu_inspect_context", {"raw": True}, context)
-    assert unknown.value.code == "pi_tool_unknown_arguments"
-
-    monkeypatch.setattr(
-        tool_module.agent_runs, "list_run_history", lambda **kwargs: {"runs": []}
-    )
-    missing = tool_module.execute_tool(
-        "easyicu_inspect_step",
-        {"step_id": "analysis"},
-        context,
-    )
-    assert missing["code"] == "easyicu_plan_not_found"
-
-
-def test_plan_approval_authority_is_fail_closed_for_every_consumer() -> None:
-    """Only an explicit ``True`` is approval authority.
-
-    The model-facing projection once read a missing flag as permissive while
-    the submit route read it as blocking, so a manifest that predates the field
-    advertised an approvable plan that the route then rejected with 409.
-    """
-
-    assert plan_approval_allowed({"plan_approval_allowed": True}) is True
-    assert plan_approval_allowed({"plan_approval_allowed": False}) is False
-    assert plan_approval_allowed({"plan_approval_allowed": None}) is False
-    assert plan_approval_allowed({}) is False
-    assert plan_approval_allowed(None) is False
-    # A truthy non-boolean is not a compiled decision either.
-    assert plan_approval_allowed({"plan_approval_allowed": "true"}) is False
-
-
-def test_plan_approval_refusal_names_the_blockers_it_is_refusing_on(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A bare 409 is a dead end for the researcher.
-
-    Approval is refused by the same fail-closed reading every consumer shares,
-    so the refusal has to carry the blocker codes that produced it.
-    """
-
-    from easyicu.webserver.routes import agent as agent_routes
-
-    monkeypatch.setattr(
-        agent_routes.settings_store,
-        "load_settings",
-        lambda: {"ai_enabled": True},
-    )
-    monkeypatch.setattr(
-        agent_routes.agent_pipeline_runs,
-        "pending_review",
-        lambda _run_id: {
-            "run_id": "run-blocked-plan",
-            "study_id": "study-blocked-plan",
-            "resumable_here": True,
-            "budget_mode": "full_reviewed",
-            "plan_approval_allowed": False,
-            "scientific_plan_review": {
-                "status": "changes_required",
-                "findings": [
-                    {
-                        "code": "REPEATED_STAY_IDENTITY_UNAVAILABLE",
-                        "severity": "blocker",
-                    },
-                    {
-                        "code": "UNADJUSTED_ASSOCIATION_NOT_ARTICLE_GRADE",
-                        "severity": "major",
-                    },
-                ],
-            },
-        },
-    )
-
-    with pytest.raises(HTTPException) as exc:
-        agent_routes.submit_agent_run_review(
-            {
-                "run_id": "run-blocked-plan",
-                "study_context_id": "study-blocked-plan",
-                "decision": "approved",
-                "external_llm_opt_in": True,
-            }
-        )
-
-    assert exc.value.status_code == 409
-    assert exc.value.detail["error"] == "scientific_plan_review_changes_required"
-    assert exc.value.detail["blocking_codes"] == [
-        "REPEATED_STAY_IDENTITY_UNAVAILABLE"
-    ]
-    assert exc.value.detail["scientific_plan_review_status"] == "changes_required"

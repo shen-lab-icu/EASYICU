@@ -21,8 +21,10 @@ from ..repairs.source import (
     deterministic_contract_repair,
 )
 from ..repairs.attempt_record import record_deterministic_runner_repair_attempt
+from ..repairs.runner_dispatch import mark_semantic_stub_injection
 from .code_hygiene import reorder_forward_references
 from .failure_classification import classify_runtime_failure
+from ..contracts.retry_policy import repair_route_for
 from .concept_audit import ConceptQuarantineState
 from .concept_repair import MAX_DETERMINISTIC_CONCEPT_REPAIRS
 from ..authority.plausibility import StepPlausibilityAuthority
@@ -839,6 +841,7 @@ def _candidate_execute_transition(
         attempt.step_attempt_state.selected_resume_capsule
         if (
             custom_runner_replay_allowed
+            and not attempt.step_record.get("explicit_failed_execution_retry")
             and not attempt.step_attempt_state.capsule_execution_replay_consumed
             and attempt.step_attempt_state.selected_resume_capsule is not None
             and attempt.step_attempt_state.selected_resume_capsule.capsule.execution
@@ -848,6 +851,10 @@ def _candidate_execute_transition(
         )
         else None
     )
+    if attempt.step_record.get("explicit_failed_execution_retry"):
+        attempt.step_record["step_authority_execution_cache_miss"] = (
+            "explicit_failed_execution_retry"
+        )
     if not custom_runner_replay_allowed:
         attempt.step_record["step_authority_execution_cache_miss"] = (
             "custom_runner_authority_unbound"
@@ -1654,6 +1661,7 @@ def _candidate_contract_setup_transition(
         step_summary=state.visual_step_summary,
         completed_step_records=completed_records_snapshot,
         resolved_input_bindings=attempt.resolved_input_bindings,
+        semantic_stub_injected=attempt.step_record.get("semantic_stub_injected"),
         effect_output_is_authorized=effect_output_authorized(
             attempt.step,
             step_record=attempt.step_record,
@@ -1944,6 +1952,9 @@ def _candidate_contract_repair_transition(
             attempt.step_record["runner_repair"] = (
                 attempt.worker_progress.runner_repair_name
             )
+            mark_semantic_stub_injection(
+                attempt.step_record, attempt.worker_progress.runner_repair_name
+            )
             attempt.step_record["code_repair_attempts"] = (
                 attempt.worker_progress.repair_attempts
             )
@@ -2233,6 +2244,9 @@ def _candidate_summary_transition(
         attempt.step_record["runner_repair"] = (
             attempt.worker_progress.runner_repair_name
         )
+        mark_semantic_stub_injection(
+            attempt.step_record, attempt.worker_progress.runner_repair_name
+        )
         host._record_repair(
             repair_id=attempt.worker_progress.runner_repair_name,
             step_id=attempt.step.step_id,
@@ -2279,8 +2293,14 @@ def _candidate_failure_transition(
         run_log = (
             (state.run_result.stdout or "") + "\n" + (state.run_result.stderr or "")
         )
-    if attempt.is_trajectory_stability_standard:
-        # A timeout can interrupt the standard executor between its
+    if (
+        attempt.worker_progress.deterministic_standard_executor_used
+        and attempt.sealed_renderer_authorized_code_sha256 is None
+    ):
+        # Fixed native code must fail at its owner boundary. Letting Coder
+        # replace an imported helper would still label the repaired script as
+        # deterministic_standard and grant it the original trust path.
+        # A timeout can interrupt a standard executor between its
         # private streaming write and atomic rename.  That file is an
         # implementation detail, not a diagnostic product, and must
         # be gone before the generic output-directory scan below can
@@ -2288,12 +2308,8 @@ def _candidate_failure_transition(
         host._remove_standard_executor_pending_artifacts(state.run_result.out_dir)
         state.standard_executor_terminal_block = True
         state.standard_executor_terminal_reason = "executor_runtime_failure"
-        # This branch is already terminal and already spends no repair,
-        # so it is safe. It is not diagnosable: the executor with the
-        # largest wall clock in the pipeline reports the same generic
-        # reason whether it raised in its first second or was killed an
-        # hour in. Name the timeout in the vocabulary generated code
-        # already uses, and leave the terminal decision above untouched.
+        # Distinguish wall-clock termination from an implementation failure
+        # while retaining the same terminal decision for fixed executors.
         #
         # Only the timeout class is adopted. The classifier also reads a
         # plan/data contract failure out of the log text, and this
@@ -2329,6 +2345,17 @@ def _candidate_failure_transition(
         runner_failure_code=state.run_result.runner_failure_code,
     )
     if runtime_failure is not None:
+        # C-F13: the central retry-policy table governs this branch, not a
+        # local copy of the rules. Unknown classes fail closed loudly instead
+        # of silently taking the fail-closed return path.
+        _route = repair_route_for(
+            str(runtime_failure.step_updates.get("runtime_failure_class") or "")
+        )
+        if _route != "fail_closed":
+            raise RuntimeError(
+                f"retry-policy route {_route!r} has no loop implementation; "
+                "failing closed instead of silently repairing"
+            )
         attempt.step_record.update(runtime_failure.step_updates)
         with host.shared_lock:
             host.findings.append(runtime_failure.finding)
@@ -2447,6 +2474,9 @@ def _candidate_failure_transition(
         attempt.worker_progress.runner_repair_name, state.code = runner_repair
         attempt.step_record["runner_repair"] = (
             attempt.worker_progress.runner_repair_name
+        )
+        mark_semantic_stub_injection(
+            attempt.step_record, attempt.worker_progress.runner_repair_name
         )
         host._record_repair(
             repair_id=attempt.worker_progress.runner_repair_name,

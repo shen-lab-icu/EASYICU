@@ -509,16 +509,16 @@ def write_report(
         "# 顶层机制一致性 QC 报告",
         "",
         f"- 样本策略：每个数据库 `sample_strategy='first'`，`max_patients={sample_size}`。",
-        "- 覆盖数据库：AUMC、eICU、MIMIC-III、MIMIC-IV、HiRID、SICdb。",
-        "- 覆盖概念：PEEP、潮气量、FiO2、呼吸机频率、气道压力、分钟通气量、RRT、尿量、呼吸频率、SpO2。",
+        f"- 覆盖数据库：{', '.join(readiness['dataset'].astype(str))}。",
+        f"- 覆盖概念：{', '.join(qc['concept'].drop_duplicates().astype(str))}。",
         "",
         "## 结论",
         "",
-        "1. 6 个本地数据库 converter readiness 均为 `ready=True`，本轮没有发现缺失或损坏的 parquet 输出。",
-        "2. 13 个顶层概念在所有数据库的合并输出 schema 中均稳定保留；不支持或样本无事件时保留空列。",
-        "3. HiRID 缺少 `minute_vol` 字典来源，SICdb 缺少 `plateau_pres` 字典来源；HiRID/SICdb 也不应强行进入 ECMO/MCS 机制层。",
-        "4. eICU、MIMIC-IV、SICdb、AUMC 小样本中的部分压力/分钟通气/RRT 概念无非空值；全库原始源项复核显示这些映射有数据，当前结果应解释为样本稀疏，不是列丢失。",
-        "5. MIMIC-III CareVue FiO2 的 0.21-1.00 fraction 编码已统一转换为 21-100 percent scale；`VALUEUOM='torr'` 是该源项的原始标注异常，不再作为数据质量警告。",
+        f"1. Converter readiness：{int(readiness['ready'].eq(True).sum())}/{len(readiness)} 个数据库为 `ready=True`。",
+        f"2. 本轮记录 {len(qc)} 个数据库-概念检查项，错误或输出列缺失 {len(errors)} 项；具体状态见下表。",
+        f"3. 字典不支持 {len(unsupported)} 项，逐项列于字典不支持表。",
+        f"4. 支持但 smoke 样本无非空值 {len(absent)} 项；本轮样本上限为 {sample_size}，未据此推断全库有无事件。",
+        f"5. 本轮记录数据质量 UserWarning {len(data_warnings)} 条；本报告不替代单位换算和全库源项的独立复核。",
         "",
         "## 图表",
         "",
@@ -542,7 +542,7 @@ def write_report(
         "",
         absent.to_markdown(index=False) if not absent.empty else "无。",
         "",
-        "复核说明：AUMC RRT、eICU PIP/MAP/minute ventilation/RRT、MIMIC-IV RRT、SICdb MAP/RRT 在全库原始源项中均有记录；本表中的 `0 rows` 来自 `max_patients=10` 的 smoke cohort 稀疏性。",
+        f"复核说明：本表只反映 `max_patients={sample_size}` 的 smoke 提取；无非空值的原因尚需结合源项与采样核查。",
         "",
         "## 错误或列缺失",
         "",
@@ -610,14 +610,14 @@ def main() -> int:
     support.to_csv(out_dir / "crossdb_top_level_support_matrix.csv", index=False)
 
     if args.skip_smoke:
-        smoke = pd.DataFrame()
-        warnings_df = pd.DataFrame()
         qc = support.copy()
         qc["qc_status"] = np.where(
             qc["dictionary_supported"],
             "supported_not_smoke_checked",
             "unsupported_by_dictionary",
         )
+        qc.to_csv(out_dir / "crossdb_top_level_qc_status.csv", index=False)
+        return 0
     else:
         smoke, warnings_df = run_smoke_extraction(args.sample_size)
         qc = merge_qc_status(support, smoke)

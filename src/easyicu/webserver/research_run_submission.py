@@ -13,7 +13,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, Literal, Mapping, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from easyicu.webserver import agent_pipeline_runs
 from easyicu.webserver import agent_runs
@@ -23,6 +23,7 @@ from easyicu.webserver import jobs as job_store
 from easyicu.webserver import provider_adapter
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver import study_contexts as context_store
+from easyicu.webserver.plan_change_request import PlanChangeRequest
 from easyicu.webserver.pi_copilot.contracts import PiCopilotError
 from easyicu.webserver.pi_copilot.provider_config import PiProviderConfigStore
 from easyicu.webserver.pi_copilot.run_authority import (
@@ -31,6 +32,8 @@ from easyicu.webserver.pi_copilot.run_authority import (
     resumable_planner_checkpoint_job_id,
 )
 from easyicu.webserver.pi_copilot.workflow import build_research_workflow_snapshot
+from easyicu.webserver.research_launch_resume import _development_resume_launch_scope
+from easyicu.webserver.research_plan_revision import load_prepared_plan_revision
 
 
 _DEVELOPMENT_REVIEWED_EXECUTION_ENV = "EASYICU_DEVELOPMENT_REVIEWED_EXECUTION"
@@ -47,6 +50,16 @@ _NEXT_STEP_SUMMARIES = {
     "no_export_files": (
         "The bound directory has no readable EasyICU export files. Prepare the "
         "package before planning."
+    ),
+    "research_pipeline_manifest_invalid": (
+        "The bound EasyICU export package exists but cannot establish intake "
+        "authority, so retrying this submission will fail identically. This is "
+        "not a permission problem and the user's folder does not need to be "
+        "re-picked: read details.intake_error_code and details.intake_error_message "
+        "for the specific contract the manifest misses, then run "
+        "easyicu_start_extraction to prepare a current package from the source "
+        "database. A package written before the current manifest contract stays "
+        "unusable no matter how often it is retried."
     ),
     "planner_checkpoint_not_available": (
         "The unchanged study has no validated Planner checkpoint to continue. "
@@ -71,8 +84,30 @@ class ResearchRunSubmissionRequest(BaseModel):
     planner_start_mode: PlannerStartMode = "auto"
     plan_revision_source_run_id: str = ""
     execution_resume_source_run_id: str = ""
+    report_only: bool = False
     literature_search_authorized: bool = False
     compute_target: Literal["local"] = "local"
+    plan_change_request: Optional[PlanChangeRequest] = None
+
+    @model_validator(mode="after")
+    def _amendments_require_fresh_candidate(self) -> "ResearchRunSubmissionRequest":
+        if self.report_only and (
+            self.intent != "reviewed_analysis"
+            or self.planner_start_mode != "auto"
+            or not self.execution_resume_source_run_id.strip()
+            or self.plan_revision_source_run_id
+            or self.plan_change_request is not None
+            or self.literature_search_authorized
+        ):
+            raise ValueError("report_only_requires_exact_completed_run")
+        if self.plan_change_request is not None and (
+            self.intent != "candidate_plan"
+            or self.planner_start_mode != "fresh"
+            or self.plan_revision_source_run_id
+            or self.execution_resume_source_run_id
+        ):
+            raise ValueError("plan_changes_require_fresh_candidate")
+        return self
 
 
 class ResearchRunSubmissionReceipt(BaseModel):
@@ -341,6 +376,8 @@ def submit_research_run(
         }
         if literature_search_authorized:
             runner_kwargs["literature_search_authorized"] = True
+        if request.plan_change_request is not None:
+            runner_kwargs["plan_change_request"] = request.plan_change_request
         planner_start_mode = request.planner_start_mode
         plan_revision_source_run_id = request.plan_revision_source_run_id.strip()
         execution_resume_source_run_id = request.execution_resume_source_run_id.strip()
@@ -357,6 +394,15 @@ def submit_research_run(
             _reject({"error": "planner_checkpoint_resume_coordinate_conflict"})
         if plan_revision_source_run_id:
             runner_kwargs["plan_revision_source_run_id"] = plan_revision_source_run_id
+            revision = load_prepared_plan_revision(
+                study=study_context, project_root=project_root,
+                source_run_id=plan_revision_source_run_id,
+            )
+            if revision is not None:
+                # Restore the selected prepared launch scope, not authority
+                # from a neighbouring export or an older plan's approval.
+                budget_mode = revision.budget_mode
+                runner_kwargs["budget_mode"] = budget_mode
         if execution_resume_source_run_id:
             runner_kwargs["execution_resume_source_run_id"] = (
                 execution_resume_source_run_id
@@ -364,6 +410,7 @@ def submit_research_run(
         if (
             not development_resume_source_job_id
             and not execution_resume_source_run_id
+            and not plan_revision_source_run_id
             and planner_start_mode != "fresh"
         ):
             development_resume_source_job_id = resumable_planner_checkpoint_job_id(
@@ -381,15 +428,35 @@ def submit_research_run(
         ):
             _reject({"error": "planner_checkpoint_not_available"})
         if development_resume_source_job_id:
+            resume_scope = _development_resume_launch_scope(
+                project_root=project_root,
+                study=study_context,
+                source_job_id=development_resume_source_job_id,
+            )
+            budget_mode = resume_scope.budget_mode
+            if budget_mode == "full_reviewed" and prepared_manifest is None:
+                dataio.validate_research_pipeline_source(path, database=database)
+            runner_kwargs["budget_mode"] = budget_mode
             runner_kwargs["development_resume_source_job_id"] = (
                 development_resume_source_job_id
             )
-        base_runner = agent_pipeline_runs.make_research_pipeline_run_runner(
-            **runner_kwargs
-        )
+        if request.report_only:
+            from easyicu.webserver.manuscript_repair import make_report_only_run_runner
+            from easyicu.research_agent.reporting.writer_only_migration import WriterOnlyMigrationError
+
+            try:
+                base_runner = make_report_only_run_runner(**runner_kwargs)
+            except WriterOnlyMigrationError as exc:
+                _reject({"error": exc.code, "message": "The sealed report inputs did not pass validation; the original analysis was preserved."})
+        else:
+            base_runner = agent_pipeline_runs.make_research_pipeline_run_runner(
+                **runner_kwargs
+            )
     except agent_runs.AgentRunConfigError as exc:
         raise ResearchRunSubmissionError(exc.detail) from exc
     except context_store.StudyContextError as exc:
+        raise ResearchRunSubmissionError(exc.detail) from exc
+    except dataio.ExportCohortError as exc:
         raise ResearchRunSubmissionError(exc.detail) from exc
     except PiCopilotError as exc:
         raise ResearchRunSubmissionError(exc.detail) from exc

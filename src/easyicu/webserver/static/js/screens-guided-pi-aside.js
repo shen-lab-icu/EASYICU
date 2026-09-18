@@ -1,6 +1,6 @@
 /* Guided Copilot workflow-authority panel owner.
 
-   Owner: projecting the bound 7-stage workflow into the right-hand panel --
+   Owner: projecting 7 required stages plus optional idea mining into the panel --
    current stage, its reason, progress, and the full stage list. Split out of
    screens-guided-pi.js, which was hundreds of lines past its size ratchet.
 
@@ -42,7 +42,7 @@
         question: reviewerDemo ? tr('Reviewer protocol', '审稿协议') : tr('Scientific question', '科学问题'),
         idea: reviewerDemo ? tr('Validation scope', '验证范围') : tr('Idea mining', '想法发掘'),
         setup: reviewerDemo ? tr('Data contract', '数据合同') : tr('Study setup', '研究配置'),
-        extraction: reviewerDemo ? tr('Safe projection', '安全投影') : tr('Feature extraction', '特征提取'),
+        extraction: reviewerDemo ? tr('Safe projection', '安全投影') : tr('Research data preparation', '研究数据准备'),
         plan: tr('Analysis plan', '分析计划'), analysis: tr('Analysis and validation', '分析与验证'),
         interpretation: tr('Result interpretation', '结果解读'), manuscript: reviewerDemo ? tr('Reviewer dossier', '审稿报告') : tr('Manuscript', '稿件'),
       };
@@ -54,6 +54,10 @@
         study_setup_complete: tr('Required study setup is complete', '必需研究配置已完成'),
         approved_plan_setup_receipt: tr('The approved plan records the study setup used for this analysis', '已批准的计划记录了本次分析采用的研究配置'),
         active_export_ready: tr('A matching EasyICU export is ready', '同一项目的 EasyICU 数据包已就绪'),
+        approved_analysis_input_receipt: tr('The completed analysis records its prepared input', '已完成的分析记录了本次使用的研究输入'),
+        bound_research_input_prepared: tr('The bound research input is prepared; scientific validation remains separate', '本次研究输入已备妥；科学验证仍需单独完成'),
+        metadata_only_input_not_prepared: tr('This candidate uses metadata only; research data are not prepared yet', '当前候选计划仅使用元数据，本次研究数据尚未备妥'),
+        research_input_preparation_required: tr('The source is registered; prepare this question’s research input', '数据源已登记，仍需准备本次研究输入'),
         plan_ready: tr('Ready to create the analysis plan', '可以生成分析计划'),
         provider_ready_to_generate_plan: tr('Question and data source are ready; generate a candidate plan for review', '问题和数据源已就绪，可以生成候选计划供审阅'),
         agent_plan_ready: tr('The digest-bound analysis plan is ready', '摘要绑定分析计划已就绪'),
@@ -65,6 +69,10 @@
         scientific_plan_review_policy_stale: tr('The scientific review policy changed; regenerate the plan while keeping the prepared data', '科学审阅规则已更新；保留已准备数据并重新生成计划'),
         operator_plan_approved: tr('Digest-bound plan approved by the user', '摘要绑定计划已由用户批准'),
         analysis_ready: tr('Ready for analysis after plan approval', '计划确认后可以执行分析'),
+        research_planning_running: tr('The research task is running; no analysis execution progress is available yet', '科研任务运行中；尚无分析执行进度回执'),
+        analysis_running: tr('The approved analysis is running', '已批准的分析正在执行'),
+        report_repair_running: tr('Revising the report from sealed evidence; analysis is not being rerun', '正在用封存证据修订报告；不会重跑分析'),
+        planner_checkpoint_resume_available: tr('Continue planning from a preserved checkpoint after validating its binding', '校验绑定后，从保留的检查点继续生成计划'),
         validated_analysis_required: tr('Validated analysis is required first', '需要先完成并验证分析'),
         validated_analysis_complete: tr('Analysis, validation, and numeric checks are complete', '分析、验证与数值核验已完成'),
         validated_analysis_ready: tr('Analysis, validation, and numeric checks are complete', '分析、验证与数值核验已完成'),
@@ -76,6 +84,7 @@
         publication_analysis_incomplete: tr('The executable plan is not a complete publication analysis', '可执行计划不是完整投稿分析'),
         paper_authority_not_granted: tr('Draft generated; publication authority was not granted', '初稿已生成；未授予论文发表权限'),
         full_agent_manuscript_required: tr('A governed Agent manuscript is required', '需要由受治理的 Agent 生成稿件'),
+        report_revision_ready_for_review: tr('Current report revision is ready for review', '当前报告修订可供审阅'),
         reviewer_protocol_bound: tr('Six reviewer criteria were bound before results', '已在查看结果前绑定 6 项审稿标准'),
         bounded_validation_objective_selected: tr('The systems-validation objective is explicit', '系统验证目标已明确'),
         prepared_data_contract_verified: tr('The prepared-data and descriptive claim contracts are verified', '准备后数据与描述性结论合同已核验'),
@@ -98,18 +107,33 @@
       const nextCaption = nextIsActionable
         ? tr('Next step', '下一步')
         : tr('Later stage', '后续阶段');
-      head.innerHTML = `<div class="at">${host.demoMode() ? tr('Reviewer demonstration', '审稿人演示') : tr('Research progress', '研究进度')}</div><div class="asub">${host.demoMode() ? tr('Read-only view of one registered run.', '一个已登记运行的只读预览。') : tr('Question, data, plan, and results stay together in this project.', '问题、数据、计划与结果都保存在当前项目中。')}</div>`;
-      body.innerHTML = `<div class="gd-pipeline-summary" data-gpi-project-workflow-aside>
+      const results = !host.demoMode() && host.resultsHtml ? host.resultsHtml() : '';
+      const pending = !host.demoMode() && host.hasPendingReview && host.hasPendingReview();
+      const reviewAction = !host.demoMode() && host.reviewActionHtml ? host.reviewActionHtml() : '';
+      // Keep the user's stage-list preference across workflow refreshes.
+      const previous = body.querySelector && body.querySelector('.gd-pipeline-disclosure');
+      const expanded = previous && previous.open;
+      head.innerHTML = `<div class="at">${host.demoMode() ? tr('Reviewer demonstration', '审稿人演示') : tr('Current study', '当前研究')}</div><div class="asub">${host.demoMode() ? tr('Read-only view of one registered run.', '一个已登记运行的只读预览。') : tr('Progress, pending decisions and results.', '进度、待办与成果。')}</div>`;
+      body.innerHTML = `${results}
+      <div class="gd-pipeline-summary" data-gpi-project-workflow-aside>
         <div class="gd-pipeline-summary-head"><div><div class="eyebrow">${tr('Current stage', '当前阶段')}</div><strong>${esc(names[current && current.id] || (current && current.label) || tr('Ready', '就绪'))}</strong><div class="gd-pipeline-value">${esc(reasonText(current))}</div></div></div>
-        <div class="gd-pipeline-bar" aria-label="${tr('EasyICU project progress', 'EasyICU 项目进度')}"><span style="width:${pct}%;"></span></div>
-        <div class="gd-pipeline-meta"><span><strong>${done}/${total}</strong> ${tr('stages complete', '个阶段已完成')}</span></div>
-        ${next ? `<div class="gd-pipeline-next"><span>${nextCaption}</span><strong>${esc(names[next.id] || next.label || next.id)}</strong></div>` : ''}
+        ${pending ? `<button type="button" class="btn sm gpi-study-pending" data-gpi-aside-pending>${tr('View pending decision', '查看待确认事项')}</button>` : !results && reviewAction ? `<div class="gpi-study-pending">${reviewAction}</div>` : ''}
+        ${next && !results ? `<div class="gd-pipeline-next"><span>${nextCaption}</span><strong>${esc(names[next.id] || next.label || next.id)}</strong></div>` : ''}
       </div>
-      <details class="gd-pipeline-disclosure" open><summary><span>${tr('All research stages', '全部研究阶段')}</span><small>${stages.length}</small></summary><div class="gd-pipeline-list" data-gpi-project-workflow-list>${stages.map(stage => {
-        const status = stage.status === 'complete' ? 'done' : stage.status === 'ready' || stage.status === 'running' || stage.status === 'review_required' ? 'active' : 'locked';
+      <details class="gd-pipeline-disclosure"${expanded ? ' open' : ''}><summary><span>${tr('All research stages', '全部研究阶段')}</span><small>${done}/${total}</small></summary>
+      <div class="gd-pipeline-bar" aria-label="${tr('EasyICU project progress', 'EasyICU 项目进度')}"><span style="width:${pct}%;"></span></div>
+      <div class="gd-pipeline-meta"><span><strong>${done}/${total}</strong> ${tr('required stages complete', '个必需阶段已完成')}</span></div>
+      <div class="gd-pipeline-list" data-gpi-project-workflow-list>${stages.map(stage => {
+        const optional = stage.required_for_completion === false;
+        const status = stage.status === 'complete' ? 'done' : stage.status === 'optional' ? 'optional' : stage.status === 'ready' || stage.status === 'running' || stage.status === 'review_required' ? 'active' : 'locked';
         const marker = status === 'done' ? iconHtml('check', 11) : status === 'locked' ? iconHtml('lock', 10) : iconHtml('dot', 10);
-        return `<div class="study-item ${status}"><span class="si-dot">${marker}</span><div class="si-txt"><div class="si-t">${esc(names[stage.id] || stage.label || stage.id)}</div></div></div>`;
+        return `<div class="study-item ${status}"><span class="si-dot">${marker}</span><div class="si-txt"><div class="si-t">${esc(names[stage.id] || stage.label || stage.id)}${optional ? tr(' · Optional', ' · 可选') : ''}</div></div></div>`;
       }).join('')}</div></details>`;
+      body.onclick = event => {
+        const resource = event.target.closest('[data-gpi-resource-kind]');
+        if (resource && host.openResource) { host.openResource(resource); return; }
+        if (event.target.closest('[data-gpi-aside-pending]') && host.revealPendingReview) host.revealPendingReview();
+      };
     }
 
     return { syncProjectWorkflowAside };

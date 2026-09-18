@@ -21,7 +21,7 @@ import pandas as pd
 from ..schema import ResearchContext
 from ..authority.evidence_store import EvidenceStore
 from .readiness import _blocked_outcome_step_ids
-from ..robustness.panel import RobustnessPanel, load_robustness_panel, worst_rows_by_axis
+from ..robustness.panel import RobustnessPanel, load_robustness_panel
 from ..authority.runtime_artifacts import (
     current_step_records,
     verified_run_evidence_path,
@@ -388,6 +388,15 @@ def _preferred_writer_scalar(summary: Mapping[str, Any], key: str) -> Any:
     of assigning an arbitrary p-value to the primary result.
     """
 
+    receipt = summary.get("scientific_runtime_receipt")
+    if isinstance(receipt, Mapping) and str(receipt.get("schema_version", "")).startswith(
+        "easyicu.landmark_spline_runtime_receipt/"
+    ):
+        # This native owner represents the primary association as a curve.
+        # Nested scalars belong to named diagnostics/secondary populations;
+        # even a unique nested CI must not become the primary curve's CI.
+        value = summary.get(key)
+        return value if value is not None and not isinstance(value, (dict, list, tuple)) else None
     if key == "p_value":
         value = summary.get(key)
         if value is not None and not isinstance(value, (dict, list)):
@@ -588,7 +597,40 @@ def _executed_method_boundary_rows(
             value = summary.get(key)
             if isinstance(value, (str, int, float, bool)) and str(value).strip():
                 row[key] = value
+        if (
+            record.get("deterministic_standard_analysis") == "grouped_table_one"
+            and summary.get("analysis_family") == "grouped_table_one"
+        ):
+            variables = summary.get("variables")
+            if isinstance(variables, list) and all(isinstance(name, str) for name in variables):
+                row["baseline_variables"] = list(variables)
+            group_by = summary.get("group_by")
+            if isinstance(group_by, str) and group_by:
+                row["group_by"] = group_by
         contracts = summary.get("model_contracts")
+        receipt = summary.get("scientific_runtime_receipt")
+        if (
+            record.get("deterministic_standard_analysis") == "signed_landmark_spline_association"
+            and isinstance(receipt, Mapping)
+        ):
+            # Received only after the envelope consumer validates the complete
+            # typed receipt. Keep the executed risk set and model semantics,
+            # including the boundary on the non-equivalent sensitivity cohort.
+            for key in (
+                "landmark_hours", "population_rule", "adjustment_columns",
+                "spline_knot_quantiles", "population_flow", "variance_estimator",
+                "cluster_unit", "interpretation",
+            ):
+                if key in receipt:
+                    row[key] = receipt[key]
+            for block, keys in (
+                ("functional_form_comparison", ("comparison", "method", "target_column", "information_criteria_basis")),
+                ("adjusted_absolute_risk", ("method", "interval")),
+                ("variable_opportunity_sensitivity", ("population_rule", "interpretation")),
+            ):
+                source = receipt.get(block)
+                if isinstance(source, Mapping):
+                    row[block] = {key: source[key] for key in keys if key in source}
         if isinstance(contracts, list):
             fit_methods = sorted(
                 {
@@ -1507,7 +1549,9 @@ def _render_robustness_panel_block(
         None,
     )
     lines: List[str] = []
-    if primary is not None:
+    if primary is not None and _robustness_panel_has_primary_effect(
+        run_dir, evidence=evidence,
+    ):
         lines.append(
             "CANONICAL PRIMARY EFFECT SOURCE: use this robustness-panel "
             "primary row for the manuscript-facing primary effect. Do not "
@@ -1529,30 +1573,62 @@ def _render_robustness_panel_block(
                 evidence=evidence,
             )
         )
+    elif primary is not None and (
+        primary.n > 0 or primary.evidence_id
+        or any(value is not None for value in (
+            primary.point_estimate, primary.ci_low, primary.ci_high, primary.se,
+        ))
+    ):
+        lines.append(
+            "primary record has no reportable effect: "
+            f"n={primary.n}, converged={primary.converged}, notes={primary.notes}. "
+            "Retain this recorded failure or limitation; do not invent an estimate."
+        )
+    else:
+        lines.append(
+            "No primary effect result is available in this panel. An empty "
+            "placeholder is not evidence that a primary model was executed "
+            "or failed to converge."
+        )
     converged_variants = [
         row
         for row in panel.rows
-        if row.spec_id != panel.primary_spec_id and row.converged
+        if row.spec_id != panel.primary_spec_id and row.converged and row.independent_variant
     ]
     if converged_variants:
         lines.append(
             "variants: "
             f"n_variants={panel.n_variants}, "
-            "range across variants point "
-            f"in [{_fmt_panel_number(panel.range_low)}, "
-            f"{_fmt_panel_number(panel.range_high)}]"
+            + (
+                "confidence-interval envelope across comparable results "
+                f"[{_fmt_panel_number(panel.range_low)}, {_fmt_panel_number(panel.range_high)}]"
+                if panel.range_low is not None and panel.range_high is not None
+                else "no common effect range is authorized; retain each result and its contrast separately"
+            )
         )
-    else:
+    elif panel.n_variants:
         lines.append(
             "variants: "
             f"n_variants={panel.n_variants}, "
             "no robustness variants converged "
             "(see robustness_panel.json for MVP boundary reasons)"
         )
-    for axis, row in sorted(worst_rows_by_axis(panel).items()):
+    else:
         lines.append(
-            f"worst on {axis} axis: "
-            f"spec_id={row.spec_id}, point={_fmt_panel_number(row.point_estimate)}"
+            "variants: n_variants=0, no independent sensitivity variant result rows were "
+            "recorded. This is not evidence of nonconvergence; do not claim "
+            "an executed robustness analysis or a robustness range."
+        )
+    for row in panel.rows:
+        if row.spec_id == panel.primary_spec_id:
+            continue
+        lines.append(
+            f"{'variant' if row.independent_variant else 'documentation only (not an independent refit)'}: "
+            f"spec_id={row.spec_id}, axis={row.axis}, n={row.n}, converged={row.converged}, "
+            f"point={_fmt_panel_number(row.point_estimate)}, "
+            f"CI=[{_fmt_panel_number(row.ci_low)}, {_fmt_panel_number(row.ci_high)}], "
+            f"contrast={row.contrast_id or 'not declared'}, unit={row.effect_unit or 'not declared'}, "
+            f"notes={row.notes}, cite={{evidence:{row.evidence_id}}}"
         )
     return lines
 
@@ -1593,6 +1669,7 @@ def _render_executed_robustness_authority(
         row
         for row in rows
         if row.get("converged") is True and row.get("independent_variant") is True
+        and row.get("axis") != "primary"
     ]
     lines = [
         "EXECUTED ROBUSTNESS AUTHORITY: this typed executed result supersedes "
@@ -1605,7 +1682,7 @@ def _render_executed_robustness_authority(
         f"{_fmt_panel_number(summary.get('primary_ci_high'))}], "
         f"cite={{evidence:{summary_evidence}}}",
         "executed variants: "
-        f"n_converged={int(summary['n_converged_variants'])}, "
+        f"n_converged={len(independent)}, "
         f"n_independent={len(independent)}, "
         f"cite={{evidence:{summary_evidence}}}",
     ]

@@ -10,7 +10,7 @@ declarative metadata.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
@@ -82,6 +82,25 @@ COMPOSITE_CONCEPT_OUTPUT_SOURCES: dict[str, str] = {
 CONCEPT_OUTPUT_LOAD_SOURCES: Mapping[str, str] = MappingProxyType(
     {"sep3_sofa1": "sep3"}
 )
+
+
+def resolve_composite_concept_output(
+    concept: str, available_concepts: Collection[str],
+) -> str | None:
+    """Resolve a public concept to one available, owner-declared output.
+
+    This is a prepared-data coordinate lookup, not an executable load plan.
+    Exact coordinates win; missing or ambiguous families stay unresolved.
+    Similar names and alternative clinical definitions are never substitutes.
+    """
+
+    if concept in available_concepts:
+        return concept
+    outputs = {
+        output for output, source in COMPOSITE_CONCEPT_OUTPUT_SOURCES.items()
+        if source == concept and output in available_concepts
+    }
+    return next(iter(outputs)) if len(outputs) == 1 else None
 
 
 class ConceptLoadPlanReason(str, Enum):
@@ -187,4 +206,5 @@ __all__ = [
     "ConceptLoadPlanReason",
     "ConceptMaterializationBinding",
     "compile_concept_load_plan",
+    "resolve_composite_concept_output",
 ]

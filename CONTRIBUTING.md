@@ -15,7 +15,8 @@ pip install -e ".[dev,webapp]"
 
 1. Run the task-scope guard described below and retain its `scope_sha256` in
    the pull-request evidence.
-2. Run `pytest -q` for the default FastAPI/core gate.
+2. Run `pytest -q` for the default fast gate (`pytest.ini` skips `slow` by default).
+   Before any freeze/release, run the full suite unfiltered with `pytest -q -m ''`.
 3. Update `README.md` / `README_zh.md` if user-facing behavior changed.
 4. Keep AI-related changes explicitly advisory and human-confirmed in both code and docs.
 5. Prefer small, reviewable patches over broad unrelated refactors.
@@ -27,7 +28,10 @@ pip install -e ".[dev,webapp]"
 
 ## Concurrent work and commit scope
 
-Concurrent agents or developer sessions must use one linked worktree per task.
+Concurrent agents or developer sessions stay in the canonical checkout and
+work serially by default; a new task does not authorize a new branch or
+worktree (see AGENTS.md). A dedicated linked worktree per task is allowed only
+as an explicitly approved exception.
 Record the full starting HEAD before editing, stage only the task-owned files,
 then run the repository guard immediately before every commit:
 
@@ -38,14 +42,12 @@ python tools/verify_git_task_scope.py \
   --allow tests/test_owned_contract.py
 ```
 
-The command fails closed when HEAD moved, the task is running in the shared
-primary worktree, no changes are staged, an unmerged path exists, or any staged,
-unstaged, or untracked path falls outside the exact allowlist. Paste the passing
-JSON receipt or at least its `scope_sha256` into the pull request.
-
-A developer working alone in a dedicated clone may pass
-`--allow-primary-worktree`, but must explain that exception in the pull request.
-This exception is not valid for a workspace shared by concurrent agents.
+The canonical checkout is accepted by default, as required by AGENTS.md. The
+command fails closed when HEAD moved, no changes are staged, an unmerged path
+exists, or any staged, unstaged, or untracked path falls outside the exact
+allowlist. For an explicitly approved linked-worktree task, pass
+`--require-linked-worktree`. Paste the passing JSON receipt or at least its
+`scope_sha256` into the pull request.
 
 ## Pull request guidance
 

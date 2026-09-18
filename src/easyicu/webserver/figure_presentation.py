@@ -141,6 +141,26 @@ def verified_presentation_gallery(
             return None
         if _sha256_file(path) != expected:
             return None
+        if "caption" in row:
+            caption = row.get("caption")
+            contract_path = _safe_relative(run_dir, row.get("contract_path"))
+            contract_digest = row.get("contract_sha256")
+            if (
+                not isinstance(caption, str)
+                or not caption.strip()
+                or len(caption) > 4000
+                or any(ord(character) < 32 for character in caption)
+                or contract_path is None
+                or contract_path.parent != gallery_dir
+                or contract_path.suffix.lower() != ".json"
+                or not isinstance(contract_digest, str)
+                or not re.fullmatch(r"[a-f0-9]{64}", contract_digest)
+                or _sha256_file(contract_path) != contract_digest
+            ):
+                return None
+            contract = _read_bounded_json(contract_path, max_bytes=_MAX_MANIFEST_BYTES)
+            if not isinstance(contract, Mapping) or contract.get("reader_caption") != caption:
+                return None
         projected = dict(row)
         if embed_pngs:
             if (

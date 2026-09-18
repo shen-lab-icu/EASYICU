@@ -1,5 +1,7 @@
 import importlib.util
 import os
+import threading
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -76,3 +78,14 @@ def test_desktop_parent_watch_rejects_invalid_owner(parent_pid_spec):
     parent_pid = os.getpid() if parent_pid_spec == "current_process" else parent_pid_spec
     with pytest.raises(ValueError, match="desktop shell"):
         module._watch_parent_process(parent_pid, interval=0.01)
+
+
+def test_parent_loss_requests_graceful_shutdown_not_hard_exit(monkeypatch):
+    import psutil
+    module = _backend_entry_module()
+    shutdown = threading.Event()
+    monkeypatch.setattr(psutil, "Process", lambda pid: SimpleNamespace(is_running=lambda: False))
+    monkeypatch.setattr(module.os, "_exit", lambda code: pytest.fail("cleanup bypassed"))
+    stop = module._watch_parent_process(987654, interval=0.01, request_shutdown=shutdown.set)
+    assert shutdown.wait(1)
+    stop.set()

@@ -1,0 +1,202 @@
+"""Reader repairs must survive the adjacent, unchanged authority gates."""
+
+from __future__ import annotations
+
+import pytest
+
+from easyicu.research_agent.authority.manuscript_claim_policy import (
+    filter_evidence_bound_scaffold,
+)
+from easyicu.research_agent.reporting.manuscript_quality import (
+    repair_registered_display_callouts,
+)
+
+
+def _filter(text: str, evidence_ids: tuple[str, ...] = ("result",)):
+    return filter_evidence_bound_scaffold(
+        text,
+        resolve_claim=lambda _ref: None,
+        resolve_evidence=lambda ref: ref in evidence_ids,
+    )
+
+
+def test_host_display_repairs_survive_strict_findings_grammar() -> None:
+    draft = "## Results\n\n### Cohort characteristics\n\n### Primary association\n"
+    repaired, changes = repair_registered_display_callouts(
+        draft, expected_display_labels=("Table 1", "Figure 1"),
+    )
+
+    filtered = _filter(repaired, ("table_one", "publication_figure_contract"))
+
+    assert len(changes) == 2
+    assert filtered.filtered_sentences == ()
+    assert "Table 1" in filtered.scaffold and "Figure 1" in filtered.scaffold
+    assert repair_registered_display_callouts(
+        repaired, expected_display_labels=("Table 1", "Figure 1"),
+    ) == (repaired, ())
+
+
+@pytest.mark.parametrize("family", (
+    "descriptive_epidemiology", "prediction_model", "dynamic_prediction",
+    "trajectory_clustering", "survival", "association_study", "ordinal_dose_response",
+))
+def test_every_plan_required_heading_survives_the_claim_policy(family):
+    from easyicu.research_agent.reporting.manuscript_result_structure import required_result_subsections
+    from .test_plan_driven_result_structure import _plan
+
+    headings = required_result_subsections(_plan(family, ("primary", "secondary", "sensitivity")))
+    draft = "## Results\n\n" + "\n\n".join(f"### {heading}" for heading in headings)
+    filtered = _filter(draft)
+
+    assert filtered.filtered_sentences == ()
+    assert all(f"### {heading}" in filtered.scaffold for heading in headings)
+
+
+@pytest.mark.parametrize("heading", (
+    "Descriptive results show lower mortality",
+    "Model performance improved",
+    "Cluster characteristics predict death",
+    "Survival results showed benefit",
+    "Secondary analyses confirmed robustness",
+))
+def test_a_known_structure_prefix_cannot_admit_a_finding(heading):
+    filtered = _filter(f"## Results\n\n### {heading} {{evidence:result}}")
+    assert filtered.unsupported_scientific_claim_sentences
+    assert heading not in filtered.scaffold
+
+
+def test_display_repairs_do_not_bypass_current_evidence_membership() -> None:
+    repaired, _ = repair_registered_display_callouts(
+        "## Results\n\n### Cohort characteristics\n",
+        expected_display_labels=("Table 1",),
+    )
+
+    filtered = _filter(repaired, ())
+
+    assert filtered.filtered_sentences
+    assert "Table 1" not in filtered.scaffold
+
+
+@pytest.mark.parametrize("unit", ("ICU", "intensive care", "intensive care unit"))
+def test_equivalent_icu_unit_names_keep_only_cited_numeric_facts(unit: str) -> None:
+    sentence = f"The cohort comprised 120 {unit} stays {{evidence:result}}."
+
+    assert _filter("## Results\n\n" + sentence).filtered_sentences == ()
+    assert _filter("## Results\n\n" + sentence, ()).filtered_sentences
+
+
+def test_recorded_result_count_is_not_a_claim_of_success_or_stability() -> None:
+    sentence = (
+        "The recorded sensitivity analysis result count was 0 "
+        "{evidence:result}."
+    )
+
+    assert _filter("## Results\n\n" + sentence).filtered_sentences == ()
+    assert _filter("## Results\n\n" + sentence, ()).filtered_sentences
+
+
+@pytest.mark.parametrize("sentence", (
+    "The cohort comprised 120 intensive care stays with reduced mortality {evidence:result}.",
+    "Intensive care improved mortality in 120 stays {evidence:result}.",
+    "The recorded sensitivity analysis result count was 0 and validated stability {evidence:result}.",
+    "No sensitivity analysis was needed because results were robust {evidence:result}.",
+    "Sepsis was harmful in 120 stays {evidence:result}.",
+))
+def test_plain_vocabulary_never_authorizes_a_scientific_conclusion(sentence: str) -> None:
+    assert _filter("## Results\n\n" + sentence).unsupported_scientific_claim_sentences
+
+
+def test_strict_filter_drops_only_newly_orphaned_variable_sentences():
+    rejected = "The primary predictor required a score increase of 2 points."
+    dependent = "It was represented as a binary maximum {evidence:result}."
+    chained = "This representation used the admission record {evidence:result}."
+    independent = "Age was recorded {evidence:result}."
+    draft = f"## Methods\n\n### Variables\n\n{rejected} {dependent} {chained} {independent}\n"
+
+    filtered = _filter(draft)
+
+    assert rejected not in filtered.scaffold
+    assert dependent not in filtered.scaffold
+    assert chained not in filtered.scaffold
+    assert independent in filtered.scaffold
+    assert dependent in filtered.filtered_sentences
+    assert chained in filtered.filtered_sentences
+
+
+@pytest.mark.parametrize("separator", ("\n\n", "\n", "\n### Statistical analysis\n"))
+def test_strict_filter_does_not_drop_a_different_paragraph_or_line(separator):
+    rejected = "The primary predictor required a score increase of 2 points."
+    dependent = "It was represented as a binary maximum {evidence:result}."
+    filtered = _filter(f"## Methods\n\n### Variables\n\n{rejected}{separator}{dependent}")
+    assert dependent in filtered.scaffold
+
+
+@pytest.mark.parametrize("separator", (" ", "\n"))
+def test_strict_filter_preserves_a_surviving_variable_antecedent(separator):
+    intro = "The predictor was recorded {evidence:result}."
+    rejected = "The primary predictor required a score increase of 2 points."
+    dependent = "It was represented as a binary maximum {evidence:result}."
+    filtered = _filter(f"## Methods\n\n### Variables\n\n{intro}{separator}{rejected} {dependent}")
+    assert intro in filtered.scaffold
+    assert dependent in filtered.scaffold
+
+
+def test_strict_filter_leaves_an_incomplete_orphan_for_quality_review():
+    filtered = _filter("## Methods\n\n### Variables\n\nThe score was 2. It represented")
+    assert "It represented" in filtered.scaffold
+
+
+def test_context_deletion_cannot_replace_missing_baseline_method_coverage():
+    from easyicu.research_agent.reporting.manuscript_quality import audit_manuscript_quality
+
+    filtered = _filter("## Methods\n\n### Variables\n\nAge was 24 years. It was recorded {evidence:result}.")
+    audit = audit_manuscript_quality(filtered.scaffold, expected_baseline_mentions={"age": ("age",)})
+    assert any(finding.code == "MANUSCRIPT_BASELINE_METHODS_INCOMPLETE" for finding in audit.findings)
+
+
+def test_context_deletion_preserves_exact_source_owned_method_facts():
+    from easyicu.research_agent.authority.manuscript_method_facts import ManuscriptMethodFact
+
+    fact = ManuscriptMethodFact("variables[0].description", "Recorded source definition for the selected exposure: “Source label”", "a" * 64)
+    draft = (
+        f"## Methods\n\n### Variables\n\n{fact.scaffold}\n\n"
+        "The predictor required a score increase of 2 points. "
+        "It was represented as a binary maximum {evidence:result}."
+    )
+    filtered = filter_evidence_bound_scaffold(
+        draft, resolve_claim=lambda _ref: None,
+        resolve_evidence=lambda ref: ref in ("research_context", "result"),
+        method_facts=(fact,),
+    )
+    assert fact.scaffold in filtered.scaffold
+    assert "It was represented" not in filtered.scaffold
+
+
+def test_role_guidance_names_every_plan_derived_results_subsection():
+    from easyicu.research_agent.reporting.manuscript_result_structure import (
+        result_section_instruction,
+    )
+    from .test_plan_driven_result_structure import _plan
+
+    instruction = result_section_instruction(
+        _plan("association_study", ("primary", "secondary", "sensitivity"))
+    )
+
+    assert "### Secondary analyses" in instruction
+    assert "reportable_descriptive_results" in instruction
+    assert "never leave this subsection empty" in instruction
+    assert "### Sensitivity and subgroup analyses" in instruction
+    assert "registry count" not in instruction
+    assert "zero sensitivity result rows" in instruction
+
+
+def test_role_guidance_omits_roles_absent_from_the_plan():
+    from easyicu.research_agent.reporting.manuscript_result_structure import (
+        result_section_instruction,
+    )
+    from .test_plan_driven_result_structure import _plan
+
+    instruction = result_section_instruction(_plan("association_study", ("primary",)))
+
+    assert "### Secondary analyses" not in instruction
+    assert "### Sensitivity and subgroup analyses" not in instruction

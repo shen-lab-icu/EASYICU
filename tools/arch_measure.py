@@ -85,6 +85,8 @@ TARGET_FILES: List[Path] = [
     # facade import; renderer dispatch and every test-patched name stay in
     # pipeline.py so module-global monkeypatch seams keep working.
     RA / "reporting" / "publication_bundles.py",
+    # The promotion filesystem transaction is measured with its renderer owner.
+    RA / "reporting" / "publication_filesystem.py",
     RA / "reporting" / "readiness.py",
     RA / "authority" / "typed_binding.py",
     RA / "authority" / "evidence_record_resolution.py",

@@ -24,12 +24,17 @@
     async function authorizeDataSource(action, options) {
       if (!host.session() || host.busy() || !api().authorizePiCopilotDataSource) return;
       const database = String(options && options.database || '').trim();
+      const expectedSessionId = host.session().session_id;
+      const expectedProjectId = projectId();
+      const isCurrent = () => host.session() && host.session().session_id === expectedSessionId
+        && projectId() === expectedProjectId;
       host.setError('');
       try {
         const payload = await api().authorizePiCopilotDataSource(
-          host.session().session_id,
-          { project_id: projectId(), action, ...(database ? { database } : {}) },
+          expectedSessionId,
+          { project_id: expectedProjectId, action, ...(database ? { database } : {}) },
         );
+        if (!isCurrent()) return;
         host.setSession(payload.session || host.session());
         rememberSession(host.session().session_id);
         if (action === 'begin_local_selection' || action === 'begin_full_data_selection') {
@@ -48,12 +53,21 @@
             await store.activate(contextId);
           }
         }
+        if (!isCurrent()) return;
         const preview = window.EasyICU.guidedPi.optional('preview');
         if (payload.resource && preview && preview.open) {
-          preview.open(payload.resource, projectId());
+          preview.open(payload.resource, expectedProjectId);
         }
         render();
+        if (payload.session && !payload.resource
+          && payload.session.data_source_authorization?.status === 'confirmed') {
+          await loadWorkflow();
+          if (!isCurrent()) return;
+          render();
+          await continueAfterDataSourceConfirmation();
+        }
       } catch (error) {
+        if (!isCurrent()) return;
         host.setError(errorText(error));
         render();
       }
@@ -87,14 +101,20 @@
         && DATA_CONSENT.selectionInProgress(host.session())
         && api().authorizePiCopilotDataSource
       ) {
+        const expectedSessionId = host.session().session_id;
+        const expectedProjectId = projectId();
+        const isCurrent = () => host.session() && host.session().session_id === expectedSessionId
+          && projectId() === expectedProjectId;
         api().authorizePiCopilotDataSource(
-          host.session().session_id,
-          { project_id: projectId(), action: 'confirm_selected_source' },
+          expectedSessionId,
+          { project_id: expectedProjectId, action: 'confirm_selected_source' },
         ).then(payload => {
+          if (!isCurrent()) return;
           host.setSession(payload.session || host.session());
           rememberSession(host.session().session_id);
           loadWorkflow().then(render);
         }).catch(error => {
+          if (!isCurrent()) return;
           host.setError(errorText(error));
           render();
         });
@@ -116,20 +136,26 @@
         || !DATA_CONSENT.selectionInProgress(host.session())
         || !api().authorizePiCopilotDataSource
       ) return false;
+      const expectedSessionId = host.session().session_id;
+      const expectedProjectId = projectId();
+      const isCurrent = () => host.session() && host.session().session_id === expectedSessionId
+        && projectId() === expectedProjectId;
       const payload = await api().authorizePiCopilotDataSource(
-        host.session().session_id,
-        { project_id: projectId(), action: 'confirm_selected_source' },
+        expectedSessionId,
+        { project_id: expectedProjectId, action: 'confirm_selected_source' },
       );
+      if (!isCurrent()) return false;
       host.setSession(payload.session || host.session());
       rememberSession(host.session().session_id);
       document.dispatchEvent(new CustomEvent('easyicu:guided-projects-refresh'));
       const preview = window.EasyICU.guidedPi.optional('preview');
       if (payload.resource && preview && preview.open) {
-        preview.open(payload.resource, projectId());
+        preview.open(payload.resource, expectedProjectId);
       } else if (preview && preview.close) {
         preview.close();
       }
       await loadWorkflow();
+      if (!isCurrent()) return true;
       render();
       if (payload.resource) return true;
       if (await continueAfterDataSourceConfirmation()) return true;

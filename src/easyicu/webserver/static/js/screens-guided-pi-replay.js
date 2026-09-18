@@ -150,6 +150,35 @@
       === 'research_pipeline_execution_runtime_unavailable';
     const created = Number(job && job.created_at_epoch);
     const finished = Number(job && job.finished_at_epoch);
+    const reportOnly = Boolean(job && (job.report_only === true
+      || rows(job.progress).some(event => event.step === 'report_repair')));
+    if (reportOnly) {
+      const status = String(job.status || '');
+      const ready = status === 'done' && job.report_revision_ready === true;
+      const pdfReady = ready && job.report_revision_pdf_ready === true;
+      const title = status === 'failed'
+        ? translate('Report revision failed; previous report preserved', '报告修订失败；原报告保留')
+        : status === 'cancelled'
+          ? translate('Report revision cancelled', '报告修订已取消')
+          : pdfReady
+            ? translate('Revised report and PDF ready for review', '新版报告与 PDF 已生成，待审阅')
+            : ready
+              ? translate('Report revised; PDF needs verification', '报告已修订；PDF 待核对')
+              : status === 'done'
+                ? translate('Report revision ended; verify its artifacts', '报告修订已结束；产物待核对')
+                : translate('Revising the report from existing analysis', '正在复用分析结果修订报告');
+      return {
+        expanded: false,
+        durationKnown: Number.isFinite(created) && Number.isFinite(finished) && finished >= created,
+        startedAt: Number.isFinite(created) ? created * 1000 : null,
+        endedAt: Number.isFinite(finished) ? finished * 1000 : null,
+        title,
+        terminalLabel: pdfReady
+          ? translate('This revision and PDF are ready to review; analysis and publication gates are unchanged', '本次修订及 PDF 可审阅；原分析与发表门不变')
+          : title,
+        blocked: status === 'done' && !pdfReady,
+      };
+    }
     return {
       // A pending review does not need its build log unfolded. The attention
       // signal is the review card below the activity -- which states the
@@ -165,7 +194,7 @@
         ? translate('Analysis plan ready for review', '分析计划已就绪，等待审阅')
         : analysisResultsAvailable
           ? analysisValidated
-            ? translate('Analysis complete; publication review remains', '分析已完成；仍需完成投稿审阅')
+            ? translate('Analysis complete; full quality review remains', '分析已完成；完整质量审阅尚未通过')
             : translate('Results generated; one validation item remains', '结果已生成；仍有一项校验待处理')
         : plannerCheckpointSaved
           ? translate('Planner saved a validated checkpoint', '规划器已保存验证检查点')
@@ -195,6 +224,17 @@
     };
   }
 
+  /**
+   * Resume the execution the host just offered a retry for.
+   *
+   * `options.resumeRunId` is the authoritative failed run the workflow
+   * projection reported, and it is what the server's retry owner validates.
+   * `session.binding.run_id` names the reviewed *candidate plan* run instead:
+   * its gate reason is a plan review, never a failed execution, so sending it
+   * makes the product refuse its own offered action with
+   * `research_pipeline_execution_retry_source_not_failed_execution`. It stays
+   * as a fallback only for a session whose projection has not loaded yet.
+   */
   async function retryFailedExecution(options) {
     const host = options && typeof options === 'object' ? options : {};
     const session = host.session && typeof host.session === 'object' ? host.session : {};
@@ -202,7 +242,8 @@
     const provider = session.research_provider && typeof session.research_provider === 'object'
       ? session.research_provider : {};
     const api = host.api && typeof host.api === 'object' ? host.api : {};
-    const runId = String(binding.run_id || '').trim();
+    const runId = String(host.resumeRunId || '').trim()
+      || String(binding.run_id || '').trim();
     const studyContextId = String(binding.study_context_id || '').trim();
     if (!runId || !studyContextId || typeof api.loadStudyContext !== 'function' || typeof api.startAgentRun !== 'function') {
       throw new Error('failed_execution_retry_coordinates_unavailable');
@@ -224,6 +265,7 @@
       engine: 'research_agent_pipeline',
       planner_start_mode: 'auto',
       execution_resume_source_run_id: runId,
+      ...(host.reportOnly === true ? { report_only: true } : {}),
     });
   }
 

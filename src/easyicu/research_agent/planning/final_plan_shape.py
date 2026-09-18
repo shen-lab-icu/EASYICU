@@ -14,25 +14,26 @@ from typing import Sequence
 from ..contracts.declared_product import typed_product
 from ..contracts.step_families import (
     _clustering_contract_applies,
-    _cohort_definition_contract_findings,
-    _prediction_contract_applies,
+    clustering_contract_applies,
+    cohort_definition_contract_findings,
+    prediction_contract_applies,
 )
-from .advanced_plan_contract import _enforce_advanced_plan_contract
+from .advanced_plan_contract import enforce_advanced_plan_contract
 from .cohort_contract import (
-    cohort_definition_is_empty as _cohort_definition_is_empty,
-    plan_expects_analysis_cohort as _plan_expects_analysis_cohort,
+    cohort_definition_is_empty,
+    plan_expects_analysis_cohort,
 )
 from .figure_plan_mutation import (
-    _ensure_publication_figure_step_in_plan,
-    _split_table_and_figure_outputs_in_plan,
+    ensure_publication_figure_step_in_plan,
+    split_table_and_figure_outputs_in_plan,
 )
 from .plan_graph import (
-    _cap_plan_preserving_figure_steps,
-    _typed_plan_dag_findings,
+    cap_plan_preserving_figure_steps,
+    typed_plan_dag_findings,
 )
 from .endpoint_contract import endpoint_contract_findings
 from .figure_plan_shaping import (
-    augment_report_typed_product_inputs as _augment_report_typed_product_inputs,
+    augment_report_typed_product_inputs,
 )
 from ..schema import AnalysisPlan
 
@@ -104,6 +105,33 @@ __all__ = [
     "_prediction_contract_applies",
     "_split_table_and_figure_outputs_in_plan",
     "_typed_plan_dag_findings",
+    "augment_report_typed_product_inputs",
+    "cap_plan_preserving_figure_steps",
+    "clustering_contract_applies",
+    "cohort_definition_contract_findings",
+    "cohort_definition_is_empty",
     "endpoint_contract_findings",
+    "enforce_advanced_plan_contract",
+    "ensure_publication_figure_step_in_plan",
+    "plan_expects_analysis_cohort",
+    "prediction_contract_applies",
+    "split_table_and_figure_outputs_in_plan",
+    "typed_plan_dag_findings",
     "validate_final_plan_shape",
 ]
+
+# Compatibility aliases: historical private re-exports keep resolving while
+# cross-owner callers migrate to the public names above. The kwargs-based
+# ``_clustering_contract_applies`` keeps its own signature (it is not the
+# step-based public ``clustering_contract_applies``); every other alias is
+# identical to its public counterpart.
+_augment_report_typed_product_inputs = augment_report_typed_product_inputs
+_cap_plan_preserving_figure_steps = cap_plan_preserving_figure_steps
+_cohort_definition_contract_findings = cohort_definition_contract_findings
+_cohort_definition_is_empty = cohort_definition_is_empty
+_ensure_publication_figure_step_in_plan = ensure_publication_figure_step_in_plan
+_enforce_advanced_plan_contract = enforce_advanced_plan_contract
+_plan_expects_analysis_cohort = plan_expects_analysis_cohort
+_prediction_contract_applies = prediction_contract_applies
+_split_table_and_figure_outputs_in_plan = split_table_and_figure_outputs_in_plan
+_typed_plan_dag_findings = typed_plan_dag_findings

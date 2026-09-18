@@ -39,6 +39,7 @@ from easyicu.webserver.copilot_data_workbench import (
     build_snapshot as build_data_workbench_snapshot,
     project_patient_snapshot_payload,
 )
+from easyicu.webserver.plan_change_request import PlanChangeRequest, ReferencedPlan, reference_plan_content
 from easyicu.webserver.ideas import mining as idea_mining
 from easyicu.webserver.ideas import handoff as idea_handoff
 
@@ -53,6 +54,7 @@ from .contracts import (
 from . import cohort_eligibility
 from . import extraction_handoff
 from .literature_tool_projection import compile_literature_tool_projection
+from .message_input import prepare_user_message
 from .projections import (
     bounded_json_projection,
     ensure_safe_projection,
@@ -69,6 +71,7 @@ from .run_authority import (
     research_pipeline_project_root,
 )
 from .study_context_update import update_study_context
+from .turn_authority import infer_explicit_turn_actions
 from .tool_catalog import (
     ALLOWED_TOOLS,
     CONTROL_TOOLS,
@@ -179,9 +182,41 @@ def _extension_result(
     ).model_dump(mode="json")
 
 
+_PRIVILEGED_ONE_SHOT_ACTIONS = frozenset(
+    {"provider_run", "extract", "report_revision"}
+)
+
+
+def _privileged_action_inferred(context: ToolExecutionContext, action: str) -> bool:
+    """Return whether backend text inference authorizes a privileged action.
+
+    D-P1-1 defense in depth: the service already strips client-pre-granted
+    privileged actions, but tools re-check the host-held user text so a
+    directly constructed grant cannot bypass the turn-authority inference.
+    An empty user message is legacy test-only construction without text
+    authority; it keeps the grant check alone so existing unit fixtures that
+    never set user text continue to exercise their owner logic.
+    """
+
+    if action not in _PRIVILEGED_ONE_SHOT_ACTIONS:
+        return True
+    user_text = str(getattr(context, "user_message", "") or "").strip()
+    if not user_text:
+        return True
+    return action in infer_explicit_turn_actions(user_text)
+
+
 def _consume_action(
     context: ToolExecutionContext, action: str
 ) -> Optional[Dict[str, Any]]:
+    if not _privileged_action_inferred(context, action):
+        return _result(
+            context,
+            status="blocked",
+            code="pi_action_authorization_required",
+            summary=f"This action requires a one-use {action} grant for the current message.",
+            owner="easyicu.webserver.pi_copilot",
+        )
     outcome = context.grant.consume_once(action)
     if outcome == "granted":
         return None
@@ -385,6 +420,7 @@ def _document_resource(
     clean_run = stable_code(run_id)
     clean_name = str(document_name or "").strip()
     labels = {
+        "manuscript_revision.pdf": "Current report revision (PDF)",
         "manuscript_scaffold.pdf": "Rendered manuscript draft (PDF)",
         "manuscript_scaffold.tex": "LaTeX manuscript source",
         "manuscript_scaffold.bib": "BibTeX bibliography",
@@ -392,6 +428,7 @@ def _document_resource(
         "system_validation_report.pdf": "System validation dossier (PDF)",
     }
     media_types = {
+        "manuscript_revision.pdf": "application/pdf",
         "manuscript_scaffold.pdf": "application/pdf",
         "manuscript_scaffold.tex": "text/x-tex",
         "manuscript_scaffold.bib": "application/x-bibtex",
@@ -460,6 +497,12 @@ def _plan_projection(payload: Mapping[str, Any]) -> Dict[str, Any]:
                     "evidence_ids",
                     "literature_citation_keys",
                     "output_type",
+                    "planned_analysis_role",
+                    "inputs",
+                    "expected_outputs",
+                    "table_one_spec",
+                    "model_requirements",
+                    "figure_panels",
                 )
                 if row.get(key) is not None
             }
@@ -2514,7 +2557,11 @@ def _inspect_manuscript(
         for resource in (
             _artifact_resource(row.get("run_id"), "manuscript_draft.json"),
             *(
-                _document_resource(row.get("run_id"), artifact.get("name"))
+                _document_resource(
+                    row.get("run_id"),
+                    artifact.get("name"),
+                    sha256=artifact.get("sha256"),
+                )
                 for artifact in projected_artifacts
             ),
         )
@@ -3123,6 +3170,66 @@ def _prepare_idea_handoff(
     )
 
 
+def _prior_art_screening_projection(value: Any) -> Dict[str, Any]:
+    """Project adjudication counts and screened metadata without row containers."""
+
+    screening = value if isinstance(value, Mapping) else {}
+    candidates = []
+    for row in list(screening.get("records") or [])[:20]:
+        if not isinstance(row, Mapping):
+            continue
+        candidates.append(
+            {
+                key: row.get(key)
+                for key in (
+                    "pmid",
+                    "title",
+                    "disposition",
+                    "evidence_role",
+                    "rationale",
+                    "population_match",
+                    "exposure_match",
+                    "outcome_match",
+                    "publication_type_eligible",
+                )
+                if row.get(key) is not None
+            }
+        )
+    return {
+        "retrieval_candidate_count": screening.get("retrieval_candidate_count"),
+        "direct_comparator_count": screening.get("direct_comparator_count"),
+        "screened_candidates": candidates,
+    }
+
+
+def _prior_art_adjudication_binding_projection(
+    binding: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Project the digest binding while replacing its internal row container."""
+
+    summary = binding.get("prior_art_adjudication_summary")
+    summary = summary if isinstance(summary, Mapping) else {}
+    projected = {
+        key: binding.get(key)
+        for key in (
+            "prior_art_adjudication_schema_version",
+            "prior_art_adjudication_sha256",
+            "prior_art_decision",
+            "prior_art_adjudicated_at",
+            "idea_definition_sha256",
+        )
+        if binding.get(key) is not None
+    }
+    projected["prior_art_adjudication_summary"] = {
+        "decision": summary.get("decision"),
+        "rationale": summary.get("rationale"),
+        "screening": _prior_art_screening_projection(summary.get("screening")),
+        "comparison_axes": list(summary.get("comparison_axes") or [])[:6],
+        "authority": summary.get("authority"),
+    }
+    return projected
+
+
 def _adjudicate_idea_literature(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
@@ -3176,10 +3283,12 @@ def _adjudicate_idea_literature(
                     "idea_id": adjudication.get("idea_id"),
                     "decision": decision,
                     "rationale": adjudication.get("rationale"),
-                    "screening": adjudication.get("screening"),
+                    "screening": _prior_art_screening_projection(
+                        adjudication.get("screening")
+                    ),
                     "comparison_axes": adjudication.get("comparison_axes"),
                     "authority": adjudication.get("authority"),
-                    "binding": binding,
+                    "binding": _prior_art_adjudication_binding_projection(binding),
                 }
             ),
             "execution_can_advance": decision == "differentiated",
@@ -3706,6 +3815,8 @@ def _run(
     plan_revision_source_run_id: str = "",
     planner_start_mode: str = "auto",
     run_intent: research_run_submission.RunIntent | None = None,
+    plan_change_request: PlanChangeRequest | None = None,
+    report_source_run_id: str = "",
 ) -> Dict[str, Any]:
     planner_start_mode = str(planner_start_mode or "auto").strip().lower()
     if planner_start_mode not in {"auto", "fresh", "resume_checkpoint"}:
@@ -3722,7 +3833,11 @@ def _run(
     # explicitly granted: clicking "full analysis" must not silently become a
     # preflight and then ask for a second permission.  With no provider grant,
     # the conservative default remains the deterministic local preflight.
-    provider_run_granted = "provider_run" in context.allowed_actions
+    # D-P1-1: a client-supplied provider_run without backend text inference
+    # is not a grant (chit-chat must stay preflight/fail-closed).
+    provider_run_granted = "provider_run" in context.allowed_actions and (
+        _privileged_action_inferred(context, "provider_run")
+    )
     local_run_granted = "run" in context.allowed_actions
     literature_search_authorized = context.grant.was_provided("literature")
     run_type = requested_run_type or ("full" if provider_run_granted else "preflight")
@@ -3817,7 +3932,20 @@ def _run(
             return account_error
 
         def authorize() -> None:
-            outcome = context.grant.consume_once("provider_run")
+            action = "report_revision" if report_source_run_id else "provider_run"
+            # D-P1-1: backend text inference is a necessary condition even
+            # when the service already filtered the grant list.
+            if not _privileged_action_inferred(context, action):
+                raise research_run_submission.ResearchRunSubmissionError(
+                    {
+                        "error": "pi_action_authorization_required",
+                        "message": (
+                            f"This action requires a one-use {action} grant for the current message."
+                        ),
+                        "owner": "easyicu.webserver.pi_copilot",
+                    }
+                )
+            outcome = context.grant.consume_once(action)
             if outcome == "granted":
                 return
             code = (
@@ -3829,9 +3957,9 @@ def _run(
                 {
                     "error": code,
                     "message": (
-                        "The one-use provider_run grant for this message was already consumed."
+                        f"The one-use {action} grant for this message was already consumed."
                         if outcome == "consumed"
-                        else "This action requires a one-use provider_run grant for the current message."
+                        else f"This action requires a one-use {action} grant for the current message."
                     ),
                     "owner": "easyicu.webserver.pi_copilot",
                 }
@@ -3856,7 +3984,10 @@ def _run(
             intent=effective_run_intent,
             planner_start_mode=planner_start_mode,
             plan_revision_source_run_id=str(plan_revision_source_run_id),
-            literature_search_authorized=literature_search_authorized,
+            literature_search_authorized=literature_search_authorized and not report_source_run_id,
+            plan_change_request=plan_change_request,
+            execution_resume_source_run_id=report_source_run_id,
+            report_only=bool(report_source_run_id),
         )
         try:
             receipt = research_run_submission.submit_research_run(
@@ -3884,11 +4015,15 @@ def _run(
         context,
         status="ok",
         code=(
-            "easyicu_full_run_submitted"
+            "easyicu_report_repair_submitted"
+            if report_source_run_id else "easyicu_full_run_submitted"
             if run_type == "full"
             else "easyicu_run_submitted"
         ),
         summary=(
+            f"Submitted report-only repair job {submitted.get('job_id')} from sealed analysis {report_source_run_id}; no analysis rerun."
+            if report_source_run_id
+            else
             (
                 "Submitted an EasyICU Research Agent Planner continuation "
                 f"job {submitted.get('job_id')} from validated checkpoint job "
@@ -3916,7 +4051,8 @@ def _run(
             # A real ResearchAgentPipeline run id does not exist at submission
             # time.  This explicit state prevents a historical bound run id
             # from being presented as the identity of the new job.
-            "run_id_status": "pending_pipeline_start",
+            "run_id_status": "existing_analysis" if report_source_run_id else "pending_pipeline_start",
+            **({"source_run_id": report_source_run_id, "report_only": True} if report_source_run_id else {}),
             **(
                 {"planner_start_mode": planner_start_mode}
                 if run_type == "full"
@@ -3935,6 +4071,22 @@ def _run(
     return result
 
 
+def _repair_report(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[str, Any]:
+    """Submit the existing report-quality repair owner for an exact bound run."""
+    row = _select_run(context, params.get("run_id"))
+    source_run_id = str((row or {}).get("run_id") or "")
+    if not source_run_id:
+        return _result(
+            context, status="blocked", code="report_repair_run_required",
+            summary="Choose an existing analysis from this study before repairing its report.",
+            owner="easyicu.webserver.manuscript_repair",
+        )
+    return _run(
+        context, {"run_type": "full"}, run_intent="reviewed_analysis",
+        report_source_run_id=source_run_id,
+    )
+
+
 def _resume(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[str, Any]:
     decision = str(params.get("decision") or "").strip().lower()
     if decision:
@@ -3950,6 +4102,14 @@ def _resume(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[st
             study = _bound_context(context.session.binding)
             if study and study.get("id"):
                 workflow = _workflow_snapshot(context, study_override=study)
+                if (
+                    workflow.get("next_action_code") == "planner_checkpoint_resume_available"
+                    and workflow.get("latest_attempt_failure")
+                ):
+                    # A failed package-bound attempt is not a plan to approve.
+                    # Continue planning through the existing owned checkpoint
+                    # route, which pauses at a new exact-plan review gate.
+                    return _request_replan(context, {"strategy": "resume_checkpoint"})
                 if (
                     str(workflow.get("next_action_code") or "")
                     == "plan_execution_upgrade_required"
@@ -4111,6 +4271,30 @@ def _cancel(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[st
     return result
 
 
+def _plan_change_references(
+    context: ToolExecutionContext, latest: Mapping[str, Any],
+) -> tuple[ReferencedPlan, ...]:
+    """Resolve explicit run references only inside this conversation's authority."""
+    named = re.findall(r"(?<![A-Za-z0-9_])run[-_][A-Za-z0-9_-]+", context.user_message)
+    ids = list(dict.fromkeys([str(latest["run_id"]), *named]))
+    rows = {str(row["run_id"]): row for row in _run_rows(context)}
+    if len(ids) > 4 or any(run_id not in rows for run_id in ids):
+        raise PiCopilotError(
+            "plan_revision_reference_unavailable",
+            "A referenced plan is outside this bound conversation or exceeds the review context limit.",
+        )
+    references = []
+    for run_id in ids:
+        result = agent_runs.read_run_artifact(str(rows[run_id].get("project_dir") or ""), "agent_plan.json")
+        if not result.get("ok") or not isinstance(result.get("payload"), Mapping):
+            raise PiCopilotError("plan_revision_reference_unavailable", "A referenced plan could not be read safely.")
+        references.append(ReferencedPlan(
+            run_id=run_id, artifact_sha256=result["artifact"]["sha256"],
+            plan=reference_plan_content(result["payload"]),
+        ))
+    return tuple(references)
+
+
 def _request_replan(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
@@ -4175,7 +4359,30 @@ def _request_replan(
             == "full_reviewed"
         )
     )
-    fresh_run_required = bool(same_study_plan and not current_review_is_resumable)
+    plan_change_request = None
+    if (
+        same_study_plan
+        and strategy == "fresh"
+        and "provider_run" in infer_explicit_turn_actions(context.user_message)
+    ):
+        # The model's `reason` can summarize or omit the actual review. Forward
+        # the host-held current user text instead, with local paths removed by
+        # the same exact-registry boundary used for the conversation itself.
+        prepared_message = prepare_user_message(
+            context.user_message,
+            registered_sources=sources.load_registry().get("sources") or [],
+        )
+        plan_change_request = PlanChangeRequest(
+            source_run_id=str(latest["run_id"]),
+            source_scientific_configuration_sha256=planned_digest or None,
+            target_scientific_configuration_sha256=current_digest if planned_digest else None,
+            user_message=prepared_message.provider_message,
+            reference_plans=_plan_change_references(context, latest),
+        )
+    fresh_run_required = bool(
+        same_study_plan
+        and (not current_review_is_resumable or plan_change_request is not None)
+    )
     preflight_only_history = bool(
         isinstance(study, Mapping)
         and study.get("id")
@@ -4201,6 +4408,7 @@ def _request_replan(
             {"run_type": "full"},
             planner_start_mode=strategy,
             run_intent="candidate_plan",
+            plan_change_request=plan_change_request,
         )
     return _result(
         context,
@@ -4643,6 +4851,7 @@ _DISPATCH = {
     "easyicu_prepare_demo_source": _prepare_demo_source,
     "easyicu_start_extraction": _start_extraction,
     "easyicu_run": _run,
+    "easyicu_repair_report": _repair_report,
     "easyicu_resume": _resume,
     "easyicu_cancel": _cancel,
     "easyicu_request_replan": _request_replan,

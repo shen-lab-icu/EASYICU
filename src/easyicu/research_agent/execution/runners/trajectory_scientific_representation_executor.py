@@ -16,6 +16,7 @@ from ...trajectory.scientific_runtime_authority import (
     TrajectoryScientificRuntimeAuthority,
     load_trajectory_scientific_runtime_authority,
 )
+from ._shared import write_json as _write_json
 
 
 def _sha256(path: Path) -> str:
@@ -24,13 +25,6 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
-
-
-def _write_json(path: Path, value: Mapping[str, Any]) -> None:
-    path.write_text(
-        json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False),
-        encoding="utf-8",
-    )
 
 
 def trajectory_scientific_representation_executor_owns_step(

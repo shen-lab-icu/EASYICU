@@ -1,6 +1,7 @@
 {
   "schema_version": "easyicu.baseline_lock/1",
   "generated_at": "2026-05-27",
+  "scope": "Pins only the 5 paper-cited A/B checkouts below. The wider baselines/REGISTRY.md landscape (benchmarks, literature, engineering, causal references) is intentionally unpinned; see REGISTRY.md Usage.",
   "paper_cited": [
     {
       "name": "data-to-paper",

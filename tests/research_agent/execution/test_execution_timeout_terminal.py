@@ -45,7 +45,24 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
 """
 
 
-def _plan() -> str:
+def _plan(*, standard_executor: bool = False) -> str:
+    if standard_executor:
+        return json.dumps({
+            "research_question": "Summarize the ICU cohort.",
+            "steps": [{
+                "step_id": "01_summary", "planned_analysis_role": "auxiliary",
+                "intent": "Summarize age by event status with the grouped Table 1 executor.",
+                "inputs": ["age", "death"], "expected_outputs": ["table:table_one"],
+                "method": "table_one", "table_one_spec": {
+                    "schema_version": "easyicu.table_one/2",
+                    "p_value_adjustment": "not_applicable_repeated_units",
+                    "group_by": "death", "group_levels": [0, 1],
+                    "variables": [{"name": "age", "variable_kind": "continuous",
+                        "summary": "median_iqr", "test": "none_descriptive_smd_only"}],
+                    "p_values_required": False,
+                },
+            }],
+        })
     return json.dumps(
         {
             "research_question": "Summarize the ICU cohort.",
@@ -88,7 +105,10 @@ def _isolate_article_suite_contract(monkeypatch) -> None:
     monkeypatch.setattr(PlannerAgent, "run", run_without_article_suite)
 
 
-def _run_with_failing_runner(*, ra, tmp_path: Path, monkeypatch, timed_out: bool):
+def _run_with_failing_runner(
+    *, ra, tmp_path: Path, monkeypatch, timed_out: bool,
+    standard_executor: bool = False,
+):
     """Execute one step whose runner always fails, timing out or crashing."""
 
     _isolate_article_suite_contract(monkeypatch)
@@ -149,7 +169,7 @@ def _run_with_failing_runner(*, ra, tmp_path: Path, monkeypatch, timed_out: bool
 
     llm = PatternScriptedMockLLMClient(
         [
-            ("ICU-AWARE RESEARCH PLAN", [_plan()] * 4),
+            ("ICU-AWARE RESEARCH PLAN", [_plan(standard_executor=standard_executor)] * 4),
             ("WRITE THE PYTHON CODE", [f"```python\n{_SCRIPT}```"] * 8),
             # Distinguishable from the original: an identical candidate is
             # short-circuited, which would make "the runner ran once" true for
@@ -178,7 +198,7 @@ def _run_with_failing_runner(*, ra, tmp_path: Path, monkeypatch, timed_out: bool
     )
     result = pipeline.run(
         question="Summarize the ICU cohort.",
-        cohort=pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]}),
+        cohort=pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0], "age": [40, 50, 60]}),
         cohort_name="execution_timeout_test",
         database="synthetic",
         target_outcome="death",
@@ -193,6 +213,24 @@ def _run_with_failing_runner(*, ra, tmp_path: Path, monkeypatch, timed_out: bool
         if record.get("step_id") == "01_summary"
     ]
     return llm, runner_calls, run_dir, partial, records
+
+
+@pytest.mark.parametrize("timed_out", [False, True])
+def test_native_executor_failure_cannot_buy_a_coder_monkeypatch(
+    ra, tmp_path, monkeypatch, timed_out,
+):
+    llm, calls, _run_dir, _partial, records = _run_with_failing_runner(
+        ra=ra, tmp_path=tmp_path, monkeypatch=monkeypatch,
+        timed_out=timed_out, standard_executor=True,
+    )
+    assert calls == ["01_summary"]
+    assert _call_count(llm, "WRITE THE PYTHON CODE") == 0
+    assert _call_count(llm, "REPAIR THE PYTHON CODE") == 0
+    assert len(records) == 1
+    assert records[0]["status"] == "deterministic_standard_blocked"
+    assert records[0]["diagnostic_only"] is True
+    assert records[0]["llm_repair_used"] is False
+    assert records[0]["standard_executor_terminal_reason"] == "executor_runtime_failure"
 
 
 @pytest.fixture(scope="module")

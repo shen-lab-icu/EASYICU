@@ -991,6 +991,14 @@ class LLMConceptAuditor:
             "without reconciling them to counts and denominators, or select an "
             "alternate per-stay summary in place of the authoritative exposure; "
             "those behaviors can change the displayed scientific result. "
+            "When the bound typed product carries count components and a "
+            "denominator for a rendered percentage, a script that only checks "
+            "that percentage pairs sum to 100 has not reconciled them: use "
+            "issue_code `registered_percentage_count_reconciliation_required` "
+            "unless the script computes or verifies each percentage against its "
+            "count numerator and denominator (a fail-closed comparison, for "
+            "example np.isclose(missing_pct, missing_n / n_total * 100.0), is "
+            "compliant; registered values must not be silently replaced). "
             "Do not assume that a generically named `n` field is the total "
             "denominator when the typed upstream product does not declare that "
             "meaning. If non-negative integer `n_nonmissing` and `missing_n` "
@@ -1065,8 +1073,9 @@ class LLMConceptAuditor:
             "`strict_numeric_nonfinite_guard_required`, "
             "`finalized_exposure_missing_reconciliation`, "
             "`finalized_exposure_overridden`, or "
-            "`finalized_exposure_forced_raw_reconciliation`, or "
-            "`plausibility_range_exclusion_required`; use `other` for "
+            "`finalized_exposure_forced_raw_reconciliation`, "
+            "`plausibility_range_exclusion_required`, or "
+            "`registered_percentage_count_reconciliation_required`; use `other` for "
             "anything else. Message text is explanatory only, never routing.\n\n"
             "Return JSON only: "
             '{"findings":[{"severity":"info|warning|error",'
@@ -1130,6 +1139,7 @@ _LLM_CONCEPT_ISSUE_CODES = frozenset(
         "finalized_exposure_overridden",
         "finalized_exposure_forced_raw_reconciliation",
         "plausibility_range_exclusion_required",
+        "registered_percentage_count_reconciliation_required",
         "other",
     }
 )
@@ -2705,6 +2715,119 @@ def _reclassify_flag_only_plausibility_range_findings(
     return reclassified
 
 
+def _host_plausibility_receipt_region(script_text: str) -> Optional[Tuple[int, int]]:
+    """Ask the renderer to verify the exact, bounded source being exempted."""
+
+    from ..authority.plausibility_receipt_code import (
+        verified_host_plausibility_receipt_region,
+    )
+
+    return verified_host_plausibility_receipt_region(script_text)
+
+
+def _region_store_names(
+    tree: ast.AST,
+    *,
+    region: Tuple[int, int],
+) -> Tuple[Set[str], Set[str]]:
+    """Names bound inside the region, and names bound anywhere outside it."""
+
+    first, last = region
+    inside: Set[str] = set()
+    outside: Set[str] = set()
+
+    def record(name: str, line: Optional[int]) -> None:
+        if not name:
+            return
+        if line is not None and first <= int(line) <= last:
+            inside.add(name)
+        else:
+            outside.add(name)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            record(node.id, getattr(node, "lineno", None))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            record(node.name, node.lineno)
+        elif isinstance(node, ast.arg):
+            record(node.arg, node.lineno)
+        elif isinstance(node, ast.alias):
+            record(node.asname or node.name.split(".")[0], getattr(node, "lineno", None))
+        elif isinstance(node, ast.ExceptHandler) and node.name is not None:
+            record(node.name, node.lineno)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name is not None:
+            record(node.name, node.lineno)
+        elif isinstance(node, ast.MatchMapping) and node.rest is not None:
+            record(node.rest, node.lineno)
+    return inside, outside
+
+
+def _downgrade_host_injected_plausibility_receipt_findings(
+    *,
+    findings: Sequence[ValidationFinding],
+    script_text: str,
+) -> List[ValidationFinding]:
+    """Do not charge the Coder for arithmetic the host wrote into the script.
+
+    The host appends its flag-only plausibility receipt to the assembled script
+    BEFORE the concept audit, so the auditor reads the host's own comparisons as
+    agent-authored.  On the E2 dependence-audit step it named the receipt's
+    conversion variable, the repair loop asked the Coder to rewrite code it does
+    not own, the next candidate re-carried the same appended block, the monotonic
+    constraint re-raised the cached finding, and the step died on its concept
+    repair budget after an earlier candidate had already executed and filed the
+    honest receipt.
+
+    Failing closed is not available to that block either: ``retain_and_flag`` is
+    the Planner's declared policy, and the receipt already discloses every value
+    that was present but would not convert as ``coercion_loss_n``.  A genuine
+    finding about an agent-authored variable keeps its authority, because a name
+    bound anywhere outside the injected region is not treated as host property.
+    """
+
+    region = _host_plausibility_receipt_region(script_text)
+    if region is None:
+        return list(findings)
+    try:
+        tree = ast.parse(str(script_text or ""))
+    except SyntaxError:
+        return list(findings)
+    inside, outside = _region_store_names(tree, region=region)
+
+    downgraded: List[ValidationFinding] = []
+    for finding in findings:
+        detail = dict(finding.detail or {})
+        variables = [
+            variable
+            for variable in (detail.get("variables") or [])
+            if isinstance(variable, str) and variable
+        ]
+        if not (
+            finding.validator == LLMConceptAuditor.name
+            and finding.severity == "error"
+            and str(detail.get("issue_code") or "")
+            == "strict_numeric_nonfinite_guard_required"
+            and variables
+            and all(name in inside and name not in outside for name in variables)
+        ):
+            downgraded.append(finding)
+            continue
+        detail.setdefault(
+            "downgraded_reason",
+            "Every named variable is bound only inside the flag-only "
+            "plausibility receipt the host appended to this script, and that "
+            "receipt reports coercion loss as ``coercion_loss_n`` instead of "
+            "invalidating the analysis set, which is the Planner-declared "
+            "retain_and_flag policy. The Coder cannot be asked to rewrite the "
+            "host's own source.",
+        )
+        detail["host_owned_source_region"] = "flag_only_plausibility_receipt"
+        downgraded.append(
+            finding.model_copy(update={"severity": "warning", "detail": detail})
+        )
+    return downgraded
+
+
 def _reclassify_llm_concept_findings(
     *,
     findings: Sequence[ValidationFinding],
@@ -2725,6 +2848,10 @@ def _reclassify_llm_concept_findings(
     reclassified = _reclassify_flag_only_plausibility_range_findings(
         findings=reclassified,
         context=context,
+    )
+    reclassified = _downgrade_host_injected_plausibility_receipt_findings(
+        findings=reclassified,
+        script_text=script_text,
     )
     return _downgrade_finalized_exposure_reconciliation_findings(
         findings=reclassified,

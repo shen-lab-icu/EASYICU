@@ -799,7 +799,7 @@ AUXILIARY_DETERMINISTIC_RUNNERS: Tuple[AuxiliaryRunner, ...] = (
         name="absolute_risk_context",
         entrypoint="absolute_risk_context_code",
         module="execution.runners.deterministic_descriptive",
-        purpose="Render descriptive exposure prevalence and absolute-risk context from an explicit product contract.",
+        purpose="Render descriptive exposure prevalence and absolute-risk context from an explicit product contract. A direct primary-model result reference requests that model's exact population; without it the table describes the declared cohort.",
         fail_closed="Declines figure/primary-effect contracts and blocks when the declared descriptive columns are unavailable.",
     ),
     AuxiliaryRunner(

@@ -75,6 +75,16 @@ class CohortSchemaError(ValueError):
 
 @dataclass(frozen=True)
 class TimeWindow:
+    """Predicate-level time window for cohort inclusion/exclusion rules.
+
+    Canonical cohort-level analysis windows are owned by
+    :class:`..schema.TimeWindow` (name/anchor/start_hours/end_hours).  This
+    contract-side type is intentionally distinct: it binds a single predicate
+    to an anchor-relative ``[start_offset_hours, end_offset_hours)`` range and
+    is consumed by :class:`ConceptPredicate` validation.  Do not merge the two
+    signatures; convert explicitly at the boundary when both are needed.
+    """
+
     anchor: TimeAnchor
     start_offset_hours: float
     end_offset_hours: float

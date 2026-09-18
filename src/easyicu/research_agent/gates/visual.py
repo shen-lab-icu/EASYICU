@@ -294,3 +294,45 @@ def decide_visual_repair(
         host_guidance=host_guidance,
         repair_log=repair_log,
     )
+
+
+# --- Public cross-module aliases (thin wrappers, no logic change) ---
+# Private names kept for backward compatibility; cross-owner callers must use
+# the public names below.
+
+
+def is_cosmetic_visual_finding(finding: ValidationFinding) -> bool:
+    """Public alias of :func:`_is_cosmetic_visual_finding` (no logic change)."""
+
+    return _is_cosmetic_visual_finding(finding)
+
+
+def demote_cosmetic_visual_findings(
+    findings: Sequence[ValidationFinding],
+) -> tuple[List[ValidationFinding], List[ValidationFinding]]:
+    """Public alias of :func:`_demote_cosmetic_visual_findings`."""
+
+    return _demote_cosmetic_visual_findings(findings)
+
+
+def visual_repair_request_log(
+    findings: Sequence[ValidationFinding],
+) -> str:
+    """Public alias of :func:`_visual_repair_request_log` (no logic change)."""
+
+    return _visual_repair_request_log(findings)
+
+
+__all__ = [
+    "VisualGateResult",
+    "VisualRepairAction",
+    "VisualRepairDecision",
+    "_demote_cosmetic_visual_findings",
+    "_is_cosmetic_visual_finding",
+    "_visual_repair_request_log",
+    "collect_visual_gate_result",
+    "decide_visual_repair",
+    "demote_cosmetic_visual_findings",
+    "is_cosmetic_visual_finding",
+    "visual_repair_request_log",
+]

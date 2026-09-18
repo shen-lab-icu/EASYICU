@@ -29,10 +29,10 @@ def _all_actions():
     return actions
 
 
-def test_first_batch_has_19_unique_case_neutral_analysis_only_adapters() -> None:
-    assert len(HIGH_FREQUENCY_METHOD_ADAPTERS) == 19
-    assert len({item.adapter_id for item in HIGH_FREQUENCY_METHOD_ADAPTERS}) == 19
-    assert len({item.action_id for item in HIGH_FREQUENCY_METHOD_ADAPTERS}) == 19
+def test_catalog_has_20_unique_case_neutral_analysis_only_adapters() -> None:
+    assert len(HIGH_FREQUENCY_METHOD_ADAPTERS) == 20
+    assert len({item.adapter_id for item in HIGH_FREQUENCY_METHOD_ADAPTERS}) == 20
+    assert len({item.action_id for item in HIGH_FREQUENCY_METHOD_ADAPTERS}) == 20
     assert {item.claim_ceiling for item in HIGH_FREQUENCY_METHOD_ADAPTERS} == {
         "analysis_only"
     }
@@ -125,7 +125,7 @@ def test_adapter_catalog_receipt_is_stable_and_complete() -> None:
     second = method_adapter_catalog_receipt()
     assert first == second
     assert first["schema_version"] == "easyicu.method_adapter_catalog/1"
-    assert first["adapter_count"] == 19
+    assert first["adapter_count"] == 20
     assert first["claim_ceiling"] == "analysis_only"
     assert re.fullmatch(r"[0-9a-f]{64}", str(first["catalog_sha256"]))
     assert first["action_ids"] == [

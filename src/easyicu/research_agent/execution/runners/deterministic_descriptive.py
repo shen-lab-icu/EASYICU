@@ -22,6 +22,7 @@ import pandas as pd
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from .plausibility_receipt import render_standard_plausibility_receipt_code
+from ._shared import read_json_object as _read_json
 
 __all__ = ["absolute_risk_context_code", "run_absolute_risk_context"]
 
@@ -156,14 +157,6 @@ def _declared_product(step: Mapping[str, Any]) -> str:
         if separator and kind == "table" and name in _SUPPORTED_PRODUCTS:
             return name
     return "exposure_outcome_summary"
-
-
-def _read_json(path: Path) -> Dict[str, Any]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
 
 
 def _normalise(value: Any) -> str:
@@ -572,7 +565,13 @@ def _write_blocked(
     return summary
 
 
-def run_absolute_risk_context() -> Dict[str, Any]:
+def run_absolute_risk_context(
+    *,
+    population_frame: pd.DataFrame | None = None,
+    population_receipt: Mapping[str, Any] | None = None,
+    exposure_columns: Sequence[str] | None = None,
+    outcome_column: str | None = None,
+) -> Dict[str, Any]:
     """Execute the descriptive role using the standard runner environment."""
 
     out_dir = Path(os.environ["STEP_OUT_DIR"])
@@ -582,7 +581,10 @@ def run_absolute_risk_context() -> Dict[str, Any]:
     cohort_path = Path(os.environ["COHORT_PARQUET"])
     context = _read_json(run_dir / "research_context.json")
     step = _load_current_step(run_dir, step_id)
-    frame = pd.read_parquet(cohort_path).copy()
+    frame = (
+        pd.read_parquet(cohort_path).copy()
+        if population_frame is None else population_frame.copy()
+    )
     n_total = int(len(frame))
     if n_total == 0:
         return _write_blocked(
@@ -592,7 +594,7 @@ def run_absolute_risk_context() -> Dict[str, Any]:
             reason="Analysis cohort is empty; absolute risk is undefined.",
         )
 
-    requested_outcome = os.environ.get("OUTCOME_COL") or context.get("target_outcome")
+    requested_outcome = outcome_column or os.environ.get("OUTCOME_COL") or context.get("target_outcome")
     outcome_col = _resolve_column(requested_outcome, frame.columns)
     if outcome_col is None:
         return _write_blocked(
@@ -615,7 +617,7 @@ def run_absolute_risk_context() -> Dict[str, Any]:
         )
 
     exposures: List[str] = []
-    for item in step.get("inputs") or []:
+    for item in exposure_columns if exposure_columns is not None else step.get("inputs") or []:
         column = _resolve_column(item, frame.columns, excluded=[outcome_col])
         if column is None or column in exposures or _is_companion_column(column):
             continue
@@ -744,6 +746,10 @@ def run_absolute_risk_context() -> Dict[str, Any]:
             )
 
     table = pd.DataFrame(rows)
+    if population_receipt is not None:
+        table["population_scope"] = population_receipt["scope"]
+        table["source_cohort_n"] = population_receipt["source_cohort_n"]
+        table["population_n"] = population_receipt["population_n"]
     product = _declared_product(step)
     table_path = out_dir / f"{product}.csv"
     table.to_csv(table_path, index=False)
@@ -781,6 +787,12 @@ def run_absolute_risk_context() -> Dict[str, Any]:
             "Source states used paired measured/count columns when available.",
         ],
     }
+    if population_receipt is not None:
+        summary["population_binding"] = dict(population_receipt)
+        summary["input_bindings"] = list(population_receipt.get("input_bindings", []))
+        summary["notes"].append(
+            "Rows match the runtime-bound primary model population; the source cohort denominator is reported separately."
+        )
     (out_dir / "step_summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",

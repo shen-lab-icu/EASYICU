@@ -7,9 +7,15 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from ..authority.manuscript_claim_policy import missing_scientific_claims_in_results
+from ..authority.runtime_artifacts import current_evidence_records
+from .manuscript_figures import manuscript_figure_receipt_is_current
 
 
 GATE_STATE_SUPERSESSION_PATTERNS = (
+    ("manuscript_figure_projection", "a reader figure has no source-bound",
+     "manuscript_figures_complete"),
+    ("manuscript_figure_projection", "source-bound figure projection failed",
+     "manuscript_figures_complete"),
     ("manuscript_gate", "execution gate did not pass", "execution_complete"),
     ("manuscript_gate", "manuscript generation skipped", "execution_complete"),
     (
@@ -103,6 +109,11 @@ def current_manuscript_completion_state(
         and not writer_probe_mode
     )
     return {
+        "manuscript_figures_complete": (
+            manuscript_figure_receipt_is_current(
+                run_dir=run_dir, evidence_records=current_evidence_records(evidence.records(), per_step_records),
+            ) if callable(getattr(evidence, "records", None)) else False
+        ),
         "manuscript_quality_complete": quality_complete,
         "manuscript_result_claims_complete": claims_complete,
     }

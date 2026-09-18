@@ -8,6 +8,7 @@ from typing import Any, Callable, Optional
 
 from ..authority.run_heartbeat import record_active_run_progress
 from ..authority.runtime_artifacts import AuditLogger
+from ..contracts.control_signals import ProgressControlSignal
 from ..providers.structured_retry import StructuredRetryProgress
 from ..providers.structured_diagnostics import (
     safe_projected_validation_issues,
@@ -17,10 +18,6 @@ from ..providers.structured_diagnostics import (
 
 class NonFatalProgressCallbackError(RuntimeError):
     """Mark a UI projection failure as safe to ignore by orchestration."""
-
-
-class ProgressControlSignal(RuntimeError):
-    """Base for typed host cancellation or orchestration control signals."""
 
 
 class ResumableProgressChannel:

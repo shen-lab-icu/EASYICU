@@ -290,6 +290,13 @@ class PipelineConfig:
     # error.  The default remains non-interactive for CLI/benchmark callers;
     # the Guided Web Copilot enables this because its product contract is
     # plan -> user confirmation -> execution.
+    #
+    # The default stays False so unprofiled non-interactive flows keep
+    # working, but it is not caller-optional everywhere: paper-series
+    # submission profiles (those pinning this flag True, e.g. the
+    # qualification12 family) and the explicit reportable-capability /
+    # literature-design-authority contracts fail closed in __post_init__
+    # when this is False, with an error that names the flag to enable.
     require_human_plan_review: bool = False
     # Opt-in next-stage contract: reviewed comparator full text/supplements
     # must shape all seven design dimensions before Provider planning, and the
@@ -422,6 +429,11 @@ class PipelineConfig:
     # the host must prove the StudyContext digest has not changed before
     # supplying it. Only plan-owned findings may appear here.
     bound_plan_revision_contract: Optional[str] = None
+    # Host-issued content from an accepted metadata-only candidate, separate
+    # from the prompt seed. Persisted/hashed so fresh planning and recovery
+    # cannot silently forget a baseline requirement.
+    bound_baseline_requirements: Optional[Dict[str, Any]] = None
+    bound_population_requirements: Optional[Dict[str, Any]] = None
     enable_tavily: bool = False
     tavily_api_key: Optional[str] = None
     tavily_retmax: int = 5
@@ -629,18 +641,56 @@ class PipelineConfig:
         return cls(**kwargs)
 
     def __post_init__(self) -> None:
+        if self.bound_population_requirements is not None:
+            from ..planning.population_requirements import PlanPopulationRequirements
+
+            if not self.require_human_plan_review:
+                raise ValueError("bound_population_requirements requires require_human_plan_review")
+            parsed = PlanPopulationRequirements.model_validate(self.bound_population_requirements)
+            object.__setattr__(self, "bound_population_requirements", parsed.model_dump(mode="json"))
+        if self.bound_baseline_requirements is not None:
+            from ..planning.baseline_requirements import AcceptedBaselineRequirements
+
+            if not self.require_human_plan_review:
+                raise ValueError("bound_baseline_requirements requires require_human_plan_review")
+            parsed = AcceptedBaselineRequirements.model_validate(
+                self.bound_baseline_requirements
+            )
+            object.__setattr__(self, "bound_baseline_requirements", parsed.model_dump(mode="json"))
         for field_def in fields(self):
             value = getattr(self, field_def.name)
             frozen = _deep_freeze(value)
             if frozen is not value:
                 object.__setattr__(self, field_def.name, frozen)
+        if self.submission_profile_name:
+            from .profiles import get_submission_profile
+
+            _review_pin_profile = get_submission_profile(
+                f"{self.submission_profile_name}/{self.submission_profile_version}"
+            )
+            if (
+                _review_pin_profile.require_human_plan_review is True
+                and not self.require_human_plan_review
+            ):
+                raise ValueError(
+                    f"submission profile {_review_pin_profile.ref!r} is a "
+                    "paper-series profile that pins "
+                    "require_human_plan_review=True, so a reviewed, "
+                    "digest-bound plan must authorize Execute; set "
+                    "require_human_plan_review=True (the Guided Web Copilot "
+                    "enables it) or run non-interactive diagnostics under a "
+                    "development-only ('*_dev') profile"
+                )
         if (
             self.require_reportable_scientific_capability
             and not self.require_human_plan_review
         ):
             raise ValueError(
                 "require_reportable_scientific_capability requires "
-                "require_human_plan_review so the pre-execution gate cannot be skipped"
+                "require_human_plan_review so the pre-execution gate cannot be "
+                "skipped; set require_human_plan_review=True (the Guided Web "
+                "Copilot enables it) or leave the reportable capability off "
+                "for diagnostic runs"
             )
         if self.require_literature_design_authority:
             if not self.enable_literature:
@@ -650,7 +700,10 @@ class PipelineConfig:
             if not self.require_human_plan_review:
                 raise ValueError(
                     "require_literature_design_authority requires "
-                    "require_human_plan_review"
+                    "require_human_plan_review; set "
+                    "require_human_plan_review=True (the Guided Web Copilot "
+                    "enables it) or leave literature design authority off for "
+                    "diagnostic runs"
                 )
             if self.planner_strategy != "progressive_v2":
                 raise ValueError(
@@ -857,6 +910,12 @@ class PipelineConfig:
             profile = get_submission_profile(
                 f"{self.submission_profile_name}/{self.submission_profile_version}"
             )
+            for coordinate in ("planner_only", "require_human_plan_review"):
+                expected = getattr(profile, coordinate)
+                if expected is not None and getattr(self, coordinate) != expected:
+                    raise ValueError(
+                        f"{coordinate} must match submission profile {profile.ref!r}"
+                    )
             expected_outline_stop = bool(
                 profile.development_stop_after_planner_outline
             )
@@ -1004,6 +1063,9 @@ class PipelineConfig:
         return {
             key: _render(value, key=key)
             for key, value in sorted(self._field_values().items())
+            # An absent additive contract must not invalidate archived config
+            # digests; once present it is part of the immutable run identity.
+            if key not in {"bound_baseline_requirements", "bound_population_requirements"} or value is not None
         }
 
     def recovery_payload(self) -> Dict[str, Any]:

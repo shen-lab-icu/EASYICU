@@ -25,9 +25,9 @@ _MOCK_LLM_CHOICES = frozenset({
 def _is_offline_choice(llm_choice: Optional[str]) -> bool:
     if not llm_choice:
         return False
-    if llm_choice in _MOCK_LLM_CHOICES:
-        return True
-    return "MockLLMClient" in llm_choice or "offline" in llm_choice.lower()
+    return llm_choice.strip().casefold() in {
+        choice.casefold() for choice in _MOCK_LLM_CHOICES
+    }
 
 
 def is_offline_llm_choice(llm_choice: Optional[str]) -> bool:

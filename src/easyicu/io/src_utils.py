@@ -43,18 +43,14 @@ def src_name(x: Union[str, DataSourceConfig, ICUDataSource, SrcEnv, DataEnv]) ->
         return x.name
     if DataEnv is not None and isinstance(x, DataEnv):
         return x.name
-    
-    # Try to get from registry
-    try:
-        registry = DataSourceRegistry.get_default()
-        if isinstance(x, str):
-            config = registry.get(x)
-            if config:
-                return config.name
-    except Exception:
-        pass
-    
-    raise TypeError(f"Cannot extract source name from {type(x)}")
+
+    # NOTE: no registry fallback here. `str` is handled above, so the old
+    # `DataSourceRegistry.get_default()` branch was unreachable (and that
+    # method does not exist). Unknown types fail closed below.
+    raise TypeError(
+        f"Cannot extract source name from {type(x)}; expected str, "
+        "DataSourceConfig, ICUDataSource, SrcEnv, or DataEnv"
+    )
 
 def src_prefix(x: Union[str, DataSourceConfig, ICUDataSource, SrcEnv]) -> list[str]:
     """Get data source class prefix (R ricu src_prefix).

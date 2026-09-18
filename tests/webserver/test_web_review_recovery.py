@@ -238,11 +238,93 @@ def test_recovery_index_never_silently_evicts_a_pending_pause(tmp_path) -> None:
     newer = WebReviewRecoveryRecord.create(
         **newer.model_dump(exclude={"record_sha256"})
     )
-    with pytest.raises(WebReviewRecoveryError, match="capacity"):
-        put_record(newer, path=path, max_records=1)
+    before = path.read_bytes()
+    put_record(newer, path=path, max_records=1)
 
-    assert get_record("old", path=path) is not None
-    assert get_record("new", path=path) is None
+    assert get_record("old", path=path) == _record("old")
+    assert get_record("new", path=path) == newer
+    assert path.read_bytes() == before
+    assert len(json.loads(path.read_text())["records"]) == 1
+
+
+def test_spilled_recovery_record_survives_concurrent_updates_and_removal(tmp_path) -> None:
+    path = tmp_path / "review-index.json"
+    put_record(_record("inline"), path=path, max_records=1)
+    run_ids = [f"run_{index:03d}" for index in range(20)]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda key: put_record(_record(key), path=path, max_records=1), run_ids))
+
+    for key in run_ids:
+        assert get_record(key, path=path) == _record(key)
+    remove_record("inline", path=path)
+    updated = WebReviewRecoveryRecord.create(
+        **_record(run_ids[0]).model_dump(exclude={"record_sha256", "created_at"}),
+        created_at=2.0,
+    )
+    put_record(updated, path=path, max_records=1)
+    assert get_record(run_ids[0], path=path) == updated
+    # A newly free inline slot must not create a second authority for this run.
+    assert run_ids[0] not in json.loads(path.read_text())["records"]
+    remove_record(run_ids[0], path=path)
+    assert get_record(run_ids[0], path=path) is None
+    assert get_record(run_ids[1], path=path) == _record(run_ids[1])
+
+
+def test_recovery_overflow_preserves_legacy_index_and_private_modes(tmp_path) -> None:
+    path = tmp_path / "review-index.json"
+    legacy = {
+        "schema_version": "easyicu.web-review-recovery-index/2",
+        "records": {"old": _record("old").model_dump(mode="json")},
+        "work_roots": [],
+    }
+    path.write_text(json.dumps(legacy))
+    before = path.read_bytes()
+    put_record(_record("../outside"), path=path, max_records=1)
+
+    assert path.read_bytes() == before
+    shard_dir = path.with_name(path.name + ".records")
+    shards = list(shard_dir.glob("*.json"))
+    assert len(shards) == 1
+    assert shard_dir.stat().st_mode & 0o777 == 0o700
+    assert shards[0].stat().st_mode & 0o777 == 0o600
+    assert get_record("../outside", path=path) == _record("../outside")
+    assert not (tmp_path / "outside").exists()
+
+
+@pytest.mark.parametrize("symlink_target", ["directory", "record"])
+def test_recovery_overflow_rejects_symlinks(tmp_path, symlink_target) -> None:
+    path = tmp_path / "review-index.json"
+    put_record(_record("inline"), path=path, max_records=1)
+    put_record(_record("overflow"), path=path, max_records=1)
+    shard_dir = path.with_name(path.name + ".records")
+    victim = shard_dir if symlink_target == "directory" else next(shard_dir.glob("*.json"))
+    original = victim.with_name(victim.name + ".original")
+    victim.rename(original)
+    victim.symlink_to(original, target_is_directory=original.is_dir())
+
+    with pytest.raises(WebReviewRecoveryError, match="symlink"):
+        get_record("overflow", path=path)
+    with pytest.raises(WebReviewRecoveryError, match="symlink"):
+        put_record(_record("overflow"), path=path, max_records=1)
+    with pytest.raises(WebReviewRecoveryError, match="symlink"):
+        remove_record("overflow", path=path)
+
+
+@pytest.mark.parametrize("tamper", ["digest", "identity"])
+def test_recovery_overflow_validates_digest_and_exact_requested_run(tmp_path, tamper) -> None:
+    path = tmp_path / "review-index.json"
+    put_record(_record("inline"), path=path, max_records=1)
+    put_record(_record("overflow"), path=path, max_records=1)
+    shard = next(path.with_name(path.name + ".records").glob("*.json"))
+    payload = json.loads(shard.read_text())
+    if tamper == "digest":
+        payload["study"]["question"] = "tampered"
+    else:
+        payload = _record("different-run").model_dump(mode="json")
+    shard.write_text(json.dumps(payload))
+
+    with pytest.raises(WebReviewRecoveryError, match="corrupt|identity"):
+        get_record("overflow", path=path)
 
 
 def test_recovery_index_concurrent_updates_do_not_lose_records(tmp_path) -> None:
@@ -419,6 +501,20 @@ def test_reconciliation_scan_is_bounded(tmp_path) -> None:
     reconcile_records(path=index, max_candidates=1)
     payload = json.loads(index.read_text(encoding="utf-8"))
     assert len(payload["records"]) == 1
+
+
+def test_reconciliation_can_recover_a_pause_after_inline_capacity_is_full(tmp_path) -> None:
+    index = tmp_path / "review-index.json"
+    root = tmp_path / "projects"
+    _, run_id = _durable_seed(root)
+    register_pipeline_work_root(root, path=index)
+    put_record(_record("existing"), path=index, max_records=1)
+    before = index.read_bytes()
+
+    assert reconcile_records(path=index, max_records=1) == 1
+    assert get_record(run_id, path=index).run_id == run_id
+    assert index.read_bytes() == before
+    assert reconcile_records(path=index, max_records=1) == 0
 
 
 def test_windows_lock_fallback_serializes_without_fcntl(

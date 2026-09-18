@@ -84,6 +84,9 @@ def test_raw_source_authority_binds_exact_export_and_tables(tmp_path: Path) -> N
     assert receipt["source_paths_returned"] is False
     assert str(tmp_path) not in str(receipt)
     followup = binding.materialize_hospital_mortality_followup()
+    status = binding.materialize_hospital_mortality_status()
+    assert status.frame.hospital_death.tolist() == [False, True]
+    assert status.receipt["clock_required"] is False
     assert followup.frame["stay_id"].tolist() == [11, 12]
     assert followup.receipt["event_stays"] == 1
 

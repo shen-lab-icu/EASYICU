@@ -56,7 +56,7 @@ def test_nav_entries_separate_their_title_from_their_sublabel() -> None:
     # Every sidebar entry that renders a sublabel must supply the joined name.
     assert 'data-nav="${c.id}" aria-label="${navLabel(c.label, c.sub)}"' in app_js
     assert 'data-nav="guided" aria-label="${navLabel(' in app_js
-    assert 'data-nav="agent" aria-label="${navLabel(' in app_js
+    assert 'data-nav="agent"' not in app_js
 
 
 def test_shell_exposes_current_route_and_disclosure_state() -> None:
@@ -113,7 +113,6 @@ ROUTE_HEADINGS = {
         "<h1 style=\"margin-top:0;\">${t('Cross-database comparison', '跨库对比')}</h1>",
     ],
     "screens-ideas.js": ["<h1"],
-    "screens-agent.js": ["<h1"],
     "screens-settings.js": ["<h1"],
     "screens-dict.js": ["<h1"],
     "screens-states.js": ["<h1"],

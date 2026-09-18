@@ -26,6 +26,12 @@ from ..scores.sofa2_aggregate import (
     sofa2_total_structurally_supported,
 )
 from .cohort import get_all_patient_ids_impl
+from .derivation_context import (
+    SepsisContextRecorder,
+    seal_context,
+    transfer_context,
+    validate_derivation_manifest,
+)
 from .concepts import (
     _concepts_need_sofa2,
     _normalize_patient_ids_for_db,
@@ -130,6 +136,7 @@ _RESOURCE_BUDGET_AVAILABLE_FRACTION = 0.70
 _RESOURCE_BUDGET_LOW_MEMORY_CACHE_MB = 512
 _RESOURCE_BUDGET_MAX_DUCKDB_MEMORY_MB = 4 * 1024
 _RESOURCE_BUDGET_MAX_ENGINE_THREADS = 8
+_RESOURCE_BUDGET_SINGLE_WORKER_TOTAL_GB = 12
 
 
 def _resource_budget_execution_limits(resource_budget_mb: float) -> Dict[str, object]:
@@ -144,7 +151,15 @@ def _resource_budget_execution_limits(resource_budget_mb: float) -> Dict[str, ob
     # memory as 70%.  The public resource budget is explicitly *available*
     # memory, so invert that model rather than silently shrinking the contract.
     modeled_total_gb = available_gb / _RESOURCE_BUDGET_AVAILABLE_FRACTION
-    if modeled_total_gb >= 128:
+    # A real 8-GiB cgroup run reached memory.max and OOM-killed the isolated
+    # MIMIC-IV medications worker at both 30k and 20k stays while this tier
+    # allowed two bucket/Arrow/DuckDB workers.  The module itself was the only
+    # active module process, so database-level serialization could not protect
+    # the envelope.  Keep small formal workers single-threaded at the data
+    # engine boundary; patient batching remains the independent scale lever.
+    if modeled_total_gb <= _RESOURCE_BUDGET_SINGLE_WORKER_TOTAL_GB:
+        worker_cap = 1
+    elif modeled_total_gb >= 128:
         worker_cap = 64
     elif modeled_total_gb >= 64:
         worker_cap = 32
@@ -309,11 +324,6 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "peak_rss_mb": 5_077.9,
             "seconds": 73.137,
         },
-        "medications": {
-            "cohort_stays": 94_458,
-            "peak_rss_mb": 6_749.9,
-            "seconds": 88.702,
-        },
         "neurological": {
             "cohort_stays": 94_458,
             "peak_rss_mb": 4_604.9,
@@ -402,6 +412,19 @@ _INVALIDATED_MEASURED_PROFILES: Mapping[
 # that respiratory/circulatory need five balanced patient batches at 8 GiB,
 # while three larger batches cross the same hard RSS limit.
 _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
+    "miiv": {
+        # The earlier one-shot profile predates the current medication loader
+        # and native publication path. Under the strict 8-GiB cgroup, 20k was
+        # OOM-killed while a full-cohort 10k isolated/deferred-merge canary
+        # completed at a 6,132.1-MiB cgroup peak. Its 10% launch headroom makes
+        # the 6,052.1-MiB formal worker budget select 5k automatically.
+        "medications": {
+            "cohort_stays": 94_458,
+            "batch_size": 10_000,
+            "peak_rss_mb": 6_132.1,
+            "seconds": 346.567,
+        },
+    },
     "aumc": {
         # SOFA-1: the smallest rounded two-partition candidate (12k) crossed
         # the hard stop, while 8k completed the three-partition closure.  The
@@ -1137,18 +1160,31 @@ def plan_module_extraction_resources(
     requested_batch_size: Optional[int] = None,
     *,
     available_memory_mb: Optional[float] = None,
+    module_batch_sizes: Optional[Mapping[str, int]] = None,
 ) -> Dict[str, ExtractionResourcePlan]:
     """Return the authoritative resource decision for every module.
 
     A database-level request may contain both measured one-shot modules and
     batch-only modules.  Returning one plan per isolated execution unit keeps
     the fast modules one-shot instead of inheriting the strictest batch in the
-    request.  An explicit override intentionally remains common to all units.
+    request. A database-wide explicit override remains common to all units
+    unless a more specific module override is supplied.
     """
 
     selected_modules = tuple(dict.fromkeys(str(module) for module in modules))
     if not selected_modules:
         raise ValueError("modules must not be empty")
+    overrides = dict(module_batch_sizes or {})
+    unknown_overrides = sorted(set(overrides) - set(selected_modules))
+    if unknown_overrides:
+        raise ValueError(
+            f"module_batch_sizes names unselected modules: {unknown_overrides}"
+        )
+    for module, value in overrides.items():
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(
+                f"module_batch_sizes[{module!r}] must be a positive integer"
+            )
     available = (
         _available_memory_mb()
         if available_memory_mb is None
@@ -1159,7 +1195,7 @@ def plan_module_extraction_resources(
             database,
             [module],
             num_patients,
-            requested_batch_size,
+            overrides.get(module, requested_batch_size),
             available_memory_mb=available,
         )
         for module in selected_modules
@@ -1534,6 +1570,19 @@ def _module_arrow_null_type(concept: str, pyarrow_module):
     return pyarrow_module.float64()
 
 
+_SOFA1_TIME_BASIS_KEY = b"easyicu.sofa1_component_time_basis"
+_SOFA1_TIME_BASIS = b"sofa_score_rolled_components_v1"
+
+
+def _require_sofa1_time_basis(schema) -> None:
+    """Legacy point components cannot be relabelled as rolling score states."""
+    if (schema.metadata or {}).get(_SOFA1_TIME_BASIS_KEY) != _SOFA1_TIME_BASIS:
+        raise ValueError(
+            "SOFA-1 component time basis is unverified; re-extract the total "
+            "and rolled components together through the score module loader"
+        )
+
+
 def _module_arrow_table(
     frame,
     concepts,
@@ -1544,6 +1593,14 @@ def _module_arrow_table(
 ):
     """Create a stable module table, adding structural nulls only in Arrow."""
     table = pyarrow_module.Table.from_pandas(frame, preserve_index=False)
+    if (
+        module == "sofa1_score"
+        and frame.attrs.get(_SOFA1_TIME_BASIS_KEY.decode()) == _SOFA1_TIME_BASIS.decode()
+    ):
+        table = table.replace_schema_metadata({
+            **(table.schema.metadata or {}),
+            _SOFA1_TIME_BASIS_KEY: _SOFA1_TIME_BASIS,
+        })
     requested = _native_export_physical_value_columns(concepts)
     # Event-time companions are derived at the native-v2 publication boundary
     # from the event concept's source ``charttime``.  Do not invent an all-null
@@ -1727,6 +1784,18 @@ _VITAL_STREAM_DERIVED_CONCEPTS = (
 # database's execution strategy.
 _ISOLATED_STREAM_BATCH_TARGETS = frozenset(
     {
+        # The 2026-09-14 full MIIV run completed demographics and outcome,
+        # then crossed the 4-GiB cgroup ceiling inside other_scores. Its first
+        # batch matched the 445-stay pilot, but successive batches retained
+        # native allocator pages until the streamed writer was killed. A fresh
+        # interpreter per batch makes the measured one-batch envelope real.
+        ("miiv", "other_scores"),
+        # The 2026-09-15 strict 8-GiB foundation run OOM-killed medications at
+        # both 30k and 20k stays.  The module ran alone, and its 20k attempt
+        # reached memory.max after earlier streamed partitions had completed.
+        # Isolate each partition so native allocator residency cannot
+        # accumulate across the five full-cohort batches.
+        ("miiv", "medications"),
         ("eicu", "sofa2_score"),
         # Full-cohort AUMC respiratory boundary runs retained Arrow/native
         # allocator pages across successive batches: 8k, 7k and 6k all crossed
@@ -1740,7 +1809,12 @@ _ISOLATED_STREAM_BATCH_TARGETS = frozenset(
 
 # Deferred merging was measured only for AUMC respiratory. eICU SOFA-2 keeps
 # its established append-after-each-child schedule until separately measured.
-_DEFERRED_STREAM_MERGE_TARGETS = frozenset({("aumc", "respiratory")})
+_DEFERRED_STREAM_MERGE_TARGETS = frozenset(
+    {
+        ("aumc", "respiratory"),
+        ("miiv", "medications"),
+    }
+)
 
 
 def _requires_isolated_stream_batch(database: str, module_name: str) -> bool:
@@ -1830,6 +1904,35 @@ def _attach_stream_derived_columns(base, addition, value_columns):
     return base
 
 
+def _load_module_concepts(load_concepts_fn, *, module_name: str, load_kwargs: Dict):
+    """Keep SOFA's total and rolled organs from one registered callback call.
+
+    Requesting the six component concepts separately returns point states.
+    They must not overwrite the aggregate callback's trailing-window states
+    before publication or the Sepsis delta calculation.
+    """
+    kwargs = dict(load_kwargs)
+    concepts = list(kwargs["concepts"])
+    coherent_sofa1 = (
+        module_name == "sofa1_score"
+        and {"sofa", *_SOFA1_COMPONENT_NAMES}.issubset(concepts)
+    )
+    if coherent_sofa1:
+        kwargs["concepts"] = [c for c in concepts if c not in _SOFA1_COMPONENT_NAMES]
+        kwargs["keep_components"] = True
+        # The R-style display projection retains only requested concept names,
+        # discarding the callback's companion organs. Native publication owns
+        # identifier/schema normalization and can retain the full typed frame.
+        kwargs["r_compatible"] = False
+    result = load_concepts_fn(**kwargs)
+    if coherent_sofa1 and isinstance(result, pd.DataFrame) and not result.empty:
+        missing = {"sofa", *_SOFA1_COMPONENT_NAMES}.difference(result.columns)
+        if missing:
+            raise ValueError(f"SOFA-1 aggregate callback omitted rolled components: {sorted(missing)}")
+        result.attrs[_SOFA1_TIME_BASIS_KEY.decode()] = _SOFA1_TIME_BASIS.decode()
+    return result
+
+
 def _load_stream_module_batch(
     load_concepts_fn,
     *,
@@ -1845,7 +1948,11 @@ def _load_stream_module_batch(
         concept for concept in _VITAL_STREAM_DERIVED_CONCEPTS if concept in concepts
     ]
     if module_name != "vitals" or not requested_derived:
-        return load_concepts_fn(**load_kwargs, patient_ids=patient_ids)
+        return _load_module_concepts(
+            load_concepts_fn,
+            module_name=module_name,
+            load_kwargs={**load_kwargs, "patient_ids": patient_ids},
+        )
 
     base_concepts = [
         concept for concept in concepts if concept not in requested_derived
@@ -2326,7 +2433,7 @@ def _run_module_extraction(
             if stream_info is not None:
                 saved[module_name] = stream_info
         else:
-            result = _lc(**kwargs)
+            result = _load_module_concepts(_lc, module_name=module_name, load_kwargs=kwargs)
     except MemoryError:
         traceback.print_exc()
         if streamed:
@@ -2349,7 +2456,7 @@ def _run_module_extraction(
                 _n = 0
             from easyicu.runtime.memory_manager import (
                 MAX_EXTRACT_CHUNKS as _MAX_CH,
-                _ceil_div as _cdiv,
+                ceil_div as _cdiv,
             )
 
             fallback_bs = max(10000, _cdiv(_n, _MAX_CH)) if _n else 10000
@@ -2358,7 +2465,7 @@ def _run_module_extraction(
             )
             kwargs["batch_size"] = fallback_bs
             try:
-                result = _lc(**kwargs)
+                result = _load_module_concepts(_lc, module_name=module_name, load_kwargs=kwargs)
             except Exception as e:
                 traceback.print_exc()
                 errors.append(f"load_concepts({module_name}) batched: {e}")
@@ -2600,6 +2707,7 @@ def _stream_special_extraction_batches(
     *,
     use_sofa2: bool,
     published_output_dir: str,
+    failure_context: Optional[Dict] = None,
 ) -> None:
     """Derive Sepsis labels from already-streamed dependency module artifacts.
 
@@ -2653,6 +2761,24 @@ def _stream_special_extraction_batches(
     started = time.time()
     module_memory_sampler = _RSSPeakSampler().start()
     source_root = Path(published_output_dir)
+    context = (SepsisContextRecorder(Path(output_dir), database=database, data_path=data_path)
+               if need_sofa1 else None)
+    batch_count = (
+        (len(all_ids) + safe_batch_size - 1) // safe_batch_size if all_ids else 0
+    )
+
+    def _mark_failure_stage(stage: str, **details) -> None:
+        if failure_context is None:
+            return
+        failure_context["stage"] = stage
+        failure_context.update(details)
+
+    _mark_failure_stage(
+        "special_stream_init",
+        special_batch_size=safe_batch_size,
+        batch_count=batch_count,
+        batch_index=None,
+    )
 
     def _read_dependency(
         module_name: str,
@@ -2682,6 +2808,8 @@ def _stream_special_extraction_batches(
                 raise FileNotFoundError(f"missing streamed dependency module: {source}")
             return pd.DataFrame(columns=[id_col, *value_columns])
         dataset = ds.dataset(source, format="parquet")
+        if module_name == "sofa1_score" and dataset.count_rows() > 0:
+            _require_sofa1_time_basis(dataset.schema)
         # A selected-module refresh can combine a newly extracted producer
         # artifact (which still uses the database-native identifier) with a
         # hash-verified dependency copied from a sealed native-v2 package
@@ -2776,6 +2904,21 @@ def _stream_special_extraction_batches(
     try:
         for start in range(0, len(all_ids), safe_batch_size):
             ids = all_ids[start : start + safe_batch_size]
+            batch_index = start // safe_batch_size
+            _mark_failure_stage(
+                "special_stream_batch_start",
+                batch_index=batch_index,
+                batch_count=batch_count,
+                batch_start=start,
+                batch_stop=start + len(ids),
+                batch_ids_sha256=_sha256_bytes(
+                    json.dumps(
+                        [str(value) for value in ids],
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ),
+            )
+            _mark_failure_stage("special_stream_read_sepsis_shared")
             susp = _read_dependency(
                 "sepsis_shared",
                 ids,
@@ -2786,11 +2929,16 @@ def _stream_special_extraction_batches(
             # derived modules empty so the native publisher can emit typed
             # structural placeholders.
             if susp.empty:
+                _mark_failure_stage("special_stream_empty_si")
+                if context is not None:
+                    context.record(None, susp, ids=ids, id_col=id_col,
+                                   time_col=None, action="empty_si")
                 continue
             if "susp_inf" not in susp.columns:
                 errors.append("streamed Sepsis dependency sepsis_shared lacks susp_inf")
                 continue
             suspicion_time_col = _time_column(susp)
+            _mark_failure_stage("special_stream_validate_suspicion")
             _require_timed_positive_suspicion(
                 susp,
                 id_col=id_col,
@@ -2800,7 +2948,12 @@ def _stream_special_extraction_batches(
             # A batch without a positive timed SI event cannot yield Sepsis-3.
             # Avoid reading either multi-million-row score dependency for it.
             if not bool(susp["susp_inf"].eq(True).fillna(False).any()):
+                _mark_failure_stage("special_stream_no_positive_si")
+                if context is not None:
+                    context.record(None, susp, ids=ids, id_col=id_col,
+                                   time_col=suspicion_time_col, action="no_positive_si")
                 continue
+            _mark_failure_stage("special_stream_read_sofa1_score")
             sofa1 = (
                 _read_dependency(
                     "sofa1_score",
@@ -2810,6 +2963,7 @@ def _stream_special_extraction_batches(
                 if need_sofa1
                 else None
             )
+            _mark_failure_stage("special_stream_read_sofa2_score")
             sofa2 = (
                 _read_dependency(
                     "sofa2_score",
@@ -2827,12 +2981,11 @@ def _stream_special_extraction_batches(
             )
 
             if need_sofa1 and sofa1 is not None:
-                from ..scores.sepsis import sep3 as _sep3
-
                 time_col = _time_column(sofa1)
                 if time_col is None:
                     errors.append("streamed SOFA-1 dependency lacks a time index")
                 else:
+                    _mark_failure_stage("special_stream_consolidate_sofa1")
                     sofa1 = _consolidate_special_score_dependency(
                         sofa1,
                         score_name="sofa",
@@ -2844,14 +2997,15 @@ def _stream_special_extraction_batches(
                         source_time_col=suspicion_time_col,
                         target_time_col=time_col,
                     )
-                    frame = _sep3(
+                    _mark_failure_stage("special_stream_derive_sep3_sofa1")
+                    frame = context.derive(
                         sofa1[[id_col, time_col, "sofa"]],
                         susp1,
-                        id_cols=[id_col],
-                        index_col=time_col,
+                        ids=ids, id_col=id_col, time_col=time_col,
                     ).rename(columns={"sep3": "sep3_sofa1"})
                     if "sep3_sofa1" in frame.columns:
                         frame["sep3_sofa1"] = frame["sep3_sofa1"].fillna(0).astype(int)
+                    _mark_failure_stage("special_stream_append_sep3_sofa1")
                     _append_frame("sep3_sofa1", frame)
             if need_sofa2 and sofa2 is not None:
                 from ..scores.sepsis_sofa2 import sep3_sofa2 as _sep3_sofa2
@@ -2860,6 +3014,7 @@ def _stream_special_extraction_batches(
                 if time_col is None:
                     errors.append("streamed SOFA-2 dependency lacks a time index")
                 else:
+                    _mark_failure_stage("special_stream_consolidate_sofa2")
                     sofa2 = _consolidate_special_score_dependency(
                         sofa2,
                         score_name="sofa2",
@@ -2872,6 +3027,7 @@ def _stream_special_extraction_batches(
                         source_time_col=suspicion_time_col,
                         target_time_col=time_col,
                     )
+                    _mark_failure_stage("special_stream_derive_sep3_sofa2")
                     frame = _sep3_sofa2(
                         sofa2[[id_col, time_col, "sofa2"]],
                         susp2,
@@ -2880,8 +3036,10 @@ def _stream_special_extraction_batches(
                     )
                     if "sep3_sofa2" in frame.columns:
                         frame["sep3_sofa2"] = frame["sep3_sofa2"].fillna(0).astype(int)
+                    _mark_failure_stage("special_stream_append_sep3_sofa2")
                     _append_frame("sep3_sofa2", frame)
 
+        _mark_failure_stage("special_stream_finalize_outputs")
         saved = {}
         for concept, writer in writers.items():
             writer.close()
@@ -2896,15 +3054,16 @@ def _stream_special_extraction_batches(
         module_memory_sampler.stop()
         raise
 
+    _mark_failure_stage("special_stream_write_manifest")
     manifest = {
         "module": "special_concepts",
         "saved": saved,
+        "derivation_contexts": ({"sep3_sofa1": context.finish(expected_ids=all_ids)}
+                                if context is not None and not errors else {}),
         "errors": errors,
         "elapsed_sec": round(time.time() - started, 1),
         "batch_size": safe_batch_size,
-        "batch_count": (
-            (len(all_ids) + safe_batch_size - 1) // safe_batch_size if all_ids else 0
-        ),
+        "batch_count": batch_count,
         "patient_partition_strategy": "source_order_interleaved_v1",
         "initial_planned_partition_count": planned_partition_count,
         **module_memory_sampler.stop(),
@@ -2923,6 +3082,7 @@ def _run_special_extraction(
     use_sofa2: bool = False,
     stream_output_batches: bool = False,
     published_output_dir: Optional[str] = None,
+    failure_context: Optional[Dict] = None,
 ) -> None:
     """加载特殊概念（Sepsis-3 等）并写入 parquet + _manifest.json。
 
@@ -2937,6 +3097,8 @@ def _run_special_extraction(
     import pandas as pd
     from easyicu import load_concepts as _lc
 
+    if failure_context is not None:
+        failure_context["stage"] = "special_dependency_discovery"
     dependency_root = Path(published_output_dir or output_dir)
     required_dependency_modules = ["sepsis_shared"]
     if any("sep3_sofa1" in EXTRACT_MODULES.get(m, []) for m in special_modules):
@@ -2949,6 +3111,8 @@ def _run_special_extraction(
     )
 
     if stream_output_batches or published_dependencies_ready:
+        if failure_context is not None:
+            failure_context["stage"] = "special_stream_dispatch"
         if not patient_ids_filter or not batch_size:
             raise ValueError(
                 "streamed special export requires patient_ids and batch_size"
@@ -2962,6 +3126,7 @@ def _run_special_extraction(
             output_dir,
             use_sofa2=use_sofa2,
             published_output_dir=published_output_dir or output_dir,
+            failure_context=failure_context,
         )
         return
 
@@ -2997,6 +3162,11 @@ def _run_special_extraction(
     if need_sofa2:
         deps.append("sofa2")
 
+    context = (SepsisContextRecorder(Path(output_dir), database=database, data_path=data_path)
+               if need_sofa1 else None)
+
+    if failure_context is not None:
+        failure_context["stage"] = "special_load_dependencies"
     try:
         merged = _lc(concepts=deps, **load_kw)
     except Exception:
@@ -3055,22 +3225,27 @@ def _run_special_extraction(
             # shared sep3()/sep3_sofa2() so both labels match load_sepsis3 and the
             # module export (unified to delta 2026-06-22).
             if need_sofa1 and "sofa" in merged.columns:
-                from ..scores.sepsis import sep3 as _sep3
-
-                result = _sep3(
+                if failure_context is not None:
+                    failure_context["stage"] = "special_derive_sep3_sofa1"
+                context_ids = (next(iter(patient_ids_filter.values()))
+                               if patient_ids_filter else merged[id_col].drop_duplicates())
+                result = context.derive(
                     merged[[id_col, time_col, "sofa"]],
                     merged[[id_col, time_col, "susp_inf"]],
-                    id_cols=[id_col],
-                    index_col=time_col,
+                    ids=context_ids, id_col=id_col, time_col=time_col,
                 ).rename(columns={"sep3": "sep3_sofa1"})
                 if "sep3_sofa1" in result.columns:
                     result["sep3_sofa1"] = result["sep3_sofa1"].fillna(0).astype(int)
                 if len(result) > 0:
+                    if failure_context is not None:
+                        failure_context["stage"] = "special_write_sep3_sofa1"
                     path = os.path.join(output_dir, "sep3_sofa1.parquet")
                     result.to_parquet(path, index=False, engine="pyarrow")
                     saved["sep3_sofa1"] = {"path": path, "rows": len(result)}
 
             if need_sofa2 and "sofa2" in merged.columns:
+                if failure_context is not None:
+                    failure_context["stage"] = "special_derive_sep3_sofa2"
                 from ..scores.sepsis_sofa2 import sep3_sofa2 as _sep3_sofa2
 
                 result = _sep3_sofa2(
@@ -3082,6 +3257,8 @@ def _run_special_extraction(
                 if "sep3_sofa2" in result.columns:
                     result["sep3_sofa2"] = result["sep3_sofa2"].fillna(0).astype(int)
                 if len(result) > 0:
+                    if failure_context is not None:
+                        failure_context["stage"] = "special_write_sep3_sofa2"
                     path = os.path.join(output_dir, "sep3_sofa2.parquet")
                     result.to_parquet(path, index=False, engine="pyarrow")
                     saved["sep3_sofa2"] = {"path": path, "rows": len(result)}
@@ -3103,16 +3280,286 @@ def _run_special_extraction(
                     f"Missing columns: {missing}, available: {list(merged.columns)[:10]}"
                 )
 
+    if context is not None and not context.batches and not errors and merged.empty and patient_ids_filter:
+        empty_id_col, empty_ids = next(iter(patient_ids_filter.items()))
+        context.record(None, merged, ids=empty_ids, id_col=empty_id_col,
+                       time_col=None, action="empty_si")
     elapsed = time.time() - t0
+    if failure_context is not None:
+        failure_context["stage"] = "special_write_manifest"
     manifest = {
         "module": "special_concepts",
         "saved": saved,
+        "derivation_contexts": ({"sep3_sofa1": context.finish(
+            expected_ids=(next(iter(patient_ids_filter.values()))
+                          if patient_ids_filter else None))}
+            if context is not None and context.batches and not errors else {}),
         "errors": errors,
         "elapsed_sec": round(elapsed, 1),
         **module_memory_sampler.stop(),
     }
     with open(os.path.join(output_dir, "_manifest.json"), "w") as f:
         json.dump(manifest, f)
+
+
+_EXTRACTION_WORKER_FAILURE_SCHEMA = "easyicu.extraction_worker_failure/1"
+_EXTRACTION_WORKER_FAILURE_DIRNAME = ".easyicu-failures"
+
+
+def _sha256_bytes(payload: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _failure_output_inventory(root: Union[str, Path]) -> tuple[List[Dict], str]:
+    """Hash files that survived a failed worker without inventing file metadata."""
+    import hashlib
+    import json
+
+    root_path = Path(root)
+    entries: List[Dict] = []
+    if root_path.is_dir():
+        for path in sorted(root_path.rglob("*")):
+            if not path.is_file() or path.is_symlink():
+                continue
+            try:
+                relative = path.relative_to(root_path).as_posix()
+            except ValueError:
+                continue
+            if relative == _EXTRACTION_WORKER_FAILURE_DIRNAME or relative.startswith(
+                f"{_EXTRACTION_WORKER_FAILURE_DIRNAME}/"
+            ):
+                continue
+            digest = hashlib.sha256()
+            try:
+                with path.open("rb") as handle:
+                    for block in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(block)
+                size = path.stat().st_size
+            except OSError as exc:
+                entries.append(
+                    {
+                        "file": relative,
+                        "bytes": None,
+                        "sha256": None,
+                        "hash_error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                continue
+            entries.append(
+                {"file": relative, "bytes": size, "sha256": digest.hexdigest()}
+            )
+    canonical = json.dumps(
+        entries, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return entries, _sha256_bytes(canonical)
+
+
+def _capture_worker_failure(
+    output_root: Union[str, Path],
+    *,
+    database: str,
+    phase: str,
+    modules: Sequence[str],
+    special_modules: Sequence[str],
+    batch_size: Optional[int],
+    stream_output_batches: bool,
+    retry_attempt: int,
+    failure_context: Optional[Mapping[str, object]] = None,
+) -> Optional[str]:
+    """Persist an in-worker traceback before the parent removes its temp tree."""
+    import datetime as _datetime
+    import json
+    import sys
+    import time
+    import traceback
+
+    traceback_text = traceback.format_exc()
+    exception_type = sys.exc_info()[0]
+    probe_root = Path(output_root)
+    partial_outputs, partial_outputs_sha256 = _failure_output_inventory(probe_root)
+    failure_id = f"{time.time_ns()}-{os.getpid()}"
+    record: Dict[str, object] = {
+        "schema_version": _EXTRACTION_WORKER_FAILURE_SCHEMA,
+        "failure_id": failure_id,
+        "created_at": _datetime.datetime.now(_datetime.timezone.utc).isoformat(),
+        "observed_by": "extraction_worker",
+        "database": database,
+        "phase": phase,
+        "modules": list(modules),
+        "special_modules": list(special_modules),
+        "batch_size": batch_size,
+        "stream_output_batches": bool(stream_output_batches),
+        "retry_attempt": int(retry_attempt),
+        "worker_pid": os.getpid(),
+        "exception_type": exception_type.__name__ if exception_type else None,
+        "traceback": traceback_text,
+        "traceback_sha256": _sha256_bytes(traceback_text.encode("utf-8")),
+        "partial_outputs": partial_outputs,
+        "partial_outputs_sha256": partial_outputs_sha256,
+        "private": True,
+        "external_llm_allowed": False,
+    }
+    if failure_context:
+        allowed_failure_context = {
+            "stage",
+            "module",
+            "batch_index",
+            "batch_count",
+            "batch_start",
+            "batch_stop",
+            "batch_ids_sha256",
+            "special_batch_size",
+        }
+        record.update(
+            {
+                key: value
+                for key, value in failure_context.items()
+                if key in allowed_failure_context
+            }
+        )
+    try:
+        record["runtime_provenance"] = _native_export_runtime_provenance()
+    except Exception as exc:
+        record["runtime_provenance"] = {
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+        }
+    failure_dir = probe_root / _EXTRACTION_WORKER_FAILURE_DIRNAME
+    failure_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    destination = failure_dir / f"worker-failure-{failure_id}.json"
+    temporary = failure_dir / f".worker-failure-{failure_id}.tmp"
+    temporary.write_text(
+        json.dumps(record, indent=2, ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
+    )
+    os.replace(temporary, destination)
+    return str(destination)
+
+
+def _persist_worker_failures(
+    *,
+    output_dir: Optional[str],
+    temp_root: Union[str, Path],
+    database: str,
+    group_modules: Sequence[str],
+    group_special: Sequence[str],
+    failed_modules: Sequence[str],
+    special_incomplete: bool,
+    worker_exit_code: Optional[int],
+    batch_size: Optional[int],
+    stream_output_batches: bool,
+    retry_attempt: int,
+) -> List[Dict[str, object]]:
+    """Seal worker failure records after join and before temporary cleanup."""
+    import datetime as _datetime
+    import json
+    import time
+
+    temp_path = Path(temp_root)
+    partial_outputs, partial_outputs_sha256 = _failure_output_inventory(temp_path)
+    source_dir = temp_path / _EXTRACTION_WORKER_FAILURE_DIRNAME
+    records: List[Dict[str, object]] = []
+    if source_dir.is_dir():
+        for source in sorted(source_dir.glob("worker-failure-*.json")):
+            try:
+                record = json.loads(source.read_text(encoding="utf-8"))
+            except Exception as exc:
+                record = {
+                    "schema_version": _EXTRACTION_WORKER_FAILURE_SCHEMA,
+                    "failure_id": f"unreadable-{time.time_ns()}-{os.getpid()}",
+                    "observed_by": "extraction_worker",
+                    "database": database,
+                    "phase": "worker_failure_record",
+                    "modules": list(group_modules),
+                    "special_modules": list(group_special),
+                    "exception_type": type(exc).__name__,
+                    "traceback": f"failed to read worker failure record: {exc}",
+                }
+            records.append(record)
+    if not records:
+        records.append(
+            {
+                "schema_version": _EXTRACTION_WORKER_FAILURE_SCHEMA,
+                "failure_id": f"parent-{time.time_ns()}-{os.getpid()}",
+                "created_at": _datetime.datetime.now(
+                    _datetime.timezone.utc
+                ).isoformat(),
+                "observed_by": "parent_extraction",
+                "database": database,
+                "phase": (
+                    "special_extraction"
+                    if special_incomplete
+                    else (str(failed_modules[0]) if failed_modules else "group_worker")
+                ),
+                "modules": list(group_modules),
+                "special_modules": list(group_special),
+                "exception_type": None,
+                "traceback": None,
+                "traceback_sha256": None,
+                "failure_kind": "worker_exit_without_failure_record",
+            }
+        )
+
+    persisted: List[Dict[str, object]] = []
+    durable_dir = (
+        Path(output_dir) / _EXTRACTION_WORKER_FAILURE_DIRNAME
+        if output_dir is not None
+        else None
+    )
+    if durable_dir is not None:
+        durable_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    for record in records:
+        record.update(
+            {
+                "worker_exit_code": worker_exit_code,
+                "attempt": int(retry_attempt) + 1,
+                "retry_attempt": int(retry_attempt),
+                "batch_size": batch_size,
+                "stream_output_batches": bool(stream_output_batches),
+                "failed_modules": list(failed_modules),
+                "special_incomplete": bool(special_incomplete),
+                "partial_outputs": partial_outputs,
+                "partial_outputs_sha256": partial_outputs_sha256,
+                "private": True,
+                "external_llm_allowed": False,
+            }
+        )
+        traceback_text = record.get("traceback")
+        if isinstance(traceback_text, str):
+            record["traceback_sha256"] = _sha256_bytes(
+                traceback_text.encode("utf-8")
+            )
+        payload = json.dumps(
+            record, indent=2, ensure_ascii=False, sort_keys=True
+        ).encode("utf-8")
+        summary: Dict[str, object] = {
+            "failure_id": record.get("failure_id"),
+            "phase": record.get("phase"),
+            "modules": record.get("modules", []),
+            "special_modules": record.get("special_modules", []),
+            "worker_exit_code": worker_exit_code,
+            "exception_type": record.get("exception_type"),
+            "traceback_sha256": record.get("traceback_sha256"),
+            "partial_outputs_sha256": partial_outputs_sha256,
+            "file": None,
+            "sha256": _sha256_bytes(payload),
+            "bytes": len(payload),
+        }
+        if durable_dir is not None:
+            destination = durable_dir / f"worker-failure-{record['failure_id']}.json"
+            temporary = destination.with_name(f".{destination.name}.tmp")
+            temporary.write_bytes(payload)
+            os.replace(temporary, destination)
+            try:
+                summary["file"] = destination.relative_to(Path(output_dir)).as_posix()
+            except ValueError:
+                summary["file"] = str(destination)
+        else:
+            summary["traceback"] = traceback_text
+        persisted.append(summary)
+    return persisted
 
 
 def _extract_special_worker(
@@ -3171,6 +3618,12 @@ def _extract_module_group_worker(
         for module_name, concepts in module_specs:
             out_dir = os.path.join(output_root, module_name)
             os.makedirs(out_dir, exist_ok=True)
+            failure_context = {
+                "stage": "module_dispatch",
+                "module": module_name,
+                "batch_index": None,
+                "batch_count": None,
+            }
             try:
                 _run_module_extraction(
                     module_name,
@@ -3188,10 +3641,29 @@ def _extract_module_group_worker(
             except Exception:
                 # _run_module_extraction 已内部捕获常规异常并写 manifest；
                 # 这里兜底保证一个模块的意外崩溃不拖垮组内后续模块。
+                try:
+                    _capture_worker_failure(
+                        output_root,
+                        database=database,
+                        phase="module",
+                        modules=[module_name],
+                        special_modules=[],
+                        batch_size=batch_size,
+                        stream_output_batches=stream_output_batches,
+                        retry_attempt=0,
+                        failure_context=failure_context,
+                    )
+                except Exception:
+                    traceback.print_exc()
                 traceback.print_exc()
         if special_modules:
             sp_dir = os.path.join(output_root, _SPECIAL_OUTPUT_DIRNAME)
             os.makedirs(sp_dir, exist_ok=True)
+            failure_context = {
+                "stage": "special_dispatch",
+                "batch_index": None,
+                "batch_count": None,
+            }
             try:
                 _run_special_extraction(
                     special_modules,
@@ -3203,8 +3675,23 @@ def _extract_module_group_worker(
                     use_sofa2=use_sofa2,
                     stream_output_batches=stream_output_batches,
                     published_output_dir=published_output_dir,
+                    failure_context=failure_context,
                 )
             except Exception:
+                try:
+                    _capture_worker_failure(
+                        output_root,
+                        database=database,
+                        phase="special_extraction",
+                        modules=[],
+                        special_modules=list(special_modules),
+                        batch_size=batch_size,
+                        stream_output_batches=stream_output_batches,
+                        retry_attempt=0,
+                        failure_context=failure_context,
+                    )
+                except Exception:
+                    traceback.print_exc()
                 traceback.print_exc()
 
 
@@ -4906,6 +5393,8 @@ def _try_publish_native_export_arrow_fast_path(
     if source_file.metadata.num_rows == 0:
         return None
     source_schema = source_file.schema_arrow
+    if module == "sofa1_score":
+        _require_sofa1_time_basis(source_schema)
     if len(set(source_schema.names)) != len(source_schema.names):
         raise ValueError("native export frame has duplicate physical columns")
     candidates = [
@@ -4920,6 +5409,11 @@ def _try_publish_native_export_arrow_fast_path(
         dictionary=dictionary,
     )
     target_schema = _native_export_arrow_schema(schema_frame)
+    if module == "sofa1_score":
+        target_schema = target_schema.with_metadata({
+            **(target_schema.metadata or {}),
+            _SOFA1_TIME_BASIS_KEY: _SOFA1_TIME_BASIS,
+        })
     read_columns = list(
         dict.fromkeys(
             [
@@ -5417,6 +5911,7 @@ def _publish_native_export_v2(
     result: Dict,
     concept_projection: Optional[Mapping[str, Sequence[str]]] = None,
     require_stay_time_bounds: bool = False,
+    expected_patient_ids: Optional[Sequence] = None,
 ) -> Dict[str, object]:
     """Seal completed grouped-module files as one native-v2 package.
 
@@ -5742,12 +6237,19 @@ def _publish_native_export_v2(
                     if not physical_output_missing
                     else "pandas_structural_placeholder"
                 )
-                frame.to_parquet(
-                    temporary_parquet,
-                    index=False,
-                    engine="pyarrow",
-                    compression="snappy",
-                )
+                import pyarrow as pa
+                import pyarrow.parquet as pq
+
+                table = pa.Table.from_pandas(frame, preserve_index=False)
+                if module == "sofa1_score" and source_rows:
+                    # The Arrow preflight above verified the producer's basis
+                    # before choosing this bounded duplicate-key fallback.
+                    table = table.replace_schema_metadata({
+                        **(table.schema.metadata or {}),
+                        _SOFA1_TIME_BASIS_KEY: _SOFA1_TIME_BASIS,
+                    })
+                pq.write_table(table, temporary_parquet, compression="snappy")
+                del table
                 metadata_frame = frame
                 published_rows = int(frame.shape[0])
                 concept_non_null = {
@@ -5989,13 +6491,26 @@ def _publish_native_export_v2(
         "feature_definitions": {"included": False},
         "column_metadata": sidecar_ref.to_dict(),
     }
+    if "sepsis3_sofa1" in modules:
+        context_ref = (result["modules"]["sepsis3_sofa1"].get("derivation_contexts") or {}).get(
+            "sep3_sofa1"
+        )
+        manifest["derivation_contexts"] = {"sep3_sofa1": seal_context(
+            output_root, manifest, context=context_ref,
+            upper_bounds=stay_time_upper_bounds, expected_ids=expected_patient_ids,
+        )}
+        if context_ref is not None:
+            manifest["derivation_validation"] = validate_derivation_manifest(
+                output_root, manifest, expected_patient_ids=expected_patient_ids
+            )
     temporary_manifest = output_root / ".native-export-v2-manifest.tmp"
-    temporary_manifest.write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    manifest_bytes = json.dumps(manifest, indent=2, ensure_ascii=False).encode("utf-8")
+    temporary_manifest.write_bytes(manifest_bytes)
     os.replace(temporary_manifest, root_manifest)
     return {
         "manifest": str(root_manifest),
+        # Hash the producer's sealed bytes, never re-trust a subsequent read.
+        "manifest_sha256": __import__("hashlib").sha256(manifest_bytes).hexdigest(),
         "column_metadata": sidecar_ref.file,
         "column_metadata_sha256": sidecar_ref.sha256,
         "output_validation_reads": len(files),
@@ -6016,6 +6531,7 @@ def extract_database(
     verbose: bool = True,
     adaptive_stream_batches: Optional[bool] = None,
     resource_budget_mb: Optional[float] = None,
+    module_batch_sizes: Optional[Mapping[str, int]] = None,
 ) -> Dict:
     """按 19 个模块分组、子进程隔离地提取整个数据库的全部特征。
 
@@ -6051,6 +6567,9 @@ def extract_database(
         batch_size: 模块内患者分批大小。None(默认) = 优先采用所选模块的实测
             one-shot 路径；内存不足才分批。已登记批次按固定计划执行；未实测
             模块保留保守保护线。仅在需要覆盖默认策略时显式传值。
+        module_batch_sizes: 可选的逐模块批量覆盖。键必须是本次选择的模块，值为
+            正整数；它比 ``batch_size`` 更具体，未列出的模块继续使用全局值或
+            自动计划。适用于同一数据库中少数高膨胀模块的已测内存边界。
         group_modules: True(默认) = 自动选择：内存充足的服务器将共享源表的
             模块合并为分组子进程；≤24GB 主机或 ≤4GB 显式缓存预算自动切换
             为每模块一个隔离子进程。False = 始终逐模块隔离。可用
@@ -6124,6 +6643,20 @@ def extract_database(
                 )
     if not modules:
         raise ValueError("modules must not be empty")
+    normalized_module_batch_sizes = dict(module_batch_sizes or {})
+    unknown_module_batch_sizes = sorted(
+        set(normalized_module_batch_sizes) - set(modules)
+    )
+    if unknown_module_batch_sizes:
+        raise ValueError(
+            "module_batch_sizes names unselected modules: "
+            f"{unknown_module_batch_sizes}"
+        )
+    for module, value in normalized_module_batch_sizes.items():
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(
+                f"module_batch_sizes[{module!r}] must be a positive integer"
+            )
     data_path = str(data_path)
 
     # 磁盘溢写 / 批处理中间文件的默认落点：**输出目录旁的 .easyicu_spill/**，而不是
@@ -6203,6 +6736,7 @@ def extract_database(
         num_patients,
         None if automatic_batch else batch_size,
         available_memory_mb=planning_available_mb,
+        module_batch_sizes=normalized_module_batch_sizes,
     )
     has_patient_batches = any(
         plan.mode != "one_shot" for plan in module_resource_plans.values()
@@ -6227,7 +6761,7 @@ def extract_database(
     any_streamed_module = bool(stream_output_batches) and any(
         plan.mode != "one_shot" for plan in module_resource_plans.values()
     )
-    if automatic_batch and (
+    if (automatic_batch or normalized_module_batch_sizes) and (
         any_streamed_module
         or len({plan.batch_size for plan in module_resource_plans.values()}) > 1
     ):
@@ -6262,6 +6796,12 @@ def extract_database(
             batch_description = "全部模块一次性（逐模块隔离）"
         elif automatic_batch:
             batch_description = "按模块实测策略（一次性/最少安全批次）"
+        elif normalized_module_batch_sizes:
+            overrides = ", ".join(
+                f"{module}={size}"
+                for module, size in sorted(normalized_module_batch_sizes.items())
+            )
+            batch_description = f"batch_size={batch_size}; 模块覆盖: {overrides}"
         else:
             batch_description = f"batch_size={batch_size}"
         print(f"   批策略: {batch_description}")
@@ -6284,9 +6824,11 @@ def extract_database(
             module: plan.to_dict()
             for module, plan in module_resource_plans.items()
         },
+        "module_batch_size_overrides": dict(normalized_module_batch_sizes),
         "resource_budget_mb": round(planning_available_mb, 1),
         "resource_execution_limits": resource_execution_limits,
         "modules": {},
+        "worker_failures": [],
         "total_elapsed": 0,
         "output_dir": output_dir,
     }
@@ -6307,7 +6849,7 @@ def extract_database(
     )
 
     groups = _group_modules_for_extraction(normal_modules, special_modules, group_flag)
-    if automatic_batch and not group_flag:
+    if (automatic_batch or normalized_module_batch_sizes) and not group_flag:
         # The legacy ungrouped shape kept both Sepsis-3 modules in one worker.
         # Their measured policies differ on eICU (SOFA-1 is 67k, SOFA-2 is
         # one-shot), so split them only for automatic isolated execution.
@@ -6324,11 +6866,16 @@ def extract_database(
         groups = isolated_groups
     for group in groups:
         group_modules_for_plan = [*group["modules"], *group["special"]]
+        group_requested_batch_size = None if automatic_batch else batch_size
+        if len(group_modules_for_plan) == 1:
+            group_requested_batch_size = normalized_module_batch_sizes.get(
+                group_modules_for_plan[0], group_requested_batch_size
+            )
         group_plan = plan_extraction_resources(
             database,
             group_modules_for_plan,
             num_patients,
-            None if automatic_batch else batch_size,
+            group_requested_batch_size,
             available_memory_mb=planning_available_mb,
         )
         group["_batch_size"] = group_plan.batch_size
@@ -6572,6 +7119,12 @@ def extract_database(
                             _attach_bounds_metadata(df, info)
                             mod_result["concepts"][c_name] = df
                 if output_dir is not None:
+                    if mod_name == "sepsis3_sofa1":
+                        ref = manifest.get("derivation_contexts", {}).get("sep3_sofa1")
+                        if ref is not None:
+                            retained = transfer_context(Path(tmp_sp_dir), Path(output_dir), ref)
+                            mod_result["derivation_contexts"] = {"sep3_sofa1": retained}
+                            output_manifest["derivation_contexts"] = {"sep3_sofa1": retained}
                     with open(
                         os.path.join(output_dir, f"{mod_name}.manifest.json"), "w"
                     ) as f:
@@ -6659,6 +7212,24 @@ def extract_database(
         )
         can_split = len(group_mods) + (1 if group_special else 0) > 1
         incomplete = bool(incomplete_mods or special_incomplete)
+        worker_failure_path = os.path.join(
+            tmp_root, _EXTRACTION_WORKER_FAILURE_DIRNAME
+        )
+        if os.path.isdir(worker_failure_path) or incomplete:
+            persisted_worker_failures = _persist_worker_failures(
+                output_dir=output_dir,
+                temp_root=tmp_root,
+                database=database,
+                group_modules=group_mods,
+                group_special=group_special,
+                failed_modules=incomplete_mods,
+                special_incomplete=special_incomplete,
+                worker_exit_code=proc.exitcode,
+                batch_size=group_batch_size,
+                stream_output_batches=group_stream_output_batches,
+                retry_attempt=stream_retry_attempt,
+            )
+            result["worker_failures"].extend(persisted_worker_failures)
         can_retry_smaller = (
             crashed
             and incomplete
@@ -6779,6 +7350,7 @@ def extract_database(
             max_patients=max_patients,
             result=result,
             require_stay_time_bounds=True,
+            expected_patient_ids=next(iter(patient_ids_filter.values())),
         )
 
     total_elapsed = time.time() - t_start

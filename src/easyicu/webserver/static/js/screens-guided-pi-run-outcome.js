@@ -1,3 +1,4 @@
+/* Owner: Guided Pi run-outcome card widget. */
 /* Guided Copilot durable completed-run card owner.
    A validated analysis remains visible after refresh even when publication
    review stays closed. It renders only host-projected artifact references. */
@@ -13,35 +14,107 @@
       'result_tables.json': ['View result tables', '查看结果表'],
       'figure_gallery.json': ['View analysis figures', '查看分析图表'],
       'manuscript_provenance.json': ['Preview evidence-bound article', '预览证据绑定文章'],
+      'manuscript_draft.json': ['View report draft and revision status', '查看报告草稿与修订状态'],
       'scientific_readiness.json': ['View scientific review', '查看科学审阅'],
     };
 
-    function render(latestRun, workflow) {
-      if (!latestRun || latestRun.present !== true || latestRun.analysis_results_available !== true) return '';
+    function resultsAvailable(latestRun, workflow) {
+      if (!latestRun || latestRun.present !== true || latestRun.analysis_results_available !== true) return false;
       const stages = Array.isArray(workflow && workflow.stages) ? workflow.stages : [];
       const analysis = stages.find(stage => stage && stage.id === 'analysis');
-      if (!analysis || !['complete', 'review_required'].includes(String(analysis.status || ''))) return '';
+      return Boolean(analysis && ['complete', 'review_required'].includes(String(analysis.status || '')));
+    }
+
+    // One host-derived collection powers both the persistent shelf and reader.
+    // A new report revision must never fall back to the historical source PDF.
+    function collection(latestRun, workflow) {
+      if (!resultsAvailable(latestRun, workflow) || !latestRun.run_id) return [];
+      const resources = (Array.isArray(latestRun.artifact_refs) ? latestRun.artifact_refs : [])
+        .filter(row => row && row.run_id === latestRun.run_id);
+      const ledger = resources.find(row => row.artifact === 'evidence_ledger.json');
+      const rows = [];
+      const add = (name, en, zh) => {
+        const ref = resources.find(row => row.artifact === name);
+        if (ref) rows.push({ ...ref, label: tr(en, zh) });
+      };
+      const addReport = (name, en, zh) => {
+        if (ledger) rows.push({
+          kind: 'research_report', run_id: latestRun.run_id, artifact: name,
+          sha256: ledger.sha256, label: tr(en, zh), media_type: 'application/json',
+        });
+      };
+      addReport('full_analysis_report.json', 'Study overview', '研究总览');
+      add('result_tables.json', 'Result tables', '结果表');
+      if (latestRun.figure_count !== 0) add('figure_gallery.json', 'Figures', '图表');
+      if (latestRun.manuscript_ready === true || latestRun.report_revision_ready === true) {
+        addReport('article_report.json', 'Article', '文章');
+      }
+      add('literature_evidence.json', 'References', '文献');
+      if (latestRun.report_revision_pdf_ready === true) add('manuscript_revision.pdf', 'Current PDF', '当前 PDF');
+      else if (latestRun.manuscript_ready === true && latestRun.report_revision_ready !== true) {
+        add('manuscript_scaffold.pdf', 'Manuscript PDF', '稿件 PDF');
+      }
+      add('scientific_readiness.json', 'Scientific review', '科学审阅');
+      return rows;
+    }
+
+    function renderShelf(latestRun, workflow) {
+      const rows = collection(latestRun, workflow);
+      if (!rows.length) return '';
+      return `<section class="gpi-study-results" aria-label="${esc(tr('Current study results', '当前研究成果'))}">
+        <div class="gpi-study-results-heading"><strong>${tr('Research results', '研究成果')}</strong><span>${tr('Available for review', '可供审阅')}</span></div>
+        <div class="gpi-study-results-links">${rows.map(row => resourceButton(row, row.label)).join('')}</div>
+        <small>${esc(tr('Analysis results · publication review pending', '分析级成果 · 投稿审阅尚未完成'))}</small>
+        <details class="gpi-study-results-source"><summary>${tr('Result source', '成果来源')}</summary><code>${esc(latestRun.run_id)}</code></details>
+      </section>`;
+    }
+
+    function renderReviewAction(latestRun, workflow) {
+      const stage = (workflow && workflow.stages || []).find(row => row.id === workflow.current_stage);
+      if (!stage || !['ready', 'review_required'].includes(stage.status)) return '';
+      const name = stage.id === 'interpretation' ? 'full_analysis_report.json'
+        : stage.id === 'manuscript' ? 'article_report.json' : '';
+      const resource = collection(latestRun, workflow).find(row => row.artifact === name);
+      return resource ? resourceButton(resource, stage.id === 'interpretation'
+        ? tr('Review results', '审阅研究结果') : tr('Review manuscript', '审阅稿件')) : '';
+    }
+
+    function render(latestRun, workflow) {
+      if (!resultsAvailable(latestRun, workflow)) return '';
       const validated = latestRun.analysis_validated === true;
       const numericVerified = latestRun.numeric_verified === true;
-      const manuscriptReady = latestRun.manuscript_ready === true;
+      const manuscriptReady = latestRun.manuscript_ready === true || latestRun.report_revision_ready === true;
       const figureCount = Number.isInteger(latestRun.figure_count) ? latestRun.figure_count : null;
       const resources = Array.isArray(latestRun.artifact_refs) ? latestRun.artifact_refs : [];
-      const ledger = resources.find(row => row && row.artifact === 'evidence_ledger.json');
-      const detailActions = latestRun.run_id && ledger ? [
-        resourceButton({
-          kind: 'research_report', run_id: latestRun.run_id, artifact: 'full_analysis_report.json',
-          label: tr('View complete analysis report', '查看完整分析报告'), media_type: 'application/json', sha256: ledger.sha256,
-        }, tr('View complete analysis report', '查看完整分析报告')),
-        manuscriptReady ? resourceButton({
-          kind: 'research_report', run_id: latestRun.run_id, artifact: 'article_report.json',
-          label: tr('View article report with figures', '查看含图文章报告'), media_type: 'application/json', sha256: ledger.sha256,
-        }, tr('View article report with figures', '查看含图文章报告')) : '',
-        resourceButton({
-          kind: 'research_report', run_id: latestRun.run_id, artifact: 'technical_report.json',
-          label: tr('View technical analysis report', '查看技术分析报告'), media_type: 'application/json', sha256: ledger.sha256,
-        }, tr('View technical analysis report', '查看技术分析报告')),
-      ] : [];
-      if (manuscriptReady) {
+      const ledger = resources.find(row => row && row.run_id === latestRun.run_id
+        && row.artifact === 'evidence_ledger.json');
+      const reportResource = name => {
+        return ledger ? {
+          kind: 'research_report', run_id: latestRun.run_id, artifact: name,
+          sha256: ledger.sha256, media_type: 'application/json',
+        } : null;
+      };
+      const analysisReport = reportResource('full_analysis_report.json');
+      const articleReport = reportResource('article_report.json');
+      const technicalReport = reportResource('technical_report.json');
+      const detailActions = [];
+      if (latestRun.run_id && ledger) {
+        if (analysisReport) detailActions.push(resourceButton(
+          analysisReport, tr('View complete analysis report', '查看完整分析报告'),
+        ));
+        if (manuscriptReady && articleReport) detailActions.push(resourceButton(
+          articleReport, tr('View article report with figures', '查看含图文章报告'),
+        ));
+        if (technicalReport) detailActions.push(resourceButton(
+          technicalReport, tr('View technical analysis report', '查看技术分析报告'),
+        ));
+      }
+      if (latestRun.report_revision_pdf_ready === true) {
+        const pdf = resources.find(row => row && row.artifact === 'manuscript_revision.pdf');
+        if (pdf) detailActions.push(resourceButton(pdf, tr('View current report PDF', '查看当前报告 PDF')));
+      }
+      // Never present the historical source PDF as the current revision.
+      if (latestRun.manuscript_ready === true && latestRun.report_revision_ready !== true) {
         const manuscriptPdf = resources.find(row => row && row.artifact === 'manuscript_scaffold.pdf');
         if (manuscriptPdf) {
           detailActions.push(resourceButton(
@@ -57,23 +130,28 @@
         ));
       }
       const primaryActions = [
-        `<button class="btn sm primary" type="button" data-gpi-run-outcome-data>${iconHtml('chart', 13)} ${esc(tr('Open data visualization', '打开数据可视化'))}</button>`,
-        ...Object.keys(labels).map(name => {
+        latestRun.run_id && ledger && analysisReport
+          ? resourceButton(analysisReport, tr('Open research results', '打开研究成果')) : '',
+        `<button class="btn sm" type="button" data-gpi-run-outcome-data>${iconHtml('viz', 13)} ${esc(tr('Open data visualization', '打开数据可视化'))}</button>`,
+      ];
+      detailActions.push(...Object.keys(labels).map(name => {
           if (!manuscriptReady && name === 'manuscript_provenance.json') return '';
           if (name === 'figure_gallery.json' && latestRun.figure_count === 0) return '';
           const resource = resources.find(row => row && row.artifact === name);
           const label = tr(labels[name][0], labels[name][1]);
           return resource ? resourceButton({ ...resource, label }, label) : '';
-        }).filter(Boolean),
-      ];
+        }).filter(Boolean));
       const retryAvailable = Boolean(
         workflow && workflow.analysis_validation_retry_available === true
       );
+      if (retryAvailable && manuscriptReady && validated && numericVerified) {
+        detailActions.push(`<button class="btn sm" type="button" data-gpi-run-outcome-retry="report_only">${iconHtml('refresh', 13)} ${esc(tr('Recheck report without rerunning analysis', '重新校验报告（不重跑分析）'))}</button>`);
+      }
       if (retryAvailable && (!validated || !manuscriptReady)) {
-        const retryLabel = validated
+        const retryLabel = validated && numericVerified
           ? tr('Restore manuscript and evidence checks', '恢复稿件与证据校验')
           : tr('Repair and revalidate', '修复并重新校验');
-        primaryActions.unshift(`<button class="btn sm primary" type="button" data-gpi-run-outcome-retry>${iconHtml('refresh', 13)} ${esc(retryLabel)}</button>`);
+        primaryActions.unshift(`<button class="btn sm primary" type="button" data-gpi-run-outcome-retry="${validated && numericVerified ? 'restore' : 'validation_repair'}">${iconHtml('refresh', 13)} ${esc(retryLabel)}</button>`);
       }
       if (!primaryActions.length && !detailActions.length) return '';
       const figureNote = figureCount === 0
@@ -88,12 +166,12 @@
           <p>${esc(tr(
             validated
               ? numericVerified
-                ? 'The approved analysis and numeric checks completed. Publication-level review is still open, but it does not hide these analysis-only results.'
+                ? 'The approved analysis and numeric checks completed. Manuscript, evidence, and publication requirements still need review; the generated analysis results are available below.'
                 : 'The approved analysis and automated validation completed. Manuscript-level numeric provenance and publication review remain open, so these results are for analysis review only.'
               : 'Execution, evidence binding, and numeric checks completed. The results remain reviewable while the outstanding validation item is repaired.',
             validated
               ? numericVerified
-                ? '已批准的分析与数值核验均已完成。投稿级审阅尚未闭合，但不会再隐藏这批分析结果。'
+                ? '已批准的分析与数值核验均已完成。稿件、证据及投稿要求仍需审阅；下方可查看已生成的分析结果。'
                 : '已批准的分析与自动校验已经完成。稿件级数字溯源和投稿审阅尚未闭合，因此当前结果仅供分析审阅。'
               : '执行、证据绑定和数值核验已经完成。剩余校验项修复期间，结果仍可查看。',
           ))}</p>
@@ -117,18 +195,21 @@
         button.disabled = true;
         button.textContent = tr('Preparing source snapshot…', '正在准备源数据快照…');
       }
+      const expectedProjectId = projectId();
       try {
-        const payload = await client.preparePiCopilotDataWorkbenchSnapshot(projectId());
+        const payload = await client.preparePiCopilotDataWorkbenchSnapshot(expectedProjectId);
+        if (projectId() !== expectedProjectId) return;
         const resource = payload && payload.resource;
         if (!resource) throw new Error(tr('EasyICU did not return a Data Workbench snapshot.', 'EasyICU 未返回数据工作台快照。'));
         resource.label = tr('EasyICU data visualization', 'EasyICU 数据可视化');
-        preview().open(resource, projectId(), workflowContext());
+        preview().open(resource, expectedProjectId, workflowContext());
         const context = workflowContext();
         await recordHostAction(
           'review_prepared_data',
-          `${String((context && context.currentRunId) || projectId())}:${String(resource.snapshot_sha256 || '')}`,
+          `${String((context && context.currentRunId) || expectedProjectId)}:${String(resource.snapshot_sha256 || '')}`,
         );
       } catch (error) {
+        if (projectId() !== expectedProjectId) return;
         onError(errorText(error));
       } finally {
         if (button && button.isConnected) {
@@ -138,7 +219,7 @@
       }
     }
 
-    return Object.freeze({ render, openData });
+    return Object.freeze({ render, renderShelf, renderReviewAction, collection, resultsAvailable, openData });
   }
 
   window.EasyICU.guidedPi.declare('runOutcome', { create });

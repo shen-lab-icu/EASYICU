@@ -1039,7 +1039,7 @@ def test_coder_repair_removes_constructed_exposure_fallback(ra):
     CoderAgent(llm).repair(
         context=context,
         step=step,
-        code="try:\n    resolved = bind(definition)\nexcept:\n    resolved = {}\n",
+        code="try:\n    resolved = bind(definition)\nexcept:\n    resolved = {}\n",  # noqa: E722 -- intentional bare-except fixture inside string sample, do not "fix"
         run_log=('DETAIL: {"reason": "authoritative_primary_exposure_fallback"}'),
     )
 
@@ -1078,6 +1078,10 @@ def test_coder_repair_removes_untraceable_figure_audit_columns(ra):
     assert "Keep such checks internal" in prompt
     assert "FIGURE REWRITE INVARIANT" in prompt
     assert "one original-column, row-aligned companion CSV" in prompt
+    # A repair may not trade the figure's only manuscript legend for anything:
+    # the host refuses to print a legend a contract did not state.
+    assert "FIGURE READER LEGEND" in prompt
+    assert "reader_caption" in prompt
 
 
 def test_coder_repair_fail_closes_partial_structural_accounting_figure(ra):

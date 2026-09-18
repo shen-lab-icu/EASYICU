@@ -104,7 +104,9 @@ test('pre-analysis readiness view distinguishes source coverage from executed an
   assert.match(host.innerHTML, /批准后才会执行/);
   assert.match(host.innerHTML, /生成最终分析队列/);
   assert.match(host.innerHTML, /执行缺失数据处理/);
-  assert.match(host.innerHTML, /计划变量覆盖情况/);
+  assert.match(host.innerHTML, /计划直接输入的非空覆盖/);
+  assert.match(host.innerHTML, /data-evidence-scope="source_readiness"/);
+  assert.match(host.innerHTML, /data-cohort-role="source_population"/);
   assert.match(host.innerHTML, /lact_max/);
   assert.match(host.innerHTML, /53\.0%/);
   assert.doesNotMatch(host.innerHTML, /分析数据已准备/);

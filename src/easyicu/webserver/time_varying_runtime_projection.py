@@ -269,7 +269,11 @@ def materialize_web_hospital_followup(
         and spec.observation_duration_variable == "hospital_followup_time_hours"
         for spec in specs
     ):
-        return acquisition
+        from .hospital_outcome_projection import materialize_web_hospital_status
+
+        return materialize_web_hospital_status(
+            acquisition, export_path=export_path, database=database
+        )
     from easyicu.research_agent.acquisition.hospital_followup_materialization import (
         materialize_hospital_followup_acquisition,
     )

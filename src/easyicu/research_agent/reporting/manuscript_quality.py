@@ -17,6 +17,17 @@ from ..authority.reader_numeric_display import (
     OVERPRECISE_READER_DECIMAL_RE,
     round_reader_numeric_display,
 )
+from .manuscript_sentence_context import has_dependent_opener
+from .manuscript_baseline import missing_baseline_method_mentions
+from .manuscript_result_structure import PRIMARY_RESULT_HEADINGS, required_result_subsections
+from .manuscript_surface import (
+    _CLAIM_MARKER_RE,
+    _CLAIM_PLACEHOLDER_RE,
+    _EVIDENCE_LINK_RE,
+    _strip_audit_markup,
+    render_reader_manuscript,
+)
+from ..schema import AnalysisPlan
 
 _REQUIRED_SECTIONS: Mapping[str, tuple[str, ...]] = {
     "Abstract": (),
@@ -54,13 +65,6 @@ _READER_FACING_SECTIONS = frozenset(
         "Conclusion",
     }
 )
-_EVIDENCE_LINK_RE = re.compile(r"\[[^\]]+\]\(evidence/[^\n)]*(?:\"[^\"]*\")?\)")
-_EVIDENCE_PLACEHOLDER_RE = re.compile(r"\{evidence:[^}\n]+\}")
-_CLAIM_MARKER_RE = re.compile(r"\[\^claim_\d+\]")
-_CLAIM_PLACEHOLDER_RE = re.compile(
-    r"\{claim:[A-Za-z0-9_-]+\.[a-z][a-z0-9_]*\}"
-)
-_CLAIM_DEFINITION_RE = re.compile(r"^\[\^claim_\d+\]:.*$", flags=re.M)
 _LITERATURE_CITATION_RE = re.compile(
     r"\[@[A-Za-z0-9_.:-]+(?:\s*;\s*@[A-Za-z0-9_.:-]+)*\]"
 )
@@ -173,21 +177,34 @@ def _subsections(text: str) -> dict[str, str]:
 
 
 def _has_prose(text: str) -> bool:
-    cleaned = _CLAIM_DEFINITION_RE.sub("", text)
-    cleaned = re.sub(r"<!--.*?-->", "", cleaned, flags=re.S)
+    visible = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+    cleaned = _strip_audit_markup(visible)
+    cleaned = _LITERATURE_CITATION_RE.sub("", cleaned)
     cleaned = re.sub(r"^#{1,6}\s+.*$", "", cleaned, flags=re.M)
-    cleaned = _EVIDENCE_LINK_RE.sub("", cleaned)
-    cleaned = _CLAIM_MARKER_RE.sub("", cleaned)
-    return bool(re.search(r"[A-Za-z]{2,}", cleaned))
+    # Chinese writer mode is a supported production mode; CJK prose is prose.
+    # Without this, every zh section looks empty and the bounded repair loop
+    # can never satisfy the reader-quality contract.
+    #
+    # A complete claim token will become prose at binding; a citation or an
+    # evidence identifier alone never will. The authority owner validates the
+    # claim separately, so this structural check does not grant permission.
+    return bool(
+        re.search(r"[A-Za-z]{2,}", cleaned)
+        or re.search(r"[\u3400-\u4dbf\u4e00-\u9fff]", cleaned)
+        or re.search(
+            rf"^\s*{_CLAIM_PLACEHOLDER_RE.pattern}[.!?]?\s*$", visible, re.M,
+        )
+    )
 
 
 def _abstract_label_has_prose(abstract: str, label: str) -> bool:
-    """Return true only when a label has reader-visible prose on its line."""
+    """Check the label's block, without borrowing prose from another label."""
 
     match = re.search(
-        rf"^\*\*{re.escape(label)}:\*\*(?P<body>[^\n]*)$",
+        rf"^\*\*{re.escape(label)}:\*\*(?P<body>.*?)"
+        r"(?=^\*\*[^*\n]+:\*\*|^#{1,6}\s|\Z)",
         abstract,
-        flags=re.I | re.M,
+        flags=re.I | re.M | re.S,
     )
     return bool(match and _has_prose(match.group("body")))
 
@@ -196,25 +213,19 @@ def _words(text: str) -> int:
     return len(re.findall(r"[A-Za-z][A-Za-z0-9'-]*", text))
 
 
-def _strip_audit_markup(text: str) -> str:
-    cleaned = _EVIDENCE_LINK_RE.sub("", text)
-    cleaned = _EVIDENCE_PLACEHOLDER_RE.sub("", cleaned)
-    cleaned = _CLAIM_DEFINITION_RE.sub("", cleaned)
-    cleaned = _CLAIM_MARKER_RE.sub("", cleaned)
-    cleaned = _CLAIM_PLACEHOLDER_RE.sub("", cleaned)
-    cleaned = re.sub(r"<!--.*?-->", "", cleaned, flags=re.S)
-    return cleaned
+def repair_section_opening_connectors(manuscript: str) -> str:
+    """Remove an unanchored inference connector, without supplying a premise.
 
-
-def render_reader_manuscript(bound_text: str) -> str:
-    """Remove audit-only markup without changing claims, numbers, or citations."""
-
-    cleaned = _strip_audit_markup(str(bound_text or ""))
-    cleaned = re.sub(r"[ \t]+([,.;:])", r"\1", cleaned)
-    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
-    cleaned = re.sub(r"\n[ \t]+", "\n", cleaned)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-    return cleaned.strip() + "\n"
+    Only the first sentence of Introduction/Discussion is eligible. Interior
+    causal reasoning, numeric statements and source citations stay untouched.
+    """
+    pattern = r"(^## (?:Introduction|Discussion)[ \t]*\n\s*)([^\n.!?]+)"
+    def repair(match):
+        sentence = re.sub(r"\b(?:therefore|thus|consequently)\b[, ]*", "", match.group(2), count=1, flags=re.I)
+        if sentence and match.group(2)[0].isupper():
+            sentence = sentence[0].upper() + sentence[1:]
+        return match.group(1) + sentence
+    return re.sub(pattern, repair, manuscript, flags=re.M)
 
 
 def _replace_section_body(text: str, section: str, body: str) -> str:
@@ -260,16 +271,19 @@ def repair_registered_display_callouts(
     """Add neutral Results callouts only for host-registered displays."""
 
     repaired = str(manuscript or "")
+    existing_subsections = _subsections(_sections(repaired).get("Results", ""))
+    primary_heading = next(
+        (heading for heading in PRIMARY_RESULT_HEADINGS if heading in existing_subsections),
+        "Primary association",
+    )
     templates = {
         "Table 1": (
             "Cohort characteristics",
-            "Cohort characteristics are summarized in Table 1 "
-            "{evidence:table_one}.",
+            "See Table 1 {evidence:table_one}.",
         ),
         "Figure 1": (
-            "Primary association",
-            "The principal study results are presented in Figure 1 "
-            "{evidence:publication_figure_contract}.",
+            primary_heading,
+            "See Figure 1 {evidence:publication_figure_contract}.",
         ),
     }
     repairs: list[Mapping[str, str]] = []
@@ -299,6 +313,34 @@ def repair_registered_display_callouts(
             }
         )
     return repaired, tuple(repairs)
+
+
+def remove_empty_optional_subsections(manuscript: str) -> str:
+    """Drop only empty, non-required wrappers left by strict prose filtering.
+
+    Required headings stay visible and fail their existing completeness gate.
+    No sentence, citation or nonempty scientific content is removed here.
+    """
+
+    text = str(manuscript or "")
+    headings = list(re.finditer(r"^(#{2,3})[ \t]+([^\n]+?)[ \t]*$", text, re.M))
+    current_section = ""
+    removals = []
+    for index, heading in enumerate(headings):
+        name = heading.group(2)
+        if heading.group(1) == "##":
+            current_section = name
+            continue
+        if current_section not in _READER_FACING_SECTIONS:
+            continue
+        if name in _REQUIRED_SECTIONS.get(current_section, ()):
+            continue
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
+        if not text[heading.end():end].strip():
+            removals.append((heading.start(), end))
+    for start, end in reversed(removals):
+        text = text[:start] + text[end:]
+    return text
 
 
 def repair_reader_structure_from_existing_prose(
@@ -528,9 +570,7 @@ def repair_reader_structure_from_existing_prose(
                 for sentence in re.split(r"(?<=[.!?])\s+", source)
                 if _has_prose(sentence)
                 and (
-                    "{evidence:" in sentence
-                    or "{claim:" in sentence
-                    or _EVIDENCE_LINK_RE.search(sentence) is not None
+                    _CLAIM_PLACEHOLDER_RE.fullmatch(sentence.rstrip(".!?"))
                 )
             ),
             None,
@@ -540,15 +580,13 @@ def repair_reader_structure_from_existing_prose(
             repairs.append(
                 {
                     "code": "MANUSCRIPT_CONCLUSION_RESTORED",
-                    "source": "existing_results_evidence_sentence",
+                    "source": "existing_results_claim_token",
                 }
             )
 
     section_map = _sections(repaired)
     abstract = section_map.get("Abstract")
-    if abstract is not None and not _abstract_label_has_prose(
-        abstract, "Conclusions"
-    ):
+    if abstract is not None and not _abstract_label_has_prose(abstract, "Conclusions"):
         paragraphs = [part.strip() for part in re.split(r"\n\s*\n", abstract)]
         results_index = next(
             (
@@ -587,30 +625,33 @@ def repair_reader_structure_from_existing_prose(
 
     section_map = _sections(repaired)
     abstract = section_map.get("Abstract")
-    if abstract is not None and not _abstract_label_has_prose(
-        abstract, "Conclusions"
+    abstract_conclusion = _abstract_blocks(abstract or "").get("conclusions", "")
+    caveat_only = bool(re.fullmatch(
+        r"Independent validation is required\s*\.?",
+        _strip_audit_markup(abstract_conclusion).strip(), flags=re.I,
+    ))
+    if abstract is not None and (
+        not _abstract_label_has_prose(abstract, "Conclusions") or caveat_only
     ):
         conclusion = section_map.get("Conclusion", "")
-        results = section_map.get("Results", "")
-        primary = _subsections(results).get("Primary association", "")
-        source = conclusion or primary or results
-        candidate = next(
-            (
+        # Do not fill an interpretation gap by copying a numeric Results
+        # sentence. Only reuse an existing complete Conclusion claim.
+        source = conclusion
+        candidates = tuple(
                 sentence.strip()
                 for sentence in re.split(r"(?<=[.!?])\s+|\n\s*\n", source)
                 if _has_prose(sentence)
                 and (
-                    "{evidence:" in sentence
-                    or "{claim:" in sentence
-                    or _EVIDENCE_LINK_RE.search(sentence) is not None
+                    _CLAIM_PLACEHOLDER_RE.fullmatch(sentence.rstrip(".!?"))
                 )
-            ),
-            None,
         )
-        if candidate is not None:
+        if candidates:
+            candidate = "\n\n".join(dict.fromkeys(candidates))
             populated = re.sub(
+                r"(\*\*Conclusions:\*\*)[\s\S]*\Z" if caveat_only else
                 r"(\*\*Conclusions:\*\*)\s*(?=\n\s*\n|\Z)",
-                lambda match: f"{match.group(1)}\n\n{candidate}",
+                lambda match: f"{match.group(1)}\n\n{candidate}" +
+                ("\n\n" + abstract_conclusion.strip() if caveat_only else ""),
                 abstract,
                 count=1,
                 flags=re.I,
@@ -620,14 +661,56 @@ def repair_reader_structure_from_existing_prose(
                 repairs.append(
                     {
                         "code": "MANUSCRIPT_ABSTRACT_CONCLUSIONS_RESTORED",
-                        "source": "existing_conclusion_or_results_evidence_sentence",
+                        "source": "existing_conclusion_claim_token",
                     }
                 )
     return repaired, tuple(repairs)
 
 
-def _normalise_adjustment_set(raw: str) -> tuple[str, ...]:
+def _normalise_adjustment_set(
+    raw: str,
+    reader_display_labels: Mapping[str, str] | None = None,
+) -> tuple[str, ...]:
     cleaned = _strip_audit_markup(raw).replace("`", "")
+    labels = {
+        str(label).strip(): str(key).strip()
+        for key, label in dict(reader_display_labels or {}).items()
+        if str(label).strip() and str(key).strip()
+    }
+    replacements: dict[str, str] = {}
+    for label, key in labels.items():
+        replacements[label] = key
+        for prefix in ("the ", "patient "):
+            if label.casefold().startswith(prefix):
+                replacements[label[len(prefix) :]] = key
+    for label, key in sorted(replacements.items(), key=lambda item: -len(item[0])):
+        cleaned = re.sub(
+            rf"(?<![A-Za-z0-9_]){re.escape(label)}(?![A-Za-z0-9_])",
+            key,
+            cleaned,
+            flags=re.I,
+        )
+    cleaned = re.split(
+        r",?\s+with no additional (?:covariates|variables|adjustment terms)\b",
+        cleaned,
+        maxsplit=1,
+        flags=re.I,
+    )[0]
+    # Model implementation clauses can follow the covariate list without
+    # becoming adjustment variables themselves.
+    cleaned = re.split(
+        r",?\s+(?:we\s+)?used\s+(?:patient[- ])?cluster[- ]robust\s+"
+        r"variance\s+estimation\b",
+        cleaned,
+        maxsplit=1,
+        flags=re.I,
+    )[0]
+    cleaned = re.split(
+        r",?\s+(?:and\s+)?began\s+at\s+(?:the\s+)?\d+-hour\s+landmark\b",
+        cleaned,
+        maxsplit=1,
+        flags=re.I,
+    )[0]
     cleaned = re.sub(r"\[@[^\]]+\]", "", cleaned)
     cleaned = re.sub(r"\band\b", ",", cleaned, flags=re.I)
     values: list[str] = []
@@ -646,7 +729,10 @@ def _normalise_adjustment_set(raw: str) -> tuple[str, ...]:
     return tuple(sorted(values))
 
 
-def _adjustment_sets(sections: Mapping[str, str]) -> dict[str, tuple[str, ...]]:
+def _adjustment_sets(
+    sections: Mapping[str, str],
+    reader_display_labels: Mapping[str, str] | None = None,
+) -> dict[str, tuple[str, ...]]:
     found: dict[str, tuple[str, ...]] = {}
     methods = _strip_audit_markup(sections.get("Methods", ""))
     method_patterns = (
@@ -655,7 +741,7 @@ def _adjustment_sets(sections: Mapping[str, str]) -> dict[str, tuple[str, ...]]:
         r"model was adjusted for\s+([^.;]+)",
     )
     method_sets = {
-        _normalise_adjustment_set(match.group(1))
+        _normalise_adjustment_set(match.group(1), reader_display_labels)
         for pattern in method_patterns
         for match in re.finditer(pattern, methods, flags=re.I)
     }
@@ -665,7 +751,7 @@ def _adjustment_sets(sections: Mapping[str, str]) -> dict[str, tuple[str, ...]]:
 
     results = _strip_audit_markup(sections.get("Results", ""))
     result_sets = {
-        _normalise_adjustment_set(match.group(1))
+        _normalise_adjustment_set(match.group(1), reader_display_labels)
         for match in re.finditer(
             r"after adjustment for\s+(.+),\s+[^,.\n]+?\s+"
             r"(?:was|were|had|showed)\b",
@@ -674,7 +760,7 @@ def _adjustment_sets(sections: Mapping[str, str]) -> dict[str, tuple[str, ...]]:
         )
     }
     result_sets.update(
-        _normalise_adjustment_set(match.group(1))
+        _normalise_adjustment_set(match.group(1), reader_display_labels)
         for match in re.finditer(
             r",\s+after adjustment for\s+([^.;]+)",
             results,
@@ -779,28 +865,45 @@ def repair_reader_internal_phrases(
         )
         pieces = audit_token.split(repaired)
         tokens = audit_token.findall(repaired)
-        for key in sorted(labels, key=len, reverse=True):
-            label = labels[key]
-            pattern = re.compile(
-                rf"(?<![A-Za-z0-9_])`?{re.escape(key)}`?(?![A-Za-z0-9_])"
-            )
-            count = 0
-            for index, piece in enumerate(pieces):
-                piece, replacements = pattern.subn(label, piece)
-                pieces[index] = piece
-                count += replacements
+        # Match ready labels before any shorter key they contain. A single
+        # pass cannot recursively expand its own output (e.g. age inside
+        # "Patient age in years"), and repeated rendering is idempotent.
+        terms = [(value, None) for value in set(labels.values())]
+        terms.extend((key, key) for key in labels)
+        terms.sort(key=lambda item: (-len(item[0]), item[0], item[1] is not None))
+        branches = [
+            f"(?P<label_{index}>{'(?i:' + re.escape(term) + ')' if key is None else re.escape(term)})"
+            for index, (term, key) in enumerate(terms)
+        ]
+        pattern = re.compile(
+            r"(?<![A-Za-z0-9_])`?(?:" + "|".join(branches) + r")`?(?![A-Za-z0-9_])"
+        )
+        counts = dict.fromkeys(labels, 0)
+
+        def replace_label(match: re.Match[str]) -> str:
+            key = terms[int(match.lastgroup.removeprefix("label_"))][1]
+            if key is None:
+                return match.group(0)
+            counts[key] += 1
+            return labels[key]
+
+        pieces = [pattern.sub(replace_label, piece) for piece in pieces]
+        from .manuscript_surface import collapse_repeated_label_prefix
+
+        for index, piece in enumerate(pieces):
+            pieces[index], prefix_repairs = collapse_repeated_label_prefix(piece, labels.values())
+            repairs.extend(prefix_repairs)
+        repaired = "".join(
+            part + (tokens[index] if index < len(tokens) else "")
+            for index, part in enumerate(pieces)
+        )
+        for key, count in counts.items():
             if count:
-                repaired = "".join(
-                    part + (tokens[index] if index < len(tokens) else "")
-                    for index, part in enumerate(pieces)
-                )
-                pieces = audit_token.split(repaired)
-                tokens = audit_token.findall(repaired)
                 repairs.append(
                     {
                         "code": "MANUSCRIPT_READER_DISPLAY_LABEL_APPLIED",
                         "source": key,
-                        "replacement": label,
+                        "replacement": labels[key],
                         "count": str(count),
                     }
                 )
@@ -813,14 +916,11 @@ def repair_incompatible_reader_labels(
     reader_display_labels: Mapping[str, str] | None = None,
     manuscript_language: str = "en",
 ) -> tuple[str, tuple[dict[str, str], ...]]:
-    """Remove UI-locale labels that conflict with the manuscript language.
+    """Retain source-bound clinical meanings when translation is unavailable.
 
-    This post-binding repair is deliberately narrow: it never translates a
-    clinical concept or touches evidence coordinates.  For an English draft,
-    a foreign plain variable label falls back to its readable key, while a
-    foreign categorical level becomes ``exposure category <value>``.  The
-    surrounding, evidence-bound sentence retains the exact estimate and group
-    coordinate without leaking a raw runtime identifier.
+    An English paragraph with a verified Chinese label is preferable to losing
+    its endpoint or group definition. Report the language boundary for review;
+    never replace a clinical label by an anonymous category or raw column key.
     """
 
     repaired = str(manuscript or "")
@@ -832,24 +932,14 @@ def repair_incompatible_reader_labels(
         label = " ".join(str(raw_label or "").split())
         if not key or not label or not re.search(r"[\u3400-\u9fff]", label):
             continue
-        if "=" in key:
-            _base, level = key.rsplit("=", 1)
-            fallback = f"exposure category {level.strip()}"
-        elif re.fullmatch(r"[A-Za-z][A-Za-z0-9-]*", key):
-            fallback = key.replace("_", " ")
-        else:
-            # A compound implementation key is not safe reader prose.  It is
-            # normally translated by Writer and therefore needs no fallback.
-            continue
         count = repaired.count(label)
         if not count:
             continue
-        repaired = repaired.replace(label, fallback)
         repairs.append(
             {
-                "code": "MANUSCRIPT_INCOMPATIBLE_DISPLAY_LABEL_REMOVED",
+                "code": "MANUSCRIPT_SOURCE_LABEL_PRESERVED_PENDING_TRANSLATION",
                 "source": label,
-                "replacement": fallback,
+                "replacement": label,
                 "count": str(count),
             }
         )
@@ -919,7 +1009,12 @@ _TERMINAL_PUNCTUATION = ".!?)]}" + "。！？）］｝】〕」』"
 
 
 def _section_has_truncated_ending(section_text: str) -> bool:
-    prose = _strip_audit_markup(section_text).rstrip()
+    # A complete host claim token is a valid terminal sentence in the canonical
+    # pre-binding draft. ``_strip_audit_markup`` removes it as audit markup, so
+    # preserve its sentence boundary before the reader-surface projection.
+    visible = re.sub(r"<!--.*?-->", "", section_text, flags=re.S)
+    visible = _CLAIM_PLACEHOLDER_RE.sub(".", visible)
+    prose = _strip_audit_markup(visible).rstrip()
     if not prose:
         return False
     return prose[-1] not in _TERMINAL_PUNCTUATION
@@ -943,7 +1038,11 @@ def audit_manuscript_quality(
     bound_text: str,
     *,
     expected_display_labels: Sequence[str] = (),
+    reader_display_labels: Mapping[str, str] | None = None,
+    expected_baseline_mentions: Mapping[str, Sequence[str]] | None = None,
+    expected_primary_result_facts: Sequence = (),
     require_administrative_sections: bool = True,
+    analysis_plan: AnalysisPlan | None = None,
 ) -> ManuscriptQualityAudit:
     """Audit structure, terminology, and one high-confidence consistency rule."""
 
@@ -951,6 +1050,29 @@ def audit_manuscript_quality(
     reader = render_reader_manuscript(text)
     section_map = _sections(text)
     findings: list[ManuscriptQualityFinding] = []
+    from .descriptive_report_facts import missing_primary_result_facts
+    from .manuscript_surface import repeated_reader_paragraphs
+
+    for section, body in _sections(reader).items():
+        duplicates = repeated_reader_paragraphs(body)
+        if duplicates:
+            findings.append(ManuscriptQualityFinding(
+                code="MANUSCRIPT_REPEATED_PARAGRAPH", severity="error", section=section,
+                message="The same paragraph is repeated within one reader section.",
+                excerpts=duplicates,
+            ))
+
+    for section, missing in missing_primary_result_facts(text, expected_primary_result_facts).items():
+        findings.append(ManuscriptQualityFinding(
+            code="MANUSCRIPT_PRIMARY_RESULT_COVERAGE_INCOMPLETE",
+            severity="error", section=section,
+            message=(
+                "The section omits admitted primary result metrics or levels. "
+                "A different result number, a methods description or a generic "
+                "validation caveat does not answer the omitted primary question."
+            ),
+            excerpts=tuple(fact.scaffold for fact in missing),
+        ))
 
     if not re.search(r"^#\s+\S+", text, flags=re.M):
         findings.append(
@@ -972,6 +1094,8 @@ def audit_manuscript_quality(
         )
 
     required_sections = dict(_REQUIRED_SECTIONS)
+    if analysis_plan is not None:
+        required_sections["Results"] = required_result_subsections(analysis_plan)
     if not require_administrative_sections:
         for section in (
             "Data and code availability",
@@ -1017,6 +1141,21 @@ def audit_manuscript_quality(
                         excerpts=(subsection,),
                     )
                 )
+            elif analysis_plan is not None and section == "Results":
+                # A valid display pointer is useful navigation, not an answer
+                # to the research question. Keep citation validation separate.
+                substantive = _strip_audit_markup(subsection_body)
+                substantive = re.sub(
+                    r"\bSee\s+(?:Figure|Table)\s+[A-Z]?\d+[a-z]?\s*[.!]?",
+                    "", substantive, flags=re.I,
+                )
+                if not _has_prose(substantive) and not _CLAIM_PLACEHOLDER_RE.search(subsection_body):
+                    findings.append(ManuscriptQualityFinding(
+                        code="MANUSCRIPT_RESULT_SUBSECTION_CALLOUT_ONLY",
+                        severity="error", section="Results",
+                        message=f"Required subsection {subsection!r} contains only a display callout, not a result.",
+                        excerpts=(subsection,),
+                    ))
 
     abstract = section_map.get("Abstract")
     if abstract is not None:
@@ -1053,7 +1192,70 @@ def audit_manuscript_quality(
                 )
             )
 
-    adjustments = _adjustment_sets(section_map)
+    # A disclaimer alone, or a subset of the result sentences, is not a
+    # conclusion. Check both the pre-binding scaffold and the reader surface;
+    # complete claim tokens remain pending the separate authority check.
+    results_text = section_map.get("Results", "")
+    for section, body in (
+        ("Abstract", _abstract_blocks(abstract or "").get("conclusions", "")),
+        ("Conclusion", section_map.get("Conclusion", "")),
+    ):
+        if not _has_prose(body) or _CLAIM_PLACEHOLDER_RE.search(body):
+            continue
+        visible = _LITERATURE_CITATION_RE.sub("", _strip_audit_markup(body))
+        visible = re.sub(r"\bIndependent validation is required\s*\.", "", visible, flags=re.I)
+        sentences = [re.sub(r"\s+", " ", sentence).strip(" .\n").casefold()
+                     for sentence in re.split(r"(?<=[.!?])\s+|\n\s*\n", visible)
+                     if re.search(r"[A-Za-z]{2,}", sentence)]
+        normalized_results = re.sub(r"\s+", " ", _strip_audit_markup(results_text)).casefold()
+        if not sentences or all(sentence in normalized_results for sentence in sentences):
+            findings.append(ManuscriptQualityFinding(
+                code="MANUSCRIPT_CONCLUSION_WITHOUT_INTERPRETATION",
+                severity="error", section=section,
+                message=(
+                    "Conclusions contains only a generic validation caveat or copied result sentences. "
+                    "Use a complete supplied host claim token to preserve the bounded study interpretation; "
+                    "do not invent a causal or adjusted comparison."
+                ),
+            ))
+
+    adjustments = _adjustment_sets(section_map, reader_display_labels)
+    variables = _subsections(section_map.get("Methods", "")).get("Variables", "")
+    variable_prose = " ".join(re.sub(
+        r"<!--.*?-->", "", _strip_audit_markup(variables), flags=re.S,
+    ).split())
+    missing_baselines = missing_baseline_method_mentions(variable_prose, expected_baseline_mentions or {})
+    if missing_baselines:
+        findings.append(ManuscriptQualityFinding(
+            code="MANUSCRIPT_BASELINE_METHODS_INCOMPLETE",
+            severity="error", section="Methods",
+            message=(
+                "Methods/Variables omits accepted baseline content: "
+                + ", ".join(missing_baselines)
+                + ". Describe the executed representations using the supplied reader labels; "
+                "a mention elsewhere in the manuscript does not satisfy this requirement."
+                " A missingness or availability count alone is not a method description."
+            ),
+            excerpts=missing_baselines,
+        ))
+    dependent_paragraphs = [
+        paragraph.strip() for paragraph in re.split(r"\n\s*\n", variables)
+        if has_dependent_opener(_strip_audit_markup(paragraph))
+    ]
+    if dependent_paragraphs:
+        findings.append(
+            ManuscriptQualityFinding(
+                code="MANUSCRIPT_VARIABLE_DEFINITION_CONTEXT_MISSING",
+                severity="error",
+                section="Methods",
+                message=(
+                    "A Variables paragraph starts with a dependent statement "
+                    "without introducing its variable; provenance-safe deletion "
+                    "does not establish a complete methods description."
+                ),
+                excerpts=tuple(paragraph[:500] for paragraph in dependent_paragraphs),
+            )
+        )
     if (
         "Methods" in adjustments
         and "Results" in adjustments
@@ -1191,7 +1393,7 @@ def audit_manuscript_quality(
         )
 
     return ManuscriptQualityAudit(
-        schema_version="manuscript-quality-audit-v3",
+        schema_version="manuscript-quality-audit-v4",
         status="pass"
         if not any(item.severity == "error" for item in findings)
         else "changes_required",

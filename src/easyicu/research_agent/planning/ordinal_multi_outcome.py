@@ -13,8 +13,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from ..authority.declared_levels import observed_levels_for
-from ..research_context.typed import declared_domain_for_variable
+from ..authority.declared_levels import closed_planning_levels_for
 from ..schema import ConceptDescriptor, ResearchContext
 
 
@@ -46,11 +45,9 @@ def is_numeric_metadata_dtype(value: object) -> bool:
 
 
 def _closed_levels(variable: ConceptDescriptor) -> tuple[Any, ...]:
-    observed = observed_levels_for(name=variable.name, variables={variable.name: variable})
-    if observed:
-        return tuple(observed)
-    declared, _basis = declared_domain_for_variable(variable)
-    return tuple(declared or ())
+    return tuple(closed_planning_levels_for(
+        name=variable.name, variables={variable.name: variable},
+    ))
 
 
 def _is_continuous_outcome_candidate(variable: ConceptDescriptor) -> bool:

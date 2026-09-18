@@ -1,3 +1,4 @@
+/* Owner: Tweaks appearance panel widget. */
 /* EasyICU — Tweaks panel controller (vanilla).
    Implements the host edit-mode protocol so the toolbar "Tweaks" toggle
    shows/hides the panel. Applies tokens live + persists to localStorage so
@@ -63,7 +64,12 @@
     refreshActive();
     // home layout changes the entry structure → re-render if we're on it
     if (key === 'home') { const r = (location.hash || '#entry').slice(1) || 'entry'; if (r === 'entry' && window.__euRender) window.__euRender(); }
-    try { window.parent.postMessage({ type: '__edit_mode_set_keys', edits: { [key]: val } }, '*'); } catch (e) {}
+    // D-P2-3: exact-origin edit-mode protocol. The host frame is same-origin
+    // (`location.origin` on both ends, including the opaque 'null' origin of
+    // file:// static previews), so '*' is never needed as a target. If this
+    // panel ever runs cross-origin, the send below throws instead of leaking
+    // tweak edits to an unintended parent.
+    try { window.parent.postMessage({ type: '__edit_mode_set_keys', edits: { [key]: val } }, window.location.origin); } catch (e) {}
   }
 
   /* ---------- panel DOM ---------- */
@@ -123,7 +129,8 @@
     panel.querySelector('#twClose').addEventListener('click', dismiss);
     panel.querySelector('#twReset').addEventListener('click', () => {
       values = Object.assign({}, DEFAULTS); apply(); persist(); refreshActive();
-      try { window.parent.postMessage({ type: '__edit_mode_set_keys', edits: values }, '*'); } catch (e) {}
+      // D-P2-3: see setTweak — same exact-origin target, never '*'.
+      try { window.parent.postMessage({ type: '__edit_mode_set_keys', edits: values }, window.location.origin); } catch (e) {}
     });
     enableDrag(panel.querySelector('#twHead'));
   }
@@ -166,18 +173,26 @@
   function activate() { if (panel) panel.hidden = false; }
   function dismiss() {
     if (panel) panel.hidden = true;
-    try { window.parent.postMessage({ type: '__edit_mode_dismissed' }, '*'); } catch (e) {}
+    // D-P2-3: exact-origin target, matching setTweak above.
+    try { window.parent.postMessage({ type: '__edit_mode_dismissed' }, window.location.origin); } catch (e) {}
   }
 
   function init() {
     apply();          // apply saved look immediately, even while hidden
     build();
     window.addEventListener('message', (e) => {
+      // D-P2-3: only the embedding parent may drive edit mode, and only over
+      // the same origin (file:// previews on both ends share the opaque
+      // 'null' origin, so this check stays closed there too). Anything else —
+      // a sibling frame, an ad slot, a cross-origin opener — is ignored.
+      if (!e || e.source !== window.parent) return;
+      if (e.origin !== window.location.origin) return;
       const t = e && e.data && e.data.type;
       if (t === '__activate_edit_mode') activate();
       else if (t === '__deactivate_edit_mode') { if (panel) panel.hidden = true; }
     });
-    try { window.parent.postMessage({ type: '__edit_mode_available' }, '*'); } catch (e) {}
+    // D-P2-3: exact-origin target, matching setTweak above.
+    try { window.parent.postMessage({ type: '__edit_mode_available' }, window.location.origin); } catch (e) {}
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

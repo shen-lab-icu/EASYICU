@@ -15,15 +15,15 @@ from ..contracts.declared_product import (
     effect_role_family,
     typed_product,
 )
-from ..contracts.product_identity import normalised_method_head as _normalised_method_head
+from ..contracts.product_identity import normalised_method_head
 from ..contracts.step_families import (
     _EFFECT_CONTRACT_METHODS,
     _ROBUSTNESS_EFFECT_CONTRACT_METHODS,
-    _step_is_figure_only,
-    _typed_effect_result_identities,
     effect_output_authorized,
+    step_is_figure_only,
+    typed_effect_result_identities,
 )
-from .figure_step_contract import _output_declares_figure, _step_produces_figure
+from .figure_step_contract import output_declares_figure, step_produces_figure
 from ..schema import (
     ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES,
     AnalysisPlan,
@@ -240,7 +240,7 @@ def _effect_figure_source_authorized(
     step_id = str(step.step_id or "")
     output_products = [typed_product(raw) for raw in (step.expected_outputs or [])]
     if (
-        _normalised_method_head(str(step.method or ""))
+        normalised_method_head(str(step.method or ""))
         in (_EFFECT_CONTRACT_METHODS | _ROBUSTNESS_EFFECT_CONTRACT_METHODS)
         or not output_products
         or any(product is None for product in output_products)
@@ -326,7 +326,7 @@ def _effect_figure_source_authorized(
             or child_product not in parent_render_products
         ):
             return False
-        parent_effect_products = _typed_effect_result_identities(
+        parent_effect_products = typed_effect_result_identities(
             parent_step.expected_outputs or []
         )
         if child_product in parent_effect_products:
@@ -409,7 +409,7 @@ def _split_table_and_figure_outputs_in_plan(
     # by the host.
     dedicated_figure_owners: Dict[Tuple[str, str], List[str]] = {}
     for candidate in plan.steps:
-        if not _step_is_figure_only(candidate):
+        if not step_is_figure_only(candidate):
             continue
         for output in candidate.expected_outputs or []:
             product = typed_product(output)
@@ -418,7 +418,7 @@ def _split_table_and_figure_outputs_in_plan(
                     str(candidate.step_id)
                 )
     for step in plan.steps:
-        if _step_is_figure_only(step):
+        if step_is_figure_only(step):
             continue
         step_id = str(step.step_id)
         for output in list(outputs_by_step[step_id]):
@@ -454,7 +454,7 @@ def _split_table_and_figure_outputs_in_plan(
         # renderer would erase that step's contract and leave an empty action
         # in the plan presented for human approval.
         step_has_non_figure_output = any(
-            not _output_declares_figure(candidate)
+            not output_declares_figure(candidate)
             for candidate in step_outputs
         )
         if not step_has_non_figure_output:
@@ -480,7 +480,7 @@ def _split_table_and_figure_outputs_in_plan(
             if (
                 f"{source_step_id}_figure" in existing_step_ids
                 or source_already_owns_figure
-                or _normalised_method_head(str(source_step.method or ""))
+                or normalised_method_head(str(source_step.method or ""))
                 in {"association_robustness", "bias_audit_association", "clustering"}
                 or typed_product(source_output)[0] != "table"
             ):
@@ -543,7 +543,7 @@ def _split_table_and_figure_outputs_in_plan(
             if outputs == list(step.expected_outputs or [])
             else step.model_copy(update={"expected_outputs": outputs})
         )
-        method = _normalised_method_head(str(working_step.method or ""))
+        method = normalised_method_head(str(working_step.method or ""))
         typed_table_inputs = [
             str(raw_input)
             for raw_input in working_step.inputs
@@ -600,7 +600,7 @@ def _split_table_and_figure_outputs_in_plan(
             # pins.
             new_steps.append(working_step)
             continue
-        figure_outputs = [out for out in outputs if _output_declares_figure(out)]
+        figure_outputs = [out for out in outputs if output_declares_figure(out)]
         non_figure_outputs = [out for out in outputs if out not in figure_outputs]
         # Split only when the figure has a typed parent data/model product to
         # consume. A log is a sidecar, not render source data; splitting a
@@ -638,7 +638,7 @@ def _split_table_and_figure_outputs_in_plan(
         effect_figure_requested = any(
             effect_bearing_product(output) for output in figure_outputs
         )
-        effect_source_products = _typed_effect_result_identities(render_source_outputs)
+        effect_source_products = typed_effect_result_identities(render_source_outputs)
         effect_figure_supported = _effect_figure_semantics_supported_by_inputs(
             figure_outputs=figure_outputs,
             effect_input_products=effect_source_products,
@@ -747,7 +747,7 @@ def _ensure_publication_figure_step_in_plan(
     where the plan that actually runs is the replanner's — which the
     plan-phase, question-gated guard never sees.
     """
-    if any(_step_produces_figure(step) for step in plan.steps or []):
+    if any(step_produces_figure(step) for step in plan.steps or []):
         return plan, []
     if not force and not _research_question_implies_figure(
         context.research_question or ""
@@ -829,4 +829,63 @@ def _ensure_publication_figure_step_in_plan(
         )
     ]
     return preserved, findings
+
+
+def split_table_and_figure_outputs_in_plan(
+    plan: AnalysisPlan,
+) -> Tuple[AnalysisPlan, List[ValidationFinding]]:
+    """Split steps that declare both table and figure outputs into two steps.
+
+    Public cross-owner entrypoint for
+    :func:`_split_table_and_figure_outputs_in_plan`. The mixed-output split
+    policy is owned here; final shape checks only apply it.
+    """
+
+    return _split_table_and_figure_outputs_in_plan(plan)
+
+
+def ensure_publication_figure_step_in_plan(
+    *,
+    plan: AnalysisPlan,
+    context: ResearchContext,
+    force: bool = False,
+) -> Tuple[AnalysisPlan, List[ValidationFinding]]:
+    """Append a fallback figure step when the planner forgot one.
+
+    Public cross-owner entrypoint for
+    :func:`_ensure_publication_figure_step_in_plan`.
+    """
+
+    return _ensure_publication_figure_step_in_plan(
+        plan=plan,
+        context=context,
+        force=force,
+    )
+
+
+def effect_figure_source_authorized(
+    *,
+    step: AnalysisStep,
+    completed_step_records: Optional[Sequence[Dict[str, Any]]],
+    resolved_input_bindings: Optional[Mapping[str, Mapping[str, Any]]] = None,
+) -> bool:
+    """Public cross-owner entrypoint for :func:`_effect_figure_source_authorized`.
+
+    The effect-figure source policy is owned here; gates only apply it.
+    """
+
+    return _effect_figure_source_authorized(
+        step=step,
+        completed_step_records=completed_step_records,
+        resolved_input_bindings=resolved_input_bindings,
+    )
+
+
+__all__ = [
+    "_ensure_publication_figure_step_in_plan",
+    "_split_table_and_figure_outputs_in_plan",
+    "effect_figure_source_authorized",
+    "ensure_publication_figure_step_in_plan",
+    "split_table_and_figure_outputs_in_plan",
+]
 

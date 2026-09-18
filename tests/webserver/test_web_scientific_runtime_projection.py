@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -72,7 +74,9 @@ def _universe(tmp_path):
     return path
 
 
-def test_web_routes_kdigo_landmark_to_categorical_runtime(tmp_path) -> None:
+def test_web_rejects_legacy_kdigo_landmark_without_observability_authority(
+    tmp_path,
+) -> None:
     universe = tmp_path / "kdigo_universe.parquet"
     pd.DataFrame(
         {
@@ -98,11 +102,54 @@ def test_web_routes_kdigo_landmark_to_categorical_runtime(tmp_path) -> None:
         }
     )
 
+    with pytest.raises(WebScientificRuntimeProjectionError) as caught:
+        compile_web_scientific_runtime_projection(
+            study={"covariate_selection": "exact"},
+            sensitivity_specs=(landmark,),
+            primary_exposure="aki_stage_max",
+            primary_exposure_source="aki_stage",
+            target_outcome="death",
+            declared_covariates=("age", "sex"),
+            covariate_operationalizations={},
+            target_is_event_status=True,
+            universe_path=universe,
+            scientific_configuration_sha256="f" * 64,
+        )
+
+    assert caught.value.code == "web_kdigo_observability_authority_missing"
+
+
+def test_web_routes_strict_kdigo_landmark_to_categorical_runtime(tmp_path) -> None:
+    universe = tmp_path / "strict_kdigo_universe.parquet"
+    pd.DataFrame(
+        {
+            "aki_stage_strict": pd.Series([0, 1], dtype="int64"),
+            "death": pd.Series([0, 1], dtype="int64"),
+            "death_time_hours": [float("nan"), 72.0],
+            "hospital_followup_time_hours": [96.0, 72.0],
+            "age": [50.0, 70.0],
+            "sex": ["F", "M"],
+        }
+    ).to_parquet(universe, index=False)
+    landmark = PrespecifiedSensitivitySpec.model_validate(
+        {
+            "spec_id": "landmark_24h",
+            "axis": "timing",
+            "strategy": "landmark",
+            "landmark_hours": 24,
+            "require_alive_at_landmark": True,
+            "exclude_negative_event_times": True,
+            "event_time_variable": "death_time_hours",
+            "observation_duration_variable": "hospital_followup_time_hours",
+            "observation_duration_unit": "hours",
+        }
+    )
+
     projection = compile_web_scientific_runtime_projection(
         study={"covariate_selection": "exact"},
         sensitivity_specs=(landmark,),
-        primary_exposure="aki_stage_max",
-        primary_exposure_source="aki_stage",
+        primary_exposure="aki_stage_strict",
+        primary_exposure_source="kdigo_aki",
         target_outcome="death",
         declared_covariates=("age", "sex"),
         covariate_operationalizations={},
@@ -119,6 +166,112 @@ def test_web_routes_kdigo_landmark_to_categorical_runtime(tmp_path) -> None:
     assert authority.exposure_levels == ("0", "1", "2", "3")
     assert authority.exposure_reference_level == "0"
     assert authority.primary_contrast_level == "3"
+
+
+def _categorical_grid_case(tmp_path):
+    universe = tmp_path / "strict_kdigo_grid.parquet"
+    pd.DataFrame(
+        {
+            "aki_stage_strict": pd.Series([0, 1, 2, 3], dtype="Int64"),
+            "aki_stage_creat_strict": pd.Series([0, 1, None, 3], dtype="Int64"),
+            "aki_stage_uo_strict": pd.Series([0, None, 2, 3], dtype="Int64"),
+            "aki_stage_reference": pd.Series([0, 1, 2, None], dtype="Int64"),
+            "death": [0, 0, 1, 1],
+            "death_time_hours": [float("nan"), float("nan"), 60.0, 48.0],
+            "hospital_followup_time_hours": [96.0, 96.0, 60.0, 48.0],
+            "age": [50.0, 60.0, 70.0, 80.0],
+            "sex": ["F", "M", "F", "M"],
+            "charlson_first": [1.0, 2.0, 3.0, 4.0],
+        }
+    ).to_parquet(universe, index=False)
+    specs = [PrespecifiedSensitivitySpec.model_validate({
+        "spec_id": "landmark_24h", "axis": "timing", "strategy": "landmark",
+        "landmark_hours": 24, "require_alive_at_landmark": True,
+        "exclude_negative_event_times": True,
+        "event_time_variable": "death_time_hours",
+        "observation_duration_variable": "hospital_followup_time_hours",
+        "observation_duration_unit": "hours",
+    })]
+    for spec_id, source in (
+        ("creatinine_only", "aki_stage_creat_strict"),
+        ("urine_only", "aki_stage_uo_strict"),
+        ("reference_definition", "aki_stage_reference"),
+    ):
+        specs.append(PrespecifiedSensitivitySpec.model_validate({
+            "spec_id": spec_id, "axis": "exposure_definition",
+            "strategy": "alternate_exposure", "execution_variables": [source],
+        }))
+    for spec_id, source in (("age_form", "age"), ("charlson_form", "charlson")):
+        specs.append(PrespecifiedSensitivitySpec.model_validate({
+            "spec_id": spec_id, "axis": "functional_form",
+            "strategy": "restricted_cubic_spline", "execution_variables": [source],
+        }))
+    return {
+        "study": {"covariate_selection": "exact"},
+        "sensitivity_specs": tuple(specs),
+        "primary_exposure": "aki_stage_strict",
+        "primary_exposure_source": "kdigo_aki",
+        "target_outcome": "death",
+        "declared_covariates": ("age", "sex", "charlson"),
+        "covariate_operationalizations": {"charlson": "charlson_first"},
+        "target_is_event_status": True,
+        "universe_path": universe,
+        "scientific_configuration_sha256": "f" * 64,
+    }
+
+
+def test_web_compiles_categorical_alternate_exposures_and_covariate_forms(tmp_path):
+    projection = compile_web_scientific_runtime_projection(
+        **_categorical_grid_case(tmp_path)
+    )
+
+    assert projection is not None
+    authority = load_current_case_scientific_runtime_authority(projection.authority)
+    assert isinstance(authority, LandmarkCategoricalAssociationRuntimeAuthority)
+    assert authority.schema_version.endswith("/2")
+    grid = authority.association_model_grid
+    assert grid is not None
+    assert [variant.analysis_id for variant in grid.variants] == [
+        "reference", "creatinine_only", "urine_only", "reference_definition",
+        "age_form", "charlson_form",
+    ]
+    assert grid.sensitivity_ids == (
+        "creatinine_only", "urine_only", "reference_definition",
+        "age_form", "charlson_form",
+    )
+    assert [variant.exposure_column for variant in grid.variants[1:4]] == [
+        "aki_stage_creat_strict", "aki_stage_uo_strict", "aki_stage_reference",
+    ]
+    assert [variant.nonlinear_terms[0].source_column for variant in grid.variants[4:]] == [
+        "age", "charlson_first",
+    ]
+    assert grid.parent_product == authority.primary_product
+
+
+def test_web_categorical_grid_requires_materialized_alternate_column(tmp_path):
+    coordinates = _categorical_grid_case(tmp_path)
+    universe = coordinates["universe_path"]
+    pd.read_parquet(universe).drop(columns="aki_stage_uo_strict").to_parquet(
+        universe, index=False
+    )
+
+    with pytest.raises(WebScientificRuntimeProjectionError) as caught:
+        compile_web_scientific_runtime_projection(**coordinates)
+
+    assert caught.value.code == "web_scientific_runtime_columns_missing"
+    assert caught.value.details["missing_columns"] == ["aki_stage_uo_strict"]
+
+
+def test_web_categorical_grid_rejects_incompatible_exposure_definition(tmp_path):
+    coordinates = _categorical_grid_case(tmp_path)
+    specs = list(coordinates["sensitivity_specs"])
+    specs[1] = specs[1].model_copy(update={"execution_variables": ("age",)})
+    coordinates["sensitivity_specs"] = tuple(specs)
+
+    with pytest.raises(WebScientificRuntimeProjectionError) as caught:
+        compile_web_scientific_runtime_projection(**coordinates)
+
+    assert caught.value.code == "web_model_grid_exposure_definition_incompatible"
 
 
 @pytest.mark.parametrize("duration_unit", ["days", "hours"])
@@ -310,7 +463,7 @@ def test_web_landmark_projection_executes_declared_patient_cluster_covariance(
         projection.authority
     )
     assert isinstance(authority, LandmarkSplineRuntimeAuthority)
-    assert authority.schema_version.endswith("/3")
+    assert authority.schema_version.endswith("/4")
     assert "patient_stay_id" in authority.required_columns
     summary = run_landmark_spline_association(
         frame=pd.read_parquet(universe),
@@ -324,4 +477,126 @@ def test_web_landmark_projection_executes_declared_patient_cluster_covariance(
     assert summary["scientific_runtime_receipt"]["cluster_group_source"] == (
         "patient_stay_id"
     )
+    comparison = summary["scientific_runtime_receipt"]["functional_form_comparison"]
+    assert comparison["method"] == "cluster_robust_nested_wald_chi2"
+    assert comparison["target_column"] == "lact_max"
+    assert comparison["statistic"] >= 0
+    assert "likelihood_ratio_statistic" not in comparison
+    sensitivity = pd.read_csv(tmp_path / "out" / "landmark_linear_sensitivity.csv")
+    assert sensitivity.loc[0, "nonlinearity_test"] == comparison["method"]
+    assert sensitivity.loc[0, "nonlinearity_statistic"] == pytest.approx(comparison["statistic"])
+    assert sensitivity.loc[0, "nonlinearity_p_value"] == pytest.approx(comparison["p_value"])
+    assert "likelihood_ratio_statistic" not in sensitivity.columns
     assert landmark_spline_runtime_receipt_valid(summary)
+
+    # A receipt cannot relabel a robust statistic as the legacy LR contract.
+    from copy import deepcopy
+    altered = deepcopy(summary)
+    altered["scientific_runtime_receipt"]["schema_version"] = "easyicu.landmark_spline_runtime_receipt/3"
+    assert not landmark_spline_runtime_receipt_valid(altered)
+
+    from easyicu.research_agent.schema import AnalysisStep
+    from easyicu.research_agent.contracts.functional_form import (
+        FunctionalFormSpec, functional_form_products,
+    )
+    from easyicu.research_agent.execution.runners.landmark_spline_functional_form_executor import (
+        run_landmark_spline_functional_form,
+    )
+    child = AnalysisStep(
+        step_id="form_check", planned_analysis_role="sensitivity",
+        intent="Expose the bound primary nonlinearity test.",
+        method="restricted_cubic_spline_sensitivity",
+        inputs=[authority.downstream_parent_product, authority.linear_sensitivity_product],
+        sensitivity_spec_ids=["exposure_functional_form"],
+        functional_form_spec=FunctionalFormSpec(
+            target_column="lact_max", knot_quantiles=authority.spline_knot_quantiles,
+        ),
+        expected_outputs=list(
+            functional_form_products("table:form_check", include_effects=True)
+        ),
+    )
+    source_paths = {
+        authority.downstream_parent_product: tmp_path / "out" / f"{authority.downstream_parent_product.partition(':')[2]}.csv",
+        authority.linear_sensitivity_product: tmp_path / "out" / f"{authority.linear_sensitivity_product.partition(':')[2]}.csv",
+    }
+    contrasts = pd.read_csv(source_paths[authority.downstream_parent_product])
+    child_summary = run_landmark_spline_functional_form(
+        step=child, authority=authority,
+        runtime_projection_sha256=projection.projection_sha256,
+        linear_sensitivity=sensitivity, linear_evidence_id="source_linear",
+        out_dir=tmp_path / "child", primary_contrasts=contrasts,
+        input_bindings=[
+            {
+                "input_key": key, "evidence_id": f"source_{key.partition(':')[2]}",
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "loaded": True,
+                "row_count": 2 if key == authority.downstream_parent_product else 1,
+            }
+            for key, path in source_paths.items()
+        ],
+    )
+    projected = pd.read_csv(tmp_path / "child" / "form_check.csv")
+    assert projected.loc[0, "method"] == comparison["method"]
+    assert projected.loc[0, "target_column"] == "lact_max"
+    assert projected.loc[0, "information_criteria_basis"] == (
+        "working_independence_loglikelihood_descriptive_only"
+    )
+    assert projected.loc[0, "statistic"] == pytest.approx(comparison["statistic"])
+    assert "likelihood_ratio_statistic" not in projected.columns
+    # The cluster-robust primary sealed one linear row. Restating that row on the
+    # primary grid must say plainly that it refitted nothing.
+    assert child_summary["functional_form_effect_products"]["independent_refit"] is False
+    curve = pd.read_csv(tmp_path / "child" / "form_check_sensitivity_exposure_curve.csv")
+    points = pd.read_csv(tmp_path / "child" / "form_check_sensitivity_exposure_contrasts.csv")
+    assert len(curve) == authority.curve_points
+    assert len(points) == 2
+    reference = float(contrasts["reference_exposure_value"].iloc[0])
+    increment = float(sensitivity.loc[0, "exposure_increment"])
+    log_unit = float(np.log(sensitivity.loc[0, "adjusted_odds_ratio"]))
+    np.testing.assert_allclose(
+        curve["adjusted_odds_ratio"],
+        np.exp(log_unit * (curve["exposure_value"] - reference) / increment),
+        rtol=1e-12,
+    )
+    np.testing.assert_allclose(
+        points["exposure_value"],
+        [contrasts["exposure_value"].min(), contrasts["exposure_value"].max()],
+        rtol=0.0, atol=1e-12,
+    )
+    with pytest.raises(ValueError, match="method or target"):
+        run_landmark_spline_functional_form(
+            step=child, authority=authority,
+            runtime_projection_sha256=projection.projection_sha256,
+            linear_sensitivity=sensitivity.assign(nonlinearity_target_column="age"),
+            linear_evidence_id="wrong_target", out_dir=tmp_path / "wrong",
+            primary_contrasts=contrasts,
+        )
+
+
+def test_legacy_cluster_authority_is_readable_but_requires_new_execution_review(tmp_path):
+    from easyicu.research_agent.authority.current_case_scientific_runtime import (
+        build_current_case_scientific_runtime_authority,
+    )
+    universe = _universe(tmp_path)
+    frame = pd.read_parquet(universe).assign(patient=["a", "b"])
+    frame.to_parquet(universe, index=False)
+    projection = compile_landmark_spline_runtime_projection(
+        study={"covariate_selection": "exact"}, sensitivity_specs=_specs(),
+        primary_exposure="lact_max", primary_exposure_source="lact", target_outcome="death",
+        declared_covariates=("age", "sex", "charlson"),
+        covariate_operationalizations={"charlson": "charlson_first"},
+        target_is_event_status=True, universe_path=universe,
+        scientific_configuration_sha256="d" * 64,
+        dependence=PlannedDependenceRequirement(group_source="patient", group_derivation="identity"),
+    )
+    legacy = dict(projection.authority)
+    legacy.pop("execution_contract_sha256")
+    legacy["schema_version"] = "easyicu.landmark_spline_runtime_authority/3"
+    sealed = build_current_case_scientific_runtime_authority(legacy)
+    wire = sealed.model_dump(mode="json")
+    assert load_current_case_scientific_runtime_authority(wire).model_dump(mode="json") == wire
+    with pytest.raises(ValueError, match="newly reviewed v4"):
+        run_landmark_spline_association(
+            frame=frame, authority=sealed, runtime_projection_sha256="e" * 64,
+            out_dir=tmp_path / "legacy",
+        )
+    assert not (tmp_path / "legacy").exists()

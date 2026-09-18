@@ -171,6 +171,16 @@ def _target_names(node: ast.AST) -> set[str]:
     return set()
 
 
+def unparseable_python_finding(exc: SyntaxError, step: AnalysisStep, *, validator: str) -> ValidationFinding:
+    """A failed parser cannot establish that mechanical obligations passed."""
+    return ValidationFinding(
+        validator=validator, severity="error",
+        message="Generated Python cannot be parsed; code obligations are unverified.",
+        detail={"reason": "python_syntax_error", "line": exc.lineno,
+                "offset": exc.offset, "parser_message": exc.msg, "step_id": step.step_id},
+    )
+
+
 def _pre312_fstring_subscript_quote_findings(
     code: str,
     tree: ast.Module | None,

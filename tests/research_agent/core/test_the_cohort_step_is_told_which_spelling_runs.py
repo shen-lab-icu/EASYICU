@@ -76,8 +76,9 @@ def directive() -> str:
 
 
 class _Step:
-    def __init__(self, outputs):
+    def __init__(self, outputs, *, icu_rule_refs=()):
         self.expected_outputs = list(outputs)
+        self.icu_rule_refs = list(icu_rule_refs)
 
 
 # ---------------------------------------------------------------------------
@@ -295,7 +296,7 @@ def test_the_retry_reminder_publishes_table_one_inputs_and_descriptive_ceiling()
 def test_the_initial_directive_publishes_table_one_inputs_and_descriptive_ceiling(
     directive,
 ):
-    assert "every `variables[*].name`" in directive
+    assert "List group_by and every row variable in inputs" in directive
     assert '"unresolved_limitations"' in directive
     assert '"post_baseline_exposure_opportunity_unresolved"' in directive
     assert (

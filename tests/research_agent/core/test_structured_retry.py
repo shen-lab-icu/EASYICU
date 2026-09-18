@@ -151,6 +151,61 @@ def test_structured_retry_projects_bounded_validation_coordinates():
     assert "invalid" not in repr(rejected)
 
 
+@pytest.mark.parametrize("phase", ["started", "rejected", "accepted"])
+def test_typed_host_control_signal_stops_structured_attempts(phase):
+    from easyicu.research_agent.orchestration.progress import ProgressControlSignal
+
+    signal = ProgressControlSignal("host requested cancellation")
+    client = ScriptedMockLLMClient(["not-json" if phase == "rejected" else "{}", "{}"])
+
+    def callback(event):
+        if event.phase == phase:
+            raise signal
+
+    with pytest.raises(ProgressControlSignal) as raised:
+        call_llm_with_structured_retry(
+            client, [LLMMessage(role="user", content="give json")],
+            parser=json.loads, max_retries=1, progress_callback=callback,
+        )
+
+    assert raised.value is signal
+    assert len(client.calls) == (0 if phase == "started" else 1)
+
+
+def test_parser_host_control_signal_is_not_a_retriable_schema_error():
+    from easyicu.research_agent.orchestration.progress import ProgressControlSignal
+
+    signal = ProgressControlSignal("host requested cancellation")
+    client = ScriptedMockLLMClient(["{}", "{}"])
+
+    def parser(_raw):
+        raise signal
+
+    with pytest.raises(ProgressControlSignal) as raised:
+        call_llm_with_structured_retry(
+            client, [LLMMessage(role="user", content="give json")],
+            parser=parser, max_retries=1,
+        )
+
+    assert raised.value is signal
+    assert len(client.calls) == 1
+
+
+def test_noncontrol_progress_observer_failure_remains_advisory():
+    client = ScriptedMockLLMClient(["not-json", '{"value": 7}'])
+
+    def broken_observer(_event):
+        raise RuntimeError("optional observer disconnected")
+
+    value = call_llm_with_structured_retry(
+        client, [LLMMessage(role="user", content="give json")],
+        parser=json.loads, max_retries=1, progress_callback=broken_observer,
+    )
+
+    assert value == {"value": 7}
+    assert len(client.calls) == 2
+
+
 def test_structured_retry_raises_after_exhausting_retries():
     client = ScriptedMockLLMClient(["bad-1", "bad-2", "bad-3"])
     with pytest.raises(StructuredResponseFailure) as ctx:

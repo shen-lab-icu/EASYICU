@@ -21,6 +21,35 @@ import pytest
 
 from easyicu.concept import ConceptResolver
 from easyicu.table import IdTbl
+from easyicu.config import DataSourceConfig
+from easyicu.datasource import ICUDataSource
+
+
+def test_cache_key_binds_source_location_and_rewritten_content(tmp_path):
+    roots = [tmp_path / "a", tmp_path / "b"]
+    for root in roots:
+        root.mkdir()
+        (root / "values.csv").write_text("x\n1\n")
+    resolver = _resolver(tmp_path / "cache", use_pickle=True)
+    sources = [ICUDataSource(DataSourceConfig(name="same"), base_path=root) for root in roots]
+
+    def key(source):
+        return resolver._build_cache_key("x", source, None, None, True, None, {})
+
+    before = key(sources[0])
+    assert before and key(sources[0]) == before
+    assert key(sources[1]) != before
+    (roots[0] / "values.csv").write_text("x\n2\n")
+    assert key(sources[0]) != before
+
+
+def test_opaque_loader_cannot_reuse_persistent_cache(tmp_path):
+    source = ICUDataSource(DataSourceConfig(name="same"), table_sources={"x": lambda: None})
+    resolver = _resolver(tmp_path, use_pickle=True)
+    key = resolver._build_cache_key("x", source, None, None, True, None, {})
+    assert not key
+    resolver._store_in_disk_cache("x", source, key, _entry())
+    assert not list(tmp_path.glob("*.trusted.pkl"))
 
 
 def _resolver(tmp_path, **kwargs) -> ConceptResolver:

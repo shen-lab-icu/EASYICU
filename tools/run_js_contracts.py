@@ -26,8 +26,10 @@ TESTS = ROOT / "tests" / "js"
 JS = ROOT / "src" / "easyicu" / "webserver" / "static" / "js"
 
 CONTRACTS: dict[str, list[str]] = {
+    "audit_regressions_20260915.test.js": [],
     "agent_render_security.test.js": ["screens-agent-render.js"],
     "composer_keyboard.test.js": ["composer-keyboard.js"],
+    "copilot_history.test.js": [],
     "crossdb_job_continuity.test.js": ["screens-viz-crossdb-job-continuity.js"],
     "crossdb_progress_owner.test.js": ["screens-viz-crossdb-progress.js"],
     "crossdb_raw_scope.test.js": ["screens-viz-crossdb-raw.js"],
@@ -55,8 +57,24 @@ CONTRACTS: dict[str, list[str]] = {
     "extraction_job_continuity.test.js": ["screens-extraction-job-continuity.js"],
     "extraction_study_roundtrip.test.js": ["screens-extraction-study-context.js"],
     "guided_gate_state.test.js": ["screens-guided-contracts.js"],
+    "guided_classic_exit.test.js": [],
     # Loads both dedicated Copilot data-view owners itself; takes no arguments.
     "guided_pi_data_workbench.test.js": [],
+    # Explicit owner list (E-P2-11): no "." directory marker — every file the
+    # harness loads is named here, including product-labels.js, so a rename
+    # or deletion fails fast in main()'s existence check instead of silently
+    # changing what the harness resolves from the directory.
+    "guided_pi_study_results.test.js": [
+        "screens-guided-pi-modules.js",
+        "screens-guided-pi-resources.js",
+        "screens-guided-pi-study-workspace.js",
+        "screens-guided-pi-run-outcome.js",
+        "product-labels.js",
+        "screens-guided-pi-preview.js",
+        "screens-guided-pi-events.js",
+        "screens-guided-pi-aside.js",
+        "screens-guided-pi-header.js",
+    ],
     # Loads the module registry and plan-confirmation owner itself; takes no arguments.
     "guided_plan_resource_authority.test.js": [],
     "guided_pi_modules.test.js": ["screens-guided-pi-modules.js"],
@@ -73,6 +91,8 @@ CONTRACTS: dict[str, list[str]] = {
     "guided_side_panels.test.js": ["screens-guided-panels.js"],
     # Reads the whole js/ directory itself; takes no arguments.
     "job_continuity_404.test.js": [],
+    "manuscript_reader_navigation.test.js": ["screens-guided-pi-preview.js"],
+    "report_progress_refresh.test.js": ["screens-guided-pi-childjob.js"],
     "patient_browse_owners.test.js": [
         "screens-viz-patient-navigation.js",
         "screens-viz-patient-tables.js",
@@ -132,7 +152,7 @@ def main(argv: list[str]) -> int:
             continue
         owners = [JS / owner for owner in CONTRACTS[name]]
         for owner in owners:
-            assert owner.is_file(), f"{name}: {owner.name} does not exist"
+            assert owner.exists(), f"{name}: {owner.name} does not exist"
         result = subprocess.run(
             ["node", str(TESTS / name), *[str(owner) for owner in owners]],
             capture_output=True,

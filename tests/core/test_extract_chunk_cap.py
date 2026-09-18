@@ -224,15 +224,17 @@ def test_explicit_stream_batch_size_always_wins():
     )
 
 
-def test_8gib_resource_budget_owns_lower_layer_worker_limits(monkeypatch):
+def test_8gib_resource_budget_uses_one_worker_after_real_medications_oom(
+    monkeypatch,
+):
     limits = _resource_budget_execution_limits(8 * 1024)
 
     assert limits == {
         "resource_budget_mb": 8192.0,
         "modeled_total_memory_gb": pytest.approx(11.428571),
-        "parallel_max_workers": 2,
-        "arrow_threads": 2,
-        "duckdb_threads": 2,
+        "parallel_max_workers": 1,
+        "arrow_threads": 1,
+        "duckdb_threads": 1,
         "duckdb_memory_limit_mb": 2048,
         "resolver_cache_budget_mb": 512,
     }
@@ -244,11 +246,22 @@ def test_8gib_resource_budget_owns_lower_layer_worker_limits(monkeypatch):
     monkeypatch.setenv("EASYICU_DUCKDB_MEMORY_LIMIT", "4GB")
     _extract_worker_env_setup("/data/aumc", 8 * 1024)
     assert os.environ["EASYICU_RESOURCE_BUDGET_MB"] == "8192.0"
-    assert os.environ["EASYICU_PARALLEL_MAX_WORKERS"] == "2"
-    assert os.environ["EASYICU_ARROW_THREADS"] == "2"
-    assert os.environ["EASYICU_DUCKDB_THREADS"] == "2"
+    assert os.environ["EASYICU_PARALLEL_MAX_WORKERS"] == "1"
+    assert os.environ["EASYICU_ARROW_THREADS"] == "1"
+    assert os.environ["EASYICU_DUCKDB_THREADS"] == "1"
     assert os.environ["EASYICU_DUCKDB_MEMORY_LIMIT"] == "2048MB"
     assert os.environ["EASYICU_CACHE_BUDGET_MB"] == "512"
+
+
+def test_formal_8gib_cgroup_available_budget_uses_one_engine_thread():
+    """The strict run exposes roughly 6 GiB as its available-memory budget."""
+
+    limits = _resource_budget_execution_limits(6052.1)
+
+    assert limits["modeled_total_memory_gb"] == pytest.approx(8.44322)
+    assert limits["parallel_max_workers"] == 1
+    assert limits["arrow_threads"] == 1
+    assert limits["duckdb_threads"] == 1
 
 
 def test_measured_miiv_blood_gas_uses_one_shot_with_2gib_available():
@@ -557,7 +570,45 @@ def test_explicit_batch_override_still_applies_to_every_module():
     }
 
 
-def test_measured_miiv_full_module_set_uses_one_shot_at_8gib():
+def test_module_batch_override_wins_without_downbatching_other_modules():
+    plans = plan_module_extraction_resources(
+        "miiv",
+        ["blood_gas", "medications", "neurological"],
+        94_458,
+        requested_batch_size=10_000,
+        available_memory_mb=6_052.1,
+        module_batch_sizes={"medications": 5_000, "neurological": 5_000},
+    )
+
+    assert {module: plan.batch_size for module, plan in plans.items()} == {
+        "blood_gas": 10_000,
+        "medications": 5_000,
+        "neurological": 5_000,
+    }
+    assert all(plan.reason_code == "explicit_batch_size" for plan in plans.values())
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"not_selected": 5_000},
+        {"medications": 0},
+        {"medications": True},
+    ],
+)
+def test_module_batch_overrides_fail_closed(overrides):
+    with pytest.raises(ValueError, match="module_batch_sizes"):
+        plan_module_extraction_resources(
+            "miiv",
+            ["medications"],
+            94_458,
+            requested_batch_size=10_000,
+            available_memory_mb=6_052.1,
+            module_batch_sizes=overrides,
+        )
+
+
+def test_measured_miiv_full_module_set_keeps_current_medications_batch_at_8gib():
     plan = plan_extraction_resources(
         "miiv",
         list(EXTRACT_MODULES),
@@ -565,13 +616,33 @@ def test_measured_miiv_full_module_set_uses_one_shot_at_8gib():
         available_memory_mb=8 * 1024,
     )
 
-    assert plan.mode == "one_shot"
-    assert plan.reason_code == "measured_profile_fast_path"
-    assert plan.batch_size == 94_458
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 10_000
     assert plan.measured_peak_rss_mb == pytest.approx(7_362.0)
     assert plan.required_available_memory_mb == pytest.approx(8_098.2)
     assert plan.advisory is None
     assert plan.advisory_zh is None
+
+
+def test_miiv_medications_scales_to_5k_for_strict_8gib_worker_budget():
+    plans = plan_module_extraction_resources(
+        "miiv",
+        ["blood_gas", "medications"],
+        94_458,
+        available_memory_mb=6_052.1,
+    )
+
+    assert plans["blood_gas"].mode == "one_shot"
+    assert plans["blood_gas"].batch_size == 94_458
+    medication_plan = plans["medications"]
+    assert medication_plan.mode == "patient_batches"
+    assert medication_plan.reason_code == "measured_profile_insufficient_memory"
+    assert medication_plan.batch_size == 5_000
+    assert medication_plan.measured_peak_rss_mb == pytest.approx(6_132.1)
+    assert medication_plan.required_available_memory_mb == pytest.approx(6_745.31)
+    assert medication_plan.advisory
+    assert medication_plan.advisory_zh
 
 
 def test_measured_miiv_renal_warns_only_below_its_one_shot_threshold():

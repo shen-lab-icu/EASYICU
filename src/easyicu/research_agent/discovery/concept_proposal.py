@@ -31,6 +31,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence
 
+from ..canonical_json import extract_json_object as _extract_json_object
+
 # Source roles we can map deterministically from the catalog. A "measurement"
 # concept must be a numeric value; events/durations are a different concept kind.
 MEASUREMENT_ROLE = "measurement"
@@ -122,6 +124,13 @@ def _catalog_rows(source_index, itemids: Sequence[int]) -> Dict[int, dict]:
 # The model never writes extraction code; it only *selects* itemids from the
 # frozen catalog and proposes declarative metadata. complete(system, user) ->
 # JSON string. Injected so tests stay hermetic.
+#
+# SECURITY CONTRACT (B-P2-2): every production caller MUST pass a callable
+# wrapped by ``authorized_complete`` (see ``providers/client_trust.py``) so
+# the external-LLM opt-in gate is enforced. Passing a bare client
+# (e.g. ``client.complete``) bypasses opt-in and is a bug. The sole
+# production caller (``tools/run_concept_proposer.py``) wraps correctly;
+# tests use hermetic fakes.
 LLMComplete = Callable[[str, str], str]
 
 _SELECTION_SYSTEM_PROMPT = (
@@ -165,20 +174,17 @@ def build_selection_messages(
 
 
 def _extract_json(text: str) -> dict:
-    raw = str(text or "").strip()
-    if "```" in raw:
-        # strip the first fenced block
-        import re as _re
+    """Extract the selection object from an LLM response.
 
-        m = _re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, _re.DOTALL)
-        if m:
-            raw = m.group(1)
-    start, end = raw.find("{"), raw.rfind("}")
-    if start == -1 or end == -1 or end < start:
+    Thin wrapper over :func:`..canonical_json.extract_json_object` (the
+    canonical owner of fence-stripping/balanced-scan semantics) that preserves
+    this module's strict contract: a missing object raises instead of
+    returning ``None``.
+    """
+    payload = _extract_json_object(text)
+    if payload is None:
         raise ValueError("no JSON object found in LLM selection response")
-    import json as _json
-
-    return _json.loads(raw[start : end + 1])
+    return payload
 
 
 def _coerce_float(value) -> Optional[float]:

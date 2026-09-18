@@ -16,9 +16,7 @@ from typing import Any, Mapping, Sequence
 
 from ...contracts.declared_product import RUNTIME_BINDABLE_TYPED_INPUT_KINDS
 from .typed_input_binding import contained_regular_file, sha256_file
-
-
-_TYPED_KEY = re.compile(r"([a-z][a-z0-9_]*):([a-z][a-z0-9_]*)")
+from ._shared import TYPED_KEY as _TYPED_KEY
 
 
 @dataclass(frozen=True, slots=True)

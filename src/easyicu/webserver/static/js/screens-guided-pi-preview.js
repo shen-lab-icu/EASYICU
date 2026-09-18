@@ -1,6 +1,10 @@
+/* Owner: Guided Pi governed preview widget. */
 /* Guided Pi governed-resource preview owner.
    It swaps the study-progress aside for one clicked project file, webpage, or
-   path-free Research Agent artifact reference. */
+   path-free Research Agent artifact reference.
+   D-P3-6: sha256 pins here use /^[a-f0-9]{64}$/ — keep in sync with the
+   backend Sha256Text in src/easyicu/webserver/routes/pi_copilot.py (same
+   pattern, no shared constant across languages; change both together). */
 (function () {
   'use strict';
   const { esc } = window.EU_HTML;
@@ -22,6 +26,13 @@
     activeEvidenceId: '',
     activeClaimId: '',
     workflowContext: {},
+    focused: false,
+    studyResources: [],
+    studyProjectId: '',
+    openStudyResource: null,
+    studyTitle: '',
+    referenceResource: null,
+    previousAsideCollapsed: null,
   };
 
   function tr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
@@ -129,11 +140,17 @@
       const artifact = String(value.artifact || '').trim();
       if (!/^[A-Za-z][A-Za-z0-9_.-]{0,159}$/.test(runId)) return null;
       const validationDocument = value.kind === 'system_validation_document';
+      const sha256 = String(value.sha256 || '').trim().toLowerCase();
+      // A missing digest stays allowed because the inspect_manuscript tool
+      // projection emits document references without one; previewUrl()
+      // refuses to serve such a document unpinned instead of rejecting the
+      // reference here.
+      if (sha256 && !/^[a-f0-9]{64}$/.test(sha256)) return null;
       if (validationDocument
         ? !/^system_validation_report\.(html|pdf)$/.test(artifact)
-        : !/^manuscript_scaffold\.(pdf|tex|bib)$/.test(artifact)) return null;
+        : !/^(manuscript_scaffold\.(pdf|tex|bib)|manuscript_revision\.pdf)$/.test(artifact)) return null;
       return {
-        kind: validationDocument ? 'system_validation_document' : 'research_document', run_id: runId, artifact,
+        kind: validationDocument ? 'system_validation_document' : 'research_document', run_id: runId, artifact, sha256,
         label: String(value.label || artifact).slice(0, 160),
         media_type: String(value.media_type || (artifact.endsWith('.pdf') ? 'application/pdf' : (artifact.endsWith('.html') ? 'text/html' : 'text/plain'))).slice(0, 120),
       };
@@ -218,7 +235,7 @@
     const owner = window.EasyICU.guidedPi.require('resources');
     if (owner && typeof owner.create === 'function') {
       const identity = owner.create({ esc });
-      if (identity && typeof identity.key === 'function') return identity.key(resource);
+      if (identity && typeof identity.key === 'function') return identity.key(resource) + ':' + String(resource.sha256 || resource.checked_sha256 || '');
     }
     return JSON.stringify(resource || {});
   }
@@ -290,8 +307,14 @@
       return `/assets/demo/${state.resource.artifact}?v=20260815-reviewer-demo1`;
     }
     if (isResearchDocument()) {
+      // The click-time digest pins the served bytes to the projected run
+      // ledger row; without a valid sha256 the document is never requested.
+      // D-P3-6: /^[a-f0-9]{64}$/ mirrors backend Sha256Text
+      // (src/easyicu/webserver/routes/pi_copilot.py); keep both in sync.
+      const documentSha256 = String(state.resource.sha256 || '').trim().toLowerCase();
+      if (!/^[a-f0-9]{64}$/.test(documentSha256)) return '';
       return api.piCopilotResearchDocumentUrl
-        ? api.piCopilotResearchDocumentUrl(state.projectId, state.resource.run_id, state.resource.artifact)
+        ? api.piCopilotResearchDocumentUrl(state.projectId, state.resource.run_id, state.resource.artifact, documentSha256)
         : '';
     }
     const checkedSha256 = String(state.resource && state.resource.checked_sha256 || '').trim().toLowerCase();
@@ -308,13 +331,55 @@
     const study = document.getElementById('gdStudyAside');
     const aside = document.getElementById('gdContextAside');
     const main = aside && aside.closest('.gd-main');
-    if (open && window.EU_GUIDED_PANELS && window.EU_GUIDED_PANELS.setContextAsideCollapsed) {
-      window.EU_GUIDED_PANELS.setContextAsideCollapsed(false, main);
+    const log = main && main.querySelector('[data-gpi-log]');
+    const layoutChanged = main && (main.classList.contains('gpi-preview-open') !== !!open
+      || main.classList.contains('gpi-preview-focus') !== (!!open && state.focused));
+    const followBottom = layoutChanged && log && log.clientHeight > 0
+      && log.scrollHeight - log.scrollTop - log.clientHeight < 32;
+    const panels = window.EU_GUIDED_PANELS;
+    if (open && panels && panels.setContextAsideCollapsed) {
+      if (state.previousAsideCollapsed === null) state.previousAsideCollapsed = panels.isContextAsideCollapsed();
+      panels.setContextAsideCollapsed(false, main);
+    } else if (!open && state.previousAsideCollapsed !== null && panels) {
+      panels.setContextAsideCollapsed(state.previousAsideCollapsed, main);
+      state.previousAsideCollapsed = null;
     }
     if (study) study.hidden = !!open;
     if (state.host) state.host.hidden = !open;
     if (aside) aside.classList.toggle('gpi-preview-open', !!open);
     if (main) main.classList.toggle('gpi-preview-open', !!open);
+    if (main) main.classList.toggle('gpi-preview-focus', !!open && state.focused);
+    // Width changes reflow messages. Only follow a reader already at the bottom.
+    if (followBottom && log.clientHeight > 0) log.scrollTop = log.scrollHeight;
+  }
+
+  function studyResourcesHtml() {
+    if (state.projectId !== state.studyProjectId || !state.resource || !state.resource.run_id) return '';
+    return state.studyResources.map((resource, index) => resource.run_id !== state.resource.run_id ? '' :
+      `<button type="button" data-gpi-study-resource="${index}" aria-current="${resourceKey(resource) === resourceKey(state.resource) ? 'true' : 'false'}">${esc(resource.label)}</button>`).join('');
+  }
+
+  function setStudyResources(resources, projectId, opener, context = {}) {
+    state.studyProjectId = String(projectId || '');
+    state.studyResources = (Array.isArray(resources) ? resources : []).map(safeResource).filter(Boolean);
+    state.openStudyResource = typeof opener === 'function' ? opener : null;
+    const studyTitle = String(context.title || '').trim();
+    // D-P2-1: defensive label projection — a bundle without product-labels.js
+    // must still render bounded raw text instead of throwing.
+    state.studyTitle = studyTitle
+      ? (window.EU_PRODUCT_LABELS?.projectTitle?.(studyTitle, '') ?? String(studyTitle)).slice(0, 200)
+      : '';
+    state.referenceResource = typeof context.reference === 'function' ? context.reference : null;
+    // Workflow polling can update the shelf without replacing the open report.
+    const nav = state.host && state.host.querySelector('[data-gpi-study-resources]');
+    if (nav) { nav.innerHTML = studyResourcesHtml(); nav.hidden = !nav.innerHTML; }
+  }
+
+  function toggleFocus(button) {
+    state.focused = !state.focused;
+    setAsideOpen(true);
+    button.setAttribute('aria-pressed', String(state.focused));
+    button.textContent = state.focused ? tr('Show conversation', '边聊边看') : tr('Focus reading', '专注阅读');
   }
   function researchProvenance() {
     const governance = state.governance || {};
@@ -383,7 +448,12 @@
         ? renderer.renderSource(state.resource)
         : `<div class="gpi-preview-state error">${esc(tr('Literature renderer unavailable', '文献渲染器不可用'))}</div>`;
     } else if (state.mode === 'document' && isDocument()) {
-      body = `<iframe class="gpi-preview-frame gpi-preview-document-frame" src="${esc(previewUrl())}" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`;
+      const documentUrl = previewUrl();
+      const url = documentUrl && /\.pdf$/i.test(state.resource.artifact || '')
+        ? documentUrl + '#view=FitH&navpanes=0' : documentUrl;
+      body = url
+        ? `<iframe class="gpi-preview-frame gpi-preview-document-frame" src="${esc(url)}" sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`
+        : `<div class="gpi-preview-state error">${icon('alert', 16)}<strong>${tr('Preview unavailable', '无法预览')}</strong><span>${tr('The registered document digest is missing, so this preview cannot be pinned to the run ledger.', '登记文档摘要缺失，预览无法钉定到运行台账。')}</span></div>`;
     } else if (state.mode === 'web' && isHtml()) {
       const url = previewUrl();
       body = url
@@ -456,15 +526,29 @@
         <div>${state.recentResources.map((resource, index) => `
           <button type="button" data-gpi-preview-recent="${index}" aria-current="${resourceKey(resource) === currentKey ? 'true' : 'false'}" title="${esc(resource.label)}">${esc(resource.label)}</button>`).join('')}</div>
       </nav>` : '';
+    const previousInspector = state.host.querySelector && state.host.querySelector('.gpi-preview-inspector');
+    const inspectorOpen = previousInspector && previousInspector.dataset.gpiPreviewResource === currentKey && previousInspector.open;
+    const referenceOwner = window.EasyICU.guidedPi.optional('studyWorkspace');
+    const canReference = state.projectId === state.studyProjectId && state.referenceResource && referenceOwner
+      && referenceOwner.create({ tr, esc }).canReference(state.resource);
     state.host.innerHTML = `
+      <div class="gpi-reader-context"><button type="button" data-gpi-preview-close>${icon('back', 14)} ${tr('Back to conversation', '返回对话')}</button><span title="${esc(state.studyTitle)}">${esc(state.projectId === state.studyProjectId ? state.studyTitle : '')}</span></div>
       <header class="gpi-preview-head">
         <div class="gpi-preview-file-icon" aria-hidden="true">${icon(state.mode === 'web' ? 'globe' : 'file', 16)}</div>
-        <div class="gpi-preview-ident"><strong>${esc(state.resource.label)}</strong><span>${esc(reference)}</span></div>
+        <div class="gpi-preview-ident"><strong title="${esc(reference)}">${esc(state.resource.label)}</strong>${provenance}</div>
+        ${canReference ? `<button class="gpi-preview-layout gpi-preview-reference-action" type="button" data-gpi-preview-reference>${tr('Reference in conversation', '引用到对话')}</button>` : ''}
+        <button class="gpi-preview-layout" type="button" data-gpi-preview-focus aria-pressed="${state.focused}">${state.focused ? tr('Show conversation', '边聊边看') : tr('Focus reading', '专注阅读')}</button>
         <button class="gpi-preview-close" type="button" data-gpi-preview-close aria-label="${tr('Close preview', '关闭预览')}" title="${tr('Close preview', '关闭预览')}">${icon('close', 15)}</button>
       </header>
-      ${recentPreviews}
-      ${provenance}
-      ${tabs}
+      <nav class="gpi-study-resource-tabs" data-gpi-study-resources aria-label="${tr('This run’s results', '本次运行成果')}"${studyResourcesHtml() ? '' : ' hidden'}>${studyResourcesHtml()}</nav>
+      ${studyResourcesHtml() ? '' : recentPreviews}
+      <details class="gpi-preview-inspector" data-gpi-preview-resource="${esc(currentKey)}"${inspectorOpen || state.mode === 'code' || state.mode === 'evidence' ? ' open' : ''}>
+        <summary>${tr('Source & verification', '来源与核验')}</summary>
+        <code class="gpi-preview-reference">${esc(reference)}</code>
+        ${state.resource.sha256 ? `<code class="gpi-preview-reference">SHA-256 ${esc(state.resource.sha256)}</code>` : ''}
+        ${provenance}
+        ${tabs}
+      </details>
       <div class="gpi-preview-body">${body}</div>`;
     if (state.mode === 'workbench' && (isDataPackageReview() || isDataWorkbenchSnapshot()) && !state.loading && !state.error) {
       const owner = isDataWorkbenchSnapshot()
@@ -497,6 +581,7 @@
     const locator = {
       pointer: String(button.dataset.evidencePointer || '').slice(0, 500),
       value: String(button.dataset.evidenceSourceValue || '').slice(0, 500),
+      display: button.dataset.gpiClaim ? String(button.textContent || '').trim().slice(0, 120) : '',
     };
     let item = state.evidenceTabs.find(row => row.evidenceId === evidenceId);
     if (!item) {
@@ -566,6 +651,20 @@
           state.projectId, state.resource.run_id, state.resource.artifact,
           state.resource.sha256,
         );
+        if (ticket !== state.request) return;
+        const reader = payload && payload.payload && (payload.payload.reader || (
+          payload.payload.schema_version === 'easyicu.manuscript-provenance/1' ? payload.payload : null
+        ));
+        const galleryRef = reader && reader.figure_gallery_artifact;
+        if (galleryRef) {
+          if (galleryRef.name !== 'figure_gallery.json' || !/^[a-f0-9]{64}$/.test(String(galleryRef.sha256 || ''))) {
+            throw new Error(tr('The reader figure source is invalid.', '文章图件来源绑定无效。'));
+          }
+          const gallery = await api.loadPiCopilotResearchArtifact(
+            state.projectId, state.resource.run_id, galleryRef.name, galleryRef.sha256,
+          );
+          reader.figure_gallery = gallery.payload;
+        }
       } else if (isIdeaPlan()) {
         if (!api.loadIdeaRun) throw new Error(tr('The Idea Mining run API is unavailable.', 'Idea Mining 运行接口不可用。'));
         const loaded = await api.loadIdeaRun({ run_id: state.resource.run_id });
@@ -603,7 +702,25 @@
       }
       if (ticket !== state.request) return;
       if (isLiteratureSource()) {
-        state.resource = { ...state.resource, ...(payload || {}), source_review_status: 'reviewed' };
+        // Merge only bounded enrichment fields; the response must not rewrite
+        // safeResource-validated identity (kind, url, label, media_type,
+        // authority_class) with unvalidated values.
+        const enrichment = payload && typeof payload === 'object' ? payload : {};
+        const enrichedTitle = String(enrichment.title || '').trim().slice(0, 500);
+        state.resource = {
+          ...state.resource,
+          ...(enrichedTitle ? { title: enrichedTitle } : {}),
+          year: String(enrichment.year || state.resource.year || '').slice(0, 16),
+          doi: String(enrichment.doi || state.resource.doi || '').slice(0, 240),
+          abstract_excerpt: String(enrichment.abstract_excerpt || '').slice(0, 1200),
+          publication_types: (Array.isArray(enrichment.publication_types) ? enrichment.publication_types : [])
+            .slice(0, 20).map(item => String(item || '').trim().slice(0, 160)).filter(Boolean),
+          bibliographic_notices: (Array.isArray(enrichment.bibliographic_notices) ? enrichment.bibliographic_notices : [])
+            .slice(0, 20).map(item => String(item || '').trim().slice(0, 600)).filter(Boolean),
+          article_kind: String(enrichment.article_kind || '').slice(0, 80),
+          full_text: enrichment.full_text && typeof enrichment.full_text === 'object' ? enrichment.full_text : null,
+          source_review_status: 'reviewed',
+        };
         state.payload = payload || null;
         return;
       }
@@ -631,11 +748,16 @@
     const safe = safeResource(resource);
     const project = String(projectId || '').trim();
     if (!safe || (!project && safe.kind !== 'demo_artifact' && safe.kind !== 'demo_document' && safe.kind !== 'literature_source')) return;
-    if (state.projectId && project && state.projectId !== project) state.recentResources = [];
-    state.resource = safe;
+    state.request += 1;
+    state.loading = false;
+    if (!state.resource || state.projectId !== project) state.focused = /^research_(report|document|artifact)$/.test(safe.kind);
+    if (state.projectId !== project) state.recentResources = [];
+    const catalogResource = project === state.studyProjectId && state.studyResources.find(row =>
+      resourceKey(row) === resourceKey(safe) && row.sha256 === safe.sha256);
+    state.resource = catalogResource ? { ...safe, label: catalogResource.label } : safe;
     state.projectId = project;
     state.workflowContext = safeWorkflowContext(workflowContext);
-    rememberResource(safe);
+    rememberResource(state.resource);
     state.artifact = null;
     state.payload = null;
     state.studyContext = null;
@@ -647,25 +769,45 @@
     state.activeClaimId = '';
     render();
     if (state.mode !== 'web' && state.mode !== 'document') loadResource();
+    return true;
+  }
+  function openRunEvidence(resource, projectId, button) {
+    if (open(resource, projectId)) return openEvidence(button);
   }
   function close() {
     state.request += 1;
+    state.focused = false;
     state.resource = null; state.artifact = null; state.payload = null; state.studyContext = null; state.governance = null; state.error = ''; state.loading = false;
     state.evidenceTabs = []; state.activeEvidenceId = '';
     state.activeClaimId = '';
     setAsideOpen(false);
     if (state.host) state.host.replaceChildren();
   }
-  function clearProject() { close(); state.projectId = ''; state.recentResources = []; state.workflowContext = {}; }
+  function clearProject() { close(); state.projectId = ''; state.recentResources = []; state.workflowContext = {}; state.studyResources = []; state.studyProjectId = ''; state.openStudyResource = null; state.studyTitle = ''; state.referenceResource = null; }
   function mount(host) {
     if (!host) return;
     state.host = host;
     host.addEventListener('click', event => {
       if (event.target.closest('[data-gpi-preview-close]')) { close(); return; }
+      if (event.target.closest('[data-gpi-preview-reference]')) {
+        if (state.projectId === state.studyProjectId && state.referenceResource) state.referenceResource(state.resource, state.projectId);
+        return;
+      }
+      const focus = event.target.closest('[data-gpi-preview-focus]');
+      if (focus) { toggleFocus(focus); return; }
+      const studyResource = event.target.closest('[data-gpi-study-resource]');
+      if (studyResource) {
+        const resource = state.studyResources[Number(studyResource.dataset.gpiStudyResource)];
+        if (resource && state.resource && state.projectId === state.studyProjectId && resource.run_id === state.resource.run_id) {
+          if (state.openStudyResource) state.openStudyResource(resource);
+          else open(resource, state.projectId, state.workflowContext);
+        }
+        return;
+      }
       const recent = event.target.closest('[data-gpi-preview-recent]');
       if (recent) {
         const resource = state.recentResources[Number(recent.dataset.gpiPreviewRecent)];
-        if (resource) open(resource, state.projectId);
+        if (resource) open(resource, state.projectId, state.workflowContext);
         return;
       }
       const evidenceClose = event.target.closest('[data-gpi-evidence-tab-close]');
@@ -695,6 +837,17 @@
       }
       const evidenceButton = event.target.closest('[data-gpi-evidence-open]');
       if (evidenceButton) { openEvidence(evidenceButton); return; }
+      const referenceLink = event.target.closest('[data-gpi-reference]');
+      if (referenceLink) {
+        // The app owns URL hashes for routing; keep article anchors local.
+        event.preventDefault();
+        const number = String(referenceLink.dataset.gpiReference || '');
+        if (/^[1-9][0-9]*$/.test(number)) {
+          const reference = host.querySelector('#gpi-reference-' + number);
+          if (reference) reference.scrollIntoView({ block: 'start' });
+        }
+        return;
+      }
       const reportArtifact = event.target.closest('[data-gpi-report-artifact]');
       if (reportArtifact && state.resource && state.resource.run_id) {
         const artifact = String(reportArtifact.dataset.gpiReportArtifact || '');
@@ -702,6 +855,22 @@
           kind: 'research_artifact', run_id: state.resource.run_id, artifact,
           label: String(reportArtifact.dataset.gpiReportLabel || artifact), media_type: 'application/json',
         }, state.projectId, state.workflowContext);
+        return;
+      }
+      const displayLink = event.target.closest('[data-gpi-display]');
+      if (displayLink) {
+        event.preventDefault();
+        const displayId = String(displayLink.dataset.gpiDisplay || '').trim();
+        if (/^[A-Za-z0-9 _.:-]{1,160}$/.test(displayId)) {
+          const anchor = Array.from(host.querySelectorAll('[data-gpi-display-anchor]'))
+            .find(node => String(node.dataset.gpiDisplayAnchor || '') === displayId);
+          if (anchor) {
+            anchor.scrollIntoView({ block: 'start' });
+            anchor.classList.add('is-focused');
+            const clearFocus = () => anchor.classList.remove('is-focused');
+            if (typeof window.setTimeout === 'function') window.setTimeout(clearFocus, 1600);
+          }
+        }
         return;
       }
       const claimButton = event.target.closest('[data-gpi-claim]');
@@ -753,5 +922,5 @@
     if (panel) panel.scrollIntoView({ block: 'nearest' });
   }
 
-  window.EasyICU.guidedPi.declare('preview', { mount, open, close, clearProject, setWorkflowContext });
+  window.EasyICU.guidedPi.declare('preview', { mount, open, openRunEvidence, close, clearProject, setWorkflowContext, setStudyResources });
 })();

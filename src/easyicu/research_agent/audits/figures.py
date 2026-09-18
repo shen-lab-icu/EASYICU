@@ -91,6 +91,9 @@ class FigureSourceDataValidator:
         "category",
     )
     _COMPOSITE_KEY_COLUMNS = (
+        # Continuous-effect tables repeat the exposure name and identify each
+        # plotted contrast/curve row by its numeric exposure value.
+        ("exposure", "exposure_value"),
         ("spec_id", "model_id", "term"),
         ("spec_id", "model_id"),
         # Coefficient tables repeat ordinary terms (age/sex/etc.) across
@@ -3868,8 +3871,8 @@ class FigureSourceDataValidator:
             best_col = min(
                 remaining,
                 key=lambda col: (
-                    measures[col],
                     len(_duplicates(upstream, (*widened, col))),
+                    measures[col],
                     col,
                 ),
             )
@@ -4073,7 +4076,21 @@ class FigureSourceDataValidator:
             upstream[join_col] = pd.Series(
                 range(len(upstream)), index=upstream.index, dtype=int
             ).astype(str)
-            key_cols = (join_col, *(key_cols or ()))
+            # The validated row position already identifies one exact parent
+            # row.  Keep shared text identity columns as an additional guard,
+            # but compare fully numeric columns below with the validator's
+            # tolerance instead of placing them in an exact-string join key.
+            # CSV round-trips can move an IEEE-754 value by one ulp; treating
+            # that harmless representation drift as a missing parent row
+            # falsely rejects a value-identical source-data projection.
+            text_identity_cols = []
+            for col in key_cols or ():
+                source_numeric = pd.to_numeric(source[col], errors="coerce")
+                upstream_numeric = pd.to_numeric(upstream[col], errors="coerce")
+                if source_numeric.notna().all() and upstream_numeric.notna().all():
+                    continue
+                text_identity_cols.append(col)
+            key_cols = (join_col, *text_identity_cols)
         if key_cols is None:
             # Structural fallback: no composite / named / positional key matched,
             # but a faithfully-derived figure often preserves the parent's OWN key
@@ -5593,6 +5610,7 @@ def _figure_audit__credit_table_source(source_path: Path, source_frame: pd.DataF
                 )
 
 
+
 def _figure_audit__credit_statistic_source(source_path: Path, statistic_ids: Set[str], *, matched_figure_obligations: Any, required_figure_obligations: Any, required_statistics: Any, self: Any, source_figure_products: Any, step: Any) -> None:
     for statistic_id in statistic_ids:
         product_name, expected = required_statistics[statistic_id]
@@ -5623,4 +5641,3 @@ def _figure_audit__credit_statistic_source(source_path: Path, statistic_ids: Set
                 matched_figure_obligations[figure].update(
                     required_figure_obligations[figure]
                 )
-

@@ -37,6 +37,12 @@ from .run_authority import (
     research_pipeline_project_root,
     workflow_authoritative_run,
 )
+from .workflow_attempts import (
+    PreservedPlanFailure,
+    preserved_plan_failure,
+    research_job_has_execution_progress,
+    research_job_has_report_repair_progress,
+)
 
 WorkflowStatus = Literal[
     "blocked",
@@ -65,6 +71,7 @@ class ResearchWorkflowStage(BaseModel):
     status: WorkflowStatus
     owner: str
     reason_code: str
+    required_for_completion: bool = True
 
 
 class ResearchWorkflowSnapshot(BaseModel):
@@ -91,6 +98,7 @@ class ResearchWorkflowSnapshot(BaseModel):
     plan_conversation_preview: Optional[Mapping[str, Any]] = None
     plan_execution_ready: bool = False
     analysis_validation_retry_available: bool = False
+    latest_attempt_failure: Optional[PreservedPlanFailure] = None
 
 
 class ProjectWorkflowProjection(BaseModel):
@@ -209,6 +217,8 @@ def build_research_workflow_snapshot(
     latest_run: Optional[Mapping[str, Any]],
     plan_review_authority: Optional[Mapping[str, Any]] = None,
     continuing_review_choices: bool = False,
+    latest_attempt: Optional[Mapping[str, Any]] = None,
+    report_revision_ready: bool = False,
 ) -> ResearchWorkflowSnapshot:
     """Compile owner receipts into one deterministic Copilot workflow state."""
 
@@ -244,7 +254,13 @@ def build_research_workflow_snapshot(
     job_kind = str(job_row.get("kind") or "")
     job_status = str(job_row.get("status") or "")
     extraction_running = job_kind == "extract" and job_status == "running"
-    analysis_running = job_kind == "agent-run" and job_status == "running"
+    pipeline_running = job_kind == "agent-run" and job_status == "running"
+    report_repair_running = pipeline_running and research_job_has_report_repair_progress(job_row)
+    analysis_running = (
+        pipeline_running and not report_repair_running
+        and research_job_has_execution_progress(job_row)
+    )
+    planning_running = pipeline_running and not analysis_running and not report_repair_running
     artifact_names = {
         str(item) for item in (run_row.get("artifact_names") or []) if item
     }
@@ -278,10 +294,12 @@ def build_research_workflow_snapshot(
     gate_checks = dict(raw_gate_checks) if isinstance(raw_gate_checks, Mapping) else {}
     # The projection always writes a bounded manuscript_draft.json, including
     # a diagnostic explanation when Writer fails closed.  Only the Research
-    # Agent's manuscript_ready gate proves that the file contains a real,
-    # evidence-bound draft suitable for human review.
+    # Agent's manuscript_ready gate or a separately verified report revision
+    # proves availability for review. Neither is a completed human review.
     has_manuscript = bool(
-        manuscript_artifact_present and gate_checks.get("manuscript_ready") is True
+        manuscript_artifact_present and (
+            gate_checks.get("manuscript_ready") is True or report_revision_ready
+        )
     )
     executed_analysis_validated = bool(
         gate_checks.get("execution_complete") is True
@@ -379,6 +397,28 @@ def build_research_workflow_snapshot(
     raw_remediation_buckets = (
         raw_remediation_buckets if isinstance(raw_remediation_buckets, Mapping) else {}
     )
+    remediation_routes = (
+        "agent_plan_revision", "runtime_capability", "study_authority_change",
+        "external_evidence", "independent_review",
+    )
+    explicit_routes = {
+        str(item.get("code") or "")[:120]: str(item.get("remediation_route"))
+        for item in review_findings[:40]
+        if isinstance(item, Mapping)
+        and str(item.get("code") or "").strip()
+        and str(item.get("remediation_route") or "") in remediation_routes
+    }
+    # Legacy proposal migration must not override a route already assigned by
+    # the scientific owner, or make one finding belong to two repair lanes.
+    legacy_proposal_codes = [
+        str(item.get("code") or "")[:120]
+        for item in review_findings[:40]
+        if isinstance(item, Mapping)
+        and str(item.get("code") or "") in _PLANNER_PROPOSAL_FINDING_CODES
+        and str(item.get("code") or "")[:120] not in explicit_routes
+    ]
+    raw_revision_blockers = raw_facts.get("automatic_revision_blockers")
+    raw_revision_blockers = raw_revision_blockers if isinstance(raw_revision_blockers, list) else []
     raw_study_authority_codes = raw_remediation_buckets.get(
         "study_authority_change"
     )
@@ -390,6 +430,8 @@ def build_research_workflow_snapshot(
             else []
         )
         if str(code).strip()
+        and explicit_routes.get(str(code)[:120], "study_authority_change")
+        == "study_authority_change"
         and plan_decisions.decision_is_resolved(study_row, str(code))
     }
 
@@ -399,24 +441,22 @@ def build_research_workflow_snapshot(
             str(code)[:120]
             for code in (values if isinstance(values, list) else [])[:40]
             if str(code).strip()
+            and explicit_routes.get(str(code)[:120], route) == route
         ]
+        rows = list(dict.fromkeys([
+            *rows, *(code for code, owner in explicit_routes.items() if owner == route),
+        ]))[:40]
         if route == "study_authority_change":
             return [
                 code
                 for code in rows
-                if code not in _PLANNER_PROPOSAL_FINDING_CODES
+                if code not in legacy_proposal_codes
                 and code not in resolved_study_authority_codes
             ]
         if route == "agent_plan_revision":
-            proposal_codes = [
-                str(item.get("code") or "")[:120]
-                for item in review_findings[:40]
-                if isinstance(item, Mapping)
-                and str(item.get("code") or "") in _PLANNER_PROPOSAL_FINDING_CODES
-            ]
             return list(
                 dict.fromkeys(
-                    [*rows, *proposal_codes, *sorted(resolved_study_authority_codes)]
+                    [*rows, *legacy_proposal_codes, *sorted(resolved_study_authority_codes)]
                 )
             )[:40]
         return rows
@@ -465,25 +505,25 @@ def build_research_workflow_snapshot(
                 for item in review_findings[:40]
                 if isinstance(item, Mapping) and str(item.get("code") or "").strip()
             ],
+            "automatic_revision_blockers": [
+                str(code)[:120]
+                for code in raw_revision_blockers[:40]
+                if isinstance(code, str)
+                and code not in resolved_study_authority_codes
+            ],
             "authorization_questions": [
                 projected_authorization_question(item)
                 for item in review_findings[:40]
                 if isinstance(item, Mapping)
                 and bool(item.get("requires_user_authorization"))
-                and str(item.get("code") or "") not in _PLANNER_PROPOSAL_FINDING_CODES
+                and str(item.get("code") or "") not in legacy_proposal_codes
                 and str(item.get("code") or "")
                 not in resolved_study_authority_codes
                 and str(item.get("authorization_question") or "").strip()
             ],
             "remediation_buckets": {
                 route: projected_remediation_codes(route)
-                for route in (
-                    "agent_plan_revision",
-                    "runtime_capability",
-                    "study_authority_change",
-                    "external_evidence",
-                    "independent_review",
-                )
+                for route in remediation_routes
             },
         }
         if raw_scientific_review
@@ -491,6 +531,11 @@ def build_research_workflow_snapshot(
     )
     current_scientific_digest = study_context_owner.scientific_configuration_sha256(
         study_row
+    )
+    latest_attempt_failure = preserved_plan_failure(
+        latest_attempt=latest_attempt or {}, candidate=run_row,
+        study_id=str(study_row.get("id") or ""),
+        scientific_configuration_sha256=current_scientific_digest,
     )
     planned_scientific_digest = str(
         review_authority.get("scientific_configuration_sha256")
@@ -511,6 +556,7 @@ def build_research_workflow_snapshot(
         plan_review_declared
         and review_authority_available
         and plan_configuration_matches
+        and not (planning_running or analysis_running)
     )
     # Sibling choices may continue across host-receipted edits, but the
     # superseded candidate still cannot be approved or executed.
@@ -519,10 +565,11 @@ def build_research_workflow_snapshot(
         and plan_review_declared
         and "plan_scientific_changes_required" in active_plan_review_codes
         and "scientific_plan_review_policy_stale" not in active_plan_review_codes
-        and not analysis_running
+        and not (planning_running or analysis_running)
     )
     plan_execution_ready = bool(
         plan_review_pending
+        and not pipeline_running
         and not choices_pending
         and plan_approval_allowed(review_authority)
         and str(review_authority.get("budget_mode") or "full_reviewed")
@@ -552,12 +599,19 @@ def build_research_workflow_snapshot(
         if plan_review_declared
         else ""
     )
+    if (
+        plan_review_reason_code == "plan_execution_upgrade_required"
+        and latest_attempt_failure is not None
+        and latest_attempt_failure.checkpoint_resume_available
+    ):
+        plan_review_reason_code = "planner_checkpoint_resume_available"
     # A live, digest-matching review is an approval gate. A stale or
     # non-resumable plan remains historical evidence, but the next governed
     # action is a fresh planning run rather than approval or in-place editing.
     plan_attention_required = bool(plan_review_pending or choices_pending)
     plan_regeneration_required = bool(
-        plan_review_declared and not plan_attention_required and not analysis_running
+        plan_review_declared and not plan_attention_required
+        and not (planning_running or analysis_running)
     )
     analysis_complete = bool(
         full_run
@@ -575,8 +629,24 @@ def build_research_workflow_snapshot(
     setup_receipted = bool(
         setup_ready or analysis_complete or analysis_outputs_available
     )
+    input_state = (
+        review_authority.get("research_input_state")
+        if review_authority.get("run_id") == run_row.get("run_id")
+        and "research_input_state" in review_authority
+        else run_row.get("research_input_state")
+    )
+    bound_input_prepared = bool(
+        input_state == "prepared" and pipeline_run and pipeline_receipt and has_plan
+        and len(planned_scientific_digest) == 64
+        and planned_scientific_digest == current_scientific_digest
+    )
+    # A registered export is a planning source, not a receipt for this
+    # question's materialized input. Keep successful downstream/preflight
+    # receipts stronger than legacy setup flags without completing zero-row
+    # metadata-only candidates.
     extraction_receipted = bool(
-        prepared_export_receipted or analysis_complete or analysis_outputs_available
+        bound_input_prepared or preflight_complete
+        or analysis_complete or analysis_outputs_available
     )
     pipeline_attempt_blocked = bool(
         full_run
@@ -592,7 +662,7 @@ def build_research_workflow_snapshot(
     # only be told that the old run failed).  The failed run stays immutable;
     # a newly authorized provider turn receives a new run id and Plan review.
     failed_pipeline_regeneration_required = bool(
-        pipeline_attempt_blocked and not analysis_running and not plan_review_declared
+        pipeline_attempt_blocked and not pipeline_running and not plan_review_declared
     )
     failed_execution_retry_available = bool(
         failed_pipeline_regeneration_required
@@ -638,6 +708,7 @@ def build_research_workflow_snapshot(
     stages = [
         ResearchWorkflowStage(
             id="idea",
+            required_for_completion=False,
             label="Idea mining",
             status=(
                 "review_required"
@@ -690,7 +761,7 @@ def build_research_workflow_snapshot(
                 else "review_required"
                 if plan_attention_required
                 else "running"
-                if analysis_running
+                if planning_running
                 else "ready"
                 if plan_regeneration_required
                 else "complete"
@@ -705,8 +776,8 @@ def build_research_workflow_snapshot(
                 if idea_blocks_execution
                 else plan_review_reason_code
                 if plan_attention_required
-                else "analysis_running"
-                if analysis_running
+                else "research_planning_running"
+                if planning_running
                 else plan_regeneration_reason_code
                 if plan_regeneration_required
                 else "agent_plan_ready"
@@ -720,7 +791,7 @@ def build_research_workflow_snapshot(
         ),
         ResearchWorkflowStage(
             id="extraction",
-            label="Feature extraction",
+            label="Research data preparation",
             status=(
                 "complete"
                 if extraction_receipted
@@ -733,12 +804,17 @@ def build_research_workflow_snapshot(
             owner="easyicu.webserver.routes.jobs",
             reason_code=(
                 "approved_analysis_input_receipt"
-                if (analysis_complete or analysis_outputs_available)
-                and not prepared_export_receipted
+                if analysis_complete or analysis_outputs_available
+                else "bound_research_input_prepared"
+                if bound_input_prepared
                 else "active_export_ready"
-                if extraction_receipted
+                if preflight_complete
                 else "extraction_running"
                 if extraction_running
+                else "metadata_only_input_not_prepared"
+                if input_state == "metadata_only"
+                else "research_input_preparation_required"
+                if active_export_present
                 else "extraction_ready"
                 if setup_ready
                 else "study_setup_incomplete"
@@ -750,6 +826,8 @@ def build_research_workflow_snapshot(
             status=(
                 "blocked"
                 if idea_blocks_execution
+                else "blocked"
+                if planning_running
                 else "blocked"
                 if plan_attention_required or plan_regeneration_required
                 else "running"
@@ -768,6 +846,8 @@ def build_research_workflow_snapshot(
             reason_code=(
                 "idea_feasibility_refresh_required"
                 if idea_blocks_execution
+                else "research_planning_running"
+                if planning_running
                 else (
                     plan_review_reason_code
                     if plan_attention_required
@@ -808,23 +888,35 @@ def build_research_workflow_snapshot(
             id="manuscript",
             label="Manuscript",
             status=(
-                "review_required" if analysis_complete and has_manuscript else "blocked"
+                "running" if report_repair_running
+                else "review_required" if analysis_complete and has_manuscript else "blocked"
             ),
             owner="easyicu.research_agent.reporting",
             reason_code=(
-                "manuscript_draft_ready_for_review"
+                "report_repair_running"
+                if report_repair_running
+                else "report_revision_ready_for_review"
+                if analysis_complete and has_manuscript and report_revision_ready
+                else "manuscript_draft_ready_for_review"
                 if analysis_complete and has_manuscript
                 else "full_agent_manuscript_required"
             ),
         ),
     ]
 
-    required = [row for row in stages if row.id != "idea"]
+    required = [row for row in stages if row.required_for_completion]
     # ``review_required`` is an outstanding human action, never a completed
     # stage.  Counting it as done made analysis-only runs appear as 7/7 even
     # though their interpretation and manuscript were still awaiting review.
     completed = sum(1 for row in required if row.status == "complete")
-    if (
+    if pipeline_running:
+        next_stage = next(
+            row for row in required if row.id == (
+                "manuscript" if report_repair_running
+                else "analysis" if analysis_running else "plan"
+            )
+        )
+    elif (
         eligibility_confirmation_required
         and not plan_attention_required
         and not plan_regeneration_required
@@ -868,6 +960,7 @@ def build_research_workflow_snapshot(
         plan_review_summary=plan_review_summary,
         plan_execution_ready=plan_execution_ready,
         analysis_validation_retry_available=(analysis_validation_retry_available),
+        latest_attempt_failure=latest_attempt_failure,
     )
 
 
@@ -1005,12 +1098,15 @@ def build_project_workflow_projection(
         agent_runs.read_run_review(str(latest_run.get("project_dir") or ""))
         if latest_run else {}
     )
+    latest_run_outcome = project_run_outcome(review)
 
     snapshot = build_research_workflow_snapshot(
         study=study,
         active_export_present=registered_export_matches_study(study, registry),
         active_job=active_job,
         latest_run=latest_run,
+        latest_attempt=rows[0] if rows else None,
+        report_revision_ready=latest_run_outcome.get("report_revision_ready") is True,
         plan_review_authority=plan_review_authority,
         continuing_review_choices=plan_review_progress.has_pending_choices(
             study, latest_run or {}, review,
@@ -1024,9 +1120,7 @@ def build_project_workflow_projection(
                 )
             }
         )
-    latest_run_outcome: Mapping[str, Any] = {"present": False}
     if latest_run:
-        latest_run_outcome = project_run_outcome(review)
         snapshot = _enrich_plan_review(snapshot, study=study, review=review)
 
     return ProjectWorkflowProjection(

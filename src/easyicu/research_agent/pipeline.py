@@ -232,6 +232,7 @@ from .orchestration.human_review_restore import (
 )
 from .orchestration.services import PipelineServices
 from .orchestration.progress import (
+    ProgressControlSignal,
     ResumableProgressChannel,
     planner_retry_progress_callback,
 )
@@ -240,9 +241,9 @@ from .orchestration.workflow import PipelineRunOutcome, PlannerDesignCanaryCompl
 from .resources.capability_runtime import CapabilityWorkflowRuntime
 from .contracts.runtime import (
     RunResult,
-    _ExecutePhaseResult,
-    _PlanPhaseResult,
-    _WritePhaseResult,
+    ExecutePhaseResult,
+    PlanPhaseResult,
+    WritePhaseResult,
 )
 from .execution.host_services import (
     ExecutePhaseServices,
@@ -1174,6 +1175,128 @@ def _run_preplan_literature_and_hypothesis(
         direct_comparator_literature_keys,
         preplan_literature,
     )
+
+
+def _shape_fresh_plan(
+    pipeline: "ResearchAgentPipeline",
+    *,
+    plan: AnalysisPlan,
+    context: Any,
+    agent_context: Any,
+    long_trajectory_bound: bool,
+    findings: List[ValidationFinding],
+) -> AnalysisPlan:
+    """Apply every plan-shaping transform to a freshly generated plan.
+
+    Extracted verbatim from ``_validate_and_persist_plan`` so the phase
+    size guard measures a stage function rather than the shaping
+    catalogue. Only called when the plan was not reused from a
+    digest-verified resume: the saved plan is already final, and
+    re-running split/cap/ensure_* could rename or reorder step_ids and
+    break the resume skip set.
+    """
+
+    plan, plan_contract_findings = _final_plan._enforce_advanced_plan_contract(
+        plan=plan,
+        context=context,
+        long_trajectory_bound=long_trajectory_bound,
+    )
+    findings.extend(plan_contract_findings)
+    plan, split_findings = _final_plan._split_table_and_figure_outputs_in_plan(plan=plan)
+    findings.extend(split_findings)
+    plan = _figure_plan.apply_required_plan_obligations(
+        plan, context, findings,
+        runtime_authority=pipeline._scientific_runtime_authorities.current_case,
+    )
+    plan, report_input_findings = _final_plan._augment_report_typed_product_inputs(
+        plan=plan
+    )
+    findings.extend(report_input_findings)
+    # Bind before deterministic figure selection; the universal gate below rechecks every source.
+    plan = bind_context_dependence_authority(plan=plan, context=agent_context)
+    # Force a declared figure step whenever the publication-figure skill
+    # will produce one regardless of the plan: the scorer reads
+    # analysis_plan.json, and a question-only heuristic misses tasks
+    # that never say "figure" yet still require one. Likewise
+    # ensure a declared audit/robustness panel, since that evidence is
+    # produced (locked robustness specs, data-quality summaries) but the
+    # plan often never presents it.
+    plan, result_renderer_findings = (
+        _figure_plan.select_deterministic_result_renderers(plan=plan)
+    )
+    findings.extend(result_renderer_findings)
+    plan, figure_guard_findings = _final_plan._ensure_publication_figure_step_in_plan(
+        plan=plan,
+        context=context,
+        force=pipeline._enable_publication_figure_skill,
+    )
+    findings.extend(figure_guard_findings)
+    plan, cohort_figure_findings = (
+        _figure_plan.ensure_cohort_accounting_figure_step(
+            plan=plan,
+        )
+    )
+    findings.extend(cohort_figure_findings)
+    plan, audit_panel_findings = _figure_plan.ensure_data_quality_figure_step(
+        plan=plan,
+        context=context,
+    )
+    findings.extend(audit_panel_findings)
+    plan, empty_figure_findings = (
+        _figure_plan.close_empty_deterministic_figure_contracts(plan=plan)
+    )
+    findings.extend(empty_figure_findings)
+    plan = _figure_plan.apply_deterministic_figure_panels(plan, findings)
+    # Measurement provenance companions are public Coder inputs. Close
+    # them before lifecycle sealing and human review so Execute cannot
+    # change the exact Plan payload that the decision approved.
+    plan, companion_input_findings = close_measurement_companion_inputs(
+        plan=plan,
+        context=context,
+    )
+    findings.extend(companion_input_findings)
+    cap = pipeline._max_total_steps
+    plan, cap_findings = _final_plan._cap_plan_preserving_figure_steps(plan=plan, cap=cap)
+    findings.extend(_defer_typed_plan_dag_findings_until_probe(cap_findings))
+    plan, trajectory_product_findings = augment_trajectory_plan_products(
+        plan=plan,
+        context=context,
+    )
+    findings.extend(trajectory_product_findings)
+    # The probe-aware replanner receives these structural issues before
+    # execution. Keep the initial snapshot advisory so a successfully
+    # repaired plan is not blocked by its superseded pre-probe shape.
+    findings.extend(
+        finding.model_copy(
+            update={
+                "validator": "plan_contract_pending",
+                "severity": "warning",
+                "detail": {
+                    **dict(finding.detail or {}),
+                    "pending_probe_replan": True,
+                },
+            }
+        )
+        for finding in trajectory_plan_dag_findings(
+            plan=plan,
+            context=context,
+            long_trajectory_bound=long_trajectory_bound,
+        )
+    )
+    with cohort_concept_id_scope(
+        progressive_cohort_concept_ids(
+            agent_context,
+            tuple(variable.name for variable in agent_context.variables),
+        )
+    ):
+        plan = ensure_cohort_definition(plan)
+    plan = ensure_robustness_specs(plan)
+    # Final gate: if the plan implies a cohort but still has no
+    # structured inclusion/exclusion (the retry above didn't recover
+    # it), record a loud, auditable contract error instead of silently
+    # running the analysis on the full universe.
+    findings.extend(_final_plan._cohort_definition_contract_findings(plan))
+    return plan
 
 
 class ResearchAgentPipeline:
@@ -2280,6 +2403,8 @@ class ResearchAgentPipeline:
                     dropped_plan_keys = planner.last_dropped_plan_keys
             except PlannerArticleContractError:
                 raise
+            except ProgressControlSignal:
+                raise
             except Exception as exc:
                 if not self._enable_deterministic_planner_fallback:
                     raise
@@ -2355,6 +2480,8 @@ class ResearchAgentPipeline:
                         article_contract_context=context,
                         planning_contract_context=planning_contract_context,
                     )
+                except ProgressControlSignal:
+                    raise
                 except Exception:
                     retry_plan = None
                 if retry_plan is not None and retry_plan.steps:
@@ -2477,7 +2604,7 @@ class ResearchAgentPipeline:
         run_id: str,
         skill_obj: Optional[ClinicalSkill],
         study_design_brief: Any,
-    ) -> _PlanPhaseResult | PlannerDesignCanaryComplete:
+    ) -> PlanPhaseResult | PlannerDesignCanaryComplete:
         """Shape, validate, bind, and persist the generated analysis plan."""
         if isinstance(generation, _progressive_planning.ProgressiveDesignCanaryDraft):
             return _progressive_planning.finalize_progressive_design_canary(
@@ -2497,103 +2624,14 @@ class ResearchAgentPipeline:
         # ensure_* could rename or reorder step_ids and break the resume skip
         # set. A freshly generated plan still gets the full treatment.
         if not reused_prior_plan:
-            plan, plan_contract_findings = _final_plan._enforce_advanced_plan_contract(
+            plan = _shape_fresh_plan(
+                pipeline=self,
                 plan=plan,
                 context=context,
+                agent_context=agent_context,
                 long_trajectory_bound=long_trajectory_bound,
+                findings=findings,
             )
-            findings.extend(plan_contract_findings)
-            plan, split_findings = _final_plan._split_table_and_figure_outputs_in_plan(plan=plan)
-            findings.extend(split_findings)
-            plan = _figure_plan.apply_required_plan_obligations(plan, context, findings)
-            plan, report_input_findings = _final_plan._augment_report_typed_product_inputs(
-                plan=plan
-            )
-            findings.extend(report_input_findings)
-            # Bind before deterministic figure selection; the universal gate below rechecks every source.
-            plan = bind_context_dependence_authority(plan=plan, context=agent_context)
-            # Force a declared figure step whenever the publication-figure skill
-            # will produce one regardless of the plan: the scorer reads
-            # analysis_plan.json, and a question-only heuristic misses tasks
-            # that never say "figure" yet still require one. Likewise
-            # ensure a declared audit/robustness panel, since that evidence is
-            # produced (locked robustness specs, data-quality summaries) but the
-            # plan often never presents it.
-            plan, result_renderer_findings = (
-                _figure_plan.select_deterministic_result_renderers(plan=plan)
-            )
-            findings.extend(result_renderer_findings)
-            plan, figure_guard_findings = _final_plan._ensure_publication_figure_step_in_plan(
-                plan=plan,
-                context=context,
-                force=self._enable_publication_figure_skill,
-            )
-            findings.extend(figure_guard_findings)
-            plan, cohort_figure_findings = (
-                _figure_plan.ensure_cohort_accounting_figure_step(
-                    plan=plan,
-                )
-            )
-            findings.extend(cohort_figure_findings)
-            plan, audit_panel_findings = _figure_plan.ensure_data_quality_figure_step(
-                plan=plan,
-                context=context,
-            )
-            findings.extend(audit_panel_findings)
-            plan, empty_figure_findings = (
-                _figure_plan.close_empty_deterministic_figure_contracts(plan=plan)
-            )
-            findings.extend(empty_figure_findings)
-            plan = _figure_plan.apply_deterministic_figure_panels(plan, findings)
-            # Measurement provenance companions are public Coder inputs. Close
-            # them before lifecycle sealing and human review so Execute cannot
-            # change the exact Plan payload that the decision approved.
-            plan, companion_input_findings = close_measurement_companion_inputs(
-                plan=plan,
-                context=context,
-            )
-            findings.extend(companion_input_findings)
-            cap = self._max_total_steps
-            plan, cap_findings = _final_plan._cap_plan_preserving_figure_steps(plan=plan, cap=cap)
-            findings.extend(_defer_typed_plan_dag_findings_until_probe(cap_findings))
-            plan, trajectory_product_findings = augment_trajectory_plan_products(
-                plan=plan,
-                context=context,
-            )
-            findings.extend(trajectory_product_findings)
-            # The probe-aware replanner receives these structural issues before
-            # execution. Keep the initial snapshot advisory so a successfully
-            # repaired plan is not blocked by its superseded pre-probe shape.
-            findings.extend(
-                finding.model_copy(
-                    update={
-                        "validator": "plan_contract_pending",
-                        "severity": "warning",
-                        "detail": {
-                            **dict(finding.detail or {}),
-                            "pending_probe_replan": True,
-                        },
-                    }
-                )
-                for finding in trajectory_plan_dag_findings(
-                    plan=plan,
-                    context=context,
-                    long_trajectory_bound=long_trajectory_bound,
-                )
-            )
-            with cohort_concept_id_scope(
-                progressive_cohort_concept_ids(
-                    agent_context,
-                    tuple(variable.name for variable in agent_context.variables),
-                )
-            ):
-                plan = ensure_cohort_definition(plan)
-            plan = ensure_robustness_specs(plan)
-            # Final gate: if the plan implies a cohort but still has no
-            # structured inclusion/exclusion (the retry above didn't recover
-            # it), record a loud, auditable contract error instead of silently
-            # running the analysis on the full universe.
-            findings.extend(_final_plan._cohort_definition_contract_findings(plan))
         # One boundary for every plan source: LLM, deterministic skill and
         # digest-verified resume. Planner parsing also binds early for prompt
         # diagnostics, but execution authority cannot depend on which producer
@@ -2774,6 +2812,9 @@ class ResearchAgentPipeline:
                     self._config.require_reportable_scientific_capability
                 ),
                 reuse_existing_review=reused_prior_plan,
+                runtime_authority=(
+                    self._scientific_runtime_authorities.current_case
+                ),
             )
             findings.append(review_gate.finding)
         write_locked_cohort_definition(
@@ -2875,7 +2916,7 @@ class ResearchAgentPipeline:
             except Exception:
                 pass
 
-        return _PlanPhaseResult(
+        return PlanPhaseResult(
             context=context,
             agent_context=agent_context,
             context_path=context_path,
@@ -2931,7 +2972,7 @@ class ResearchAgentPipeline:
         run_environment_identity: Dict[str, Any],
         resume_from_step_id: Optional[str],
         emit_progress: Callable[..., None],
-    ) -> _PlanPhaseResult:
+    ) -> PlanPhaseResult:
         """Build context, attach memory, and emit an execution plan."""
         # The Planner is refused a trajectory design unless the host can see a
         # trajectory, and ResearchContext only ever shows the wide fixed-window
@@ -2941,6 +2982,9 @@ class ResearchAgentPipeline:
         # after its last revision, so it never got to satisfy it.
         long_trajectory_bound = long_trajectory_is_bound(trajectory_binding)
         context_path = run_dir / "research_context.json"
+        from .planning.baseline_requirements import bind_baseline_requirements
+        from .planning.population_requirements import bind_population_requirements
+
         if resume_context_evidence_path is not None:
             # Resume context authority is the digest-verified evidence copy,
             # never a newly built context from the incoming call. Scientific
@@ -2950,6 +2994,12 @@ class ResearchAgentPipeline:
             # part of the original evidence bytes).
             context = parse_research_context_json(
                 resume_context_evidence_path.read_text(encoding="utf-8")
+            )
+            bind_baseline_requirements(
+                context, self._config.bound_baseline_requirements, restoring=True,
+            )
+            bind_population_requirements(
+                context, self._config.bound_population_requirements, restoring=True,
             )
             if not context_path.is_file() or sha256_of_file(
                 context_path
@@ -2983,6 +3033,12 @@ class ResearchAgentPipeline:
             if builder is build_research_context:
                 context_kwargs["trajectory_binding"] = trajectory_binding
             context = builder(**context_kwargs)
+            context = bind_baseline_requirements(
+                context, self._config.bound_baseline_requirements,
+            )
+            context = bind_population_requirements(
+                context, self._config.bound_population_requirements,
+            )
             context_path.write_text(
                 context.model_dump_json(indent=2),
                 encoding="utf-8",
@@ -3117,7 +3173,7 @@ class ResearchAgentPipeline:
                     else preplan_data_failure_reason(findings)
                 ),
             )
-            return _PlanPhaseResult(
+            return PlanPhaseResult(
                 context=context,
                 agent_context=context,
                 context_path=context_path,
@@ -3327,6 +3383,7 @@ class ResearchAgentPipeline:
                 planning_contract_context,
                 scientific_plan_guardrails,
                 self._bound_plan_revision_contract,
+                self._scientific_runtime_authorities.planning_contract_context(),
             )
             if value
         )
@@ -3550,7 +3607,7 @@ class ResearchAgentPipeline:
     def _run_execute_phase(
         self,
         *,
-        plan_result: _PlanPhaseResult,
+        plan_result: PlanPhaseResult,
         cohort_path: Path,
         trajectory_binding: Optional[StagedTrajectoryBinding],
         run_dir: Path,
@@ -3560,7 +3617,7 @@ class ResearchAgentPipeline:
         emit_progress: Callable[..., None],
         resume_from_step_id: Optional[str] = None,
         stop_after_step_id: Optional[str] = None,
-    ) -> "_ExecutePhaseResult":
+    ) -> "ExecutePhaseResult":
         """Delegate to :mod:`execution.phase`.
 
         The execute loop body is in :mod:`execution.phase` so this
@@ -3587,8 +3644,8 @@ class ResearchAgentPipeline:
     def _run_write_phase(
         self,
         *,
-        plan_result: _PlanPhaseResult,
-        execute_result: _ExecutePhaseResult,
+        plan_result: PlanPhaseResult,
+        execute_result: ExecutePhaseResult,
         run_dir: Path,
         run_id: str,
         stop_after_analysis: bool,
@@ -3597,7 +3654,7 @@ class ResearchAgentPipeline:
         run_language: str,
         emit_progress: Callable[..., None],
         force_writer_probe: bool = False,
-    ) -> _WritePhaseResult:
+    ) -> WritePhaseResult:
         """Delegate to :mod:`reporting.write_phase`."""
         from .reporting.write_phase import run_write_phase
 
@@ -3618,9 +3675,9 @@ class ResearchAgentPipeline:
     def _finalise_success(
         self,
         *,
-        plan_result: _PlanPhaseResult,
-        execute_result: _ExecutePhaseResult,
-        write_result: _WritePhaseResult,
+        plan_result: PlanPhaseResult,
+        execute_result: ExecutePhaseResult,
+        write_result: WritePhaseResult,
         run_id: str,
         run_dir: Path,
         cohort_path: Path,
@@ -3791,7 +3848,7 @@ class ResearchAgentPipeline:
     def _persist_review_checkpoint(
         self,
         *,
-        plan_result: _PlanPhaseResult,
+        plan_result: PlanPhaseResult,
         requests: Sequence[Any],
         run_id: str,
         run_dir: Path,
@@ -4443,6 +4500,18 @@ class ResearchAgentPipeline:
         run_environment_identity = build_environment_identity(
             llm_signature=self._llm_signature(llm)
         )
+        runtime_revision = self._services.execution_runtime_revision
+        if runtime_revision is not None:
+            from .orchestration.runtime_revision import ExecutionRuntimeRevision
+
+            if not isinstance(runtime_revision, ExecutionRuntimeRevision) or not resume_run_id:
+                raise ValueError("An execution runtime revision requires its exact resumed run")
+            runtime_revision.validate(config=self._config, run_dir=self.workdir / run_id)
+            run_environment_identity["execution_runtime_revision"] = {
+                "approved_config_sha256": runtime_revision.approved_config_sha256,
+                "target_config_sha256": runtime_revision.target_config_sha256,
+                "approved_checkpoint_sha256": runtime_revision.checkpoint_sha256,
+            }
 
         resume_state: Optional[Dict[str, Any]] = None
         resume_context_evidence_path: Optional[Path] = None
@@ -5031,7 +5100,7 @@ class ResearchAgentPipeline:
                 self,
                 run_id=str(run_id),
                 progress_callback=progress_callback,
-                plan_result_factory=_PlanPhaseResult,
+                plan_result_factory=PlanPhaseResult,
                 load_resume_state=_load_resume_state,
                 rejection_only=all_rejected,
             )
@@ -6845,7 +6914,7 @@ def _pipeline_run___write_invoker(
             status="error",
             run_id=run_id,
         )
-        return _WritePhaseResult(literature=None, bound_path=bound_path)
+        return WritePhaseResult(literature=None, bound_path=bound_path)
 
 
 def _pipeline_run___finalise_invoker(
@@ -6914,6 +6983,18 @@ def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, sel
             if evidence_root is not None
             else plan_result.plan_path.parent
         )
+        runtime_revision = getattr(getattr(self, "_services", None), "execution_runtime_revision", None)
+        if runtime_revision is not None:
+            runtime_revision.authorize_and_record(
+                config=self._config,
+                run_dir=checkpoint_file.parent,
+                plan_payload=plan_result.plan.model_dump(mode="json"),
+                run_input_capsule_sha256=str(capsule_record.sha256),
+                runtime_bundle=self._validated_runtime_bundle,
+                runtime_capabilities=self._validated_runtime_capabilities,
+                evidence=plan_evidence,
+            )
+            return ()
         if checkpoint_file.is_file() and completed_review_authorizes_exact_retry(
             checkpoint_file,
             pipeline_config_sha256=self._config.canonical_digest(),

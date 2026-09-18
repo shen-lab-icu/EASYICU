@@ -318,23 +318,44 @@ def test_an_unbound_optional_input_is_not_claimed_as_consumed() -> None:
     assert robustness_figure_consumed_input_keys(None) == (ROBUSTNESS_FIGURE_INPUT,)
 
 
-def test_selection_asks_the_owner_rather_than_naming_one_key() -> None:
-    """The wiring, so a narrower literal cannot come back."""
+@pytest.mark.parametrize("optional", [False, True])
+def test_selection_passes_resolved_parents_to_the_receipt_owner(optional) -> None:
+    """Exercise selection: passing the step object lost all optional receipts."""
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
+        _MATRIX_COLUMNS,
+    )
+    from easyicu.research_agent.execution.runners.selection import select_standard_executor
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
-    import ast
-    import inspect
-
-    from easyicu.research_agent.execution.runners import selection
-
-    tree = ast.parse(inspect.getsource(selection))
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.keyword) or node.arg != "consumed_input_keys":
-            continue
-        rendered = ast.unparse(node.value)
-        assert rendered != "(ROBUSTNESS_FIGURE_INPUT,)", (
-            "the robustness figure declares one key again instead of asking "
-            "its owner"
-        )
+    resolved = {
+        "table:robustness_matrix": {
+            "product_contract": {"columns": list(_MATRIX_COLUMNS)},
+        },
+    }
+    if optional:
+        resolved.update({
+            "table:robustness_summary": {},
+            ROBUSTNESS_PRIMARY_ESTIMATE_INPUT: {},
+            ROBUSTNESS_COMPLETE_CASE_INPUT: {},
+        })
+    step = AnalysisStep(
+        step_id="sensitivity_display", planned_analysis_role="auxiliary",
+        intent="Display the prespecified sensitivity results.",
+        method="visualization", inputs=list(resolved),
+        expected_outputs=["figure:robustness_plot"],
+        input_consumption_contracts=[
+            {"input_key": key, "mode": "all_rows"}
+            for key in resolved if key.startswith("table:")
+        ],
+    )
+    selected = select_standard_executor(
+        step, plan=AnalysisPlan(research_question="Cohort analysis", steps=[step]),
+        resolved_bindings=resolved,
+    )
+    assert selected is not None
+    assert selected.analysis_kind == "robustness_figure"
+    assert selected.host_sealed_renderer
+    assert set(selected.consumed_input_keys) == set(resolved)
 
 
 def test_the_renderer_does_not_spell_a_flag_as_an_estimate() -> None:

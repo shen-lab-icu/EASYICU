@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import math
-import re
 import statistics
 import textwrap
 from pathlib import Path
@@ -42,6 +41,8 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...schema import AnalysisStep
+from ...figures.display_labels import label_lookup, scoped_label_lookup
+from ...figures.presentation import wrap_figure_label as _wrap_category_label
 from ...numeric_scalars import coerce_optional_finite_float as _finite
 from .exposure_outcome_distribution_executor import (
     COUNTS_ONLY_COVARIANCE,
@@ -54,8 +55,12 @@ from .exposure_outcome_distribution_executor import (
     wilson_interval,
 )
 from .figure_input_capability import TypedInputCapability
-from .planner_display_labels import planner_binary_level_labels
 from .typed_input_binding import BoundTypedInput, load_typed_input
+from ._shared import (
+    figure_product as _figure_product,
+    is_safe_figure_product_id as _is_safe_figure_product_id,
+    method_head as _method_head,
+)
 
 __all__ = [
     "EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_CAPABILITY",
@@ -70,10 +75,6 @@ EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT = EXPOSURE_OUTCOME_DISTRIBUTION_INPUT
 if EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT != EXPOSURE_OUTCOME_DISTRIBUTION_OUTPUT:
     raise RuntimeError("distribution figure input drifted from its producer output")
 
-#: Same rule as the missingness renderer: the figure product id is a
-#: Planner-owned label that becomes a filename, never a capability claim.
-_FIGURE_PRODUCT_ID = re.compile(r"[a-z][a-z0-9_]{0,127}")
-
 EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_CAPABILITY = TypedInputCapability(
     required=frozenset({EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_INPUT}),
 )
@@ -81,21 +82,6 @@ EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_CAPABILITY = TypedInputCapability(
 _OVERALL_ROLE = "overall"
 _LEVEL_ROLE = "exposure_level"
 _ANALYSIS_KIND = "exposure_outcome_distribution_figure"
-
-
-def _is_safe_figure_product_id(value: Any) -> bool:
-    return bool(_FIGURE_PRODUCT_ID.fullmatch(str(value or "")))
-
-
-def _method_head(value: Any) -> str:
-    return str(value or "").strip().lower().split(" with ", 1)[0]
-
-
-def _figure_product(value: Any) -> str | None:
-    kind, separator, product = str(value or "").strip().partition(":")
-    if kind != "figure" or not separator or not _is_safe_figure_product_id(product):
-        return None
-    return product
 
 
 def exposure_outcome_distribution_figure_declaration_verdict(
@@ -159,8 +145,6 @@ def exposure_outcome_distribution_figure_code(
             "The step is not owned by the exposure-outcome distribution renderer"
         )
     product = _figure_product(step.expected_outputs[0])
-    resolved = planner_binary_level_labels(display_labels)
-    labels = (resolved[1], resolved[2]) if resolved is not None else None
     return textwrap.dedent(
         f"""
         import os
@@ -176,7 +160,7 @@ def exposure_outcome_distribution_figure_code(
             resolved_inputs=Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"]),
             step_id={step.step_id!r},
             figure_product={product!r},
-            level_labels={labels!r},
+            display_labels={dict(display_labels or {})!r},
         )
         """
     ).strip()
@@ -734,14 +718,21 @@ def _validate(
     return levels, total, design, contrast
 
 
-def _labels(levels: pd.DataFrame, level_labels: tuple[str, str] | None) -> list[str]:
-    """Label rows from the Planner's display labels when they are binary.
+def _labels(
+    levels: pd.DataFrame, level_labels: tuple[str, str] | None,
+    *, exposure: str = "", display_labels: Mapping[str, str] | None = None,
+) -> list[str]:
+    """Match declared labels by exposure and value, never by row position.
 
     Falls back to the level value itself: an unlabelled category is still an
-    honest category, whereas inventing a clinical name would not be.
+    honest category, whereas inventing a clinical name would not be. The legacy
+    explicit tuple remains available only when no scoped mapping is supplied.
     """
 
     values = list(levels["exposure_level"])
+    if display_labels:
+        return [scoped_label_lookup(exposure, value, display_labels) or str(value)
+                for value in values]
     if level_labels is not None and len(values) == 2:
         return [str(level_labels[0]), str(level_labels[1])]
     return [str(value) for value in values]
@@ -755,6 +746,7 @@ def run_exposure_outcome_distribution_figure(
     step_id: str,
     figure_product: str,
     level_labels: tuple[str, str] | None = None,
+    display_labels: Mapping[str, str] | None = None,
 ) -> Mapping[str, Any]:
     """Render the two-panel distribution figure from its one bound table."""
 
@@ -834,13 +826,26 @@ def run_exposure_outcome_distribution_figure(
         parent_contrast.insert(0, "source_row_index", [int(total.name)])
         parent_contrast.to_csv(contrast_source, index=False)
 
+    # This renderer also runs in report-revision worker threads on desktop
+    # hosts. Never let backend auto-selection create a native GUI window.
+    import matplotlib
+
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     palette = apply_publication_style()
-    labels = _labels(levels, level_labels)
+    labels = _labels(levels, level_labels, exposure=str(design["exposure_column"]),
+                     display_labels=display_labels)
     positions = list(range(len(levels)))
 
-    fig, (ax_a, ax_b) = plt.subplots(1, 2, figsize=(7.2, 3.4))
+    fig, (ax_a, ax_b) = plt.subplots(1, 2, figsize=(7.2, 3.4), sharey=True)
+    fig.subplots_adjust(
+        left=0.30,
+        right=0.98,
+        bottom=0.29 if contrast is not None else 0.20,
+        top=0.84,
+        wspace=0.35,
+    )
 
     prevalence = levels["exposure_pct"].astype(float)
     prevalence_low = (
@@ -859,11 +864,44 @@ def run_exposure_outcome_distribution_figure(
         ),
         color=palette["blue"],
         error_kw={"ecolor": palette["neutral"], "capsize": 2.0, "elinewidth": 1.0},
-        height=0.55,
+        height=0.38,
     )
     ax_a.set_yticks(positions)
-    ax_a.set_yticklabels(labels)
-    ax_a.invert_yaxis()
+    label_font = ax_a.get_yticklabels()[0].get_fontproperties()
+    canvas = fig.canvas.get_renderer()
+    label_width = fig.bbox.width * 0.25
+    wrapped_labels = [
+        _wrap_category_label(label, renderer=canvas, font=label_font, width=label_width)
+        for label in labels
+    ]
+    max_lines = max(label.count("\n") + 1 for label in wrapped_labels)
+    if max_lines > 1:
+        # Find a common compact width without adding lines or splitting Latin
+        # terms. Character-count wrapping can strand a single trailing glyph.
+        low_width, high_width = label_width / max_lines, label_width
+        for _ in range(8):
+            candidate_width = (low_width + high_width) / 2
+            candidates = [
+                _wrap_category_label(label, renderer=canvas, font=label_font, width=candidate_width)
+                for label in labels
+            ]
+            if max(label.count("\n") + 1 for label in candidates) > max_lines:
+                low_width = candidate_width
+            else:
+                high_width, wrapped_labels = candidate_width, candidates
+    ax_a.set_yticklabels(wrapped_labels)
+    rendered_width = max(
+        canvas.get_text_width_height_descent(part, label_font, False)[0]
+        for label in wrapped_labels for part in label.split("\n")
+    )
+    fig.subplots_adjust(left=max(0.16, (rendered_width + fig.dpi * 0.18) / fig.bbox.width))
+    # One aligned category axis serves both panels. Repeating a long clinical
+    # label in the inter-panel gutter can cover the neighbouring data marks.
+    ax_a.set_ylim(len(labels) - 0.3, -0.5)
+    ax_a.set_xlim(
+        min(0.0, float(prevalence_low.min()) * 1.05),
+        max(100.0, float(prevalence_high.max()) * 1.05),
+    )
     ax_a.set_xlabel("Share of the analysed cohort (%)")
     ax_a.set_title("Exposure distribution", loc="left", pad=4)
     ax_a.grid(axis="x", color=palette["neutral_light"], linewidth=0.55)
@@ -874,11 +912,13 @@ def run_exposure_outcome_distribution_figure(
         levels["exposure_denominator"],
     ):
         ax_a.text(
-            float(pct) + 1.0,
-            position,
-            f"{float(pct):.1f}%  {int(n_rows):,}/{int(denominator):,}",
-            va="center",
-            fontsize=6.1,
+            0.98,
+            position + 0.26,
+            f"{float(pct):.2f}%  {int(n_rows):,}/{int(denominator):,}",
+            transform=ax_a.get_yaxis_transform(),
+            ha="right",
+            va="top",
+            fontsize=7.2,
         )
     add_panel_label(ax_a, "A", x=-0.14, y=1.04)
 
@@ -899,14 +939,12 @@ def run_exposure_outcome_distribution_figure(
             capsize=2.0,
             markersize=4.2,
         )
-    ax_b.set_yticks(positions)
-    ax_b.set_yticklabels(labels)
-    ax_b.invert_yaxis()
+    ax_b.tick_params(axis="y", left=False, labelleft=False)
     lower = min(0.0, float(low.min()) * 1.15)
     upper = max(5.0, float(high.max()) * 1.35)
     ax_b.set_xlim(lower, upper)
-    ax_b.set_xlabel("Outcome rate (%)")
-    ax_b.set_title("Outcome rate by exposure", loc="left", pad=4)
+    ax_b.set_xlabel("Observed outcome proportion (%)")
+    ax_b.set_title("Outcome proportion by group", loc="left", pad=4)
     ax_b.grid(axis="x", color=palette["neutral_light"], linewidth=0.55)
     for position, estimate, events, denominator, missing in zip(
         positions,
@@ -915,17 +953,15 @@ def run_exposure_outcome_distribution_figure(
         levels["outcome_denominator"],
         levels["outcome_missing_n"],
     ):
-        suffix = f"  ({int(missing):,} unobserved)" if int(missing) else ""
+        suffix = f"\n({int(missing):,} unobserved)" if int(missing) else ""
         ax_b.text(
-            min(
-                float(estimate) + (upper - lower) * 0.025,
-                upper - (upper - lower) * 0.02,
-            ),
-            position,
-            f"{float(estimate):.1f}%  {int(events):,}/{int(denominator):,}{suffix}",
-            va="center",
-            ha="left" if estimate < lower + (upper - lower) * 0.86 else "right",
-            fontsize=6.1,
+            0.98,
+            position + 0.26,
+            f"{float(estimate):.2f}%  {int(events):,}/{int(denominator):,}{suffix}",
+            transform=ax_b.get_yaxis_transform(),
+            va="top",
+            ha="right",
+            fontsize=7.2,
         )
     add_panel_label(ax_b, "B", x=-0.14, y=1.04)
     if contrast is not None:
@@ -954,14 +990,6 @@ def run_exposure_outcome_distribution_figure(
             linespacing=1.25,
             color=palette["neutral"],
         )
-    fig.subplots_adjust(
-        left=0.16,
-        right=0.98,
-        bottom=0.29 if contrast is not None else 0.20,
-        top=0.84,
-        wspace=0.48,
-    )
-
     source_data = [full_source.name, prevalence_source.name, outcome_source.name]
     if contrast is not None:
         source_data.append(contrast_source.name)
@@ -1012,7 +1040,7 @@ def run_exposure_outcome_distribution_figure(
             },
             {
                 "panel_id": panel_templates[1].panel_id,
-                "title": "Outcome rate by exposure",
+                "title": "Outcome proportion by group",
                 "role": panel_templates[1].article_role,
                 "claim": (
                     "Events, the denominator they are taken over, and the "
@@ -1035,6 +1063,37 @@ def run_exposure_outcome_distribution_figure(
             },
         ],
         source_data=source_data,
+        reader_caption=(
+            "Exposure distribution and observed outcome proportions. "
+            f"Exposure: {label_lookup(design['exposure_column'], display_labels) or design['exposure_column']}; "
+            f"outcome: {label_lookup(design['outcome_column'], display_labels) or design['outcome_column']}. "
+            "(A) Bars show each declared exposure level's share of the analysis cohort. "
+            "(B) Points show the observed outcome proportion within each level. "
+            "Annotations give percentages and their numerators/denominators. "
+            + (
+                "Outcome denominators include all declared analysis records. "
+                if design['denominator_policy'] == 'all_declared_rows'
+                else "Outcome denominators include only records with an observed outcome; "
+                "unobserved counts are shown separately when present. "
+            )
+            + "Missing-outcome policy: "
+            + {
+                "fail_closed": "unobserved outcomes are not permitted. ",
+                "exclude_from_denominator": "unobserved outcomes are excluded from the denominator. ",
+                "structural_absence_is_non_event": "declared structural absence is counted as no event. ",
+            }[str(design['missing_outcome_policy'])]
+            + (
+                "No confidence intervals or hypothesis tests are shown. "
+                if counts_only else (
+                    f"Error bars are {100 * float(design['confidence_level']):g}% "
+                    + ("Wilson confidence intervals. " if design['interval_method'] == 'wilson'
+                       else "patient-cluster-robust Wald confidence intervals. ")
+                )
+            )
+            + ("" if contrast is None else contrast_note + " ")
+            + "Records are not necessarily distinct patients. These descriptive "
+            "displays do not estimate an adjusted or causal effect."
+        ),
         statistics_note=(
             (
                 "Counts, denominators, and observed percentages are reproduced "

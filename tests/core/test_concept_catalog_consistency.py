@@ -72,6 +72,15 @@ def test_mimic_sampling_keeps_negative_cultures_as_collection_events() -> None:
         assert "specimen" in source["_comment"]
 
 
+def test_admission_type_maps_mimic_ophthalmology_service_to_surgery() -> None:
+    """EYE is a real MIMIC-IV services.curr_service code, not a free level."""
+
+    concept = _load_json("concept-dict.json")
+    for database in ("miiv", "mimic", "mimic_demo"):
+        callback = concept["adm"]["sources"][database][0]["callback"]
+        assert re.search(r"\bEYE\s*=\s*'surg'", callback)
+
+
 def _data_source_tables() -> dict[str, dict]:
     data_sources = _load_json("data-sources.json")
     return {source["name"]: source["tables"] for source in data_sources}
@@ -245,6 +254,38 @@ def test_web_catalog_aligns_with_merged_extraction_dictionary() -> None:
 
     assert unresolved_web_concepts == set()
     assert hidden_dict_concepts <= HIDDEN_DICTIONARY_CONCEPTS
+
+
+def test_concept_dictionary_keys_match_packaged_json() -> None:
+    """CI gate (A-P2-8): CONCEPT_DICTIONARY must stay in lockstep with the
+    packaged extraction dictionaries.
+
+    Exact partition (verified 2026-09-17):
+      CONCEPT_DICTIONARY == (concept-dict.json ∪ sofa2-dict.json
+                             − HIDDEN_DICTIONARY_CONCEPTS)
+                            ∪ COMPOSITE_CONCEPT_OUTPUT_SOURCES
+    with the three parts pairwise disjoint. Any new dictionary concept must
+    either appear in the catalog or be added to HIDDEN_DICTIONARY_CONCEPTS
+    with justification; any new catalog-only concept must be registered in
+    COMPOSITE_CONCEPT_OUTPUT_SOURCES.
+    """
+    concept_dict = _load_json("concept-dict.json")
+    sofa2_dict = _load_json("sofa2-dict.json")
+    merged = set(concept_dict) | set(sofa2_dict)
+    catalog = set(CONCEPT_DICTIONARY)
+    hidden = set(HIDDEN_DICTIONARY_CONCEPTS)
+    composite = set(COMPOSITE_CONCEPT_OUTPUT_SOURCES)
+
+    assert hidden <= merged, f"hidden concepts missing from JSON: {sorted(hidden - merged)}"
+    assert composite <= catalog, f"composite outputs missing from catalog: {sorted(composite - catalog)}"
+    assert (merged - hidden).isdisjoint(composite), (
+        f"overlap: {sorted((merged - hidden) & composite)}"
+    )
+    assert hidden.isdisjoint(catalog), f"hidden concepts leaked into catalog: {sorted(hidden & catalog)}"
+    assert catalog == (merged - hidden) | composite, (
+        f"catalog-only unexpected: {sorted(catalog - (merged - hidden) - composite)}; "
+        f"dictionary-only missing from catalog: {sorted((merged - hidden) - catalog)}"
+    )
 
 
 def test_composite_output_sources_are_valid() -> None:

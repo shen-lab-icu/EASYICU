@@ -9,12 +9,23 @@ from easyicu.research_agent.literature import (
     LiteratureScreeningDecision,
     LiteratureSearchProvenance,
 )
+from easyicu.research_agent.planning.novelty_contract import (
+    NOVELTY_REVIEW_DIMENSIONS,
+)
 from easyicu.research_agent.reporting.scientific_maturity import (
+    _has_external_preregistration,
+    _novelty_facts,
+    _preregistration_receipt_format_valid,
     _primary_figure_facts,
     _robustness_facts,
+    _manuscript_section_prose_metrics,
+    _section_target_deviations,
     build_scientific_maturity_audit,
     scientific_maturity_audit_from_gates,
     scientific_maturity_readiness_gates,
+)
+from easyicu.research_agent.reporting.manuscript_sections import (
+    MANUSCRIPT_SECTION_SPECS,
 )
 from easyicu.research_agent.schema import (
     AnalysisPlan,
@@ -146,6 +157,7 @@ def test_registered_model_grid_counts_distinct_robustness_axes(tmp_path) -> None
         "analysis_rows": [
             {
                 "analysis_id": "primary",
+                "exposure": "severity",
                 "n_stays": 100,
                 "estimate": 1.5,
                 "ci_low": 1.2,
@@ -158,6 +170,7 @@ def test_registered_model_grid_counts_distinct_robustness_axes(tmp_path) -> None
             },
             {
                 "analysis_id": "landmark",
+                "exposure": "severity",
                 "n_stays": 90,
                 "estimate": 1.6,
                 "ci_low": 1.3,
@@ -170,6 +183,7 @@ def test_registered_model_grid_counts_distinct_robustness_axes(tmp_path) -> None
             },
             {
                 "analysis_id": "first_stay",
+                "exposure": "severity",
                 "n_stays": 85,
                 "estimate": 1.55,
                 "ci_low": 1.25,
@@ -182,6 +196,7 @@ def test_registered_model_grid_counts_distinct_robustness_axes(tmp_path) -> None
             },
             {
                 "analysis_id": "flexible",
+                "exposure": "severity",
                 "n_stays": 100,
                 "estimate": 1.48,
                 "ci_low": 1.18,
@@ -192,11 +207,24 @@ def test_registered_model_grid_counts_distinct_robustness_axes(tmp_path) -> None
                 "readmission_restriction": "all_stays",
                 "fitted_covariates": "age_spline_1;age_spline_2;score",
             },
+            {
+                "analysis_id": "alternate_definition",
+                "exposure": "severity_other",
+                "n_stays": 100,
+                "estimate": 1.5,
+                "ci_low": 1.2,
+                "ci_high": 1.8,
+                "landmark_hours": None,
+                "alive_at_landmark_required": False,
+                "negative_event_times_excluded": False,
+                "readmission_restriction": "all_stays",
+                "fitted_covariates": "age;score",
+            },
         ],
         "basis_receipts": {"flexible": [{"basis": "natural_cubic_spline"}]},
         "scientific_runtime_receipt": {
             "schema_version": "easyicu.association_model_grid_runtime_receipt/1",
-            "variant_ids": ["primary", "landmark", "first_stay", "flexible"],
+            "variant_ids": ["primary", "landmark", "first_stay", "flexible", "alternate_definition"],
             "reference_variant_id": "primary",
         },
     }
@@ -221,8 +249,8 @@ def test_registered_model_grid_counts_distinct_robustness_axes(tmp_path) -> None
 
     facts = _robustness_facts(tmp_path, None)
 
-    assert facts["declared_axes"] == ["cohort", "model", "timing"]
-    assert facts["variant_count"] == 3
+    assert facts["declared_axes"] == ["cohort", "exposure_definition", "model", "timing"]
+    assert facts["variant_count"] == 4
     assert facts["all_variants_duplicate_primary"] is False
     assert facts["registered_robustness_evidence_refs"] == [
         "evidence/statistic_grid__step_summary.json"
@@ -776,3 +804,267 @@ def test_design_analogue_satisfies_non_exposure_comparison_source_gate(
     assert audit.facts["direct_comparator_keys"] == []
     assert audit.facts["design_analogue_keys"] == ["analogue_2025"]
     assert audit.facts["comparison_source_keys"] == ["analogue_2025"]
+
+    # Pin the publication boundary end to end: a packet with an accepted
+    # disposition and matching digests still cannot close the novelty gate
+    # until every dimension carries independent-review provenance and a
+    # reviewer identity.
+    from easyicu.research_agent.reporting.novelty_positioning import (
+        novelty_authority_digests,
+    )
+
+    digests = novelty_authority_digests(
+        context=context, plan=plan, literature=literature
+    )
+
+    def _packet(source_status: str, reviewer_owner: str) -> dict:
+        return {
+            "status": "supported",
+            "direct_comparator_keys": [],
+            "design_analogue_keys": ["analogue_2025"],
+            "comparison_dimensions": {
+                name: {
+                    "study": "sealed cohort",
+                    "comparator": "published analogue",
+                    "difference": "different design route",
+                    "source_status": source_status,
+                }
+                for name in NOVELTY_REVIEW_DIMENSIONS
+            },
+            "review_disposition": "human_review_pass",
+            "reviewer_owner": reviewer_owner,
+            **digests,
+        }
+
+    (tmp_path / "novelty_positioning_audit.json").write_text(
+        json.dumps(_packet("study_authority_only", "external reviewer")),
+        encoding="utf-8",
+    )
+    audit = build_scientific_maturity_audit(
+        context=context, plan=plan, run_dir=tmp_path
+    )
+    assert "NOVELTY_POSITIONING_NOT_ESTABLISHED" in {
+        finding.code for finding in audit.findings
+    }
+    assert audit.facts["novelty"]["unreviewed_dimensions"] == sorted(
+        NOVELTY_REVIEW_DIMENSIONS
+    )
+
+    (tmp_path / "novelty_positioning_audit.json").write_text(
+        json.dumps(_packet("independent_reviewed", "external reviewer")),
+        encoding="utf-8",
+    )
+    audit = build_scientific_maturity_audit(
+        context=context, plan=plan, run_dir=tmp_path
+    )
+    assert "NOVELTY_POSITIONING_NOT_ESTABLISHED" not in {
+        finding.code for finding in audit.findings
+    }
+    assert audit.facts["novelty"]["supported"] is True
+
+
+_TARGET_BEARING_SECTION_KEYS = (
+    "abstract",
+    "introduction",
+    "methods",
+    "results",
+    "discussion",
+    "limitations",
+)
+
+
+def _article_section(title: str, *, words: int, paragraphs: int) -> str:
+    """One top-level article section with an exact prose word and paragraph count."""
+
+    per_block = max(1, words // paragraphs)
+    blocks = [
+        " ".join(f"w{index}" for index in range(per_block))
+        for _ in range(paragraphs)
+    ]
+    remainder = words - per_block * paragraphs
+    if remainder > 0:
+        blocks[-1] += " " + " ".join("x" for _ in range(remainder))
+    return f"## {title}\n\n" + "\n\n".join(blocks) + "\n\n"
+
+
+def _article(**sections: tuple[int, int]) -> str:
+    return "".join(
+        _article_section(name.title(), words=words, paragraphs=paragraphs)
+        for name, (words, paragraphs) in sections.items()
+    )
+
+
+def test_section_length_targets_match_their_own_instructions() -> None:
+    """The bound stated in prose and the bound being checked cannot drift."""
+
+    by_key = {spec.key: spec for spec in MANUSCRIPT_SECTION_SPECS}
+
+    assert tuple(key for key, spec in by_key.items() if spec.word_target) == (
+        _TARGET_BEARING_SECTION_KEYS
+    )
+    for key, spec in by_key.items():
+        if spec.word_target:
+            low, high = spec.word_target
+            assert f"{low}-{high} words" in spec.instruction, key
+        if spec.paragraph_target:
+            # Paragraph bounds are stated as prose ("four labelled paragraphs",
+            # "one paragraph"), so only the presence of the bound is pinned here.
+            assert "paragraph" in spec.instruction, key
+
+
+def test_section_target_deviations_report_short_prose_without_gating() -> None:
+    manuscript = _article(
+        abstract=(250, 4),
+        introduction=(400, 4),
+        methods=(500, 6),
+        results=(500, 6),
+        discussion=(269, 3),
+        limitations=(135, 1),
+    )
+
+    deviations = _section_target_deviations(manuscript)
+
+    assert [
+        (entry["section"], tuple(entry["issues"])) for entry in deviations
+    ] == [
+        ("discussion", ("below_word_target", "below_paragraph_target")),
+        ("limitations", ("below_word_target",)),
+    ]
+    assert all(entry["gating"] is False for entry in deviations)
+    assert deviations[0]["observed_words"] == 269
+    assert deviations[0]["word_target"] == [400, 650]
+
+
+def test_section_target_deviations_flag_prose_above_target() -> None:
+    """An over-long abstract misses its spec as surely as a thin discussion."""
+
+    manuscript = _article(
+        abstract=(334, 4),
+        introduction=(400, 4),
+        methods=(500, 6),
+        results=(500, 6),
+        discussion=(500, 4),
+        limitations=(200, 1),
+    )
+
+    assert [
+        (entry["section"], tuple(entry["issues"]))
+        for entry in _section_target_deviations(manuscript)
+    ] == [("abstract", ("above_word_target",))]
+
+
+def test_prose_metrics_do_not_credit_evidence_markup_as_content() -> None:
+    """The advisory target describes reader prose, so links must not count."""
+
+    plain = _article_section("Discussion", words=120, paragraphs=3)
+    with_links = plain.replace(
+        "\n\n", ' [step](evidence/step__summary.json "sha256=aaaa")\n\n', 1
+    )
+
+    assert _manuscript_section_prose_metrics(plain)["discussion"]["words"] == 120
+    assert (
+        _manuscript_section_prose_metrics(with_links)["discussion"]["words"] == 120
+    )
+
+
+def _supported_novelty_packet(**overrides) -> dict:
+    dimensions = {
+        name: {
+            "study": "sealed cohort",
+            "comparator": "prior cohort",
+            "difference": "different time zero",
+            "source_status": "independent_reviewed",
+        }
+        for name in NOVELTY_REVIEW_DIMENSIONS
+    }
+    packet = {
+        "status": "supported",
+        "direct_comparator_keys": ["direct_2018"],
+        "design_analogue_keys": [],
+        "comparison_dimensions": dimensions,
+        "review_disposition": "human_review_pass",
+        "reviewer_owner": "external reviewer",
+        "context_sha256": "a" * 64,
+        "plan_sha256": "b" * 64,
+        "literature_sha256": "c" * 64,
+    }
+    packet.update(overrides)
+    return packet
+
+
+def _write_novelty_packet(tmp_path, payload: dict) -> None:
+    (tmp_path / "novelty_positioning_audit.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+
+
+def test_novelty_supported_requires_independent_dimension_review(tmp_path) -> None:
+    digests = {
+        "context_sha256": "a" * 64,
+        "plan_sha256": "b" * 64,
+        "literature_sha256": "c" * 64,
+    }
+
+    _write_novelty_packet(tmp_path, _supported_novelty_packet())
+    facts = _novelty_facts(
+        tmp_path,
+        comparison_source_keys=["direct_2018"],
+        expected_authority_digests=digests,
+    )
+    assert facts["supported"] is True
+    assert facts["reviewer_owner"] == "external reviewer"
+    assert facts["unreviewed_dimensions"] == []
+
+    dimensions = {
+        name: {
+            "study": "sealed cohort",
+            "comparator": "prior cohort",
+            "difference": "different time zero",
+            "source_status": "study_authority_only",
+        }
+        for name in NOVELTY_REVIEW_DIMENSIONS
+    }
+    _write_novelty_packet(
+        tmp_path, _supported_novelty_packet(comparison_dimensions=dimensions)
+    )
+    facts = _novelty_facts(
+        tmp_path,
+        comparison_source_keys=["direct_2018"],
+        expected_authority_digests=digests,
+    )
+    assert facts["supported"] is False
+    assert facts["unreviewed_dimensions"] == sorted(NOVELTY_REVIEW_DIMENSIONS)
+
+    dimensions["population_and_setting"]["source_status"] = "independent_reviewed"
+    _write_novelty_packet(
+        tmp_path,
+        _supported_novelty_packet(
+            comparison_dimensions=dimensions, reviewer_owner=""
+        ),
+    )
+    facts = _novelty_facts(
+        tmp_path,
+        comparison_source_keys=["direct_2018"],
+        expected_authority_digests=digests,
+    )
+    assert facts["supported"] is False
+    assert facts["reviewer_owner"] == ""
+
+
+def test_forged_preregistration_receipt_grants_nothing(tmp_path) -> None:
+    """P0: a run-dir JSON file is self-assertion, never a trust boundary.
+
+    Even a well-formed ``preregistration_receipt.json`` (four arbitrary
+    strings passed the earlier format check) must not grant paper authority:
+    no versioned-protocol system with an independent issuer exists, so the
+    gate stays unconditionally closed at engineering-complete.
+    """
+    forged = {
+        "protocol_version": "whatever",
+        "statistical_plan": "whatever",
+        "acceptance_contract": "whatever",
+        "signed_declarations": "whatever",
+    }
+    (tmp_path / "preregistration_receipt.json").write_text(json.dumps(forged))
+    assert _preregistration_receipt_format_valid(tmp_path) is True
+    assert _has_external_preregistration(tmp_path) is False

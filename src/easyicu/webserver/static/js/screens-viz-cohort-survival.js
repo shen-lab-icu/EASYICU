@@ -1,3 +1,4 @@
+/* Owner: Cohort Statistics survival widget. */
 /* Cohort Statistics survival rendering sub-owner. */
 (function () {
   let state;

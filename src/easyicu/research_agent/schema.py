@@ -68,6 +68,7 @@ from .contracts.model_tokens import (
 )
 from .contracts.post_analysis import EValueConversionSpec, SubgroupAnalysisSpec
 from .contracts.product_identity import is_canonical_typed_product_token
+from .contracts.runtime_outcomes import RuntimeOutcomeContract
 from .contracts.survival import (
     SURVIVAL_ANALYSIS_RECEIPT_PRODUCT,
     SurvivalAnalysisReceipt,
@@ -86,6 +87,8 @@ from .planning.robustness_contract import (
     validate_robustness_specs,
 )
 from .planning.sensitivity_authority import PrespecifiedSensitivitySpec
+from .contracts.functional_form import FunctionalFormSpec, RCS_LINEAR_SENSITIVITY_METHODS
+from .contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
 from .research_context.clinical_definition import ClinicalDefinitionReference
 
 # Compatibility exports: these contracts have dependency-neutral owners, while
@@ -244,7 +247,13 @@ class AggregationRule(str, Enum):
 
 
 class TimeWindow(BaseModel):
-    """A bounded analysis window relative to an anchor event."""
+    """A bounded analysis window relative to an anchor event.
+
+    This is the canonical cohort-level window definition.  The predicate-level
+    contract type :class:`planning.cohort_contract.TimeWindow` is intentionally
+    distinct (anchor-relative offset range bound to one predicate); see its
+    docstring before unifying call sites.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -586,6 +595,10 @@ class ConceptDescriptor(BaseModel):
         description="Known harmonisation caveats when replicating this variable across ICU databases.",
     )
     missingness: Optional[MissingnessProfile] = None
+    concept_enrichment_degraded: bool = Field(
+        default=False,
+        description="True when concept-dictionary enrichment was unavailable.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1145,6 +1158,10 @@ class TableOneSpec(BaseModel):
     variable roles, summary family, or inferential test. For exactly two
     declared groups, the host also emits comparison-minus-reference SMDs.
 
+    /3 is an internal descriptive composition for already learned groups;
+    the source-bound phenotype comparison owner supplies the frozen levels.
+    The ordinary Table 1 executor does not accept that mode.
+
     ``missing_group_policy`` decides what a row whose grouping value is missing
     means -- the same question ``ExposureOutcomeDistributionSpec`` asks about an
     unobserved outcome, and it is answered the same way: by the Planner, in the
@@ -1168,7 +1185,7 @@ class TableOneSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["easyicu.table_one/1", "easyicu.table_one/2"] = (
+    schema_version: Literal["easyicu.table_one/1", "easyicu.table_one/2", "easyicu.table_one/3"] = (
         "easyicu.table_one/1"
     )
     group_by: str
@@ -1179,7 +1196,7 @@ class TableOneSpec(BaseModel):
     missingness_display: Literal["n_percent_by_group"] = "n_percent_by_group"
     p_values_required: bool = True
     p_value_adjustment: Literal[
-        "none_descriptive_table", "not_applicable_repeated_units"
+        "none_descriptive_table", "not_applicable_repeated_units", "not_applicable_data_derived_groups"
     ] = "none_descriptive_table"
     standardized_difference_mode: Literal["auto_binary_groups"] = "auto_binary_groups"
 
@@ -1214,13 +1231,40 @@ class TableOneSpec(BaseModel):
                 )
         elif (
             self.p_values_required
-            or self.p_value_adjustment != "not_applicable_repeated_units"
+            or self.p_value_adjustment != (
+                "not_applicable_repeated_units" if self.schema_version == "easyicu.table_one/2"
+                else "not_applicable_data_derived_groups"
+            )
             or len(no_test) != len(self.variables)
         ):
             raise ValueError(
-                "Table One /2 is descriptive/SMD-only for repeated units and "
+                "Table One /2 and /3 are descriptive/SMD-only for repeated units or data-derived groups and "
                 "must not declare an inferential test"
             )
+        return self
+
+
+class PhenotypeComparisonSpec(BaseModel):
+    """Planner-selected descriptions on a source-bound, already frozen clustering."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.phenotype_comparison/1"] = "easyicu.phenotype_comparison/1"
+    identity_column: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    variables: List[TableOneVariableSpec] = Field(min_length=1, max_length=64)
+    outcome_columns: List[str] = Field(min_length=1, max_length=16)
+    scope: Literal["within_cohort_descriptive_only"] = "within_cohort_descriptive_only"
+
+    @model_validator(mode="after")
+    def _exact_descriptive_roster(self) -> "PhenotypeComparisonSpec":
+        names = [variable.name for variable in self.variables]
+        outcomes = self.outcome_columns
+        if len(names) != len(set(names)) or self.identity_column in names or any(":" in name for name in names):
+            raise ValueError("phenotype_comparison_roster_invalid")
+        if len(outcomes) != len(set(outcomes)) or not set(outcomes).issubset(names):
+            raise ValueError("phenotype_comparison_outcome_invalid")
+        if any(variable.test != "none_descriptive_smd_only" for variable in self.variables):
+            raise ValueError("phenotype_comparison_inference_forbidden")
         return self
 
 
@@ -1690,6 +1734,10 @@ class AnalysisStep(BaseModel):
         ),
     )
     icu_rule_refs: List[str] = Field(default_factory=list)
+    runtime_outcome_contract: Optional[RuntimeOutcomeContract] = Field(
+        default=None,
+        description="Execution-owner endpoint projection; the host validates it against the exact runtime authority before execution.",
+    )
     sensitivity_spec_ids: List[str] = Field(
         default_factory=list,
         max_length=16,
@@ -1698,6 +1746,32 @@ class AnalysisStep(BaseModel):
             "implements. The host validates these ids against sealed user "
             "preferences; descriptive prose is not a binding."
         ),
+    )
+    functional_form_spec: Optional[FunctionalFormSpec] = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="Exact target variable and basis for an RCS-versus-linear sensitivity; never inferred from prose or a sensitivity id.",
+    )
+    population_scope: Optional[Literal["analysis_cohort", "primary_model"]] = Field(
+        default=None, exclude_if=lambda value: value is None,
+        description="Declared descriptive population, bound by the compiler and execution owner; absence preserves historical serialization, not fresh approval.",
+    )
+    population_scope_change_reason: Optional[str] = Field(
+        default=None, min_length=12, max_length=1200, exclude_if=lambda value: value is None,
+        description="Required only for an intentional change from a source-bound descriptive population; disclose why the scientific scope changes for fresh complete-plan review.",
+    )
+
+    @field_validator("population_scope_change_reason", mode="before")
+    @classmethod
+    def _strip_population_scope_change_reason(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    phenotyping_feature_columns: Optional[List[str]] = Field(
+        default=None, min_length=2, max_length=64, exclude_if=lambda value: value is None,
+        description="Exact clustering fit columns; readable profile, identity and outcome inputs are not fit features.",
+    )
+    phenotype_comparison_spec: Optional[PhenotypeComparisonSpec] = Field(
+        default=None, exclude_if=lambda value: value is None,
     )
     literature_citation_keys: List[str] = Field(
         default_factory=list,
@@ -1832,6 +1906,12 @@ class AnalysisStep(BaseModel):
             "different step and must not claim it to reach a host runner."
         ),
     )
+    allow_fallback_as_primary: bool = Field(
+        default=False,
+        description=(
+            "Plan permission for a fallback step to count as primary."
+        ),
+    )
 
     @field_validator("scientific_capability")
     @classmethod
@@ -1874,6 +1954,21 @@ class AnalysisStep(BaseModel):
 
     @model_validator(mode="after")
     def _model_requirement_ids_are_unique(self) -> "AnalysisStep":
+        if self.phenotyping_feature_columns is not None:
+            if self.scientific_action_id != PHENOTYPING_PRIMARY_ACTION or self.planned_analysis_role != "primary":
+                raise ValueError("phenotyping_feature_columns belongs only to the primary cluster solution")
+            require_phenotyping_features(self.phenotyping_feature_columns, inputs=self.inputs)
+        if self.phenotype_comparison_spec is not None:
+            if self.scientific_action_id != "phenotyping.outcome_by_cluster" or self.planned_analysis_role != "secondary":
+                raise ValueError("phenotype_comparison_spec belongs only to a secondary outcome-by-cluster step")
+            if not {self.phenotype_comparison_spec.identity_column, *(v.name for v in self.phenotype_comparison_spec.variables)}.issubset(self.inputs):
+                raise ValueError("phenotype_comparison_input_mismatch")
+        if self.functional_form_spec is not None and (
+            self.planned_analysis_role != "sensitivity"
+            or self.method not in RCS_LINEAR_SENSITIVITY_METHODS
+            or len(self.sensitivity_spec_ids) != 1
+        ):
+            raise ValueError("functional_form_spec requires one exact RCS-versus-linear sensitivity")
         binding_keys = [item.citation_key for item in self.literature_design_bindings]
         if len(binding_keys) != len(set(binding_keys)):
             raise ValueError(

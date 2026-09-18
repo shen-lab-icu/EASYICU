@@ -157,6 +157,10 @@ def test_failed_closed_selection_renders_a_bound_diagnostic_without_labels(
     assert "no interior solution" in contract["panels"][0]["claim"].lower()
     assert "aic" in contract["panels"][0]["claim"].lower()
     assert "candidate labels are not displayed" in contract["statistics_note"].lower()
+    assert "Fail closed: the minimum occurred" in contract["reader_caption"]
+    svg = (tmp_path / "figure" / "trajectory_selection_diagnostics.svg").read_text("utf-8")
+    assert "Fail closed: the minimum occurred" not in svg
+    assert "No interior optimum" in svg
 
 
 def test_availability_arithmetic_drift_fails_closed(tmp_path: Path) -> None:

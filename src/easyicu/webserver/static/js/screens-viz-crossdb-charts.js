@@ -1,3 +1,4 @@
+/* Owner: Cross-DB chart widget. */
 /* ============================================================
    screens-viz-crossdb-charts.js — Cross-DB chart renderer owner.
    Receives one selected aggregate feature and builds either a

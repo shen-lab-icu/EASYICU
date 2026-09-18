@@ -82,7 +82,7 @@ def _build_context_args(tmp_path: Path) -> dict:
 def test_p0_1_build_context_returns_the_outbound_safe_projection(tmp_path):
     payload = dispatch("research_agent.build_context", _build_context_args(tmp_path))
 
-    assert payload.get("schema") == "easyicu.outbound_safe_context/1"
+    assert payload.get("schema") == "easyicu.outbound_safe_context/2"
     assert "projection" in payload
     # The internal shape's own fields are the tell: the raw dump carries the
     # cohort parquet path and the free-text preference notes.
@@ -99,7 +99,7 @@ def test_p0_1_internal_context_scope_restores_the_raw_shape(tmp_path, monkeypatc
 
     payload = dispatch("research_agent.build_context", _build_context_args(tmp_path))
 
-    assert payload.get("schema") != "easyicu.outbound_safe_context/1"
+    assert payload.get("schema") != "easyicu.outbound_safe_context/2"
     assert "cohort" in payload
 
 

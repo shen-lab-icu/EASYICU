@@ -20,6 +20,9 @@ evidence, the release remains blocked or its scope and claims must be reduced.
 - [ ] Run the supported Python and operating-system matrix.
 - [ ] Run one full exact-head CI against the frozen candidate and retain its URL
       or exported result. Focused tests do not satisfy this gate.
+- [ ] Dev9 final aggregate: batch in-scope merges first, then dispatch CI once
+      with `checkpoint_reason: final_aggregate_merge` for the exact aggregate
+      SHA, and retain that run URL in the release record.
 - [ ] Build wheel and sdist, install each in a clean environment, and verify
       package data and console entry points.
 - [ ] Rebuild and smoke-test the digest-bound Docker runner when its image,
@@ -31,6 +34,10 @@ evidence, the release remains blocked or its scope and claims must be reduced.
       supported Python/OS target; record the resolver and source inputs.
 - [ ] Execute the compatibility matrix against that snapshot before freezing it.
 - [ ] Run a dependency vulnerability audit and disposition every finding.
+- [ ] Audit pip (`requirements*.lock`, runner `requirements.lock`), Cargo
+      (`desktop/src-tauri/Cargo.lock`), and npm (`package-lock.json` files)
+      on a weekly cadence; name the audit owner in the release record.
+      Dependabot covers GitHub Actions only and does not replace this audit.
 - [ ] Confirm external workflow actions use reviewed immutable commit SHAs and
       workflow permissions are least-privilege.
 - [ ] Produce and retain an SBOM for release artifacts and the runner image.

@@ -1,14 +1,16 @@
 """Gap A (SciMON-style novelty optimisation) and Gap B (multi-criteria
 validator panel) tests for the idea-mining layer.
 
-Both features are advisory: Gap A may only replace an idea with a *measured*
-more-novel revision while preserving the verbatim-quote provenance gate, and
-Gap B annotates candidates without ever touching the go/no-go gate.
+Both features are advisory: Gap A preserves originals and records unreviewed,
+source-traceable proposals. Search-hit counts cannot establish novelty or
+select a replacement. Gap B also leaves the go/no-go gate untouched.
 """
 
 from __future__ import annotations
 
 from typing import Sequence
+
+import pytest
 
 from easyicu.research_agent.discovery.idea_mining import (
     LiteratureIdeaCandidate,
@@ -17,6 +19,7 @@ from easyicu.research_agent.discovery.idea_mining import (
     build_novelty_optimization_messages,
     optimize_ideas_for_novelty,
     score_candidates_multicriteria,
+    _measure_idea_novelty,
 )
 from easyicu.research_agent.literature import CitationRecord
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
@@ -100,11 +103,12 @@ def _revision(exposure: str) -> dict:
 # --- Gap A: novelty optimisation ---------------------------------------------
 
 
-def test_novelty_optimization_keeps_measured_improvement() -> None:
+@pytest.mark.parametrize("proposal_hits", [0, 3, 40, 50])
+def test_search_counts_never_replace_original_and_proposals_remain_reviewable(proposal_hits) -> None:
     search = CountingSearch(
         {
             "crowdedconstruct": (40, ["a", "b"]),
-            "nicheconstruct": (3, ["c"]),
+            "nicheconstruct": (proposal_hits, ["c"]),
         }
     )
     llm = ScriptedLLM([_revision("nicheconstruct subgroup")])
@@ -122,13 +126,21 @@ def test_novelty_optimization_keeps_measured_improvement() -> None:
     )
 
     assert len(out) == 1
-    assert "nicheconstruct" in out[0].exposure_or_predictor
+    assert "crowdedconstruct" in out[0].exposure_or_predictor
     # Provenance anchors preserved verbatim through the revision.
     assert out[0].source_quote == QUOTE
     assert out[0].citation_key == "neutral_review_2026"
-    assert trace[0]["revised"] is True
+    assert trace[0]["revised"] is False
     assert trace[0]["initial_exact_hits"] == 40
-    assert trace[0]["final_exact_hits"] == 3
+    assert trace[0]["final_exact_hits"] == 40
+    proposal = trace[0]["proposals"][0]
+    assert proposal["exact_hits"] == proposal_hits
+    assert "nicheconstruct" in proposal["candidate"]["exposure_or_predictor"]
+    assert proposal["candidate"]["source_quote"] == QUOTE
+    assert proposal["status"] == "unreviewed"
+    assert proposal["adoption_allowed"] is False
+    assert len(proposal["review_requirements"]) == 4
+    assert trace[0]["initial_exact_query"] != proposal["exact_query"]
 
 
 def test_novelty_optimization_rejects_non_improvement() -> None:
@@ -207,6 +219,29 @@ def test_novelty_optimization_drops_untraceable_revision() -> None:
     assert "crowdedconstruct" in out[0].exposure_or_predictor
     assert out[0].source_quote == QUOTE
     assert trace[0]["revised"] is False
+    assert trace[0]["proposals"] == []
+
+
+@pytest.mark.parametrize("payload", [{}, {"hit_count": None}, {"hit_count": "unavailable"}, {"hit_count": -1}])
+def test_unavailable_search_count_is_not_recorded_as_zero(payload) -> None:
+    class MissingCountSearch:
+        def search_prior_art(self, *_args, **_kwargs):
+            return payload
+
+    assert _measure_idea_novelty(_idea("candidate"), search_client=MissingCountSearch(), max_results=5) == (-1, [])
+
+
+def test_no_unobservable_or_disabled_proposal_calls() -> None:
+    idea = _idea("crowdedconstruct trajectory")
+    search = CountingSearch({"crowdedconstruct": (40, ["a"])})
+    llm = ScriptedLLM([])
+    for options in ({"trace": None}, {"trace": [], "rounds": 0}):
+        assert optimize_ideas_for_novelty(
+            [idea], materials=[_material()], source_snapshot_id=SNAPSHOT,
+            llm=llm, search_client=search, **options,
+        ) == [idea]
+    assert llm.calls == []
+    assert search.queries == []
 
 
 def test_novelty_optimization_prompt_is_case_neutral() -> None:

@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 import easyicu
@@ -24,7 +26,13 @@ def _write_complete_score_dependencies(source: Path, time) -> None:
         }
     )
     sofa1["sofa"] = sofa1[sofa1_components].sum(axis=1)
-    sofa1.to_parquet(source / "sofa1_score.parquet", index=False)
+    # The two fixture states are rolling organs (baseline then a new peak).
+    table = pa.Table.from_pandas(sofa1, preserve_index=False)
+    table = table.replace_schema_metadata({
+        **(table.schema.metadata or {}),
+        api._SOFA1_TIME_BASIS_KEY: api._SOFA1_TIME_BASIS,
+    })
+    pq.write_table(table, source / "sofa1_score.parquet")
 
     sofa2_components = list(api.SOFA2_COMPONENT_NAMES)
     sofa2 = pd.DataFrame(
@@ -561,6 +569,19 @@ def test_aumc_respiratory_uses_measured_batch_process_isolation() -> None:
     assert api._requires_isolated_stream_batch("aumc", "respiratory") is True
     assert api._requires_isolated_stream_batch("aumc", "ventilator") is False
     assert api._requires_isolated_stream_batch("aumc", "other_scores") is False
+
+
+def test_miiv_other_scores_uses_measured_batch_process_isolation() -> None:
+    assert api._requires_isolated_stream_batch("miiv", "other_scores") is True
+    assert api._requires_isolated_stream_batch("miiv_demo", "other_scores") is False
+    assert api._requires_isolated_stream_batch("mimic", "other_scores") is False
+
+
+def test_miiv_medications_uses_isolated_batches_and_deferred_merge() -> None:
+    assert api._requires_isolated_stream_batch("miiv", "medications") is True
+    assert ("miiv", "medications") in api._DEFERRED_STREAM_MERGE_TARGETS
+    assert api._requires_isolated_stream_batch("miiv_demo", "medications") is False
+    assert api._requires_isolated_stream_batch("mimic", "medications") is False
 
 
 def test_append_isolated_stream_batch_aligns_to_frozen_schema(tmp_path) -> None:

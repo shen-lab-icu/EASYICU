@@ -1,3 +1,4 @@
+/* Owner: Cohort Statistics chart widget. */
 /* ============================================================
    screens-viz-cohort-charts.js — Cohort Statistics chart owner.
    Converts reviewed aggregate survival and SOFA transition data

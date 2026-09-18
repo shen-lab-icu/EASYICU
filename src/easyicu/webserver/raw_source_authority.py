@@ -246,6 +246,14 @@ class RawMimicIVSourceBinding:
         )
         return derive_mimic_iv_hospital_mortality_followup(icustays, admissions)
 
+    def materialize_hospital_mortality_status(self):
+        from easyicu.hospital_mortality import derive_mimic_hospital_mortality_status
+
+        return derive_mimic_hospital_mortality_status(
+            _read_verified_table(self.icustays_path, self.icustays_sha256, table="icustays"),
+            _read_verified_table(self.admissions_path, self.admissions_sha256, table="admissions"),
+        )
+
 
 def _read_verified_table(path: Path, expected_sha256: str, *, table: str) -> pd.DataFrame:
     try:

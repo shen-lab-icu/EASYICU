@@ -6,6 +6,9 @@
 
   function create(deps) {
     const d = deps || {};
+    /* Bumped by reset(): in-flight search/source/import resolutions check their
+       captured ticket so a reset widget cannot be repopulated afterwards. */
+    let revision = 0;
     const state = {
       searching: false,
       importing: false,
@@ -84,14 +87,16 @@
       state.searching = true;
       state.result = null;
       setError(null);
+      const ticket = revision;
       repaint();
       window.EU_API.searchZotero({ query: state.query, limit: 8 })
         .then(data => {
+          if (ticket !== revision) return;
           state.result = data;
           setSourceResolved(null);
         })
-        .catch(e => { setError(e.message || String(e)); })
-        .finally(() => { state.searching = false; repaint(); });
+        .catch(e => { if (ticket !== revision) return; setError(e.message || String(e)); })
+        .finally(() => { if (ticket !== revision) return; state.searching = false; repaint(); });
     }
 
     function useItem(index) {
@@ -107,11 +112,12 @@
       setSourceType('zotero');
       state.searching = true;
       setError(null);
+      const ticket = revision;
       repaint();
       window.EU_API.zoteroSource({ item })
-        .then(data => applySource(data, item))
-        .catch(e => { setError(e.message || String(e)); })
-        .finally(() => { state.searching = false; repaint(); });
+        .then(data => { if (ticket !== revision) return; applySource(data, item); })
+        .catch(e => { if (ticket !== revision) return; setError(e.message || String(e)); })
+        .finally(() => { if (ticket !== revision) return; state.searching = false; repaint(); });
     }
 
     function importPaste() {
@@ -132,14 +138,16 @@
       setSourceType('zotero');
       state.importing = true;
       setError(null);
+      const ticket = revision;
       repaint();
       window.EU_API.importZoteroSource({ text: state.pasteText })
         .then(data => {
+          if (ticket !== revision) return;
           state.pasteImport = data;
           applySource(data, data && data.item);
         })
-        .catch(e => { setError(e.message || String(e)); })
-        .finally(() => { state.importing = false; repaint(); });
+        .catch(e => { if (ticket !== revision) return; setError(e.message || String(e)); })
+        .finally(() => { if (ticket !== revision) return; state.importing = false; repaint(); });
     }
 
     function render() {
@@ -203,6 +211,7 @@
     }
 
     function reset() {
+      revision += 1;
       state.searching = false;
       state.importing = false;
       state.query = '';

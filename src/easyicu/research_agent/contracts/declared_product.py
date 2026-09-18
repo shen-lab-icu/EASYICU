@@ -11,6 +11,7 @@ from ..canonical_json import sha256_file as _sha256_file
 
 import json
 import hashlib
+import logging
 import math
 import os
 import re
@@ -18,6 +19,8 @@ import tempfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
+
+logger = logging.getLogger(__name__)
 
 from ..repair_registry import is_sealed_renderer_repair, repair_metadata_for
 from ..schema import AnalysisStep, ValidationFinding
@@ -331,7 +334,11 @@ def typed_product_binding_contract(
             return None
         try:
             artifact_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            logger.debug(
+                "exposure_definition artifact unreadable, closed: error_type=%s",
+                type(exc).__name__,
+            )
             return None
         if not isinstance(artifact_payload, Mapping):
             return None
@@ -409,7 +416,11 @@ def typed_product_binding_contract(
             return None
         try:
             artifact_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.debug(
+                "prespecified_confounder_set artifact unreadable, closed: error_type=%s",
+                type(exc).__name__,
+            )
             return None
         if not isinstance(artifact_payload, Mapping):
             return None
@@ -552,7 +563,11 @@ def typed_product_binding_contract(
             artifact_path,
             columns=[identity_column, *score_columns],
         )
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "assignment_model artifact unreadable, closed: error_type=%s",
+            type(exc).__name__,
+        )
         return None
     if frame is None or frame.empty:
         return None
@@ -592,7 +607,11 @@ def typed_product_binding_contract(
                 expected_identity = cohort_frame[identity_column]
         else:
             return None
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "assignment_model cohort comparison unreadable, closed: error_type=%s",
+            type(exc).__name__,
+        )
         return None
     expected_identity = expected_identity.reset_index(drop=True)
     observed_identity = identity.reset_index(drop=True)

@@ -680,3 +680,23 @@ def test_dispatch_survey_sees_expected_number_of_callbacks():
         "distinct callbacks; expected at least 150. Did concept-dict.json "
         "or sofa2-dict.json get truncated?"
     )
+
+
+def test_blood_ratio_uses_admission_owner_not_magnitude_or_remote_nearest(monkeypatch):
+    from types import SimpleNamespace
+    from easyicu.concept import ConceptResolver
+
+    resolver = ConceptResolver({})
+    source = SimpleNamespace(config=SimpleNamespace(name='aumc'),
+        load_table=lambda *args, **kwargs: pd.DataFrame({'admissionid':[1], 'admittedat':[60.], 'dischargedat':[1e7]}))
+    wbc = ICUTable(pd.DataFrame({'admissionid':[1,1], 'measuredat':[2.,2000.], 'wbc':[10.,100.]}),
+                   id_columns=['admissionid'],index_column='measuredat',value_column='wbc')
+    monkeypatch.setattr(resolver, 'load_concepts', lambda *args, **kwargs: {'wbc':wbc})
+    # Absolute raw minutes, with a nonzero admission origin. A distant WBC at
+    # 2000 h must neither change units nor lend authority to the 100 h record.
+    frame = pd.DataFrame({'admissionid':[1,1], 'measuredat':[180.,6060.], 'lymph':[2.,2.]})
+    result = _apply_callback(frame.copy(), _src('blood_cell_ratio',value_var='lymph',index_var='measuredat'),
+                             concept_name='lymph',resolver=resolver,data_source=source)
+    assert result.measuredat.tolist()==frame.measuredat.tolist()
+    assert result.lymph.iloc[0]==20.
+    assert pd.isna(result.lymph.iloc[1])

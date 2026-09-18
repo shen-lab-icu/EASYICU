@@ -18,9 +18,13 @@ import json
 from typing import Literal, Tuple
 
 __all__ = [
+    "DIRECT_METHOD_BINDINGS",
+    "DirectMethodBinding",
     "HIGH_FREQUENCY_METHOD_ADAPTERS",
     "MethodAdapterContract",
     "MethodAdapterGapError",
+    "direct_method_bindings_receipt",
+    "get_direct_method_binding",
     "get_method_adapter_contract",
     "method_adapter_catalog_receipt",
     "require_method_adapter_contract",
@@ -220,6 +224,22 @@ HIGH_FREQUENCY_METHOD_ADAPTERS: Tuple[MethodAdapterContract, ...] = (
         ),
     ),
     *_adapter_group(
+        ("time_to_event.rmst",),
+        owner_module=(
+            "easyicu.research_agent.execution.runners.rmst_executor"
+        ),
+        owner_entrypoint="rmst_executor_code",
+        selection_kind="signed_rmst_contrast",
+        required_declarations=(
+            "one digest-bound typed cohort",
+            "one reviewed two-group time/event/group/horizon RMST specification",
+        ),
+        validation_test_refs=(
+            "tests/research_agent/execution/test_rmst_executor.py::test_rmst_contrast_runs_and_matches_the_reviewed_kernel",
+            "tests/research_agent/execution/test_rmst_executor.py::test_rmst_contrast_fails_closed_on_invalid_inputs",
+        ),
+    ),
+    *_adapter_group(
         (
             "phenotyping.cluster_solution",
             "phenotyping.k_selection",
@@ -327,4 +347,83 @@ def method_adapter_catalog_receipt() -> dict[str, object]:
         "catalog_sha256": hashlib.sha256(canonical).hexdigest(),
         "action_ids": [item.action_id for item in HIGH_FREQUENCY_METHOD_ADAPTERS],
         "claim_ceiling": "analysis_only",
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class DirectMethodBinding:
+    """One runner-to-methods direct call point (no adapter indirection).
+
+    These are intentional direct imports that bypass the adapter catalog's
+    selection layer (e.g. runners importing ``methods.*`` helpers inline).
+    They are registered here for drift visibility only; this registry never
+    changes the call chain.
+    """
+
+    binding_id: str
+    owner_module: str
+    direct_module: str
+    direct_symbols: Tuple[str, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+DIRECT_METHOD_BINDINGS: Tuple[DirectMethodBinding, ...] = (
+    DirectMethodBinding(
+        binding_id="direct_table_one_v1",
+        owner_module=(
+            "easyicu.research_agent.execution.runners.table_one_executor"
+        ),
+        direct_module="easyicu.research_agent.methods.table_one",
+        direct_symbols=(
+            "build_grouped_table_one",
+            "table_one_spec_sha256",
+        ),
+    ),
+    DirectMethodBinding(
+        binding_id="direct_descriptive_inputs_v1",
+        owner_module=(
+            "easyicu.research_agent.execution.runners.deterministic_missingness"
+        ),
+        direct_module="easyicu.research_agent.methods.descriptive_inputs",
+        direct_symbols=("measurement_provenance_receipt",),
+    ),
+    DirectMethodBinding(
+        binding_id="direct_source_status_v1",
+        owner_module=(
+            "easyicu.research_agent.execution.runners.deterministic_missingness"
+        ),
+        direct_module="easyicu.research_agent.methods.source_status",
+        direct_symbols=(
+            "reconcile_binary_event_presence",
+            "reconcile_conditional_event_time",
+        ),
+    ),
+)
+
+_BY_DIRECT_ID = {item.binding_id: item for item in DIRECT_METHOD_BINDINGS}
+
+
+def get_direct_method_binding(binding_id: str) -> DirectMethodBinding | None:
+    """Return one registered direct binding, or ``None`` without guessing."""
+
+    return _BY_DIRECT_ID.get(str(binding_id or "").strip())
+
+
+def direct_method_bindings_receipt() -> dict[str, object]:
+    """Return a stable digest-bound receipt for the three direct bindings."""
+
+    entries = [item.to_dict() for item in DIRECT_METHOD_BINDINGS]
+    canonical = json.dumps(
+        entries,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return {
+        "schema_version": "easyicu.direct_method_bindings/1",
+        "binding_count": len(entries),
+        "catalog_sha256": hashlib.sha256(canonical).hexdigest(),
+        "binding_ids": [item.binding_id for item in DIRECT_METHOD_BINDINGS],
     }

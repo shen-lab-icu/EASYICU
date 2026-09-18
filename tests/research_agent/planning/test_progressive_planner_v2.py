@@ -61,6 +61,7 @@ from easyicu.research_agent.planning.progressive_compiler import (
 )
 from easyicu.research_agent.planning.dependence_authority import (
     bind_context_dependence_authority,
+    descriptive_counts_only_required,
 )
 from easyicu.research_agent.planning.cohort_contract import concept_id_exists
 from easyicu.research_agent.planning.progressive_contract import (
@@ -968,7 +969,8 @@ def test_article_contract_credits_typed_measurement_audit_with_precise_products(
     assert "data_quality" in roles_covered_by_plan(plan, contract)
 
 
-def test_compiler_normalizes_real_provider_ungrouped_baseline_aliases() -> None:
+@pytest.mark.parametrize("product", ["artifact:baseline_context_summary", "table:baseline_table"])
+def test_compiler_normalizes_real_provider_ungrouped_baseline_aliases(product: str) -> None:
     payload = _payload()
     baseline = payload["steps"][1]
     baseline.update(
@@ -976,7 +978,7 @@ def test_compiler_normalizes_real_provider_ungrouped_baseline_aliases() -> None:
         custom_method="overall_baseline_context_summary",
         outputs=[
             {
-                "product_id": "artifact:baseline_context_summary",
+                "product_id": product,
                 "semantic_role": "custom",
             }
         ],
@@ -2109,7 +2111,9 @@ def test_progressive_outline_schema_is_tiny_closed_and_has_no_step_details() -> 
     schema = json.loads(request.schema_json)
     encoded = request.canonical_payload_json
 
-    assert len(encoded.encode("utf-8")) < 4_000
+    # Population choice and amendment rationale now belong to the whole-plan
+    # stage; the outline still excludes executable details and stays bounded.
+    assert len(encoded.encode("utf-8")) < 4_500
     assert request.name == "easyicu_progressive_plan_outline_v1"
     assert schema["properties"]["analysis_type"]["enum"] == ["association_study"]
     step = schema["$defs"]["ProgressiveOutlineStep"]["properties"]
@@ -2122,6 +2126,8 @@ def test_progressive_outline_schema_is_tiny_closed_and_has_no_step_details() -> 
         "variable_names",
         "literature_citation_keys",
         "scientific_action_id",
+        "population_scope",
+        "population_scope_change_reason",
     }
     for forbidden in (
         "raw_inputs",
@@ -2230,6 +2236,27 @@ def test_foundation_schema_compiles_robustness_shape_invariant() -> None:
     assert complete_case["complete_case_variables"]["items"]["enum"] == [
         "exposure_flag",
         "outcome_flag",
+    ]
+
+
+def test_foundation_transport_owns_required_label_keys_and_canonicalizes_values():
+    from jsonschema import validate, ValidationError
+    from easyicu.research_agent.planning.progressive_contract import ProgressivePlanFoundation
+
+    request = progressive_foundation_structured_output_request(
+        outline_sha256="a" * 64, variable_names=["exposure_flag", "outcome_flag"],
+        required_reader_display_label_keys=["exposure_flag", "outcome_flag"],
+        required_binary_display_label_scopes=["exposure_flag"],
+    )
+    schema = json.loads(request.schema_json)["$defs"]["ProgressivePlanFoundation"]["properties"]["display_labels"]
+    labels = {"exposure_flag": "Observed exposure", "outcome_flag": "Hospital outcome", "exposure_flag=0": "Unexposed", "exposure_flag=1": "Exposed"}
+    validate(labels, schema)
+    with pytest.raises(ValidationError):
+        validate({}, schema)
+    with pytest.raises(ValidationError):
+        validate({key: value for key, value in labels.items() if key != "outcome_flag"}, schema)
+    assert ProgressivePlanFoundation._keyed_label_transport(labels) == [
+        {"key": key, "value": value} for key, value in labels.items()
     ]
 
 
@@ -3022,7 +3049,9 @@ def test_compiler_materializes_host_owned_contracts_and_exact_wires() -> None:
     assert {item.mode for item in figure.input_consumption_contracts} == {"all_rows"}
 
 
-def test_absolute_risk_context_module_compiles_existing_deterministic_owner() -> None:
+@pytest.mark.parametrize("primary_population", [False, True])
+@pytest.mark.parametrize("declaration", ["legacy", "explicit", "without_reference", "conflict", "wrong_variables", "bound_same", "bound_drift", "bound_amendment"])
+def test_absolute_risk_context_module_compiles_existing_deterministic_owner(primary_population, declaration) -> None:
     payload = json.loads(json.dumps(_payload()))
     step = next(
         item for item in payload["steps"] if item["step_id"] == "03_distribution"
@@ -3047,26 +3076,105 @@ def test_absolute_risk_context_module_compiles_existing_deterministic_owner() ->
         "producer_step_id": "03_absolute_risk_context",
         "product_id": "table:absolute_risk_context",
     }
+    if primary_population:
+        payload["steps"].remove(step)
+        index = next(i for i, item in enumerate(payload["steps"]) if item["step_id"] == "05_primary")
+        payload["steps"].insert(index + 1, step)
+        step["depends_on"] = ["05_primary"]
+        step["product_inputs"] = [{"producer_step_id": "05_primary", "product_id": "table:adjusted_association_estimates"}]
+    if declaration != "legacy":
+        step["population_scope"] = "primary_model" if primary_population else "analysis_cohort"
+    if declaration == "without_reference":
+        step["product_inputs"] = []
+        step["depends_on"] = []
+    if declaration == "conflict":
+        step["population_scope"] = "analysis_cohort" if primary_population else "primary_model"
+        with pytest.raises(ProgressivePlanCompileError, match=(
+            "analysis_cohort scope" if primary_population else "preceding supported primary"
+        )):
+            compile_progressive_plan(skeleton=ProgressivePlanSkeleton.model_validate(payload), context=_context())
+        return
+    if declaration == "wrong_variables" and primary_population:
+        step["primary_exposure"] = "age_years"
+        with pytest.raises(ProgressivePlanCompileError, match="primary model's exposure and outcome"):
+            compile_progressive_plan(skeleton=ProgressivePlanSkeleton.model_validate(payload), context=_context())
+        return
+    context = _context()
+    if declaration.startswith("bound_"):
+        from easyicu.research_agent.planning.population_requirements import bind_population_requirements
+        expected_scope = step["population_scope"]
+        if declaration != "bound_same":
+            expected_scope = "analysis_cohort" if primary_population else "primary_model"
+        context = bind_population_requirements(context, {
+            "source_plan_sha256": "a" * 64,
+            "populations": [{"source_step_id": "historical_different_id",
+                             "output_product": "table:absolute_risk_context",
+                             "population_scope": expected_scope}],
+        })
+        if declaration == "bound_drift":
+            with pytest.raises(ProgressivePlanCompileError, match="Preserve table:absolute_risk_context"):
+                compile_progressive_plan(skeleton=ProgressivePlanSkeleton.model_validate(payload), context=context)
+            return
+        if declaration == "bound_amendment":
+            step["population_scope_change_reason"] = "The requested scope change compares the alternative population explicitly."
     plan, _receipt = compile_progressive_plan(
         skeleton=ProgressivePlanSkeleton.model_validate(payload),
-        context=_context(),
+        context=context,
     )
 
     compiled = next(
         item for item in plan.steps if item.step_id == "03_absolute_risk_context"
     )
-    assert compiled.method == "absolute_risk_context"
+    if declaration == "bound_amendment":
+        assert compiled.population_scope_change_reason == step["population_scope_change_reason"]
+    assert compiled.method == ("primary_population_absolute_risk_context" if primary_population else "absolute_risk_context")
     assert compiled.inputs == [
         "exposure_flag",
         "outcome_flag",
         "artifact:analysis_cohort",
-    ]
+    ] + (["table:adjusted_association_estimates"] if primary_population else [])
     assert compiled.expected_outputs == ["table:absolute_risk_context"]
+    assert compiled.population_scope == (
+        "primary_model" if primary_population else None if declaration == "legacy" else "analysis_cohort"
+    )
     contract = build_article_analysis_contract(
         _context(),
         analysis_type=plan.analysis_type,
     )
     assert "descriptive_result" in roles_covered_by_plan(plan, contract)
+
+
+def test_fresh_risk_materialization_requires_scope_but_historical_bytes_are_preserved():
+    step = ProgressiveSkeletonStep(
+        step_id="risk", planned_analysis_role="secondary", module_id="absolute_risk_context",
+        objective="Describe absolute risk in the planned population.",
+        primary_exposure="exposure_flag", outcome="outcome_flag",
+    )
+    payload = ProgressiveStepMaterialization(outline_step_sha256="a" * 64, foundation=None, step=step).model_dump(mode="json")
+    assert "population_scope" not in payload["step"]
+    assert ProgressiveStepMaterialization.model_validate(payload).model_dump(mode="json") == payload
+    with pytest.raises(ValueError, match="explicit population_scope"):
+        _parse_step_materialization(json.dumps(payload))
+    for scope in ("primary_model", "analysis_cohort"):
+        payload["step"]["population_scope"] = scope
+        assert _parse_step_materialization(json.dumps(payload)).step.population_scope == scope
+
+
+def test_risk_transport_requires_a_closed_non_null_population_choice():
+    outline = ProgressiveOutlineStep(
+        step_id="risk", planned_analysis_role="secondary", module_id="absolute_risk_context",
+        objective="Describe risk in the prespecified population.",
+        variable_names=["exposure_flag", "outcome_flag"],
+    )
+    request = progressive_step_materialization_request(
+        outline_step=outline, outline_step_sha256=canonical_sha256(outline.model_dump(mode="json")),
+        variable_names=outline.variable_names, scientific_action_ids=[],
+    )
+    step = json.loads(request.schema_json)["$defs"]["ProgressiveSkeletonStep"]
+    assert "population_scope" in step["required"]
+    assert step["properties"]["population_scope"] == {
+        "type": "string", "enum": ["analysis_cohort", "primary_model"],
+    }
 
 
 def test_compiler_keeps_ordinal_linear_levels_out_of_treatment_contrasts() -> None:
@@ -3192,9 +3300,11 @@ def test_table_one_compiler_reports_known_missing_group_rows() -> None:
         else variable
         for variable in context.variables
     ]
+    context = context.model_copy(update={"variables": variables})
+    payload = _payload()
+    payload["steps"][2]["missing_exposure_policy"] = "exclude_from_denominator"
     plan, _ = compile_progressive_plan(
-        skeleton=_skeleton(),
-        context=context.model_copy(update={"variables": variables}),
+        skeleton=ProgressivePlanSkeleton.model_validate(payload), context=context,
     )
 
     table_step = next(step for step in plan.steps if step.step_id == "02_table_one")
@@ -3219,9 +3329,16 @@ def test_distribution_compiler_reports_known_missing_exposure_rows() -> None:
         else variable
         for variable in context.variables
     ]
+    context = context.model_copy(update={"variables": variables})
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(skeleton=_skeleton(), context=context)
+    assert caught.value.reason_code == "progressive_distribution_missingness_authority_invalid"
+    assert caught.value.path == "missing_exposure_policy"
+
+    payload = _payload()
+    payload["steps"][2]["missing_exposure_policy"] = "exclude_from_denominator"
     plan, _ = compile_progressive_plan(
-        skeleton=_skeleton(),
-        context=context.model_copy(update={"variables": variables}),
+        skeleton=ProgressivePlanSkeleton.model_validate(payload), context=context,
     )
 
     distribution_step = next(
@@ -3432,6 +3549,58 @@ def test_counts_only_compiler_emits_descriptive_table_and_distribution() -> None
     assert distribution.risk_difference_contrast is None
 
 
+@pytest.mark.parametrize("metadata_only", [False, True])
+def test_descriptive_source_without_patient_identity_compiles_counts_only(metadata_only) -> None:
+    context = _context()
+    provenance = {"analysis_unit": "icu_stay"}
+    if metadata_only:
+        provenance["evidence_stage"] = "metadata_only_planning"
+    context = context.model_copy(update={
+        "cohort": context.cohort.model_copy(update={
+            "n_stays": 0 if metadata_only else 120,
+            "n_patients": None,
+            "provenance": provenance,
+        }),
+    })
+    payload = _payload()
+    payload.update(analysis_type="descriptive_epidemiology", robustness_intents=[])
+    payload["steps"] = payload["steps"][:3]
+    original_context = context.model_dump(mode="json")
+
+    plan, _receipt = compile_progressive_plan(
+        skeleton=ProgressivePlanSkeleton.model_validate(payload), context=context,
+    )
+    distribution = plan.steps[2].exposure_outcome_distribution_spec
+    assert distribution.schema_version == "easyicu.exposure_outcome_distribution/3"
+    assert distribution.confidence_level is None
+    assert distribution.risk_difference_contrast is None
+    assert context.model_dump(mode="json") == original_context
+    assert "Source-bound descriptive inference ceiling" in "\n".join(
+        message.content for message in ProgressivePlannerAgent.request_messages(context)
+    )
+
+
+@pytest.mark.parametrize("authority", ["equal_owner_counts", "patient_group", "other_family"])
+def test_source_counts_ceiling_preserves_other_design_authority(authority) -> None:
+    context = _context()
+    provenance = {"analysis_unit": "icu_stay"}
+    cohort_updates = {"n_patients": None, "provenance": provenance}
+    if authority == "equal_owner_counts":
+        cohort_updates["n_patients"] = context.cohort.n_stays
+    elif authority == "patient_group":
+        cohort_updates["id_columns"] = ["stay_id", "person_key"]
+        provenance["patient_id_columns"] = ["person_key"]
+    context = context.model_copy(update={
+        "cohort": context.cohort.model_copy(update=cohort_updates),
+    })
+
+    assert not descriptive_counts_only_required(
+        context,
+        analysis_type=("association_study" if authority == "other_family"
+                       else "descriptive_epidemiology"),
+    )
+
+
 def test_descriptive_compiler_rejects_effect_robustness_before_plan_assembly() -> None:
     context = _context().model_copy(
         update={
@@ -3582,6 +3751,175 @@ def test_outline_requires_custom_owner_for_explicit_separate_product() -> None:
     assert caught.value.details["findings"][0]["required_products"] == [
         "table:prespecified_sensitivity"
     ]
+
+
+def test_functional_form_step_cannot_own_separate_analysis_product() -> None:
+    payload = _outline_payload()
+    custom = next(
+        step for step in payload["steps"] if step["module_id"] == "custom_analysis"
+    )
+    custom.update(
+        step_id="06_age_functional_form",
+        variable_names=["age_years"],
+    )
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent._validate_outline_authority(
+            ProgressivePlanOutline.model_validate(payload),
+            analysis_types=("association_study",),
+            variable_names=(
+                "exposure_flag",
+                "outcome_flag",
+                "age_years",
+                "sex_code",
+            ),
+            allowed_literature_citation_keys=(),
+            required_custom_products=("table:secondary_icu_los_association",),
+        )
+
+    assert (
+        caught.value.reason_code
+        == "progressive_outline_separate_analysis_owner_missing"
+    )
+    assert caught.value.details["findings"][0]["candidate_step_ids"] == []
+
+
+def test_separate_analysis_product_rejects_duplicate_custom_owners() -> None:
+    payload = _outline_payload()
+    custom = next(
+        step for step in payload["steps"] if step["module_id"] == "custom_analysis"
+    )
+    custom["objective"] = (
+        "Run the prespecified table:secondary_icu_los_association analysis."
+    )
+    duplicate = dict(custom)
+    duplicate.update(
+        step_id="06_duplicate_secondary",
+        objective="Duplicate the table:secondary_icu_los_association analysis.",
+    )
+    payload["steps"].append(duplicate)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent._validate_outline_authority(
+            ProgressivePlanOutline.model_validate(payload),
+            analysis_types=("association_study",),
+            variable_names=(
+                "exposure_flag",
+                "outcome_flag",
+                "age_years",
+                "sex_code",
+            ),
+            allowed_literature_citation_keys=(),
+            required_custom_products=("table:secondary_icu_los_association",),
+        )
+
+    finding = caught.value.details["findings"][0]
+    assert (
+        caught.value.reason_code
+        == "progressive_outline_separate_analysis_owner_missing"
+    )
+    assert finding["duplicate_product_owners"] == {
+        "table:secondary_icu_los_association": [
+            "06_sensitivity",
+            "06_duplicate_secondary",
+        ]
+    }
+    assert finding["candidate_step_ids"] == [
+        "06_sensitivity",
+        "06_duplicate_secondary",
+    ]
+
+
+def test_separate_analysis_product_binds_to_the_step_that_names_it() -> None:
+    payload = _outline_payload()
+    custom = next(
+        step for step in payload["steps"] if step["module_id"] == "custom_analysis"
+    )
+    custom["objective"] = (
+        "Run the prespecified table:secondary_icu_los_association analysis."
+    )
+
+    ProgressivePlannerAgent._validate_outline_authority(
+        ProgressivePlanOutline.model_validate(payload),
+        analysis_types=("association_study",),
+        variable_names=(
+            "exposure_flag",
+            "outcome_flag",
+            "age_years",
+            "sex_code",
+        ),
+        allowed_literature_citation_keys=(),
+        required_custom_products=("table:secondary_icu_los_association",),
+    )
+
+
+def test_host_mandated_custom_step_does_not_break_product_owner_binding() -> None:
+    payload = _outline_payload()
+    custom = next(
+        step for step in payload["steps"] if step["module_id"] == "custom_analysis"
+    )
+    custom["objective"] = (
+        "Run the prespecified table:secondary_icu_los_association analysis."
+    )
+    ordered = {
+        "step_id": "07_ordered_trend",
+        "planned_analysis_role": "secondary",
+        "module_id": "custom_analysis",
+        "objective": "Estimate the ordered multi-outcome trend on the primary model.",
+        "depends_on": ["05_primary"],
+        "variable_names": ["exposure_flag", "outcome_flag", "los_days"],
+        "literature_citation_keys": [],
+        "scientific_action_id": "association.ordinal_trend",
+    }
+    payload["steps"].append(ordered)
+
+    ProgressivePlannerAgent._validate_outline_authority(
+        ProgressivePlanOutline.model_validate(payload),
+        analysis_types=("association_study",),
+        variable_names=(
+            "exposure_flag",
+            "outcome_flag",
+            "age_years",
+            "sex_code",
+            "los_days",
+        ),
+        allowed_literature_citation_keys=(),
+        available_ordered_trend=("exposure_flag", "outcome_flag", "los_days"),
+        required_custom_products=("table:secondary_icu_los_association",),
+    )
+
+
+def test_functional_form_step_for_a_non_required_covariate_is_allowed() -> None:
+    payload = _outline_payload()
+    custom = next(
+        step for step in payload["steps"] if step["module_id"] == "custom_analysis"
+    )
+    custom.update(
+        step_id="06_age_functional_form",
+        variable_names=["age_years"],
+    )
+    extra = dict(custom)
+    extra.update(
+        step_id="07_charlson_functional_form",
+        objective="Check the prespecified charlson_score functional form.",
+        variable_names=["charlson_score"],
+    )
+    payload["steps"].append(extra)
+
+    ProgressivePlannerAgent._validate_outline_authority(
+        ProgressivePlanOutline.model_validate(payload),
+        analysis_types=("association_study",),
+        variable_names=(
+            "exposure_flag",
+            "outcome_flag",
+            "age_years",
+            "sex_code",
+            "charlson_score",
+        ),
+        allowed_literature_citation_keys=(),
+        continuous_domain_variables=("age_years", "charlson_score"),
+        required_functional_form_targets=("age_years",),
+    )
 
 
 def test_outline_binds_optional_ordered_trend_only_when_selected() -> None:
@@ -3788,6 +4126,29 @@ def test_outline_cannot_substitute_unrelated_closed_domains_for_primary_pair() -
     assert caught.value.details["step_id"] == distribution["step_id"]
 
 
+def test_outline_uses_selected_distribution_variables_for_unresolved_anchor() -> None:
+    outline = ProgressivePlanOutline.model_validate(_outline_payload())
+
+    ProgressivePlannerAgent._validate_outline_authority(
+        outline,
+        analysis_types=("association_study",),
+        variable_names=(
+            "exposure_flag",
+            "outcome_flag",
+            "age_years",
+            "sex_code",
+        ),
+        allowed_literature_citation_keys=(),
+        closed_domain_variables=(
+            "exposure_flag",
+            "outcome_flag",
+            "sex_code",
+        ),
+        primary_exposure="unresolved_exposure_alias",
+        target_outcome="outcome_flag",
+    )
+
+
 def test_outline_rejects_secondary_custom_result_off_primary_lineage() -> None:
     payload = _outline_payload()
     custom = next(
@@ -3852,12 +4213,14 @@ def test_outline_rejects_an_adjusted_model_that_omits_a_host_bound_covariate() -
     assert finding["missing_from_selected_design"] == []
 
 
-def test_outline_prompt_projects_scientific_to_physical_adjustment_authority() -> None:
+@pytest.mark.parametrize("origin", ["user", "agent_plan", None])
+def test_outline_prompt_projects_scientific_to_physical_adjustment_authority(origin: str | None) -> None:
     context = _context().model_copy(
         update={
             "user_preferences": UserPreferences(
                 covariates=["AGE", "SEX"],
                 covariate_selection="exact",
+                covariate_authority=origin,
                 covariate_rationales={
                     "AGE": "Prespecified baseline demographic confounder.",
                     "SEX": "Prespecified baseline demographic confounder.",
@@ -3876,7 +4239,11 @@ def test_outline_prompt_projects_scientific_to_physical_adjustment_authority() -
 
     prompt = ProgressivePlannerAgent.request_messages(context)[-1].content
 
-    assert "User-owned adjustment-set authority" in prompt
+    assert "User-owned adjustment-set authority" not in prompt
+    assert "Adjustment-set authority" in prompt
+    assert '"authority":"' + (origin or "unrecorded") + '"' in prompt
+    if origin == "agent_plan":
+        assert "not user-specified" in prompt
     assert '"scientific_covariates":["AGE","SEX"]' in prompt
     assert '"operational_covariates":["age_years","sex_code"]' in prompt
     assert "not modeling roles" in prompt
@@ -3904,6 +4271,7 @@ def test_outline_requires_functional_form_sensitivity_for_exact_continuous_covar
             allowed_literature_citation_keys=(),
             continuous_domain_variables=("age_years",),
             required_exact_covariates=("age_years",),
+            required_functional_form_targets=("age_years",),
         )
 
     assert caught.value.reason_code == (
@@ -3934,6 +4302,83 @@ def test_outline_requires_functional_form_sensitivity_for_exact_continuous_covar
         allowed_literature_citation_keys=(),
         continuous_domain_variables=("age_years",),
         required_exact_covariates=("age_years",),
+        required_functional_form_targets=("age_years",),
+    )
+
+
+def test_outline_requires_one_functional_form_owner_per_continuous_target() -> None:
+    payload = _outline_payload()
+    selected = next(
+        candidate
+        for candidate in payload["design_selection"]["candidates"]
+        if candidate["disposition"] == "selected"
+    )
+    selected["required_variables"].extend(["age_years", "charlson_score"])
+    combined = {
+        "step_id": "08_functional_form_check",
+        "planned_analysis_role": "sensitivity",
+        "module_id": "custom_analysis",
+        "objective": "Check both continuous covariate functional forms.",
+        "depends_on": ["05_primary"],
+        "variable_names": ["age_years", "charlson_score"],
+        "literature_citation_keys": [],
+        "scientific_action_id": None,
+    }
+    payload["steps"].append(combined)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        ProgressivePlannerAgent._validate_outline_authority(
+            ProgressivePlanOutline.model_validate(payload),
+            analysis_types=("association_study",),
+            variable_names=(
+                "exposure_flag",
+                "outcome_flag",
+                "age_years",
+                "sex_code",
+                "charlson_score",
+            ),
+            allowed_literature_citation_keys=(),
+            continuous_domain_variables=("age_years", "charlson_score"),
+            required_functional_form_targets=("age_years", "charlson_score"),
+        )
+
+    finding = caught.value.details["findings"][0]
+    assert caught.value.reason_code == (
+        "progressive_outline_functional_form_sensitivity_missing"
+    )
+    assert finding["invalid_target_partitions"] == [
+        {
+            "step_id": "08_functional_form_check",
+            "functional_form_targets": ["age_years", "charlson_score"],
+        }
+    ]
+
+    payload["steps"].pop()
+    for step_id, target in (
+        ("08_age_functional_form", "age_years"),
+        ("09_charlson_functional_form", "charlson_score"),
+    ):
+        item = dict(combined)
+        item.update(
+            step_id=step_id,
+            objective=f"Check the prespecified {target} functional form.",
+            variable_names=[target],
+        )
+        payload["steps"].append(item)
+
+    ProgressivePlannerAgent._validate_outline_authority(
+        ProgressivePlanOutline.model_validate(payload),
+        analysis_types=("association_study",),
+        variable_names=(
+            "exposure_flag",
+            "outcome_flag",
+            "age_years",
+            "sex_code",
+            "charlson_score",
+        ),
+        allowed_literature_citation_keys=(),
+        continuous_domain_variables=("age_years", "charlson_score"),
+        required_functional_form_targets=("age_years", "charlson_score"),
     )
 
 
@@ -3955,8 +4400,34 @@ def test_outline_prompt_requires_functional_form_step_before_plan_review() -> No
     prompt = ProgressivePlannerAgent.request_messages(context)[-1].content
 
     assert "Host-resolved functional-form obligation" in prompt
-    assert "step_id contains 'functional_form'" in prompt
+    assert "step_id must contain 'functional_form'" in prompt
+    assert "one downstream custom_analysis sensitivity step per applicable" in prompt
+    assert "exactly one target" in prompt
     assert '["age_years"]' in prompt
+
+
+def test_outline_prompt_resolves_functional_form_targets_case_insensitively() -> None:
+    base = _context()
+    context = base.model_copy(
+        update={
+            "variables": [
+                *base.variables,
+                ConceptDescriptor(
+                    name="charlson",
+                    role=VariableRole.COMPOSITE_SCORE,
+                    dtype="float64",
+                ),
+            ],
+            "user_preferences": UserPreferences(
+                covariates=["age_years", "Charlson"],
+                covariate_selection="planner_selectable",
+            ),
+        }
+    )
+
+    prompt = ProgressivePlannerAgent.request_messages(context)[-1].content
+
+    assert '["age_years","charlson"]' in prompt
 
 
 def test_outline_rejects_missing_method_layer_before_checkpoint() -> None:
@@ -4099,7 +4570,6 @@ def test_retrieved_data_cards_use_concept_declared_domain_without_claiming_obser
             "role": "demographic",
             "dtype": "object",
             "source_concept": "sex",
-            "derived_from_concepts": [],
             "closed_domain_level_count": 2,
             "supports_closed_level_contrast": True,
             "closed_domain_basis": "declared_concept_dictionary_levels",
@@ -4179,7 +4649,7 @@ def test_outline_rejects_new_estimand_action_on_robustness_replay_owner() -> Non
         candidate["analysis_type"] = "survival"
     next(
         step for step in payload["steps"] if step["module_id"] == "adjusted_association"
-    )["scientific_action_id"] = None
+    ).update(module_id="custom_analysis", scientific_action_id="time_to_event.cox_hr")
     replay = {
         "step_id": "08_robustness",
         "planned_analysis_role": "sensitivity",
@@ -4335,7 +4805,7 @@ def test_predicate_filtered_foundation_contract_projects_nested_item_shapes() ->
     assert '"start_offset_hours":"<number>"' in contract
     assert '"value":{"mode":' in contract
     assert "value object must preserve all six displayed keys" in contract
-    assert 'each item has exactly {"key":' in contract
+    assert 'each nonempty item has exactly {"key":' in contract
     assert '"card_sha256":"<authorized 64-char digest>"' in contract
 
 
@@ -4347,11 +4817,11 @@ def test_foundation_contract_projects_required_reader_label_keys() -> None:
     )
 
     assert (
-        '"key":"exposure_flag","value":"<reader-facing clinical variable label>"'
+        '"exposure_flag":"<reader-facing clinical variable label>"'
         in contract
     )
     assert (
-        '"key":"outcome_flag","value":"<reader-facing clinical variable label>"'
+        '"outcome_flag":"<reader-facing clinical variable label>"'
         in contract
     )
 
@@ -4399,6 +4869,31 @@ def test_step_materialization_contract_projects_closed_envelope() -> None:
     assert '"literature_bindings":[]' in contract
     assert "Never return variable_names" in contract
     assert "flatten step fields into the root" not in contract
+
+
+@pytest.mark.parametrize("module", ["adjusted_association", "measurement_audit", "absolute_risk_context"])
+def test_text_materialization_template_scopes_population_field_to_its_owner(module):
+    outline = ProgressiveOutlineStep(
+        step_id="current_step", planned_analysis_role="secondary", module_id=module,
+        objective="Materialize the prespecified analysis step.",
+        variable_names=["exposure_flag", "outcome_flag"],
+    )
+    contract = _step_materialization_shape_contract(
+        outline_step=outline, outline_step_sha256="a" * 64,
+    )
+    template = json.loads(contract.splitlines()[1])
+    assert ("population_scope" in template["step"]) == (module == "absolute_risk_context")
+
+
+def test_non_risk_population_decoration_remains_invalid():
+    step = next(step for step in _payload()["steps"] if step["module_id"] == "adjusted_association")
+    materialization = {
+        "outline_step_sha256": "a" * 64, "foundation": None, "step": step,
+    }
+    for scope in ("analysis_cohort", "primary_model"):
+        step["population_scope"] = scope
+        with pytest.raises(ValueError, match="population_scope belongs only"):
+            _parse_step_materialization(json.dumps(materialization))
 
 
 def test_compiler_projects_measurement_output_role_vocabulary() -> None:
@@ -4760,6 +5255,7 @@ def test_functional_form_sensitivity_requires_an_exact_executable_method() -> No
     supported_step = supported["steps"][5]
     supported_step["step_id"] = "06_functional_form_sensitivity"
     supported_step["custom_method"] = "restricted_cubic_spline_sensitivity"
+    supported_step["functional_form_spec"] = {"target_column": "age_years", "knot_quantiles": [0.1, 0.5, 0.9]}
     supported_step["sensitivity_spec_ids"] = [
         "age_restricted_cubic_spline_vs_linear"
     ]
@@ -4787,6 +5283,39 @@ def test_functional_form_sensitivity_requires_an_exact_executable_method() -> No
         "progressive_association_sensitivity_parent_invalid"
     )
     assert caught.value.step_id == "06_sensitivity"
+
+
+@pytest.mark.parametrize("diagnostic_name", ["shape_diagnostics", "age_model_comparison"])
+def test_robustness_figure_keeps_functional_form_diagnostics_in_report(diagnostic_name):
+    payload = _payload()
+    diagnostic = payload["steps"][5]
+    diagnostic.update(custom_method="restricted_cubic_spline_sensitivity",
+                      functional_form_spec={"target_column": "age_years", "knot_quantiles": [0.1, 0.5, 0.9]},
+                      sensitivity_spec_ids=["age_restricted_cubic_spline_vs_linear"],
+                      outputs=[{"product_id": f"table:{diagnostic_name}", "semantic_role": "scientific_sensitivity"}])
+    replay = deepcopy(diagnostic)
+    replay.update(step_id="06_replay", module_id="robustness_replay", custom_method=None,
+                  functional_form_spec=None, sensitivity_spec_ids=["complete_case"], outputs=[])
+    payload["steps"].insert(6, replay)
+    figure = payload["steps"][7]
+    figure["depends_on"] = [replay["step_id"], diagnostic["step_id"]]
+    figure["product_inputs"] = [
+        {"producer_step_id": replay["step_id"], "product_id": "table:robustness_matrix"},
+        {"producer_step_id": diagnostic["step_id"], "product_id": f"table:{diagnostic_name}"},
+    ]
+    with pytest.raises(ProgressivePlanCompileError, match="functional-form diagnostics are not effect estimates"):
+        compile_progressive_plan(skeleton=ProgressivePlanSkeleton.model_validate(payload), context=_context())
+    figure["product_inputs"].pop()
+    # The report keeps the requested sensitivity result; it is not dropped.
+    payload["steps"].append({
+        "step_id": "08_report", "module_id": "report", "planned_analysis_role": "auxiliary",
+        "objective": "Report the prespecified functional-form comparison.",
+        "depends_on": [diagnostic["step_id"]],
+        "product_inputs": [{"producer_step_id": diagnostic["step_id"], "product_id": f"table:{diagnostic_name}"}],
+        "outputs": [{"product_id": "report:study_report", "semantic_role": "report"}],
+    })
+    plan, _ = compile_progressive_plan(skeleton=ProgressivePlanSkeleton.model_validate(payload), context=_context())
+    assert f"table:{diagnostic_name}" in plan.steps[-1].inputs
 
 
 def test_compiler_reports_identical_distribution_contrast_at_its_owner() -> None:
@@ -5644,6 +6173,8 @@ def test_run_bound_schema_closes_runtime_rosters_under_twelve_kib() -> None:
     encoded = request.canonical_payload_json
 
     assert len(encoded.encode("utf-8")) < 12_000
+    assert schema["properties"]["know_how_decisions"]["maxItems"] == 0
+    assert "ProgressiveKnowHowDecision" not in schema["$defs"]
     assert "CandidateLiteratureDesignDecision" not in schema["$defs"]
     assert schema["properties"]["analysis_type"]["enum"] == ["association_study"]
     branches = schema["$defs"]["ProgressiveSkeletonStep"]["anyOf"]
@@ -5730,8 +6261,8 @@ def test_agent_materializes_one_step_at_a_time_with_strict_transport() -> None:
         '"schema_version":"easyicu.progressive_plan_foundation/1"' in foundation_prompt
     )
     assert '"foundation":{"cohort":' in foundation_prompt
-    assert '"key":"exposure_flag=0"' in foundation_prompt
-    assert '"key":"exposure_flag=1"' in foundation_prompt
+    assert '"exposure_flag=0":"<reader-facing label for level 0>"' in foundation_prompt
+    assert '"exposure_flag=1":"<reader-facing label for level 1>"' in foundation_prompt
     assert "Required binary display-label authority" in foundation_prompt
     assert '"robustness_intents":[]' in foundation_prompt
     assert '"know_how_decisions":[]' in foundation_prompt
@@ -5773,6 +6304,38 @@ def test_outline_authority_failure_is_retried_before_foundation() -> None:
         "easyicu_progressive_plan_outline_v1"
     )
     assert "progressive_outline_variable_unavailable" in (llm.calls[1][0][-1].content)
+
+
+def test_accepted_baseline_omission_is_repaired_in_outline_not_a_whole_new_run() -> None:
+    from easyicu.research_agent.planning.baseline_requirements import bind_baseline_requirements
+
+    context = bind_baseline_requirements(_context(), {
+        "schema_version": "easyicu.accepted_baseline_requirements/1",
+        "source_plan_sha256": "a" * 64,
+        "tables": [{
+            "source_step_id": "original_baseline",
+            "group_by": {"name": "exposure_flag"},
+            "variables": [{"name": "age_years"}, {"name": "sex_code"}],
+        }],
+    })
+    invalid = _outline_payload()
+    baseline = next(step for step in invalid["steps"] if step["module_id"] == "table_one")
+    baseline["variable_names"].remove("age_years")
+    responses = [invalid, _outline_payload(), _foundation_payload(), *_materialization_payloads()]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    llm.supports_strict_json_schema = True
+    plan = ProgressivePlannerAgent(llm).run(context)
+    assert len(plan.steps) == 7
+    assert len(llm.calls) == 10
+    assert [call[1]["structured_output"].name for call in llm.calls[:3]] == [
+        "easyicu_progressive_plan_outline_v1", "easyicu_progressive_plan_outline_v1",
+        "easyicu_progressive_plan_foundation_v1",
+    ]
+    feedback = llm.calls[1][0][-1].content
+    assert "progressive_outline_accepted_baseline_incomplete" in feedback
+    assert "age_years" in feedback and "original_baseline" in feedback
+    table = next(step for step in plan.steps if step.table_one_spec is not None)
+    assert {v.name for v in table.table_one_spec.variables} == {"age_years", "sex_code"}
 
 
 def test_foundation_outline_digest_is_bound_without_spending_a_retry() -> None:
@@ -6119,7 +6682,8 @@ def test_agent_resumes_only_the_unmaterialized_suffix() -> None:
     )
 
 
-def test_agent_rejects_resume_authority_drift_before_provider_call() -> None:
+@pytest.mark.parametrize("changed_field", ["question", "plan_contract"])
+def test_agent_rejects_resume_authority_drift_before_provider_call(changed_field) -> None:
     dependency_context = {
         "cohort_file_sha256": "b" * 64,
         "llm_signature": "codex:gpt-test",
@@ -6139,9 +6703,11 @@ def test_agent_rejects_resume_authority_drift_before_provider_call() -> None:
         _context(),
         checkpoint_callback=checkpoints.append,
         resume_dependency_context=dependency_context,
+        planning_contract_context="Preserve the accepted candidate plan.",
     )
-    changed_context = _context().model_copy(
-        update={"research_question": "Estimate a different scientific target."}
+    changed_context = (
+        _context().model_copy(update={"research_question": "Estimate a different scientific target."})
+        if changed_field == "question" else _context()
     )
     resumed_llm = ScriptedMockLLMClient([])
     resumed_llm.supports_strict_json_schema = True
@@ -6151,6 +6717,9 @@ def test_agent_rejects_resume_authority_drift_before_provider_call() -> None:
             changed_context,
             resume_checkpoint=checkpoints[4],
             resume_dependency_context=dependency_context,
+            planning_contract_context=(
+                "" if changed_field == "plan_contract" else "Preserve the accepted candidate plan."
+            ),
         )
 
     assert caught.value.reason_code == (
@@ -6325,6 +6894,7 @@ def test_agent_repairs_primary_model_to_the_exact_adjustment_roster() -> None:
     functional_form_step = payload["steps"][5]
     functional_form_step["step_id"] = "06_functional_form_sensitivity"
     functional_form_step["custom_method"] = "restricted_cubic_spline_sensitivity"
+    functional_form_step["functional_form_spec"] = {"target_column": "age_years", "knot_quantiles": [0.1, 0.5, 0.9]}
     functional_form_step["sensitivity_spec_ids"] = [
         "age_restricted_cubic_spline_vs_linear"
     ]
@@ -6792,3 +7362,21 @@ def test_step_transport_requires_each_outline_literature_key_once() -> None:
 
     assert bindings["minItems"] == 1
     assert bindings["maxItems"] == 1
+
+
+def test_ungrouped_baseline_refuses_identifier_summary_before_execution() -> None:
+    from easyicu.research_agent.schema import ConceptDescriptor
+    payload = _payload()
+    baseline = payload["steps"][1]
+    baseline.update(
+        module_id="custom_analysis", custom_method="baseline_description",
+        outputs=[{"product_id": "table:baseline_table", "semantic_role": "custom"}],
+        table_one_group_by=None, table_one_mode=None, table_one_variables=[],
+    )
+    baseline["raw_inputs"].append("row_key")
+    context = _context().model_copy(update={"variables": [
+        *_context().variables, ConceptDescriptor(name="row_key", role="id", dtype="string"),
+    ]})
+    with pytest.raises(ProgressivePlanCompileError) as raised:
+        compile_progressive_plan(skeleton=ProgressivePlanSkeleton.model_validate(payload), context=context)
+    assert raised.value.code == "progressive_baseline_summary_semantic_role_ineligible"

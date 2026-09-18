@@ -117,7 +117,7 @@ body.lang-zh .eyebrow{ letter-spacing: 0.04em; }
 .sc-mode.idea{ color:oklch(46% 0.10 280); background:oklch(96% 0.03 280); border:1px solid oklch(88% 0.05 280); }
 .sc-meta{ font-size:11px; color:var(--ink-4); margin-top:5px; display:flex; align-items:center; gap:6px; padding-left:16px; }
 .sc-meta .mid{ width:3px; height:3px; border-radius:50%; background:var(--hair-3); }
-/* .sc-folder moved to css/agent.css (owner file), 2026-07-07 design pass. */
+/* .sc-folder lives in css/agent-project-source.css. */
 
 /* detail (right) */
 .modeswitch{ display:inline-flex; padding:3px; gap:3px; background:var(--surface-2); border:1px solid var(--hair); border-radius:var(--r-2); flex:none; }

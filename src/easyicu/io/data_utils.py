@@ -1,8 +1,14 @@
 """Deprecated table/ID helpers.
 
-**Nothing inside EasyICU imports this module.** It survives only because its
-names are exported from the top-level package, so deleting it outright would
-break an external caller we cannot see. It goes in 2.0.
+.. deprecated::
+    DO NOT USE IN NEW CODE (禁新用). Nothing inside EasyICU imports this
+    module. It survives only because its names are exported from the top-level
+    package, so deleting it outright would break an external caller we cannot
+    see.
+
+    Removal plan: remove in EasyICU 2.0 (code kept until then; call sites warn
+    via DeprecationWarning). Migrate to :func:`easyicu.table.change_id` and
+    plain pandas on ``ICUTable.data`` (see below).
 
 The ID functions here are *not* forwarded to the canonical implementations in
 :mod:`easyicu.table.id_conversion`, because they do not mean the same thing.

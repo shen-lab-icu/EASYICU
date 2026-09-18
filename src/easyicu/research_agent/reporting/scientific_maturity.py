@@ -40,6 +40,8 @@ from ..research_context.temporal_semantics import (
 )
 from ..schema import AnalysisPlan, ResearchContext
 from .display_suite import panel_has_absolute_risk_context
+from .review_disclaimer import SIMULATED_REVIEW_NOT_INDEPENDENT
+from . import manuscript_surface as _manuscript_surface
 from .novelty_positioning import novelty_authority_digests
 
 
@@ -126,6 +128,67 @@ def _read_json(run_dir: Path, name: str) -> Mapping[str, Any]:
     except (FileNotFoundError, OSError, UnicodeDecodeError, ValueError):
         return {}
     return payload if isinstance(payload, Mapping) else {}
+
+
+def _preregistration_receipt_format_valid(run_dir: Path) -> bool:
+    """Return whether ``preregistration_receipt.json`` is well-formed.
+
+    Diagnostic only: format validity NEVER grants paper authority (see
+    :func:`_has_external_preregistration`). Kept so a future
+    versioned-protocol system can reuse the schema check.
+    """
+
+    try:
+        raw = (run_dir / "preregistration_receipt.json").read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError, UnicodeDecodeError):
+        return False
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return False
+    if not isinstance(payload, Mapping):
+        return False
+    required = (
+        "protocol_version",
+        "statistical_plan",
+        "acceptance_contract",
+        "signed_declarations",
+    )
+    for field in required:
+        value = payload.get(field)
+        if isinstance(value, Mapping):
+            if not value:
+                return False
+        elif isinstance(value, (list, tuple)):
+            if not value:
+                return False
+        elif not str(value or "").strip():
+            return False
+    return True
+
+
+def _has_external_preregistration(run_dir: Path) -> bool:
+    """Return whether an external formal preregistration grants authority.
+
+    P0-2 fail-closed ceiling (declared here in readiness code, not in product
+    docs): the current candidate has no versioned-protocol + preregistration
+    system, so paper authority is capped at engineering-complete.  A run that
+    claims paper authority (novelty supported and/or publication bundle ready)
+    without this external receipt is blocked.  ``registered_report_inputs.py``
+    is report-only repair admission and explicitly does NOT satisfy this gate:
+    it carries no hypothesis/estimand contract hash, frozen-plan digest,
+    statistical plan, acceptance contract, or signed declarations.
+
+    Unconditionally False: a JSON file inside the run directory is a
+    self-assertion by whoever can write to that directory, so no
+    ``preregistration_receipt.json`` — however well-formed — can serve as a
+    trust boundary (four arbitrary strings passed the earlier format check).
+    Re-enable granting only when a versioned-protocol system with an
+    independent issuer and verifiable signed declarations lands; until then
+    every paper-authority claim stays blocked at engineering-complete.
+    """
+
+    return False
 
 
 def _model_covariates(plan: Optional[AnalysisPlan]) -> tuple[str, ...]:
@@ -306,6 +369,18 @@ def _novelty_facts(
         and str(dimensions[name].get("comparator") or "").strip()
         and str(dimensions[name].get("difference") or "").strip()
     }
+    # Mirror the typed packet's own review contract: an accepted disposition is
+    # not enough when a dimension still carries study-authority text or no
+    # reviewer identity.  Without this the maturity audit counted a packet the
+    # owner model would reject as "supported".
+    independently_reviewed_dimensions = {
+        name
+        for name in required
+        if isinstance(dimensions.get(name), Mapping)
+        and str(dimensions[name].get("source_status") or "").strip().casefold()
+        == "independent_reviewed"
+    }
+    reviewer_owner = str(audit.get("reviewer_owner") or "").strip()
     digest_fields = ("context_sha256", "plan_sha256", "literature_sha256")
     digest_mismatches = [
         field
@@ -320,6 +395,8 @@ def _novelty_facts(
         and comparator_keys
         and set(comparator_keys) <= set(comparison_source_keys)
         and complete_dimensions == required
+        and independently_reviewed_dimensions == required
+        and reviewer_owner
         and str(audit.get("review_disposition") or "").strip().casefold()
         in {"independent_pre_review_pass", "human_review_pass"}
     )
@@ -331,6 +408,13 @@ def _novelty_facts(
         "comparison_source_keys": comparator_keys,
         "complete_dimensions": sorted(complete_dimensions),
         "required_dimensions": sorted(required),
+        "independently_reviewed_dimensions": sorted(
+            independently_reviewed_dimensions
+        ),
+        "unreviewed_dimensions": sorted(
+            required - independently_reviewed_dimensions
+        ),
+        "reviewer_owner": reviewer_owner,
         "review_disposition": str(audit.get("review_disposition") or "not_available"),
         "digest_bound": digest_bound,
         "digest_mismatches": digest_mismatches,
@@ -504,9 +588,12 @@ def _registered_association_model_grid_facts(run_dir: Path) -> dict[str, Any]:
                 or bool(basis_receipts.get(analysis_id))
             ):
                 row_axes.add("model")
+            if row.get("exposure") != reference.get("exposure"):
+                row_axes.add("exposure_definition")
             if (
                 "timing" not in row_axes
                 and "model" not in row_axes
+                and "exposure_definition" not in row_axes
                 and (
                     row.get("readmission_restriction")
                     != reference.get("readmission_restriction")
@@ -643,6 +730,20 @@ def _manuscript_section_word_counts(manuscript: str) -> dict[str, int]:
     return output
 
 
+def _manuscript_section_prose_metrics(
+    manuscript: str,
+) -> dict[str, dict[str, int]]:
+    """Backward-compatible owner entry point for reader-prose measurements."""
+
+    return _manuscript_surface.manuscript_section_prose_metrics(manuscript)
+
+
+def _section_target_deviations(manuscript: str) -> list[dict[str, Any]]:
+    """Backward-compatible owner entry point for advisory target deviations."""
+
+    return _manuscript_surface.manuscript_section_target_deviations(manuscript)
+
+
 def _manuscript_facts(run_dir: Path) -> dict[str, Any]:
     audit = _read_json(run_dir, "manuscript_literature_audit.json")
     manuscript_path = run_dir / "manuscript_scaffold_bound.md"
@@ -689,6 +790,9 @@ def _manuscript_facts(run_dir: Path) -> dict[str, Any]:
         "section_word_counts": section_word_counts,
         "section_word_floors": section_word_floors,
         "thin_sections": thin_sections,
+        # Advisory: whether the Writer honoured the length its own instruction
+        # asked for. Kept separate from thin_sections so it can never gate.
+        "sections_outside_spec_target": _section_target_deviations(manuscript),
         "missing_sections": missing,
         "literature_audit_status": str(audit.get("status") or "missing"),
         "exact_literature_citations_present": bool(
@@ -1644,11 +1748,16 @@ def build_scientific_maturity_audit(
                 code="INDEPENDENT_SCIENTIFIC_REVIEW_NOT_AVAILABLE",
                 severity="blocker",
                 dimension="clinical_review",
-                message="No owner-issued independent scientific review receipt is available.",
+                message=(
+                    "No reviewer receipt is available. The pipeline's "
+                    f"{SIMULATED_REVIEW_NOT_INDEPENDENT}."
+                ),
                 evidence_refs=["reviewer_report.json"],
                 remediation=(
-                    "Generate the clinical/methodological reviewer receipt and keep "
-                    "human sign-off separate from the Agent's own review."
+                    "Run the clinical/methodological reviewer loop and keep "
+                    "human sign-off separate from the Agent's own review; paper "
+                    "authority additionally requires the externally completed "
+                    "novelty packet."
                 ),
             )
         )
@@ -1661,6 +1770,43 @@ def build_scientific_maturity_audit(
                 message=f"The reviewer receipt remains {recommendation}.",
                 evidence_refs=["reviewer_report.json"],
                 remediation="Resolve and regenerate the independent scientific review receipt.",
+            )
+        )
+    # P0-2 fail-closed paper-authority ceiling: novelty-supported and/or a
+    # publication-bundle-ready run claims paper authority. Without an external
+    # preregistration receipt the claim is blocked and the candidate stays at
+    # engineering-complete. This is a blocker (not advisory) by design.
+    preregistered = _has_external_preregistration(run_dir)
+    publication_claims_paper = bool(
+        publication.get("publication_figure_bundle_ready")
+        or publication.get("publication_figure_contract_ready")
+        or publication.get("publication_figure_source_data_ready")
+        or publication.get("publication_figure_visual_qa_passed")
+    )
+    if (bool(novelty.get("supported")) or publication_claims_paper) and not preregistered:
+        findings.append(
+            ScientificMaturityFinding(
+                code="FORMAL_PREREGISTRATION_NOT_ESTABLISHED",
+                severity="blocker",
+                dimension="clinical_review",
+                message=(
+                    "缺 preregistration，不授予 paper authority，上限 "
+                    "engineering-complete: the run claims paper authority "
+                    "(novelty supported and/or publication bundle ready) "
+                    "without an external preregistration receipt."
+                ),
+                evidence_refs=[
+                    "preregistration_receipt.json",
+                    "reporting/registered_report_inputs.py",
+                ],
+                remediation=(
+                    "Register a versioned protocol with preregistration "
+                    "(statistical plan + acceptance contract) and signed "
+                    "declarations bound to the frozen plan before claiming "
+                    "paper authority; registered_report_inputs.py is "
+                    "report-only repair admission, not preregistration. "
+                    "Current candidate remains engineering-complete."
+                ),
             )
         )
 
@@ -1750,6 +1896,7 @@ def build_scientific_maturity_audit(
                 )[:20],
             },
             "reviewer_recommendation": recommendation or "not_available",
+            "formal_preregistration_established": preregistered,
         },
     )
 

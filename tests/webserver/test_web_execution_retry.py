@@ -83,6 +83,71 @@ def test_completed_approved_run_can_retry_post_execution_validation(
     assert target.wrapper_dir == wrapper.resolve()
     assert target.pipeline_run_id == "run-analysis"
     assert target.pipeline_config_sha256 == "b" * 64
+    assert target.resume_from_step_id is None
+
+
+def test_failed_execution_retry_binds_first_failed_step_as_explicit_rerun(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "projects"
+    wrapper = root / "study" / "run-wrapper"
+    run_dir = wrapper / "pipeline" / "run-analysis"
+    run_dir.mkdir(parents=True)
+    (run_dir / "human_review_checkpoint.json").write_text("{}", encoding="utf-8")
+    (run_dir / "run_status.json").write_text(
+        json.dumps(
+            {
+                "gates": {
+                    "execution_complete": False,
+                    "failed_steps": [
+                        {"step_id": "02_model", "status": "execution_failed"},
+                        {"step_id": "03_figure", "status": "dependency_failed"},
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        agent_pipeline_runs.agent_runs,
+        "list_run_history",
+        lambda **_kwargs: {
+            "runs": [
+                {
+                    "run_id": "run-analysis",
+                    "scientific_configuration_sha256": "a" * 64,
+                    "gate_reason": "research_pipeline_execution_failed",
+                    "run_status": "failed",
+                    "project_dir": str(wrapper),
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        agent_pipeline_runs.study_context_owner,
+        "scientific_configuration_sha256",
+        lambda _study: "a" * 64,
+    )
+    from easyicu.research_agent.orchestration import human_review_checkpoint
+
+    monkeypatch.setattr(
+        human_review_checkpoint,
+        "load_checkpoint",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            state="completed",
+            approved_decisions=[{"decision": "approved"}],
+            pipeline_config_sha256="b" * 64,
+        ),
+    )
+
+    target = agent_pipeline_runs._resolve_execution_resume_wrapper(
+        study={"id": "study"},
+        project_root=str(root),
+        source_run_id="run-analysis",
+    )
+
+    assert target.resume_from_step_id == "02_model"
 
 
 @pytest.mark.parametrize(
@@ -226,6 +291,34 @@ def test_execution_retry_accepts_missing_seed_only_for_exact_checkpoint_digest(
     )
 
     assert restored is config
+
+
+def test_execution_retry_projection_checks_secondary_outcome_columns(
+    tmp_path: Path,
+) -> None:
+    import pandas as pd
+
+    cohort = tmp_path / "cohort.parquet"
+    pd.DataFrame({"lact_max": [2.0], "death": [0]}).to_parquet(cohort)
+    inputs = agent_pipeline_runs._ExecutionResumeInputs(
+        cohort_path=cohort,
+        cohort_authority_path=None,
+        cohort_authority_ref=None,
+        trajectory_path=None,
+        trajectory_authority_path=None,
+        trajectory_authority_ref=None,
+        scientific_identity={
+            "primary_exposure": "lact_max",
+            "target_outcome": "death",
+            "outcome_columns": ["death", "los_icu"],
+        },
+    )
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as raised:
+        agent_pipeline_runs._execution_resume_acquisition_projection(inputs)
+
+    assert raised.value.code == "research_pipeline_execution_retry_input_invalid"
+    assert raised.value.details == {"missing_column_count": 1}
 
 
 def test_execution_retry_rejects_missing_seed_when_checkpoint_digest_drifted(

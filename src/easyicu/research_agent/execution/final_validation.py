@@ -23,6 +23,7 @@ from ..audits.envelope_consumers import (
     RegisteredOutputEnvelopeConsumer,
     StepSummaryFractionEnvelopeDualReader,
 )
+from ..audits.model_contrast_reporting import model_contrast_reporting_findings
 from ..audits.validators import (
     ClinicalConstraintValidator,
     CrossStepCohortLockValidator,
@@ -201,8 +202,9 @@ def _demote_result_figure_shape_for_family_renderer(
                         finding.message
                         + " [advisory: this study-design family builds its "
                         "manuscript-facing primary figure deterministically in "
-                        "the write phase; the display-suite gate remains the "
-                        "fail-closed backstop for panel count and role diversity]"
+                        "the write phase; final figure and source-binding audits "
+                        "still apply. Display-suite panel-count and role-diversity "
+                        "checks are design advice, not a blocking substitute]"
                     ),
                 }
             )
@@ -326,6 +328,7 @@ def _evaluate_final_deterministic_gates(
         step_summary=step_summary,
         completed_step_records=completed_step_records,
         resolved_input_bindings=resolved_input_bindings,
+        semantic_stub_injected=step_record.get("semantic_stub_injected"),
         effect_output_is_authorized=effect_output_authorized(
             step,
             step_record=step_record,
@@ -350,6 +353,9 @@ def _evaluate_final_deterministic_gates(
         final_registered_output_envelope_validator=(RegisteredOutputEnvelopeConsumer()),
         final_registered_output_evidence_store=evidence_store,
     )
+    contract_findings.extend(model_contrast_reporting_findings(
+        step_record=step_record, step_summary=step_summary,
+    ))
     contract_findings.extend(
         figure_contract_validator.audit(
             step=step,

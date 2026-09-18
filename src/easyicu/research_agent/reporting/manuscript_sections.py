@@ -9,16 +9,20 @@ model-facing class from also becoming a manuscript workflow coordinator.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import re
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 from .administrative_authority import (
     ManuscriptAdministrativeAuthority,
     render_manuscript_administrative_sections,
 )
+from .manuscript_baseline import baseline_naming_instruction, baseline_reporting_mentions
+from .manuscript_result_structure import required_result_subsections, result_section_instruction
+from .manuscript_surface import MANUSCRIPT_SECTION_LENGTH_TARGETS
+from ..schema import AnalysisPlan
 
 
 @dataclass(frozen=True)
@@ -30,6 +34,14 @@ class ManuscriptSectionSpec:
     instruction: str
     max_tokens: int
     required_subsections: tuple[str, ...] = ()
+    # The length bound the instruction already states in prose. Carrying it as
+    # data lets `scientific_maturity` report whether the Writer honoured its own
+    # request. These are advisory targets, not gates: the anti-stub floors in
+    # `scientific_maturity.section_word_floors` stay the only blocking bound, so a
+    # target can never become a quota a descriptive study is padded to meet.
+    # ``None`` means the instruction states no numeric bound; none is inferred.
+    word_target: tuple[int, int] | None = None
+    paragraph_target: tuple[int, int] | None = None
 
 
 class ManuscriptSectionContractError(RuntimeError):
@@ -47,8 +59,14 @@ class ManuscriptSectionContractError(RuntimeError):
 class ManuscriptReaderQualityContractError(RuntimeError):
     """Bounded section repairs did not close deterministic reader errors."""
 
-    def __init__(self, *, findings: tuple[tuple[str, str, str], ...]):
+    def __init__(
+        self, *, findings: tuple[tuple[str, str, str], ...], manuscript: str = "",
+        repaired_section_keys: tuple[str, ...] = (),
+    ):
         self.findings = findings
+        # Diagnostic candidate only; raising still blocks manuscript authority.
+        self.manuscript = manuscript
+        self.repaired_section_keys = repaired_section_keys
         detail = "; ".join(
             f"{code} ({section}): {message}" for code, section, message in findings
         )
@@ -56,6 +74,21 @@ class ManuscriptReaderQualityContractError(RuntimeError):
             "Writer sections still fail deterministic reader-quality checks "
             f"after bounded targeted repairs: {detail}"
         )
+
+
+def completed_section_repair_candidate(
+    exc: Exception, *, expected_section_keys: Sequence[str] | None = None,
+) -> tuple[str, tuple[str, ...]] | None:
+    """Return a completed draft only for the caller's final binding and audits."""
+    if (
+        isinstance(exc, ManuscriptReaderQualityContractError)
+        and exc.manuscript.strip()
+        and exc.repaired_section_keys
+        and (expected_section_keys is None
+             or set(exc.repaired_section_keys) == set(expected_section_keys))
+    ):
+        return exc.manuscript, exc.repaired_section_keys
+    return None
 
 
 MANUSCRIPT_SECTION_SPECS = (
@@ -76,23 +109,37 @@ MANUSCRIPT_SECTION_SPECS = (
     ManuscriptSectionSpec(
         key="abstract",
         section_name="Abstract",
+        word_target=MANUSCRIPT_SECTION_LENGTH_TARGETS["abstract"][0],
+        paragraph_target=MANUSCRIPT_SECTION_LENGTH_TARGETS["abstract"][1],
         instruction=(
             "Write `## Abstract` with four labelled paragraphs:\n"
             "- **Background:** 2-3 sentences (clinical importance, knowledge "
             "gap).\n"
             "- **Methods:** 3-4 sentences (cohort, design, primary analysis, "
             "ICU-aware aggregation).\n"
-            "- **Results:** 4-5 sentences (N, outcome incidence, primary effect "
-            "size with 95% CI and p, one supporting finding).\n"
-            "- **Conclusions:** 1-2 sentences (associational phrasing only, call "
-            "for validation).\n"
+            "- **Results:** Report N, the endpoint summary, and the primary "
+            "result appropriate to the approved analysis. Include effect sizes, "
+            "confidence intervals, and p-values only when explicitly supplied "
+            "and authorized by the machine digest. Preserve the supplied "
+            "confidence level; never assume 95%. For descriptive counts-only "
+            "results, report observed events, denominators, and proportions "
+            "without inferential or causal comparisons. Do not invent missing "
+            "estimates, uncertainty, tests, or supporting findings.\n"
+            "  When the digest supplies complete primary-result claim tokens, "
+            "place those tokens as standalone paragraphs within Results. Do not "
+            "replace their numeric effects or uncertainty with free-form prose. "
+            "Use a supplied descriptive claim for its own population and denominator.\n"
+            "- **Conclusions:** 1-2 sentences using supplied complete claim tokens. "
+            "Match the approved analysis: descriptive evidence is not an association. "
+            "A validation caveat alone is incomplete.\n"
             "Use an exact standalone `{claim:<step>.<claim>}` sentence for any "
             "current-study qualitative direction or comparison when the machine "
             "digest supplies one; emit only the token and do not paraphrase or "
-            "attach an evidence token. Keep Conclusions distinct from Results: "
-            "state only the observational/noncausal interpretation and need for "
-            "independent validation, supported by an exact literature key; do not "
-            "restate the current-study direction in free text.\n"
+            "attach an evidence token. In Conclusions, use a complete host claim "
+            "for the study interpretation; for the validation caveat use the "
+            "neutral sentence `Independent validation is required.` with an "
+            "exact supporting literature key when available. Do not restate "
+            "the current-study direction in free text.\n"
             "Use reader-facing clinical labels; do not expose raw snake_case "
             "identifiers, internal reason codes, or host/runtime terminology.\n"
             "Target: 200-300 words total."
@@ -102,9 +149,11 @@ MANUSCRIPT_SECTION_SPECS = (
     ManuscriptSectionSpec(
         key="introduction",
         section_name="Introduction",
+        word_target=MANUSCRIPT_SECTION_LENGTH_TARGETS["introduction"][0],
+        paragraph_target=MANUSCRIPT_SECTION_LENGTH_TARGETS["introduction"][1],
         instruction=(
-            "Write `## Introduction` with 4-5 paragraphs (900-1200 words "
-            "total):\n"
+            "Write `## Introduction` with 3-5 concise paragraphs (roughly 300-500 words; "
+            "scale to the question, not a mandatory quota):\n"
             "- Para 1: Clinical importance of the ICU question and why it "
             "matters now.\n"
             "- Para 2: Prior evidence on the key predictor / score / exposure. "
@@ -129,6 +178,7 @@ MANUSCRIPT_SECTION_SPECS = (
     ManuscriptSectionSpec(
         key="methods",
         section_name="Methods",
+        word_target=MANUSCRIPT_SECTION_LENGTH_TARGETS["methods"][0],
         instruction=(
             "Write `## Methods` with sub-sections:\n"
             "### Study design and cohort\n"
@@ -139,6 +189,22 @@ MANUSCRIPT_SECTION_SPECS = (
             "verified precomputed representation and analysis window. A "
             "precomputed maximum, minimum, mean, or first value must not be "
             "reinterpreted using the source concept's default aggregation rule.\n"
+            "  Include every baseline variable listed in the verified "
+            "EXECUTED METHOD BOUNDARY, not only model adjustment covariates. "
+            "Use its exact executed representation and the supplied reader label; "
+            "mentioning a variable only in Introduction or Table 1 is insufficient. "
+            "A missingness or availability count alone does not describe its representation.\n"
+            "  Attach an exact allowed {evidence:<id>} token to each current-study "
+            "method sentence, including variable introductions and analysis choices; "
+            "a citation on a later sentence does not authorize an earlier one.\n"
+            "  Introduce the named variable in every Variables paragraph; do not "
+            "start one with an unanchored pronoun or 'the representation'. "
+            "Recorded source definitions are not independent clinical validation.\n"
+            "  An observation window is not a landmark design. Describe a "
+            "landmark, exclusion, follow-up origin or time-varying analysis only "
+            "when the executed method boundary explicitly records it. A binary "
+            "hospitalization outcome remains a hospitalization outcome even when "
+            "its precomputed column was materialized in an early observation window.\n"
             "### Statistical analysis\n"
             "  Model family (logistic regression / Cox / clustering), adjustment "
             "set, sensitivity analyses (multiple-testing correction, subgroup "
@@ -169,16 +235,26 @@ MANUSCRIPT_SECTION_SPECS = (
     ManuscriptSectionSpec(
         key="results",
         section_name="Results",
+        word_target=MANUSCRIPT_SECTION_LENGTH_TARGETS["results"][0],
         instruction=(
             "Write `## Results` with sub-sections:\n"
             "### Cohort characteristics\n"
             "  N, key demographics. When `table_one` is available, call the "
             "display `Table 1` in prose and cite {evidence:table_one}.\n"
             "### Primary outcome\n"
-            "  Incidence, cite {evidence:outcome_rate}.\n"
+            "  Report the overall outcome count and proportion from the digest, "
+            "with its exact owning evidence id, or use the supplied outcome "
+            "claim token. Do not invent an outcome_rate alias. This subsection "
+            "needs a supported outcome fact, not only a definition of the endpoint.\n"
             "### Primary association\n"
-            "  Effect size and 95% CI, cite "
-            "{evidence:primary_association} or {evidence:model_performance}.\n"
+            "  Report the approved primary analysis, citing its registered "
+            "evidence. Include effect sizes and confidence intervals only when "
+            "explicitly supplied and authorized by the machine digest. Preserve "
+            "the supplied confidence level; never assume 95%. For "
+            "descriptive counts-only results, report observed events, "
+            "denominators, and proportions here; do not imply an estimated "
+            "association. Do not invent missing estimates, uncertainty, "
+            "tests, or evidence ids.\n"
             "  Report a p-value only when the machine digest names the exact "
             "test and its scientific role. Never relabel a non-linearity, "
             "functional-form, calibration, or goodness-of-fit p-value as the "
@@ -195,6 +271,12 @@ MANUSCRIPT_SECTION_SPECS = (
             "declared adjustment and interpretation ceiling. Do not report an "
             "unauthorized constant hazard ratio.\n"
             "### Sensitivity and subgroup analyses\n"
+            "  When the digest records zero sensitivity result rows, report "
+            "only that registered count using `The recorded sensitivity "
+            "analysis result count was <n> {evidence:<owner>}.` Do not claim "
+            "that an unexecuted sensitivity analysis was performed, that "
+            "estimates were stable, or that a model failed to converge. "
+            "Do not turn a planned method into an executed result.\n"
             "  Multiple-testing result, subgroup heterogeneity, E-value if "
             "available. When the machine digest supplies a "
             "`reportable_descriptive_results` block, report its overall outcome "
@@ -237,15 +319,18 @@ MANUSCRIPT_SECTION_SPECS = (
     ManuscriptSectionSpec(
         key="discussion",
         section_name="Discussion",
+        word_target=MANUSCRIPT_SECTION_LENGTH_TARGETS["discussion"][0],
+        paragraph_target=MANUSCRIPT_SECTION_LENGTH_TARGETS["discussion"][1],
         instruction=(
-            "Write `## Discussion` with 5 paragraphs (900-1300 words total):\n"
+            "Write `## Discussion` with 4-5 concise paragraphs (roughly 400-650 words; "
+            "do not inflate a descriptive study to meet a quota):\n"
             "- Para 1: Restate the main finding and interpret it cautiously in "
             "the context of the results.\n"
             "- Para 2: Compare with prior literature and explain where this "
             "study agrees or diverges.\n"
-            "- Para 3: Discuss plausible mechanisms using only associational "
-            "language ('may reflect', 'could be consistent with', 'one possible "
-            "explanation').\n"
+            "- Para 3: Discuss alternative explanations only if supported by the "
+            "supplied literature. Do not invent mechanisms or imply that a descriptive "
+            "analysis tested those explanations. Omit this paragraph if unsupported.\n"
             "- Para 4: Clinical implications, limits to generalisability, and why "
             "the result should not be over-interpreted.\n"
             "- Para 5: Methodological strengths, evidence traceability, ICU-aware "
@@ -269,6 +354,8 @@ MANUSCRIPT_SECTION_SPECS = (
     ManuscriptSectionSpec(
         key="limitations",
         section_name="Limitations",
+        word_target=MANUSCRIPT_SECTION_LENGTH_TARGETS["limitations"][0],
+        paragraph_target=MANUSCRIPT_SECTION_LENGTH_TARGETS["limitations"][1],
         instruction=(
             "Write `## Limitations` — one paragraph, 150-250 words. Include at "
             "least:\n"
@@ -292,11 +379,12 @@ MANUSCRIPT_SECTION_SPECS = (
         section_name="Conclusion",
         instruction=(
             "## Conclusion\n"
-            "1-2 sentences. Associational phrasing. Each conclusion sentence "
-            "must either be one exact host-authorized claim token or cite at "
-            "least one registered evidence id. End with a call for "
-            "prospective / external validation only if it can be tied to "
-            "sensitivity, limitation, or validation evidence.\n\n"
+            "1-2 sentences. A generic validation caveat alone is incomplete. "
+            "Use a complete host-authorized claim token for the "
+            "study interpretation. An evidence citation alone does not authorize "
+            "a free-form conclusion. For a validation caveat use the neutral "
+            "sentence `Independent validation is required.` with an exact "
+            "supporting evidence or literature citation when available.\n\n"
             "If a host-authorized scientific claim is supplied, use its exact "
             "standalone `{claim:<step>.<claim>}` token for the current-study "
             "conclusion; the host will render and cite it. Do not write funding, "
@@ -312,7 +400,20 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "12"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "29"
+
+
+def manuscript_section_specs(analysis_plan: AnalysisPlan | None = None):
+    """Share the exact plan-derived Results contract across all Writer paths."""
+    if analysis_plan is None:
+        return MANUSCRIPT_SECTION_SPECS
+    return tuple(
+        replace(
+            spec, instruction=result_section_instruction(analysis_plan),
+            required_subsections=required_result_subsections(analysis_plan),
+        ) if spec.key == "results" else spec
+        for spec in MANUSCRIPT_SECTION_SPECS
+    )
 
 
 def manuscript_writer_contract_sha256() -> str:
@@ -418,12 +519,16 @@ def _quality_repair_specs(
     scientific: str,
     *,
     expected_display_labels: tuple[str, ...] = (),
+    reader_display_labels: Mapping[str, str] | None = None,
+    expected_baseline_mentions: Mapping[str, tuple[str, ...]] | None = None,
+    expected_primary_result_facts: Sequence = (),
+    analysis_plan: AnalysisPlan | None = None,
 ) -> tuple[tuple[ManuscriptSectionSpec, str], ...]:
     """Map deterministic manuscript findings to their section owners."""
 
     from .manuscript_quality import audit_manuscript_quality
 
-    by_key = {spec.key: spec for spec in MANUSCRIPT_SECTION_SPECS}
+    by_key = {spec.key: spec for spec in manuscript_section_specs(analysis_plan)}
     section_keys = {
         "Title": ("title",),
         "Abstract": ("abstract",),
@@ -438,7 +543,11 @@ def _quality_repair_specs(
     messages: dict[str, list[str]] = {}
     for finding in audit_manuscript_quality(
         scientific,
+        expected_primary_result_facts=expected_primary_result_facts,
+        analysis_plan=analysis_plan,
         expected_display_labels=expected_display_labels,
+        reader_display_labels=reader_display_labels,
+        expected_baseline_mentions=expected_baseline_mentions,
         require_administrative_sections=False,
     ).findings:
         if finding.severity != "error":
@@ -454,6 +563,11 @@ def _quality_repair_specs(
             detail = f"{finding.code}: {finding.message}"
             if finding.excerpts:
                 detail += " Offending text: " + "; ".join(finding.excerpts)
+            if finding.code == "MANUSCRIPT_BASELINE_METHODS_INCOMPLETE":
+                detail += "\n" + baseline_naming_instruction({
+                    name: aliases for name, aliases in (expected_baseline_mentions or {}).items()
+                    if name in finding.excerpts
+                })
             messages.setdefault(key, []).append(detail)
     return tuple(
         (by_key[key], "\n".join(f"- {message}" for message in values))
@@ -465,6 +579,9 @@ def quality_repair_section_keys(
     manuscript: str,
     *,
     expected_display_labels: tuple[str, ...] = (),
+    reader_display_labels: Mapping[str, str] | None = None,
+    expected_baseline_mentions: Mapping[str, tuple[str, ...]] | None = None,
+    analysis_plan: AnalysisPlan | None = None,
 ) -> tuple[str, ...]:
     """Return the Writer section owners selected by the quality contract.
 
@@ -477,15 +594,45 @@ def quality_repair_section_keys(
         spec.key
         for spec, _detail in _quality_repair_specs(
             manuscript,
+            analysis_plan=analysis_plan,
             expected_display_labels=expected_display_labels,
+            reader_display_labels=reader_display_labels,
+            expected_baseline_mentions=expected_baseline_mentions,
         )
     )
+
+
+def quality_repair_section_errors(
+    manuscript: str,
+    *,
+    expected_display_labels: tuple[str, ...] = (),
+    reader_display_labels: Mapping[str, str] | None = None,
+    expected_baseline_mentions: Mapping[str, tuple[str, ...]] | None = None,
+    expected_primary_result_facts: Sequence = (),
+    analysis_plan: AnalysisPlan | None = None,
+) -> dict[str, tuple[str, ...]]:
+    """Use the same quality-to-owner mapping for adjacent evidence repair."""
+
+    return {
+        spec.key: (detail,)
+        for spec, detail in _quality_repair_specs(
+            manuscript,
+            analysis_plan=analysis_plan,
+            expected_primary_result_facts=expected_primary_result_facts,
+            expected_display_labels=expected_display_labels,
+            reader_display_labels=reader_display_labels,
+            expected_baseline_mentions=expected_baseline_mentions,
+        )
+    }
 
 
 def _remaining_quality_errors(
     scientific: str,
     *,
     expected_display_labels: tuple[str, ...] = (),
+    reader_display_labels: Mapping[str, str] | None = None,
+    expected_baseline_mentions: Mapping[str, tuple[str, ...]] | None = None,
+    analysis_plan: AnalysisPlan | None = None,
 ) -> tuple[tuple[str, str, str], ...]:
     from .manuscript_quality import audit_manuscript_quality
 
@@ -502,10 +649,19 @@ def _remaining_quality_errors(
         )
         for finding in audit_manuscript_quality(
             scientific,
+            analysis_plan=analysis_plan,
             expected_display_labels=expected_display_labels,
+            reader_display_labels=reader_display_labels,
+            expected_baseline_mentions=expected_baseline_mentions,
             require_administrative_sections=False,
         ).findings
         if finding.severity == "error"
+    )
+
+
+def _baseline_mentions_for_common(common: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
+    return baseline_reporting_mentions(
+        common.get("context"), common.get("reader_display_labels"),
     )
 
 
@@ -539,6 +695,7 @@ def repair_existing_manuscript_sections(
     call_section: Callable[..., str],
     common: Mapping[str, Any],
     administrative_authority: ManuscriptAdministrativeAuthority | None = None,
+    checkpoint: Callable[[str], None] | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     """Regenerate only section owners named by deterministic quality errors."""
 
@@ -572,7 +729,10 @@ def repair_existing_manuscript_sections(
     for attempt in range(2):
         repair_specs = _quality_repair_specs(
             scientific,
+            analysis_plan=common.get("analysis_plan"),
             expected_display_labels=display_labels,
+            reader_display_labels=common.get("reader_display_labels", {}),
+            expected_baseline_mentions=_baseline_mentions_for_common(common),
         )
         if not repair_specs:
             administrative = render_manuscript_administrative_sections(
@@ -581,8 +741,7 @@ def repair_existing_manuscript_sections(
             return "\n\n".join((scientific, administrative)), tuple(repaired_keys)
         for spec, error_detail in repair_specs:
             repair_instruction = (
-                spec.instruction
-                + "\n\nREADER-QUALITY CONTRACT MIGRATION:\n"
+                "READER-QUALITY CONTRACT MIGRATION:\n"
                 + f"Fix these section-owned errors:\n{error_detail}\n"
                 + "Regenerate the complete section from the same evidence. Do not add "
                 + "results, change executed methods, repeat excerpts, expose raw ids, "
@@ -604,7 +763,8 @@ def repair_existing_manuscript_sections(
                 spec,
                 call_section(
                     section_name=spec.section_name,
-                    instruction=repair_instruction,
+                    instruction=spec.instruction,
+                    repair_feedback=repair_instruction,
                     max_tokens=spec.max_tokens,
                     **common,
                 ),
@@ -616,24 +776,38 @@ def repair_existing_manuscript_sections(
                     missing_subsections=missing_subsections,
                 )
             sections[spec.key] = repaired
+            if checkpoint:
+                checkpoint(_assemble_scientific_sections(sections))
             if spec.key not in repaired_keys:
                 repaired_keys.append(spec.key)
         scientific = _assemble_scientific_sections(sections)
+        scientific, _repair_rounding = repair_reader_structure_from_existing_prose(scientific)
         scientific, _phrase_repairs = repair_reader_internal_phrases(
             scientific,
             reader_display_labels=common.get("reader_display_labels", {}),
             manuscript_language=str(common.get("language") or "en"),
         )
+        scientific, _display_repairs = repair_registered_display_callouts(
+            scientific,
+            expected_display_labels=display_labels,
+        )
         sections = _existing_scientific_sections(scientific)
 
     remaining = _remaining_quality_errors(
         scientific,
+        analysis_plan=common.get("analysis_plan"),
         expected_display_labels=display_labels,
+        reader_display_labels=common.get("reader_display_labels", {}),
+        expected_baseline_mentions=_baseline_mentions_for_common(common),
     )
-    if remaining:
-        raise ManuscriptReaderQualityContractError(findings=remaining)
     administrative = render_manuscript_administrative_sections(administrative_authority)
-    return "\n\n".join((scientific, administrative)), tuple(repaired_keys)
+    candidate = "\n\n".join((scientific, administrative))
+    if remaining:
+        raise ManuscriptReaderQualityContractError(
+            findings=remaining, manuscript=candidate,
+            repaired_section_keys=tuple(repaired_keys),
+        )
+    return candidate, tuple(repaired_keys)
 
 
 def repair_named_manuscript_sections(
@@ -652,28 +826,28 @@ def repair_named_manuscript_sections(
     """
 
     sections = _existing_scientific_sections(manuscript)
-    specs = {spec.key: spec for spec in MANUSCRIPT_SECTION_SPECS}
+    specs = {spec.key: spec for spec in manuscript_section_specs(common.get("analysis_plan"))}
     unknown = sorted(set(section_errors) - set(specs))
     if unknown:
         raise ValueError(
             "unknown manuscript section owner keys: " + ", ".join(unknown)
         )
     repaired_keys: list[str] = []
-    for spec in MANUSCRIPT_SECTION_SPECS:
+    for spec in specs.values():
         errors = tuple(section_errors.get(spec.key) or ())
         if not errors:
             continue
         detail = "\n".join(f"- {item}" for item in errors[:12])
         instruction = (
-            spec.instruction
-            + "\n\nEVIDENCE-AUTHORITY CONTRACT REPAIR:\n"
+            "EVIDENCE-AUTHORITY CONTRACT REPAIR:\n"
             + "The adjacent deterministic claim policy rejected these sentences "
             + f"owned by this section:\n{detail}\n"
-            + "Regenerate the complete section. Every current-study method or "
-            + "numeric fact must carry an exact allowed `{evidence:<id>}` token. "
-            + "A qualitative scientific conclusion is allowed only as the exact "
-            + "standalone `{claim:<step>.<claim>}` sentence supplied by the digest. "
-            + "Do not append a claim token to prose. Omit a sentence when no such "
+            + "Regenerate the complete section. For a numeric result or scientific "
+            + "conclusion represented by a supplied claim, emit only its exact "
+            + "standalone `{claim:<step>.<claim>}` sentence; the host supplies its "
+            + "evidence citation. Other current-study methods or numeric facts "
+            + "require an exact allowed `{evidence:<id>}` token. Do not paraphrase "
+            + "a supplied result claim or append its token to prose. Omit a sentence when no such "
             + "authority exists. Preserve required headings and do not mention "
             + "this repair."
         )
@@ -681,7 +855,8 @@ def repair_named_manuscript_sections(
             spec,
             call_section(
                 section_name=spec.section_name,
-                instruction=instruction,
+                instruction=spec.instruction,
+                repair_feedback=instruction,
                 max_tokens=spec.max_tokens,
                 **common,
             ),
@@ -698,12 +873,14 @@ def repair_named_manuscript_sections(
     from .manuscript_quality import (
         expected_manuscript_display_labels,
         repair_reader_internal_phrases,
+        repair_reader_structure_from_existing_prose,
         repair_registered_display_callouts,
     )
 
     display_labels = expected_manuscript_display_labels(
         tuple(common.get("evidence_ids") or ())
     )
+    scientific, _repair_rounding = repair_reader_structure_from_existing_prose(scientific)
     scientific, _display_repairs = repair_registered_display_callouts(
         scientific,
         expected_display_labels=display_labels,
@@ -715,12 +892,22 @@ def repair_named_manuscript_sections(
     )
     remaining = _remaining_quality_errors(
         scientific,
+        analysis_plan=common.get("analysis_plan"),
         expected_display_labels=display_labels,
+        reader_display_labels=common.get("reader_display_labels", {}),
+        expected_baseline_mentions=_baseline_mentions_for_common(common),
     )
-    if remaining:
-        raise ManuscriptReaderQualityContractError(findings=remaining)
     administrative = render_manuscript_administrative_sections(administrative_authority)
-    return "\n\n".join((scientific, administrative)), tuple(repaired_keys)
+    candidate = "\n\n".join((scientific, administrative))
+    if remaining:
+        # The adjacent owner may bind this completed draft and run its final
+        # audits, or send their findings into its remaining bounded repair pass.
+        # This exception does not establish manuscript or publication authority.
+        raise ManuscriptReaderQualityContractError(
+            findings=remaining, manuscript=candidate,
+            repaired_section_keys=tuple(repaired_keys),
+        )
+    return candidate, tuple(repaired_keys)
 
 
 def render_manuscript_sections(
@@ -728,6 +915,7 @@ def render_manuscript_sections(
     call_section: Callable[..., str],
     common: Mapping[str, Any],
     administrative_authority: ManuscriptAdministrativeAuthority | None = None,
+    checkpoint: Callable[[str], None] | None = None,
 ) -> str:
     """Dispatch scientific sections and append host-owned administrative facts.
 
@@ -745,7 +933,7 @@ def render_manuscript_sections(
     display_labels = expected_manuscript_display_labels(
         tuple(common.get("evidence_ids") or ())
     )
-    for spec in MANUSCRIPT_SECTION_SPECS:
+    for spec in manuscript_section_specs(common.get("analysis_plan")):
         section = _ensure_section_heading(
             spec,
             call_section(
@@ -790,6 +978,8 @@ def render_manuscript_sections(
                 missing_subsections=missing_subsections,
             )
         sections[spec.key] = section
+        if checkpoint:
+            checkpoint(_assemble_scientific_sections(sections))
 
     scientific = _assemble_scientific_sections(sections)
     from .manuscript_quality import (
@@ -818,14 +1008,16 @@ def render_manuscript_sections(
     for attempt in range(2):
         repair_specs = _quality_repair_specs(
             scientific,
+            analysis_plan=common.get("analysis_plan"),
             expected_display_labels=display_labels,
+            reader_display_labels=common.get("reader_display_labels", {}),
+            expected_baseline_mentions=_baseline_mentions_for_common(common),
         )
         if not repair_specs:
             break
         for spec, error_detail in repair_specs:
             repair_instruction = (
-                spec.instruction
-                + "\n\nREADER-QUALITY CONTRACT REPAIR:\n"
+                "READER-QUALITY CONTRACT REPAIR:\n"
                 + "The assembled draft failed these deterministic checks owned by "
                 + f"this section:\n{error_detail}\n"
                 + "Regenerate the complete section from the same machine evidence. "
@@ -843,7 +1035,8 @@ def render_manuscript_sections(
                 spec,
                 call_section(
                     section_name=spec.section_name,
-                    instruction=repair_instruction,
+                    instruction=spec.instruction,
+                    repair_feedback=repair_instruction,
                     max_tokens=spec.max_tokens,
                     **common,
                 ),
@@ -855,6 +1048,8 @@ def render_manuscript_sections(
                     missing_subsections=missing_subsections,
                 )
             sections[spec.key] = repaired
+            if checkpoint:
+                checkpoint(_assemble_scientific_sections(sections))
         scientific = _assemble_scientific_sections(sections)
         scientific, _repair_rounding = repair_reader_structure_from_existing_prose(
             scientific
@@ -868,12 +1063,19 @@ def render_manuscript_sections(
 
     remaining = _remaining_quality_errors(
         scientific,
+        analysis_plan=common.get("analysis_plan"),
         expected_display_labels=display_labels,
+        reader_display_labels=common.get("reader_display_labels", {}),
+        expected_baseline_mentions=_baseline_mentions_for_common(common),
     )
-    if remaining:
-        raise ManuscriptReaderQualityContractError(findings=remaining)
     administrative = render_manuscript_administrative_sections(administrative_authority)
-    return "\n\n".join(part for part in (scientific, administrative) if part)
+    candidate = "\n\n".join(part for part in (scientific, administrative) if part)
+    if remaining:
+        raise ManuscriptReaderQualityContractError(
+            findings=remaining, manuscript=candidate,
+            repaired_section_keys=tuple(sections),
+        )
+    return candidate
 
 
 __all__ = [
@@ -886,5 +1088,6 @@ __all__ = [
     "quality_repair_section_keys",
     "repair_named_manuscript_sections",
     "repair_existing_manuscript_sections",
+    "quality_repair_section_errors",
     "render_manuscript_sections",
 ]

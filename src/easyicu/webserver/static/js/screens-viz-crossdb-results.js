@@ -1,3 +1,4 @@
+/* Owner: Cross-DB result workspace widget. */
 /* Cross-DB result workspace owner.
    Owns result navigation and rendering only; setup, transport, and API calls
    remain in their existing owners. */

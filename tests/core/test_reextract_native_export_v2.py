@@ -20,6 +20,20 @@ launcher = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = launcher
 SPEC.loader.exec_module(launcher)
 
+SEALER_TOOL = (
+    Path(__file__).resolve().parents[2]
+    / "scripts"
+    / "releases"
+    / "EX-A01_seal_full6_release.py"
+)
+SEALER_SPEC = importlib.util.spec_from_file_location(
+    "reextract_native_export_v2_sealer_contract", SEALER_TOOL
+)
+assert SEALER_SPEC and SEALER_SPEC.loader
+sealer = importlib.util.module_from_spec(SEALER_SPEC)
+sys.modules[SEALER_SPEC.name] = sealer
+SEALER_SPEC.loader.exec_module(sealer)
+
 COMMIT = "a" * 40
 
 
@@ -159,11 +173,168 @@ def test_dirty_checkout_fails_closed() -> None:
         )
 
 
+def test_new_manifest_satisfies_release_sealer_provenance_contract(
+    tmp_path: Path,
+) -> None:
+    args = launcher._parse_args(
+        [
+            "--output-root",
+            str(tmp_path),
+            "--data-root",
+            str(tmp_path / "databases"),
+        ]
+    )
+    manifest = launcher._new_run_manifest(
+        databases=launcher.DATABASE_ORDER,
+        data_paths={database: f"/data/{database}" for database in launcher.DATABASE_ORDER},
+        identity={
+            "repository_root": str(launcher.REPOSITORY_ROOT),
+            "commit": COMMIT,
+        },
+        monitoring={
+            "backend": "psutil_process_tree",
+            "process_tree_pss_supported": True,
+            "release_sealable": True,
+        },
+        memory={"effective_total_mb": 8192, "effective_available_mb": 8192},
+        args=args,
+    )
+    expected_receipts = {}
+    for index, database in enumerate(sealer.DATABASES, start=1):
+        module_metrics = {
+            module: {
+                "rows": index,
+                "parquet_bytes": index * 10,
+                "parquet_sha256": f"{index:064x}",
+                "elapsed_seconds": float(index),
+            }
+            for module in sealer.MODULES
+        }
+        expected_receipts[database] = {
+            "native_manifest_sha256": f"{index + 10:064x}",
+            "total_rows": index * len(sealer.MODULES),
+            "total_parquet_bytes": index * len(sealer.MODULES) * 10,
+            "module_metrics": module_metrics,
+        }
+        manifest["sources"][database] = dict(expected_receipts[database])
+
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    launcher._atomic_write_json(run_root / "run_manifest.json", manifest)
+
+    receipts = sealer.validate_run_provenance(
+        run_root=run_root,
+        validation={
+            "easyicu_commit": COMMIT,
+            "run_manifest_receipts": expected_receipts,
+        },
+    )
+
+    assert manifest["publication_checkout"] == {
+        "easyicu_git_commit": COMMIT,
+        "easyicu_git_dirty": False,
+        "scope": "fresh_full_extraction",
+    }
+    assert receipts["run_manifest"]["file"] == "run_manifest.json"
+
+
+def test_resume_rejects_publication_checkout_drift(tmp_path: Path) -> None:
+    args = launcher._parse_args(
+        ["--output-root", str(tmp_path), "--data-root", str(tmp_path / "databases")]
+    )
+    data_paths = {database: f"/data/{database}" for database in launcher.DATABASE_ORDER}
+    identity = {
+        "repository_root": str(launcher.REPOSITORY_ROOT),
+        "commit": COMMIT,
+    }
+    manifest = launcher._new_run_manifest(
+        databases=launcher.DATABASE_ORDER,
+        data_paths=data_paths,
+        identity=identity,
+        monitoring={"release_sealable": True},
+        memory={"effective_total_mb": 8192, "effective_available_mb": 8192},
+        args=args,
+    )
+    manifest["publication_checkout"]["easyicu_git_commit"] = "b" * 40
+    launcher._atomic_write_json(tmp_path / "run_manifest.json", manifest)
+
+    with pytest.raises(launcher.ExtractionRunError, match="publication checkout"):
+        launcher._load_resume_manifest(
+            run_root=tmp_path,
+            databases=launcher.DATABASE_ORDER,
+            data_paths=data_paths,
+            identity=identity,
+            resource_policy="strict",
+        )
+
+
+@pytest.mark.parametrize(
+    ("original_database_batches", "original_module_batches", "resume_database_batches", "resume_module_batches", "message"),
+    [
+        (
+            {"miiv": 10_000},
+            {"miiv": {"neurological": 5_000}},
+            {"miiv": 20_000},
+            {"miiv": {"neurological": 5_000}},
+            "database batch overrides",
+        ),
+        (
+            {"miiv": 10_000},
+            {"miiv": {"neurological": 5_000}},
+            {"miiv": 10_000},
+            {"miiv": {"neurological": 10_000}},
+            "module batch overrides",
+        ),
+    ],
+)
+def test_resume_rejects_batch_override_drift(
+    tmp_path: Path,
+    original_database_batches: dict[str, int],
+    original_module_batches: dict[str, dict[str, int]],
+    resume_database_batches: dict[str, int],
+    resume_module_batches: dict[str, dict[str, int]],
+    message: str,
+) -> None:
+    args = launcher._parse_args(
+        ["--output-root", str(tmp_path), "--data-root", str(tmp_path / "databases")]
+    )
+    data_paths = {database: f"/data/{database}" for database in launcher.DATABASE_ORDER}
+    identity = {
+        "repository_root": str(launcher.REPOSITORY_ROOT),
+        "commit": COMMIT,
+    }
+    manifest = launcher._new_run_manifest(
+        databases=launcher.DATABASE_ORDER,
+        data_paths=data_paths,
+        identity=identity,
+        monitoring={"release_sealable": True},
+        memory={"effective_total_mb": 8192, "effective_available_mb": 8192},
+        args=args,
+        batch_overrides=original_database_batches,
+        module_batch_overrides=original_module_batches,
+    )
+    launcher._atomic_write_json(tmp_path / "run_manifest.json", manifest)
+
+    with pytest.raises(launcher.ExtractionRunError, match=message):
+        launcher._load_resume_manifest(
+            run_root=tmp_path,
+            databases=launcher.DATABASE_ORDER,
+            data_paths=data_paths,
+            identity=identity,
+            resource_policy="strict",
+            batch_overrides=resume_database_batches,
+            module_batch_overrides=resume_module_batches,
+        )
+
+
 def test_native_package_validation_binds_19_module_time_peak_rows_and_bytes(
     tmp_path: Path,
 ) -> None:
     export = tmp_path / "export"
     _build_native_export(export)
+    private = export / launcher.PRIVATE_DERIVATION_CONTEXT_DIRECTORY
+    private.mkdir()
+    (private / "replay-shard.parquet").write_bytes(b"PAR1private")
 
     receipt = launcher._validate_export_package(export, COMMIT, "miiv")
 
@@ -183,6 +354,13 @@ def test_native_package_validation_rejects_wrong_database_and_extra_parquet(
         launcher._validate_export_package(export, COMMIT, "eicu")
 
     (export / "extra.parquet").write_bytes(b"PAR1extra")
+    with pytest.raises(launcher.ExtractionRunError, match="Parquet set mismatch"):
+        launcher._validate_export_package(export, COMMIT, "miiv")
+
+    (export / "extra.parquet").unlink()
+    nested = export / "unexpected"
+    nested.mkdir()
+    (nested / "extra.parquet").write_bytes(b"PAR1extra")
     with pytest.raises(launcher.ExtractionRunError, match="Parquet set mismatch"):
         launcher._validate_export_package(export, COMMIT, "miiv")
 
@@ -342,6 +520,108 @@ def test_worker_preserves_module_plans_and_enforces_assigned_budget(
     assert result["batch_strategy"]["aggregate_plan_is_summary"] is (requested_batch_size is None)
 
 
+def test_worker_recovers_nested_oom_when_native_publication_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import easyicu.api as public_api
+    import easyicu.api.extraction as extraction
+
+    attempt_root = tmp_path / "attempt"
+    attempt_root.mkdir()
+    monkeypatch.setattr(
+        launcher,
+        "_git_identity",
+        lambda: {
+            "repository_root": str(launcher.REPOSITORY_ROOT),
+            "commit": COMMIT,
+            "dirty": False,
+            "dirty_status": [],
+        },
+    )
+    monkeypatch.setattr(
+        launcher,
+        "_configure_worker_runtime",
+        lambda _attempt, assigned: {"assigned_memory_mb": assigned},
+    )
+    monkeypatch.setattr(
+        extraction,
+        "_get_all_patient_ids",
+        lambda *_args, **_kwargs: (list(range(60_000)), "stay_id"),
+    )
+
+    def fail_during_native_publication(_database, **kwargs):
+        failure_root = Path(kwargs["output_dir"]) / ".easyicu-failures"
+        failure_root.mkdir(parents=True)
+        record = {
+            "failure_id": "parent-oom",
+            "phase": "medications",
+            "modules": ["medications"],
+            "special_modules": [],
+            "worker_exit_code": -9,
+            "failure_kind": "worker_exit_without_failure_record",
+            "exception_type": None,
+            "traceback_sha256": None,
+            "partial_outputs_sha256": "c" * 64,
+        }
+        (failure_root / "worker-failure-parent-oom.json").write_text(
+            json.dumps(record), encoding="utf-8"
+        )
+        raise ValueError(
+            "native_export_v2 requires every requested module to finish before "
+            "publication (failures=['medications'], missing_results=[])"
+        )
+
+    monkeypatch.setattr(public_api, "extract_database", fail_during_native_publication)
+    monkeypatch.setenv("PYTHONPATH", str(launcher.SOURCE_ROOT))
+    spec_path = attempt_root / "worker_spec.json"
+    spec_path.write_text(
+        json.dumps(
+            {
+                "database": "miiv",
+                "data_path": "/data/miiv",
+                "attempt_root": str(attempt_root),
+                "easyicu_git_commit": COMMIT,
+                "assigned_memory_mb": 6 * 1024,
+                "planning_memory_mb": 8 * 1024,
+                "adaptive_core": False,
+                "requested_batch_size": 30_000,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert launcher._worker_main(spec_path) == 1
+
+    result = json.loads((attempt_root / "worker_result.json").read_text())
+    assert result["nested_memory_failure"] is True
+    assert result["worker_failures"] == [
+        {
+            "failure_id": "parent-oom",
+            "phase": "medications",
+            "modules": ["medications"],
+            "special_modules": [],
+            "worker_exit_code": -9,
+            "failure_kind": "worker_exit_without_failure_record",
+            "exception_type": None,
+            "traceback_sha256": None,
+            "partial_outputs_sha256": "c" * 64,
+            "file": ".easyicu-failures/worker-failure-parent-oom.json",
+            "sha256": _sha256(
+                attempt_root
+                / "export"
+                / ".easyicu-failures"
+                / "worker-failure-parent-oom.json"
+            ),
+            "bytes": (
+                attempt_root
+                / "export"
+                / ".easyicu-failures"
+                / "worker-failure-parent-oom.json"
+            ).stat().st_size,
+        }
+    ]
+
+
 def test_successful_database_is_atomically_promoted_and_never_overwritten(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -350,6 +630,11 @@ def test_successful_database_is_atomically_promoted_and_never_overwritten(
 
     def fake_worker(**kwargs):
         spec = json.loads(Path(kwargs["spec_path"]).read_text(encoding="utf-8"))
+        assert spec["requested_batch_size"] == 10_000
+        assert spec["requested_module_batch_sizes"] == {
+            "medications": 5_000,
+            "neurological": 5_000,
+        }
         attempt = Path(spec["attempt_root"])
         export = attempt / "export"
         _build_native_export(export)
@@ -395,7 +680,11 @@ def test_successful_database_is_atomically_promoted_and_never_overwritten(
         git_commit=COMMIT,
         assigned_memory_mb=16 * 1024,
         adaptive_core=True,
-        requested_batch_size=None,
+        requested_batch_size=10_000,
+        requested_module_batch_sizes={
+            "medications": 5_000,
+            "neurological": 5_000,
+        },
         max_memory_retries=2,
         sample_interval_seconds=0.1,
         psutil_module=None,
@@ -520,10 +809,146 @@ def test_process_oom_downbatches_only_failed_staging_attempt(
     assert (run_root / "exports" / "eicu" / "renal.parquet").is_file()
 
 
+def test_nested_module_worker_oom_downbatches_the_database_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A module subprocess exit -9 must trigger the outer batch retry."""
+
+    run_root = tmp_path / "run"
+    (run_root / "exports").mkdir(parents=True)
+    observed_batches = []
+
+    def fake_worker(**kwargs):
+        spec = json.loads(Path(kwargs["spec_path"]).read_text(encoding="utf-8"))
+        attempt = Path(spec["attempt_root"])
+        requested = spec.get("requested_batch_size")
+        planned = 40_000 if requested is None else int(requested)
+        observed_batches.append(planned)
+        (attempt / "worker_plan.json").write_text(
+            json.dumps(
+                {
+                    "planned_initial_batch_size": planned,
+                    "planned_batch_count": 6,
+                    "adaptive_core": False,
+                }
+            ),
+            encoding="utf-8",
+        )
+        if len(observed_batches) == 1:
+            (attempt / "export").mkdir()
+            (attempt / "worker_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "failed",
+                        "error": "ExtractionRunError: module extraction errors",
+                        "worker_failures": [
+                            {
+                                "failure_kind": "worker_exit_without_failure_record",
+                                "worker_exit_code": -9,
+                                "phase": "medications",
+                            }
+                        ],
+                        "nested_memory_failure": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return {
+                "process_exit_code": 1,
+                "elapsed_seconds": 1.0,
+                "peak_process_tree_rss_mb": 7900.0,
+                "peak_process_tree_pss_mb": 7600.0,
+                "monitor_errors": [],
+            }
+        export = attempt / "export"
+        _build_native_export(export, database="miiv")
+        package = launcher._validate_export_package(export, COMMIT, "miiv")
+        (attempt / "worker_result.json").write_text(
+            json.dumps(
+                {
+                    "status": "complete",
+                    "package_receipt": package,
+                    "batch_strategy": {
+                        "label": "planned_streamed:30000_stays_x7;memory_retries=0",
+                        "initial_batch_size": planned,
+                        "planned_batch_count": 7,
+                        "stream_retry_history": [],
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return {
+            "process_exit_code": 0,
+            "elapsed_seconds": 2.0,
+            "peak_process_tree_rss_mb": 5000.0,
+            "peak_process_tree_pss_mb": 4500.0,
+            "monitor_errors": [],
+        }
+
+    monkeypatch.setattr(launcher, "_run_monitored_worker", fake_worker)
+    source = launcher._execute_database(
+        database="miiv",
+        run_root=run_root,
+        data_path="/data/miiv",
+        git_commit=COMMIT,
+        assigned_memory_mb=8 * 1024,
+        adaptive_core=True,
+        requested_batch_size=None,
+        max_memory_retries=2,
+        sample_interval_seconds=0.1,
+        psutil_module=None,
+        monitoring={"release_sealable": True},
+        prior_source=None,
+    )
+
+    assert observed_batches == [40_000, 30_000]
+    assert source["status"] == "complete"
+    assert source["attempt_count"] == 2
+    first_attempt = source["attempts"][0]
+    assert first_attempt["process_exit_code"] == 1
+    assert first_attempt["peak_process_tree_pss_mb"] == 7600.0
+
+
 def test_streamed_python_memory_error_is_retryable() -> None:
     assert launcher._looks_like_memory_failure(
         1,
         "streamed module export exhausted memory: sofa1_score",
+    )
+
+
+def test_module_batch_cli_parsing_is_typed_and_scoped() -> None:
+    assert launcher._resolve_module_batch_overrides(
+        ["miiv/medications=5000", "miiv/neurological=5000"]
+    ) == {"miiv": {"medications": 5_000, "neurological": 5_000}}
+
+    with pytest.raises(launcher.ExtractionRunError, match="invalid or duplicate"):
+        launcher._resolve_module_batch_overrides(["miiv/not-a-module=5000"])
+    with pytest.raises(launcher.ExtractionRunError, match="must be positive"):
+        launcher._resolve_module_batch_overrides(["miiv/medications=0"])
+
+
+def test_nested_worker_exit_minus_nine_is_a_memory_failure() -> None:
+    assert launcher._nested_worker_memory_failure(
+        [
+            {
+                "failure_kind": "worker_exit_without_failure_record",
+                "worker_exit_code": -9,
+                "phase": "medications",
+            }
+        ]
+    )
+
+
+def test_nested_non_memory_failure_does_not_trigger_memory_retry() -> None:
+    assert not launcher._nested_worker_memory_failure(
+        [
+            {
+                "failure_kind": "structured_exception",
+                "worker_exit_code": 1,
+                "exception_type": "ValueError",
+            }
+        ]
     )
 
 

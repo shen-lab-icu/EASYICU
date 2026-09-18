@@ -107,6 +107,42 @@ def test_the_reported_key_names_what_separates_the_rows(tmp_path: Path) -> None:
     assert result["key_column"] == "row_role+exposure_level"
 
 
+def test_numeric_level_wins_over_constant_text_when_only_it_separates_rows(
+    tmp_path: Path,
+) -> None:
+    """A constant text field must not stop the search before a numeric key.
+
+    Continuous-effect contrast tables often repeat the exposure name and use
+    the numeric exposure value to identify each row.  A constant text column
+    is preferable only when it separates rows at least as well; choosing it
+    first and stopping on no improvement falsely rejects an exact projection.
+    """
+
+    table = pd.DataFrame(
+        {
+            "exposure": ["lact_max", "lact_max"],
+            "exposure_value": [1.0, 4.9],
+            "reference_exposure_value": [2.0, 2.0],
+            "adjusted_odds_ratio": [0.82, 1.96],
+            "exposure_density_scope": [
+                "primary_complete_case",
+                "primary_complete_case",
+            ],
+        }
+    )
+
+    result = _compare(table.copy(), table, tmp_path)
+
+    assert result["ok"], result.get("reason")
+    assert result["key_column"] == "exposure+exposure_value"
+
+    forged = table.copy()
+    forged.loc[forged["exposure_value"] == 4.9, "adjusted_odds_ratio"] = 9.99
+    rejected = _compare(forged, table, tmp_path)
+    assert rejected["ok"] is False
+    assert rejected["reason"] == "source_values_disagree"
+
+
 def test_a_forged_value_is_still_rejected(tmp_path: Path) -> None:
     """Widening the key must not blunt the check it exists to enable."""
 
@@ -202,6 +238,38 @@ def test_a_long_form_positional_projection_is_not_a_many_to_many_join(
 
     assert result["ok"], result.get("reason")
     assert result["n_source_rows"] == 4
+
+
+def test_positional_projection_compares_float_keys_with_tolerance(
+    tmp_path: Path,
+) -> None:
+    """One-ulp CSV drift in a numeric level is a value check, not a join miss."""
+
+    upstream = pd.DataFrame(
+        {
+            "exposure": ["lact_max", "lact_max"],
+            "exposure_value": [2.3650000333786014, 3.1450000524520876],
+            "adjusted_odds_ratio": [1.08, 1.29],
+        }
+    )
+    source = pd.DataFrame(
+        {
+            "source_row_index": [0, 1],
+            "exposure": ["lact_max", "lact_max"],
+            "exposure_value": [2.365000033378601, 3.145000052452088],
+            "adjusted_odds_ratio": [1.08, 1.29],
+        }
+    )
+
+    result = _compare(source, upstream, tmp_path)
+
+    assert result["ok"], result.get("reason")
+    assert result["key_column"] == "source_row_index"
+
+    source.loc[1, "adjusted_odds_ratio"] = 9.99
+    rejected = _compare(source, upstream, tmp_path)
+    assert rejected["ok"] is False
+    assert rejected["reason"] == "source_values_disagree"
 
 
 def test_a_key_that_cannot_be_made_unique_says_so(tmp_path: Path) -> None:

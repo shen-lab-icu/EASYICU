@@ -6,8 +6,11 @@ including missing value analysis, range validation, and consistency checks.
 
 from typing import Optional, Dict, Any, List, Union, Sequence
 from pathlib import Path
+import logging
 import pandas as pd
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 class DataQualityValidator:
     """Validate data quality for ICU datasets."""
@@ -304,10 +307,10 @@ class DataQualityValidator:
             
             # Save as JSON
             import json
-            with open(output_file, 'w') as f:
+            with open(output_file, 'w', encoding="utf-8") as f:
                 json.dump(report, f, indent=2, default=str)
-            
-            print(f"Quality report saved to {output_file}")
+
+            logger.info("Quality report saved to %s", output_file)
         
         return report
 
@@ -361,55 +364,56 @@ def validate_data_quality(
     return report
 
 def print_quality_summary(report: Dict[str, Any]) -> None:
-    """Print a human-readable summary of quality report.
-    
+    """Log a human-readable summary of quality report.
+
     Args:
         report: Quality report from comprehensive_report()
     """
-    print("=" * 60)
-    print("DATA QUALITY REPORT")
-    print("=" * 60)
-    
+    logger.info("=" * 60)
+    logger.info("DATA QUALITY REPORT")
+    logger.info("=" * 60)
+
     # Basic info
     if 'basic_info' in report:
         info = report['basic_info']
-        print("\nBasic Information:")
-        print(f"  Rows: {info['n_rows']:,}")
-        print(f"  Columns: {info['n_columns']}")
+        logger.info("\nBasic Information:")
+        logger.info("  Rows: %s", f"{info['n_rows']:,}")
+        logger.info("  Columns: %s", info['n_columns'])
         if info['n_patients']:
-            print(f"  Patients: {info['n_patients']:,}")
-        print(f"  Memory: {info['memory_usage_mb']:.2f} MB")
-    
+            logger.info("  Patients: %s", f"{info['n_patients']:,}")
+        logger.info("  Memory: %.2f MB", info['memory_usage_mb'])
+
     # Missing data
     if 'missing_data' in report and report['missing_data']:
-        print("\nMissing Data (Top 5):")
+        logger.info("\nMissing Data (Top 5):")
         for item in report['missing_data'][:5]:
-            print(f"  {item['variable']}: {item['pct_missing']:.1f}% missing")
-    
+            logger.info("  %s: %.1f%% missing", item['variable'], item['pct_missing'])
+
     # Duplicates
     if 'duplicates' in report:
         dup = report['duplicates']
-        print("\nDuplicates:")
-        print(f"  {dup['n_duplicate_rows']} duplicate rows ({dup['pct_duplicates']:.1f}%)")
-    
+        logger.info("\nDuplicates:")
+        logger.info("  %s duplicate rows (%.1f%%)", dup['n_duplicate_rows'], dup['pct_duplicates'])
+
     # Range validation
     if 'range_validation' in report and report['range_validation']:
-        out_of_range = [v for v in report['range_validation'] 
+        out_of_range = [v for v in report['range_validation']
                        if v.get('n_out_of_range', 0) > 0]
         if out_of_range:
-            print("\nOut-of-Range Values:")
+            logger.info("\nOut-of-Range Values:")
             for item in out_of_range[:5]:
-                print(f"  {item['variable']}: {item['n_out_of_range']} values "
-                     f"({item['pct_out_of_range']:.1f}%)")
+                logger.info("  %s: %s values (%.1f%%)",
+                            item['variable'], item['n_out_of_range'],
+                            item['pct_out_of_range'])
     
     # Time consistency
     if 'time_consistency' in report:
         tc = report['time_consistency']
         if tc.get('n_time_issues', 0) > 0:
-            print("\nTime Consistency Issues:")
-            print(f"  {tc['n_time_issues']} patients with time issues")
+            logger.info("\nTime Consistency Issues:")
+            logger.info("  %s patients with time issues", tc['n_time_issues'])
 
-    print("=" * 60)
+    logger.info("=" * 60)
 
 
 def composite_score_completeness(

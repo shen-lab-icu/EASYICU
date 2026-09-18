@@ -409,6 +409,10 @@ def build_experiment_package(
         _write_package_readme(stage / "PACKAGE.md", payload)
         stage.rename(destination)
     except Exception:
+        # E-P2-10: rmtree guard — staging dir must stay under package_root
+        # and never be a symlink.
+        assert stage.resolve().is_relative_to(package_root.resolve()), stage
+        assert not stage.is_symlink(), stage
         shutil.rmtree(stage, ignore_errors=True)
         raise
     _refresh_index(package_root)

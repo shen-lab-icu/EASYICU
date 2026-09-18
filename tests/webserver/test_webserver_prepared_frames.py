@@ -255,7 +255,6 @@ def test_parquet_pushdown_matches_the_stored_id_dtype(tmp_path: Path, dtype: str
 # rather than quietly ignored. The set may shrink; it may not grow.
 KNOWN_UNCONSOLIDATED_READERS = {
     "catalog.py",
-    "crossdb_review.py",
     "dataio.py",
     "ideas/mining.py",
     "patient_drilldown/__init__.py",  # row-paged table preview, not module frames

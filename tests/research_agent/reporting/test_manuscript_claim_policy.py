@@ -52,6 +52,104 @@ def test_policy_accepts_only_a_complete_known_claim_token() -> None:
     assert result.unsupported_scientific_claim_sentences == result.filtered_sentences
 
 
+@pytest.mark.parametrize(
+    "prefix",
+    ["**Results:** ", "**Conclusions:** ", "> - **Results:** ", "**结果：** "],
+)
+def test_structured_abstract_label_preserves_known_claim_authority(prefix) -> None:
+    claim = _claim()
+    scaffold = prefix + claim.placeholder
+
+    filtered = filter_evidence_bound_scaffold(scaffold, resolve_claim=_resolver)
+    expanded = expand_scientific_claim_tokens(
+        filtered.scaffold,
+        resolve_claim=_resolver,
+        current_evidence_ids={claim.evidence_id},
+    )
+
+    assert filtered.scaffold == scaffold + "\n"
+    assert filtered.filtered_sentences == ()
+    assert expanded.scaffold.startswith(prefix + claim.render_reader_text(
+        include_estimate="Conclusions" not in prefix,
+    ))
+    assert f"{{evidence:{claim.evidence_id}}}" in expanded.scaffold
+    assert expanded.missing_claim_refs == ()
+    assert expanded.malformed_sentences == ()
+
+
+@pytest.mark.parametrize("direction", ["positive", "negative", "no_clear_association"])
+def test_conclusion_projects_bounded_interpretation_without_repeating_estimate(direction):
+    claim = _claim().model_copy(update={
+        "direction": direction, "point_estimate": 1.7,
+        "interval_lower": 1.2, "interval_upper": 2.4,
+        "exposure": "oxygen_index at 5 versus 2 mmHg",
+        "population": "the complete-case records at the 24-hour landmark",
+        "estimand": "odds ratio; this point contrast only, not a summary of the nonlinear curve; noncausal association",
+    })
+    sealed = claim.model_dump_json()
+    raw = (
+        "## Abstract\n\n**Results:** " + claim.placeholder
+        + "\n\n**Conclusions:**\n\n" + claim.placeholder
+        + "\n\n## Results\n\n" + claim.placeholder
+        + "\n\n## Conclusion\n\n" + claim.placeholder
+        + "\n\n## Supplementary results\n\n" + claim.placeholder
+    )
+    expanded = expand_scientific_claim_tokens(raw, resolve_claim=lambda _: claim).scaffold
+    results = expanded.split("## Results\n", 1)[1].split("## Conclusion", 1)[0]
+    conclusion = expanded.split("## Conclusion\n", 1)[1].split("## Supplementary", 1)[0]
+    abstract = expanded.split("## Results\n", 1)[0]
+    assert "1.7" in results and "95% CI" in results
+    assert "1.7" not in conclusion and "95% CI" not in conclusion
+    assert "1.7" not in abstract.split("**Conclusions:**", 1)[1]
+    for coordinate in ("5 versus 2 mmHg", "24-hour landmark", "age, sex", "this point contrast only"):
+        assert coordinate in conclusion
+    assert "1.7" in expanded.split("## Supplementary results", 1)[1]
+    assert claim.model_dump_json() == sealed
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "{claim:unknown.adjusted_association}",
+        "Higher mortality {claim:04_association.adjusted_association}",
+        "{claim:04_association.adjusted_association} and a causal benefit.",
+        "{{claim:04_association.adjusted_association}}",
+        "{claim:04_association.adjusted_association} {evidence:unrelated}",
+    ],
+)
+def test_structured_abstract_label_does_not_authorize_unsupported_claims(body) -> None:
+    filtered = filter_evidence_bound_scaffold(
+        "**Results:** " + body,
+        resolve_claim=_resolver,
+    )
+
+    assert filtered.scaffold == "\n"
+    assert filtered.unsupported_scientific_claim_sentences
+
+
+def test_structured_abstract_label_still_checks_current_evidence_membership() -> None:
+    claim = _claim()
+    expanded = expand_scientific_claim_tokens(
+        "**Results:** " + claim.placeholder,
+        resolve_claim=_resolver,
+        current_evidence_ids=set(),
+    )
+
+    assert expanded.missing_claim_refs == (claim.claim_ref,)
+    assert claim.render_reader_text() not in expanded.scaffold
+
+
+def test_assertive_bold_label_cannot_hide_an_extra_scientific_claim() -> None:
+    scaffold = "**Higher mortality:** " + _claim().placeholder
+
+    filtered = filter_evidence_bound_scaffold(scaffold, resolve_claim=_resolver)
+    expanded = expand_scientific_claim_tokens(scaffold, resolve_claim=_resolver)
+
+    assert filtered.scaffold == "\n"
+    assert filtered.unsupported_scientific_claim_sentences == (scaffold,)
+    assert expanded.malformed_sentences == (scaffold,)
+
+
 def test_policy_collapses_exact_host_prose_followed_by_duplicate_claim_token() -> None:
     claim = _claim()
     sentence = (
@@ -323,7 +421,7 @@ def test_claim_expansion_preserves_markdown_prefix_and_binds_evidence() -> None:
     )
 
     assert result.scaffold.startswith(
-        "> In the covariate-adjusted model, the prespecified exposure"
+        "> After adjustment for age, sex, Lactate"
     )
     assert "{evidence:04_association_summary}" in result.scaffold
     assert result.missing_claim_refs == ()
@@ -406,13 +504,45 @@ def test_host_claim_remains_present_after_deterministic_reader_rounding() -> Non
         "## Results\n\n### Primary association\n\n" + claim.placeholder + "\n",
         resolve_claim=lambda ref: claim if ref == claim.claim_ref else None,
     ).scaffold
-    assert "33.333333" in expanded
+    assert "33.333333" not in expanded
+    assert "33.333 percent" in expanded
     rounded = (
         expanded.replace("1/3", "1[^claim_1]/3[^claim_2]")
-        .replace("33.333333", "33.333[^claim_3]")
+        .replace("33.333 percent", "33.333[^claim_3] percent")
     )
 
     assert missing_scientific_claims_in_results(
         rounded,
         claims=[claim],
     ) == ()
+
+
+def test_claim_display_rounding_leaves_scaffold_provenance_and_model_numbers_intact():
+    claim = _claim()
+    canonical = "[^claim_1]: value=33.333333; field=estimate; evidence=source.123456"
+    source_link = "[source](https://example.org/10.123456/record)"
+    unbound = "A model-supplied value of 99.123456 must still face numeric binding."
+    scaffold = "\n".join((claim.placeholder, canonical, source_link, unbound))
+    expanded = expand_scientific_claim_tokens(scaffold, resolve_claim=_resolver)
+    assert canonical in expanded.scaffold
+    assert source_link in expanded.scaffold
+    assert unbound in expanded.scaffold
+    assert claim.render_reader_text() in expanded.scaffold
+
+
+def test_writer_neutral_count_examples_use_the_same_closed_claim_grammar():
+    manuscript = (
+        "## Results\n\n"
+        "The level 1 group included 60 stays (50% of the cohort) {evidence:summary}.\n\n"
+        "The observed mortality was 12 of 60 stays (20%) in the level 1 group {evidence:summary}."
+    )
+    result = filter_evidence_bound_scaffold(
+        manuscript, resolve_claim=lambda _: None, resolve_evidence=lambda ref: ref == "summary",
+    )
+    assert not result.filtered_sentences
+    # Syntax admission is not value/source verification; the separate strict
+    # binder must still validate every example value before a report is ready.
+    tampered = manuscript.replace("included", "caused a reduction in")
+    assert filter_evidence_bound_scaffold(
+        tampered, resolve_claim=lambda _: None, resolve_evidence=lambda ref: True,
+    ).filtered_sentences

@@ -2,7 +2,8 @@
 """Full paper via OpenRouter free model (DeepSeek V4 Flash).
 
 Usage:
-    export OPENROUTER_API_KEY='sk-or-v1-...'
+    # 占位 key 示例，勿提交真key到仓库；运行时从环境变量读取真 key。
+    export OPENROUTER_API_KEY='sk-or-v1-PLACEHOLDER'
     export EASYICU_ALLOW_EXTERNAL_LLM=1
     python examples/research_agent_openrouter_paper.py
 """

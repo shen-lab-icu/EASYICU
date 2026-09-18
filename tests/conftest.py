@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -68,7 +69,51 @@ def pytest_collection_modifyitems(config, items):
     skip_real_data = pytest.mark.skip(
         reason="Need --run-real and an existing EASYICU_DATA_PATH"
     )
+    # E-P2-4: resource-gated markers skip with an explicit reason so the
+    # skip is counted (visible in -rs) instead of silently passing.  The
+    # governance gate test_corpus_and_node_skips_are_counted pins that these
+    # markers exist and that this hook handles them; coverage tooling must
+    # treat these skips as uncovered, not as passes.
+    corpus_ready = corpus_root().exists()
+    node_ready = shutil.which("node") is not None
+    docker_ready = shutil.which("docker") is not None
+    skip_no_corpus = pytest.mark.skip(
+        reason=f"Recorded run corpus is not mounted at {corpus_root()}"
+    )
+    skip_no_node = pytest.mark.skip(reason="Node.js is unavailable")
+    skip_no_docker = pytest.mark.skip(reason="Docker is unavailable")
 
     for item in items:
         if "needs_real_data" in item.keywords and not (run_real and real_data_ready):
             item.add_marker(skip_real_data)
+        if "requires_corpus" in item.keywords and not corpus_ready:
+            item.add_marker(skip_no_corpus)
+        if "requires_node" in item.keywords and not node_ready:
+            item.add_marker(skip_no_node)
+        if "requires_docker" in item.keywords and not docker_ready:
+            item.add_marker(skip_no_docker)
+
+
+def corpus_root() -> Path:
+    """Recorded-run corpus root (E-P2-4/E-P2-5 shared helper).
+
+    Honors ``EASYICU_CORPUS_ROOT`` so CI and developers without the
+    historical ``/Volumes`` mount can point at a local copy; falls back to
+    the historical default which the ``requires_corpus`` marker skips on.
+    """
+
+    return Path(
+        os.environ.get(
+            "EASYICU_CORPUS_ROOT", "/Volumes/外置硬盘/easyicu_data/canonical9_runs"
+        )
+    )
+
+
+def node_binary() -> str | None:
+    """Node.js binary for JS contract tests (E-P2-4 shared helper)."""
+
+    direct = shutil.which("node")
+    if direct:
+        return direct
+    candidates = sorted((Path.home() / ".nvm" / "versions" / "node").glob("*/bin/node"))
+    return str(candidates[-1]) if candidates else None

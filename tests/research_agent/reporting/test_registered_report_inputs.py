@@ -1,0 +1,162 @@
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from easyicu.research_agent.authority.evidence_store import (
+    EvidenceStore,
+    EvidenceEnforcementError,
+)
+from easyicu.research_agent.reporting.registered_report_inputs import (
+    ReadOnlyReportEvidence,
+    _require_completed_plan_records,
+)
+from easyicu.research_agent.reporting.writer_only_migration import (
+    WriterOnlyMigrationError,
+)
+from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+from easyicu.research_agent.authority.evidence_store import EvidenceEnforcementMode
+
+
+@pytest.mark.parametrize("evidence_id,name", [("writer_evidence_digest", "writer_evidence_digest.md"), ("run_status", "run_status.json")])
+def test_report_input_uses_latest_sealed_revision_without_retargeting_old_citations(tmp_path, evidence_id, name):
+    store = EvidenceStore(tmp_path)
+    source = tmp_path / name
+    source.write_text("old verified digest")
+    old = store.register_text(kind="log", description="Digest", text=source.read_text(),
+                              filename=source.name, evidence_id=evidence_id)
+    source.write_text("new verified digest")
+    new = store.register_text(kind="log", description="Digest", text=source.read_text(),
+                              filename=source.name, evidence_id=evidence_id, on_sha_change="new_id")
+    reader = ReadOnlyReportEvidence(tmp_path)
+    assert reader.get(evidence_id).sha256 == old.sha256
+    assert new.sha256 != old.sha256
+    assert reader.verify_input(source.name, evidence_id) == source.read_bytes()
+    source.write_text("old verified digest")
+    with pytest.raises(WriterOnlyMigrationError):
+        reader.verify_input(source.name, evidence_id)
+
+
+def _bind_numbers(root, text):
+    # Exercise the unchanged value binder through the new read-only facade;
+    # envelope admission has its own owner/real-run replay tests.
+    bound, bindings, _ = bind_numeric_values(
+        text,
+        evidence=ReadOnlyReportEvidence(root),
+        enforcement_mode=EvidenceEnforcementMode.STRICT,
+        per_step_records=json.loads((root / "manifest.json").read_text())[
+            "per_step_records"
+        ],
+    )
+    return bound, len(bindings)
+
+
+def _source(tmp_path):
+    root = tmp_path / "run"
+    store = EvidenceStore(root)
+    rows = []
+    for step_id, number in (("cohort", 120), ("other", 240)):
+        path = tmp_path / f"{step_id}.json"
+        summary = {"n_total": number}
+        path.write_text(json.dumps(summary))
+        evidence = store.register_file(
+            kind="statistic",
+            description="Aggregate counts",
+            source_path=path,
+            evidence_id=step_id + "_summary",
+            produced_by_step=step_id,
+        )
+        store.register_step_summary_numerics(
+            step_id=step_id, evidence_id=evidence.evidence_id, summary=summary
+        )
+        rows.append(
+            {
+                "step_id": step_id,
+                "status": "ok",
+                "step_summary": summary,
+                "step_summary_evidence_id": evidence.evidence_id,
+                "evidence_ids": [evidence.evidence_id],
+            }
+        )
+    (root / "manifest.json").write_text(json.dumps({"per_step_records": rows}))
+    return root, store
+
+
+def test_reader_uses_snapshot_without_constructing_or_repairing_store(
+    tmp_path, monkeypatch
+):
+    root, store = _source(tmp_path)
+    before = {str(p): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    monkeypatch.setattr(
+        EvidenceStore, "__init__", lambda *a, **kw: pytest.fail("mutable store opened")
+    )
+    reader = ReadOnlyReportEvidence(root)
+    assert (
+        len(
+            reader.authoritative_numeric_claims(
+                json.loads((root / "manifest.json").read_text())["per_step_records"]
+            )
+        )
+        == 2
+    )
+    assert reader.get("cohort_summary").sha256 == store.get("cohort_summary").sha256
+    assert before == {str(p): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+
+def test_named_report_input_must_equal_its_sealed_registered_copy(tmp_path):
+    root, store = _source(tmp_path)
+    path = root / "input.json"
+    path.write_text('{"n_total":120}')
+    store.register_file(
+        kind="log", description="Input", source_path=path, evidence_id="input"
+    )
+    reader = ReadOnlyReportEvidence(root)
+    assert reader.verify_input("input.json", "input") == path.read_bytes()
+    path.write_text('{"n_total":121}')
+    with pytest.raises(WriterOnlyMigrationError, match="REGISTERED_INPUT_CHANGED"):
+        reader.verify_input("input.json", "input")
+
+
+def test_derived_working_status_is_not_used_as_immutable_analysis_authority(tmp_path):
+    root, store = _source(tmp_path)
+    status = {"gates": {"execution_complete": True, "analysis_validated": True, "numeric_verified": False}}
+    record = store.register_json(kind="log", description="Completed analysis", payload=status,
+                                filename="run_status.json", evidence_id="run_status")
+    (root / "run_status.json").write_text('{"gates":{"reportable":true}}')
+    reader = ReadOnlyReportEvidence(root)
+    assert json.loads(reader.read_sealed("run_status")) == status
+    assert json.loads(reader.read_sealed("run_status"))["gates"]["numeric_verified"] is False
+    (root / record.relative_path).write_text('{}')
+    with pytest.raises(WriterOnlyMigrationError):
+        reader.read_sealed("run_status")
+
+
+@pytest.mark.parametrize("suffix", [[], [{"step_id":"cohort","status":"failed"}]])
+def test_current_plan_requires_all_outputs_and_never_revives_prior_success(suffix):
+    from types import SimpleNamespace
+    plan = SimpleNamespace(steps=[SimpleNamespace(step_id="cohort"), SimpleNamespace(step_id="analysis")])
+    success = [{"step_id":"cohort","status":"ok"}, {"step_id":"analysis","status":"ok"}]
+    _require_completed_plan_records(plan, success)
+    invalid = success + suffix if suffix else success[:1]
+    with pytest.raises(WriterOnlyMigrationError, match="PLAN_RESULTS_INCOMPLETE"):
+        _require_completed_plan_records(plan, invalid)
+
+
+def test_report_repair_binds_values_to_exact_step_not_only_valid_citations(tmp_path):
+    root, _ = _source(tmp_path)
+    text = "The cohort included 120 ICU stays {evidence:cohort_summary}."
+    bound, count = _bind_numbers(root, text)
+    assert count == 1 and "[^claim_1]" in bound
+    assert "step=cohort" in bound
+    with pytest.raises(EvidenceEnforcementError):
+        _bind_numbers(root, text.replace("120", "9999"))
+    with pytest.raises(EvidenceEnforcementError):
+        _bind_numbers(root, text.replace("120", "240"))
+
+
+def test_report_numbers_cannot_use_tampered_evidence(tmp_path):
+    root, store = _source(tmp_path)
+    (root / store.get("cohort_summary").relative_path).write_text('{"n_total":9999}')
+    with pytest.raises(EvidenceEnforcementError):
+        _bind_numbers(root, "The cohort included 120 stays {evidence:cohort_summary}.")

@@ -10,6 +10,7 @@ from easyicu.concept_output_sources import (
     ConceptLoadPlanReason,
     ConceptMaterializationBinding,
     compile_concept_load_plan,
+    resolve_composite_concept_output,
 )
 
 
@@ -98,3 +99,21 @@ def test_compile_load_plan_accepts_ordered_tuple_boundary() -> None:
     assert plan.output_concepts == ("mort_28d", "death")
     assert plan.source_concepts == ("mort_28d", "death")
     assert plan.materializations == ()
+
+
+@pytest.mark.parametrize(
+    ("concept", "available", "expected"),
+    [
+        ("sep3", ("sep3_sofa1",), "sep3_sofa1"),
+        ("sep3", ("sep3", "sep3_sofa1"), "sep3"),
+        ("sep3", ("sep3_sofa2",), None),
+        ("sep3", ("sep3_unknown",), None),
+        ("comorbidity_loader", ("charlson",), "charlson"),
+        ("comorbidity_loader", ("charlson", "elixhauser"), None),
+        ("charlson", ("comorbidity_loader",), None),
+    ],
+)
+def test_prepared_output_resolution_is_exact_or_unique_owner_mapping(
+    concept: str, available: tuple[str, ...], expected: str | None,
+) -> None:
+    assert resolve_composite_concept_output(concept, available) == expected

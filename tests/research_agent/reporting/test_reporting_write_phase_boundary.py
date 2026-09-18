@@ -6,6 +6,68 @@ import ast
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+
+def test_writer_checkpoint_survives_finalizer_plan_order_without_losing_attempt_authority(tmp_path):
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.reporting import write_phase
+
+    records = [
+        {"step_id": "b", "status": "ok", "step_summary": {"n": 20}},
+        {"step_id": "a", "status": "ok", "step_summary": {"n": 30}},
+    ]
+    store = EvidenceStore(tmp_path)
+    eid = write_phase._preserve_writer_checkpoint(
+        "# Partial draft\n\n## Methods\n\nBaseline description.",
+        evidence=store, per_step_records=records,
+    )
+    finalized = list(reversed(records))
+    result = write_phase._verified_resume_writer_scaffold_for_quality_migration(
+        resume_state={"per_step_records": finalized}, evidence=store,
+        run_dir=tmp_path, per_step_records=finalized,
+    )
+    assert result is not None and result[1]["source_evidence_id"] == eid
+    assert write_phase._writer_execution_checkpoint_sha256(records) != write_phase._writer_execution_checkpoint_sha256(
+        records + [{"step_id": "b", "status": "failed"}],
+    )
+
+
+@pytest.mark.parametrize('changed_checkpoint,tamper', [(False, False), (True, False), (False, True)])
+def test_rejected_writer_candidate_only_resumes_as_verified_repair(tmp_path, changed_checkpoint, tamper):
+    from easyicu.research_agent.reporting import write_phase
+    from easyicu.research_agent.reporting.manuscript_sections import ManuscriptReaderQualityContractError
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+
+    store = EvidenceStore(tmp_path)
+    records = [{'step_id': 'baseline', 'status': 'ok', 'step_summary': {'n': 20}}]
+    exc = ManuscriptReaderQualityContractError(
+        findings=(('MISSING', 'Methods', 'Admission type omitted'),),
+        manuscript='# Diagnostic draft\n\n## Methods\n\nIncomplete prose.',
+    )
+    eid = write_phase._preserve_rejected_writer_candidate(exc, evidence=store, per_step_records=records)
+    record = store.get(eid)
+    assert record.metadata['publication_authorized'] is False
+    assert record.finding_severity == 'error'
+    assert eid not in write_phase._preferred_writer_evidence_names(store, records)
+    assert store.get('manuscript_scaffold_raw') is None
+    assert write_phase._verified_resume_writer_scaffold(
+        resume_state={'per_step_records': records}, evidence=store,
+        run_dir=tmp_path, per_step_records=records,
+    ) is None
+    if tamper:
+        (tmp_path / record.relative_path).write_text('altered')
+    current = [{'step_id': 'baseline', 'status': 'ok', 'step_summary': {'n': 21}}] if changed_checkpoint else records
+    result = write_phase._verified_resume_writer_scaffold_for_quality_migration(
+        resume_state={'per_step_records': records}, evidence=store,
+        run_dir=tmp_path, per_step_records=current,
+    )
+    if changed_checkpoint or tamper:
+        assert result is None
+    else:
+        assert result[0] == exc.manuscript
+        assert result[1]['source_evidence_id'] == eid
+
 
 def test_failed_quality_migration_preserves_verified_prior_scaffold(
     monkeypatch,

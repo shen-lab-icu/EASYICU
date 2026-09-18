@@ -1,3 +1,4 @@
+/* Owner: Guided Pi plan-action widget. */
 /* Governed Plan action owner for Guided Copilot.
    Owns authority calculation and the complete user-action lifecycle from one
    explicit click/edit through review, retry, fresh planning, and terminal job
@@ -26,12 +27,25 @@
   ]);
   const AUTOMATIC_PROVIDER_RUN_CODES = new Set([
     'provider_ready_to_generate_plan',
-    'plan_execution_upgrade_required',
     'scientific_plan_review_policy_stale',
     'plan_configuration_superseded',
     'plan_scientific_changes_required',
   ]);
   const BARE_CONTINUATION = /^(?:(?:请|麻烦)?\s*(?:继续|开始|往下做|接着做)(?:一下|吧|做|执行|推进)?|(?:please\s+)?(?:continue|proceed|go\s+ahead))(?:[。.!！]?)$/i;
+
+  // Shared by the read-only card and the action boundary. A stopped automatic
+  // loop is not approval, nor permission to discard the reviewed source.
+  function canRetryStoppedPlan(workflow) {
+    const summary = (workflow || {}).plan_review_summary || {};
+    const repairs = (summary.remediation_buckets || {}).agent_plan_revision;
+    return (workflow || {}).next_action_code === 'agent_plan_revision_nonconvergent'
+      && Boolean(String(summary.run_id || '').trim())
+      && Array.isArray(summary.authorization_questions)
+      && summary.authorization_questions.length === 0
+      && Array.isArray(summary.automatic_revision_blockers)
+      && summary.automatic_revision_blockers.length === 0
+      && Array.isArray(repairs) && repairs.length > 0;
+  }
 
   function create(host) {
     const tr = host.tr;
@@ -41,11 +55,18 @@
     const startedTransitions = new Set();
 
     function unavailable() {
-      return !host.session() || host.busy() || host.sessionIsStale();
+      return !host.session() || host.busy() || host.sessionIsStale()
+        || (typeof host.researchSourceReady === 'function' && !host.researchSourceReady());
     }
 
     function workflowCode() {
       return String((host.workflow() && host.workflow().next_action_code) || '');
+    }
+
+    function automaticRevisionBlocked() {
+      const summary = (host.workflow() || {}).plan_review_summary || {};
+      return Array.isArray(summary.automatic_revision_blockers)
+        && summary.automatic_revision_blockers.length > 0;
     }
 
     function transitionKey(reasonCode) {
@@ -65,7 +86,9 @@
         String(session.session_id || ''),
         String(binding.study_context_id || ''),
         revisionCoordinate,
-        String(binding.run_id || ''),
+        String(reasonCode === 'agent_plan_revision_nonconvergent'
+          ? ((host.workflow() || {}).plan_review_summary || {}).run_id || ''
+          : binding.run_id || ''),
         String(reasonCode || ''),
       ].join(':');
     }
@@ -90,6 +113,19 @@
       host.render();
     }
 
+    function retrySourceRunId() {
+      // The retry offer is computed from the authoritative latest run, so the
+      // retry action must name that same run. The session binding is only a
+      // fallback: it keeps the coordinate of the reviewed candidate plan, and
+      // the server's retry owner refuses a source whose gate reason is not a
+      // failed approved execution.
+      const latest = typeof host.latestRun === 'function' ? host.latestRun() : null;
+      const projected = String((latest && latest.run_id) || '').trim();
+      if (projected) return projected;
+      const session = host.session() || {};
+      return String((session.binding && session.binding.run_id) || '').trim();
+    }
+
     function generationRequest(reasonCode) {
       const retryExecution = reasonCode === 'failed_pipeline_execution_retry_available';
       const executionUpgrade = reasonCode === 'plan_execution_upgrade_required';
@@ -99,7 +135,9 @@
         && !retryExecution
         && !executionUpgrade;
       return {
-        text: retryExecution
+        text: reasonCode === 'agent_plan_revision_nonconvergent'
+          ? tr('Replan once after repair', '修复后重新规划一次')
+          : retryExecution
           ? tr('Retry analysis from the failed step', '从失败步骤重试分析')
           : executionUpgrade
             ? tr('Confirm the plan and prepare analysis data', '确认方案并准备分析数据')
@@ -120,23 +158,50 @@
     async function startFormalPlanGeneration(reasonCode, options = {}) {
       if (unavailable()) return false;
       const automatic = Boolean(options && options.automatic);
+      const retryingStoppedPlan = reasonCode === 'agent_plan_revision_nonconvergent';
+      if (retryingStoppedPlan && (automatic || !canRetryStoppedPlan(host.workflow()))) return false;
+      // A newly generated candidate is not a reviewed plan. The existing
+      // confirmation action owns this transition; job completion cannot
+      // manufacture approval to prepare its data package.
+      if (automatic && reasonCode === 'plan_execution_upgrade_required') return false;
+      if (automatic && reasonCode === 'plan_scientific_changes_required'
+        && automaticRevisionBlocked()) return false;
       const request = generationRequest(String(reasonCode || ''));
       const session = host.session() || {};
+      const expectedProjectId = host.projectId();
+      const expectedSessionId = session.session_id;
+      const selectionRevision = host.selectionRevision ? host.selectionRevision() : null;
+      const isCurrent = () => host.projectId() === expectedProjectId
+        && host.session() && host.session().session_id === expectedSessionId
+        && (!host.selectionRevision || host.selectionRevision() === selectionRevision);
       const binding = session.binding || {};
       const provider = session.research_provider || {};
       const studyContextId = String(binding.study_context_id || '').trim();
-      const revisingScientificPlan = reasonCode === 'plan_scientific_changes_required';
+      const revisingScientificPlan = reasonCode === 'plan_scientific_changes_required'
+        || retryingStoppedPlan;
       const executionUpgrade = reasonCode === 'plan_execution_upgrade_required';
       const retryingFailedPlan = reasonCode === 'failed_pipeline_requires_fresh_plan';
+      const replanningFailedExecution = retryingFailedPlan
+        && workflowCode() === 'failed_pipeline_execution_retry_available';
       const staleScientificPolicy = reasonCode === 'scientific_plan_review_policy_stale';
       // Both a plan-owned revision and a candidate-to-package upgrade must be
       // bound to the exact reviewed run.  The server distinguishes the two by
       // the digest-verified scientific review: non-approvable reviews produce
       // a bounded repair contract, while approvable metadata-only plans grant
       // only their exact materialization roster.
-      const revisionSourceRunId = revisingScientificPlan || executionUpgrade
-        ? String(binding.run_id || '').trim()
-        : '';
+      const revisionSourceRunId = retryingStoppedPlan
+        ? String(host.workflow().plan_review_summary.run_id).trim()
+        : revisingScientificPlan || executionUpgrade || replanningFailedExecution
+          ? String(binding.run_id || '').trim()
+          : '';
+      if (replanningFailedExecution && !revisionSourceRunId) {
+        host.setError(tr(
+          'The failed plan source is unavailable. Refresh this project before generating a new plan.',
+          '失败计划的来源不可用，请刷新项目后再生成新计划。',
+        ));
+        host.render();
+        return false;
+      }
       // A user- or agent-initiated transition consumes only this exact
       // session/revision/run coordinate. A page can host several studies, so a
       // process-wide boolean would incorrectly suppress later conversations.
@@ -145,8 +210,10 @@
         'plan_scientific_changes_required',
         'plan_execution_upgrade_required',
         'scientific_plan_review_policy_stale',
+        'agent_plan_revision_nonconvergent',
       ].includes(String(reasonCode || ''));
       const guardKey = transitionKey(reasonCode);
+      if (retryingStoppedPlan && startedTransitions.has(guardKey)) return false;
       if (guardedTransition) startedTransitions.add(guardKey);
       const api = host.api();
       if (
@@ -169,8 +236,17 @@
         });
       }
       setPending(true);
+      let jobStarted = false;
+      const stillCurrent = () => {
+        if (isCurrent()) return true;
+        // A stale request that has not crossed the job-creation boundary did
+        // not consume this transition. Let the same session retry if reopened.
+        if (guardedTransition && !jobStarted) startedTransitions.delete(guardKey);
+        return false;
+      };
       try {
         const response = await api.loadStudyContext(studyContextId);
+        if (!stillCurrent()) return false;
         const study = response && (response.context || response.study || response);
         const source = study && study.data_source;
         const sourcePath = String((source && source.path) || '').trim();
@@ -199,6 +275,8 @@
               : 'fresh',
           plan_revision_source_run_id: revisionSourceRunId,
         });
+        jobStarted = true;
+        if (!stillCurrent()) return false;
         await host.recordHostAction(
           automatic && !executionUpgrade
             ? reasonCode === 'provider_ready_to_generate_plan'
@@ -210,6 +288,7 @@
           String(payload.job_id || ''),
           String(payload.job_id || ''),
         );
+        if (!stillCurrent()) return false;
         host.setBusy(false);
         host.watchChildJob(
           String(payload.job_id || ''),
@@ -219,6 +298,7 @@
         );
         return true;
       } catch (error) {
+        if (!stillCurrent()) return false;
         if (guardedTransition) startedTransitions.delete(guardKey);
         host.setBusy(false);
         host.setError(host.errorText(error));
@@ -298,20 +378,7 @@
         return startFormalPlanGeneration(actionCode, {automatic: true});
       }
       if (actionCode === 'plan_execution_upgrade_required') {
-        const session = host.session() || {};
-        const binding = session.binding || {};
-        const reviewedRunId = String(binding.run_id || '').trim();
-        const studyContextId = String(binding.study_context_id || '').trim();
-        if (
-          startedTransitions.has(transitionKey(actionCode))
-          // A failed or cancelled package-bound attempt is durable session
-          // evidence.  Do not turn a reload/rebind into an unbounded automatic
-          // retry loop; an explicit retry remains available after the runtime
-          // or architecture defect is repaired.
-          || !reviewedRunId
-          || !studyContextId
-        ) return false;
-        return startFormalPlanGeneration(actionCode, {automatic: true});
+        return false;
       }
       if (actionCode === 'scientific_plan_review_policy_stale') {
         if (startedTransitions.has(transitionKey(actionCode))) return false;
@@ -332,6 +399,7 @@
         : [];
       if (
         actionCode !== 'plan_scientific_changes_required'
+        || automaticRevisionBlocked()
         || questions.length
         || !plannerOwnedFindings.length
         || startedTransitions.has(transitionKey(actionCode))
@@ -356,6 +424,7 @@
       if (
         !BARE_CONTINUATION.test(message)
         || String(workflow.next_action_code || '') !== 'plan_scientific_changes_required'
+        || automaticRevisionBlocked()
         || questions.length
         || !repairs.length
       ) return false;
@@ -464,18 +533,59 @@
         host.render();
         return;
       }
-      const validationRepair = reason === 'validation_repair';
+      const reportOnly = reason === 'report_only';
+      const restore = reason === 'restore';
+      const validationRepair = reason === 'validation_repair' || reportOnly || restore;
+      // A workflow/session refresh can settle while the report request is in
+      // flight. Its fallback must retain this action's approved run and route.
+      const session = host.session() || {};
+      const retryOptions = {
+        api: host.api(),
+        session: {
+          ...session,
+          binding: { ...session.binding },
+          research_provider: { ...session.research_provider },
+        },
+        resumeRunId: retrySourceRunId(),
+      };
       host.appendMessage({
         id: 'execution-retry-' + Date.now(), role: 'user', complete: true,
-        text: validationRepair
+        text: restore
+          ? tr('Restore the report and its checks using the approved study', '按已批准的研究恢复报告与校验')
+          : reportOnly
+          ? tr('Repair only the report from sealed results; do not rerun analysis', '只使用封存结果修订报告，不重跑分析')
+          : validationRepair
           ? tr('Repair the remaining validation item', '修复剩余校验项')
           : tr('Retry analysis from the failed step', '从失败步骤重试分析'),
       });
       setPending(true);
       try {
-        const payload = await replay.retryFailedExecution({
-          api: host.api(), session: host.session(),
-        });
+        let payload;
+        try {
+          payload = await replay.retryFailedExecution({
+            ...retryOptions, reportOnly: reportOnly || restore,
+          });
+        } catch (error) {
+          // A general Restore action may revalidate the same approved run
+          // when old report inputs were not sealed or their aggregate
+          // reporting contract needs refresh. Explicit report-only
+          // requests never widen scope, and all other failures stay closed.
+          const restoreCode = String(error && (error.code || error.message) || '');
+          if (!restore || ![
+            'WRITER_ONLY_REGISTERED_INPUT_CHANGED',
+            'WRITER_ONLY_REPORT_PROJECTION_REFRESH_REQUIRED',
+          ].includes(restoreCode)) throw error;
+          host.appendMessage({
+            id: 'report-recovery-' + Date.now(), role: 'assistant', complete: true,
+            text: tr(
+              'The saved report checks need restoration. I am revalidating the existing run against its approved plan before continuing the report; the research question and data source stay unchanged.',
+              '报告的历史校验记录需要恢复。正在按原批准方案重新核验现有运行，再继续报告；研究问题和数据来源不变。',
+            ),
+          });
+          payload = await replay.retryFailedExecution({
+            ...retryOptions, reportOnly: false,
+          });
+        }
         await host.recordHostAction(
           'retry_analysis', String(payload.job_id || ''), String(payload.job_id || ''),
         );
@@ -495,6 +605,10 @@
 
     async function confirmWorkflow(confirmation) {
       if (!confirmation) return;
+      if (confirmation.code === 'agent_plan_revision_nonconvergent') {
+        if (confirmation.retryPlanRevision) await startFormalPlanGeneration(confirmation.code);
+        return;
+      }
       if (confirmation.code === 'operator_plan_approval_required') {
         await submitReview('approved');
         return;
@@ -597,5 +711,5 @@
     });
   }
 
-  window.EasyICU.guidedPi.declare('planActions', { create });
+  window.EasyICU.guidedPi.declare('planActions', { create, canRetryStoppedPlan });
 })();

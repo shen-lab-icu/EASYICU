@@ -1,3 +1,4 @@
+/* Owner: Guided Pi cohort-eligibility widget. */
 /* Guided Copilot primary-cohort confirmation owner.
    It renders only server-issued option coordinates and returns the selected
    coordinate to the shell. It never derives consent from conversation text. */

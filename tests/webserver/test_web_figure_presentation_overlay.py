@@ -88,6 +88,39 @@ def test_digest_bound_presentation_gallery_is_used_without_overwriting_original(
         "data:image/png;base64,"
     )
 
+    # Reader notes travel outside the image, but must still match its exact
+    # source-bound contract rather than arbitrary gallery prose.
+    caption = "Counts reproduce the original cohort; no independent interval is shown."
+    contract_path = presentation_png.parent / "polished.figure_contract.json"
+    _write_json(contract_path, {"reader_caption": caption})
+    gallery_path = presentation_png.parent / "presentation_figure_gallery.json"
+    gallery = json.loads(gallery_path.read_text())
+    gallery["figures"][0].update(
+        caption=caption,
+        contract_path="presentation_figures/polished.figure_contract.json",
+        contract_sha256=hashlib.sha256(contract_path.read_bytes()).hexdigest(),
+    )
+    _write_json(gallery_path, gallery)
+    assert _figure_projection(tmp_path)["figures"][0]["caption"] == caption
+    assert agent_runs.read_run_artifact(str(tmp_path), "figure_gallery.json")["payload"][
+        "figures"
+    ][0]["caption"] == caption
+    for key, invalid in (
+        ("caption", "An unsupported causal conclusion."),
+        ("caption", caption + "\n"),
+        ("caption", "x" * 4001),
+        ("contract_sha256", "0" * 64),
+        ("contract_path", "../outside.figure_contract.json"),
+    ):
+        original = gallery["figures"][0][key]
+        gallery["figures"][0][key] = invalid
+        _write_json(gallery_path, gallery)
+        assert verified_presentation_gallery(tmp_path, canonical_gallery) is None
+        gallery["figures"][0][key] = original
+    _write_json(gallery_path, gallery)
+    _write_json(contract_path, {"reader_caption": "Changed contract"})
+    assert verified_presentation_gallery(tmp_path, canonical_gallery) is None
+
 
 def test_tampered_presentation_source_falls_back_to_registered_gallery(
     tmp_path: Path,

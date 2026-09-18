@@ -43,7 +43,7 @@ def test_plan_contract_owners_do_not_depend_on_compatibility_catch_all() -> None
     assert "plan_utils" not in execution_owner
     assert len(compatibility.splitlines()) < 100
     assert "from .contracts.step_families import (" in compatibility
-    assert "from .gates.step_contract import _step_contract_findings" in compatibility
+    assert "from .gates.step_contract import step_contract_findings" in compatibility
     assert "from .planning.plan_graph import (" in compatibility
 
 

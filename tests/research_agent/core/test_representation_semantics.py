@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from easyicu.research_agent.research_context.representation_semantics import (
     compile_wide_representation_semantics,
 )
@@ -122,3 +124,25 @@ def test_precomputed_max_publishes_physical_representation_not_median_policy() -
     assert compiled.allowed_aggregations == [AggregationRule.NONE]
     assert compiled.aggregation_default == AggregationRule.NONE
     assert any("precomputed maximum value" in item for item in compiled.clinical_caveats)
+
+
+@pytest.mark.parametrize("transform", ["window_nonnull_count", "window_measurement_status"])
+def test_observation_companion_is_not_an_ordinal_clinical_score(transform):
+    descriptor = _ordinal_descriptor("opaque_column", transform=transform)
+    compiled = compile_wide_representation_semantics([descriptor])[0]
+    assert compiled.role == VariableRole.META
+    assert compiled.unit is None
+    assert compiled.valid_range is None
+    assert compiled.is_ordinal is False
+    assert compiled.ordinal_levels is None
+    assert compiled.allowed_aggregations == [AggregationRule.NONE]
+    assert any("not the clinical value" in text for text in compiled.clinical_caveats)
+
+
+def test_prespecified_measurement_process_outcome_keeps_its_role():
+    descriptor = ConceptDescriptor(
+        name="measurement_availability", role=VariableRole.OUTCOME, dtype="int64",
+        unit_normalization="window_measurement_status",
+    )
+    compiled = compile_wide_representation_semantics([descriptor])[0]
+    assert compiled.role == VariableRole.OUTCOME

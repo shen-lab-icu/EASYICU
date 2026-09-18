@@ -22,16 +22,17 @@ when one owner and its typed consumers are identified explicitly.
 **Starting base HEAD (full SHA):**
 
 - [ ] This PR contains one independently reviewable workstream.
-- [ ] Work was performed in a dedicated linked worktree, or a sole-user clone
-      exception is explained below.
+- [ ] Work was performed in the canonical checkout (default), or a linked-worktree
+      exception was explicitly approved and is explained below.
 - [ ] No unrelated staged, unstaged, or untracked path was present at commit.
 
 ## Task-scope receipt
 
 Run `tools/verify_git_task_scope.py` immediately before committing and paste
-its receipt. The guard fails closed when HEAD moved, when the task ran in the
-shared primary worktree, or when any staged, unstaged, or untracked path falls
-outside the declared allowlist.
+its receipt. The canonical checkout is accepted by default. The guard fails
+closed when HEAD moved or any staged, unstaged, or untracked path falls outside
+the declared allowlist. Use `--require-linked-worktree` only for an approved
+linked-worktree task.
 
 ```text
 scope_sha256:

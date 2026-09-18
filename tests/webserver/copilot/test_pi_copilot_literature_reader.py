@@ -1,5 +1,6 @@
 """Focused reader-facing literature projection contracts."""
 
+import json
 import shutil
 import subprocess
 
@@ -7,9 +8,72 @@ import pytest
 
 from .test_pi_copilot_static import _ESCAPE_OWNER, _read
 from easyicu.webserver.pi_copilot import projections
+from easyicu.webserver.literature_projection import project_run_literature
 
 
 _MODULE_OWNER = _read("js/screens-guided-pi-modules.js")
+
+
+@pytest.mark.parametrize("renderer", ["renderSource", "renderArtifact"])
+@pytest.mark.parametrize("title", [
+    "Robustness of sepsis-3 criteria in critically ill patients",
+    "Prediction of 30-day mortality for ICU patients with Sepsis-3",
+    "Prognostic accuracy of the SOFA score in suspected infection",
+    "Assessment of STROBE reporting quality in cohort studies",
+])
+def test_chinese_reader_preserves_the_exact_article_title(renderer, title):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    row = {"key": "retrieved_study", "title": title}
+    payload = row if renderer == "renderSource" else {"citations": [row]}
+    source = _read("js/screens-guided-pi-literature.js")
+    script = f"""
+      global.window = {{ EU_LANG: 'zh' }};
+      eval({_ESCAPE_OWNER!r}); eval({_MODULE_OWNER!r}); eval({source!r});
+      console.log(window.EasyICU.guidedPi.require('literature').{renderer}({json.dumps(payload)}));
+    """
+    html = subprocess.run([node, "--eval", script], check=True, capture_output=True, text=True).stdout
+    assert f"<h4>{title}</h4>" in html
+    assert "脓毒症 Sepsis-3 共识定义" not in html
+    assert "SOFA 器官功能评分定义" not in html
+
+
+def test_run_projection_retains_bounded_source_notices_without_mutating_evidence():
+    notices = ["Author correction: 10.1038/example.", "x" * 900]
+    bundle = {"citations": [{"key": "source", "title": "Source title", "bibliographic_notices": notices}]}
+    before = json.dumps(bundle)
+    projected = project_run_literature(run_id="run_test", bundle=bundle, plan={})
+    assert projected["citations"][0]["bibliographic_notices"] == [notices[0], "x" * 600]
+    assert json.dumps(bundle) == before
+
+
+@pytest.mark.parametrize("notices", ["not a list", {"private": "not a notice"}, [None, {}, 123]])
+def test_run_projection_does_not_coerce_malformed_notices(notices):
+    projected = project_run_literature(
+        run_id="run_test", plan={},
+        bundle={"citations": [{"key": "source", "title": "Source title", "bibliographic_notices": notices}]},
+    )
+    assert projected["citations"][0]["bibliographic_notices"] == []
+
+
+@pytest.mark.parametrize("renderer", ["renderSource", "renderArtifact"])
+def test_reader_displays_escaped_bibliographic_notices(renderer):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    row = {"key": "source", "title": "Source title", "bibliographic_notices": ["Correction: <script>alert(1)</script>"]}
+    payload = row if renderer == "renderSource" else {"citations": [row]}
+    source = _read("js/screens-guided-pi-literature.js")
+    script = f"""
+      global.window = {{ EU_LANG: 'zh' }};
+      eval({_ESCAPE_OWNER!r}); eval({_MODULE_OWNER!r}); eval({source!r});
+      console.log(window.EasyICU.guidedPi.require('literature').{renderer}({json.dumps(payload)}));
+    """
+    html = subprocess.run([node, "--eval", script], check=True, capture_output=True, text=True).stdout
+    assert "来源勘误与声明" in html
+    assert "Correction: &lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "<script>" not in html
 
 
 def test_literature_reader_separates_direct_evidence_from_system_references() -> None:

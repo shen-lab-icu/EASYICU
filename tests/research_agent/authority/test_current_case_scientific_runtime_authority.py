@@ -29,6 +29,7 @@ from easyicu.research_agent.contracts.capability_ids import (
     SOURCE_FEASIBILITY_ANALYSIS_KIND,
     SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID,
 )
+from easyicu.research_agent.contracts.figure_plan import PlannedFigurePanelSpec
 from easyicu.research_agent.contracts.landmark_spline_validation import (
     landmark_spline_runtime_receipt_valid,
 )
@@ -44,6 +45,9 @@ from easyicu.research_agent.reporting.readiness import (
 )
 from easyicu.research_agent.execution.runners.landmark_spline_executor import (
     run_landmark_spline_association,
+)
+from easyicu.research_agent.execution.runners.landmark_spline_fit import (
+    prepare_landmark_model_population,
 )
 from easyicu.research_agent.execution.runners.landmark_spline_functional_form_executor import (
     LANDMARK_SPLINE_FUNCTIONAL_FORM_ANALYSIS_KIND,
@@ -73,6 +77,7 @@ from easyicu.research_agent.plan_utils import (
 )
 from easyicu.research_agent.schema import (
     AnalysisPlan,
+    AnalysisStep,
     CohortDescriptor,
     ResearchContext,
 )
@@ -81,6 +86,7 @@ from easyicu.research_agent.planning.capability_registry import (
     assess_scientific_capability,
     resolve_primary_capability,
 )
+from easyicu.research_agent.contracts.functional_form import FunctionalFormSpec
 
 
 def _authority(task_id: str):
@@ -149,6 +155,32 @@ def test_landmark_complete_case_row_binds_only_to_equivalent_locked_spec() -> No
     )
     with pytest.raises(ValueError, match="matched 0"):
         _matching_complete_case_spec_id(specs=specs, authority=authority)
+
+
+def test_landmark_complete_case_population_rejects_zero_event_categorical_level() -> None:
+    """A categorical level with no landmark events is not estimable."""
+
+    _projection, authority = _authority("e2_lactate_mortality")
+    assert isinstance(authority, LandmarkSplineRuntimeAuthority)
+    rng = np.random.default_rng(20260911)
+    n = 60
+    frame = pd.DataFrame(
+        {
+            "lact_max": rng.uniform(0.5, 6.0, size=n),
+            "death": [0] * 40 + [0, 1] * 10,
+            "death_time": [np.nan] * n,
+            "los_icu": rng.uniform(50.0, 100.0, size=n),
+            "age": rng.uniform(30.0, 90.0, size=n),
+            "sex": ["Unknown"] * 20 + ["Male"] * 20 + ["Female"] * 20,
+            "charlson_first": rng.integers(0, 5, size=n),
+        }
+    )
+    # Every death is before the 24-hour landmark, so only survivors enter the
+    # model and any categorical level with no survivor event is fully separated.
+    frame.loc[frame["death"].eq(1), "death_time"] = 48.0
+
+    with pytest.raises(ValueError, match="zero-event level"):
+        prepare_landmark_model_population(frame, authority)
 
 
 def _h2_plan(authority: SourceFeasibilityRuntimeAuthority) -> AnalysisPlan:
@@ -466,6 +498,227 @@ def test_e2_runtime_authority_mechanically_compiles_the_primary_draft() -> None:
     assert set(authority.required_columns).issubset(bound.steps[0].inputs)
     assert bound.steps[1].inputs == [authority.downstream_parent_product]
     assert findings[0].detail["reason_code"] == "landmark_spline_host_compiled"
+    contract = bound.steps[0].runtime_outcome_contract
+    assert contract is not None
+    assert contract.outcomes == (authority.outcome_column,)
+    assert contract.owner_ref == authority.plan_rule_ref
+    tampered = bound.model_copy(update={"steps": [
+        bound.steps[0].model_copy(update={"runtime_outcome_contract": contract.model_copy(update={"outcomes": ("another_outcome",)})}),
+        *bound.steps[1:],
+    ]})
+    with pytest.raises(CurrentCaseScientificAuthorityError, match="runtime_outcome_contract"):
+        authority.validate_plan(tampered)
+
+
+def test_e2_runtime_rebinds_figure_panel_sources_to_signed_parent() -> None:
+    _projection, authority = _authority("e2_lactate_mortality")
+    assert isinstance(authority, LandmarkSplineRuntimeAuthority)
+    exact = _e2_plan(authority)
+    draft_step = exact.steps[0].model_copy(
+        update={
+            "method": "adjusted_association_models",
+            "intent": "Estimate a generic adjusted association.",
+            "expected_outputs": ["table:adjusted_association_estimates"],
+            "scientific_capability": "association_adjusted_v1",
+            "icu_rule_refs": [],
+        }
+    )
+    display = AnalysisStep.model_validate(
+        {
+            "step_id": "02_display",
+            "planned_analysis_role": "auxiliary",
+            "intent": "Render the primary adjusted association.",
+            "method": "visualization",
+            "inputs": ["table:adjusted_association_estimates"],
+            "expected_outputs": ["figure:primary_result"],
+            "input_consumption_contracts": [
+                {
+                    "input_key": "table:adjusted_association_estimates",
+                    "mode": "all_rows",
+                }
+            ],
+            "figure_panels": [
+                PlannedFigurePanelSpec(
+                    panel_id="primary_effect",
+                    figure_output="figure:primary_result",
+                    article_role="primary_estimand",
+                    chart_type="forest",
+                    source_products=["table:adjusted_association_estimates"],
+                )
+            ],
+        }
+    )
+    draft = exact.model_copy(update={"steps": [draft_step, display]})
+
+    bound = authority.bind_plan(draft)
+
+    rebound = bound.steps[1]
+    assert rebound.inputs == [authority.downstream_parent_product]
+    assert [
+        panel.source_products for panel in rebound.figure_panels
+    ] == [[authority.downstream_parent_product]]
+    AnalysisPlan.model_validate(bound.model_dump(mode="json"))
+
+
+def test_e2_runtime_binds_functional_form_sensitivity_into_the_composite() -> None:
+    _projection, authority = _authority("e2_lactate_mortality")
+    assert isinstance(authority, LandmarkSplineRuntimeAuthority)
+    primary = _e2_plan(authority).steps[0]
+    sensitivity_product = "table:robustness_grid"
+    plan = AnalysisPlan.model_validate(
+        {
+            "research_question": "Estimate the signed landmark association.",
+            "analysis_type": "association_study",
+            "steps": [
+                primary.model_dump(mode="json"),
+                {
+                    "step_id": "02_functional_form_sensitivity",
+                    "planned_analysis_role": "sensitivity",
+                    "intent": "Refit the prespecified covariate functional form.",
+                    "inputs": ["dataset:analysis_cohort"],
+                    "expected_outputs": [
+                        sensitivity_product,
+                        f"{sensitivity_product}_exposure_curve",
+                        f"{sensitivity_product}_exposure_contrasts",
+                    ],
+                    "method": "restricted_cubic_spline_sensitivity",
+                    "sensitivity_spec_ids": ["functional_form_sensitivity"],
+                    "functional_form_spec": {
+                        "target_column": "age",
+                        "knot_quantiles": list(authority.spline_knot_quantiles),
+                    },
+                },
+                {
+                    "step_id": "03_robustness_summary",
+                    "planned_analysis_role": "sensitivity",
+                    "intent": "Summarize the signed robustness projection.",
+                    "inputs": ["dataset:analysis_cohort"],
+                    "expected_outputs": ["table:robustness_summary"],
+                    "method": "robustness_sensitivity",
+                },
+                {
+                    "step_id": "04_measurement_audit",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Audit the measurement process.",
+                    "inputs": ["dataset:analysis_cohort"],
+                    "expected_outputs": ["table:measurement_process"],
+                    "method": "missing_data",
+                },
+                {
+                    "step_id": "05_article_display",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Render the signed article display.",
+                    "inputs": [
+                        "table:absolute_risk_context",
+                        "table:adjusted_association_estimates",
+                        "table:robustness_summary",
+                        "table:measurement_process",
+                    ],
+                    "expected_outputs": ["figure:article_display"],
+                    "method": "visualization",
+                },
+            ],
+        }
+    )
+
+    bound = authority.bind_plan(plan)
+
+    figure = bound.steps[-1]
+    assert figure.inputs == [
+        authority.curve_product,
+        authority.adjusted_absolute_risk_product,
+        f"{sensitivity_product}_exposure_contrasts",
+        "table:robustness_summary",
+        "table:measurement_process",
+    ]
+    assert [panel.article_role for panel in figure.figure_panels] == [
+        "primary_estimand",
+        "descriptive_result",
+        "robustness",
+        "robustness",
+        "data_quality",
+    ]
+    assert [panel.chart_type for panel in figure.figure_panels] == [
+        "marginal_effect_panel",
+        "absolute_risk_curve",
+        "sensitivity_forest",
+        "sensitivity_coverage_matrix",
+        "availability_panel",
+    ]
+
+
+def test_e2_runtime_does_not_promote_a_dedicated_robustness_figure() -> None:
+    _projection, authority = _authority("e2_lactate_mortality")
+    assert isinstance(authority, LandmarkSplineRuntimeAuthority)
+    primary = _e2_plan(authority).steps[0]
+    sensitivity_product = "table:robustness_grid"
+    plan = AnalysisPlan.model_validate(
+        {
+            "research_question": "Estimate the signed landmark association.",
+            "analysis_type": "association_study",
+            "steps": [
+                primary.model_dump(mode="json"),
+                {
+                    "step_id": "02_functional_form_sensitivity",
+                    "planned_analysis_role": "sensitivity",
+                    "intent": "Refit the prespecified covariate functional form.",
+                    "inputs": ["dataset:analysis_cohort"],
+                    "expected_outputs": [
+                        sensitivity_product,
+                        f"{sensitivity_product}_exposure_curve",
+                        f"{sensitivity_product}_exposure_contrasts",
+                    ],
+                    "method": "restricted_cubic_spline_sensitivity",
+                    "sensitivity_spec_ids": ["functional_form_sensitivity"],
+                    "functional_form_spec": {
+                        "target_column": "age",
+                        "knot_quantiles": list(authority.spline_knot_quantiles),
+                    },
+                },
+                {
+                    "step_id": "03_robustness_summary",
+                    "planned_analysis_role": "sensitivity",
+                    "intent": "Summarize the signed robustness projection.",
+                    "inputs": ["dataset:analysis_cohort"],
+                    "expected_outputs": [
+                        "table:robustness_summary",
+                        "table:robustness_matrix",
+                    ],
+                    "method": "robustness_sensitivity",
+                },
+                {
+                    "step_id": "04_measurement_audit",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Audit the measurement process.",
+                    "inputs": ["dataset:analysis_cohort"],
+                    "expected_outputs": ["table:measurement_process"],
+                    "method": "missing_data",
+                },
+                {
+                    "step_id": "05_robustness_figure",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Render the dedicated robustness display.",
+                    "inputs": [
+                        "table:robustness_summary",
+                        "table:robustness_matrix",
+                    ],
+                    "expected_outputs": ["figure:robustness_plot"],
+                    "method": "visualization",
+                },
+            ],
+        }
+    )
+
+    bound = authority.bind_plan(plan)
+
+    figure = next(
+        step for step in bound.steps if step.step_id == "05_robustness_figure"
+    )
+    assert figure.inputs == [
+        "table:robustness_summary",
+        "table:robustness_matrix",
+    ]
+    assert figure.figure_panels == []
 
 
 def test_e2_runtime_clears_rebound_binary_sensitivity_capability(
@@ -487,12 +740,13 @@ def test_e2_runtime_clears_rebound_binary_sensitivity_capability(
         update={
             "step_id": "02_sensitivity",
             "planned_analysis_role": "sensitivity",
-            "method": "prespecified_functional_form_check",
+            "method": "restricted_cubic_spline_sensitivity",
             "intent": "Check the declared functional form.",
             "inputs": ["table:adjusted_association_estimates"],
             "expected_outputs": ["table:functional_form_check"],
             "scientific_capability": "association_freeform_v1",
             "sensitivity_spec_ids": ["functional_form_check"],
+            "functional_form_spec": FunctionalFormSpec(target_column=authority.exposure_column, knot_quantiles=authority.spline_knot_quantiles),
             "icu_rule_refs": [],
         }
     )
@@ -515,6 +769,10 @@ def test_e2_runtime_clears_rebound_binary_sensitivity_capability(
     )
     assert selected is not None
     assert selected.analysis_kind == LANDMARK_SPLINE_FUNCTIONAL_FORM_ANALYSIS_KIND
+    # The primary owner seals exp(beta) with a symmetric Wald interval, so the
+    # test row is built the same way instead of picking three unrelated numbers.
+    unit_log_odds = float(np.log(1.5))
+    unit_standard_error = 0.1
     summary = run_landmark_spline_functional_form(
         step=rebound,
         authority=authority,
@@ -531,16 +789,77 @@ def test_e2_runtime_clears_rebound_binary_sensitivity_capability(
                     "likelihood_ratio_statistic": 14.0,
                     "additional_spline_parameters": 2,
                     "nonlinearity_p_value": 0.00091,
+                    "exposure_increment": authority.linear_sensitivity_per_unit,
+                    "adjusted_odds_ratio": float(np.exp(unit_log_odds)),
+                    "ci_low": float(np.exp(unit_log_odds - 1.96 * unit_standard_error)),
+                    "ci_high": float(np.exp(unit_log_odds + 1.96 * unit_standard_error)),
                 }
             ]
         ),
         linear_evidence_id="table_linear",
         out_dir=tmp_path,
+        primary_contrasts=pd.DataFrame(
+            {
+                "exposure": [authority.exposure_column] * 2,
+                "exposure_value": [1.0, 4.9],
+                "reference_exposure_value": [2.0, 2.0],
+                "adjusted_odds_ratio": [0.62, 3.4],
+                "ci_low": [0.55, 3.0],
+                "ci_high": [0.70, 3.9],
+            }
+        ),
+        input_bindings=[
+            {
+                "input_key": authority.downstream_parent_product,
+                "evidence_id": "table_contrasts",
+                "sha256": "a" * 64,
+                "loaded": True,
+                "row_count": 2,
+            },
+            {
+                "input_key": authority.linear_sensitivity_product,
+                "evidence_id": "table_linear",
+                "sha256": "b" * 64,
+                "loaded": True,
+                "row_count": 1,
+            },
+        ],
     )
     assert summary["n_complete_case"] == 44095
     projected = pd.read_csv(tmp_path / "functional_form_check.csv")
     assert projected.loc[0, "n_complete_case"] == 44095
     assert projected.loc[0, "nonlinearity_p_value"] == pytest.approx(0.00091)
+    # The exposure target projects the already sealed linear term instead of
+    # refitting, so it must still publish the comparable effect tables that the
+    # article figure's specification panel binds.
+    assert rebound.expected_outputs == [
+        "table:functional_form_check",
+        "table:functional_form_check_sensitivity_exposure_curve",
+        "table:functional_form_check_sensitivity_exposure_contrasts",
+    ]
+    assert len(summary["output_files"]) == 3
+    effects = summary["functional_form_effect_products"]
+    assert effects["independent_refit"] is False
+    assert effects["contrast_product"] == (
+        "table:functional_form_check_sensitivity_exposure_contrasts"
+    )
+    curve = pd.read_csv(tmp_path / "functional_form_check_sensitivity_exposure_curve.csv")
+    points = pd.read_csv(tmp_path / "functional_form_check_sensitivity_exposure_contrasts.csv")
+    assert len(curve) == authority.curve_points
+    assert len(points) == 2
+    grid = np.linspace(1.0, 4.9, authority.curve_points)
+    np.testing.assert_allclose(curve["exposure_value"], grid, rtol=0.0, atol=1e-10)
+    np.testing.assert_allclose(
+        curve["adjusted_odds_ratio"],
+        np.exp(unit_log_odds * (grid - 2.0) / authority.linear_sensitivity_per_unit),
+        rtol=1e-12,
+    )
+    np.testing.assert_allclose(
+        points["adjusted_odds_ratio"],
+        curve["adjusted_odds_ratio"].iloc[[0, -1]],
+        rtol=0.0,
+        atol=0.0,
+    )
 
 
 def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
@@ -907,8 +1226,13 @@ def test_landmark_survival_executor_keeps_case_labels_in_authority() -> None:
     assert "ICU stays" not in source
 
 
+@pytest.mark.parametrize("contrast_schema", [
+    "legacy", "current", "numeric_strings", "wrong_exposure",
+    "duplicate_coordinate", "nonfinite_coordinate", "mixed_reference",
+])
 def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
     tmp_path: Path,
+    contrast_schema: str,
 ) -> None:
     projection, authority = _authority("e2_lactate_mortality")
     assert isinstance(authority, LandmarkSplineRuntimeAuthority)
@@ -1087,7 +1411,36 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
             "events": [5480],
         }
     )
-    summary = run_landmark_spline_robustness(
+    upper_coordinate = 5.0
+    reference_column = "reference_value"
+    if contrast_schema != "legacy":
+        linear = linear.rename(columns={"per_unit": "exposure_increment"})
+        reference_column = "reference_exposure_value"
+        contrasts = contrasts.rename(columns={"reference_value": reference_column})
+        contrasts["exposure"] = authority.exposure_column
+        contrasts["exposure_density_n"] = [13, 4]
+        contrasts["exposure_density_fraction"] = [0.13, 0.04]
+        contrasts["exposure_density_display_n"] = 100
+        contrasts["exposure_density_population_n"] = 150
+        contrasts["exposure_density_scope"] = "primary_complete_case_within_curve_range"
+    if contrast_schema == "numeric_strings":
+        contrasts["exposure_value"] = ["5", "12"]
+        upper_coordinate = 12.0
+    expected_error = None
+    if contrast_schema == "wrong_exposure":
+        contrasts.loc[0, "exposure"] = "different_exposure"
+        expected_error = "exposure disagrees"
+    elif contrast_schema == "duplicate_coordinate":
+        contrasts["exposure_value"] = [1.0, 1.0]
+        expected_error = "coordinates must be unique"
+    elif contrast_schema == "nonfinite_coordinate":
+        contrasts.loc[0, "exposure_value"] = np.inf
+        expected_error = "finite"
+    elif contrast_schema == "mixed_reference":
+        contrasts.loc[0, reference_column] = 3.0
+        expected_error = "share one reference"
+    original_contrasts = contrasts.copy(deep=True)
+    replay_arguments = dict(
         step=step,
         authority=authority,
         runtime_projection_sha256=projection.runtime_projection_sha256,
@@ -1114,14 +1467,44 @@ def test_e2_runtime_authority_binds_and_executes_deterministic_robustness(
             },
         ],
     )
+    if expected_error:
+        with pytest.raises(ValueError, match=expected_error):
+            run_landmark_spline_robustness(**replay_arguments)
+        assert not (tmp_path / "robustness_matrix.csv").exists()
+        pd.testing.assert_frame_equal(contrasts, original_contrasts)
+        return
+    summary = run_landmark_spline_robustness(**replay_arguments)
+    from easyicu.research_agent.authority.scientific_claims import derive_scientific_claim_drafts
+    claims = derive_scientific_claim_drafts(summary)
+    assert len(claims) == 3
+    assert claims[1].outcome == authority.outcome_column
+    assert claims[1].point_estimate == 2.0
+    assert claims[1].adjusted_for == list(authority.required_adjustment_columns)
+    assert "not a summary of the nonlinear curve" in claims[1].estimand
     assert summary["status"] == "ok"
     assert summary["primary_or"] == 2.0
     assert summary["primary_effect_is_nonlinear_curve_summary"] is False
-    assert "exposure_value=5" in summary["primary_effect_label"]
-    assert "reference_value=2.1" in summary["primary_effect_label"]
+    assert f"exposure_value={upper_coordinate:g}" in summary["primary_effect_label"]
+    assert f"{reference_column}=2.1" in summary["primary_effect_label"]
+    pd.testing.assert_frame_equal(contrasts, original_contrasts)
     assert summary["complete_case_n"] == 44095
+    assert summary["primary_estimate"] == summary["primary_or"]
+    assert summary["n_converged_variants"] == 1
+    assert summary["n_converged_results"] == 3
+    assert all(row["n"] == row["modeled_analytic_n"] == 44095 for row in summary["robustness_rows"])
     assert len(summary["input_bindings"]) == 2
     matrix = pd.read_csv(tmp_path / "robustness_matrix.csv")
+    primary_row = matrix.loc[matrix["axis"] == "primary"].iloc[0]
+    linear_row = matrix.loc[matrix["axis"] == "functional_form"].iloc[0]
+    missing_row = matrix.loc[matrix["axis"] == "missing"].iloc[0]
+    assert primary_row["contrast_label"] == f"{upper_coordinate:g} vs 2.1"
+    assert linear_row["contrast_label"] == "Per 1 unit increase"
+    assert primary_row["contrast_id"] != linear_row["contrast_id"]
+    assert primary_row["contrast_id"] == missing_row["contrast_id"]
+    assert set(matrix["effect_unit"]) == {"recorded exposure units"}
+    assert set(matrix["spec_label"]) == {
+        "Nonlinear model, upper contrast", "Linear sensitivity model", "Primary complete-case set",
+    }
     assert set(matrix["axis"]) == {"primary", "functional_form", "missing"}
     assert (
         matrix.loc[matrix["axis"] == "missing", "spec_id"].item()

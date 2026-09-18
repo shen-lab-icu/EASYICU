@@ -78,6 +78,9 @@ def test_sic_death_uses_hospital_discharge_type_not_offset():
             "CaseID": [1, 2, 3, 4, 5, 6],
             "death": [3600, 7200, None, 3_700_000, None, 1800],
             "HospitalDischargeType": [2028, 2028, 2026, 2026, None, 9999],
+            # Official SICdb origin: OffsetOfDeath is measured from the primary
+            # admission, so the ICU clock requires subtracting ICUOffset.
+            "ICUOffset": [0, 3600, 0, 0, 0, 0],
         }
     )
 
@@ -90,8 +93,54 @@ def test_sic_death_uses_hospital_discharge_type_not_offset():
     assert int((out["death"] == True).sum()) == 2  # noqa: E712
     assert pd.isna(out.loc[out["CaseID"] == 4, "death"].iloc[0])
     assert out.loc[out["CaseID"] == 1, "charttime"].iloc[0] == 1.0
+    assert out.loc[out["CaseID"] == 2, "charttime"].iloc[0] == 1.0
     assert pd.isna(out.loc[out["CaseID"] == 4, "charttime"].iloc[0])
     assert pd.isna(out.loc[out["CaseID"] == 6, "death"].iloc[0])
+
+
+def test_sic_death_without_icu_offset_fails_closed():
+    frame = pd.DataFrame(
+        {
+            "CaseID": [1, 2],
+            "death": [3600, None],
+            "HospitalDischargeType": [2028, 2026],
+        }
+    )
+
+    with pytest.raises(ValueError, match="ICUOffset"):
+        _apply_callback(
+            frame,
+            _src("sic_death", "OffsetOfDeath", "OffsetOfDeath"),
+            "death",
+        )
+
+
+def test_sic_death_loads_icu_offset_from_cases_when_absent():
+    frame = pd.DataFrame(
+        {
+            "CaseID": [1, 2],
+            "death": [7200, 1800],
+            "HospitalDischargeType": [2028, 2026],
+        }
+    )
+
+    class SicCasesSource:
+        def load_table(self, table_name, columns=None, filters=None, verbose=False):
+            assert table_name == "cases"
+            assert columns == ["CaseID", "ICUOffset"]
+            return types.SimpleNamespace(
+                data=pd.DataFrame({"CaseID": [1, 2], "ICUOffset": [3600, 0]})
+            )
+
+    out = _apply_callback(
+        frame,
+        _src("sic_death", "OffsetOfDeath", "OffsetOfDeath"),
+        "death",
+        data_source=SicCasesSource(),
+    )
+
+    assert out.loc[out["CaseID"] == 1, "charttime"].iloc[0] == 1.0
+    assert pd.isna(out.loc[out["CaseID"] == 2, "charttime"].iloc[0])
 
 
 def test_sic_death_missing_disposition_fails_closed():
@@ -126,12 +175,15 @@ def test_sic_death_loader_requests_authoritative_disposition_column():
 
         def load_table(self, table_name, columns=None, filters=None, verbose=False):
             del table_name, filters, verbose
-            self.requested_columns = list(columns or [])
+            for column in columns or []:
+                if column not in self.requested_columns:
+                    self.requested_columns.append(column)
             frame = pd.DataFrame(
                 {
                     "CaseID": [1, 2, 3],
                     "OffsetOfDeath": [3600, 3_700_000, None],
                     "HospitalDischargeType": [2028, 2026, 2026],
+                    "ICUOffset": [0, 1800, 0],
                 }
             )
             keep = list(
@@ -169,5 +221,7 @@ def test_sic_death_loader_requests_authoritative_disposition_column():
     result = loaded["death"].data
 
     assert "HospitalDischargeType" in source.requested_columns
+    assert "ICUOffset" in source.requested_columns
     assert result.loc[result["CaseID"] == 1, "death"].eq(True).all()  # noqa: E712
+    assert result.loc[result["CaseID"] == 1, "charttime"].eq(1.0).all()
     assert not result.loc[result["CaseID"] == 2, "death"].eq(True).any()  # noqa: E712

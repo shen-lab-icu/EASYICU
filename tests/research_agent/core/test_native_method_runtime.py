@@ -15,7 +15,11 @@ def reset_cache():
 def test_native_probe_uses_an_immutable_data_free_network_disabled_image(monkeypatch):
     calls = []
     image_id = "sha256:" + "a" * 64
-    monkeypatch.setattr(runtime.shutil, "which", lambda _: "/opt/docker")
+    # The probe resolves Docker through the shared locality helper, not a
+    # module-level shutil; stub the real seam so no environment is required.
+    monkeypatch.setattr(
+        runtime, "resolve_docker_executable", lambda _requested=None: "/opt/docker"
+    )
 
     def run(argv, **kwargs):
         calls.append(argv)
@@ -36,7 +40,11 @@ def test_native_probe_uses_an_immutable_data_free_network_disabled_image(monkeyp
 
 
 def test_native_probe_does_not_fall_back_to_host_r(monkeypatch):
-    monkeypatch.setattr(runtime.shutil, "which", lambda _: "/opt/docker")
+    # The probe resolves Docker through the shared locality helper, not a
+    # module-level shutil; stub the real seam so no environment is required.
+    monkeypatch.setattr(
+        runtime, "resolve_docker_executable", lambda _requested=None: "/opt/docker"
+    )
     monkeypatch.setattr(
         runtime.subprocess,
         "run",

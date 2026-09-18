@@ -1,0 +1,15 @@
+{
+  "counts": {
+    "concepts": 274,
+    "sources": 6,
+    "modules": 19,
+    "methods": 15
+  },
+  "inputs": {
+    "src/easyicu/data/concept-dict.json": "6c35b48f88832b0ed601fbb0913986c8d66f2eedd3e70abcbe5b0c5bc31d3aba",
+    "src/easyicu/data/sofa2-dict.json": "b804b56fe4522b067b6ee499b616371e026d1452bc20f8f378c694217ef2f476",
+    "src/easyicu/data/data-sources.json": "167bf0d6cbe01aa5a0c23b95bc5cae87c9904b6cff3c9943660fd688eccf9f0c",
+    "src/easyicu/concept/catalog.py": "63ae88d15eec716f7ec40bd34d45060f0d4b9395c5583a3001bbe2091e25d4e2",
+    "src/easyicu/research_agent/planning/capability_registry.py": "060fc22ac74c3c76d4d25003b4bae1291bce3324d1291914537d8d5c01aa3010"
+  }
+}

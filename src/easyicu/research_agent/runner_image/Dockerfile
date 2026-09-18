@@ -87,11 +87,35 @@ RUN apt-get update \
 # Generated analysis imports EasyICU's publication-figure and audit helpers.
 # Install the repository package itself without resolving dependencies again;
 # the complete runtime set is pinned above and is captured by DockerRunner. The
-# digest-pinned base already supplies the pyproject build tools, so reuse those
-# exact bytes instead of creating a second temporary environment that downloads
-# setuptools/wheel again outside requirements.lock.
+# final install uses --no-build-isolation, so prove the base image really
+# supplies the pyproject build tools first: absence fails the build, and the
+# exact versions are recorded in build-tools-receipt.txt next to the lock.
 COPY pyproject.toml README.md /opt/easyicu/
 COPY src/easyicu /opt/easyicu/src/easyicu
+RUN python - <<'PY'
+from pathlib import Path
+import importlib.metadata as metadata
+import re
+
+declared = Path("/opt/easyicu/pyproject.toml").read_text(encoding="utf-8")
+wanted = {}
+for chunk in re.search(r"requires\s*=\s*\[(.*?)\]", declared, re.S).group(1).split(","):
+    name = re.split(r"[<>=!~;\s\[]", chunk.strip().strip("'\""), maxsplit=1)[0].strip().lower()
+    if name:
+        wanted[name] = chunk.strip().strip("'\"")
+
+lines = []
+for dist in ("setuptools", "wheel"):
+    try:
+        installed = metadata.version(dist)
+    except metadata.PackageNotFoundError:
+        raise SystemExit(f"base image has no {dist}; --no-build-isolation is unsound")
+    lines.append(f"{dist} installed=={installed} required='{wanted.get(dist, '')}'")
+print("\n".join(lines))
+Path("/opt/easyicu-runner/build-tools-receipt.txt").write_text(
+    "\n".join(lines) + "\n", encoding="utf-8"
+)
+PY
 RUN pip install --no-cache-dir --no-deps /opt/easyicu --no-build-isolation
 
 # Non-root user so `--user=$(id -u):$(id -g)` works out of the box and

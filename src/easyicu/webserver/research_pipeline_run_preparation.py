@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
@@ -30,13 +30,21 @@ from easyicu.webserver import (
     provider_adapter,
 )
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
+from easyicu.webserver.plan_change_request import PlanChangeRequest
+from easyicu.webserver.research_plan_revision import (
+    PreparedPlanRevision,
+    load_prepared_plan_revision,
+)
 from easyicu.webserver.research_launch_resume import (
     _development_progressive_resume_binding,
     _development_resume_acquisition_profile,
     _development_resume_literature_bundle,
+    _development_resume_launch_scope,
+    _DevelopmentResumeLaunchScope,
 )
 from easyicu.webserver.research_launch_runtime import (
     _require_execution_runtime,
+    _require_profile_dictionaries,
     _validated_pipeline_credential_source,
 )
 from easyicu.webserver.research_launch_scientific import (
@@ -79,6 +87,7 @@ class ResearchPipelineLaunchRequest:
     development_resume_source_job_id: str
     budget_mode: str
     runner_image: Optional[str]
+    plan_change_request: Optional[PlanChangeRequest] = None
 
 
 @dataclass(frozen=True)
@@ -133,6 +142,8 @@ class PreparedLaunchExecution:
     plan_revision_source_run_id: str
     execution_resume_source_run_id: str
     runner_image: str
+    plan_change_request: Optional[PlanChangeRequest] = None
+    development_resume_scope: Optional[_DevelopmentResumeLaunchScope] = None
 
 
 @dataclass(frozen=True)
@@ -142,6 +153,7 @@ class PreparedResearchPipelineRun:
     scientific: PreparedScientificLaunch
     authority: PreparedLaunchAuthority
     execution: PreparedLaunchExecution
+    prepared_plan_revision: Optional[PreparedPlanRevision] = None
 
 
 @dataclass(frozen=True)
@@ -239,6 +251,19 @@ def _prepare_scientific_launch(
         or None
     )
     planning_exposure_aggregation = _primary_exposure_aggregation(study)
+    if (
+        planning_exposure_aggregation is None
+        and planning_exposure_source == planning_coordinates.get("primary_exposure")
+    ):
+        # A question can name an exact operation without pre-populating an
+        # execution field. Carry it into the reviewable zero-row candidate,
+        # not into the persisted StudyContext or an unapproved execution.
+        planning_exposure_aggregation = planning_coordinates.get(
+            "primary_exposure_aggregation"
+        )
+    metadata_planning_coordinates["primary_exposure_aggregation"] = (
+        planning_exposure_aggregation
+    )
     metadata_operationalized_columns = (
         _metadata_planning_operationalized_columns(
             primary_exposure_source=planning_exposure_source,
@@ -281,12 +306,30 @@ def _prepare_scientific_launch(
                 database=database,
             )
         except dataio.ExportCohortError as exc:
+            forwarded = {
+                key: value for key, value in exc.detail.items() if key != "error"
+            }
+            # `ResearchRunSubmissionError` prefers this message over its own
+            # next-step table, so the intake reason has to appear here or the only
+            # remedy a reader ever sees is to retry. A package whose manifest
+            # predates the intake contract can never pass on retry: it needs a
+            # fresh extraction, and saying so is the difference between a user
+            # re-picking a healthy folder and fixing the actual stale artifact.
+            message = (
+                "The Research Agent requires a manifest-backed prepared data package."
+            )
+            intake_code = str(forwarded.get("intake_error_code") or "").strip()
+            if intake_code:
+                message = (
+                    f"{message} Intake rejected the bound package as "
+                    f"{intake_code}: {forwarded.get('intake_error_message') or ''} "
+                    "Retrying will fail identically; run easyicu_start_extraction "
+                    "to prepare a current export package from the source database."
+                )
             raise ResearchPipelineRunError(
                 str(exc.detail.get("error") or "research_pipeline_source_invalid"),
-                "The Research Agent requires a manifest-backed prepared data package.",
-                details={
-                    key: value for key, value in exc.detail.items() if key != "error"
-                },
+                message,
+                details=forwarded,
             ) from exc
         prepared_package_binding = dict(package_receipt["binding"])
 
@@ -368,6 +411,33 @@ def _prepare_launch_execution(
         or os.environ.get(_DEVELOPMENT_RESUME_JOB_ENV),
         80,
     )
+    if request.plan_change_request is not None and (
+        not scientific.metadata_only_planning
+        or selected_resume_source
+        or request.plan_revision_source_run_id
+        or request.execution_resume_source_run_id
+    ):
+        raise ResearchPipelineRunError(
+            "plan_changes_require_fresh_candidate",
+            "New plan amendments require fresh candidate planning, not analysis or checkpoint reuse.",
+        )
+    bound_change_request = request.plan_change_request
+    if (
+        bound_change_request is None and scientific.metadata_only_planning
+        and not selected_resume_source and not request.plan_revision_source_run_id
+        and not request.execution_resume_source_run_id
+    ):
+        from easyicu.webserver.plan_change_requirements import compiled_configuration_plan_change
+
+        bound_change_request = compiled_configuration_plan_change(
+            study=scientific.study, project_root=project_root,
+        )
+    if bound_change_request is not None:
+        from easyicu.webserver.plan_change_requirements import bind_plan_change_requirements
+
+        bound_change_request = bind_plan_change_requirements(
+            bound_change_request, study=scientific.study, project_root=project_root,
+        )
     if selected_resume_source:
         development_resume_binding = _development_progressive_resume_binding(
             project_root=project_root,
@@ -404,6 +474,18 @@ def _prepare_launch_execution(
         if development_resume_binding is not None
         else None
     )
+    development_resume_scope = (
+        _development_resume_launch_scope(
+            project_root=project_root, study=scientific.study,
+            source_job_id=selected_resume_source,
+        )
+        if development_resume_binding is not None else None
+    )
+    if development_resume_scope is not None and development_resume_scope.budget_mode != budget_mode:
+        raise ResearchPipelineRunError(
+            "research_pipeline_development_resume_scope_mismatch",
+            "The Planner continuation must retain its sealed launch scope.",
+        )
 
     capability_settings = capability_policy.capability_settings()
     publication_skill_flags = publication_skill_flags_from_settings(capability_settings)
@@ -442,9 +524,11 @@ def _prepare_launch_execution(
             "research_pipeline_runner_image_invalid",
             "The server-owned runner image must be one non-empty reference.",
         )
+    _require_profile_dictionaries(budget_mode=budget_mode)
     _require_execution_runtime(
         budget_mode=budget_mode,
         runner_image=selected_runner_image,
+        project_root=request.project_root,
     )
     if not scientific.metadata_only_planning and any(
         spec.strategy == "time_varying" for spec in scientific.sensitivity_specs
@@ -487,6 +571,8 @@ def _prepare_launch_execution(
                 160,
             ),
             runner_image=selected_runner_image,
+            plan_change_request=bound_change_request,
+            development_resume_scope=development_resume_scope,
         ),
     )
 
@@ -496,6 +582,22 @@ def prepare_research_pipeline_run(
 ) -> PreparedResearchPipelineRun:
     """Validate one launch request completely before runner side effects."""
 
+    revision = load_prepared_plan_revision(
+        study=request.study_context, project_root=request.project_root,
+        source_run_id=request.plan_revision_source_run_id,
+    )
+    if revision is not None:
+        if (
+            request.development_resume_source_job_id
+            or os.environ.get(_DEVELOPMENT_RESUME_JOB_ENV)
+            or request.execution_resume_source_run_id
+            or request.plan_change_request is not None
+        ):
+            raise ResearchPipelineRunError(
+                "prepared_plan_revision_resume_conflict",
+                "A fresh scientific repair cannot also resume an old plan or execution.",
+            )
+        request = replace(request, budget_mode=revision.budget_mode)
     scientific = _prepare_scientific_launch(request)
     provider_authorization = _authorize_launch_provider(request)
     authority, execution = _prepare_launch_execution(
@@ -507,4 +609,5 @@ def prepare_research_pipeline_run(
         scientific=scientific,
         authority=authority,
         execution=execution,
+        prepared_plan_revision=revision,
     )

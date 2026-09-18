@@ -1,3 +1,4 @@
+/* Owner: Cross-DB raw-run widget. */
 /* Cross-DB raw-run owner: explicit quick/full feature scope and bounded request. */
 (function () {
   'use strict';

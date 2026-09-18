@@ -25,7 +25,6 @@ plain plan/JSON call, so there is no per-model integration.
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
@@ -37,6 +36,7 @@ from .catalog import (
     build_available_catalog,
 )
 from .patient_grouping import PatientGroupingBinding
+from ..canonical_json import extract_json_object as _extract_json_object
 from ..providers.protocol import LLMClient, LLMMessage
 from ..providers.factory import authorized_complete
 from ..contracts.endpoint import EndpointSpec
@@ -71,23 +71,13 @@ _CONCEPT_SELECTION_AUTHORITIES = frozenset({"agent_selectable", "host_exact"})
 
 
 def _extract_json(raw: str) -> Optional[dict]:
-    """Tolerant JSON extraction (fenced block or first {...} object)."""
-    text = (raw or "").strip()
-    if "```" in text:
-        # strip a ```json ... ``` fence
-        text = re.sub(r"^```[a-zA-Z0-9]*\n?", "", text)
-        text = re.sub(r"\n?```$", "", text.strip())
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except json.JSONDecodeError:
-            return None
-    return None
+    """Tolerant JSON extraction (fenced block or first {...} object).
+
+    Thin wrapper over :func:`..canonical_json.extract_json_object` — the
+    canonical owner of fence-stripping/balanced-scan semantics.  Kept under
+    the local name so existing callers and tests keep working.
+    """
+    return _extract_json_object(raw)
 
 
 def _canonicalize_catalog_selection(
@@ -158,6 +148,7 @@ class DataFoundationAgent:
         question: str,
         catalog: AvailableCatalog,
         target_outcome: Optional[str] = None,
+        planning_context: str = "",
     ) -> ConceptSelection:
         user = (
             f"RESEARCH QUESTION:\n{question}\n\n"
@@ -166,6 +157,8 @@ class DataFoundationAgent:
                 if target_outcome
                 else ""
             )
+            + (f"PLAN REVISION CONTEXT (not execution authority):\n{planning_context}\n\n"
+               if planning_context else "")
             + catalog.render_for_prompt()
             + '\n\nReturn JSON: {"selected_concepts": [concept_id, ...], '
             '"inclusion_exclusion": ["plain-text criterion", ...], '
@@ -376,6 +369,7 @@ def acquire_universe_for_question(
                 for concept in catalog.concepts
                 if Path(concept.file_name).stem.lower() in normalized_modules
             ],
+            enrichment_degraded=catalog.enrichment_degraded,
         )
     if concept_selection_authority not in _CONCEPT_SELECTION_AUTHORITIES:
         raise ValueError(

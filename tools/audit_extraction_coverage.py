@@ -45,7 +45,16 @@ from easyicu.scores.comorbidity import _NO_ICD_DATABASES  # noqa: E402
 from easyicu.scores.microbiology import _NO_MICRO_DATABASES  # noqa: E402
 from easyicu.scores.outcomes import _FOLLOWUP_DATABASES  # noqa: E402
 
-DEFAULT_ROOT = "/Volumes/外置硬盘/easyicu_data/phd_thesis_module_reextract/full6_20260717"
+# E-P2-5: honor EASYICU_DB_ROOT for the extraction root; the historical
+# /Volumes path is only the fallback.  A missing root fails closed in
+# audit() with a clear message instead of silently auditing nothing.
+DEFAULT_ROOT = os.environ.get(
+    "EASYICU_EXTRACT_ROOT",
+    os.environ.get(
+        "EASYICU_DB_ROOT",
+        "/Volumes/外置硬盘/easyicu_data/phd_thesis_module_reextract/full6_20260717",
+    ),
+)
 
 # special 组 -> (所在模块, 组内概念, 合法缺失库集合)
 # 合法缺失库来自各 loader 的排除常量(import 而非硬编, 自动跟随 loader 变更)。

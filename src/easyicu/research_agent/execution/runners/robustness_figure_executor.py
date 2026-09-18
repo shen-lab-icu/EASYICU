@@ -97,6 +97,7 @@ from .deterministic_robustness import (
 from ...figures.robustness import assess_robustness_effect_comparability
 from .effect_scale import describe_effect_scale
 from .figure_input_capability import TypedInputCapability
+from ._shared import figure_product as _figure_product, method_head as _method_head
 
 __all__ = [
     "ROBUSTNESS_FIGURE_INPUT",
@@ -120,21 +121,6 @@ _READ_COLUMNS = (
     "axis",
     "converged",
 )
-
-
-def _method_head(value: Any) -> str:
-    return str(value or "").strip().lower().split(" with ", 1)[0]
-
-
-def _figure_product(value: Any) -> str | None:
-    kind, separator, product = str(value or "").strip().partition(":")
-    if (
-        kind != "figure"
-        or not separator
-        or not re.fullmatch(r"[a-z][a-z0-9_]*", product)
-    ):
-        return None
-    return product
 
 
 #: Statistics and companion tables the recorded steps bind alongside the
@@ -328,6 +314,7 @@ def robustness_figure_executor_code(step: AnalysisStep) -> str:
     )
     if product is None:
         raise ValueError("The step is not owned by the robustness renderer")
+    chart_type = step.figure_panels[0].chart_type if step.figure_panels else "specification_grid"
     return textwrap.dedent(
         f"""
         import os
@@ -343,6 +330,7 @@ def robustness_figure_executor_code(step: AnalysisStep) -> str:
             resolved_inputs=Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"]),
             step_id={step.step_id!r},
             figure_product={product!r},
+            chart_type={chart_type!r},
         )
         """
     ).strip()
@@ -675,15 +663,25 @@ def _validated_rows(frame: pd.DataFrame) -> tuple[pd.DataFrame, str, bool]:
     rows["__low"] = [_finite(value) for value in rows["ci_low"]]
     rows["__high"] = [_finite(value) for value in rows["ci_high"]]
     rows["__drawable"] = [
-        estimate is not None and low is not None and high is not None and low <= high
-        for estimate, low, high in zip(
-            rows["__estimate"], rows["__low"], rows["__high"]
+        str(converged).lower() == "true" and estimate is not None and low is not None and high is not None and low <= estimate <= high
+        for estimate, low, high, converged in zip(
+            rows["__estimate"], rows["__low"], rows["__high"], rows["converged"]
         )
     ]
-    if not rows["__drawable"].any():
-        raise ValueError("no robustness specification carries a drawable interval")
     labels = [str(value).strip() for value in rows["spec_id"].tolist()]
-    if any(not label for label in labels) or len(set(labels)) != len(labels):
+    if any(not label for label in labels):
+        raise ValueError("robustness specifications must carry unique non-empty ids")
+    contrasts = (
+        [str(value).strip() for value in rows["contrast_id"].tolist()]
+        if "contrast_id" in rows
+        else [""] * len(rows)
+    )
+    repeated_specs = {label for label in labels if labels.count(label) > 1}
+    row_identities = list(zip(labels, contrasts, strict=True))
+    if any(
+        label in repeated_specs and not contrast
+        for label, contrast in row_identities
+    ) or len(set(row_identities)) != len(row_identities):
         raise ValueError("robustness specifications must carry unique non-empty ids")
     rows["__label"] = labels
     return rows, effect_scale, bool((~rows["__drawable"]).any())
@@ -721,6 +719,183 @@ def _reader_label(value: str) -> str:
     return str(value).replace("_", " ").strip()
 
 
+def _declared_label(row, key, fallback):
+    value = str(row.get(key, "")).strip()
+    return value if value and value.lower() not in {"nan", "none"} else fallback
+
+
+# The one panel this renderer owns. The contract panel title and the reader
+# legend lead from the same token, so the legend can never describe a panel
+# the figure stopped drawing.
+ROBUSTNESS_PANEL_TITLE = "Locked specification grid"
+
+
+def _plain_legend(parts: Sequence[str]) -> str:
+    """Collapse a legend into the single plain line a contract may carry.
+
+    ``FigureContract.reader_caption`` rejects control characters, and a
+    specification label or comparability message can legitimately carry a
+    newline, so joining here is the renderer's obligation, not the reader's.
+    """
+
+    return " ".join(" ".join(str(part).split()) for part in parts if str(part or "").strip())
+
+
+def _declared_identity_present(rows: pd.DataFrame) -> bool:
+    """Whether any drawn row really shows its contrast and effect unit.
+
+    ``_draw_specification_table`` prints that pair only when both halves are
+    declared, so the legend may claim it only when the table can show it.
+    """
+
+    for _, row in rows.iterrows():
+        contrast = _declared_label(
+            row, "contrast_label", _declared_label(row, "contrast_id", "")
+        )
+        unit = _declared_label(row, "effect_unit", "")
+        if contrast and unit:
+            return True
+    return False
+
+
+def _reader_legend(
+    *,
+    panel_title: str,
+    chart_type: str,
+    effect_scale: str,
+    declared_identity: bool,
+    specification_count: int,
+    multiplicative_axis: bool,
+    null_value_shown: bool,
+    anchor_line_shown: bool,
+    has_nonestimable_row: bool,
+    narrow_rows: Sequence[str],
+    axis_authorized: bool,
+    complete_case_n: Any,
+) -> str:
+    """State the reader-facing legend from what this renderer actually drew.
+
+    Every sentence names an element the code above either drew or deliberately
+    skipped, so nothing here is inferred from the image. The manuscript figure
+    projection refuses to invent a legend for a contract that lacks one, which
+    is what made an absent legend a delivery blocker rather than a cosmetic
+    gap: measured 2026-09-12, a run that completed all 13 steps and passed
+    numeric verification was still held at ``evidence_complete=false`` by this
+    renderer's silence.
+    """
+
+    parts: list[str] = [f"{panel_title}."]
+    if chart_type == "specification_grid":
+        parts.append(
+            "One row per prespecified analysis, giving its point estimate and "
+            f"interval in {_reader_label(effect_scale)} units"
+            + (
+                " together with the declared contrast and effect unit each row "
+                "was estimated on."
+                if declared_identity
+                else "; a row whose contrast or effect unit was not declared "
+                "says so on its own line."
+            )
+        )
+        parts.append(
+            "A specification table is drawn instead of a shared axis."
+            if axis_authorized
+            else "A specification table is drawn instead of a shared axis, "
+            "because these rows were not authorized as directly comparable; "
+            "no cross-row contrast is implied."
+        )
+    else:
+        parts.append(
+            "One row per prespecified analysis, plotted as a point estimate with "
+            "its confidence interval on a shared "
+            f"{_reader_label(effect_scale)} axis."
+        )
+        if multiplicative_axis:
+            parts.append(
+                "The effect axis is logarithmic, so equal distances are equal ratios."
+            )
+        if null_value_shown:
+            parts.append(
+                "The dashed vertical line marks the null value of that scale."
+            )
+        if anchor_line_shown:
+            parts.append(
+                "The solid vertical line labelled 'primary estimate' is the bound "
+                "primary result, reproduced from its registered statistic."
+            )
+    if has_nonestimable_row:
+        parts.append(
+            "A row labelled 'Not estimable' records a specification whose refit "
+            "did not yield an estimate; it is named rather than dropped."
+        )
+    if narrow_rows:
+        parts.append(
+            "An interval too narrow to resolve against this axis is printed "
+            "beside its marker: " + ", ".join(_reader_label(name) for name in narrow_rows) + "."
+        )
+    if complete_case_n is not None:
+        try:
+            parts.append(
+                f"The complete-case analysis denominator is n={int(complete_case_n):,}."
+            )
+        except (TypeError, ValueError):
+            pass
+    parts.append(
+        f"All {int(specification_count)} locked specifications are drawn, and "
+        "every value is reproduced from the bound robustness matrix without "
+        "recomputation."
+    )
+    return _plain_legend(parts)
+
+
+def _draw_specification_table(ax, rows, effect_scale, anchor_bound, anchor_value):
+    """Show each source estimate without implying a common contrast or axis."""
+    records = []
+    for _, row in rows.iterrows():
+        estimate = (_interval_text(row["__estimate"], row["__low"], row["__high"])
+                    if row["__drawable"] else "Not estimable")
+        identity = [
+            _declared_label(row, "contrast_label", _declared_label(row, "contrast_id", "")),
+            _declared_label(row, "effect_unit", ""),
+        ]
+        identity = [value for value in identity if value and value.lower() != "nan"]
+        basis = "; ".join(identity) if len(identity) == 2 else "Contrast / unit not declared"
+        if str(row.get("independent_variant", "")).lower() == "false":
+            basis += "; not an independent variant"
+        label = _declared_label(row, "spec_label", row["__label"])
+        records.append((textwrap.fill(_reader_label(label), 28), estimate,
+                        textwrap.fill(_reader_label(basis), 34)))
+    line_counts = [max(value.count("\n") + 1 for value in record) for record in records]
+    total = 1.8 + sum(lines + 0.6 for lines in line_counts) + (1.5 if anchor_bound else 0)
+    ax.figure.set_figheight(max(58, total * 4.5 + 12) / 25.4)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(total, 0)
+    ax.axis("off")
+    columns = (0.01, 0.36, 0.69)
+    for x, label in zip(columns, ("Specification", f"{effect_scale} estimate [CI]", "Interpretation")):
+        ax.text(x, 0, label, va="top", fontsize=7.5, fontweight="bold")
+    y = 1.4
+    for record, lines in zip(records, line_counts):
+        ax.axhline(y - 0.2, color="#d8dde3", linewidth=0.5)
+        for x, value in zip(columns, record):
+            ax.text(x, y, value, va="top", fontsize=7, linespacing=1.25)
+        y += lines + 0.6
+    if anchor_bound:
+        value = f"{anchor_value:.6g}" if anchor_value is not None else "not reported"
+        # Do not add a detached scalar when its exact value is already shown
+        # by the primary row with the producer's declared contrast.
+        primary = rows.loc[rows["axis"].eq("primary")] if "axis" in rows else rows.iloc[0:0]
+        already_shown = (
+            len(primary) == 1
+            and bool(primary.iloc[0]["__drawable"])
+            and primary.iloc[0]["__estimate"] == anchor_value
+            and bool(_declared_label(primary.iloc[0], "contrast_label", ""))
+        )
+        if not already_shown:
+            ax.text(columns[0], y, f"Primary estimate: {value} (contrast not declared)",
+                    va="top", fontsize=7)
+
+
 def run_robustness_figure(
     *,
     out_dir: Path,
@@ -728,11 +903,14 @@ def run_robustness_figure(
     resolved_inputs: Path | Mapping[str, Any],
     step_id: str,
     figure_product: str,
+    chart_type: str = "specification_grid",
 ) -> Mapping[str, Any]:
     """Render the locked specification grid and write its figure contract."""
 
     if not re.fullmatch(r"[a-z][a-z0-9_]*", figure_product or ""):
         raise ValueError("figure product must be one canonical lowercase token")
+    if chart_type not in {"specification_grid", "sensitivity_forest"}:
+        raise ValueError("unsupported robustness chart grammar")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     frame, binding, bound_inputs = _load_matrix(
@@ -741,22 +919,12 @@ def run_robustness_figure(
         step_id=step_id,
     )
     rows, effect_scale, has_gap = _validated_rows(frame)
-    # A SHARED SCALE IS NOT A SHARED QUESTION.
-    #
-    # This renderer authorizes its common axis from `effect_scale` alone, and
-    # the planning owner already says why that is not enough: a per-unit OR, a
-    # high-vs-reference OR, and a duplicated complete-case documentation row
-    # all carry "OR" while answering different questions
-    # (figures/robustness.py::assess_robustness_effect_comparability). The
-    # publication renderer consults that owner and drops to a coverage matrix
-    # when it refuses; this standalone figure did not consult it at all.
-    #
-    # It is consulted here rather than enforced: the producer does not yet emit
-    # the identity columns the assessment needs, so a hard gate would refuse
-    # every grid the corpus contains. What it can do is stop the figure from
-    # asserting comparability silently -- the verdict travels with the figure,
-    # in its own note and in the panel metadata a reviewer reads.
     comparability = assess_robustness_effect_comparability(frame)
+    if chart_type == "sensitivity_forest" and not comparability.authorized:
+        raise ValueError("common robustness effect axis is not authorized: " + comparability.message)
+    scale_contract = describe_effect_scale(effect_scale)
+    if chart_type == "sensitivity_forest" and scale_contract.multiplicative and (rows["__low"] <= 0).any():
+        raise ValueError("ratio confidence intervals must be positive for a logarithmic effect axis")
     primary_effect_bound, primary_effect_value = _load_statistic(
         run_dir=Path(run_dir),
         inputs=bound_inputs,
@@ -831,103 +999,116 @@ def run_robustness_figure(
     import matplotlib.pyplot as plt
 
     palette = apply_publication_style(font_size=7.0)
-    height_mm = max(58.0, 16.0 + 7.4 * len(rows))
-    fig, ax = plt.subplots(figsize=(120 / 25.4, height_mm / 25.4))
+    height_mm = max(40.0, 16.0 + 7.4 * len(rows))
+    fig, ax = plt.subplots(figsize=((180 if chart_type == "specification_grid" else 120) / 25.4, height_mm / 25.4))
 
-    positions = list(range(len(rows)))
     drawn = [index for index, ok in enumerate(rows["__drawable"]) if ok]
-    estimates = [rows["__estimate"].iloc[i] for i in drawn]
-    lows = [rows["__low"].iloc[i] for i in drawn]
-    highs = [rows["__high"].iloc[i] for i in drawn]
-    ax.errorbar(
-        estimates,
-        drawn,
-        xerr=[
-            [estimate - low for estimate, low in zip(estimates, lows)],
-            [high - estimate for estimate, high in zip(estimates, highs)],
-        ],
-        fmt="o",
-        color=palette["blue"],
-        ecolor=palette["neutral"],
-        elinewidth=1.0,
-        capsize=2.0,
-        markersize=4.2,
-    )
-    null_value = describe_effect_scale(effect_scale).null_value
-    if null_value is not None:
-        ax.axvline(
-            null_value,
-            color=palette["neutral"],
-            linewidth=0.8,
-            linestyle="--",
-            zorder=0,
-        )
-    # The anchor the specifications are compared against. Drawn whenever the
-    # plan bound it, because binding it is what asks for it to be shown.
-    if anchor_value is not None:
-        ax.axvline(
-            anchor_value,
-            color=palette["blue"],
-            linewidth=1.0,
-            zorder=0,
-            label="primary estimate",
-        )
-        # Sensitivity rows and their intervals occupy the lower/right region;
-        # keep the anchor key in the otherwise empty upper-left quadrant so it
-        # cannot obscure a result marker or confidence interval.
-        ax.legend(loc="upper left", frameon=False, fontsize=6.1)
-    ax.set_yticks(positions)
-    ax.set_yticklabels([_reader_label(label) for label in rows["__label"]])
-    ax.invert_yaxis()
-    ax.set_xlabel(_reader_label(effect_scale))
-    ax.grid(axis="x", color=palette["neutral_light"], linewidth=0.55)
-    for index, ok in enumerate(rows["__drawable"]):
-        if ok:
-            continue
-        # Named, not dropped.
-        ax.text(
-            0.5,
-            index,
-            "not estimable",
-            transform=ax.get_yaxis_transform(),
-            va="center",
-            ha="center",
-            fontsize=6.1,
-            color=palette["neutral"],
-        )
-    # A REAL INTERVAL THAT CANNOT BE SEEN READS AS NO INTERVAL.
-    #
-    # The grid puts every specification on one axis, so its span is set by the
-    # widest contrast. A specification whose interval is orders of magnitude
-    # tighter then renders inside its own marker: a recorded run drew
-    # OR 0.9999976 [0.9999782, 1.0000170] beside contrasts spanning 1.60-1.72,
-    # and the reader saw a bare point. Left alone that says "this variant has
-    # no interval", which is the opposite of what the matrix recorded. So the
-    # values are printed for exactly those rows -- the figure keeps its shape
-    # and stops asserting a precision claim it did not measure.
-    x_low, x_high = ax.get_xlim()
-    axis_span = abs(x_high - x_low)
     narrow_rows: list[str] = []
-    if axis_span > 0:
-        for index, drawable in enumerate(rows["__drawable"]):
-            if not drawable:
+    null_value = None
+    if chart_type == "specification_grid":
+        _draw_specification_table(ax, rows, effect_scale, anchor_bound, anchor_value)
+    else:
+        positions = list(range(len(rows)))
+        drawn = [index for index, ok in enumerate(rows["__drawable"]) if ok]
+        estimates = [rows["__estimate"].iloc[i] for i in drawn]
+        lows = [rows["__low"].iloc[i] for i in drawn]
+        highs = [rows["__high"].iloc[i] for i in drawn]
+        ax.errorbar(
+            estimates,
+            drawn,
+            xerr=[
+                [estimate - low for estimate, low in zip(estimates, lows)],
+                [high - estimate for estimate, high in zip(estimates, highs)],
+            ],
+            fmt="o",
+            color=palette["blue"],
+            ecolor=palette["neutral"],
+            elinewidth=1.0,
+            capsize=2.0,
+            markersize=4.2,
+        )
+        null_value = scale_contract.null_value
+        if scale_contract.multiplicative:
+            ax.set_xscale("log")
+            from matplotlib.ticker import FuncFormatter, MaxNLocator, NullLocator
+            ax.xaxis.set_major_locator(MaxNLocator(nbins=4, min_n_ticks=3))
+            ax.xaxis.set_major_formatter(FuncFormatter(lambda value, _pos: f"{value:g}"))
+            ax.xaxis.set_minor_locator(NullLocator())
+        if null_value is not None:
+            ax.axvline(
+                null_value,
+                color=palette["neutral"],
+                linewidth=0.8,
+                linestyle="--",
+                zorder=0,
+            )
+        # The anchor the specifications are compared against. Drawn whenever the
+        # plan bound it, because binding it is what asks for it to be shown.
+        if anchor_value is not None:
+            ax.axvline(
+                anchor_value,
+                color=palette["blue"],
+                linewidth=1.0,
+                zorder=0,
+                label="primary estimate",
+            )
+            # Sensitivity rows and their intervals occupy the lower/right region;
+            # keep the anchor key in the otherwise empty upper-left quadrant so it
+            # cannot obscure a result marker or confidence interval.
+            fig.legend(loc="upper left", bbox_to_anchor=(0.42, 1), frameon=False, fontsize=6.1)
+        ax.set_yticks(positions)
+        ax.set_yticklabels([_reader_label(label) for label in rows["__label"]])
+        ax.invert_yaxis()
+        ax.set_xlabel(_reader_label(effect_scale))
+        ax.grid(axis="x", color=palette["neutral_light"], linewidth=0.55)
+        for index, ok in enumerate(rows["__drawable"]):
+            if ok:
                 continue
-            low = rows["__low"].iloc[index]
-            high = rows["__high"].iloc[index]
-            if (high - low) / axis_span >= 0.02:
-                continue
-            estimate = rows["__estimate"].iloc[index]
-            narrow_rows.append(str(rows["__label"].iloc[index]))
-            ax.annotate(
-                _interval_text(estimate, low, high),
-                xy=(estimate, index),
-                xytext=(6, 0),
-                textcoords="offset points",
+            # Named, not dropped.
+            ax.text(
+                0.5,
+                index,
+                "not estimable",
+                transform=ax.get_yaxis_transform(),
                 va="center",
-                ha="left",
-                fontsize=5.8,
+                ha="center",
+                fontsize=6.1,
                 color=palette["neutral"],
             )
+        # A REAL INTERVAL THAT CANNOT BE SEEN READS AS NO INTERVAL.
+        #
+        # The grid puts every specification on one axis, so its span is set by the
+        # widest contrast. A specification whose interval is orders of magnitude
+        # tighter then renders inside its own marker: a recorded run drew
+        # OR 0.9999976 [0.9999782, 1.0000170] beside contrasts spanning 1.60-1.72,
+        # and the reader saw a bare point. Left alone that says "this variant has
+        # no interval", which is the opposite of what the matrix recorded. So the
+        # values are printed for exactly those rows -- the figure keeps its shape
+        # and stops asserting a precision claim it did not measure.
+        x_low, x_high = ax.get_xlim()
+        transform = math.log if scale_contract.multiplicative else float
+        axis_span = abs(transform(x_high) - transform(x_low))
+        narrow_rows: list[str] = []
+        if axis_span > 0:
+            for index, drawable in enumerate(rows["__drawable"]):
+                if not drawable:
+                    continue
+                low = rows["__low"].iloc[index]
+                high = rows["__high"].iloc[index]
+                if (transform(high) - transform(low)) / axis_span >= 0.02:
+                    continue
+                estimate = rows["__estimate"].iloc[index]
+                narrow_rows.append(str(rows["__label"].iloc[index]))
+                ax.annotate(
+                    _interval_text(estimate, low, high),
+                    xy=(estimate, index),
+                    xytext=(6, 0),
+                    textcoords="offset points",
+                    va="center",
+                    ha="left",
+                    fontsize=5.8,
+                    color=palette["neutral"],
+                )
     if complete_case_bound:
         ax.set_title(
             "Complete-case n: "
@@ -940,32 +1121,34 @@ def run_robustness_figure(
             pad=4,
             fontsize=6.4,
         )
-    fig.subplots_adjust(left=0.42, right=0.97, bottom=0.14, top=0.92)
+    fig.subplots_adjust(left=0.02 if chart_type == "specification_grid" else 0.42, right=0.98,
+                        bottom=0.08 if chart_type == "specification_grid" else 0.22,
+                        top=0.82 if chart_type == "sensitivity_forest" and anchor_bound else 0.9)
 
     contract = make_figure_contract(
         figure_id=figure_product,
-        title=f"Robustness of the primary estimate ({_reader_label(effect_scale)})",
+        title=f"Prespecified analysis results ({_reader_label(effect_scale)})",
         # Stated, not inferred: the claim a robustness figure makes is about
         # agreement across the locked grid, never about the effect itself.
         core_claim=(
-            "Whether the registered effect estimate holds across every "
-            "pre-specified analytic variant."
+            "Estimates, uncertainty and estimability for each prespecified analysis; "
+            "direct effect comparison requires a verified common estimand."
         ),
         panels=[
             {
                 "panel_id": panel_template.panel_id,
-                "title": "Locked specification grid",
+                "title": ROBUSTNESS_PANEL_TITLE,
                 "role": "robustness",
                 "claim": (
                     "One row per locked robustness specification, showing its "
                     "point estimate and confidence interval on the declared "
-                    "effect scale. Specifications whose refit did not converge "
+                    "effect scale, in a specification table unless a common axis is authorized. Specifications whose refit did not converge "
                     "are labelled rather than omitted."
                 ),
                 "evidence_ids": list(source_data_names),
                 "metadata": {
                     "article_role": panel_template.article_role,
-                    "chart_type": panel_template.chart_type,
+                    "chart_type": chart_type,
                     "source_products": list(panel_template.source_products),
                     "source_data": list(source_data_names),
                     "effect_axis_comparability_authorized": bool(
@@ -980,6 +1163,22 @@ def run_robustness_figure(
             }
         ],
         source_data=list(source_data_names),
+        reader_caption=_reader_legend(
+            panel_title=ROBUSTNESS_PANEL_TITLE,
+            chart_type=chart_type,
+            effect_scale=effect_scale,
+            declared_identity=_declared_identity_present(rows),
+            specification_count=len(rows),
+            multiplicative_axis=bool(scale_contract.multiplicative),
+            null_value_shown=null_value is not None,
+            anchor_line_shown=(
+                chart_type == "sensitivity_forest" and anchor_value is not None
+            ),
+            has_nonestimable_row=has_gap,
+            narrow_rows=narrow_rows,
+            axis_authorized=bool(comparability.authorized),
+            complete_case_n=complete_case_n,
+        ),
         statistics_note=[
             (
                 "Estimates and intervals are reproduced from the bound "
@@ -992,9 +1191,8 @@ def run_robustness_figure(
                 ()
                 if comparability.authorized
                 else (
-                    "Specifications share an effect scale but not a verified "
-                    "common estimand, contrast, and unit, so their positions on "
-                    "this axis are not authorized as directly comparable. "
+                    "These specifications are not authorized as directly comparable; "
+                    "a table preserves their results without a common effect axis. "
                     + str(comparability.message),
                 )
             ),
@@ -1051,7 +1249,8 @@ def run_robustness_figure(
         # repair is here: a boolean about the drawing is not an estimate, and
         # should not be spelled as one.
         "anchor_input_bound": bool(anchor_bound),
-        "anchor_line_drawn": anchor_value is not None,
+        "anchor_line_drawn": chart_type == "sensitivity_forest" and anchor_value is not None,
+        "chart_type": chart_type,
         "complete_case_n_bound": bool(complete_case_bound),
         "complete_case_n": complete_case_n,
         "source_data_files": list(source_data_names),

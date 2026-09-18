@@ -30,8 +30,10 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...schema import AnalysisStep
+from .cohort_flow_figure_executor import render_cohort_flow_axis
 from .figure_input_capability import TypedInputCapability
 from .typed_input_binding import BoundTypedInput, load_typed_input, sha256_file
+from ._shared import figure_product as _figure_product, method_head as _method_head
 
 COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS = (
     "table:cohort_flow",
@@ -189,21 +191,6 @@ _COMPOSITE_DESCRIPTIVE_FIGURE_CAPABILITIES = tuple(
     TypedInputCapability(required=frozenset(profile))
     for profile in _COMPOSITE_DESCRIPTIVE_FIGURE_PROFILES
 )
-
-
-def _method_head(value: Any) -> str:
-    return str(value or "").strip().lower().split(" with ", 1)[0]
-
-
-def _figure_product(value: Any) -> str | None:
-    kind, separator, product = str(value or "").strip().partition(":")
-    if (
-        kind != "figure"
-        or not separator
-        or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", product)
-    ):
-        return None
-    return product
 
 
 def _binding_carries_required_columns(binding: Any, input_key: str) -> bool:
@@ -554,8 +541,6 @@ def run_composite_descriptive_figure(
     remaining = _integer_series(flow, "n_remaining")
     if (remaining < 0).any():
         raise ValueError("cohort-flow counts must be non-negative")
-    positions = np.arange(len(flow))
-    ax.barh(positions, remaining, color=palette["blue"])
     flow_labels = []
     for index, row in flow.iterrows():
         concept = row.get("concept_id")
@@ -566,9 +551,7 @@ def run_composite_descriptive_figure(
             flow_labels.append(_reader_label(predicate))
         else:
             flow_labels.append(f"Cohort step {index + 1}")
-    ax.set_yticks(positions, flow_labels)
-    ax.invert_yaxis()
-    ax.set_xlabel("ICU stays remaining")
+    render_cohort_flow_axis(ax, flow, flow_labels, compact=True)
     ax.set_title("Cohort accounting", loc="left", pad=12)
     add_panel_label(ax, "A", x=-0.12, y=1.04)
 
@@ -697,7 +680,7 @@ def run_composite_descriptive_figure(
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
-        height_mm=178.0,
+        height_mm=float(fig.get_figheight()) * 25.4,
         panels=[
             {
                 "panel_id": panel_id,

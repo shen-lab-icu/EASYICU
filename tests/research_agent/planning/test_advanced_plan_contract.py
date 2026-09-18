@@ -486,7 +486,11 @@ def test_advanced_plan_contract_preserves_article_level_robustness_suite(ra):
     assert findings[0].detail.get("missing_structured_owner") is True
 
 
-def test_advanced_plan_contract_does_not_duplicate_dedicated_robustness_renderer(ra):
+@pytest.mark.parametrize("companions", [
+    [], ["table:robustness_summary"],
+    ["statistic:primary_or", "statistic:complete_case_n"],
+])
+def test_advanced_plan_contract_does_not_duplicate_dedicated_robustness_renderer(ra, companions):
     from easyicu.research_agent.planning.advanced_plan_contract import _enforce_advanced_plan_contract
     from easyicu.research_agent.schema import (
         AnalysisPlan,
@@ -569,13 +573,14 @@ def test_advanced_plan_contract_does_not_duplicate_dedicated_robustness_renderer
                 planned_analysis_role="auxiliary",
                 intent="Render the verified robustness matrix.",
                 method="visualization",
-                inputs=["table:robustness_matrix"],
+                inputs=["table:robustness_matrix", *companions],
                 expected_outputs=["figure:robustness"],
                 input_consumption_contracts=[
                     {
-                        "input_key": "table:robustness_matrix",
+                        "input_key": source,
                         "mode": "all_rows",
-                    }
+                    } for source in ["table:robustness_matrix", *companions]
+                    if source.startswith("table:")
                 ],
             ),
         ],
@@ -605,6 +610,20 @@ def test_advanced_plan_contract_does_not_duplicate_dedicated_robustness_renderer
         if output.startswith("figure:")
     ]
     assert figure_outputs == ["figure:robustness"]
+
+    from easyicu.research_agent.contracts.figure_plan import ROBUSTNESS_FIGURE_KNOWN_INPUTS
+    from easyicu.research_agent.planning.figure_plan_shaping import dedicated_renderer_consumes_typed_source
+
+    renderer = plan.steps[-1]
+    for invalid in (
+        renderer.model_copy(update={"inputs": [*renderer.inputs, "table:unrelated"]}),
+        renderer.model_copy(update={"input_consumption_contracts": []}),
+        renderer.model_copy(update={"expected_outputs": ["figure:robustness", "table:extra"]}),
+    ):
+        assert not dedicated_renderer_consumes_typed_source(
+            [invalid], source="table:robustness_matrix",
+            compatible_companions=ROBUSTNESS_FIGURE_KNOWN_INPUTS - {"table:robustness_matrix"},
+        )
 
 
 def test_advanced_plan_contract_normalizes_bias_audit_steps(ra):

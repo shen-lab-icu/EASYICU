@@ -77,6 +77,26 @@ def _expected_display_labels(source: Path) -> tuple[str, ...]:
     return tuple(labels)
 
 
+def _reader_display_labels(source: Path) -> Mapping[str, str]:
+    """Load the run's authorized display vocabulary for semantic audits."""
+
+    path = source.parent / "analysis_plan.json"
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    labels = payload.get("display_labels")
+    if not isinstance(labels, dict):
+        return {}
+    return {
+        str(key): str(value)
+        for key, value in labels.items()
+        if str(key).strip() and str(value).strip()
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -113,6 +133,7 @@ def main() -> int:
         audit = audit_manuscript_quality(
             text,
             expected_display_labels=_expected_display_labels(source),
+            reader_display_labels=_reader_display_labels(source),
         )
         audit_path = output_dir / f"{label}_manuscript_quality_audit.json"
         reader_path = output_dir / f"{label}_manuscript_reader.md"

@@ -640,6 +640,77 @@ def test_landmark_materialization_uses_hospital_hours_not_icu_duration(source):
     assert row.source_materialization_variables == ()
 
 
+def test_hospital_status_keeps_rows_unknowns_and_parent_bytes(source):
+    from easyicu.hospital_mortality import HospitalMortalityStatus
+    from easyicu.research_agent.acquisition.hospital_outcome_materialization import materialize_hospital_status_acquisition
+    from easyicu.research_agent.intake.legacy_materialization import load_verified_legacy_materialization_provenance
+
+    acquisition, followup, _ = source
+    parent_sha = sha256_file(acquisition.universe_path)
+    parent_provenance_sha = sha256_file(acquisition.provenance_path)
+    status = followup.frame[["stay_id", "hospital_death"]].copy()
+    status["hospital_death"] = status.hospital_death.astype("boolean")
+    status.loc[0, "hospital_death"] = pd.NA
+    prepared = materialize_hospital_status_acquisition(
+        acquisition, status=HospitalMortalityStatus(status, {"clock_required": False}),
+        raw_source_receipt={"authority_ref": "test"},
+    )
+    frame = pd.read_parquet(prepared.universe_path)
+    assert len(frame) == 300
+    assert pd.isna(frame.death.iloc[0])
+    assert "death_time_hours" not in frame
+    assert sha256_file(acquisition.universe_path) == parent_sha
+    assert sha256_file(acquisition.provenance_path) == parent_provenance_sha
+    provenance = load_verified_legacy_materialization_provenance(prepared.universe_path, cohort=frame)
+    receipt = provenance["hospital_status_materialization"]
+    assert receipt["source_cohort_sha256"] == parent_sha
+    assert receipt["excluded_stays"] == 0
+    assert receipt["unknown_status_stays"] == 1
+    with pytest.raises(ValueError, match="artifact_exists"):
+        materialize_hospital_status_acquisition(
+            acquisition, status=HospitalMortalityStatus(status, {}), raw_source_receipt={}
+        )
+
+
+def test_hospital_status_rejects_stale_parent_and_partial_coverage(source):
+    from easyicu.hospital_mortality import HospitalMortalityStatus
+    from easyicu.research_agent.acquisition.hospital_outcome_materialization import materialize_hospital_status_acquisition
+
+    acquisition, followup, _ = source
+    status = followup.frame[["stay_id", "hospital_death"]].iloc[1:]
+    with pytest.raises(ValueError, match="coverage_incomplete"):
+        materialize_hospital_status_acquisition(
+            acquisition, status=HospitalMortalityStatus(status, {}), raw_source_receipt={}
+        )
+    frame = pd.read_parquet(acquisition.universe_path)
+    frame["age"] = 77.0
+    frame.to_parquet(acquisition.universe_path, index=False)
+    with pytest.raises(ValueError, match="source_receipt_mismatch"):
+        materialize_hospital_status_acquisition(
+            acquisition, status=HospitalMortalityStatus(status, {}), raw_source_receipt={}
+        )
+
+
+def test_web_without_landmark_still_requires_source_bound_hospital_status(source, monkeypatch):
+    from types import SimpleNamespace
+    from easyicu.hospital_mortality import HospitalMortalityStatus
+    from easyicu.webserver import hospital_outcome_projection as owner
+    from easyicu.webserver.time_varying_runtime_projection import materialize_web_hospital_followup
+
+    acquisition, followup, _ = source
+    acquisition = replace(acquisition, materialized_columns=("stay_id", "death"))
+    monkeypatch.setattr(owner, "resolve_raw_mimic_iv_source_binding", lambda **_: None)
+    with pytest.raises(ValueError, match="Legacy hospital mortality"):
+        materialize_web_hospital_followup(acquisition, specs=[], export_path=acquisition.universe_path.parent, database="miiv")
+    monkeypatch.setattr(owner, "resolve_raw_mimic_iv_source_binding", lambda **_: SimpleNamespace(
+        materialize_hospital_mortality_status=lambda: HospitalMortalityStatus(followup.frame[["stay_id", "hospital_death"]], {}),
+        public_receipt=lambda: {"authority_ref": "test"},
+    ))
+    prepared = materialize_web_hospital_followup(acquisition, specs=[], export_path=acquisition.universe_path.parent, database="miiv")
+    assert prepared.universe_path.name == "hospital_status_cohort.parquet"
+    assert len(pd.read_parquet(prepared.universe_path)) == 300
+
+
 def test_landmark_followup_keeps_verified_patient_grouping_visible_to_planning(
     source,
 ):

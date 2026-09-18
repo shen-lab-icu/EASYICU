@@ -1,3 +1,4 @@
+/* Owner: Project Monitor run-history widget. */
 /* Project Monitor persisted-run projection owner.
    Keeps history shaping independent from the screen's mutable UI state. */
 (function () {

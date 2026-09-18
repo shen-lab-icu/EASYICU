@@ -26,7 +26,7 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def test_mice_fills_all_missing(ra):
+def test_legacy_imputer_fills_partially_missing_target(ra):
     import numpy as np
 
     rng = np.random.default_rng(42)

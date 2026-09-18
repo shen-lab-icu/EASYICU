@@ -862,3 +862,18 @@ def test_primary_digest_labels_source_context_and_projects_population_flow(
     assert '"n_stays": 94458' not in digest
     assert '"registered_population_flow"' in digest
     assert '"alive_and_under_observation_at_landmark": 74526' in digest
+
+
+def test_native_curve_does_not_promote_secondary_population_interval():
+    from easyicu.research_agent.reporting.writer_evidence import _preferred_writer_scalar
+    summary = {
+        "n_complete_case": 80,
+        "scientific_runtime_receipt": {
+            "schema_version": "easyicu.landmark_spline_runtime_receipt/4",
+            "variable_opportunity_sensitivity": {"ci_low": 1.3, "ci_high": 1.5, "n": 90},
+        },
+    }
+    assert _preferred_writer_scalar(summary, "ci_low") is None
+    assert _preferred_writer_scalar(summary, "ci_high") is None
+    assert _preferred_writer_scalar(summary, "n_complete_case") == 80
+    assert summary["scientific_runtime_receipt"]["variable_opportunity_sensitivity"]["n"] == 90

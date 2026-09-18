@@ -8,10 +8,12 @@ returned by that caller.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from threading import Event
 from typing import Any, Callable, Iterable, Literal, Mapping, Optional, Sequence
 
 from ..schema import AnalysisStep
+from ..authority.provider_hard_stop import ProviderHardStopError
 
 _SUCCESS_REPLAN_REQUEST_FIELDS = (
     "replan_requested",
@@ -75,6 +77,13 @@ class RunExecutionState:
     stop_on_failure: bool = False
     stop_failure_roles: frozenset[str] = frozenset()
     stop_reason: Optional[str] = None
+    # Steps that failed while the queue continued. Consumers of their declared
+    # outputs are skipped by the caller's dependency gate, not by suppressing
+    # the whole remaining queue.
+    failed_step_ids: list[str] = field(default_factory=list)
+    # Caller-requested stop point. A failed step at this coordinate still stops
+    # the queue, because the request is a scheduling command, not a replan.
+    stop_after_step_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -127,6 +136,9 @@ class RunCoordinator:
         on_step_exception: Optional[Callable[[AnalysisStep, BaseException], None]] = (
             None
         ),
+        resolve_run_halt: Optional[
+            Callable[[AnalysisStep, Any], Optional[RunTransition]]
+        ] = None,
     ) -> RunExecutionState:
         while state.remaining_steps:
             step = state.remaining_steps.pop(0)
@@ -154,10 +166,20 @@ class RunCoordinator:
                 state.stop_reason = f"step_raised:{step.step_id}:{type(error).__name__}"
                 if on_step_exception is not None:
                     on_step_exception(step, error)
-                if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                if isinstance(error, (KeyboardInterrupt, SystemExit, ProviderHardStopError)):
                     raise
                 break
             state.executed_step_ids.add(step.step_id)
+            # The caller's run-level halt check (input-authority corruption,
+            # requested stop, pending replan review) is host policy, not a
+            # replan decision. It runs after every executed step -- including
+            # a failed auxiliary one -- so a corrupt input authority can never
+            # be skipped by a branch that keeps the independent tail.
+            if resolve_run_halt is not None:
+                halt = resolve_run_halt(step, record)
+                if halt is not None and halt.kind in {"stop", "pause"}:
+                    state.stop_reason = halt.reason
+                    break
             record_failed = isinstance(record, dict) and (
                 str(record.get("status") or "").strip().lower() != "ok"
             )
@@ -166,14 +188,43 @@ class RunCoordinator:
                 if isinstance(record, dict)
                 else ""
             )
-            if record_failed and (
-                state.stop_on_failure or record_role in state.stop_failure_roles
-            ):
+            if record_failed and record_role in state.stop_failure_roles:
+                # A declared required role owns the reported result; its failure
+                # ends the queue here. The caller still seals the manifest.
                 record["remaining_steps_suppressed"] = True
                 state.stop_reason = "required_step_failed:" + (
                     str(record.get("status") or "").strip().lower() or "missing"
                 )
                 break
+            if record_failed and state.stop_on_failure:
+                # A submission-profile run must not let one auxiliary failure
+                # swallow the independent tail. The caller's execution-time
+                # dependency gate (figure-parent and typed ``kind:product``
+                # edges) marks real consumers as ``skipped_dependency_failed``;
+                # everything else keeps its slot in the denominator. The failed
+                # step is not a replan anchor, so the replan-producing
+                # transition callback is never invited for it.
+                if state.stop_after_step_id == step.step_id:
+                    state.stop_reason = "requested_stop_after_step"
+                    break
+                if resolve_run_halt is None:
+                    # Compatibility for callers that only wired the full
+                    # transition callback: ask it once, but honour only a
+                    # run-level halt. A replan/continue answer is discarded;
+                    # this step is still a failed auxiliary step.
+                    maybe_halt = resolve_transition(
+                        step,
+                        record,
+                        bool(state.remaining_steps),
+                    )
+                    if (
+                        maybe_halt is not None
+                        and maybe_halt.kind in {"stop", "pause"}
+                    ):
+                        state.stop_reason = maybe_halt.reason
+                        break
+                state.failed_step_ids.append(step.step_id)
+                continue
             transition = resolve_transition(
                 step,
                 record,
@@ -200,18 +251,38 @@ class RunCoordinator:
         max_workers: int,
         execute_step: Callable[[AnalysisStep], Any],
         submit_step: Callable[[Any, Callable[..., Any], AnalysisStep], Any],
-        on_worker_error: Callable[[BaseException], None],
+        on_worker_error: Callable[[AnalysisStep, BaseException], None],
     ) -> None:
         step_list = list(steps)
+        hard_stopped = Event()
+
+        def guarded_execute(step: AnalysisStep) -> Any:
+            if hard_stopped.is_set():
+                return None
+            try:
+                return execute_step(step)
+            except ProviderHardStopError:
+                hard_stopped.set()
+                raise
+
+        stop_error: Optional[ProviderHardStopError] = None
         with ThreadPoolExecutor(
             max_workers=min(int(max_workers), len(step_list)),
             thread_name_prefix="ra_step",
         ) as executor:
-            futures = [submit_step(executor, execute_step, step) for step in step_list]
+            futures = {submit_step(executor, guarded_execute, step): step for step in step_list}
             for future in as_completed(futures):
+                if future.cancelled():
+                    continue
                 error = future.exception()
                 if error is not None:
-                    on_worker_error(error)
+                    on_worker_error(futures[future], error)
+                    if isinstance(error, ProviderHardStopError):
+                        stop_error = error
+                        for pending in futures:
+                            pending.cancel()
+        if stop_error is not None:
+            raise stop_error
 
 
 __all__ = ["RunCoordinator", "RunExecutionState", "RunTransition"]

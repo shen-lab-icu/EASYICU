@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from easyicu.research_agent.reporting.review_artifacts import build_review_artifact_payloads
 
 
@@ -149,6 +151,27 @@ def test_review_artifact_payloads_fail_closed_without_primary_figure(tmp_path: P
     assert gallery["status"] == "no_primary_publication_figure"
     assert gallery["primary_count"] == 0
     assert gallery["supporting_count"] == 1
+
+
+@pytest.mark.parametrize("caption", [None, "", "A\nB", "x" * 4001, "Observed values. No inference."])
+def test_gallery_carries_only_the_selected_contracts_plain_reader_caption(tmp_path, caption):
+    supporting = _write_contract(
+        tmp_path, "steps/quality/outputs", "quality", figure_id="quality", roles=["audit"]
+    )
+    path = tmp_path / supporting
+    contract = json.loads(path.read_text())
+    contract["reader_caption"] = caption
+    path.write_text(json.dumps(contract), encoding="utf-8")
+    review, gallery, _ = build_review_artifact_payloads(
+        run_dir=tmp_path,
+        gates={"display_supporting_figure_contract_paths": [supporting]},
+    )
+    for row in (gallery["figures"][0], review["supporting_figures"][0]):
+        assert row["contract_path"] == supporting
+        if caption == "Observed values. No inference.":
+            assert row["caption"] == caption
+        else:
+            assert "caption" not in row
 
 
 def test_review_artifact_payloads_infer_chart_types_without_explicit_metadata(

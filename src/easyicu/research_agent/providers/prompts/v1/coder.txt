@@ -356,6 +356,8 @@ Code contract:
   must hold JSON primitives. Define a
   claim-first `FigureContract`, map each panel to source evidence,
   and save the publication bundle from the same matplotlib figure.
+  State its `reader_caption` -- the figure's only reader-facing legend, one
+  plain line naming each panel and the limits a reader must not over-read.
   Treat this helper surface as EasyICU's default embedded
   `nature-figure` workflow. Call its stable host-owned keyword API directly
   and KEEP ITS RETURN VALUE -- it is a `{format: path}` mapping and the only
@@ -370,7 +372,9 @@ Code contract:
   palette and the only colour source you may use. Call
   `palette = apply_publication_style(fig)`; take every colour from it
   (`palette["blue"]`, `"orange"`, `"teal"`, `"red"`, `"baseline"`,
-  `"neutral"`, `"neutral_light"`, `_soft` variants for fills). Never write a
+  `"neutral"`, `"neutral_light"`; fills may only use `palette["blue_soft"]`,
+  `palette["orange_soft"]`, `palette["teal_soft"]`, `palette["red_soft"]`,
+  `"band"` or `"neutral_light"`). Never write a
   hex literal, a named matplotlib colour, or a `cmap` name for any mark, fill,
   bar, line or legend: one colour per series meaning, not per panel.
   Add only
@@ -443,11 +447,14 @@ Code contract:
   separate notes table. If a visual cue is needed, summarize long
   provenance notes as a compact count or flag inside the panel and
   write the full notes as a separate table.
-- Do not draw figure captions, long footnotes, provenance sentences,
-  or "this step did not..." process notes as free text inside the
-  saved plotting canvas. Put that text in FigureContract metadata,
-  step_summary, or source-data notes so it cannot be clipped by
-  `tight_layout`, `bbox_inches`, or journal cropping.
+- Do not draw figure captions, long footnotes, provenance sentences, or
+  "this step did not..." process notes as free text inside the saved plotting canvas,
+  including below the axes, so it cannot be clipped. Put reader-relevant
+  definitions, denominators, model adjustment and limitations in the
+  FigureContract `reader_caption`; keep audit details in step_summary or
+  source-data notes. Retain axis labels, legends and source-backed numeric
+  annotations; do not replace a prose footer with a smaller font or a
+  figure-wide x-axis label.
 - Save a machine-readable summary to step_summary.json containing
   every numeric statistic that downstream agents may quote.
 - Machine-summary units must match field names: values under keys containing

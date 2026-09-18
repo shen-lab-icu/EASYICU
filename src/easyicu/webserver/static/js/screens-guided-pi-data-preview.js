@@ -1,3 +1,4 @@
+/* Owner: Guided Pi data-preview adapter widget. */
 /* Copilot adapter for the native embedded data workbench.
    Rendering stays with the Patient/Cohort/Cross-DB visualization owners. */
 (function () {

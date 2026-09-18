@@ -21,7 +21,7 @@ from __future__ import annotations
 import pandas as pd
 
 from ..datasource import FilterOp, FilterSpec
-from .comorbidity import _build_datasource, _lower_cols, _table_df
+from .comorbidity import build_datasource, lower_cols, table_df
 
 # eICU 'organism' values that denote a NEGATIVE culture, not an isolate.
 _EICU_NEGATIVE = {"no growth", "no growth on culture", "", "none"}
@@ -65,11 +65,11 @@ def load_microbiology(
             print(f"[microbiology] {database} ships no structured culture table — N/A")
         return pd.DataFrame()
 
-    ds = _build_datasource(database, data_path)
+    ds = build_datasource(database, data_path)
 
     if db in ("miiv", "miiv_demo", "mimic", "mimic_demo"):
         stay_col = _STAY_ID_COL[db]
-        stays = _lower_cols(_table_df(ds, "icustays"))
+        stays = lower_cols(table_df(ds, "icustays"))
         if patient_values is not None:
             stays = stays[stays[stay_col].isin(patient_values)].copy()
             selected_hadm_ids = stays["hadm_id"].dropna().unique().tolist()
@@ -82,8 +82,8 @@ def load_microbiology(
             # allocate several GB and spill to the Mac system disk.  Translate
             # the requested ICU stays to admissions first, then let the
             # datasource push the admission filter into Parquet/DuckDB.
-            mb = _lower_cols(
-                _table_df(
+            mb = lower_cols(
+                table_df(
                     ds,
                     "microbiologyevents",
                     filters=[
@@ -96,7 +96,7 @@ def load_microbiology(
                 )
             )
         else:
-            mb = _lower_cols(_table_df(ds, "microbiologyevents"))
+            mb = lower_cols(table_df(ds, "microbiologyevents"))
         org_col = "org_name" if "org_name" in mb.columns else "org_itemid"
         positive = mb[org_col].notna()
         if mb[org_col].dtype == object:
@@ -120,8 +120,8 @@ def load_microbiology(
     elif db in ("eicu", "eicu_demo"):
         stay_col = "patientunitstayid"
         if patient_values is not None:
-            mb = _lower_cols(
-                _table_df(
+            mb = lower_cols(
+                table_df(
                     ds,
                     "microlab",
                     filters=[
@@ -134,7 +134,7 @@ def load_microbiology(
                 )
             )
         else:
-            mb = _lower_cols(_table_df(ds, "microlab"))
+            mb = lower_cols(table_df(ds, "microlab"))
         org = mb["organism"].astype(str).str.strip().str.lower()
         positive = mb["organism"].notna() & ~org.isin(_EICU_NEGATIVE)
         site = mb.get("culturesite", pd.Series("", index=mb.index)).astype(str)
@@ -147,7 +147,7 @@ def load_microbiology(
             }
         )
         flags = per_stay.groupby("patientunitstayid").any().reset_index()
-        stays = _lower_cols(_table_df(ds, "patient"))[
+        stays = lower_cols(table_df(ds, "patient"))[
             ["patientunitstayid"]
         ].drop_duplicates()
         if patient_values is not None:

@@ -21,6 +21,12 @@ from typing import List, Mapping, Optional, Tuple
 
 _MAX_PDF_BYTES = 64 * 1024 * 1024
 _RECEIPT_NAME = "manuscript_pdf_receipt.json"
+_LOCAL_TOOL_DIRS = (
+    Path("/opt/homebrew/bin"),
+    Path("/usr/local/bin"),
+    Path("/Library/TeX/texbin"),
+    Path.home() / "Library/TinyTeX/bin/universal-darwin",
+)
 
 
 @dataclass
@@ -35,8 +41,13 @@ class PDFRenderResult:
 
 def _which_first(*candidates: str) -> Optional[str]:
     for candidate in candidates:
-        if shutil.which(candidate):
-            return candidate
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+        for directory in _LOCAL_TOOL_DIRS:
+            local = directory / candidate
+            if local.is_file() and os.access(local, os.X_OK):
+                return str(local)
     return None
 
 
@@ -217,7 +228,7 @@ def render_pdf_for_run(
     # Tectonic is first because it has an explicit untrusted-input mode.  The
     # cached flag makes a missing package fail instead of silently reaching the
     # network during a scientific run.
-    tectonic = shutil.which("tectonic")
+    tectonic = _which_first("tectonic")
     if tectonic:
         rc, log = _run_with_log(
             [
@@ -246,7 +257,7 @@ def render_pdf_for_run(
             )
         notes.append(f"tectonic failed (rc={rc}); see {log_path.name}")
 
-    latexmk = shutil.which("latexmk")
+    latexmk = _which_first("latexmk")
     if latexmk:
         rc, log = _run_with_log(
             [
@@ -286,7 +297,7 @@ def render_pdf_for_run(
             + ["No safe local LaTeX engine is available; install Tectonic or TeXLive."],
         )
 
-    bibtex = shutil.which("bibtex")
+    bibtex = _which_first("bibtex")
     log_lines: List[str] = []
     successful = True
     # One engine pass creates the citation inventory, BibTeX writes the .bbl,

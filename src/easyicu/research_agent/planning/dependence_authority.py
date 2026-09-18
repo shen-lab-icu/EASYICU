@@ -13,17 +13,34 @@ import json
 from collections.abc import Mapping
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
+
+from ..contracts.analysis_design import AnalysisDesignConflict, validate_analysis_family_ceiling
 
 from ..contracts.descriptive_execution import (
     exposure_outcome_distribution_execution_verdict,
 )
 from ..contracts.dependence import PlannedDependenceRequirement
 from ..schema import AnalysisPlan, ResearchContext
+from .analysis_types import canonical_analysis_family
+
+
+DEPENDENCE_DIAGNOSTIC_OWNER = "easyicu.planning.dependence_authority_v1"
+DEPENDENCE_REASON_CODES = frozenset({
+    "analysis_dependence_contract_invalid", "counts_only_inference_forbidden",
+    "counts_only_step_untyped", "counts_only_family_incompatible",
+})
 
 
 class DependenceAuthorityError(ValueError):
     """A declared dependence design conflicts with its owner-issued authority."""
+
+    def __init__(self, message: str, *, code: str = "analysis_dependence_contract_invalid"):
+        super().__init__(message)
+        if code not in DEPENDENCE_REASON_CODES:
+            raise ValueError("unknown dependence diagnostic code")
+        self.code = code
+        self.easyicu_safe_diagnostic = {"owner": DEPENDENCE_DIAGNOSTIC_OWNER, "reason_code": code}
 
 
 class _AnalysisDesign(BaseModel):
@@ -49,6 +66,37 @@ class _AnalysisDesign(BaseModel):
         "none_counts_only",
     ]
 
+    @model_validator(mode="after")
+    def _compatible_family_ceiling(self):
+        validate_analysis_family_ceiling(
+            analysis_family=self.analysis_family, variance_estimator=self.variance_estimator
+        )
+        return self
+
+
+def _parse_analysis_design(design: Mapping) -> _AnalysisDesign:
+    # Check the machine-readable sibling conflict before Pydantic wraps it in
+    # a generic validation error. Preserve host authority; never pick an
+    # estimator on behalf of the researcher to make a model family executable.
+    try:
+        validate_analysis_family_ceiling(
+            analysis_family=design.get("analysis_family"),
+            variance_estimator=design.get("variance_estimator"),
+        )
+    except AnalysisDesignConflict as exc:
+        raise DependenceAuthorityError(
+            "The host analysis_design combines an inferential family with "
+            "none_counts_only; a host design revision is required before planning.",
+            code="counts_only_family_incompatible",
+        ) from exc
+    try:
+        return _AnalysisDesign.model_validate(dict(design))
+    except ValueError as exc:
+        raise DependenceAuthorityError(
+            "analysis_design does not match the closed repeated-unit contract: "
+            + str(exc)
+        ) from exc
+
 
 def _requested_cluster_design(context: ResearchContext) -> _AnalysisDesign | None:
     preferences = context.user_preferences
@@ -67,13 +115,7 @@ def _requested_cluster_design(context: ResearchContext) -> _AnalysisDesign | Non
         return None
     if not isinstance(design, Mapping):
         raise DependenceAuthorityError("analysis_design must be a typed object")
-    try:
-        parsed = _AnalysisDesign.model_validate(dict(design))
-    except ValueError as exc:
-        raise DependenceAuthorityError(
-            "analysis_design does not match the closed repeated-unit contract: "
-            + str(exc)
-        ) from exc
+    parsed = _parse_analysis_design(design)
     if parsed.variance_estimator == "cluster_robust" and parsed.cluster_unit is None:
         raise DependenceAuthorityError(
             "cluster_robust analysis_design requires cluster_unit"
@@ -104,13 +146,7 @@ def _counts_only_design(context: ResearchContext) -> bool:
         payload.get("analysis_design"), Mapping
     ):
         return False
-    try:
-        parsed = _AnalysisDesign.model_validate(dict(payload["analysis_design"]))
-    except ValueError as exc:
-        raise DependenceAuthorityError(
-            "analysis_design does not match the closed repeated-unit contract: "
-            + str(exc)
-        ) from exc
+    parsed = _parse_analysis_design(payload["analysis_design"])
     return parsed.variance_estimator == "none_counts_only"
 
 
@@ -225,6 +261,73 @@ def context_patient_group_authority(
     return None
 
 
+def repeat_units_possible(context: ResearchContext) -> bool:
+    """Assess repeated-unit risk once for planning, compilation, and review."""
+
+    provenance = context.cohort.provenance or {}
+    preferences = context.user_preferences
+    if hasattr(preferences, "model_dump"):
+        preferences = preferences.model_dump(mode="json")
+    preferences = preferences if isinstance(preferences, Mapping) else {}
+    n_patients = context.cohort.n_patients
+    n_stays = context.cohort.n_stays
+    if n_patients is not None and n_stays is not None and n_stays > n_patients:
+        return True
+    counts_establish_one_stay_per_patient = (
+        n_patients is not None and n_stays is not None and n_stays <= n_patients
+    )
+    analysis_unit = str(provenance.get("analysis_unit") or "").strip().casefold()
+    if (
+        provenance.get("evidence_stage") == "metadata_only_planning"
+        and analysis_unit == "icu_stay"
+        and context_patient_group_authority(context) is None
+    ):
+        return True
+    if (
+        n_stays is not None
+        and n_stays > 1
+        and analysis_unit == "icu_stay"
+        and not counts_establish_one_stay_per_patient
+        and context_patient_group_authority(context) is None
+    ):
+        return True
+    text = " ".join(
+        [
+            *[str(value) for value in context.cohort.inclusion_criteria],
+            *[str(value) for value in context.cohort.exclusion_criteria],
+            *[str(value) for value in provenance.get("inclusion_criteria") or ()],
+            *[str(value) for value in provenance.get("exclusion_criteria") or ()],
+            str(preferences.get("data_constraints") or ""),
+            str(preferences.get("extra_notes") or ""),
+        ]
+    ).casefold()
+    return any(
+        token in text
+        for token in (
+            "repeat", "readmission", "re-admission", "repeated stay",
+            "multiple icu", "retain icu readmissions", "重复", "再次 icu", "再次icu",
+        )
+    )
+
+
+def descriptive_counts_only_required(
+    context: ResearchContext, *, analysis_type: str
+) -> bool:
+    """Restrict descriptive uncertainty without inventing a user decision.
+
+    The existing typed ceiling still governs every family. The source-derived
+    ceiling applies only to a declared descriptive family: absence of patient
+    grouping is not permission to compile independent-row intervals. It does
+    not change the question, filter stays, or downgrade another study family.
+    """
+
+    return context_counts_only_authority(context) or (
+        canonical_analysis_family(analysis_type) == "descriptive_epidemiology"
+        and repeat_units_possible(context)
+        and context_patient_group_authority(context) is None
+    )
+
+
 def context_dependence_authority(
     context: ResearchContext,
 ) -> PlannedDependenceRequirement | None:
@@ -293,7 +396,8 @@ def bind_context_dependence_authority(
             not in {None, "descriptive_exposure_outcome_distribution_v1"}
         ):
             raise DependenceAuthorityError(
-                "counts-only analysis_design cannot authorize a model or inferential capability"
+                "counts-only analysis_design cannot authorize a model or inferential capability",
+                code="counts_only_inference_forbidden",
             )
         if (
             counts_only
@@ -318,7 +422,8 @@ def bind_context_dependence_authority(
                 "typed exposure/outcome distribution, descriptive/SMD-only "
                 "Table One, measurement audit, rendering, and report steps; "
                 "audit product names cannot claim reserved baseline, distribution, "
-                "outcome, risk, effect, or inference roles"
+                "outcome, risk, effect, or inference roles",
+                code="counts_only_step_untyped",
             )
         requirements = []
         for requirement in step.model_requirements:
@@ -378,5 +483,7 @@ __all__ = [
     "context_counts_only_authority",
     "context_dependence_authority",
     "context_patient_group_authority",
+    "descriptive_counts_only_required",
     "dependence_matches_context",
+    "repeat_units_possible",
 ]

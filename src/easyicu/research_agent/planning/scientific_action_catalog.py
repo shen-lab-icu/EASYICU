@@ -29,6 +29,8 @@ from typing import Literal, Tuple
 
 from ..contracts.method_kernels import CURATED_METHOD_KERNELS
 from ..contracts.method_packages import BASELINE_PACKAGES, CURATED_METHOD_PACKAGES
+from ..contracts.cross_sectional_phenotyping_policy import CROSS_SECTIONAL_PHENOTYPING_POLICY
+from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
 from .analysis_method_suite import AnalysisMethod, get_suite
 from .method_adapter_catalog import (
     MethodAdapterContract,
@@ -79,9 +81,22 @@ class ScientificActionRuntimeContract:
     required_product_inputs: Tuple[str, ...] = ()
     article_roles: Tuple[str, ...] = ()
     standard_executor: str = ""
+    display_name: str = ""
+    purpose: str = ""
+    execution_parameters: Tuple[Tuple[str, object], ...] = ()
 
 
 _RUNTIME_CONTRACTS: dict[str, ScientificActionRuntimeContract] = {
+    "phenotyping.outcome_by_cluster": ScientificActionRuntimeContract(
+        outputs=(("table:outcome_by_cluster", "custom"),),
+        required_product_inputs=("artifact:analysis_cohort", "table:phenotype_assignments"),
+        article_roles=("phenotype_profile",),
+        standard_executor="phenotype_comparison",
+        display_name="Clinical and outcome descriptions by frozen cluster",
+        purpose="Describe the explicitly selected clinical/outcome roster on exactly the primary clustering cohort, with observed denominators and missing counts; no refit, inferential tests or causal claim.",
+        execution_parameters=(("grouping", "frozen_primary_assignments"), ("join", "exact_unique_source_identity"),
+                              ("missingness", "observed_per_variable_with_missing_counts"), ("inference", "none_data_derived_groups")),
+    ),
     "phenotyping.cluster_solution": ScientificActionRuntimeContract(
         outputs=(
             ("table:phenotype_profiles", "custom"),
@@ -89,18 +104,38 @@ _RUNTIME_CONTRACTS: dict[str, ScientificActionRuntimeContract] = {
         ),
         article_roles=("phenotype_structure", "phenotype_profile"),
         standard_executor="cross_sectional_phenotyping",
+        display_name="Cross-sectional MiniBatchKMeans candidate clusters",
+        purpose="Group the declared numeric clustering features; profile-only variables and outcomes belong in separate downstream analyses.",
+        execution_parameters=CROSS_SECTIONAL_PHENOTYPING_POLICY.parameters("phenotyping.cluster_solution"),
     ),
     "phenotyping.k_selection": ScientificActionRuntimeContract(
         outputs=(("table:cluster_selection", "custom"),),
         required_product_inputs=("table:phenotype_assignments",),
         article_roles=("cluster_selection",),
         standard_executor="cross_sectional_phenotyping",
+        display_name="Candidate-K silhouette selection",
+        purpose="Replay the published silhouette selection on the sealed primary feature matrix.",
+        execution_parameters=CROSS_SECTIONAL_PHENOTYPING_POLICY.parameters("phenotyping.k_selection"),
     ),
     "phenotyping.cluster_stability": ScientificActionRuntimeContract(
         outputs=(("table:cluster_stability", "custom"),),
         required_product_inputs=("table:phenotype_assignments",),
         article_roles=("stability",),
         standard_executor="cross_sectional_phenotyping",
+        display_name="Conditional subsample stability and diagonal-GMM agreement",
+        purpose="Measure agreement conditional on fixed primary preprocessing and K; this does not establish full-pipeline or external reproducibility.",
+        execution_parameters=CROSS_SECTIONAL_PHENOTYPING_POLICY.parameters("phenotyping.cluster_stability"),
+    ),
+    "time_to_event.rmst": ScientificActionRuntimeContract(
+        outputs=(
+            ("table:rmst_summary", "custom"),
+            ("log:rmst_runtime_receipt", "custom"),
+        ),
+        required_product_inputs=("artifact:analysis_cohort",),
+        standard_executor="signed_rmst_contrast",
+        display_name="Restricted mean survival time contrast",
+        purpose="Report the reviewed two-group Kaplan-Meier restricted-mean survival difference at the prespecified horizon; descriptive analysis only, with no proportional-hazards assumption and no Coder fallback.",
+        execution_parameters=(("estimator", "kaplan_meier_rmst_difference"),),
     ),
     "prediction.discrimination_calibration": ScientificActionRuntimeContract(
         outputs=(
@@ -292,8 +327,8 @@ def _compile_action(
         action_id=action_id,
         analysis_family=family,
         method_key=method.key,
-        name=method.name,
-        purpose=method.purpose,
+        name=(runtime_contract.display_name or method.name) if runtime_contract else method.name,
+        purpose=(runtime_contract.purpose or method.purpose) if runtime_contract else method.purpose,
         tier=method.tier,
         execution_mode=(
             "host_owned"
@@ -301,7 +336,11 @@ def _compile_action(
             or (method_adapter is not None and method_adapter.scope == "full_action")
             else _execution_mode(method)
         ),
-        produces=method.produces,
+        produces=(
+            ", ".join(product for product, _ in runtime_contract.outputs)
+            if runtime_contract and runtime_contract.display_name
+            else method.produces
+        ),
         runner=method.runner,
         kernel_imports=tuple(
             str(kernels[module].import_path)
@@ -671,6 +710,12 @@ def validate_plan_scientific_action_selections(
             analysis_type=analysis_type,
             action_id=action_id,
         )
+        if action_id == PHENOTYPING_PRIMARY_ACTION:
+            require_phenotyping_features(getattr(step, "phenotyping_feature_columns", None), inputs=step.inputs)
+        if action_id == "phenotyping.outcome_by_cluster":
+            from ..contracts.phenotype_comparison import validate_comparison_step
+
+            validate_comparison_step(step)
         method_key = str(getattr(step, "method", "") or "").strip()
         exact_method_actions = tuple(
             action.action_id

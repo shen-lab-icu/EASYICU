@@ -184,6 +184,7 @@ def submit_agent_run(
                 execution_resume_source_run_id=str(
                     body.get("execution_resume_source_run_id") or ""
                 ),
+                report_only=body_bool(body, "report_only"),
                 literature_search_authorized=body_bool(
                     body, "literature_search_authorized"
                 ),

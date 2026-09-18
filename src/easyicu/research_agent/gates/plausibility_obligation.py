@@ -2462,8 +2462,10 @@ def flag_only_plausibility_obligation_findings(
     if tree is None:
         try:
             tree = ast.parse(text)
-        except SyntaxError:
-            return []
+        except SyntaxError as exc:
+            from .preflight_support import unparseable_python_finding
+            return [unparseable_python_finding(exc, step, validator="flag_only_plausibility_obligation")]
+
     # The host-owned step scope is shared with the post-execution receipt check,
     # so generated source cannot make the two halves disagree about which step
     # owes the obligation.

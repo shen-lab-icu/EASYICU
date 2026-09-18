@@ -1,3 +1,4 @@
+/* Owner: Guided Pi data-consent gate widget. */
 /* Conversation-level data-source confirmation for Guided Copilot.
    StudyContext remains the scientific owner; this module only renders and
    decodes the per-session consent gate. */
@@ -43,6 +44,22 @@
     return 'use_study_required_data';
   }
 
+  function renderSelectedSource(session, ctx) {
+    const current = authorization(session);
+    // This is current host state, not a reconstructed user message or approval.
+    if (current.status !== 'confirmed' || current.confirmation_mode !== 'select_local_source') return '';
+    const label = sourceLabel(current);
+    if (!label) return '';
+    return `<details class="gpi-data-consent" aria-label="${ctx.tr('Confirmed study data source', '本研究已确认的数据源')}">
+      <summary>${ctx.tr('Data source confirmed: ', '已确认数据源：')}${ctx.esc(label)}</summary>
+      <div class="gpi-data-consent-body">
+        <p>${ctx.tr('This source was selected in the local data picker and confirmed for this conversation.', '这份数据已在本地数据选择器中选定，并确认用于本次会话。')}</p>
+        ${current.confirmed_at ? `<p>${ctx.tr('Confirmed at: ', '确认时间：')}${ctx.esc(current.confirmed_at)}</p>` : ''}
+        <p>${ctx.tr('Source confirmation does not approve analysis. The research plan and prepared data are reviewed separately.', '确认数据源不等于批准分析。研究计划和准备后的数据仍需分别审阅。')}</p>
+      </div>
+    </details>`;
+  }
+
   function renderPast(session, ctx) {
     const current = authorization(session);
     if (current.status === 'confirmed' && current.confirmation_mode === 'agent_default_study_required') {
@@ -83,14 +100,25 @@
       const source = current.source || {};
       const label = [source.label, source.reference_release ? `v${source.reference_release}` : '']
         .filter(Boolean).join(' ');
-      return `<section class="gpi-data-consent" aria-label="${ctx.tr('Automatic data-source preparation', '自动准备项目数据源')}">
+      return `<section class="gpi-data-consent" aria-label="${ctx.tr('Confirm data source', '确认数据源')}">
         <span class="gpi-data-consent-icon">${ctx.icon('shield', 16)}</span>
         <div class="gpi-data-consent-body">
-          <strong>${ctx.tr('EasyICU is applying the study-required data policy', 'EasyICU 正在自动采用按研究需要准备的策略')}</strong>
+          <strong>${ctx.tr('Which data should this study use?', '这项研究使用哪份数据？')}</strong>
           <p>${ctx.esc(label || ctx.tr('Validated project source', '已验证的项目数据源'))}</p>
-          <small>${ctx.tr('No researcher decision is needed. Refreshing this conversation reconciles older saved sessions automatically.', '不需要研究者做决定；刷新当前会话即可自动同步旧会话状态。')}</small>
+          <div class="gpi-data-consent-actions">
+            <button class="btn primary" type="button" data-gpi-data-source-action="use_study_required_data">${ctx.tr('Confirm this source', '确认使用这份数据')}</button>
+            <button class="btn" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Choose another source', '选择其他数据源')}</button>
+          </div>
+          <small>${ctx.tr('After you confirm the source, EasyICU will propose a plan and prepare only its required data. Source selection does not approve analysis.', '确认数据源后，EasyICU 会拟定计划，只准备计划所需的数据。选择数据源不等于批准分析。')}</small>
         </div>
       </section>`;
+    }
+    if (current.status === 'pending') {
+      return `<section class="gpi-data-consent" aria-label="${ctx.tr('Bind data source', '绑定数据源')}"><div class="gpi-data-consent-body">
+        <strong>${ctx.tr('Next, choose the data for this question', '接下来，请为这个问题选择数据源')}</strong>
+        <p>${ctx.tr('Select and confirm a local dataset. EasyICU will then propose the research plan; no analysis starts yet.', '选择并确认本地数据后，EasyICU 会据此拟定研究计划，此时不会开始分析。')}</p>
+        <button class="btn primary" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Choose data source', '选择数据源')}</button>
+      </div></section>`;
     }
     if (!selectionInProgress(session)) return '';
     return `<section class="gpi-data-consent" aria-label="${ctx.tr('Local data selection', '本地数据选择')}">
@@ -118,6 +146,7 @@
     requiresConfirmation,
     selectionInProgress,
     matchesSourceSelection,
+    renderSelectedSource,
     renderPast,
     render,
     actionFromEvent,

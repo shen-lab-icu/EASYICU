@@ -31,8 +31,9 @@
         const value = seconds.toFixed(1);
         return tr(`${value}s`, `${value} 秒`);
       }
-      const minutes = Math.floor(seconds / 60);
-      const remainder = Math.round(seconds % 60);
+      const roundedSeconds = Math.round(seconds);
+      const minutes = Math.floor(roundedSeconds / 60);
+      const remainder = roundedSeconds % 60;
       return tr(
         remainder ? `${minutes}m ${remainder}s` : `${minutes}m`,
         remainder ? `${minutes} 分 ${remainder} 秒` : `${minutes} 分`,
@@ -243,10 +244,10 @@
         ? tr('Approved analysis steps completed', '已完成批准的分析步骤')
         : tr('Running the approved analysis steps', '正在执行批准的分析步骤');
       if (stage === 'figure') return done
-        ? tr('Figures regenerated from registered result tables and visually checked', '已从登记结果表重新生成图件并完成视觉核查')
+        ? tr('Figure generation and checks finished', '图件生成与检查流程已结束')
         : tr('Regenerating and checking the analysis figures', '正在重新生成并核查分析图件');
       if (stage === 'report') return done
-        ? tr('Evidence-bound article and manuscript exports regenerated', '已重新生成证据绑定文章与稿件导出')
+        ? tr('Manuscript generation and checks finished; see the result verdict', '稿件生成与检查流程已结束；是否通过请看结果审阅')
         : tr('Regenerating the evidence-bound article and manuscript exports', '正在重新生成证据绑定文章与稿件导出');
       if (stage === 'progress') return done
         ? tr('Research-task progress updated', '研究任务进度已更新')
@@ -486,7 +487,31 @@
       return rows;
     }
 
-    return Object.freeze({ appendPublicDelta, durationText, finishTurn, focusLatest, pipelineEventLabel, render, startTurn, stepLabel, syncLiveClock, timeMs });
+    function renderTimeline(rows, renderRow) {
+      let pending = [];
+      const output = [];
+      function flush() {
+        if (!pending.length) return;
+        const history = pending.length > 2 ? pending.slice(0, -1) : [];
+        if (history.length) {
+          const failed = history.filter(row => ['failed', 'cancelled', 'interrupted'].includes(row.status)).length;
+          output.push(`<details class="gpi-execution-history"><summary>${esc(tr(
+            `Earlier execution records (${history.length}; ${failed} incomplete)`,
+            `此前执行记录（${history.length} 次，${failed} 次未完成）`,
+          ))}</summary>${history.map(renderRow).join('')}</details>`);
+        }
+        output.push(...(history.length ? pending.slice(-1) : pending).map(renderRow));
+        pending = [];
+      }
+      rows.forEach(row => {
+        if (row && row.role === 'activity' && row.status !== 'running') pending.push(row);
+        else { flush(); output.push(renderRow(row)); }
+      });
+      flush();
+      return output.join('');
+    }
+
+    return Object.freeze({ appendPublicDelta, durationText, finishTurn, focusLatest, pipelineEventLabel, render, renderTimeline, startTurn, stepLabel, syncLiveClock, timeMs });
   }
 
   window.EasyICU.guidedPi.declare('activity', { create });

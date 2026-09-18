@@ -25,6 +25,15 @@ _ZOTERO_TIMEOUT_SECONDS = 0.35
 _DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+\b", re.IGNORECASE)
 _YEAR_RE = re.compile(r"\b(?:18|19|20|21|22)\d{2}\b")
 
+
+def pubmed_connector_block_reason(*, path: str) -> str | None:
+    """Recheck the shared connector switch at each network-capable entry."""
+    if settings_store.load_settings().get("connector_pubmed_enabled", True) is True:
+        return None
+    reason = "connector_pubmed_enabled_false"
+    record_tool_event("pubmed_connector_blocked", {"reason": reason, "path": path})
+    return reason
+
 CAPABILITY_SETTINGS = {
     "science_skills_enabled": True,
     "nature_figure_skill_enabled": True,

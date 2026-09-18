@@ -1,3 +1,4 @@
+/* Owner: Patient Review series fallback widget. */
 (function () {
   /* Sixth copy of the palette, gone. This fallback runs when the ECharts
      shell is missing, so it is exactly where a divergence goes unnoticed: its

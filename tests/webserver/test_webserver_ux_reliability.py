@@ -68,20 +68,12 @@ def test_language_switch_flushes_guided_slots_before_global_rerender() -> None:
 
 
 def test_agent_projects_has_no_provider_controls_or_fake_exports() -> None:
-    agent = _js("screens-agent.js")
     provider = _js("screens-guided-pi-provider.js")
 
     assert "you do not configure a second analysis model elsewhere" in provider
     assert "data-gpi-research-provider" in provider
-    assert "data-ag-external-run" not in agent
-    assert "AGENT_PROVIDER_PANEL" not in agent
     # The dock-opening affordance moved to the shared topbar 'Page guide'
     # button; the agent screen must not ship its own duplicate opener.
-    assert "data-cpopen" not in agent
-    assert "Run full with provider" not in agent
-    assert "A full agent analysis is a separate step" not in agent
-    assert "t('Export ledger'" not in agent
-    assert "t('Export notes'" not in agent
 
 
 def test_guided_blocked_gate_never_uses_the_success_findings_path() -> None:

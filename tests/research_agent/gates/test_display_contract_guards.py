@@ -12,6 +12,8 @@ and the run produces robustness/data-quality evidence. The scorer reads
 
 from __future__ import annotations
 
+import pytest
+
 from easyicu.research_agent.evaluation_scorecard import score_plan
 from easyicu.research_agent.icu_agent_bench import ICUAgentBenchTask
 from easyicu.research_agent.plan_utils import (
@@ -306,7 +308,7 @@ def test_deterministic_robustness_renderer_binds_statistics_and_tables() -> None
     panel = shaped.steps[0].figure_panels[0]
     assert panel.panel_id == "robustness_grid"
     assert panel.article_role == "robustness"
-    assert panel.chart_type == "sensitivity_forest"
+    assert panel.chart_type == "specification_grid"
     assert panel.source_products == step.inputs
     assert findings[0].detail["reason"] == "deterministic_figure_panels_bound"
 
@@ -497,6 +499,85 @@ def test_adjusted_association_gets_source_bound_absolute_risk_composite() -> Non
     assert repeated == []
 
 
+@pytest.mark.parametrize("display_id", ["visualization", "clinical_results"])
+def test_absolute_risk_composite_reuses_closed_unpanelled_result_pair(display_id):
+    sources = ["table:adjusted_association_estimates", "table:absolute_risk_context"]
+    producers = [
+        AnalysisStep(
+            step_id="primary",
+            planned_analysis_role="primary",
+            intent="Estimate association",
+            method="adjusted_association_models",
+            expected_outputs=[sources[0]],
+        ),
+        AnalysisStep(
+            step_id="risk",
+            intent="Describe risk",
+            method="absolute_risk_context",
+            expected_outputs=[sources[1]],
+        ),
+        AnalysisStep(
+            step_id="checks",
+            intent="Check robustness",
+            method="robustness_sensitivity",
+            expected_outputs=["table:robustness_matrix", "table:robustness_summary"],
+        ),
+    ]
+    display = AnalysisStep(
+        step_id=display_id,
+        planned_analysis_role="auxiliary",
+        intent="Show association and risk",
+        method="visualization",
+        inputs=sources,
+        expected_outputs=[f"figure:{display_id}"],
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(input_key=s, mode="all_rows") for s in sources
+        ],
+    )
+    plan = AnalysisPlan(
+        research_question="Continuous exposure and mortality",
+        steps=[*producers, display],
+    )
+    shaped, findings = ensure_absolute_risk_association_composite_figure_step(plan=plan)
+    assert len(shaped.steps) == len(plan.steps)
+    assert shaped.steps[:-1] == producers
+    assert shaped.steps[-1].step_id == display_id
+    assert shaped.steps[-1].expected_outputs == display.expected_outputs
+    assert len(shaped.steps[-1].figure_panels) == 4
+    assert {c.input_key for c in shaped.steps[-1].input_consumption_contracts} == set(
+        shaped.steps[-1].inputs
+    )
+    assert (
+        findings[0].detail["reason_code"]
+        == "absolute_risk_association_composite_figure_rebound"
+    )
+    assert ensure_absolute_risk_association_composite_figure_step(plan=shaped) == (
+        shaped,
+        [],
+    )
+
+    other = display.model_copy(
+        update={
+            "step_id": "another_display",
+            "expected_outputs": ["figure:another_display"],
+        }
+    )
+    ambiguous = plan.model_copy(update={"steps": [*plan.steps, other]})
+    result, _ = ensure_absolute_risk_association_composite_figure_step(plan=ambiguous)
+    assert result.steps[: len(ambiguous.steps)] == ambiguous.steps
+
+    # Partial-row selections and explicitly authored panels are different displays.
+    for protected in [
+        display.model_copy(update={"input_consumption_contracts": []}),
+        display.model_copy(
+            update={"figure_panels": shaped.steps[-1].figure_panels[:1]}
+        ),
+    ]:
+        guarded = plan.model_copy(update={"steps": [*producers, protected]})
+        result, _ = ensure_absolute_risk_association_composite_figure_step(plan=guarded)
+        assert result.steps[: len(guarded.steps)] == guarded.steps
+
+
 def test_signed_landmark_association_gets_source_bound_composite_renderer() -> None:
     steps = [
         AnalysisStep(
@@ -560,6 +641,161 @@ def test_signed_landmark_association_gets_source_bound_composite_renderer() -> N
     again, repeated = ensure_landmark_association_composite_figure_step(plan=shaped)
     assert again == shaped
     assert repeated == []
+
+
+@pytest.mark.parametrize(
+    ("sensitivity_method", "include_sensitivity"),
+    [
+        ("linear_per_unit_sensitivity", True),
+        ("restricted_cubic_spline_sensitivity", True),
+        ("ad_hoc_sensitivity", False),
+    ],
+)
+def test_landmark_composite_admits_only_registered_functional_form_sensitivity(
+    sensitivity_method: str,
+    include_sensitivity: bool,
+) -> None:
+    sensitivity_product = "table:functional_form_sensitivity_exposure_contrasts"
+    plan = AnalysisPlan(
+        research_question="Estimate a landmark association.",
+        steps=[
+            AnalysisStep(
+                step_id="measurement_audit",
+                planned_analysis_role="auxiliary",
+                intent="Audit the landmark measurement process.",
+                method="missing_data",
+                expected_outputs=["table:measurement_process"],
+            ),
+            AnalysisStep(
+                step_id="adjusted_primary",
+                planned_analysis_role="primary",
+                intent="Estimate the signed landmark spline association.",
+                method="signed_landmark_restricted_cubic_spline",
+                expected_outputs=[
+                    "table:landmark_rcs_curve",
+                    "table:landmark_adjusted_absolute_risk",
+                ],
+            ),
+            AnalysisStep(
+                step_id="robustness_replay",
+                planned_analysis_role="sensitivity",
+                intent="Replay the prespecified robustness authority.",
+                method="robustness_sensitivity",
+                expected_outputs=["table:robustness_summary"],
+            ),
+            AnalysisStep(
+                step_id="functional_form_sensitivity",
+                planned_analysis_role="sensitivity",
+                intent="Refit the registered functional-form sensitivity.",
+                method=sensitivity_method,
+                expected_outputs=[sensitivity_product],
+            ),
+        ],
+    )
+
+    shaped, _ = ensure_landmark_association_composite_figure_step(plan=plan)
+
+    figure = shaped.steps[-1]
+    expected_inputs = [
+        "table:landmark_rcs_curve",
+        "table:landmark_adjusted_absolute_risk",
+        *([sensitivity_product] if include_sensitivity else []),
+        "table:robustness_summary",
+        "table:measurement_process",
+    ]
+    assert figure.inputs == expected_inputs
+    assert [panel.article_role for panel in figure.figure_panels] == [
+        "primary_estimand",
+        "descriptive_result",
+        *(["robustness"] if include_sensitivity else []),
+        "robustness",
+        "data_quality",
+    ]
+    assert (
+        "sensitivity_forest"
+        in {panel.chart_type for panel in figure.figure_panels}
+    ) is include_sensitivity
+
+
+def test_existing_landmark_pair_display_is_rebound_to_include_sensitivity() -> None:
+    curve = "table:landmark_rcs_curve"
+    risk = "table:landmark_adjusted_absolute_risk"
+    sensitivity = "table:robustness_grid"
+    plan = AnalysisPlan(
+        research_question="Estimate a landmark association.",
+        steps=[
+            AnalysisStep(
+                step_id="measurement_audit",
+                planned_analysis_role="auxiliary",
+                intent="Audit the landmark measurement process.",
+                method="missing_data",
+                expected_outputs=["table:measurement_process_audit"],
+            ),
+            AnalysisStep(
+                step_id="adjusted_primary",
+                planned_analysis_role="primary",
+                intent="Estimate the signed landmark spline association.",
+                method="signed_landmark_restricted_cubic_spline",
+                expected_outputs=[curve, risk],
+            ),
+            AnalysisStep(
+                step_id="functional_form_sensitivity",
+                planned_analysis_role="sensitivity",
+                intent="Refit the prespecified covariate functional form.",
+                method="restricted_cubic_spline_sensitivity",
+                sensitivity_spec_ids=["age_functional_form"],
+                expected_outputs=[
+                    sensitivity,
+                    f"{sensitivity}_exposure_curve",
+                    f"{sensitivity}_exposure_contrasts",
+                ],
+                functional_form_spec={
+                    "target_column": "age",
+                    "knot_quantiles": [0.1, 0.5, 0.9],
+                },
+            ),
+            AnalysisStep(
+                step_id="robustness_summary",
+                planned_analysis_role="sensitivity",
+                intent="Summarize the signed robustness projection.",
+                method="robustness_sensitivity",
+                expected_outputs=["table:robustness_summary"],
+            ),
+            AnalysisStep(
+                step_id="display_package",
+                planned_analysis_role="auxiliary",
+                intent="Render the two aligned signed landmark curves.",
+                method="visualization",
+                inputs=[curve, risk],
+                expected_outputs=["figure:display_package"],
+                input_consumption_contracts=[
+                    {"input_key": source, "mode": "all_rows"}
+                    for source in (curve, risk)
+                ],
+            ),
+        ],
+    )
+
+    shaped, findings = ensure_landmark_association_composite_figure_step(plan=plan)
+
+    figure = next(step for step in shaped.steps if step.step_id == "display_package")
+    assert figure.inputs == [
+        curve,
+        risk,
+        f"{sensitivity}_exposure_contrasts",
+        "table:robustness_summary",
+        "table:measurement_process_audit",
+    ]
+    assert [panel.article_role for panel in figure.figure_panels] == [
+        "primary_estimand",
+        "descriptive_result",
+        "robustness",
+        "robustness",
+        "data_quality",
+    ]
+    assert findings[0].detail["reason_code"] == (
+        "landmark_association_composite_figure_rebound"
+    )
 
 
 def test_signed_landmark_renderer_reuses_article_step_and_measurement_alias() -> None:
@@ -1045,3 +1281,173 @@ def test_cohort_accounting_figure_prefers_unique_primary_population_flow() -> No
     assert renderer.input_consumption_contracts[0].input_key == (
         "table:landmark_population_flow"
     )
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        None,
+        "missing_audit",
+        "missing_robustness",
+        "ambiguous_source",
+        "filtered_composite",
+    ],
+)
+def test_composite_audits_move_only_to_existing_closed_displays(broken):
+    from easyicu.research_agent.planning.figure_plan_shaping import (
+        apply_runtime_bound_figure_contracts,
+        omit_redundant_composite_audits,
+    )
+    from easyicu.research_agent.contracts.figure_plan import (
+        landmark_association_composite_panels,
+    )
+
+    plan = _plan_with_typed_data_quality_sources()
+    plan, _ = ensure_data_quality_figure_step(
+        plan=plan, context=_Ctx(plan.research_question)
+    )
+    curve_sources = [
+        "table:biomarker_rcs_curve",
+        "table:biomarker_adjusted_absolute_risk",
+    ]
+    sources = [
+        *curve_sources,
+        "table:robustness_summary",
+        "table:measurement_process_audit",
+    ]
+    primary = AnalysisStep(
+        step_id="primary",
+        planned_analysis_role="primary",
+        intent="Estimate curves.",
+        method="signed_landmark_restricted_cubic_spline",
+        expected_outputs=curve_sources,
+    )
+    robustness = AnalysisStep(
+        step_id="robust",
+        planned_analysis_role="sensitivity",
+        intent="Check sensitivity.",
+        method="robustness_sensitivity",
+        expected_outputs=["table:robustness_summary", "table:robustness_matrix"],
+    )
+    robust_display = AnalysisStep(
+        step_id="robust_display",
+        planned_analysis_role="auxiliary",
+        intent="Show sensitivity.",
+        method="visualization",
+        inputs=robustness.expected_outputs,
+        expected_outputs=["figure:robust"],
+        input_consumption_contracts=[
+            {"input_key": k, "mode": "all_rows"} for k in robustness.expected_outputs
+        ],
+    )
+    composite = AnalysisStep(
+        step_id="composite",
+        planned_analysis_role="auxiliary",
+        intent="Show curves and audits.",
+        method="visualization",
+        inputs=sources,
+        expected_outputs=["figure:curves"],
+        input_consumption_contracts=[
+            {"input_key": k, "mode": "all_rows"} for k in sources
+        ],
+        figure_panels=[
+            p.bind(figure_output="figure:curves")
+            for p in landmark_association_composite_panels(sources)
+        ],
+    )
+    if broken == "missing_audit":
+        plan.steps.pop()
+    if broken == "filtered_composite":
+        composite.input_consumption_contracts = []
+    plan.steps.extend([primary, robustness, composite])
+    if broken != "missing_robustness":
+        plan.steps.append(robust_display)
+    if broken == "ambiguous_source":
+        plan.steps.append(robustness.model_copy(update={"step_id": "other_robustness"}))
+    original = plan.model_dump(mode="json")
+    shaped, findings = omit_redundant_composite_audits(plan=plan)
+    assert plan.model_dump(mode="json") == original
+    actual = next(s for s in shaped.steps if s.step_id == "composite")
+    assert actual.inputs == (curve_sources if broken is None else sources)
+    assert bool(findings) is (broken is None)
+    if broken is None:
+        assert len(actual.figure_panels) == 2
+        assert set(c.input_key for c in actual.input_consumption_contracts) == set(
+            curve_sources
+        )
+        again, repeated = omit_redundant_composite_audits(plan=shaped)
+        assert again == shaped and repeated == []
+        rebound = apply_runtime_bound_figure_contracts(shaped, [])
+        assert len(rebound.steps) == len(shaped.steps)
+        assert (
+            next(s for s in rebound.steps if s.step_id == "composite").inputs
+            == curve_sources
+        )
+
+
+def test_late_primary_population_binding_reuses_existing_cohort_figure():
+    from easyicu.research_agent.planning.figure_plan_shaping import (
+        apply_runtime_bound_figure_contracts,
+    )
+
+    cohort = AnalysisStep(
+        step_id="cohort",
+        planned_analysis_role="auxiliary",
+        intent="Describe eligible cohort.",
+        method="cohort_definition_and_attrition",
+        expected_outputs=["artifact:analysis_cohort", "table:cohort_flow"],
+    )
+    initial = AnalysisPlan(research_question="Association", steps=[cohort])
+    initial, _ = ensure_cohort_accounting_figure_step(plan=initial)
+    renderer_id = initial.steps[-1].step_id
+    primary = AnalysisStep(
+        step_id="primary",
+        planned_analysis_role="primary",
+        intent="Fit the prespecified population.",
+        method="signed_landmark_restricted_cubic_spline",
+        expected_outputs=["table:primary_population_flow"],
+    )
+    bound = initial.model_copy(update={"steps": [cohort, primary, initial.steps[-1]]})
+    result = apply_runtime_bound_figure_contracts(bound, [])
+    assert len(result.steps) == len(bound.steps)
+    rendered = next(s for s in result.steps if s.step_id == renderer_id)
+    assert rendered.inputs == ["table:primary_population_flow"]
+    assert [
+        c.input_key for c in rendered.input_consumption_contracts
+    ] == rendered.inputs
+    assert rendered.figure_panels[0].source_products == rendered.inputs
+    assert result.steps[0] == cohort and result.steps[1] == primary
+    assert apply_runtime_bound_figure_contracts(result, []) == result
+
+
+def test_ambiguous_primary_population_does_not_relabel_broad_cohort():
+    from easyicu.research_agent.planning.figure_plan_shaping import (
+        apply_runtime_bound_figure_contracts,
+    )
+
+    cohort = AnalysisStep(
+        step_id="cohort",
+        planned_analysis_role="auxiliary",
+        intent="Describe cohort.",
+        method="cohort_definition_and_attrition",
+        expected_outputs=["table:cohort_flow"],
+    )
+    plan, _ = ensure_cohort_accounting_figure_step(
+        plan=AnalysisPlan(research_question="Association", steps=[cohort])
+    )
+    original_renderer = plan.steps[-1]
+    for name in ("first", "second"):
+        plan.steps.insert(
+            1,
+            AnalysisStep(
+                step_id=name,
+                planned_analysis_role="primary",
+                intent="Estimate population.",
+                method="adjusted_association",
+                expected_outputs=[f"table:{name}_population_flow"],
+            ),
+        )
+    result = apply_runtime_bound_figure_contracts(plan, [])
+    actual = next(s for s in result.steps if s.step_id == original_renderer.step_id)
+    assert actual.inputs == ["table:cohort_flow"]
+    assert len(result.steps) == len(plan.steps)

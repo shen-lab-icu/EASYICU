@@ -1,3 +1,4 @@
+/* Owner: API transport bridge (mock catalog -> live /api/*). */
 /* EasyICU real-data bridge.
    Replaces the mock catalog from data-catalog.js with live data served by the
    FastAPI backend (/api/catalog). Loaded after data-catalog.js, so window.EU_CATALOG
@@ -567,10 +568,11 @@
       + '/data-workbench-snapshot?snapshot_sha256=' + encodeURIComponent(snapshotSha256)
     );
   }
-  function piCopilotResearchDocumentUrl(projectId, runId, documentName) {
+  function piCopilotResearchDocumentUrl(projectId, runId, documentName, expectedSha256) {
     return '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
       + '/runs/' + encodeURIComponent(runId)
-      + '/documents/' + encodeURIComponent(documentName);
+      + '/documents/' + encodeURIComponent(documentName)
+      + (expectedSha256 ? '?expected_sha256=' + encodeURIComponent(expectedSha256) : '');
   }
   function createPageGuideSession(body) {
     return postJSON('/api/page-guide/sessions', body || {});

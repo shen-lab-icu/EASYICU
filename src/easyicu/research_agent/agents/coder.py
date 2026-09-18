@@ -431,6 +431,15 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "header. Other schema fields are representation facts, never authority for "
         "an exposure, outcome, method, cohort, estimand, or role. Select only exact "
         "declared columns; fail closed instead of using positional/dtype fallbacks.\n"
+        # A measurement audit row can carry two overlapping partitions of the same "
+        # cohort under four plausible names, and a generated figure that adds them "
+        # or picks one numerator silently reports a misleading share -- measured "
+        # 2026-09-12, when a repaired article figure did exactly that and the "
+        # concept audit blocked the step. The producer now states which sums each "
+        # row satisfies, so the rule is to read that statement, not to invent one.
+        "- partition_identities binds a row's valid sums and its own *_pct "
+        "denominator; never combine overlapping counts, recompute from n_total, "
+        "or require unstated sums.\n"
         "- A typed product without product_contract.columns is non-tabular. "
         "Load its digest-bound representation by suffix; never invent a table schema. "
         "For JSON, a present product_contract.json_structure is the exact "
@@ -627,6 +636,13 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
             "FigureContract.source_data and step_summary. Never replace them "
             "with generic value/count/denominator rows."
         )
+        # The manuscript projection refuses to write a legend a contract did not
+        # state, so a repair round that dropped reader_caption could trade the
+        # figure's only manuscript legend for a layout fix; measured 2026-09-12.
+        lines.append(
+            "- FIGURE READER LEGEND (binding): the rewritten contract still states "
+            "reader_caption in one plain line describing only what this figure draws."
+        )
         lines.extend(_figure_panel_scope_contract(step))
     lines.extend(
         [
@@ -739,15 +755,11 @@ class CoderAgent:
             )
             + "\n\n"
             "OUTPUT FORMAT — VERY IMPORTANT:\n"
-            "Return *only* a complete, runnable Python script. A "
-            "```python … ``` fence is acceptable; any text outside "
-            "the fence will be discarded. Do NOT include the cohort "
-            "data inline; read it from `os.environ['COHORT_PARQUET']`. "
-            "Do NOT print or describe what the script does — write "
-            "the script itself. Respect explicit user preferences "
-            "recorded in the ResearchContext, especially requested "
-            "outputs, evaluation metrics, timing rules, and design "
-            "constraints.\n\n"
+            "Return only a complete runnable Python script; a Python fence is "
+            "allowed and outside text is discarded. Read the cohort from "
+            "`os.environ['COHORT_PARQUET']`; never inline it. Emit no explanation. "
+            "Honor ResearchContext preferences for outputs, metrics, timing, and "
+            "design.\n\n"
             "STEP-SCOPED RESEARCH CONTEXT:\n"
             + _format_context(
                 scoped_context,

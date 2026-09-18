@@ -23,6 +23,11 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 
+from ...hospital_mortality import (
+    HospitalMortalityStatusError,
+    hospital_mortality_status_from_flag,
+    join_mimic_hospital_admissions,
+)
 
 MIMIC_IV_HOSPITAL_MORTALITY_FOLLOWUP_COLUMNS = (
     "stay_id",
@@ -61,28 +66,14 @@ class HospitalMortalityFollowup:
             )
 
 
-def _require_columns(frame: pd.DataFrame, *, label: str, columns: tuple[str, ...]) -> None:
+def _require_columns(
+    frame: pd.DataFrame, *, label: str, columns: tuple[str, ...]
+) -> None:
     missing = sorted(set(columns) - set(frame.columns))
     if missing:
         raise HospitalMortalityFollowupError(
             f"hospital_followup_{label}_columns_missing",
             f"The raw {label} table lacks required columns: {', '.join(missing)}.",
-        )
-
-
-def _require_unique_nonmissing_key(
-    frame: pd.DataFrame, *, label: str, key: str
-) -> None:
-    values = frame[key]
-    if bool(values.isna().any()):
-        raise HospitalMortalityFollowupError(
-            f"hospital_followup_{label}_key_missing",
-            f"The raw {label} table has missing {key} values.",
-        )
-    if bool(values.duplicated().any()):
-        raise HospitalMortalityFollowupError(
-            f"hospital_followup_{label}_key_nonunique",
-            f"The raw {label} table has non-unique {key} values.",
         )
 
 
@@ -117,7 +108,9 @@ def derive_mimic_iv_hospital_mortality_followup(
     silently recoded or assigned ICU length of stay.
     """
 
-    if not isinstance(icustays, pd.DataFrame) or not isinstance(admissions, pd.DataFrame):
+    if not isinstance(icustays, pd.DataFrame) or not isinstance(
+        admissions, pd.DataFrame
+    ):
         raise TypeError("MIMIC-IV hospital follow-up requires pandas DataFrames")
     _require_columns(
         icustays,
@@ -134,31 +127,21 @@ def derive_mimic_iv_hospital_mortality_followup(
             "hospital_expire_flag",
         ),
     )
-    _require_unique_nonmissing_key(icustays, label="icustays", key="stay_id")
-    _require_unique_nonmissing_key(admissions, label="admissions", key="hadm_id")
-
-    stay_rows = icustays[["stay_id", "hadm_id", "intime"]].copy()
-    stay_rows["__input_order"] = np.arange(len(stay_rows), dtype=np.int64)
-    admission_rows = admissions[
-        ["hadm_id", "dischtime", "deathtime", "hospital_expire_flag"]
-    ].copy()
-    joined = stay_rows.merge(
-        admission_rows,
-        on="hadm_id",
-        how="left",
-        sort=False,
-        validate="many_to_one",
-        indicator="__admission_match",
-    )
-    joined = joined.sort_values("__input_order", kind="stable").reset_index(drop=True)
+    try:
+        joined = join_mimic_hospital_admissions(icustays, admissions)
+    except HospitalMortalityStatusError as exc:
+        raise HospitalMortalityFollowupError(
+            exc.code.replace("hospital_status_", "hospital_followup_", 1),
+            "The raw hospital-status linkage is ambiguous.",
+        ) from exc
 
     intime, invalid_intime = _timestamps(joined["intime"])
     dischtime, invalid_dischtime = _timestamps(joined["dischtime"])
     deathtime, invalid_deathtime = _timestamps(joined["deathtime"])
-    raw_event = pd.to_numeric(joined["hospital_expire_flag"], errors="coerce")
-    event_flag_valid = raw_event.isin([0, 1]) & np.isfinite(raw_event)
-    event = raw_event.eq(1)
-    censor = raw_event.eq(0)
+    status = hospital_mortality_status_from_flag(joined["hospital_expire_flag"])
+    event_flag_valid = status.notna()
+    event = status.fillna(False).astype(bool)
+    censor = (~status).fillna(False).astype(bool)
 
     reason = pd.Series("", index=joined.index, dtype="object")
     _first_reason(
@@ -236,8 +219,7 @@ def derive_mimic_iv_hospital_mortality_followup(
     exclusion_counts = dict(sorted(exclusion_counts.items()))
     zero_time_events = int(
         (
-            valid_rows["hospital_death"].eq(1)
-            & valid_rows["death_time_hours"].eq(0.0)
+            valid_rows["hospital_death"].eq(1) & valid_rows["death_time_hours"].eq(0.0)
         ).sum()
     )
     zero_time_censoring = int(
@@ -260,12 +242,10 @@ def derive_mimic_iv_hospital_mortality_followup(
         },
         "censoring": {
             "followup_time_column": "hospital_followup_time_hours",
-            "rule": (
-                "event_at_deathtime_else_censor_at_hospital_discharge_time"
-            ),
+            "rule": ("event_at_deathtime_else_censor_at_hospital_discharge_time"),
             "source": "admissions.dischtime - icustays.intime",
         },
-        "input_stays": int(len(stay_rows)),
+        "input_stays": int(len(joined)),
         "valid_stays": int(len(valid_rows)),
         "excluded_stays": int(len(exclusions)),
         "event_stays": int(valid_rows["hospital_death"].sum()),

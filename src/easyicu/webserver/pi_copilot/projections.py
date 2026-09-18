@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..research_input_progress import project_research_input_state
 from . import cohort_eligibility
 from .contracts import PiCopilotError, plan_approval_allowed
 from .user_visible_text import project_user_turn_text, sanitize_user_visible_text
@@ -430,6 +431,33 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     }
     artifacts = result.get("artifacts")
     artifacts = artifacts if isinstance(artifacts, list) else []
+    revision = result.get("report_revision")
+    revision = revision if isinstance(revision, Mapping) else {}
+    own_revision = bool(revision.get("revision_id") == snapshot.get("id") and revision)
+    report_only = own_revision or any(
+        isinstance(event, Mapping) and event.get("step") == "report_repair"
+        for event in events
+    )
+    revision_ready = bool(
+        own_revision and snapshot.get("status") == "done"
+        and revision.get("schema_version") == "easyicu.web-report-revision/1"
+        and revision.get("source_run_id") == run_id
+        and revision.get("status") == "pass"
+        and revision.get("analysis_steps_executed") == 0
+        and revision.get("claim_ceiling") == "analysis_only"
+        and revision.get("publication_authorized") is False
+        and re.fullmatch(r"[a-f0-9]{64}", str(revision.get("output_sha256") or ""))
+    )
+    pdf = revision.get("pdf_artifact")
+    pdf = pdf if isinstance(pdf, Mapping) else {}
+    revision_pdf_ready = bool(
+        revision_ready and pdf.get("name") == "manuscript_revision.pdf"
+        and pdf.get("revision_id") == snapshot.get("id")
+        and pdf.get("manuscript_sha256") == revision.get("output_sha256")
+        and re.fullmatch(r"[a-f0-9]{64}", str(pdf.get("sha256") or ""))
+        and any(isinstance(row, Mapping) and row.get("name") == pdf.get("name")
+                and row.get("sha256") == pdf.get("sha256") for row in artifacts)
+    )
     artifact_names = {
         str(row.get("name") or "").strip()
         for row in artifacts
@@ -474,7 +502,9 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             continue
         name = _bounded_text(row.get("name"), 160)
         digest = _bounded_text(row.get("sha256"), 64).lower()
-        if diagnostic_only and name not in diagnostic_artifacts:
+        if diagnostic_only and name not in diagnostic_artifacts and not (
+            revision_pdf_ready and name == "manuscript_revision.pdf"
+        ):
             continue
         if (
             not run_id
@@ -494,6 +524,7 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                     else "research_document"
                     if name in {
                         "manuscript_scaffold.pdf",
+                        "manuscript_revision.pdf",
                         "manuscript_scaffold.tex",
                         "manuscript_scaffold.bib",
                     }
@@ -523,6 +554,9 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             "error_code": _safe_error_code(snapshot.get("error")),
             "progress": progress,
             "run_id": run_id,
+            "research_input_state": project_research_input_state(
+                result.get("research_input_state")
+            ),
             "artifact_refs": artifact_refs,
             "gate_status": stable_code(gate.get("status")),
             "gate_reason_code": stable_code(gate.get("reason")),
@@ -532,6 +566,10 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             "evidence_complete": gate_checks.get("evidence_complete") is True,
             "manuscript_ready": gate_checks.get("manuscript_ready") is True,
             "analysis_results_available": analysis_results_available,
+            "report_only": report_only,
+            "report_revision_ready": revision_ready,
+            "report_revision_pdf_ready": revision_pdf_ready,
+            "report_revision_id": stable_code(revision.get("revision_id")) if own_revision else "",
             "reportable": bool(gate.get("reportable")),
             "human_review_pending": bool(result.get("human_review_pending")),
         }
@@ -562,6 +600,33 @@ def project_run_outcome(review: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     artifact_payloads = (
         artifact_payloads if isinstance(artifact_payloads, Mapping) else {}
     )
+    provenance = artifact_payloads.get("manuscript_provenance.json") or {}
+    revision = (provenance.get("report_revision") or {}) if isinstance(provenance, Mapping) else {}
+    # This is draft availability only, not the immutable source manuscript
+    # gate or permission to publish. Payloads have passed the run ledger check.
+    projection["report_revision_ready"] = bool(
+        isinstance(revision, Mapping)
+        and revision.get("schema_version") == "easyicu.web-report-revision/1"
+        and revision.get("status") == "pass"
+        and revision.get("source_run_id") == review.get("run_id")
+        and revision.get("analysis_steps_executed") == 0
+        and revision.get("claim_ceiling") == "analysis_only"
+        and revision.get("publication_authorized") is False
+        and re.fullmatch(r"[a-f0-9]{64}", str(revision.get("output_sha256") or ""))
+        and revision.get("output_sha256") == provenance.get("manuscript_sha256")
+    )
+    pdf = revision.get("pdf_artifact") if isinstance(revision, Mapping) else None
+    projection["report_revision_pdf_ready"] = bool(
+        projection["report_revision_ready"] and isinstance(pdf, Mapping)
+        and pdf.get("name") == "manuscript_revision.pdf"
+        and pdf.get("revision_id") == revision.get("revision_id")
+        and pdf.get("manuscript_sha256") == revision.get("output_sha256")
+        and any(row.get("artifact") == pdf.get("name") and row.get("sha256") == pdf.get("sha256")
+                for row in projection.get("artifact_refs", []))
+    )
+    if not projection["report_revision_pdf_ready"]:
+        projection["artifact_refs"] = [row for row in projection.get("artifact_refs", [])
+                                       if row.get("artifact") != "manuscript_revision.pdf"]
     figure_gallery = artifact_payloads.get("figure_gallery.json")
     if isinstance(figure_gallery, Mapping):
         figures = figure_gallery.get("figures")
@@ -589,6 +654,8 @@ def project_run_outcome(review: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                 "numeric_verified",
                 "evidence_complete",
                 "manuscript_ready",
+                "report_revision_ready",
+                "report_revision_pdf_ready",
                 "analysis_results_available",
                 "figure_count",
                 "reportable",

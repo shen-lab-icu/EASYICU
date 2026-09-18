@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import os
 import secrets
+from html import escape
 from urllib.parse import parse_qsl, urlencode
 
 from fastapi import FastAPI
 from starlette.datastructures import MutableHeaders, QueryParams
-from starlette.responses import JSONResponse, RedirectResponse
+from starlette.responses import HTMLResponse, JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 DESKTOP_SESSION_ENV = "EASYICU_DESKTOP_SESSION_TOKEN"
@@ -72,7 +73,23 @@ class DesktopSessionMiddleware:
             location = str(scope.get("path") or "/")
             if clean_query:
                 location = f"{location}?{clean_query}"
-            response = RedirectResponse(location, status_code=303)
+            # WKWebView arrives from tauri://localhost. An HTTP redirect keeps
+            # that cross-site navigation context and drops the Strict cookie.
+            # Establish a loopback document before navigating to the clean URL.
+            response = HTMLResponse(
+                '<!doctype html><html><head><meta charset="utf-8">'
+                '<meta http-equiv="refresh" content="0;url='
+                + escape(location, quote=True)
+                + '"><title>EasyICU</title></head>'
+                '<body>Opening EasyICU…</body></html>',
+                headers={
+                    "Cache-Control": "no-store",
+                    "Referrer-Policy": "no-referrer",
+                    "Content-Security-Policy": (
+                        "default-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+                    ),
+                },
+            )
             response.set_cookie(
                 DESKTOP_COOKIE,
                 self.token,

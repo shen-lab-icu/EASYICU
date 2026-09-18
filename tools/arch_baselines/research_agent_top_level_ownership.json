@@ -13,6 +13,10 @@
       "owner": "frozen_benchmark_facade",
       "reason": "Thin instance-id facade over the frozen ICUAgentBench suite and scorer authority."
     },
+    "bibliographic_metadata.py": {
+      "owner": "shared_literature_metadata",
+      "reason": "Exact-match, source-verified author completion shared by literature planning and manuscript readers."
+    },
     "canonical_json.py": {
       "owner": "shared_primitive",
       "reason": "Single canonical serialization primitive used across authorities."

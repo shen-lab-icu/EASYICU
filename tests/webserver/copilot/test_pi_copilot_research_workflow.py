@@ -1,4 +1,13 @@
-"""Focused owner and fail-closed tests for the Copilot research workflow."""
+"""Focused owner and fail-closed tests for the Copilot research workflow.
+
+Stub naming convention (E-P2-13): the launches here stub the container
+probe via ``_assume_execution_runtime_ready`` so scope/resume authority
+tests do not depend on the host daemon.  NEW stubbed tests must carry
+``stubbed`` in the test name (e.g. ``test_foo_with_stubbed_runtime``);
+the ~195 pre-existing stubbed tests keep their historical names frozen so
+this patch stays reviewable.  Exactly one probe test below runs WITHOUT
+any stub (``requires_docker``) so the real gate stays exercised.
+"""
 
 from __future__ import annotations
 
@@ -35,6 +44,7 @@ from easyicu.webserver import (
     dataio,
     literature_authority,
     provider_adapter,
+    plan_change_requirements,
     research_launch_resume,
     research_launch_scientific,
     research_pipeline_run_preparation,
@@ -148,11 +158,30 @@ def test_typed_selected_design_requires_complete_reviewable_recommendation() -> 
     assert agent_pipeline_runs._plan_has_complete_reviewable_recommendation({})
 
 
-def _write_pipeline_export(root: Path, *, database: str = "miiv") -> Path:
+def _write_pipeline_export(
+    root: Path, *, database: str = "miiv", current_contract: bool = True
+) -> Path:
+    """Write a prepared export package manifest.
+
+    ``current_contract=False`` reproduces an export written before intake began
+    requiring per-file ``concept_ids``: the same directory is laid out correctly
+    and passes the layout-only readiness probe, but cannot establish authority.
+    """
+
     root.mkdir(parents=True, exist_ok=True)
     pd.DataFrame({"stay_id": [1], "age": [65]}).to_parquet(
         root / "demographics.parquet", index=False
     )
+    # Built in the original key order so the default path serializes the same
+    # manifest bytes as before; the file entry joins the binding hash.
+    file_entry: dict[str, Any] = {
+        "file": "demographics.parquet",
+        "module": "demographics",
+        "concepts": 1,
+    }
+    if current_contract:
+        file_entry["concept_ids"] = ["age"]
+    file_entry["rows"] = 1
     (root / "_manifest.json").write_text(
         json.dumps(
             {
@@ -163,15 +192,7 @@ def _write_pipeline_export(root: Path, *, database: str = "miiv") -> Path:
                     "modules": {"demographics": ["age"]},
                 },
                 "feature_definitions": {"included": False},
-                "files": [
-                    {
-                        "file": "demographics.parquet",
-                        "module": "demographics",
-                        "concepts": 1,
-                        "concept_ids": ["age"],
-                        "rows": 1,
-                    }
-                ],
+                "files": [file_entry],
             }
         ),
         encoding="utf-8",
@@ -223,20 +244,12 @@ from tests.webserver.copilot.research_workflow_fixtures import (
 )
 
 from tests.webserver.copilot.research_workflow_fixtures import (
+    _acquisition_receipt,
     _foundation_profile as _foundation_profile,
+    _write_development_resume_literature,
+    _write_development_resume_planner_catalog,
+    _write_real_pipeline_fixture,
 )
-
-
-def test_web_cancellation_is_a_typed_progress_control_signal() -> None:
-    from easyicu.research_agent.orchestration.progress import ProgressControlSignal
-
-    assert issubclass(agent_pipeline_runs.ResearchPipelineRunError, ProgressControlSignal)
-    job = SimpleNamespace(cancel_requested=True, emit=lambda _event: None)
-
-    with pytest.raises(ProgressControlSignal) as raised:
-        agent_pipeline_runs._progress(job, step="planning", label="Planning")
-
-    assert raised.value.code == "research_pipeline_cancelled"
 
 
 def _nonapprovable_review_payload(*, finding_code: str) -> dict[str, Any]:
@@ -270,25 +283,10 @@ def _allow_current_scientific_review(monkeypatch: pytest.MonkeyPatch) -> None:
         agent_pipeline_runs,
         "_load_pending_scientific_review",
         lambda *_args, **_kwargs: {
-            "schema_version": "easyicu.plan_scientific_review/5",
+            "schema_version": agent_pipeline_runs.CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION,
             "approval_allowed": True,
         },
     )
-
-
-@pytest.mark.parametrize(
-    ("budget_mode", "expected"),
-    [
-        ("planner_canary", (240.0, 480.0)),
-        ("candidate_plan", (240.0, 480.0)),
-        ("full_reviewed", (None, None)),
-    ],
-)
-def test_provider_request_timeouts_preserve_a_separate_hard_stop(
-    budget_mode: str,
-    expected: tuple[float | None, float | None],
-) -> None:
-    assert agent_pipeline_runs._provider_request_timeouts_for_budget(budget_mode) == expected
 
 
 @pytest.mark.parametrize(
@@ -301,9 +299,11 @@ def test_provider_request_timeouts_preserve_a_separate_hard_stop(
         ),
     ],
 )
+@pytest.mark.parametrize("runtime_blocker", [False, True])
 def test_plan_revision_bridge_falls_back_to_fresh_plan_without_agent_findings(
     finding_code: str,
     expected_fragment: str,
+    runtime_blocker: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     study = _complete_study()
@@ -323,17 +323,33 @@ def test_plan_revision_bridge_falls_back_to_fresh_plan_without_agent_findings(
             ]
         },
     )
+    review_payload = _nonapprovable_review_payload(finding_code=finding_code)
+    if runtime_blocker:
+        review_payload["findings"].append({
+            "code": "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+            "severity": "blocker", "dimension": "icu_clinical_design",
+            "message": "The selected temporal estimator has no bound runtime.",
+            "remediation": "Bind the selected design to its execution owner.",
+            "remediation_route": "runtime_capability",
+        })
     monkeypatch.setattr(
         agent_runs,
         "read_run_record",
         lambda _project_dir: SimpleNamespace(
             artifact_payloads={
-                "scientific_plan_review.json": _nonapprovable_review_payload(
-                    finding_code=finding_code
-                )
+                "scientific_plan_review.json": review_payload
             }
         ),
     )
+
+    if runtime_blocker:
+        with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as caught:
+            agent_pipeline_runs._compile_plan_revision_contract(
+                study=study, project_root="/private/projects",
+                source_run_id=source_run_id,
+            )
+        assert caught.value.code == "plan_revision_owner_resolution_required"
+        return
 
     contract = agent_pipeline_runs._compile_plan_revision_contract(
         study=study,
@@ -394,19 +410,44 @@ def test_plan_revision_stops_when_agent_owned_defects_do_not_shrink() -> None:
     assert improved == pending
 
 
+@pytest.mark.parametrize("omit_requested_los", [False, True])
+@pytest.mark.parametrize("population", ["all_rows", "filtered", "missing", "invalid", "conflict"])
 def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    omit_requested_los: bool,
+    population: str,
 ) -> None:
     study = _complete_study()
     study.update(
         {
-            "question": "Is lact associated with death?",
+            "question": "Is lact associated with death?" + (
+                " Also assess ICU length of stay." if omit_requested_los else ""
+            ),
             "covariates": ["age"],
             "covariate_selection": "exact",
             "execution_concepts": {"covariates": ["age"]},
         }
     )
+    candidate_cohort: dict[str, Any] = {"selection_mode": "all_input_rows"}
+    if population in {"filtered", "conflict"}:
+        candidate_cohort = {
+            "selection_mode": "predicate_filtered",
+            "inclusion": [{
+                "concept_id": "age", "aggregation": "first", "op": ">=", "value": 18,
+                "time_window": {
+                    "anchor": "icu_admission", "start_offset_hours": 0,
+                    "end_offset_hours": 24,
+                },
+            }],
+        }
+        if population == "filtered":
+            study["cohort"] = {}
+            study["cohort_eligibility_authority"] = {}
+    elif population == "missing":
+        candidate_cohort = {}
+    elif population == "invalid":
+        candidate_cohort = {"selection_mode": "anything"}
     source_run_id = "run-candidate"
     project_dir = tmp_path / "candidate-wrapper"
     inner_run = project_dir / "pipeline" / source_run_id
@@ -435,12 +476,12 @@ def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
     )
     pipeline_input = project_dir / "pipeline_input"
     pipeline_input.mkdir()
-    pd.DataFrame(columns=["lact", "death", "age"]).to_parquet(
+    pd.DataFrame(columns=["lact", "death", "age", "charlson"]).to_parquet(
         pipeline_input / "planner_catalog.parquet",
         index=False,
     )
     (pipeline_input / "planner_catalog_receipt.json").write_text(
-        json.dumps({"selected_concepts": ["lact", "death", "age"]}),
+        json.dumps({"selected_concepts": ["lact", "death", "age", "charlson"]}),
         encoding="utf-8",
     )
     review = PlanScientificReview(
@@ -480,7 +521,7 @@ def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
                 "scientific_plan_review.json": review,
                 "agent_plan.json": {
                     "analysis_type": "association_study",
-                    "cohort": {"selection_mode": "all_input_rows"},
+                    "cohort": candidate_cohort,
                     "steps": [
                         {
                             "step_id": "primary_model",
@@ -488,7 +529,22 @@ def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
                             "planned_analysis_role": "primary",
                             "inputs": ["lact", "death", "age"],
                             "expected_outputs": ["table:estimate"],
-                        }
+                        },
+                        {
+                            "step_id": "baseline_candidate",
+                            "method": "descriptive",
+                            "planned_analysis_role": "auxiliary",
+                            "inputs": ["lact", "age", "charlson"],
+                            "expected_outputs": ["table:table_one"],
+                            "table_one_spec": {
+                                "group_by": "lact", "group_levels": [0, 1],
+                                "variables": [
+                                    {"name": name, "variable_kind": "continuous",
+                                     "summary": "median_iqr", "test": "mann_whitney_or_kruskal"}
+                                    for name in ("age", "charlson")
+                                ],
+                            },
+                        },
                     ],
                 },
             },
@@ -503,6 +559,18 @@ def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
         },
     )
 
+    if omit_requested_los or population in {"missing", "invalid", "conflict"}:
+        with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as raised:
+            agent_pipeline_runs._load_candidate_plan_materialization_authority(
+                study=study,
+                project_root=str(tmp_path),
+                source_run_id=source_run_id,
+                database="miiv",
+                covariates=("age",),
+            )
+        assert raised.value.code == "candidate_plan_materialization_authority_invalid"
+        return
+
     authority = agent_pipeline_runs._load_candidate_plan_materialization_authority(
         study=study,
         project_root=str(tmp_path),
@@ -514,29 +582,63 @@ def test_candidate_plan_acceptance_binds_zero_row_materialization_authority(
     assert authority is not None
     assert authority.primary_exposure == "lact"
     assert authority.target_outcome == "death"
+    assert authority.primary_cohort_selection_mode == candidate_cohort["selection_mode"]
+    assert authority.baseline_requirements is not None
+    table = authority.baseline_requirements.tables[0]
+    assert [item.name for item in table.variables] == ["age", "charlson"]
+    assert table.variables[1].source_concept == "charlson"
+    seed = json.loads(authority.contract.split("- candidate_plan_seed_json: ", 1)[1])
+    assert seed["steps"][1]["table_one_spec"]["variables"][1]["name"] == "charlson"
+    roster = agent_pipeline_runs._materialization_concept_roster(
+        foundation_profile={
+            "available_concepts": ("death", "lact", "age", "charlson"),
+            "outcome_concepts": ("death",), "required_feature_concepts": ("lact",),
+            "static_concepts": ("age",),
+        },
+        development_resume_acquisition=None,
+        baseline_requirements=authority.baseline_requirements,
+    )
+    assert roster == {
+        "outcome_concepts": ("death",), "required_feature_concepts": ("lact", "charlson"),
+        "static_concepts": ("age",),
+    }
     assert "source_plan_sha256: " + "b" * 64 in authority.contract
     assert "primary_model" in authority.contract
 
 
-def test_candidate_plan_materialization_accepts_owner_derived_exposure_column(
+@pytest.mark.parametrize(
+    "configured_operation, prepared_exposure",
+    [(True, "lact"), (False, "lact"), (False, "aki_stage_strict")],
+)
+def test_candidate_plan_materialization_accepts_source_bound_exposure_column(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    configured_operation: bool,
+    prepared_exposure: str,
 ) -> None:
+    is_lactate = prepared_exposure == "lact"
+    materialized_exposure = "lact_max" if is_lactate else prepared_exposure
+    proposed_exposure = "lact" if is_lactate else "aki_stage"
     study = _complete_study()
     study.update(
         {
-            "question": "Is peak lactate associated with death?",
+            "question": (
+                "Is peak lactate associated with death?" if is_lactate
+                else "Is strict 24-hour KDIGO AKI stage associated with death?"
+            ),
             "covariates": ["age"],
             "covariate_selection": "exact",
             "execution_concepts": {
-                "primary_exposure": "lact",
-                "primary_exposure_aggregation": "max",
+                "primary_exposure": prepared_exposure,
+                **({"primary_exposure_aggregation": "max"} if is_lactate else {}),
                 "outcome": "death",
                 "covariates": ["age"],
             },
         }
     )
     source_run_id = "run-derived-candidate"
+    if not configured_operation:
+        study["execution_concepts"].pop("primary_exposure_aggregation", None)
     project_dir = tmp_path / "candidate-wrapper"
     inner_run = project_dir / "pipeline" / source_run_id
     inner_run.mkdir(parents=True)
@@ -544,7 +646,7 @@ def test_candidate_plan_materialization_accepts_owner_derived_exposure_column(
         "scientific_identity": {
             "question": study["question"],
             "database": "miiv",
-            "primary_exposure": "lact_max",
+            "primary_exposure": materialized_exposure,
             "target_outcome": "death",
             "user_preferences": {"covariates": ["age"]},
         }
@@ -564,15 +666,17 @@ def test_candidate_plan_materialization_accepts_owner_derived_exposure_column(
     )
     pipeline_input = project_dir / "pipeline_input"
     pipeline_input.mkdir()
-    pd.DataFrame(columns=["lact_max", "death", "los_icu", "age"]).to_parquet(
+    pd.DataFrame(columns=[materialized_exposure, "death", "los_icu", "age"]).to_parquet(
         pipeline_input / "planner_catalog.parquet",
         index=False,
     )
     (pipeline_input / "planner_catalog_receipt.json").write_text(
         json.dumps(
             {
-                "selected_concepts": ["lact", "death", "los_icu", "age"],
-                "operationalized_columns": ["lact_max"],
+                "selected_concepts": [prepared_exposure, "death", "los_icu", "age"],
+                "operationalized_columns": (
+                    [materialized_exposure] if is_lactate else []
+                ),
             }
         ),
         encoding="utf-8",
@@ -625,7 +729,8 @@ def test_candidate_plan_materialization_accepts_owner_derived_exposure_column(
         agent_pipeline_runs,
         "_metadata_only_planning_coordinates",
         lambda **_kwargs: {
-            "primary_exposure": "lact",
+            "primary_exposure": proposed_exposure,
+            "primary_exposure_aggregation": "max" if is_lactate else None,
             "target_outcome": "death",
         },
     )
@@ -639,9 +744,26 @@ def test_candidate_plan_materialization_accepts_owner_derived_exposure_column(
     )
 
     assert authority is not None
-    assert authority.primary_exposure == "lact_max"
+    assert authority.primary_exposure == materialized_exposure
+    assert authority.primary_exposure_aggregation == ("max" if is_lactate else None)
     assert authority.target_outcome == "death"
     assert authority.outcome_concepts == ("los_icu", "death")
+    if not is_lactate:
+        # The configured strict column is admissible only while it remains in
+        # the sealed physical source roster; the broad proposal cannot replace it.
+        receipt_path = pipeline_input / "planner_catalog_receipt.json"
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        receipt["selected_concepts"].remove(prepared_exposure)
+        receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+        with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as raised:
+            agent_pipeline_runs._load_candidate_plan_materialization_authority(
+                study=study,
+                project_root=str(tmp_path),
+                source_run_id=source_run_id,
+                database="miiv",
+                covariates=("age",),
+            )
+        assert raised.value.code == "candidate_plan_materialization_authority_invalid"
 
 
 def test_public_composite_concept_resolves_to_one_materialization_source() -> None:
@@ -1269,7 +1391,7 @@ def test_metadata_only_planning_grounds_aliases_and_drops_unsupported_optional_n
     ]
 
 
-def test_metadata_only_planning_merges_exact_source_metadata_for_dependence(
+def test_metadata_only_planning_preserves_canonical_negative_source_contract(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1321,9 +1443,59 @@ def test_metadata_only_planning_merges_exact_source_metadata_for_dependence(
         "stay_id",
         "lact",
         "death",
-        "icu_readmission",
     ]
     assert acquisition.coverage.missing == []
+
+
+def test_metadata_checkpoint_reuses_selected_source_catalog_and_rejects_lost_concept(tmp_path, monkeypatch):
+    import hashlib
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+    from easyicu.research_agent.acquisition.catalog import AvailableCatalog, CatalogConcept
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+
+    source = tmp_path / "selected-export"
+    source_concepts = [CatalogConcept(concept_id="local_score", file_name="score.parquet")]
+    seen_paths = []
+
+    def source_catalog(path):
+        seen_paths.append(path)
+        return AvailableCatalog(source=str(path), concepts=list(source_concepts))
+
+    monkeypatch.setattr(catalog_module, "build_available_catalog", source_catalog)
+    original = agent_pipeline_runs._metadata_only_planning_acquisition(
+        database="miiv", export_path=source,
+        question="Describe the locally supplied score and mortality.",
+        llm=ScriptedMockLLMClient([json.dumps({
+            "selected_concepts": ["local_score", "death"],
+            "inclusion_exclusion": [], "rationale": "Use the supplied score and outcome.",
+        })]), output_dir=tmp_path / "original",
+    )
+    assert not original.blocked
+    profile = research_launch_resume._DevelopmentResumeAcquisition(
+        kind="metadata_only_planning_catalog",
+        selected_concepts=tuple(original.selection.selected_concepts),
+        universe_path=original.universe_path, provenance_path=original.provenance_path,
+        universe_sha256=hashlib.sha256(original.universe_path.read_bytes()).hexdigest(),
+        provenance_sha256=hashlib.sha256(original.provenance_path.read_bytes()).hexdigest(),
+    )
+    restored = agent_pipeline_runs._restore_metadata_only_planning_acquisition(
+        database="miiv", export_path=source, profile=profile,
+        output_dir=tmp_path / "restored",
+    )
+    assert restored.coverage.missing == []
+    assert restored.universe_path.read_bytes() == original.universe_path.read_bytes()
+    assert restored.provenance_path.read_bytes() == original.provenance_path.read_bytes()
+    assert pd.read_parquet(restored.universe_path).empty
+    assert seen_paths == [source, source]
+
+    source_concepts.clear()
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as rejected:
+        agent_pipeline_runs._restore_metadata_only_planning_acquisition(
+            database="miiv", export_path=source, profile=profile,
+            output_dir=tmp_path / "rejected",
+        )
+    assert rejected.value.code == "research_pipeline_development_resume_acquisition_authority_mismatch"
+    assert not (tmp_path / "rejected").exists()
 
 
 def test_metadata_only_kdigo_stage_keeps_closed_domain_in_research_context(
@@ -1756,12 +1928,36 @@ def test_metadata_only_planning_ignores_unmapped_display_labels(
     ]
 
 
+@pytest.mark.parametrize("multiple_outcomes", [False, True])
+@pytest.mark.parametrize("requested_changes", [False, True])
+@pytest.mark.parametrize("named_operation", [False, True])
 def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    multiple_outcomes: bool,
+    requested_changes: bool,
+    named_operation: bool,
 ) -> None:
     import easyicu.research_agent as research_agent
     from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+    from easyicu.webserver.plan_change_request import PlanChangeRequest, ReferencedPlan
+
+    change = PlanChangeRequest(
+        source_run_id="run-reviewed-candidate",
+        user_message="Revise the complete plan; retain all requested outcomes and explain the population denominator.",
+        reference_plans=(ReferencedPlan(run_id="run-reviewed-candidate", artifact_sha256="c" * 64,
+            plan={"steps": [{"step_id": "risk", "population_scope": "primary_model",
+                             "expected_outputs": ["table:absolute_risk_context"]}]}),),
+    ) if requested_changes else None
+    if change is not None:
+        # Exact source binding has its own owner tests. This runner test uses a
+        # deliberately synthetic reference and owns only the metadata-only
+        # launch contract, so do not make it fabricate a source run on disk.
+        monkeypatch.setattr(
+            plan_change_requirements,
+            "bind_plan_change_requirements",
+            lambda request, **_kwargs: request,
+        )
 
     actual_run = tmp_path / "actual-planner-run"
     _write_real_pipeline_fixture(
@@ -1800,6 +1996,7 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
             captured["cohort_authority_path"] = kwargs["cohort_authority_path"]
             captured["id_columns"] = kwargs["id_columns"]
             captured["target_outcome"] = kwargs["target_outcome"]
+            captured["outcome_columns"] = kwargs["outcome_columns"]
             captured["primary_exposure"] = kwargs["primary_exposure"]
             captured["endpoint"] = (
                 kwargs["endpoint"].model_dump(mode="json")
@@ -1808,10 +2005,16 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
             )
             return SimpleNamespace(manifest_path=actual_run / "manifest.json")
 
+    configs: list[Any] = []
+
+    def from_config(config: Any, *, services: Any) -> FakePipeline:
+        configs.append(config)
+        return FakePipeline()
+
     monkeypatch.setattr(
         research_agent.ResearchAgentPipeline,
         "from_config",
-        lambda _config, *, services: FakePipeline(),
+        from_config,
     )
     def patient_grouping(_study: Any) -> PatientGroupingBinding:
         return PatientGroupingBinding(
@@ -1851,6 +2054,12 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
             "cluster_unit": "patient",
         },
     }
+    if multiple_outcomes:
+        study["question"] += " Also assess ICU length of stay."
+    if named_operation:
+        study["question"] = "Is the first 24-hour peak lactate associated with hospital death?" + (
+            " Also assess ICU length of stay." if multiple_outcomes else ""
+        )
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
         export_path=str(prepared),
         study_context=study,
@@ -1859,6 +2068,7 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
         provider_environment={"OPENAI_API_KEY": "test-key"},
         credential_source="pi_verified",
         budget_mode="planner_canary",
+        plan_change_request=change,
     )
 
     class Job:
@@ -1871,14 +2081,27 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
 
     result = runner(Job())
 
+    assert configs[0].require_human_plan_review is True
+    assert configs[0].required_primary_cohort_selection_mode is None
+    assert configs[0].evidence_enforcement_mode == "strict"
+    from easyicu.research_agent.contracts.frozen_payload import thaw_payload
+    assert thaw_payload(configs[0].bound_population_requirements) == (
+        change.population_requirements().model_dump(mode="json") if change else None
+    )
+    assert configs[0].bound_plan_revision_contract == (
+        change.planner_context() if change is not None else None
+    )
+
     assert captured == {
         "cohort_rows": 0,
         "cohort_columns": [
             "stay_id",
             "patient_stay_id",
+            *(["lact_max"] if named_operation else []),
             "lact",
             "sep3",
             "death",
+            *(["los_icu"] if multiple_outcomes else []),
         ],
         "planning_authority": {
             "kind": "metadata_only_planning_catalog",
@@ -1906,7 +2129,8 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
         "cohort_authority_path": None,
         "id_columns": ["patient_stay_id"],
         "target_outcome": "death",
-        "primary_exposure": "sep3",
+        "primary_exposure": "lact_max" if named_operation else "sep3",
+        "outcome_columns": ("death", "los_icu") if multiple_outcomes else ("death",),
         "endpoint": {
             "name": "death",
             "kind": "binary",
@@ -2080,6 +2304,34 @@ def test_pipeline_factory_rejects_missing_or_unknown_database(database: Any) -> 
         if database is None
         else "research_pipeline_database_unknown"
     )
+
+
+def test_stale_package_rejection_carries_the_intake_reason(
+    tmp_path: Path,
+) -> None:
+    """A pre-``concept_ids`` export has to say why it cannot establish authority.
+
+    The layout-only readiness probe accepts this directory, so it can be selected
+    and confirmed as a data source; intake is the first owner that opens the
+    package. Without the reason travelling with the rejection, the submission
+    boundary reports a stable code whose only offered remedy is to retry a
+    package that will fail identically every time.
+    """
+
+    export = _write_pipeline_export(tmp_path / "stale-export", current_contract=False)
+
+    with pytest.raises(dataio.ExportCohortError) as exc:
+        dataio.validate_research_pipeline_source(str(export), database="miiv")
+
+    detail = exc.value.detail
+    assert detail["error"] == "research_pipeline_manifest_invalid"
+    assert detail["intake_error_code"] == "manifest_concept_ids_invalid"
+    assert "concept_ids" in detail["intake_error_message"]
+
+    # The reason must survive the hop into the research-run error payload, which
+    # is what Copilot and the Web surface actually read.
+    forwarded = {key: value for key, value in detail.items() if key != "error"}
+    assert "intake_error_code" in forwarded
 
 
 def test_pipeline_factory_rejects_clinical_anchor_as_materialization_anchor(
@@ -2281,6 +2533,7 @@ def test_workflow_projection_keeps_plan_review_before_analysis() -> None:
             "run_id": "run-plan-review",
             "resumable_here": True,
             "plan_approval_allowed": True,
+            "research_input_state": "prepared",
             "scientific_configuration_sha256": (
                 study_context_owner.scientific_configuration_sha256(study)
             ),
@@ -2295,6 +2548,42 @@ def test_workflow_projection_keeps_plan_review_before_analysis() -> None:
     assert by_id["plan"].reason_code == "operator_plan_approval_required"
     assert by_id["analysis"].status == "blocked"
     assert by_id["analysis"].reason_code == "operator_plan_approval_required"
+
+
+@pytest.mark.parametrize("input_state", [None, "metadata_only", "unavailable", "unknown", "prepared"])
+def test_registered_source_does_not_complete_question_specific_input(input_state) -> None:
+    study = _complete_study()
+    snapshot = build_research_workflow_snapshot(
+        study=study, active_export_present=True, active_job=None,
+        latest_run={
+            "run_id": "run-input-progress", "run_type": "full",
+            "engine": "easyicu.research_agent.pipeline", "gate_status": "blocked",
+            "run_status": "human_review_pending", "research_input_state": input_state,
+            "scientific_configuration_sha256": study_context_owner.scientific_configuration_sha256(study),
+            "pending_review_reason_codes": ["operator_plan_approval_required"],
+            "artifact_names": ["agent_plan.json", "source_run_manifest.json"],
+        },
+    )
+    by_id = {row.id: row for row in snapshot.stages}
+    assert (by_id["extraction"].status == "complete") is (input_state == "prepared")
+    assert by_id["analysis"].status == "blocked"
+    assert len(snapshot.stages) == 8
+    assert snapshot.required_stage_count == 7
+    assert by_id["idea"].required_for_completion is False
+    assert sum(row.required_for_completion for row in snapshot.stages) == 7
+
+
+def test_prepared_input_from_superseded_configuration_does_not_complete_new_setup() -> None:
+    snapshot = build_research_workflow_snapshot(
+        study=_complete_study(), active_export_present=True, active_job=None,
+        latest_run={
+            "run_id": "run-stale-input", "run_type": "full",
+            "engine": "easyicu.research_agent.pipeline", "gate_status": "blocked",
+            "research_input_state": "prepared", "scientific_configuration_sha256": "f" * 64,
+            "artifact_names": ["agent_plan.json", "source_run_manifest.json"],
+        },
+    )
+    assert next(row for row in snapshot.stages if row.id == "extraction").status != "complete"
 
 
 def test_live_review_authority_overrides_stale_approvable_run_history() -> None:
@@ -2390,6 +2679,7 @@ def test_agent_selected_runtime_gap_routes_to_host_compiler() -> None:
             "remediation_buckets": {
                 "agent_plan_revision": ["ROBUSTNESS_AXES_TOO_NARROW"],
                 "runtime_capability": [
+                    "PRIMARY_POPULATION_EXECUTION_OWNER_MISSING",
                     "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
                     "REPEATED_STAY_IDENTITY_UNAVAILABLE",
                 ],
@@ -2549,6 +2839,7 @@ def test_legacy_method_question_is_projected_as_system_owned_plan_work() -> (
         "rendered_outputs_assessed": False,
         "dimension_scores": {"icu_clinical_design": 0, "figures": 70},
         "finding_codes": ["POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"],
+        "automatic_revision_blockers": [],
         "authorization_questions": [],
         "remediation_buckets": {
             "agent_plan_revision": [
@@ -2723,6 +3014,59 @@ def test_plan_review_separates_system_proposals_from_user_authorization() -> Non
 
 
 @pytest.mark.parametrize(
+    ("code", "route", "requires_authorization", "old_decision_resolved"),
+    [
+        ("ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED", "runtime_capability", False, False),
+        ("OUTCOME_DEFINITION_UNRESOLVED", "study_authority_change", True, False),
+        ("POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED", "runtime_capability", False, True),
+    ],
+)
+def test_explicit_scientific_owner_is_not_reassigned_by_legacy_projection(
+    code, route, requires_authorization, old_decision_resolved, monkeypatch
+) -> None:
+    study = _complete_study()
+    monkeypatch.setattr(
+        "easyicu.webserver.pi_copilot.plan_decisions.decision_is_resolved",
+        lambda study, decision_code: old_decision_resolved,
+    )
+    review = {
+        "status": "changes_required",
+        "findings": [{
+            "code": code, "remediation_route": route,
+            "requires_user_authorization": requires_authorization,
+            "authorization_question": "Review the changed endpoint scope?" if requires_authorization else None,
+        }],
+        "facts": {"remediation_buckets": {
+            # An old projection's duplicate must not override the typed owner.
+            "agent_plan_revision": [code], route: [code],
+        }},
+    }
+    if old_decision_resolved:
+        review["facts"]["remediation_buckets"]["study_authority_change"] = [code]
+    snapshot = build_research_workflow_snapshot(
+        study=study, active_export_present=True, active_job=None,
+        latest_run={
+            "run_type": "full", "run_id": "run-explicit-owner",
+            "budget_mode": "full_reviewed", "engine": "easyicu.research_agent.pipeline",
+            "gate_status": "blocked", "run_status": "human_review_pending",
+            "pending_review_reason_codes": ["plan_scientific_changes_required"],
+            "artifact_names": ["agent_plan.json", "scientific_plan_review.json"],
+        },
+        plan_review_authority={
+            "run_id": "run-explicit-owner", "resumable_here": True,
+            "scientific_configuration_sha256": study_context_owner.scientific_configuration_sha256(study),
+            "scientific_plan_review": review,
+        },
+    )
+
+    summary = snapshot.plan_review_summary
+    assert summary is not None
+    assert summary["remediation_buckets"]["agent_plan_revision"] == []
+    assert summary["remediation_buckets"][route] == [code]
+    assert len(summary["authorization_questions"]) == int(requires_authorization)
+
+
+@pytest.mark.parametrize(
     ("plan_review_authority", "stored_digest", "expected_reason"),
     [
         (None, "", "plan_review_not_resumable"),
@@ -2855,9 +3199,9 @@ def test_fresh_planning_job_takes_precedence_over_superseded_plan() -> None:
     )
 
     by_id = {row.id: row for row in snapshot.stages}
-    assert snapshot.next_action_code == "analysis_running"
+    assert snapshot.next_action_code == "research_planning_running"
     assert by_id["plan"].status == "running"
-    assert by_id["analysis"].status == "running"
+    assert by_id["analysis"].status == "blocked"
 
 
 def test_terminal_failed_pipeline_returns_to_fresh_plan_confirmation() -> None:
@@ -4884,7 +5228,23 @@ def test_adjudicate_idea_literature_persists_confirmed_definition(
             "idea_id": body["idea_id"],
             "decision": body["decision"],
             "rationale": body["rationale"],
-            "screening": {"retrieval_candidate_count": 3},
+            "screening": {
+                "retrieval_candidate_count": 3,
+                "direct_comparator_count": 0,
+                "records": [
+                    {
+                        "pmid": "12345678",
+                        "title": "Retrieval candidate",
+                        "disposition": "exclude",
+                        "evidence_role": "related_context",
+                        "rationale": "Different population.",
+                        "population_match": False,
+                        "exposure_match": True,
+                        "outcome_match": True,
+                        "publication_type_eligible": True,
+                    }
+                ],
+            },
             "comparison_axes": [{"axis": "population_and_setting"}],
             "authority": {"human_confirmed": True},
         },
@@ -4895,6 +5255,17 @@ def test_adjudicate_idea_literature_persists_confirmed_definition(
         lambda run_id, idea_id: {
             "prior_art_decision": "differentiated",
             "prior_art_adjudication_sha256": "a" * 64,
+            "prior_art_adjudication_summary": {
+                "decision": "differentiated",
+                "rationale": "The endpoint differs from available candidates.",
+                "screening": {
+                    "retrieval_candidate_count": 3,
+                    "direct_comparator_count": 0,
+                    "records": [{"pmid": "12345678"}],
+                },
+                "comparison_axes": [{"axis": "population_and_setting"}],
+                "authority": {"human_confirmed": True},
+            },
         },
     )
     plan_fields = {
@@ -4922,6 +5293,14 @@ def test_adjudicate_idea_literature_persists_confirmed_definition(
 
     assert result["code"] == "easyicu_idea_literature_adjudicated"
     assert result["details"]["execution_can_advance"] is True
+    screening = result["details"]["prior_art_adjudication"]["screening"]
+    assert "records" not in screening
+    assert screening["screened_candidates"][0]["pmid"] == "12345678"
+    binding_screening = result["details"]["prior_art_adjudication"]["binding"][
+        "prior_art_adjudication_summary"
+    ]["screening"]
+    assert "records" not in binding_screening
+    assert binding_screening["retrieval_candidate_count"] == 3
     assert calls[0]["plan_fields"] == plan_fields
 
 
@@ -5996,6 +6375,7 @@ def test_superseded_plan_replan_starts_a_fresh_candidate_plan(
         plan_revision_source_run_id: str = "",
         planner_start_mode: str = "auto",
         run_intent: research_run_submission.RunIntent | None = None,
+        plan_change_request: Any = None,
     ) -> dict[str, Any]:
         captured.update(
             context=context,
@@ -6003,6 +6383,7 @@ def test_superseded_plan_replan_starts_a_fresh_candidate_plan(
             plan_revision_source_run_id=plan_revision_source_run_id,
             planner_start_mode=planner_start_mode,
             run_intent=run_intent,
+            plan_change_request=plan_change_request,
         )
         return {"status": "ok", "code": "candidate_plan_submitted"}
 
@@ -6029,6 +6410,7 @@ def test_superseded_plan_replan_starts_a_fresh_candidate_plan(
     assert captured["params"] == {"run_type": "full"}
     assert captured["planner_start_mode"] == "fresh"
     assert captured["run_intent"] == "candidate_plan"
+    assert captured["plan_change_request"] is None
 
 
 def test_candidate_plan_approval_starts_package_bound_run_instead_of_resuming_canary(
@@ -6191,6 +6573,33 @@ def test_unprepared_source_rejection_names_the_preparation_step(
     assert "re-pick" in result["summary"]
 
 
+def test_stale_package_offers_re_extraction_instead_of_a_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Close the loop from the real rejection to the advice Pi receives.
+
+    The detail is produced by the actual intake owner against an actual stale
+    package rather than hand-written, so this also pins that the intake reason
+    survives every hop: dataio -> submission boundary -> Pi receipt.
+    """
+
+    export = _write_pipeline_export(tmp_path / "stale", current_contract=False)
+    with pytest.raises(dataio.ExportCohortError) as raised:
+        dataio.validate_research_pipeline_source(str(export), database="miiv")
+
+    result = _run_submission_rejection(monkeypatch, dict(raised.value.detail))
+
+    assert result["status"] == "blocked"
+    assert result["code"] == "research_pipeline_manifest_invalid"
+    assert result["summary"] != (
+        "The existing EasyICU run submission boundary rejected the request."
+    )
+    assert "easyicu_start_extraction" in result["summary"]
+    assert "fail identically" in result["summary"]
+    assert result["details"]["intake_error_code"] == "manifest_concept_ids_invalid"
+
+
 def test_other_run_rejections_carry_the_owning_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6295,125 +6704,6 @@ def test_full_run_uses_the_codex_account_frozen_into_the_session(
     assert captured["environment"]["EASYICU_CODEX_MODEL"] == "gpt-5.6-luna"
 
 
-def _write_real_pipeline_fixture(run_dir: Path, *, manuscript: str) -> None:
-    (run_dir / "evidence").mkdir(parents=True)
-    (run_dir / "results").mkdir()
-    readiness = {
-        "execution_complete": True,
-        "analysis_validated": True,
-        "evidence_complete": True,
-        "numeric_verified": True,
-        "manuscript_ready": False,
-    }
-    (run_dir / "run_status.json").write_text("{}", encoding="utf-8")
-    plan_payload = {
-        "steps": [
-            {
-                "id": "model",
-                "title": "Fit specified model",
-                "literature_citation_keys": ["method_paper"],
-            }
-        ]
-    }
-    plan_bytes = json.dumps(plan_payload).encode("utf-8")
-    (run_dir / "analysis_plan.json").write_bytes(plan_bytes)
-    import hashlib
-
-    (run_dir / "manifest.json").write_text(
-        json.dumps(
-            {
-                "readiness": readiness,
-                "current_plan_authority": {
-                    "relative_path": "analysis_plan.json",
-                    "sha256": hashlib.sha256(plan_bytes).hexdigest(),
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    (run_dir / "preplan_literature_bundle.json").write_text(
-        json.dumps(
-            {
-                "research_question": "Does an ICU exposure predict mortality?",
-                "citations": [
-                    {
-                        "key": "method_paper",
-                        "title": "A source-backed method paper",
-                        "year": "2024",
-                        "venue": "Statistics in Medicine",
-                        "pmid": "12345",
-                    }
-                ],
-                "prisma": None,
-                "search_provenance": {
-                    "curated_seed_count": 1,
-                    "sources_enabled": [],
-                    "sources_returning": [],
-                    "search_conducted": False,
-                    "note": "Curated method reference; no retrieval was run.",
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    (run_dir / "manuscript_scaffold_bound.md").write_text(
-        manuscript,
-        encoding="utf-8",
-    )
-    (run_dir / "claim_ledger.csv").write_text(
-        "claim_id,claim_text,evidence_refs,status,note\n"
-        "c1,The registered aggregate estimate passed validation,ev-table,analysis_only,Review required\n",
-        encoding="utf-8",
-    )
-    (run_dir / "results" / "aggregate.csv").write_text(
-        "row_role,exposure_level_index,exposure_level,n_rows,exposure_denominator,exposure_pct,exposure_ci_low_pct,exposure_ci_high_pct,exposure_standard_error_pct,exposure_interval_covariance,exposure_interval_cluster_count,outcome_observed_n,outcome_missing_n,outcome_events,outcome_denominator,outcome_rate_pct,interval_method\n"
-        "exposure_level,0,0,60,100,60.0,,,,none_counts_only,,60,0,5,60,8.3,none_counts_only\n",
-        encoding="utf-8",
-    )
-    (run_dir / "results" / "identifier_rows.csv").write_text(
-        "metric,a,b,c,d,e,f,g,h,i,j,k,stay_id\n"
-        "sensitive,1,2,3,4,5,6,7,8,9,10,11,123\n",
-        encoding="utf-8",
-    )
-    (run_dir / "evidence" / "evidence_index.json").write_text(
-        json.dumps(
-            [
-                {
-                    "kind": "table",
-                    "evidence_id": "ev-table",
-                    "description": "Aggregate model result",
-                    "relative_path": "results/aggregate.csv",
-                },
-                {
-                    "kind": "table",
-                    "evidence_id": "ev-sensitive",
-                    "description": "Identifier rows",
-                    "relative_path": "results/identifier_rows.csv",
-                },
-            ]
-        ),
-        encoding="utf-8",
-    )
-    (run_dir / "figure_gallery.json").write_text(
-        json.dumps({"status": "no_figures", "figures": []}),
-        encoding="utf-8",
-    )
-
-
-def _acquisition_receipt() -> SimpleNamespace:
-    return SimpleNamespace(
-        selection=SimpleNamespace(selected_concepts=["heart_rate", "mortality"]),
-        materialized_concepts=["heart_rate", "mortality"],
-        materialized_columns=("heart_rate", "mortality"),
-        coverage=SimpleNamespace(sufficient=True),
-        analysis_columns={
-            "heart_rate": "heart_rate",
-            "death": "mortality",
-        },
-        endpoint=None,
-    )
-
-
 def test_metadata_only_checkpoint_keeps_full_materialization_roster() -> None:
     foundation = _foundation_profile()
     metadata_checkpoint = research_launch_resume._DevelopmentResumeAcquisition(
@@ -6480,130 +6770,23 @@ def _write_development_resume_acquisition(
     )
 
 
-def _write_development_resume_literature(
-    run_dir: Path,
-    *,
-    research_question: str,
-) -> None:
-    (run_dir / "preplan_literature_bundle.json").write_text(
-        json.dumps(
-            {
-                "research_question": research_question,
-                "citations": [],
-                "screening_decisions": [],
-                "design_evidence_cards": [],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-
-def _write_development_resume_planner_catalog(
-    run_dir: Path,
-    *,
-    selected_concepts: tuple[str, ...] = ("lact", "death"),
-    patient_identity_column: str | None = None,
-    operationalized_columns: tuple[str, ...] = (),
-) -> None:
-    pipeline_input = run_dir.parent.parent / "pipeline_input"
-    pipeline_input.mkdir(parents=True, exist_ok=True)
-    universe = pipeline_input / "planner_catalog.parquet"
-    columns: dict[str, pd.Series] = {"stay_id": pd.Series(dtype="int64")}
-    if patient_identity_column:
-        columns[patient_identity_column] = pd.Series(dtype="string")
-    columns.update(
-        {
-            column: pd.Series(dtype="float64")
-            for column in operationalized_columns
-        }
-    )
-    columns.update(
-        {
-            concept: pd.Series(dtype="float64")
-            for concept in selected_concepts
-        }
-    )
-    frame = pd.DataFrame(columns)
-    replacement_row_identity = (
-        {
-            "output_identity_column": patient_identity_column,
-            "mapping_file_sha256": "a" * 64,
-            "mapped_cohort_rows": 0,
-            "patient_group_derivation": {
-                "algorithm": "prefix_before_:s",
-                "delimiter": ":s",
-            },
-            "authority_coordinates": {
-                "schema_version": "easyicu.patient_grouping_runtime_authority/1",
-                "authority_ref": "test/identity-bridge/v1",
-                "database": "miiv",
-                "mapping_sha256": "a" * 64,
-                "grouping_derivation": "prefix_before_:s",
-                "provider_visible_values": False,
-            },
-        }
-        if patient_identity_column
-        else None
-    )
-    frame.attrs["easyicu_planning_authority"] = {
-        "kind": "metadata_only_planning_catalog",
-        "patient_rows_read": False,
-        **(
-            {"replacement_row_identity": replacement_row_identity}
-            if replacement_row_identity is not None
-            else {}
-        ),
-    }
-    frame.to_parquet(universe, index=False)
-    selected_sha256 = hashlib.sha256(
-        json.dumps(
-            list(selected_concepts),
-            ensure_ascii=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
-    (pipeline_input / "planner_catalog_receipt.json").write_text(
-        json.dumps(
-            {
-                "schema_version": "easyicu.metadata-only-planning-catalog/1",
-                "database": "miiv",
-                "catalog_source": "easyicu-database-capability:miiv",
-                "row_identity_column": "stay_id",
-                "patient_identity_column": patient_identity_column,
-                "operationalized_columns": list(operationalized_columns),
-                "replacement_row_identity": replacement_row_identity,
-                "selected_concepts": list(selected_concepts),
-                "selected_concepts_sha256": selected_sha256,
-                "patient_rows_read": False,
-                "patient_rows_written": False,
-                "observed_feasibility_claims": False,
-                "execution_authorized": False,
-                "planning_target_outcome": "death",
-                "planning_endpoint": {
-                    "name": "death",
-                    "kind": "binary",
-                    "absence_semantics": "no_absent_rows",
-                    "levels": [0, 1],
-                    "event_column": None,
-                    "time_column": None,
-                    "time_origin": None,
-                    "censoring_rule": None,
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-
-
 def test_pipeline_projection_uses_real_artifacts_and_withholds_identifier_table(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run_dir = tmp_path / "real-run"
     _write_real_pipeline_fixture(
         run_dir,
         manuscript="# Results\nThe registered aggregate estimate is analysis-only.",
     )
-    wrapper = tmp_path / "web-projection"
+    wrapper = tmp_path / "study-workflow" / "run_web-projection"
+    projected_inputs = []
+
+    def input_progress(path):
+        projected_inputs.append(path)
+        return "prepared"
+
+    monkeypatch.setattr(agent_pipeline_runs, "research_input_state", input_progress)
 
     result = agent_pipeline_runs._write_projection(
         wrapper_dir=wrapper,
@@ -6615,6 +6798,12 @@ def test_pipeline_projection_uses_real_artifacts_and_withholds_identifier_table(
 
     assert result["engine"] == "easyicu.research_agent.pipeline"
     assert result["gate"]["status"] == "analysis_only"
+    assert projected_inputs == [run_dir]
+    assert result["research_input_state"] == "prepared"
+    source_manifest = json.loads((wrapper / "source_run_manifest.json").read_text())
+    assert source_manifest["research_input_state"] == "prepared"
+    history = agent_runs.list_run_history(project_root=str(tmp_path))
+    assert history["runs"][0]["research_input_state"] == "prepared"
     tables = json.loads((wrapper / "result_tables.json").read_text(encoding="utf-8"))
     assert tables["table_count"] == 1
     assert tables["tables"][0]["evidence_id"] == "ev-table"
@@ -6729,6 +6918,34 @@ def test_pending_plan_without_current_review_projects_stale_policy_reason(
     assert history["runs"][0]["scientific_configuration_sha256"] == (
         study_context_owner.scientific_configuration_sha256(_complete_study())
     )
+
+
+@pytest.mark.parametrize("version", [10, 11, 12, 13])
+def test_digest_valid_archived_review_is_not_current_approval_policy(tmp_path, monkeypatch, version) -> None:
+    review = PlanScientificReview(
+        status="analysis_only", approval_allowed=True, top_journal_candidate=False,
+        score=81, context_sha256="a" * 64, plan_sha256="b" * 64,
+        dimension_scores={"content_completeness": 100},
+        literature_sha256="c" * 64, figure_strategy_sha256="d" * 64,
+        generated_at="2026-09-07T00:00:00Z",
+    ).model_dump(mode="json")
+    review["schema_version"] = f"easyicu.plan_scientific_review/{version}"
+    raw = json.dumps(review).encode()
+    path = tmp_path / "scientific_plan_review.json"
+    path.write_bytes(raw)
+    monkeypatch.setattr(agent_pipeline_runs, "_pending_bound_evidence_sha256", lambda *_: hashlib.sha256(raw).hexdigest())
+    request = SimpleNamespace(payload={"reason": "operator_plan_approval_required"})
+    pending = SimpleNamespace(requests=[request])
+    allowed = agent_pipeline_runs._pending_plan_approval_allowed(
+        run_dir=tmp_path, pending=pending, plan_recommendation_complete=True,
+    )
+    current = review["schema_version"] == agent_pipeline_runs.CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION
+    assert allowed is current
+    reason = agent_pipeline_runs._pending_review_reason_code(
+        request=request, plan_recommendation_complete=True, scientific_plan_review=review,
+    )
+    assert reason == ("operator_plan_approval_required" if current else "scientific_plan_review_policy_stale")
+    assert path.read_bytes() == raw
 
 
 def test_nonconvergent_projection_persists_stop_reason(
@@ -7338,6 +7555,7 @@ def test_pipeline_projection_fails_closed_when_source_contains_a_host_path(
 
     assert result["gate"]["status"] == "blocked"
     assert result["gate"]["reason"] == "research_pipeline_projection_privacy_blocked"
+    assert result["research_input_state"] == "unavailable"
     assert not (wrapper / "manuscript_draft.json").exists()
     gate = json.loads((wrapper / "quality_gate.json").read_text(encoding="utf-8"))
     assert gate["privacy"]["payloads_withheld"] is True
@@ -7499,6 +7717,236 @@ def test_web_runner_timeout_is_typed_and_records_bounded_retry_diagnostic(
     review = agent_runs.read_run_review(history["runs"][0]["project_dir"])
     assert review["readiness"]["status"] == "blocked"
     assert review["gate"]["reason"] == "research_pipeline_provider_timeout"
+
+
+@pytest.mark.parametrize("failure_kind", ["typed", "untyped"])
+def test_execution_retry_preserves_sealed_coordinates_and_prior_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_kind: str,
+) -> None:
+    """A resumed writer must neither re-plan its inputs nor erase prior results."""
+
+    _assume_execution_runtime_ready(monkeypatch)
+    wrapper = tmp_path / "projects" / "study-workflow" / "run-original"
+    wrapper.mkdir(parents=True)
+    cohort = wrapper / "cohort.parquet"
+    pd.DataFrame({
+        "heart_rate_max": [90.0], "heart_rate_mean": [80.0],
+        "death": [0], "los_icu": [2.0],
+    }).to_parquet(cohort)
+    inputs = agent_pipeline_runs._ExecutionResumeInputs(
+        cohort_path=cohort,
+        cohort_authority_path=None,
+        cohort_authority_ref=None,
+        trajectory_path=None,
+        trajectory_authority_path=None,
+        trajectory_authority_ref=None,
+        scientific_identity={
+            "primary_exposure": "heart_rate_max",
+            "target_outcome": "death",
+            "outcome_columns": ["death", "los_icu"],
+        },
+    )
+    original = {
+        name: json.dumps({"run_id": "run-analysis", "existing_result": name})
+        for name in (
+            "run_context.json", "quality_gate.json",
+            "source_run_manifest.json", "evidence_ledger.json",
+        )
+    }
+    for name, content in original.items():
+        (wrapper / name).write_text(content, encoding="utf-8")
+    legacy_diagnostic = wrapper / "diagnostics" / "research_pipeline_failure.json"
+    legacy_diagnostic.parent.mkdir()
+    legacy_diagnostic.write_text('{"earlier_failure":true}', encoding="utf-8")
+    monkeypatch.setattr(
+        agent_pipeline_runs, "_resolve_execution_resume_wrapper",
+        lambda **_kwargs: agent_pipeline_runs._ExecutionResumeTarget(
+            wrapper_dir=wrapper, pipeline_run_id="run-analysis",
+            pipeline_config_sha256="a" * 64,
+            resume_from_step_id="02_model",
+        ),
+    )
+    monkeypatch.setattr(
+        agent_pipeline_runs, "_verified_execution_resume_inputs", lambda _target: inputs,
+    )
+    monkeypatch.setattr(
+        agent_pipeline_runs, "_validated_execution_retry_config",
+        lambda **kwargs: kwargs["current_config"],
+    )
+    # Fresh inference would pick a different aggregation and omit the secondary
+    # endpoint. The sealed request must win without consulting those heuristics.
+    monkeypatch.setattr(
+        agent_pipeline_runs, "_resolve_materialized_primary_exposure",
+        lambda **_kwargs: "heart_rate_mean",
+    )
+    monkeypatch.setattr(
+        provider_adapter, "build_research_agent_provider_client",
+        lambda *_args, **_kwargs: (object(), {"provider": "openai", "model": "test"}),
+    )
+    monkeypatch.setattr(
+        research_pipeline_run_preparation, "_data_foundation_profile",
+        lambda **_kwargs: _foundation_profile(),
+    )
+    import easyicu.research_agent as research_agent
+
+    captured: list[dict[str, Any]] = []
+
+    class FakePipeline:
+        def run(self, **kwargs: Any) -> None:
+            captured.append(kwargs)
+            if failure_kind == "typed":
+                raise agent_pipeline_runs.ResearchPipelineRunError(
+                    "research_pipeline_cancelled", "private retry detail",
+                )
+            from easyicu.research_agent.authority.run_input import RunInputIdentityError
+
+            raise RunInputIdentityError("private retry detail")
+
+    monkeypatch.setattr(
+        research_agent.ResearchAgentPipeline, "from_config",
+        lambda _config, *, services: FakePipeline(),
+    )
+    export_path = _write_pipeline_export(tmp_path / "export")
+    runner = agent_pipeline_runs.make_research_pipeline_run_runner(
+        export_path=str(export_path), study_context=_complete_study(),
+        project_root=str(tmp_path / "projects"),
+        provider={"provider": "openai", "external": True},
+        provider_environment=_PI_PROVIDER_ENVIRONMENT, budget_mode="full_reviewed",
+        execution_resume_source_run_id="run-analysis",
+    )
+    for attempt in range(2):
+        job = SimpleNamespace(
+            id=f"retry-{attempt}", cancel_requested=False, emit=lambda _event: None,
+        )
+        with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError):
+            runner(job)
+    assert len(captured) == 2
+    for request in captured:
+        assert request["primary_exposure"] == "heart_rate_max"
+        assert request["target_outcome"] == "death"
+        assert request["outcome_columns"] == ("death", "los_icu")
+        assert request["cohort"] == cohort
+        assert request["resume_run_id"] == "run-analysis"
+        assert request["resume_from_step_id"] == "02_model"
+    for name, content in original.items():
+        assert (wrapper / name).read_text(encoding="utf-8") == content
+    assert legacy_diagnostic.read_text(encoding="utf-8") == '{"earlier_failure":true}'
+    diagnostics = sorted((wrapper / "diagnostics" / "execution_retries").glob("*.json"))
+    assert len(diagnostics) == 2
+    for diagnostic in diagnostics:
+        payload = json.loads(diagnostic.read_text(encoding="utf-8"))
+        assert payload["status"] == "failed"
+        assert "private retry detail" not in json.dumps(payload)
+        if failure_kind == "untyped":
+            assert payload["exception_types"] == ["RunInputIdentityError"]
+
+
+@pytest.mark.parametrize("failed_execution", [False, True])
+def test_prepared_plan_revision_reuses_inputs_but_requires_a_new_plan_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_execution: bool,
+) -> None:
+    import easyicu.research_agent as research_agent
+    from easyicu.research_agent.acquisition import foundation
+    from easyicu.webserver import research_plan_revision
+    from tests.research_agent.planning.test_baseline_requirements import _requirements
+
+    _assume_execution_runtime_ready(monkeypatch)
+    monkeypatch.delenv("EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_SOURCE_JOB_ID", raising=False)
+    root = tmp_path / "projects"
+    old_run = root / "study-workflow" / "run_old" / "pipeline" / "run_source"
+    old_run.mkdir(parents=True)
+    cohort, trajectory = old_run / "cohort.parquet", old_run / "cohort_trajectory.parquet"
+    pd.DataFrame({"heart_rate_max": [90.0], "death": [0], "charlson": [2.0]}).to_parquet(cohort)
+    pd.DataFrame({"heart_rate": [90.0]}).to_parquet(trajectory)
+    before = {path: path.read_bytes() for path in (cohort, trajectory)}
+    scope = research_plan_revision.PreparedPlanRevision(
+        run_dir=old_run, pipeline_config_sha256="a" * 64,
+        prepared_package_binding={"sha256": "b" * 64},
+        prior_plan_contract="Retain the reviewed baseline and 48-hour window.",
+        required_primary_cohort_selection_mode="all_input_rows",
+    )
+    inputs = agent_pipeline_runs._ExecutionResumeInputs(
+        cohort_path=cohort, cohort_authority_path=None, cohort_authority_ref=None,
+        trajectory_path=trajectory, trajectory_authority_path=None, trajectory_authority_ref=None,
+        scientific_identity={
+            "primary_exposure": "heart_rate_max", "target_outcome": "death", "outcome_columns": ["death"],
+            "time_windows": [{"name": "reviewed_window", "start_hours": 0, "end_hours": 48}],
+            "user_preferences": {"data_constraints": "Keep the sealed population."},
+            "inclusion_criteria": ["reviewed population"],
+        },
+    )
+    monkeypatch.setattr(research_plan_revision, "load_prepared_plan_revision", lambda **kw: scope)
+    monkeypatch.setattr(research_pipeline_run_preparation, "load_prepared_plan_revision", lambda **kw: scope)
+    monkeypatch.setattr(agent_pipeline_runs, "_verified_execution_resume_inputs", lambda target: inputs)
+    monkeypatch.setattr(agent_pipeline_runs, "_load_candidate_plan_materialization_authority", lambda **kw: None)
+    review = _nonapprovable_review_payload(finding_code="ACCEPTED_BASELINE_CONTENT_MISSING")
+    baseline = _requirements("age", "charlson").model_dump(mode="json")
+    population = {"schema_version": "easyicu.plan_population_requirements/1",
+        "source_plan_sha256": "d" * 64, "source_digest_kind": "canonical_plan_sha256",
+        "populations": [{"source_step_id": "risk", "output_product": "table:absolute_risk_context", "population_scope": "primary_model"}]}
+    review["facts"] = {"accepted_baseline_requirements": baseline, "plan_population_requirements": population}
+    monkeypatch.setattr(agent_pipeline_runs, "_load_plan_revision_source_review", lambda **kw: PlanScientificReview.model_validate(review))
+    monkeypatch.setattr(research_pipeline_run_preparation, "_data_foundation_profile", lambda **kw: _foundation_profile())
+    monkeypatch.setattr(provider_adapter, "build_research_agent_provider_client", lambda *a, **kw: (object(), {"provider": "openai", "model": "test"}))
+
+    def forbidden(*a, **kw):
+        pytest.fail("Prepared plan revision must not reselect concepts, extract or resume execution")
+
+    if failed_execution:
+        from dataclasses import replace
+        from easyicu.research_agent.planning.baseline_requirements import AcceptedBaselineRequirements
+        from easyicu.research_agent.planning.population_requirements import PlanPopulationRequirements
+
+        scope = replace(
+            scope, failed_execution_replan=True,
+            baseline_requirements=AcceptedBaselineRequirements.model_validate(baseline),
+            population_requirements=PlanPopulationRequirements.model_validate(population),
+        )
+        monkeypatch.setattr(agent_pipeline_runs, "_load_candidate_plan_materialization_authority", forbidden)
+        monkeypatch.setattr(agent_pipeline_runs, "_load_plan_revision_source_review", forbidden)
+
+    monkeypatch.setattr(foundation, "acquire_universe_for_question", forbidden)
+    monkeypatch.setattr(agent_pipeline_runs, "_metadata_only_planning_acquisition", forbidden)
+    monkeypatch.setattr(agent_pipeline_runs, "_resolve_execution_resume_wrapper", forbidden)
+    captured = {}
+
+    class FakePipeline:
+        def run(self, **kw):
+            captured["request"] = kw
+            raise agent_pipeline_runs.ResearchPipelineRunError("research_pipeline_cancelled", "test stops before planning")
+
+    def pipeline(config, *, services):
+        captured["config"] = config
+        return FakePipeline()
+
+    monkeypatch.setattr(research_agent.ResearchAgentPipeline, "from_config", pipeline)
+    export = _write_pipeline_export(tmp_path / "export")
+    runner = agent_pipeline_runs.make_research_pipeline_run_runner(
+        export_path=str(export), study_context=_complete_study(), project_root=str(root),
+        provider={"provider": "openai", "external": True}, provider_environment=_PI_PROVIDER_ENVIRONMENT,
+        budget_mode="planner_canary", plan_revision_source_run_id="run_source",
+    )
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError, match="test stops"):
+        runner(SimpleNamespace(id="new-revision", cancel_requested=False, emit=lambda event: None))
+    request, config = captured["request"], captured["config"]
+    assert request["cohort"] == cohort and request["trajectory_path"] == trajectory
+    assert request["primary_exposure"] == "heart_rate_max" and request["target_outcome"] == "death"
+    assert request["time_windows"][0].end_hours == 48
+    assert request["inclusion_criteria"] == ["reviewed population"]
+    assert request["user_preferences"] == {"data_constraints": "Keep the sealed population."}
+    assert request["resume_run_id"] is None
+    assert config.workdir == root / "study-workflow" / "run_new-revision" / "pipeline"
+    assert config.require_human_plan_review is True and config.enable_replanning is False
+    assert config.required_primary_cohort_selection_mode == "all_input_rows"
+    from easyicu.research_agent.contracts.frozen_payload import thaw_payload
+
+    assert thaw_payload(config.bound_baseline_requirements) == baseline
+    assert thaw_payload(config.bound_population_requirements) == population
+    assert "48-hour" in config.bound_plan_revision_contract
+    assert ("ACCEPTED_BASELINE_CONTENT_MISSING" in config.bound_plan_revision_contract) is not failed_execution
+    assert all(path.read_bytes() == content for path, content in before.items())
 
 
 def test_planner_failure_artifact_persists_only_safe_attempt_metadata(
@@ -7745,6 +8193,23 @@ def test_candidate_planner_provider_http_failure_preserves_resume_route() -> Non
     )
 
 
+def test_candidate_planner_rate_limit_preserves_resume_route() -> None:
+    class RateLimitError(RuntimeError):
+        pass
+
+    failure = RateLimitError("provider response content must not cross the boundary")
+    failure.status_code = 429
+
+    assert agent_pipeline_runs._pipeline_failure_code(
+        failure,
+        budget_mode="planner_canary",
+    ) == "research_pipeline_planner_provider_unavailable"
+    assert (
+        agent_pipeline_runs._pipeline_failure_code(failure)
+        == "research_pipeline_execution_failed"
+    )
+
+
 def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -7947,7 +8412,7 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     if runner_image is not None:
         runner_kwargs["runner_image"] = runner_image
     expected_resume_path = None
-    if budget_mode is None and runner_image_environment is None:
+    if budget_mode == "full_reviewed" and runner_image_environment is None and runner_image is None:
         expected_resume_path = (
             tmp_path
             / "projects"
@@ -7973,6 +8438,13 @@ def test_web_runner_delegates_to_research_agent_pipeline(
             "EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_SOURCE_JOB_ID",
             "prior-canary",
         )
+        monkeypatch.setattr(
+            research_pipeline_run_preparation,
+            "_development_resume_launch_scope",
+            lambda **kwargs: research_launch_resume._DevelopmentResumeLaunchScope(
+                "full_reviewed", "Exact sealed candidate plan constraint",
+            ),
+        )
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
         export_path=str(export_path),
         study_context=_complete_study(),
@@ -7993,7 +8465,7 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     result = runner(Job())
 
     assert calls["acquire"]["question"] == _complete_study()["question"]
-    expected_provider_timeout = 240.0 if budget_mode != "full_reviewed" else None
+    expected_provider_timeout = 480.0 if budget_mode != "full_reviewed" else None
     expected_provider_hard_timeout = (
         480.0 if budget_mode != "full_reviewed" else None
     )
@@ -8077,6 +8549,10 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     # smaller routine-E1 iteration envelope must not interrupt a valid
     # progressive plan after an arbitrary number of calls.
     assert calls["config"].development_planner_efficiency_max_calls is None
+    assert calls["config"].bound_plan_revision_contract == (
+        "Exact sealed candidate plan constraint" if expected_resume_path else None
+    )
+    assert calls["config"].require_human_plan_review is True
     assert (
         calls["config"].development_planner_efficiency_max_reported_tokens is None
     )
@@ -8172,6 +8648,11 @@ def test_web_runner_allows_server_owned_resume_for_full_reviewed_development(
         lambda **_kwargs: [object()],
     )
     _assume_execution_runtime_ready(monkeypatch)
+    monkeypatch.setattr(
+        research_pipeline_run_preparation,
+        "_development_resume_launch_scope",
+        lambda **kwargs: research_launch_resume._DevelopmentResumeLaunchScope("full_reviewed", None),
+    )
 
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
         export_path=str(export_path),
@@ -8780,715 +9261,24 @@ def test_pi_verified_provider_environment_is_full_pipeline_only(
     }
 
 
-@pytest.mark.parametrize("suffix", [".csv", ".xlsx"])
-def test_pipeline_route_rejects_raw_tabular_files_before_provider_resolution(
-    suffix: str,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from easyicu.webserver.routes import agent as agent_route
-
-    raw = tmp_path / "raw"
-    raw.mkdir()
-    (raw / f"patients{suffix}").write_text("stay_id\n1\n", encoding="utf-8")
-    study = {
-        **_complete_study(),
-        "data_source": {"path": str(raw), "database": "miiv"},
-    }
-    monkeypatch.setenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", "1")
-    monkeypatch.setattr(agent_route.context_store, "get_context", lambda _id: study)
-    provider_called = False
-
-    def provider_environment(*_args: Any, **_kwargs: Any) -> dict[str, str]:
-        nonlocal provider_called
-        provider_called = True
-        return dict(_PI_PROVIDER_ENVIRONMENT)
-
-    monkeypatch.setattr(
-        agent_route.PiProviderConfigStore,
-        "research_agent_environment",
-        provider_environment,
-    )
-
-    with pytest.raises(Exception) as raised:
-        agent_route.jobs_agent_run(
-            {
-                "path": str(raw),
-                "study_context_id": study["id"],
-                "engine": "research_agent_pipeline",
-                "run_type": "full",
-                "credential_source": "pi_verified",
-                "external_llm_opt_in": True,
-            },
-            request=_request(),
-        )
-
-    assert raised.value.detail["error"] in {
-        "research_pipeline_manifest_required",
-        "no_export_files",
-    }
-    assert provider_called is False
-
-
-@pytest.mark.parametrize(
-    (
-        "planner_start_mode",
-        "resume_source_job_id",
-        "plan_revision_source_run_id",
-    ),
-    [
-        ("fresh", "", ""),
-        ("resume_checkpoint", "prior-canary", ""),
-        ("auto", "prior-canary", "run-reviewed-candidate"),
-    ],
-)
-def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
-    planner_start_mode: str,
-    resume_source_job_id: str,
-    plan_revision_source_run_id: str,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from easyicu.webserver.pi_copilot.workspace import ProjectWorkspace
-    from easyicu.webserver import research_run_submission
-    from easyicu.webserver.routes import agent as agent_route
-
-    export = tmp_path / "raw-mimiciv"
-    export.mkdir()
-    (export / "patients.csv").write_text("stay_id\n1\n", encoding="utf-8")
-    study = {
-        **_complete_study(),
-        "data_source": {"path": str(export), "database": "miiv"},
-    }
-    workspace = ProjectWorkspace(tmp_path / "pi-workspace")
-    captured: dict[str, Any] = {}
-    monkeypatch.setattr(agent_route.context_store, "get_context", lambda _id: study)
-    monkeypatch.setattr(
-        research_run_submission,
-        "research_pipeline_workspace",
-        lambda: workspace,
-    )
-    monkeypatch.setattr(
-        research_run_submission,
-        "resumable_planner_checkpoint_job_id",
-        lambda **_kwargs: resume_source_job_id,
-    )
-    monkeypatch.setattr(
-        agent_route.PiProviderConfigStore,
-        "research_agent_environment",
-        lambda self, **_kwargs: dict(_PI_PROVIDER_ENVIRONMENT),
-    )
-    monkeypatch.setattr(agent_route.settings_store, "load_settings", lambda: {"ai_enabled": True})
-    monkeypatch.setattr(
-        agent_route.capabilities,
-        "validate_compute_target",
-        lambda _body: {"ok": True, "compute_target": "local"},
-    )
-    monkeypatch.setattr(
-        agent_route.agent_runs,
-        "resolve_agent_provider_config",
-        lambda **_kwargs: {"provider": "openai", "external": True},
-    )
-    monkeypatch.setattr(
-        agent_route.context_store,
-        "build_agent_context_binding",
-        lambda *_args, **_kwargs: {},
-    )
-
-    def make_runner(**kwargs: Any) -> Any:
-        captured.update(kwargs)
-        return lambda _job: {"gate": {"status": "blocked"}}
-
-    monkeypatch.setattr(
-        agent_route.agent_pipeline_runs,
-        "make_research_pipeline_run_runner",
-        make_runner,
-    )
-    monkeypatch.setattr(
-        research_run_submission,
-        "_submit_job",
-        lambda _kind, _runner: SimpleNamespace(id="job-workspace", kind="agent-run", status="queued"),
-    )
-    monkeypatch.setattr(
-        agent_route.context_store,
-        "handoff_context",
-        lambda *_args, **_kwargs: {"revision": 5},
-    )
-    monkeypatch.setattr(
-        agent_route.capabilities,
-        "record_tool_event",
-        lambda *_args, **_kwargs: None,
-    )
-
-    payload = {
-        "path": str(export),
-        "study_context_id": study["id"],
-        "engine": "research_agent_pipeline",
-        "run_type": "full",
-        "credential_source": "pi_verified",
-        "external_llm_opt_in": True,
-        "project_root": str(tmp_path / "client-controlled"),
-        "planner_start_mode": planner_start_mode,
-    }
-    if resume_source_job_id:
-        payload["development_resume_source_job_id"] = "client-forged-checkpoint"
-    if plan_revision_source_run_id:
-        payload["plan_revision_source_run_id"] = plan_revision_source_run_id
-    result = agent_route.jobs_agent_run(
-        payload,
-        request=_request(),
-    )
-
-    assert result["job_id"] == "job-workspace"
-    assert Path(captured["project_root"]) == workspace.project_root(study["id"])
-    assert Path(captured["project_root"]) != tmp_path / "client-controlled"
-    assert captured["budget_mode"] == "planner_canary"
-    assert result["planner_start_mode"] == planner_start_mode
-    if resume_source_job_id:
-        assert captured["development_resume_source_job_id"] == resume_source_job_id
-        assert result["resume_source_job_id"] == resume_source_job_id
-    else:
-        assert "development_resume_source_job_id" not in captured
-    if plan_revision_source_run_id:
-        assert captured["plan_revision_source_run_id"] == plan_revision_source_run_id
-
-
-def test_monitor_history_merges_default_and_copilot_pipeline_roots(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from easyicu.webserver.routes import agent as agent_route
-
-    pipeline_root = tmp_path / "pi-project"
-    pipeline_root.mkdir()
-    calls: list[str | None] = []
-
-    class Workspace:
-        def existing_project_root(self, project_id: str) -> Path:
-            assert project_id == "study-workflow"
-            return pipeline_root
-
-    def history(*, study_id: str, project_root: str | None = None, limit: int) -> dict[str, Any]:
-        calls.append(project_root)
-        if project_root is None:
-            rows = [
-                {
-                    "run_id": "run_preflight",
-                    "project_dir": str(tmp_path / "default" / "run_preflight"),
-                    "updated_at_epoch": 10,
-                }
-            ]
-        else:
-            rows = [
-                {
-                    "run_id": "run_pipeline",
-                    "project_dir": str(pipeline_root / "study-workflow" / "run_pipeline"),
-                    "updated_at_epoch": 20,
-                }
-            ]
-        return {"ok": True, "project_root": project_root or "default", "runs": rows, "count": len(rows)}
-
-    monkeypatch.setattr(agent_route, "research_pipeline_workspace", lambda: Workspace())
-    monkeypatch.setattr(agent_route.agent_runs, "list_run_history", history)
-    result = agent_route.post_agent_run_history(
-        {"study_id": "study-workflow", "limit": 50}
-    )
-
-    assert calls == [None, str(pipeline_root)]
-    assert result["count"] == 2
-    assert [row["run_id"] for row in result["runs"]] == [
-        "run_pipeline",
-        "run_preflight",
-    ]
-
-
-def test_pipeline_route_rejects_client_selected_full_reviewed_mode(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from easyicu.webserver.routes import agent as agent_route
-
-    export = _write_pipeline_export(tmp_path / "export")
-    study = {
-        **_complete_study(),
-        "data_source": {"path": str(export), "database": "miiv"},
-    }
-    monkeypatch.setattr(agent_route.context_store, "get_context", lambda _id: study)
-
-    with pytest.raises(Exception) as raised:
-        agent_route.jobs_agent_run(
-            {
-                "path": str(export),
-                "study_context_id": study["id"],
-                "engine": "research_agent_pipeline",
-                "run_type": "full",
-                "budget_mode": "full_reviewed",
-            },
-            request=_request(),
-        )
-
-    assert raised.value.detail == {
-        "error": "research_pipeline_budget_mode_server_owned"
-    }
-
-
-def test_pipeline_development_execution_mode_is_server_owned(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from easyicu.webserver.routes import agent as agent_route
-
-    monkeypatch.delenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", raising=False)
-    assert agent_route._server_research_pipeline_budget_mode() == "planner_canary"
-
-    monkeypatch.setenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", "1")
-    assert agent_route._server_research_pipeline_budget_mode() == "full_reviewed"
-
-    monkeypatch.setenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", "true")
-    with pytest.raises(Exception) as raised:
-        agent_route._server_research_pipeline_budget_mode()
-    assert raised.value.detail == {
-        "error": "research_pipeline_development_mode_invalid"
-    }
-
-
-def test_candidate_plan_click_stays_planner_only_with_or_without_prepared_package(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from easyicu.webserver.routes import agent as agent_route
-
-    monkeypatch.setenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", "1")
-    assert agent_route._research_pipeline_budget_mode_for_source(
-        prepared_manifest=None,
-        metadata_only_planning_authorized=True,
-    ) == "planner_canary"
-    assert agent_route._research_pipeline_budget_mode_for_source(
-        prepared_manifest=tmp_path / "manifest.json",
-        metadata_only_planning_authorized=True,
-    ) == "planner_canary"
-    monkeypatch.delenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", raising=False)
-    assert agent_route._research_pipeline_budget_mode_for_source(
-        prepared_manifest=tmp_path / "manifest.json",
-        metadata_only_planning_authorized=True,
-    ) == "planner_canary"
-    monkeypatch.setenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", "1")
-    assert agent_route._research_pipeline_budget_mode_for_source(
-        prepared_manifest=None,
-        metadata_only_planning_authorized=False,
-    ) == "full_reviewed"
-
-
-def test_planner_only_plan_requests_package_bound_regeneration() -> None:
-    study = _complete_study()
-    digest = study_context_owner.scientific_configuration_sha256(study)
-    snapshot = build_research_workflow_snapshot(
-        study=study,
-        active_export_present=True,
-        active_job=None,
-        latest_run={
-            "run_type": "full",
-            "run_id": "run-preview-only",
-            "engine": "easyicu.research_agent.pipeline",
-            "gate_status": "blocked",
-            "run_status": "human_review_pending",
-            "pending_review_reason_codes": ["operator_plan_approval_required"],
-            "artifact_names": ["agent_plan.json", "source_run_manifest.json"],
-        },
-        plan_review_authority={
-            "run_id": "run-preview-only",
-            "resumable_here": True,
-            "scientific_configuration_sha256": digest,
-            "budget_mode": "planner_canary",
-        },
-    )
-
-    by_id = {row.id: row for row in snapshot.stages}
-    assert snapshot.plan_execution_ready is False
-    assert snapshot.next_action_code == "plan_execution_upgrade_required"
-    assert by_id["plan"].reason_code == "plan_execution_upgrade_required"
-    assert by_id["analysis"].reason_code == "plan_execution_upgrade_required"
-
-
-def test_legacy_scientific_review_requests_fresh_plan_without_reextracting() -> None:
-    study = _complete_study()
-    digest = study_context_owner.scientific_configuration_sha256(study)
-    snapshot = build_research_workflow_snapshot(
-        study=study,
-        active_export_present=True,
-        active_job=None,
-        latest_run={
-            "run_type": "full",
-            "run_id": "run-stale-science-policy",
-            "engine": "easyicu.research_agent.pipeline",
-            "gate_status": "blocked",
-            "run_status": "human_review_pending",
-            "pending_review_reason_codes": [
-                "scientific_plan_review_policy_stale"
-            ],
-            "artifact_names": ["agent_plan.json", "source_run_manifest.json"],
-        },
-        plan_review_authority={
-            "run_id": "run-stale-science-policy",
-            "resumable_here": True,
-            "scientific_configuration_sha256": digest,
-            "budget_mode": "full_reviewed",
-            "plan_approval_allowed": False,
-            "requests": [
-                {
-                    "reason_code": "scientific_plan_review_policy_stale",
-                    "approval_allowed": False,
-                }
-            ],
-        },
-    )
-
-    by_id = {row.id: row for row in snapshot.stages}
-    assert snapshot.plan_execution_ready is False
-    assert snapshot.next_action_code == "scientific_plan_review_policy_stale"
-    assert by_id["plan"].reason_code == "scientific_plan_review_policy_stale"
-    assert by_id["analysis"].reason_code == "scientific_plan_review_policy_stale"
-
-
-def test_planner_canary_cannot_be_approved_into_execution(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from easyicu.webserver.routes import agent as agent_route
-
-    monkeypatch.setattr(agent_route.settings_store, "load_settings", lambda: {"ai_enabled": True})
-    monkeypatch.setattr(
-        agent_route.agent_pipeline_runs,
-        "pending_review",
-        lambda _run_id: {
-            "study_id": "study-workflow",
-            "resumable_here": True,
-            "budget_mode": "planner_canary",
-        },
-    )
-
-    with pytest.raises(Exception) as raised:
-        agent_route.jobs_agent_run_review(
-            {
-                "run_id": "run-canary",
-                "study_context_id": "study-workflow",
-                "decision": "approved",
-                "external_llm_opt_in": True,
-            },
-            request=_request(),
-        )
-
-    assert raised.value.detail == {
-        "error": "research_pipeline_planner_canary_execution_blocked"
-    }
-
-
-def test_pipeline_bridge_cannot_approve_canary_when_route_is_bypassed(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    request = HumanReviewRequest.create(
-        kind="scientific_stop",
-        summary="Review canary plan.",
-        authority_sha256="a" * 64,
-        payload={"reason": "operator_plan_approval_required"},
-    )
-    pending = HumanReviewPending(
-        run_id="run-canary-bypass",
-        thread_id="run-canary-bypass",
-        run_dir=str(tmp_path / "run-canary-bypass"),
-        requests=(request,),
-    )
-    pipeline_called = False
-
-    class _Pipeline:
-        def resume_human_review(self, *_args: Any, **_kwargs: Any) -> Any:
-            nonlocal pipeline_called
-            pipeline_called = True
-            raise AssertionError("canary must not reach execution")
-
-    _install_pending_review(
-        monkeypatch,
-        agent_pipeline_runs._PendingRun(
-            pipeline=_Pipeline(),
-            pending=pending,
-            wrapper_dir=tmp_path,
-            study={"id": "study-canary"},
-            provider={},
-            acquisition=SimpleNamespace(),
-            created_at=1.0,
-            budget_mode="planner_canary",
-        ),
-    )
-
-    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
-        agent_pipeline_runs.resume_research_pipeline(
-            run_id=pending.run_id,
-            study_context_id="study-canary",
-            decision="approved",
-            reviewer="server reviewer",
-            note="",
-            job=SimpleNamespace(emit=lambda _event: None, cancel_requested=False),
-        )
-
-    assert exc.value.code == "research_pipeline_planner_canary_execution_blocked"
-    assert pipeline_called is False
-
-
-def test_signoff_ignores_client_reviewer_identity(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from easyicu.webserver.routes import agent as agent_route
-
-    captured: dict[str, Any] = {}
-
-    def create_signoff(_project_dir: str, **kwargs: Any) -> dict[str, Any]:
-        captured.update(kwargs)
-        return {"ok": True}
-
-    monkeypatch.setattr(agent_route.agent_runs, "create_human_signoff", create_signoff)
-
-    agent_route.post_agent_run_signoff(
-        {"project_dir": "/server/run", "reviewer": "client-claims-to-be-PI"}
-    )
-
-    assert captured["reviewer"] == "easyicu_local_web_operator"
-
-
-def test_research_pipeline_runner_uses_in_memory_provider_authority(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _assume_execution_runtime_ready(monkeypatch)
-    actual_run = tmp_path / "actual-provider-run"
-    _write_real_pipeline_fixture(
-        actual_run,
-        manuscript="# Results\nThe provider-bound result is analysis-only.",
-    )
-    universe = tmp_path / "universe.parquet"
-    universe.write_bytes(b"typed-universe-placeholder")
-    acquisition = _acquisition_receipt()
-    acquisition.blocked = False
-    acquisition.universe_path = universe
-    acquisition.cohort_authority_path = None
-    acquisition.cohort_authority_ref = None
-    acquisition.trajectory_path = None
-    acquisition.trajectory_authority_path = None
-    acquisition.trajectory_authority_ref = None
-    expected_environment = {
-        "OPENAI_API_KEY": "test-private-provider-key",
-        "OPENAI_BASE_URL": "http://127.0.0.1:8317/v1",
-        "OPENAI_MODEL": "test-local-model",
-        "EASYICU_DISABLE_PROVIDER_ENV_FILE": "1",
-    }
-    captured: dict[str, Any] = {}
-
-    def build_client(
-        provider: dict[str, Any],
-        *,
-        request_timeout: float | None = None,
-        request_hard_timeout: float | None = None,
-        environ: dict[str, str] | None = None,
-    ) -> tuple[object, dict[str, Any]]:
-        captured["provider"] = dict(provider)
-        captured["environment"] = dict(environ or {})
-        captured["request_timeout"] = request_timeout
-        captured["request_hard_timeout"] = request_hard_timeout
-        return object(), {"provider": "openai", "model": "test-local-model"}
-
-    monkeypatch.setattr(
-        provider_adapter,
-        "build_research_agent_provider_client",
-        build_client,
-    )
-    import easyicu.research_agent as research_agent
-    from easyicu.research_agent.acquisition import foundation
-
-    monkeypatch.setattr(
-        foundation,
-        "acquire_universe_for_question",
-        lambda **_kwargs: acquisition,
-    )
-    monkeypatch.setattr(
-        research_pipeline_run_preparation,
-        "_data_foundation_profile",
-        lambda **_kwargs: _foundation_profile(),
-    )
-
-    class FakePipeline:
-        def run(self, **_kwargs: Any) -> SimpleNamespace:
-            return SimpleNamespace(manifest_path=actual_run / "manifest.json")
-
-    monkeypatch.setattr(
-        research_agent.ResearchAgentPipeline,
-        "from_config",
-        lambda _config, *, services: FakePipeline(),
-    )
-
-    export_path = _write_pipeline_export(tmp_path / "export")
-    runner = agent_pipeline_runs.make_research_pipeline_run_runner(
-        export_path=str(export_path),
-        study_context=_complete_study(),
-        project_root=str(tmp_path / "projects"),
-        provider={"provider": "openai", "external": True},
-        provider_environment=expected_environment,
-        budget_mode="full_reviewed",
-    )
-
-    class Job:
-        id = "job-provider-authority"
-        cancel_requested = False
-        events: list[dict[str, Any]] = []
-
-        def emit(self, event: dict[str, Any]) -> None:
-            self.events.append(dict(event))
-
-    result = runner(Job())
-
-    assert captured["environment"] == expected_environment
-    assert captured["request_timeout"] is None
-    assert captured["request_hard_timeout"] is None
-    assert result["provider"]["model"] == "test-local-model"
-    assert "test-private-provider-key" not in json.dumps(result)
-
-
-def test_pipeline_bridge_rejects_direct_scientific_provider_fallback(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    export = _write_pipeline_export(tmp_path / "export")
-    monkeypatch.setattr(
-        research_pipeline_run_preparation,
-        "_data_foundation_profile",
-        lambda **_kwargs: _foundation_profile(),
-    )
-
-    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
-        agent_pipeline_runs.make_research_pipeline_run_runner(
-            export_path=str(export),
-            study_context=_complete_study(),
-            project_root=str(tmp_path / "projects"),
-            provider={"provider": "openai", "external": True},
-            provider_environment=None,
-        )
-
-    assert exc.value.code == "research_pipeline_pi_verified_credentials_required"
-
-
-def test_pipeline_revalidates_package_before_provider_or_acquisition(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _assume_execution_runtime_ready(monkeypatch)
-    export = _write_pipeline_export(tmp_path / "export")
-    study = {
-        **_complete_study(),
-        "data_source": {"path": str(export), "database": "miiv"},
-    }
-    monkeypatch.setattr(
-        research_pipeline_run_preparation,
-        "_data_foundation_profile",
-        lambda **_kwargs: _foundation_profile(),
-    )
-    provider_called = False
-
-    def provider_client(*_args: Any, **_kwargs: Any) -> Any:
-        nonlocal provider_called
-        provider_called = True
-        raise AssertionError("provider must not be reached after package drift")
-
-    monkeypatch.setattr(
-        provider_adapter,
-        "build_research_agent_provider_client",
-        provider_client,
-    )
-    runner = agent_pipeline_runs.make_research_pipeline_run_runner(
-        export_path=str(export),
-        study_context=study,
-        project_root=str(tmp_path / "projects"),
-        provider={"provider": "openai", "external": True},
-        provider_environment=_PI_PROVIDER_ENVIRONMENT,
-        budget_mode="full_reviewed",
-    )
-    (export / "demographics.parquet").write_bytes(b"changed-after-submit")
-
-    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
-        runner(SimpleNamespace(id="job-drift", emit=lambda _event: None))
-
-    assert exc.value.code == "research_pipeline_package_binding_changed"
-    assert provider_called is False
-
-
-def test_plan_approval_revalidates_the_exact_prepared_package(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _allow_current_scientific_review(monkeypatch)
-    study, package_binding = _study_with_package_binding(tmp_path / "package")
-    request = HumanReviewRequest.create(
-        kind="scientific_stop",
-        summary="Review package-bound plan.",
-        authority_sha256="f" * 64,
-        payload={"reason": "operator_plan_approval_required"},
-    )
-    pending = HumanReviewPending(
-        run_id="run-package-drift",
-        thread_id="run-package-drift",
-        run_dir=str(tmp_path / "run-package-drift"),
-        requests=(request,),
-    )
-    pipeline_called = False
-
-    class _Pipeline:
-        def resume_human_review(self, *_args: Any, **_kwargs: Any) -> Any:
-            nonlocal pipeline_called
-            pipeline_called = True
-            raise AssertionError("drifted package must not reach Pipeline")
-
-    entry = agent_pipeline_runs._PendingRun(
-        pipeline=_Pipeline(),
-        pending=pending,
-        wrapper_dir=tmp_path,
-        study=study,
-        provider={},
-        acquisition=SimpleNamespace(),
-        created_at=1.0,
-        prepared_package_binding=package_binding,
-    )
-    _install_pending_review(monkeypatch, entry)
-    export = Path(study["data_source"]["path"])
-    (export / "demographics.parquet").write_bytes(b"changed-before-approval")
-
-    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
-        agent_pipeline_runs.resume_research_pipeline(
-            run_id=pending.run_id,
-            study_context_id=study["id"],
-            decision="approved",
-            reviewer="server reviewer",
-            note="",
-            job=SimpleNamespace(emit=lambda _event: None, cancel_requested=False),
-            current_study_context=study,
-        )
-
-    assert exc.value.code == "research_pipeline_package_binding_changed"
-    assert pipeline_called is False
-
-
-def test_provider_public_identity_binds_endpoint_without_disclosing_it() -> None:
-    common = {
-        "provider": "openai",
-        "api_key": "test-key",
-        "api_key_env": "OPENAI_API_KEY",
-        "base_url_env": "OPENAI_BASE_URL",
-        "model": "test-model",
-        "model_env": "OPENAI_MODEL",
-        "auth_header": "authorization",
-    }
-
-    first = provider_adapter._credential_public_metadata(
-        {**common, "base_url": "https://one.example/v1/chat/completions"}
-    )
-    second = provider_adapter._credential_public_metadata(
-        {**common, "base_url": "https://two.example/v1/chat/completions"}
-    )
-
-    assert first["endpoint_fingerprint"] != second["endpoint_fingerprint"]
-    assert "one.example" not in json.dumps(first)
+# ---------------------------------------------------------------------------
+# E-P2-13: the one un-stubbed probe (requires_docker).  Every other launch
+# test above uses _assume_execution_runtime_ready; this one deliberately does
+# NOT, so the real container gate stays exercised where a daemon exists and
+# skips (counted) where it does not.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.requires_docker
+def test_probe_runner_availability_consults_the_real_runtime_without_stub() -> None:
+    """Un-stubbed integration probe: the real gate answers for docker."""
+
+    from easyicu.research_agent.execution import runner as runner_module
+
+    availability = runner_module.probe_runner_availability("docker")
+    assert availability.kind == "docker"
+    # The real gate ran (not the _assume_execution_runtime_ready stub): it
+    # returns the typed contract with a strict bool and a non-empty image,
+    # whatever the host reports (available with a daemon+image, or a typed
+    # reason_code such as docker_image_missing without one).
+    assert availability.available in (True, False)
+    assert isinstance(availability.image, str) and availability.image

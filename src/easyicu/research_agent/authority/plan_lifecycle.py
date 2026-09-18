@@ -584,13 +584,37 @@ def persist_normalized_plan(
     return path
 
 
+def _plan_lifecycle_variant_evidence_id(revision: int, plan_sha256: str) -> str:
+    """Return the digest-suffixed lineage id for a same-revision plan variant."""
+
+    digest = str(plan_sha256 or "").strip().lower()
+    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+        raise PlanLifecycleAuthorityError(
+            "plan lineage variant selection requires a full SHA-256 digest"
+        )
+    return f"{plan_lifecycle_evidence_id(revision)}_{digest[:8]}"
+
+
 def load_normalized_plan(
     *,
     run_dir: Path,
     evidence: EvidenceStore,
     revision: int,
+    plan_sha256: str | None = None,
 ) -> NormalizedPlan:
+    """Load one registered normalized-plan lineage.
+
+    Without ``plan_sha256`` this reads the baseline revision lineage,
+    preserving the historical single-plan behaviour.  When a revision
+    legitimately produced more than one immutable public plan (see
+    :func:`persist_normalized_plan`), pass the exact reviewed
+    ``plan_sha256`` to bind that digest's variant lineage
+    (``<baseline>_<sha8>``) instead of silently reading the baseline.
+    """
+
     evidence_id = plan_lifecycle_evidence_id(revision)
+    if plan_sha256 is not None:
+        evidence_id = _plan_lifecycle_variant_evidence_id(revision, plan_sha256)
     record = evidence.get(evidence_id)
     if record is None:
         raise PlanLifecycleAuthorityError(
@@ -700,12 +724,20 @@ def approve_normalized_plan_for_execution(
     revision: int,
     review_requests: Sequence[Any],
     decision_set_sha256: str,
+    plan_sha256: str | None = None,
 ) -> ApprovedExecutablePlan:
     """Bind one reviewed normalized plan to the decision released to Execute.
 
     Both the live in-process pause and durable restart recovery call this owner.
     Keeping request parsing here prevents those control-plane paths from
     independently deciding which scientific authority a human approved.
+
+    Without ``plan_sha256`` the baseline revision lineage is bound,
+    preserving the historical single-plan behaviour.  When the reviewed
+    revision carries a digest-suffixed variant lineage, pass the exact
+    reviewed digest so the approval binds that variant instead of the
+    baseline; :meth:`ApprovedExecutablePlan.create` still verifies the
+    loaded lineage against the reviewed authority digest.
     """
 
     authorities: dict[str, PlanReviewAuthority] = {}
@@ -735,6 +767,7 @@ def approve_normalized_plan_for_execution(
         run_dir=run_dir,
         evidence=evidence,
         revision=revision,
+        plan_sha256=plan_sha256,
     )
     approved = ApprovedExecutablePlan.create(
         normalized=normalized,

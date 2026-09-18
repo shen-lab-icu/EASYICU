@@ -11,6 +11,7 @@ calibration is a separate question.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 from sklearn.metrics import roc_auc_score
 
 from easyicu.research_agent.methods.delong_auc import (
@@ -125,11 +126,8 @@ def test_better_model_beats_worse_model():
 
 def test_missing_class_raises():
     # An AUROC is undefined without both classes present.
+    # E-P2-7: pytest.raises instead of try/except:pass/else-raise.
     y = np.array([1, 1, 1, 1])
     score = np.array([0.1, 0.2, 0.3, 0.4])
-    try:
+    with pytest.raises(ValueError, match="both classes|single-class|one class"):
         delong_auc_variance(y, score)
-    except ValueError:
-        pass
-    else:  # pragma: no cover - failure path
-        raise AssertionError("expected ValueError for single-class input")

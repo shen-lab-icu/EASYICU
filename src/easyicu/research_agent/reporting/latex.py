@@ -28,11 +28,13 @@ from .bibtex import (
     render_thebibliography_block,
     sanitise_bibtex_key,
 )
+from .manuscript_figures import ManuscriptFigure
 from ..literature import (
     CitationRecord,
     LiteratureBundle,
     manuscript_citable_keys,
 )
+from .manuscript_tables import ManuscriptTable
 
 
 # Map common Markdown constructs → LaTeX. Intentionally small; this is
@@ -108,6 +110,10 @@ _LATEX_SPECIAL = {
     "\\": r"\textbackslash{}",
     "<": r"\textless{}",
     ">": r"\textgreater{}",
+    "≥": r"\ensuremath{\geq}",
+    "≤": r"\ensuremath{\leq}",
+    "−": r"\ensuremath{-}",
+    "≠": r"\ensuremath{\neq}",
 }
 
 
@@ -288,6 +294,9 @@ def scaffold_to_latex(
     venue_template: str = "article",
     figure_paths: Optional[Sequence[Tuple[str, str]]] = None,
     supplementary_figure_paths: Optional[Sequence[Tuple[str, str]]] = None,
+    figures: Sequence[ManuscriptFigure] = (),
+    tables: Sequence[ManuscriptTable] = (),
+    figure_context: Sequence[str] = (),
     draft_watermark: bool = False,
     claim_base_url: Optional[str] = None,
 ) -> str:
@@ -303,6 +312,20 @@ def scaffold_to_latex(
     don't want a separate biber/bibtex run.
     """
     authors = list(authors or ["EasyICU research-agent"])
+    if figures and (figure_paths or supplementary_figure_paths):
+        raise ValueError("Use either bound figures or legacy figure paths, not both")
+    captions = {figure.relative_path: figure.caption for figure in figures}
+    if len(captions) != len(figures):
+        raise ValueError("A bound figure path must occur exactly once in the reader")
+    if figures:
+        if any(figure.placement not in {"main", "supplementary"} for figure in figures):
+            raise ValueError("Reader figure placement must be main or supplementary")
+        figure_paths = [(figure.evidence_id, figure.relative_path) for figure in figures
+                        if figure.placement == "main"]
+        supplementary_figure_paths = [
+            (figure.evidence_id, figure.relative_path) for figure in figures
+            if figure.placement == "supplementary"
+        ]
     claim_base_url = _validated_claim_base_url(claim_base_url)
 
     # Strip HTML comments (``<!-- ... -->``) — produced by the binder
@@ -316,12 +339,12 @@ def scaffold_to_latex(
 
     if bibliography is not None:
         allowed_citation_keys = set(manuscript_citable_keys(bibliography))
-        requested_citation_keys = {
+        requested_citation_keys = list(dict.fromkeys(
             part.strip().lstrip("@")
             for match in _LITERATURE_CITATION_PATTERN.finditer(markdown)
             for part in match.group("keys").split(";")
-        }
-        unknown_citation_keys = sorted(requested_citation_keys - allowed_citation_keys)
+        ))
+        unknown_citation_keys = sorted(set(requested_citation_keys) - allowed_citation_keys)
         if unknown_citation_keys:
             raise ValueError(
                 "manuscript cites keys absent from the run-bound bibliography: "
@@ -370,6 +393,11 @@ def scaffold_to_latex(
     # Rebuild as LaTeX
     parts: List[str] = []
     parts.append(latex_template_preamble(venue_template))
+    display_text = " ".join([markdown, title, *authors,
+                             *(str(cell) for table in tables for row in table.rows for cell in row),
+                             *(figure.caption for figure in figures)])
+    if re.search(r"[\u3400-\u9fff]", display_text):
+        parts.append(r"\usepackage[fontset=fandol]{ctex}")
     parts.append("")
     parts.append(r"\title{" + _escape_latex(title) + "}")
     parts.append(r"\author{" + r" \and ".join(_escape_latex(a) for a in authors) + "}")
@@ -424,15 +452,52 @@ def scaffold_to_latex(
 
     if manuscript_citable_keys(bibliography):
         if inline_bibliography:
-            block = render_thebibliography_block(bibliography)
+            block = render_thebibliography_block(bibliography, cited_keys=requested_citation_keys)
             if block:
-                parts.append(r"\section*{References}")
                 parts.append(block)
                 parts.append("")
         else:
             parts.append(r"\bibliographystyle{" + bibliography_style + "}")
             parts.append(r"\bibliography{" + bibliography_basename + "}")
             parts.append("")
+
+    if figure_context:
+        parts.append(r"\section*{Cohort accounting}")
+        parts.extend(_escape_latex(note) + "\n" for note in figure_context)
+
+    if tables:
+        parts.extend([r"\clearpage", r"\section*{Tables}", ""])
+        for table in tables:
+            if not table.columns or any(len(row) != len(table.columns) for row in table.rows):
+                raise ValueError("reader table rows must match the declared columns")
+            count = len(table.columns)
+            weights = [1.0] * count
+            if table.columns[0] == "Characteristic":
+                weights = [1.5, *(0.55 if column in {"SMD", "P value"} else 1.1
+                                  for column in table.columns[1:])]
+            layout = "@{}" + "".join(
+                r">{\raggedright\arraybackslash}p{\dimexpr"
+                + f"{weight / sum(weights):.5f}" + r"\linewidth-2\tabcolsep\relax}"
+                for weight in weights
+            ) + "@{}"
+            header = " & ".join(_escape_latex(cell) for cell in table.columns) + r" \\"
+            parts.extend([
+                r"\begingroup\footnotesize", r"\begin{longtable}{" + layout + "}",
+                r"\caption{" + _escape_latex(table.caption) + r"}\\",
+                r"\toprule", header, r"\midrule\endfirsthead",
+                r"\toprule", header, r"\midrule\endhead",
+            ])
+            for row in table.rows:
+                cells = [
+                    _escape_latex(cell).replace(r"\_", r"\_\allowbreak{}") for cell in row
+                ]
+                if row[0].startswith("  "):
+                    cells[0] = r"\hspace*{1em}" + cells[0].lstrip()
+                parts.append(" & ".join(cells) + r" \\")
+            parts.extend([r"\bottomrule", r"\end{longtable}"])
+            for note in table.notes:
+                parts.append(r"\par\noindent " + _escape_latex(note))
+            parts.extend([r"\endgroup", ""])
 
     # Keep main and supplementary displays visibly separate. This prevents a
     # routine quality-control plot from being mistaken for a main result and
@@ -456,12 +521,14 @@ def scaffold_to_latex(
             parts.append(r"\begin{figure}[htbp]")
             parts.append(r"\centering")
             parts.append(
-                r"\includegraphics[width=\textwidth]{"
+                r"\includegraphics[width=\textwidth,height=0.70\textheight,keepaspectratio]{"
                 + _escape_latex(normalized_figure_path)
                 + "}"
             )
             parts.append(
-                r"\caption{" + _escape_latex(fig_id.replace("_", " ").strip()) + "}"
+                r"\caption{" + _escape_latex(
+                    captions.get(fig_rel_path, fig_id.replace("_", " ").strip())
+                ) + "}"
             )
             label_key = re.sub(r"[^A-Za-z0-9:._-]+", "-", fig_id).strip("-")
             parts.append(r"\label{fig:" + label_key + "}")
@@ -471,6 +538,7 @@ def scaffold_to_latex(
     if supplementary_figure_paths:
         parts.append(r"\clearpage")
         parts.append(r"\section*{Supplementary figures}")
+        parts.append(r"\setcounter{figure}{0}\renewcommand{\thefigure}{S\arabic{figure}}")
         parts.append("")
         for fig_id, fig_rel_path in supplementary_figure_paths:
             normalized_figure_path = str(fig_rel_path).replace("\\", "/")
@@ -487,12 +555,14 @@ def scaffold_to_latex(
             parts.append(r"\begin{figure}[htbp]")
             parts.append(r"\centering")
             parts.append(
-                r"\includegraphics[width=\textwidth]{"
+                r"\includegraphics[width=\textwidth,height=0.58\textheight,keepaspectratio]{"
                 + _escape_latex(normalized_figure_path)
                 + "}"
             )
             parts.append(
-                r"\caption{" + _escape_latex(fig_id.replace("_", " ").strip()) + "}"
+                r"\caption{" + _escape_latex(
+                    captions.get(fig_rel_path, fig_id.replace("_", " ").strip())
+                ) + "}"
             )
             label_key = re.sub(r"[^A-Za-z0-9:._-]+", "-", fig_id).strip("-")
             parts.append(r"\label{fig:supp-" + label_key + "}")
@@ -517,6 +587,7 @@ def latex_template_preamble(venue_template: str = "article") -> str:
         \usepackage[colorlinks=true,linkcolor=blue!55!black,citecolor=teal!55!black,urlcolor=blue!55!black]{hyperref}
         \usepackage{booktabs}
         \usepackage{longtable}
+        \usepackage{array}
         \usepackage{xcolor}
         \usepackage[hang,small,bf]{caption}
         \setlength{\emergencystretch}{4em}

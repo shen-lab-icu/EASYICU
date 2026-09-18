@@ -47,7 +47,7 @@ const html = context.window.EasyICU.guidedPi.require('analysisReport').render({
   ] },
   figure_gallery: { presentation_variant: true, figures: [] },
 });
-assert.ok(html.includes('Complete analysis report'));
+assert.ok(html.includes('Research results and interpretation'));
 assert.ok(html.includes('Result interpretation'));
 assert.ok(html.includes('safe-gallery'));
 assert.ok(html.includes('data-gpi-evidence-open'));

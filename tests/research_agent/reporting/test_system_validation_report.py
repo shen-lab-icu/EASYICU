@@ -177,6 +177,41 @@ def test_system_validation_report_separates_execution_from_publication() -> None
     assert len(report.source_bindings) == 8
 
 
+def test_provider_usage_bindings_name_the_accounting_digest_and_each_ledger() -> None:
+    projections = _projections()
+    report = build_system_validation_report(
+        run_id="run_validation",
+        projections=projections,
+        run_status={
+            "gates": {"execution_complete": True, "completed_step_count": 2}
+        },
+        provider_usage={
+            "status": "completed",
+            "calls": 3,
+            "accounted_tokens": 1234,
+            "estimated_cost_usd": 0.42,
+            "ledger_sha256": "f" * 64,
+            "attempts": [
+                {"stage": "run", "ledger_digest": "1" * 64},
+                {"stage": "report_revision", "ledger_digest": "2" * 64},
+                {"stage": "corrupt", "ledger_digest": "not-a-digest"},
+            ],
+        },
+        projection_privacy_passed=True,
+    )
+
+    usage_bindings = {
+        binding.artifact: binding.sha256
+        for binding in report.source_bindings
+        if "provider" in binding.artifact
+    }
+    assert usage_bindings == {
+        "provider_usage_accounting": "f" * 64,
+        "provider_hard_stop_ledger.json[run]": "1" * 64,
+        "provider_hard_stop_ledger.json[report_revision]": "2" * 64,
+    }
+
+
 def test_system_validation_report_prefers_semantically_corrected_gallery() -> None:
     projections = _projections()
     projections["system_validation_figure_gallery.json"] = {
@@ -329,3 +364,40 @@ def test_system_validation_receipt_binds_exact_json_and_html_bytes() -> None:
     assert receipt["publication_authorized"] is False
     assert receipt["html"]["sha256"] == hashlib.sha256(html_bytes).hexdigest()
     assert receipt["pdf"] is None
+
+
+def test_unknown_failure_class_becomes_contract_drift_finding() -> None:
+    """Retry policy allowlist is enforced at validation time, not discarded."""
+    projections = _projections()
+    projections["source_run_manifest.json"]["per_step_records"] = [
+        {"step_id": "01_x", "runtime_failure_class": "execution_timeout"},
+        {"step_id": "02_y", "runtime_failure_class": "some_future_class"},
+    ]
+    report = build_system_validation_report(
+        run_id="run_validation",
+        projections=projections,
+        run_status={"gates": {"execution_complete": True}},
+        review_checkpoint=_approved_checkpoint(),
+        provider_usage=None,
+        projection_privacy_passed=True,
+    )
+    codes = [finding.code for finding in report.scientific_findings]
+    assert "retry_policy_contract_drift" in codes
+    assert report.status == "engineering_validation_incomplete"
+
+
+def test_tabled_failure_classes_emit_no_drift_finding() -> None:
+    projections = _projections()
+    projections["source_run_manifest.json"]["per_step_records"] = [
+        {"step_id": "01_x", "runtime_failure_class": "execution_timeout"},
+    ]
+    report = build_system_validation_report(
+        run_id="run_validation",
+        projections=projections,
+        run_status={"gates": {"execution_complete": True}},
+        review_checkpoint=_approved_checkpoint(),
+        provider_usage=None,
+        projection_privacy_passed=True,
+    )
+    codes = [finding.code for finding in report.scientific_findings]
+    assert "retry_policy_contract_drift" not in codes

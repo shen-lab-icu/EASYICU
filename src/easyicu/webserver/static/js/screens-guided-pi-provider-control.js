@@ -1,3 +1,4 @@
+/* Owner: Guided Pi provider/account control widget. */
 /* Copilot-owned provider/account event controller.
    The parent screen passes its mutable session state and narrow callbacks;
    this owner handles only account login, model discovery, and API verification. */
@@ -51,6 +52,31 @@
       if (renderAfter) render();
     }
 
+    function safeAuthUrl(value) {
+      // D-P1-3: same semantics as literature.safeUrl (https + hostname +
+      // no userinfo) plus the Codex allowlist. Never navigate a backend URL
+      // that fails this gate; report via errorText and close the popup.
+      const registry = window.EasyICU && window.EasyICU.guidedPi
+        && typeof window.EasyICU.guidedPi.optional === 'function'
+        ? window.EasyICU.guidedPi.optional('literature') : null;
+      if (registry && typeof registry.safeUrl === 'function') {
+        const cleaned = registry.safeUrl(value);
+        try {
+          const parsed = new URL(cleaned);
+          if (parsed.hostname.toLowerCase() !== 'auth.openai.com') return '';
+          if (parsed.port) return '';
+          return cleaned;
+        } catch (_) { return ''; }
+      }
+      try {
+        const parsed = new URL(String(value || ''));
+        if (parsed.protocol !== 'https:' || !parsed.hostname || parsed.username || parsed.password) return '';
+        if (parsed.port) return '';
+        if (parsed.hostname.toLowerCase() !== 'auth.openai.com') return '';
+        return parsed.href;
+      } catch (_) { return ''; }
+    }
+
     async function startCodexLogin(flow, popup) {
       if (state.codexBusy || !api().startPiCopilotCodexLogin) return;
       state.codexBusy = true; state.error = ''; render();
@@ -66,8 +92,12 @@
         } : null;
         const authUrl = String((payload && (payload.auth_url || payload.verification_url)) || '');
         if (authUrl) {
-          if (popup && !popup.closed) popup.location.href = authUrl;
-          else window.open(authUrl, '_blank', 'noopener,noreferrer');
+          const safeUrl = safeAuthUrl(authUrl);
+          if (!safeUrl) {
+            if (popup && !popup.closed) popup.close();
+            state.error = errorText({ code: 'codex_auth_url_invalid' });
+          } else if (popup && !popup.closed) popup.location.href = safeUrl;
+          else window.open(safeUrl, '_blank', 'noopener,noreferrer');
         } else if (popup && !popup.closed) {
           popup.close();
         }
@@ -112,10 +142,41 @@
       finally { state.codexBusy = false; render(); }
     }
 
+    // D-P2-4: documentation-reserved example hosts (RFC 2606) are placeholder
+    // text only and must never receive a verification probe with the key.
+    function presetHostname(value) {
+      try {
+        return new URL(String(value || '')).hostname.toLowerCase().replace(/\.+$/, '') || '';
+      } catch (_) {
+        return '';
+      }
+    }
+
+    function isExampleHostname(host) {
+      return !!host && ['example.com', 'example.org', 'example.net', 'example.edu']
+        .some(root => host === root || host.endsWith('.' + root));
+    }
+
     async function configureProvider(form) {
       if (state.setupSaving || !form) return;
       const data = new FormData(form);
       const apiKey = String(data.get('api_key') || '').trim();
+      const baseUrl = String(data.get('base_url') || '').trim();
+      // D-P2-4: the custom-openai preset leaves the address empty and the
+      // example domain is placeholder text only. Refuse both here — before
+      // any verification probe could carry the API key to a stand-in host —
+      // and require the user to type a real gateway address. The backend
+      // (validate_credential_endpoint) rejects example.* a second time.
+      if (!baseUrl || isExampleHostname(presetHostname(baseUrl))) {
+        const keyInput = form.querySelector('[name="api_key"]');
+        if (keyInput) keyInput.value = '';
+        state.error = tr(
+          'Enter your gateway address before verifying. The example address is only a placeholder and is never submitted.',
+          '请先填写网关地址再验证。示例地址只是占位文本，不会提交。',
+        );
+        render();
+        return;
+      }
       const keyInput = form.querySelector('[name="api_key"]');
       if (keyInput) keyInput.value = '';
       state.setupSaving = true; state.error = '';
@@ -125,7 +186,7 @@
         const payload = await api().savePiCopilotProviderConfig({
           provider: String(data.get('provider') || '').trim(),
           api_key: apiKey,
-          base_url: String(data.get('base_url') || '').trim(),
+          base_url: baseUrl,
           model: String(data.get('model') || '').trim(),
           api_transport: String(data.get('api_transport') || 'openai-completions'),
           enable_ai: true,

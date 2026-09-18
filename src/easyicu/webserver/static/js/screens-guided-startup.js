@@ -1,3 +1,4 @@
+/* Owner: Guided startup cover widget. */
 /* Guided Copilot startup transaction.
    Owns only the initial full-shell cover so project discovery, model status,
    saved conversations, and StudyContext can settle behind one stable frame. */

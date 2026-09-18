@@ -277,14 +277,14 @@ def run_trajectory_selection_figure(
         linewidth=0.7,
         s=44,
         zorder=4,
+        label="No interior optimum" if failed_closed else "Selected candidate",
     )
     ax_bic.set_xticks(selection["n_clusters"])
     ax_bic.set_xlabel("Candidate number of classes (K)")
     ax_bic.set_ylabel("Information criterion")
     ax_bic.ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
     ax_bic.set_title("Prespecified candidate-grid assessment", loc="left", pad=5)
-    if "aic" in selection.columns:
-        ax_bic.legend(frameon=False, fontsize=5.8, loc="upper right")
+    ax_bic.legend(frameon=False, fontsize=5.8, loc="upper right")
 
     concepts: list[str] = []
     windows: list[str] = []
@@ -339,14 +339,7 @@ def run_trajectory_selection_figure(
         if failed_closed
         else "Interior candidate selected; stability and external reproducibility remain separate requirements."
     )
-    fig.text(
-        0.10,
-        0.035,
-        status_text,
-        fontsize=6.2,
-        color=palette["red"] if failed_closed else palette["blue"],
-    )
-    fig.subplots_adjust(left=0.10, right=0.96, bottom=0.24, top=0.86, wspace=0.38)
+    fig.subplots_adjust(left=0.10, right=0.96, bottom=0.18, top=0.86, wspace=0.38)
 
     if failed_closed:
         core_claim = (
@@ -404,6 +397,13 @@ def run_trajectory_selection_figure(
             },
         ],
         source_data=[selection_source.name, availability_source.name],
+        reader_caption=(
+            "(a) BIC across the prespecified candidate grid; AIC, when shown, "
+            "is diagnostic only. (b) Observed coordinate availability by "
+            f"prespecified ICU time window. {status_text} "
+            "Availability percentages reproduce the producer's counts, not "
+            "independent repeated measurements."
+        ),
         statistics_note=(
             "BIC values come from every model in the signed candidate grid and "
             "remain the only selection criterion. When present, AIC is a "

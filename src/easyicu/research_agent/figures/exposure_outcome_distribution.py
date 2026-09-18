@@ -67,6 +67,17 @@ def _single_text(series: pd.Series) -> Optional[str]:
     return str(values.iloc[0])
 
 
+def _declared_confidence(frame: pd.DataFrame, columns: Mapping[str, Any]) -> Optional[float]:
+    column = columns.get("confidence_level")
+    if column is None:
+        return None
+    values = pd.to_numeric(frame[column], errors="coerce")
+    if values.isna().any() or not values.map(math.isfinite).all():
+        return None
+    confidence = _single_finite_number(values)
+    return confidence if confidence is not None and 0.5 < confidence < 1 else None
+
+
 def is_exposure_outcome_distribution_frame(frame: pd.DataFrame) -> bool:
     """Whether ``frame`` carries the typed distribution product identity."""
 
@@ -91,6 +102,9 @@ def normalise_distribution_risk_difference(
         return None
     columns = _columns(frame)
     if not _RISK_DIFFERENCE_COLUMNS <= set(columns):
+        return _empty_association()
+    confidence = _declared_confidence(frame, columns)
+    if confidence is None:
         return _empty_association()
 
     roles = frame[columns["row_role"]].astype(str).str.strip().str.casefold()
@@ -153,6 +167,7 @@ def normalise_distribution_risk_difference(
             "estimate": [estimate],
             "lower": [lower],
             "upper": [upper],
+            "confidence_level": [confidence],
         }
     )
     result.attrs.update(
@@ -160,7 +175,8 @@ def normalise_distribution_risk_difference(
             "source_contract": "exposure_outcome_distribution",
             "effect_measure": "risk_difference_pct",
             "xlabel": "Risk difference (percentage points)",
-            "header": "Risk difference, pp (95% CI)",
+            "header": f"Risk difference, pp ({100 * confidence:g}% CI)",
+            "confidence_level": confidence,
             "null_value": 0.0,
             "ratio_scale": False,
         }
@@ -183,12 +199,13 @@ def normalise_distribution_outcome_rates(
     if not is_exposure_outcome_distribution_frame(frame):
         return None
     columns = _columns(frame)
+    confidence = _declared_confidence(frame, columns)
     required = {
         "ci_low_pct",
         "ci_high_pct",
         "exposure_level_index",
     }
-    if not required <= set(columns):
+    if confidence is None or not required <= set(columns):
         return pd.DataFrame(columns=["score", "rate", "lower", "upper", "n"])
 
     roles = frame[columns["row_role"]].astype(str).str.strip().str.casefold()
@@ -218,6 +235,7 @@ def normalise_distribution_outcome_rates(
             "_order": pd.to_numeric(
                 levels[columns["exposure_level_index"]], errors="coerce"
             ),
+            "confidence_level": confidence,
         }
     ).dropna(subset=["score", "rate", "lower", "upper", "n", "_order"])
     result = result.loc[
@@ -241,6 +259,7 @@ def normalise_distribution_outcome_rates(
             ),
             "score_is_numeric": False,
             "source_contract": "exposure_outcome_distribution",
+            "confidence_level": confidence,
         }
     )
     return result

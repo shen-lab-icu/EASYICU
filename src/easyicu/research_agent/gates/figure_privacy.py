@@ -562,6 +562,7 @@ def _inspect_source(path: Path) -> Dict[str, Any]:
 def _rendered_text(contract: Any) -> List[str]:
     texts = [
         str(getattr(contract, "core_claim", "") or ""),
+        str(getattr(contract, "reader_caption", "") or ""),
         str(getattr(contract, "statistics_note", "") or ""),
         str(getattr(contract, "image_integrity_note", "") or ""),
     ]

@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 
 from ...contracts.figure_plan import (
-    LANDMARK_ASSOCIATION_COMPOSITE_INPUTS,
     landmark_association_composite_panels,
 )
 from ...figures.publication import (
@@ -30,6 +29,7 @@ from ...icu_rules import classify_variable
 from ...schema import AnalysisStep
 from .figure_input_capability import TypedInputCapability
 from .typed_input_binding import BoundTypedInput, load_typed_input, sha256_file
+from ._shared import figure_product as _figure_product
 
 
 _REQUIRED_COLUMNS = {
@@ -58,6 +58,16 @@ _REQUIRED_COLUMNS = {
     ),
     "table:robustness_summary": frozenset({"axis", "total_specs", "converged_specs"}),
     "table:robustness_matrix": frozenset({"spec_id", "axis", "converged"}),
+    "sensitivity_contrasts": frozenset(
+        {
+            "exposure",
+            "exposure_value",
+            "reference_exposure_value",
+            "adjusted_odds_ratio",
+            "ci_low",
+            "ci_high",
+        }
+    ),
     "measurement_process": frozenset({"concept", "n_total", "measured_one_n"}),
 }
 
@@ -70,20 +80,11 @@ _LEGACY_LANDMARK_ARTICLE_INPUTS = frozenset(
 )
 
 
-def _figure_product(value: Any) -> str | None:
-    kind, separator, product = str(value or "").strip().partition(":")
-    if (
-        kind != "figure"
-        or not separator
-        or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", product)
-    ):
-        return None
-    return product
-
-
 def _curve_input(inputs: list[str] | tuple[str, ...]) -> str | None:
+    sensitivity_contrasts = _sensitivity_contrasts_input(inputs)
     reserved = {
         "table:robustness_summary",
+        sensitivity_contrasts,
     }
     adjusted_risk = _adjusted_risk_input(inputs)
     matches = [
@@ -92,6 +93,13 @@ def _curve_input(inputs: list[str] | tuple[str, ...]) -> str | None:
         if value.startswith("table:")
         and value not in reserved
         and value != adjusted_risk
+        and not (
+            (
+                "robustness" in value.partition(":")[2]
+                or "sensitivity" in value.partition(":")[2]
+            )
+            and value.partition(":")[2].endswith("_exposure_curve")
+        )
         and value.partition(":")[2]
         not in {"measurement_process", "measurement_process_audit"}
     ]
@@ -125,6 +133,20 @@ def _measurement_input(inputs: list[str] | tuple[str, ...]) -> str | None:
     return matches[0] if len(matches) == 1 else None
 
 
+def _sensitivity_contrasts_input(inputs: list[str] | tuple[str, ...]) -> str | None:
+    matches = [
+        value
+        for value in inputs
+        if value.startswith("table:")
+        and value.partition(":")[2].endswith("_exposure_contrasts")
+        and (
+            "robustness" in value.partition(":")[2]
+            or "sensitivity" in value.partition(":")[2]
+        )
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def _exposure_columns(frame: pd.DataFrame) -> tuple[str, str]:
     pairs = [
         (column.removeprefix("reference_"), column)
@@ -147,17 +169,9 @@ def landmark_association_figure_input_profile(
         and set(values) == _LEGACY_LANDMARK_ARTICLE_INPUTS
     ):
         return values
-    curve = _curve_input(values)
-    adjusted_risk = _adjusted_risk_input(values)
-    measurement = _measurement_input(values)
-    if (
-        curve is None
-        or adjusted_risk is None
-        or measurement is None
-        or len(values) != 4
-        or len(values) != len(set(values))
-        or not LANDMARK_ASSOCIATION_COMPOSITE_INPUTS <= set(values)
-    ):
+    try:
+        landmark_association_composite_panels(values)
+    except ValueError:
         return None
     return values
 
@@ -195,6 +209,9 @@ def landmark_association_figure_executor_owns_step(
     legacy_profile = set(profile) == _LEGACY_LANDMARK_ARTICLE_INPUTS
     curve = None if legacy_profile else _curve_input(profile)
     adjusted_risk = None if legacy_profile else _adjusted_risk_input(profile)
+    sensitivity_contrasts = (
+        None if legacy_profile else _sensitivity_contrasts_input(profile)
+    )
     measurement = None if legacy_profile else _measurement_input(profile)
     return all(
         _binding_has_columns(
@@ -204,6 +221,8 @@ def landmark_association_figure_executor_owns_step(
                 if key == curve
                 else "adjusted_risk_curve"
                 if key == adjusted_risk
+                else "sensitivity_contrasts"
+                if key == sensitivity_contrasts
                 else "measurement_process"
                 if key == measurement
                 else key
@@ -215,7 +234,6 @@ def landmark_association_figure_executor_owns_step(
         or (
             curve is not None
             and adjusted_risk is not None
-            and measurement is not None
         )
     )
 
@@ -417,6 +435,201 @@ def _draw_exposure_distribution(
     ax.spines["bottom"].set_color("#C9CED3")
     ax.spines["bottom"].set_linewidth(0.55)
     ax.tick_params(axis="x", labelsize=5.8, length=2.2, width=0.55)
+
+
+def _draw_sensitivity_forest(
+    ax: Any,
+    *,
+    primary_curve: pd.DataFrame,
+    exposure_column: str,
+    reference_column: str,
+    sensitivity_contrasts: pd.DataFrame,
+    palette: Mapping[str, str],
+) -> None:
+    """Compare the primary and independent-refit contrasts on one OR scale."""
+
+    from matplotlib.ticker import FixedLocator, FuncFormatter, NullFormatter
+
+    primary = primary_curve.copy()
+    sensitivity = sensitivity_contrasts.copy()
+    if len(sensitivity) < 2:
+        raise ValueError("sensitivity forest requires at least two contrasts")
+    primary_values = pd.to_numeric(
+        primary[exposure_column], errors="coerce"
+    ).to_numpy(dtype=float)
+    if not np.isfinite(primary_values).all():
+        raise ValueError("primary curve exposure values must be finite")
+    primary_exposures = {
+        str(value or "").strip() for value in primary["exposure"]
+    }
+    sensitivity_exposures = {
+        str(value or "").strip() for value in sensitivity["exposure"]
+    }
+    if (
+        "" in primary_exposures
+        or len(primary_exposures) != 1
+        or sensitivity_exposures != primary_exposures
+    ):
+        raise ValueError("sensitivity and primary curves must name the same exposure")
+
+    records: list[dict[str, float]] = []
+    for row in sensitivity.itertuples(index=False):
+        exposure_value = float(row.exposure_value)
+        matches = np.flatnonzero(
+            np.isclose(primary_values, exposure_value, rtol=0.0, atol=1e-10)
+        )
+        if len(matches) != 1:
+            raise ValueError(
+                "sensitivity contrasts must align exactly with the primary grid"
+            )
+        primary_row = primary.iloc[int(matches[0])]
+        reference_value = float(row.reference_exposure_value)
+        primary_reference = float(primary_row[reference_column])
+        if not np.isclose(
+            reference_value, primary_reference, rtol=0.0, atol=1e-10
+        ):
+            raise ValueError("sensitivity and primary references must align")
+        records.append(
+            {
+                "exposure_value": exposure_value,
+                "reference_value": reference_value,
+                "primary_estimate": float(primary_row["adjusted_odds_ratio"]),
+                "primary_low": float(primary_row["ci_low"]),
+                "primary_high": float(primary_row["ci_high"]),
+                "sensitivity_estimate": float(row.adjusted_odds_ratio),
+                "sensitivity_low": float(row.ci_low),
+                "sensitivity_high": float(row.ci_high),
+            }
+        )
+    records.sort(key=lambda item: item["exposure_value"])
+    positions = np.arange(len(records), dtype=float)
+    primary_y = positions + 0.11
+    sensitivity_y = positions - 0.11
+    primary_estimates = np.array(
+        [item["primary_estimate"] for item in records], dtype=float
+    )
+    sensitivity_estimates = np.array(
+        [item["sensitivity_estimate"] for item in records], dtype=float
+    )
+    primary_low = np.array([item["primary_low"] for item in records], dtype=float)
+    primary_high = np.array([item["primary_high"] for item in records], dtype=float)
+    sensitivity_low = np.array(
+        [item["sensitivity_low"] for item in records], dtype=float
+    )
+    sensitivity_high = np.array(
+        [item["sensitivity_high"] for item in records], dtype=float
+    )
+    positive = np.concatenate(
+        [
+            primary_low[primary_low > 0],
+            primary_high[primary_high > 0],
+            sensitivity_low[sensitivity_low > 0],
+            sensitivity_high[sensitivity_high > 0],
+        ]
+    )
+    if not positive.size:
+        raise ValueError("sensitivity forest requires positive ratio-scale bounds")
+    ax.errorbar(
+        primary_estimates,
+        primary_y,
+        xerr=np.vstack(
+            (
+                np.maximum(primary_estimates - primary_low, 0),
+                np.maximum(primary_high - primary_estimates, 0),
+            )
+        ),
+        fmt="o",
+        color=palette["blue"],
+        ecolor=palette["blue"],
+        elinewidth=0.85,
+        capsize=1.8,
+        markersize=3.4,
+        label="Primary",
+    )
+    ax.errorbar(
+        sensitivity_estimates,
+        sensitivity_y,
+        xerr=np.vstack(
+            (
+                np.maximum(sensitivity_estimates - sensitivity_low, 0),
+                np.maximum(sensitivity_high - sensitivity_estimates, 0),
+            )
+        ),
+        fmt="s",
+        color=palette["orange"],
+        ecolor=palette["orange"],
+        elinewidth=0.85,
+        capsize=1.8,
+        markersize=3.1,
+        label="Sensitivity",
+    )
+    ax.axvline(1.0, color="#7A8188", linestyle=(0, (3, 3)), linewidth=0.75)
+    ax.set_xscale("log")
+    lower_limit = float(positive.min()) / 1.06
+    upper_limit = float(positive.max()) * 1.06
+    candidate_ticks = (0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0)
+    visible = [
+        tick for tick in candidate_ticks if lower_limit <= tick <= upper_limit
+    ]
+    if 1.0 not in visible and lower_limit <= 1.0 <= upper_limit:
+        visible.append(1.0)
+    if len(visible) > 4:
+        visible = [visible[0], *visible[1:-1:2], visible[-1]][:4]
+        if lower_limit <= 1.0 <= upper_limit and 1.0 not in visible:
+            visible = sorted({*visible[:3], 1.0})
+    ax.set_xlim(lower_limit, upper_limit)
+    ax.xaxis.set_major_locator(FixedLocator(sorted(set(visible))))
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}"))
+    ax.xaxis.set_minor_locator(FixedLocator([]))
+    ax.xaxis.set_minor_formatter(NullFormatter())
+    ax.set_yticks(
+        positions,
+        [
+            f"{item['exposure_value']:g} vs {item['reference_value']:g}"
+            for item in records
+        ],
+    )
+    ax.invert_yaxis()
+    ax.set_xlabel("Adjusted odds ratio (95% CI)")
+    ax.set_title(
+        "Sensitivity to covariate\nfunctional form",
+        loc="left",
+        pad=4,
+        fontsize=7.0,
+        fontweight="semibold",
+    )
+    ax.grid(axis="x", color="#E7EAED", linewidth=0.5)
+    ax.set_axisbelow(True)
+    ax.legend(frameon=False, fontsize=4.8, loc="upper right")
+
+
+def _draw_landmark_audits(
+    axes: Any,
+    *,
+    robustness: pd.DataFrame,
+    process: pd.DataFrame,
+    palette: Mapping[str, str],
+    first_panel_index: int = 0,
+) -> None:
+    """Draw the two audit panels on their actual bound display surface."""
+
+    draw_robustness_coverage(
+        axes[0], robustness, color=palette["blue"], label_formatter=display_label
+    )
+    denominator = pd.to_numeric(process["n_total"])
+    numerator = pd.to_numeric(process["measured_one_n"])
+    axes[1].barh(
+        np.arange(len(process)), 100 * numerator / denominator, color=palette["blue"]
+    )
+    axes[1].set_yticks(
+        np.arange(len(process)), [display_label(value) for value in process["concept"]]
+    )
+    axes[1].set_xlim(0, 100)
+    axes[1].set_xlabel("Measured (%)")
+    axes[1].set_title("Measurement availability", loc="left")
+    axes[1].invert_yaxis()
+    for index, axis in enumerate(axes, start=first_panel_index):
+        add_panel_label(axis, chr(ord("a") + index), x=-0.08, y=1.06, fontsize=7.0)
 
 
 def _run_legacy_landmark_article_figure(
@@ -691,7 +904,7 @@ def run_landmark_association_figure(
     input_keys: tuple[str, ...],
     panel_placements: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Render four exact source tables without fitting or filtering a model."""
+    """Render the exact declared curve/audit profile without model fitting."""
 
     if _figure_product(f"figure:{figure_product}") is None:
         raise ValueError("unsafe figure product")
@@ -716,27 +929,29 @@ def run_landmark_association_figure(
         )
     curve_key = _curve_input(profile)
     adjusted_risk_key = _adjusted_risk_input(profile)
+    sensitivity_key = _sensitivity_contrasts_input(profile)
     measurement_key = _measurement_input(profile)
     assert (
         curve_key is not None
         and adjusted_risk_key is not None
-        and measurement_key is not None
     )
     curve = bound[curve_key].frame.copy()
     adjusted_risk = bound[adjusted_risk_key].frame.copy()
-    robustness = bound["table:robustness_summary"].frame.copy()
-    process = bound[measurement_key].frame.copy()
-    for key, frame in (
-        (curve_key, curve),
-        (adjusted_risk_key, adjusted_risk),
-        ("table:robustness_summary", robustness),
-        (measurement_key, process),
-    ):
+    sensitivity = (
+        bound[sensitivity_key].frame.copy() if sensitivity_key is not None else None
+    )
+    has_audits = measurement_key is not None
+    robustness = bound["table:robustness_summary"].frame.copy() if has_audits else None
+    process = bound[measurement_key].frame.copy() if has_audits else None
+    for key, item in bound.items():
+        frame = item.frame
         required = _REQUIRED_COLUMNS[
             "curve"
             if key == curve_key
             else "adjusted_risk_curve"
             if key == adjusted_risk_key
+            else "sensitivity_contrasts"
+            if key == sensitivity_key
             else "measurement_process"
             if key == measurement_key
             else key
@@ -770,7 +985,19 @@ def run_landmark_association_figure(
             "exposure_density_fraction",
         ),
     )
-    _require_finite_columns(process, ("n_total", "measured_one_n"))
+    if sensitivity is not None:
+        _require_finite_columns(
+            sensitivity,
+            (
+                "exposure_value",
+                "reference_exposure_value",
+                "adjusted_odds_ratio",
+                "ci_low",
+                "ci_high",
+            ),
+        )
+    if has_audits:
+        _require_finite_columns(process, ("n_total", "measured_one_n"))
 
     source_files: list[str] = []
     for key, item in bound.items():
@@ -788,6 +1015,15 @@ def run_landmark_association_figure(
 
     palette = apply_publication_style(font_size=7.0)
     placements = dict(panel_placements or {})
+    panel_templates = landmark_association_composite_panels(profile)
+    result_panels = tuple(panel for panel in panel_templates if not panel.separable_display)
+    result_placements = {
+        placements.get(panel.panel_id, panel.placement) for panel in result_panels
+    }
+    if len(result_placements) != 1 or not result_placements <= {"main", "supplementary"}:
+        raise ValueError("landmark result panels require one shared display placement")
+    result_placement = next(iter(result_placements))
+    combine_audits = has_audits and result_placement == "supplementary"
     # Audit panels have a separate exported display and exact runtime binding.
     show_process = placements.get("measurement_process", "supplementary") == "main"
     show_robustness = placements.get("robustness_summary", "supplementary") == "main"
@@ -795,13 +1031,24 @@ def run_landmark_association_figure(
         raise ValueError(
             "landmark audit panels require a supplementary display, not the primary curve figure"
         )
-    figure_height_mm = 78.0
+    figure_height_mm = 88.0 if sensitivity is not None else 78.0
+    if combine_audits:
+        figure_height_mm += max(85, 35 + 6 * max(len(process), len(robustness))) + 20
     fig = plt.figure(
         figsize=(183 / 25.4, figure_height_mm / 25.4),
     )
-    grid = fig.add_gridspec(
+    grid_columns = 3 if sensitivity is not None else 2
+    outer_grid = (
+        fig.add_gridspec(
+            2, 1, hspace=0.45, left=0.08, right=0.985, bottom=0.09, top=0.95
+        )
+        if combine_audits else None
+    )
+    grid = outer_grid[0].subgridspec(
+        2, grid_columns, height_ratios=(5.2, 0.72), hspace=0.12, wspace=0.32
+    ) if combine_audits else fig.add_gridspec(
         2,
-        2,
+        grid_columns,
         height_ratios=(5.2, 0.72),
         hspace=0.12,
         wspace=0.32,
@@ -814,6 +1061,9 @@ def run_landmark_association_figure(
     ax_risk = fig.add_subplot(grid[0, 1])
     ax_curve_density = fig.add_subplot(grid[1, 0], sharex=ax_curve)
     ax_risk_density = fig.add_subplot(grid[1, 1], sharex=ax_risk)
+    ax_sensitivity = (
+        fig.add_subplot(grid[:, 2]) if sensitivity is not None else None
+    )
 
     ax = ax_curve
     display_curve = curve.sort_values(exposure_column, kind="stable")
@@ -946,37 +1196,65 @@ def run_landmark_association_figure(
         color=risk_color,
         exposure_label=exposure_label,
     )
+    if sensitivity is not None:
+        assert ax_sensitivity is not None
+        _draw_sensitivity_forest(
+            ax_sensitivity,
+            primary_curve=curve,
+            exposure_column=exposure_column,
+            reference_column=reference_column,
+            sensitivity_contrasts=sensitivity,
+            palette=palette,
+        )
+        add_panel_label(ax_sensitivity, "c", x=-0.08, y=1.04, fontsize=7.0)
 
-    # Validate the supplementary audit sources even though they do not compete
-    # with the primary result for visual salience.
-    prepare_robustness_coverage(robustness)
-    robustness_display = {
-        "chart_type": "sensitivity_coverage_matrix",
-        "effect_comparison_authorized": False,
-        "reason_code": "ROBUSTNESS_EFFECT_COMPARABILITY_UNRESOLVED",
-        "display_authority": "audit_only",
-    }
-    denominator = pd.to_numeric(process["n_total"])
-    numerator = pd.to_numeric(process["measured_one_n"])
-    if (
-        (denominator <= 0).any()
-        or (numerator < 0).any()
-        or (numerator > denominator).any()
-    ):
-        raise ValueError("measurement-process counts do not nest")
+    if has_audits:
+        # Validate the supplementary audit sources even though they do not compete
+        # with the primary result for visual salience.
+        prepare_robustness_coverage(robustness)
+        robustness_display = {
+            "chart_type": "sensitivity_coverage_matrix",
+            "effect_comparison_authorized": False,
+            "reason_code": "ROBUSTNESS_EFFECT_COMPARABILITY_UNRESOLVED",
+            "display_authority": "audit_only",
+        }
+        denominator = pd.to_numeric(process["n_total"])
+        numerator = pd.to_numeric(process["measured_one_n"])
+        if (
+            (denominator <= 0).any()
+            or (numerator < 0).any()
+            or (numerator > denominator).any()
+        ):
+            raise ValueError("measurement-process counts do not nest")
 
     evidence = {key: str(item.evidence_id or "") for key, item in bound.items()}
-    panel_templates = landmark_association_composite_panels(profile)
-    panels = tuple(
-        panel
-        for panel in panel_templates
-        if placements.get(panel.panel_id, panel.placement) == "main"
-    )
+    if combine_audits:
+        audit_grid = outer_grid[1].subgridspec(1, 2, wspace=0.5)
+        _draw_landmark_audits(
+            [fig.add_subplot(audit_grid[0]), fig.add_subplot(audit_grid[1])],
+            robustness=robustness, process=process, palette=palette,
+            first_panel_index=len(result_panels),
+        )
+    panels = panel_templates if combine_audits else result_panels
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
         core_claim=(
-            "The aligned main panels show the adjusted ratio-scale association and model-standardised absolute outcome risk with 95% confidence intervals across the prespecified exposure grid. "
-            "The source-backed distribution strips show where the complete-case cohort contributes information; audit-only coverage and measurement-process tables remain supplementary."
+            "The aligned result panels show the adjusted ratio-scale association, "
+            "model-standardised absolute outcome risk, and an independent "
+            "functional-form sensitivity comparison on the same prespecified "
+            "contrasts with 95% confidence intervals. The source-backed "
+            "distribution strips show where the complete-case cohort contributes "
+            "information; audit-only coverage and measurement-process tables "
+            "remain supplementary."
+            if sensitivity is not None
+            else (
+                "The aligned result panels show the adjusted ratio-scale association "
+                "and model-standardised absolute outcome risk with 95% confidence "
+                "intervals across the prespecified exposure grid. The source-backed "
+                "distribution strips show where the complete-case cohort contributes "
+                "information; audit-only coverage and measurement-process tables "
+                "remain supplementary."
+            )
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
@@ -987,16 +1265,21 @@ def run_landmark_association_figure(
                 "title": (
                     "Sensitivity-analysis coverage"
                     if panel.panel_id == "robustness_summary"
+                    else "Sensitivity contrasts"
+                    if panel.panel_id == "sensitivity_contrasts"
                     else _label(panel.panel_id)
                 ),
                 "role": panel.article_role,
                 "claim": (
                     "This audit panel reports registered, converged, and independent specification counts without comparing heterogeneous effects."
                     if panel.panel_id == "robustness_summary"
+                    else "This panel compares the primary and independent functional-form sensitivity odds ratios at the same prespecified contrasts and reference."
+                    if panel.panel_id == "sensitivity_contrasts"
                     else "This panel renders the complete registered source table without model refitting."
                 ),
                 "evidence_ids": [evidence[source] for source in panel.source_products],
                 "metadata": {
+                    "placement": result_placement,
                     "chart_type": (
                         robustness_display["chart_type"]
                         if panel.panel_id == "robustness_summary"
@@ -1007,6 +1290,8 @@ def run_landmark_association_figure(
                         "continuous_fitted_curve_with_95ci"
                         if panel.panel_id
                         in {"association_curve", "absolute_risk_curve"}
+                        else "paired_effect_estimates_with_95ci"
+                        if panel.panel_id == "sensitivity_contrasts"
                         else "direct_table_projection"
                     ),
                     "source_data": [
@@ -1016,6 +1301,11 @@ def run_landmark_association_figure(
                     **(
                         robustness_display
                         if panel.panel_id == "robustness_summary"
+                        else {
+                            "effect_comparison_authorized": True,
+                            "reason_code": "SAME_ESTIMAND_INDEPENDENT_FUNCTIONAL_FORM_REFIT",
+                        }
+                        if panel.panel_id == "sensitivity_contrasts"
                         else {}
                     ),
                 },
@@ -1025,7 +1315,32 @@ def run_landmark_association_figure(
         source_data=source_files,
         statistics_note=(
             "All plotted values and exposure-grid densities are direct projections of registered source rows; no model is fit and no patient rows are read by the renderer. "
-            "The two curves share one exposure grid and reference value. Robustness summaries remain audit-only counts and are not displayed as confidence intervals or comparable effects."
+            "The two curves share one exposure grid and reference value. "
+            + (
+                "The sensitivity forest compares only aligned odds-ratio contrasts from the independent functional-form refit on the same reference and scale. "
+                if sensitivity is not None
+                else ""
+            )
+            + "Robustness summaries remain audit-only counts and are not displayed as confidence intervals or comparable effects."
+        ),
+        reader_caption=(
+            "Panel a shows adjusted odds ratios and 95% confidence intervals across the prespecified exposure grid. "
+            "Panel b shows model-standardised absolute outcome risk and 95% confidence intervals on the same grid. "
+            + (
+                "Panel c compares the primary and independent functional-form sensitivity odds ratios at the same prespecified contrasts. "
+                if sensitivity is not None
+                else ""
+            )
+            + "The reference value is marked on the curve panels. "
+            "Exposure-distribution strips show where the complete-case cohort contributes information at each grid value. "
+            "All values are direct projections of registered source rows; no model was refit by the renderer. "
+            "Robustness summaries are audit-only and do not authorize direct comparisons of heterogeneous specifications."
+            + (
+                f" Panel {chr(ord('a') + len(result_panels))} shows registered, "
+                "converged and independent specification counts for each declared contrast; "
+                f"panel {chr(ord('a') + len(result_panels) + 1)} shows measurement availability."
+                if combine_audits else ""
+            )
         ),
     )
     outputs = save_publication_figure(
@@ -1036,79 +1351,74 @@ def run_landmark_association_figure(
         dpi=300,
     )
     plt.close(fig)
+    supplemental_outputs = {}
     supplemental_name = f"{figure_product}_supplementary"
-    supplemental_panels = [
-        panel
-        for panel in panel_templates
-        if placements.get(panel.panel_id, panel.placement) == "supplementary"
-    ]
-    supplemental_fig, supplemental_axes = plt.subplots(
-        1,
-        2,
-        figsize=(
-            183 / 25.4,
-            max(85, 35 + 6 * max(len(process), len(robustness))) / 25.4,
-        ),
-        layout="constrained",
-    )
-    draw_robustness_coverage(
-        supplemental_axes[0],
-        robustness,
-        color=palette["blue"],
-        label_formatter=display_label,
-    )
-    supplemental_axes[1].barh(
-        np.arange(len(process)), 100 * numerator / denominator, color=palette["blue"]
-    )
-    supplemental_axes[1].set_yticks(
-        np.arange(len(process)), [display_label(value) for value in process["concept"]]
-    )
-    supplemental_axes[1].set_xlim(0, 100)
-    supplemental_axes[1].set_xlabel("Measured (%)")
-    supplemental_axes[1].set_title("Measurement availability", loc="left")
-    supplemental_axes[1].invert_yaxis()
-    for axis, label in zip(supplemental_axes, ("a", "b")):
-        add_panel_label(axis, label)
-    supplemental_contract = make_figure_contract(
-        figure_id=f"figure:{supplemental_name}",
-        core_claim="Supplementary source-backed specification coverage and measurement availability; no effect comparison is authorized.",
-        archetype="quantitative_grid",
-        width_mm=float(supplemental_fig.get_figwidth() * 25.4),
-        height_mm=float(supplemental_fig.get_figheight() * 25.4),
-        panels=[
-            {
-                "panel_id": panel.panel_id,
-                "title": _label(panel.panel_id),
-                "role": panel.article_role,
-                "claim": "Registered counts projected from the bound source table without refitting.",
-                "evidence_ids": [evidence[source] for source in panel.source_products],
-                "metadata": {
-                    "chart_type": panel.chart_type,
-                    "source_products": list(panel.source_products),
-                    "placement": "supplementary",
-                    "source_data": [
-                        f"{source.partition(':')[2]}_source_data.csv"
-                        for source in panel.source_products
-                    ],
-                },
-            }
-            for panel in supplemental_panels
-        ],
-        source_data=[
-            f"{source.partition(':')[2]}_source_data.csv"
-            for panel in supplemental_panels
-            for source in panel.source_products
-        ],
-        statistics_note="Counts only; robustness effect comparability remains unresolved. No patient rows or model fitting.",
-    )
-    supplemental_outputs = save_publication_figure(
-        supplemental_fig,
-        out_dir / supplemental_name,
-        contract=supplemental_contract,
-        formats=("png", "svg", "pdf", "tiff"),
-        dpi=300,
-    )
-    plt.close(supplemental_fig)
+    separate_audits = has_audits and not combine_audits
+    if separate_audits:
+        supplemental_panels = [
+            panel
+            for panel in panel_templates
+            if panel.separable_display
+        ]
+        supplemental_fig, supplemental_axes = plt.subplots(
+            1,
+            2,
+            figsize=(
+                183 / 25.4,
+                max(85, 35 + 6 * max(len(process), len(robustness))) / 25.4,
+            ),
+            layout="constrained",
+        )
+        _draw_landmark_audits(
+            supplemental_axes, robustness=robustness, process=process, palette=palette
+        )
+        supplemental_contract = make_figure_contract(
+            figure_id=f"figure:{supplemental_name}",
+            core_claim="Supplementary source-backed specification coverage and measurement availability; no effect comparison is authorized.",
+            archetype="quantitative_grid",
+            width_mm=float(supplemental_fig.get_figwidth() * 25.4),
+            height_mm=float(supplemental_fig.get_figheight() * 25.4),
+            panels=[
+                {
+                    "panel_id": panel.panel_id,
+                    "title": _label(panel.panel_id),
+                    "role": panel.article_role,
+                    "claim": "Registered counts projected from the bound source table without refitting.",
+                    "evidence_ids": [evidence[source] for source in panel.source_products],
+                    "metadata": {
+                        "chart_type": panel.chart_type,
+                        "source_products": list(panel.source_products),
+                        "placement": "supplementary",
+                        "source_data": [
+                            f"{source.partition(':')[2]}_source_data.csv"
+                            for source in panel.source_products
+                        ],
+                    },
+                }
+                for panel in supplemental_panels
+            ],
+            source_data=[
+                f"{source.partition(':')[2]}_source_data.csv"
+                for panel in supplemental_panels
+                for source in panel.source_products
+            ],
+            statistics_note="Counts only; robustness effect comparability remains unresolved. No patient rows or model fitting.",
+            reader_caption=(
+                "Supplementary panels show registered robustness-specification "
+                "coverage and measurement-availability counts projected from the "
+                "bound source tables. All values are direct projections without "
+                "refitting; robustness rows are audit-only and do not authorize "
+                "comparisons between heterogeneous specifications."
+            ),
+        )
+        supplemental_outputs = save_publication_figure(
+            supplemental_fig,
+            out_dir / supplemental_name,
+            contract=supplemental_contract,
+            formats=("png", "svg", "pdf", "tiff"),
+            dpi=300,
+        )
+        plt.close(supplemental_fig)
     for item in bound.values():
         if sha256_file(item.path) != item.sha256:
             raise ValueError(f"typed input changed while rendering: {item.input_key}")
@@ -1147,12 +1457,16 @@ def run_landmark_association_figure(
         "figure_contract": f"{figure_product}.figure_contract.json",
         "contract_files": [
             f"{figure_product}.figure_contract.json",
-            f"{supplemental_name}.figure_contract.json",
+            *([f"{supplemental_name}.figure_contract.json"] if separate_audits else []),
         ],
         "output_files": {f"figure:{figure_product}": f"{figure_product}.png"},
-        "supplementary_output_files": {
-            f"figure:{figure_product}": f"{supplemental_name}.png"
-        },
+        "supplementary_output_files": (
+            {f"figure:{figure_product}": f"{supplemental_name}.png"}
+            if separate_audits
+            else {f"figure:{figure_product}": f"{figure_product}.png"}
+            if result_placement == "supplementary"
+            else {}
+        ),
     }
     (out_dir / "step_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",

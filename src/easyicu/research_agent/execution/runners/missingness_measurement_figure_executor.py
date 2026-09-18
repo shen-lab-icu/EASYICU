@@ -27,6 +27,8 @@ import textwrap
 from typing import Any, Mapping
 
 import pandas as pd
+from ...figures.display_labels import display_label
+from ...figures.presentation import wrap_figure_label
 
 from ...figures.publication import (
     add_panel_label,
@@ -46,6 +48,11 @@ from ...schema import AnalysisStep
 from ...numeric_scalars import coerce_optional_finite_float as _finite
 from .deterministic_missingness import measurement_audit_product_filename
 from .figure_input_capability import TypedInputCapability
+from ._shared import (
+    figure_product as _figure_product,
+    is_safe_figure_product_id as _is_safe_figure_product_id,
+    method_head as _method_head,
+)
 
 __all__ = [
     "MEASUREMENT_PROCESS_AUDIT_INPUT",
@@ -81,19 +88,12 @@ MISSINGNESS_MEASUREMENT_FIGURE_ANALYSIS_KIND = "missingness_measurement_figure"
 #: this renderer is competent to do: a plan naming the two audit tables exactly,
 #: under the right contracts, was declined for the spelling of its label alone.
 #:
-#: The id is still constrained, because it becomes a path segment and a
-#: filename stem: ``out_dir / figure_product`` and ``{figure_product}.png``.
-#: The length bound is set by that use -- the longest suffix this module
-#: appends is ``_source_missingness_panel_source_data.csv`` -- so a legal id
-#: cannot produce an ENAMETOOLONG failure after the run has already paid for
-#: the analysis.
-_FIGURE_PRODUCT_ID = re.compile(r"[a-z][a-z0-9_]{0,127}")
-
-
-def _is_safe_figure_product_id(value: Any) -> bool:
-    """Whether ``value`` is a legal, path-safe figure product id."""
-
-    return bool(_FIGURE_PRODUCT_ID.fullmatch(str(value or "")))
+#: Figure product-id bound is owned by ``execution.runners._shared``
+#: (FIGURE_PRODUCT_ID).
+#: The bound exists because the id becomes a path segment and filename stem
+#: (``out_dir / figure_product``, ``{figure_product}.png``); the longest
+#: suffix this module appends is ``_source_missingness_panel_source_data.csv``,
+#: so a legal id cannot produce ENAMETOOLONG after the analysis has run.
 
 
 # The columns this renderer READS from each parent, not the parent's full
@@ -140,8 +140,8 @@ _PROCESS_COLUMNS = (
 #: dropping a column from the reader's grid.
 _PROCESS_MEASURES = (
     ("eligible_n", "Applicable"),
-    ("measured_one_n", "Measured >=1"),
-    ("repeat_measured_n", "Measured >1"),
+    ("measured_one_n", "Value/status present"),
+    ("repeat_measured_n", "Repeated records"),
 )
 _PRODUCT_BY_INPUT = {
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT: "missingness_measurement_audit",
@@ -197,17 +197,6 @@ def _columns_read(
     if kind == "table" and separator:
         return _AUDIT_COLUMNS
     raise ValueError(f"{input_key} is not a supported measurement-audit product")
-
-
-def _method_head(value: Any) -> str:
-    return str(value or "").strip().lower().split(" with ", 1)[0]
-
-
-def _figure_product(value: Any) -> str | None:
-    kind, separator, product = str(value or "").strip().partition(":")
-    if kind != "figure" or not separator or not _is_safe_figure_product_id(product):
-        return None
-    return product
 
 
 #: ``run_missingness_measurement_figure`` indexes both bindings and builds a
@@ -495,6 +484,7 @@ def missingness_measurement_figure_executor_code(
             figure_product={product!r},
             missingness_input={input_by_role['measurement_missingness']!r},
             process_input={input_by_role['measurement_process']!r},
+            display_labels={dict(getattr(plan, 'display_labels', {}) or {})!r},
         )
         """
     ).strip()
@@ -842,6 +832,16 @@ def _validate_process_rows(frame: pd.DataFrame) -> list[dict[str, Any]]:
                 "which must be a subset of eligible stays"
             )
         for column, label in _PROCESS_MEASURES:
+            display_status = "available"
+            if column == "repeat_measured_n":
+                semantics = _text(row.get("indicator_semantics"))
+                if semantics in {"binary_event_presence", "conditional_event_time"}:
+                    display_status = "not_applicable"
+                elif (
+                    semantics != "measurement_availability"
+                    or not _text(row.get("measurement_count_column"))
+                ):
+                    display_status = "not_established"
             cells.append(
                 {
                     "variable": variable,
@@ -851,6 +851,7 @@ def _validate_process_rows(frame: pd.DataFrame) -> list[dict[str, Any]]:
                     "count": counts[column],
                     "denominator": cohort,
                     "percentage": 100.0 * counts[column] / cohort,
+                    "display_status": display_status,
                 }
             )
     if not cells:
@@ -861,6 +862,16 @@ def _validate_process_rows(frame: pd.DataFrame) -> list[dict[str, Any]]:
 def _reader_label(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9]+", " ", str(value or "")).strip()
     return cleaned if cleaned else "Variable"
+
+
+def _display_percentage(value: float) -> str:
+    """Do not round a nonzero/incomplete share to apparent zero/completeness."""
+
+    if 0 < value < 0.1:
+        return "<0.1"
+    if 99.9 < value < 100:
+        return ">99.9"
+    return f"{value:.1f}"
 
 
 def _write_source_projection(
@@ -1092,6 +1103,7 @@ def run_missingness_measurement_figure(
     figure_product: str,
     missingness_input: str = MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
     process_input: str = MEASUREMENT_PROCESS_AUDIT_INPUT,
+    display_labels: Mapping[str, str] | None = None,
 ) -> Mapping[str, Any]:
     """Render the verified missingness/measurement pair and write its contract."""
 
@@ -1146,8 +1158,8 @@ def run_missingness_measurement_figure(
 
     palette = apply_publication_style(font_size=7.0)
     variables = [_text(value) for value in missing_rows["variable"]]
-    # Declared order, not alphabetical: the three measures are a funnel, and
-    # sorting them by name would put "Measured >1" before "Measured >=1".
+    # Declared order, not alphabetical: applicability precedes source presence
+    # and repetition. Event/status rows do not imply a measurement funnel.
     columns = [label for _column, label in _PROCESS_MEASURES]
     grid_variables = sorted({str(cell["variable"]) for cell in process_cells})
     height_mm = max(86.0, 26.0 + 5.4 * max(len(variables), len(grid_variables)))
@@ -1157,6 +1169,14 @@ def run_missingness_measurement_figure(
         figsize=(183 / 25.4, height_mm / 25.4),
         gridspec_kw={"width_ratios": [1.0, 1.25]},
     )
+    canvas = fig.canvas.get_renderer()
+    font = ax_a.yaxis.label.get_fontproperties()
+    labels = {name: wrap_figure_label(display_label(name, display_labels), renderer=canvas,
+                                     font=font, width=fig.bbox.width * 0.16)
+              for name in set(variables) | set(grid_variables)}
+    max_lines = max(text.count("\n") + 1 for text in labels.values())
+    height_mm = max(height_mm, (max(len(variables), len(grid_variables)) * max_lines * 3.2 + 5) / 0.66)
+    fig.set_size_inches(183 / 25.4, height_mm / 25.4)
 
     positions = list(range(len(variables)))
     missing_pct = pd.to_numeric(missing_rows["value_missing_pct"]).to_numpy()
@@ -1184,6 +1204,10 @@ def run_missingness_measurement_figure(
         ]
     else:
         plotted_values = [float(value) for value in missing_pct]
+    missingness_axis_max = (
+        100.0 if zero_missing_display
+        else min(100.0, max(0.1, max(plotted_values) * 1.3))
+    )
     bars = ax_a.barh(
         positions,
         plotted_values,
@@ -1197,13 +1221,13 @@ def run_missingness_measurement_figure(
     # were almost completely observed.
     ax_a.set_yticklabels(
         [
-            _reader_label(name)
+            labels[name]
             + (" †" if per_variable.get(name, {}).get("conditional") else "")
             for name in variables
         ]
     )
     ax_a.invert_yaxis()
-    ax_a.set_xlim(0, 100)
+    ax_a.set_xlim(0, missingness_axis_max)
     ax_a.set_xlabel(
         "Eligible stays with a source value (%)"
         if zero_missing_display
@@ -1232,9 +1256,10 @@ def run_missingness_measurement_figure(
             x = min(float(plotted) - 1.0, 97.0) if eligible_n > 0 else 1.0
             horizontal_alignment = "right" if eligible_n > 0 else "left"
         else:
-            label = f"{float(percentage):.1f}%  n={int(missing_n):,}"
-            x = min(float(percentage) + 1.0, 97.0)
-            horizontal_alignment = "left" if percentage < 88 else "right"
+            label = f"{_display_percentage(float(percentage))}%  n={int(missing_n):,}"
+            x = min(float(percentage) + missingness_axis_max * 0.01,
+                    missingness_axis_max * 0.97)
+            horizontal_alignment = "left" if percentage < missingness_axis_max * 0.88 else "right"
         ax_a.text(
             x,
             bar.get_y() + bar.get_height() / 2,
@@ -1259,6 +1284,7 @@ def run_missingness_measurement_figure(
                     float(cell["percentage"])
                     for cell in process_cells
                     if cell["variable"] == variable and cell["column"] == column
+                    and cell["display_status"] == "available"
                 ),
                 float("nan"),
             )
@@ -1281,16 +1307,20 @@ def run_missingness_measurement_figure(
         ha="right",
     )
     ax_b.set_yticks(range(len(grid_variables)))
-    ax_b.set_yticklabels([_reader_label(name) for name in grid_variables])
-    ax_b.set_title("Measurement-process coverage", loc="left", pad=4)
+    ax_b.set_yticklabels([labels[name] for name in grid_variables])
+    ax_b.set_title("Source-record coverage", loc="left", pad=4)
+    cell_by_position = {
+        (cell["variable"], cell["column"]): cell for cell in process_cells
+    }
     for row_index, variable in enumerate(grid_variables):
         for column_index, column in enumerate(columns):
             value = frame.iat[row_index, column_index]
             if math.isnan(float(value)):
+                cell = cell_by_position.get((variable, column), {})
                 ax_b.text(
                     column_index,
                     row_index,
-                    "–",
+                    "N/A" if cell.get("display_status") == "not_applicable" else "Unknown",
                     ha="center",
                     va="center",
                     fontsize=5.8,
@@ -1300,7 +1330,7 @@ def run_missingness_measurement_figure(
             ax_b.text(
                 column_index,
                 row_index,
-                f"{float(value):.1f}",
+                _display_percentage(float(value)),
                 ha="center",
                 va="center",
                 fontsize=5.6,
@@ -1311,7 +1341,11 @@ def run_missingness_measurement_figure(
     colorbar.ax.tick_params(labelsize=5.8)
     add_panel_label(ax_b, "B", x=-0.30, y=1.02)
     fig.subplots_adjust(left=0.20, right=0.94, bottom=0.22, top=0.88, wspace=0.72)
-
+    cohort_sizes = {int(entry["denominator"]) for entry in per_variable.values()}
+    denominator_note = (
+        f"N = {next(iter(cohort_sizes)):,} stays. " if len(cohort_sizes) == 1
+        else "Variable-specific cohort denominators are preserved. "
+    )
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
         core_claim=(
@@ -1356,12 +1390,13 @@ def run_missingness_measurement_figure(
             },
             {
                 "panel_id": DATA_QUALITY_FIGURE_PANELS[1].panel_id,
-                "title": "Measurement-process coverage",
+                "title": "Source-record coverage",
                 "role": "data_quality",
                 "claim": (
-                    "Applicable, measured-at-least-once and measured-more-than-"
-                    "once stays are each shown as a share of the same cohort, "
-                    "so the three columns read as one narrowing funnel."
+                    "Applicable stays and stays with a source value or event "
+                    "status are shown as shares of the cohort. Repeated records "
+                    "are shown only for a declared measurement count source; "
+                    "event fields remain N/A and unknown semantics stay unknown."
                 ),
                 "evidence_ids": [process_source.name],
                 "metadata": {
@@ -1377,6 +1412,26 @@ def run_missingness_measurement_figure(
             process_source.name,
             missingness_panel_source.name,
         ],
+        reader_caption=(
+            "Source availability and record coverage. " + denominator_note
+            + (
+                "(A) Bars show completeness among eligible stays because every "
+                "audited missing count is zero. A variable with no eligible "
+                "stays remains N/A, not 100% complete. "
+                if zero_missing_display else "(A) Bars show stays with a missing "
+                "source value as a percentage of the whole cohort, with counts "
+                "alongside. "
+            )
+            + "(B) Shading and labels show applicable stays, stays with a source "
+            "value/status, and stays with repeated source records, each as a "
+            "percentage of the cohort. "
+            + ("The dagger marks variables applicable to only part of the cohort. "
+               if any(entry['conditional'] for entry in per_variable.values()) else "")
+            + "N/A denotes an event or event-time field with no repetition display; "
+            "Unknown denotes unestablished repetition-source semantics. Source "
+            "completeness is not event prevalence, and repeated records are not "
+            "independent measurements. No inferential uncertainty is shown."
+        ),
         statistics_note=(
             "Percentages are recomputed from the sealed integer counts. Both "
             "partitions are re-derived per variable (eligible + not applicable "
@@ -1386,6 +1441,10 @@ def run_missingness_measurement_figure(
             "measurements, not stays, and are not commensurable with this "
             "scale. The executor validates all source rows and introduces no "
             "cohort, variable, missing-data, or modeling decision."
+            " Source value/status completeness is not event prevalence; repeated "
+            "source records are not independent measurements. Event and event-time "
+            "fields have no repetition display; missing count-source semantics "
+            "remain unknown rather than becoming a zero. Source counts are preserved."
             + (
                 " Because every missing count is zero, panel A deterministically "
                 "shows eligible-stay completeness (100% when an eligible "
@@ -1434,6 +1493,9 @@ def run_missingness_measurement_figure(
         "audited_variable_count": int(len(per_variable)),
         "zero_missing_completeness_display": zero_missing_display,
         "measurement_process_cell_count": int(len(process_cells)),
+        "measurement_process_masked_cell_count": sum(
+            cell["display_status"] != "available" for cell in process_cells
+        ),
         "source_data_files": source_files,
         "figure_files": figure_files,
         "figure_path": f"{figure_product}.png",

@@ -84,7 +84,7 @@ def _absolute_risk_distribution_step(*, descriptive: bool = True) -> AnalysisSte
             "outcome_positive_value": 1,
             "level_match_policy": "exact_typed",
             "denominator_policy": "all_declared_rows",
-            "missing_outcome_policy": "structural_absence_is_non_event",
+            "missing_outcome_policy": "fail_closed",
             "risk_difference_contrast": {
                 "reference_exposure_level": 0,
                 "comparison_exposure_level": 1,

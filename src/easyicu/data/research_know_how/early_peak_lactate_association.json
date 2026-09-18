@@ -7,7 +7,7 @@
   "clinical_topics": ["peak lactate", "early lactate", "hyperlactatemia", "mortality", "serial biomarker", "informative measurement"],
   "topic_aliases": ["peak lactate", "early lactate", "first 24h lactate", "first-24h lactate", "24h lactate", "lactate mortality", "lactate", "lactic acid", "乳酸峰值", "早期乳酸", "乳酸与死亡", "乳酸"],
   "study_families": ["association", "descriptive", "prediction"],
-  "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
+  "applicable_databases": ["miiv", "mimic", "eicu", "hirid", "aumc", "sic"],
   "design_candidates": {
     "population": "All eligible ICU stays define the measurement-audit denominator; the primary association population is the subset with at least one valid typed lactate during ICU hours 0-24 and before death or discharge.",
     "time_zero": "ICU admission is the prespecified anchor for the first-24-hour exposure window.",

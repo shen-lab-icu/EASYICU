@@ -15,6 +15,7 @@ plan cannot be approved first and downgraded only after provider work has run.
 from __future__ import annotations
 
 import json
+import math
 import re
 from datetime import datetime, timezone
 from typing import Any, Literal, Mapping, Optional
@@ -22,7 +23,12 @@ from typing import Any, Literal, Mapping, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..canonical_json import canonical_sha256
+from ..authority.current_case_scientific_runtime import (
+    CurrentCaseScientificRuntimeAuthority,
+    LandmarkCategoricalAssociationRuntimeAuthority,
+)
 from ..concept_availability import normalize_database_name
+from ..gates.plan_declared_inputs import declared_raw_input_plan_findings
 from ..contracts.cohort_product_keys import (
     is_closed_cohort_product_key,
     sole_typed_cohort_input,
@@ -32,10 +38,18 @@ from ..contracts.association_execution import (
 )
 from ..contracts.descriptive_execution import (
     DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
+    exposure_outcome_distribution_execution_verdict,
 )
 from ..contracts.ordered_stratified import is_ordered_stratified_analysis_step
+from ..contracts.functional_form import functional_form_products
+from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
+from ..contracts.phenotype_comparison import (
+    COMPARISON_ACTION, comparison_cohort_input, validate_comparison_step,
+)
+from ..contracts.scientific_runtime_ownership import declared_runtime_outcomes
 from ..literature import LiteratureBundle, manuscript_citable_records
 from ..research_context.temporal_semantics import (
+    normalise_time_anchor,
     primary_exposure_time_anchor_alignment,
     window_extends_after_anchor,
 )
@@ -43,9 +57,22 @@ from ..research_context.typed import declared_domain_for_variable
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
 from .figure_strategy import ArticleFigureStrategy
 from .adjustment_authority import AdjustmentSetAuthority
+from .analysis_types import canonical_analysis_family
+from .population_requirements import context_population_requirements
+from .baseline_requirements import (
+    baseline_requirement_coverage,
+    baseline_requirement_projection,
+    context_baseline_requirements,
+)
 from .dependence_authority import (
     context_patient_group_authority,
+    descriptive_counts_only_required,
     dependence_matches_context,
+    repeat_units_possible,
+)
+from .distribution_authority import (
+    DISTRIBUTION_MISSINGNESS_GUIDANCE,
+    distribution_policy_issues,
 )
 from .method_literature import method_binding_support
 from .novelty_contract import NOVELTY_REVIEW_DIMENSIONS
@@ -83,13 +110,22 @@ class PlanScientificFinding(BaseModel):
     authorization_question: Optional[str] = None
 
 
+CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/13"
+
+
 class PlanScientificReview(BaseModel):
     """Digest-bound pre-approval review of an exact context/plan/literature set."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.plan_scientific_review/5"] = (
-        "easyicu.plan_scientific_review/5"
+    # Archived reviews remain readable, but cannot substitute for a /13
+    # execution review (the resume gate also binds the review version).
+    schema_version: Literal[
+        "easyicu.plan_scientific_review/10", "easyicu.plan_scientific_review/11",
+        "easyicu.plan_scientific_review/12",
+        "easyicu.plan_scientific_review/13",
+    ] = (
+        CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION
     )
     status: Literal["changes_required", "analysis_only", "ready_for_approval"]
     review_scope: Literal["pre_execution_plan"] = "pre_execution_plan"
@@ -162,6 +198,9 @@ def planned_model_outcomes(
     Count those context-declared outcome inputs as coverage rather than forcing
     the Planner to invent a duplicate conventional model solely to satisfy the
     review projection.
+    Native owners publish their endpoint contract without conventional model
+    requirements. Review consumes that projection, never a method-name guess.
+    It is not signature verification or execution authority.
     """
 
     if plan is None:
@@ -172,6 +211,20 @@ def planned_model_outcomes(
             outcome = str(requirement.outcome or "").strip()
             if outcome and outcome not in values:
                 values.append(outcome)
+        # A descriptive question requires its declared summary, not a new
+        # regression. Conversely a summary cannot substitute for a requested
+        # model merely because it reads the same outcome column.
+        if (
+            canonical_analysis_family(plan.analysis_type) == "descriptive_epidemiology"
+            and exposure_outcome_distribution_execution_verdict(step).claimed
+        ):
+            spec = step.exposure_outcome_distribution_spec
+            if (
+                spec is not None
+                and {spec.exposure, spec.outcome}.issubset(step.inputs)
+                and spec.outcome not in values
+            ):
+                values.append(spec.outcome)
         if context is not None and is_ordered_stratified_analysis_step(step):
             for input_key in step.inputs:
                 descriptor = context.variable(str(input_key or "").strip())
@@ -179,6 +232,11 @@ def planned_model_outcomes(
                     continue
                 if descriptor.name not in values:
                     values.append(descriptor.name)
+        if context is not None:
+            for outcome in declared_runtime_outcomes(step):
+                descriptor = context.variable(outcome)
+                if descriptor is not None and descriptor.role.value == "outcome" and outcome not in values:
+                    values.append(outcome)
     return tuple(values)
 
 
@@ -249,87 +307,27 @@ def post_baseline_exposure(context: ResearchContext) -> tuple[bool, Optional[str
         return False, None
     if not isinstance(constraints, Mapping):
         return False, None
-    confirmations = constraints.get("confirmations")
     materialization = constraints.get("materialization_window")
     if (
-        not isinstance(confirmations, Mapping)
-        or confirmations.get("feature_time_window") is not True
-        or not isinstance(materialization, Mapping)
+        not isinstance(materialization, Mapping)
         or materialization.get("role") != "outer_observation_window"
-        or str(materialization.get("anchor") or "").strip().casefold()
-        != "icu admission"
+        or normalise_time_anchor(str(materialization.get("anchor") or ""))
+        != "icu_admission"
     ):
+        return False, None
+    # This detects a risk in the host-declared physical window; it grants no
+    # execution authority. An absent confirmation cannot hide that risk.
+    if isinstance(materialization.get("hours"), bool):
         return False, None
     try:
         hours = float(materialization["hours"])
     except (KeyError, TypeError, ValueError):
         return False, None
-    if hours <= 0:
+    if not math.isfinite(hours) or hours <= 0:
         return False, None
     # This label deliberately names the physical coordinate, rather than
     # implying a phenotype definition or a follow-up horizon.
     return True, f"outer_materialization:icu_admission[0,{hours:g}]h"
-
-
-def repeat_units_possible(context: ResearchContext) -> bool:
-    provenance = context.cohort.provenance or {}
-    preferences = context.user_preferences
-    if hasattr(preferences, "model_dump"):
-        preferences = preferences.model_dump(mode="json")
-    preferences = preferences if isinstance(preferences, Mapping) else {}
-    n_patients = context.cohort.n_patients
-    n_stays = context.cohort.n_stays
-    if n_patients is not None and n_stays is not None and n_stays > n_patients:
-        return True
-    # Both counts being known and equal is itself owner-issued proof that every
-    # stay belongs to a different person, so dependence is already ruled out.
-    counts_establish_one_stay_per_patient = (
-        n_patients is not None and n_stays is not None and n_stays <= n_patients
-    )
-    # Otherwise a stay-level cohort without patient identity cannot establish
-    # that every row belongs to a different person. Treat dependence as
-    # possible rather than silently upgrading "unknown" to "independent". The
-    # review below can then offer the governed remedies: materialize patient
-    # grouping or use an owner-issued one-stay/readmission restriction.
-    analysis_unit = str(provenance.get("analysis_unit") or "").strip().casefold()
-    if (
-        provenance.get("evidence_stage") == "metadata_only_planning"
-        and analysis_unit == "icu_stay"
-        and context_patient_group_authority(context) is None
-    ):
-        return True
-    if (
-        n_stays is not None
-        and n_stays > 1
-        and analysis_unit == "icu_stay"
-        and not counts_establish_one_stay_per_patient
-        and context_patient_group_authority(context) is None
-    ):
-        return True
-    text = " ".join(
-        [
-            *[str(value) for value in context.cohort.inclusion_criteria],
-            *[str(value) for value in context.cohort.exclusion_criteria],
-            *[str(value) for value in provenance.get("inclusion_criteria") or ()],
-            *[str(value) for value in provenance.get("exclusion_criteria") or ()],
-            str(preferences.get("data_constraints") or ""),
-            str(preferences.get("extra_notes") or ""),
-        ]
-    ).casefold()
-    return any(
-        token in text
-        for token in (
-            "repeat",
-            "readmission",
-            "re-admission",
-            "repeated stay",
-            "multiple icu",
-            "retain icu readmissions",
-            "重复",
-            "再次 icu",
-            "再次icu",
-        )
-    )
 
 
 def patient_identity_available(context: ResearchContext) -> bool:
@@ -432,6 +430,7 @@ def _step_requires_temporal_inference(step: AnalysisStep) -> bool:
         or step.model_requirements
         or step.family_primary_result_requirement is not None
         or step.scientific_capability is not None
+        or step.functional_form_spec is not None
     ):
         return True
     return _method_head(step) in (
@@ -482,6 +481,20 @@ def _signed_temporal_result_projection(
         # eligibility; their own method/execution contracts remain subject to
         # the separate sensitivity-capability gates.
         return True
+    if step.functional_form_spec is not None and step.scientific_capability is None:
+        # The signed spline owner refits a covariate on its own exact landmark
+        # rows, or projects an exact exposure comparison. This recognizes only
+        # temporal closure; runtime authority still validates method and target.
+        parents = [primary for primary in plan.steps
+                   if primary.planned_analysis_role == "primary"
+                   and _method_head(primary) == "signed_landmark_restricted_cubic_spline"
+                   and any(str(ref).startswith("scientific_runtime_contract:")
+                           for ref in set(primary.icu_rule_refs) & set(step.icu_rule_refs))
+                   and set(step.inputs) <= set(primary.inputs) | set(primary.expected_outputs)
+                   and set(step.inputs) & set(primary.expected_outputs)
+                   and step.functional_form_spec.target_column in primary.inputs]
+        if len(parents) == 1:
+            return True
     if step.scientific_capability is not None:
         return False
     candidates = [
@@ -715,7 +728,8 @@ def method_source_facts(
     layers_by_step: dict[str, list[str]] = {}
     method_source_gaps: list[str] = []
     unsupported_bindings: list[dict[str, Any]] = []
-    for step in scientific_steps(plan):
+    scientific_step_ids = {str(step.step_id) for step in scientific_steps(plan)}
+    for step in plan.steps:
         layers: set[str] = set()
         for binding in step.literature_design_bindings:
             support = method_binding_support(
@@ -736,7 +750,7 @@ def method_source_facts(
                 )
         sorted_layers = sorted(layers)
         layers_by_step[str(step.step_id)] = sorted_layers
-        if not sorted_layers:
+        if not sorted_layers and str(step.step_id) in scientific_step_ids:
             method_source_gaps.append(str(step.step_id))
     cited_layers = sorted({layer for values in layers_by_step.values() for layer in values})
     required_layers = list(required_method_layers_for_plan(plan, context))
@@ -927,11 +941,40 @@ def _requested_sensitivity_axes(context: ResearchContext) -> set[str]:
     return {review_axis(spec.axis) for spec in _sensitivity_specs(context)}
 
 
+def _signed_grid_spec_ids(
+    context: ResearchContext,
+    plan: AnalysisPlan,
+    runtime_authority: CurrentCaseScientificRuntimeAuthority | None,
+) -> set[str]:
+    """Credit only variants present in the validated categorical grid seal."""
+
+    if not isinstance(runtime_authority, LandmarkCategoricalAssociationRuntimeAuthority):
+        return set()
+    grid = runtime_authority.association_model_grid
+    if grid is None:
+        return set()
+    try:
+        runtime_authority.validate_plan(plan)
+    except ValueError:
+        return set()
+    operationalizations = dict(
+        AdjustmentSetAuthority.from_context(context).operationalizations
+    )
+    return grid.covered_prespecified_spec_ids(
+        _sensitivity_specs(context),
+        operationalizations=operationalizations,
+    )
+
+
 def _sensitivity_facts(
-    context: ResearchContext, plan: AnalysisPlan
+    context: ResearchContext,
+    plan: AnalysisPlan,
+    *,
+    runtime_authority: CurrentCaseScientificRuntimeAuthority | None = None,
 ) -> dict[str, Any]:
     requested = _requested_sensitivity_axes(context)
     typed_specs = {spec.spec_id: spec for spec in _sensitivity_specs(context)}
+    operationalizations = dict(AdjustmentSetAuthority.from_context(context).operationalizations)
     unsupported_spec_ids = {
         spec_id
         for spec_id, spec in typed_specs.items()
@@ -982,11 +1025,18 @@ def _sensitivity_facts(
             if (
                 step.planned_analysis_role == "sensitivity"
                 and method in FUNCTIONAL_FORM_EXECUTABLE_METHODS
-                and step.scientific_capability
-                == ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
+                and (
+                    step.scientific_capability == ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
+                    or _signed_temporal_result_projection(step, plan)
+                )
                 and step.sensitivity_spec_ids
-                and len(step.expected_outputs) == 1
+                and step.functional_form_spec is not None
+                and bool(step.expected_outputs)
                 and str(step.expected_outputs[0]).startswith("table:")
+                and tuple(step.expected_outputs) == functional_form_products(
+                    step.expected_outputs[0], include_effects=len(step.expected_outputs) != 1,
+                )
+                and (len(step.expected_outputs) == 1 or step.scientific_capability is None)
             ):
                 # The progressive compiler signs this exact custom-sensitivity
                 # shape against the primary adjusted-association product. It is
@@ -998,7 +1048,15 @@ def _sensitivity_facts(
                 spec = typed_specs.get(spec_id)
                 if (
                     spec is not None
+                    and method != "verified_association_model_grid"
                     and method in EXECUTABLE_METHODS_BY_STRATEGY[spec.strategy]
+                    and (
+                        spec.axis != "functional_form" or (
+                            step.functional_form_spec is not None
+                            and tuple(operationalizations.get(name, name) for name in spec.execution_variables)
+                            == (step.functional_form_spec.target_column,)
+                        )
+                    )
                 ):
                     executed_spec_ids.add(spec_id)
             # A signed runtime method is the host-bound implementation of the
@@ -1013,6 +1071,8 @@ def _sensitivity_facts(
                 step_inputs = set(step.inputs)
                 for spec_id, spec in typed_specs.items():
                     if method not in EXECUTABLE_METHODS_BY_STRATEGY[spec.strategy]:
+                        continue
+                    if spec.axis == "functional_form" and spec.execution_variables != (context.primary_exposure,):
                         continue
                     required_inputs = set(spec.execution_variables)
                     if spec.strategy == "landmark":
@@ -1060,6 +1120,7 @@ def _sensitivity_facts(
                             executed_spec_ids.add(spec_id)
         else:
             protocol_only.update(axes)
+    executed_spec_ids.update(_signed_grid_spec_ids(context, plan, runtime_authority))
     replay_steps = [
         step
         for step in plan.steps
@@ -1155,30 +1216,20 @@ def _continuous_linearity_facts(plan: AnalysisPlan) -> dict[str, Any]:
             for term in requirement.model_terms or ():
                 if term.role == "covariate" and term.coding == "continuous" and str(term.transform or "").casefold() in {"", "identity"}:
                     identity_terms.append(term.name)
-    has_functional_form_sensitivity = any(
-        executable_scientific_step(step)
-        and (
-            _method_head(step) in FUNCTIONAL_FORM_EXECUTABLE_METHODS
-            or any(
-                token
-                in " ".join(
-                    [step.step_id, step.intent, step.method or "", *step.expected_outputs]
-                ).casefold()
-                for token in (
-                    "spline",
-                    "nonlinear",
-                    "non-linear",
-                    "functional form",
-                    "functional_form",
-                    "fractional polynomial",
-                )
-            )
-        )
+    checked_targets = {
+        step.functional_form_spec.target_column
         for step in scientific_steps(plan)
-    )
+        if step.functional_form_spec is not None
+        and step.planned_analysis_role == "sensitivity"
+        and executable_scientific_step(step)
+        and _method_head(step) in FUNCTIONAL_FORM_EXECUTABLE_METHODS
+    }
+    unchecked = set(identity_terms) - checked_targets
     return {
         "linear_identity_terms": sorted(set(identity_terms)),
-        "functional_form_sensitivity_executable": has_functional_form_sensitivity,
+        "checked_functional_form_targets": sorted(checked_targets),
+        "unchecked_linear_identity_terms": sorted(unchecked),
+        "functional_form_sensitivity_executable": bool(checked_targets) and not unchecked,
     }
 
 
@@ -1305,6 +1356,18 @@ def render_plan_scientific_guardrails(context: ResearchContext) -> str:
     """Render case-neutral, context-derived guardrails before Planner generation."""
 
     lines = ["PRE-APPROVAL SCIENTIFIC PLAN GUARDRAILS (host-derived):"]
+    baseline = baseline_requirement_projection(context)
+    if baseline["tables"]:
+        lines.append(
+            "- ACCEPTED BASELINE CONTENT: retain every required variable in an "
+            "actual table_one_spec with the required grouping. Choose and explain "
+            "any still-open value aggregation from the available host-declared "
+            "columns; counts/timestamps, step-input mentions, and prose do not "
+            "satisfy a clinical-value requirement. Unavailable items remain gaps, "
+            "not permission to omit or substitute them. "
+            + json.dumps(baseline, ensure_ascii=False, sort_keys=True)
+        )
+    lines.append("- " + DISTRIBUTION_MISSINGNESS_GUIDANCE)
     alignment = primary_exposure_time_anchor_alignment(context)
     if alignment.status in {"mismatch", "declared_only"}:
         lines.append(
@@ -1425,6 +1488,19 @@ def remediation_route_for_finding(
     return "agent_plan_revision"
 
 
+def plan_revision_blocker_codes(findings: list[PlanScientificFinding]) -> tuple[str, ...]:
+    """Block futile plan retries until the responsible non-Planner owner acts.
+
+    Major/minor maturity limitations do not prevent bounded plan repair.
+    Blocking runtime, authority, evidence and independent-review gaps do.
+    """
+    return tuple(sorted({
+        finding.code for finding in findings
+        if finding.severity == "blocker"
+        and remediation_route_for_finding(finding) != "agent_plan_revision"
+    }))
+
+
 def render_agent_plan_revision_contract(review: PlanScientificReview) -> str:
     """Render only plan-fixable findings from an exact prior review.
 
@@ -1465,14 +1541,207 @@ def build_plan_scientific_review(
     literature: Optional[LiteratureBundle] = None,
     figure_strategy: Optional[ArticleFigureStrategy] = None,
     require_reportable_capability: bool = False,
+    runtime_authority: CurrentCaseScientificRuntimeAuthority | None = None,
 ) -> PlanScientificReview:
     """Score and adjudicate the exact proposed plan before human approval."""
 
     findings: list[PlanScientificFinding] = []
+    diagnostic_products = {
+        product for source in plan.steps if source.functional_form_spec is not None
+        for product in source.expected_outputs[:1]
+    }
+    for step in plan.steps:
+        if ("table:robustness_matrix" in step.inputs
+                and diagnostic_products.intersection(step.inputs)
+                and any(product.startswith("figure:") for product in step.expected_outputs)):
+            findings.append(PlanScientificFinding(
+                code="ROBUSTNESS_DIAGNOSTIC_DISPLAY_MISMATCH",
+                severity="blocker", dimension="figures",
+                message="The robustness figure binds functional-form diagnostics that are not effect estimates.",
+                evidence_refs=["analysis_plan.json"],
+                remediation="Keep the functional-form comparison as a report diagnostic table; bind only supported robustness results to the specification-grid figure. Preserve the requested sensitivity analysis.",
+                remediation_route="agent_plan_revision", requires_user_authorization=False,
+            ))
+        if step.method == "absolute_risk_context" and step.population_scope != "analysis_cohort":
+            findings.append(PlanScientificFinding(
+                code="DESCRIPTIVE_POPULATION_SCOPE_UNRESOLVED",
+                severity="blocker",
+                dimension="icu_clinical_design",
+                message="A descriptive risk step has no executable choice of population; its prose cannot establish the denominator.",
+                evidence_refs=["analysis_plan.json"],
+                remediation="Declare analysis_cohort or primary_model in the planning contract and bind the matching execution owner before approval.",
+                remediation_route="agent_plan_revision",
+                requires_user_authorization=False,
+            ))
+        if step.method == "primary_population_absolute_risk_context" and step.runtime_outcome_contract is None:
+            findings.append(PlanScientificFinding(
+                code="PRIMARY_POPULATION_EXECUTION_OWNER_MISSING",
+                severity="blocker",
+                dimension="icu_clinical_design",
+                message="A descriptive risk step requests the primary model population, but no typed runtime owner binds that population.",
+                evidence_refs=["analysis_plan.json"],
+                remediation="Bind the declared primary population through its supported execution adapter; do not fall back to the broader cohort.",
+                remediation_route="runtime_capability",
+                requires_user_authorization=False,
+            ))
+    population_requirements = context_population_requirements(context)
+    population_changes = []
+    population_labels = {
+        "primary_model": "the primary model's eligible complete-case population",
+        "analysis_cohort": "the broader analysis cohort",
+    }
+    if population_requirements is not None:
+        for required in population_requirements.populations:
+            matches = [step for step in plan.steps if required.output_product in step.expected_outputs]
+            if len(matches) == 1 and matches[0].population_scope == required.population_scope:
+                continue
+            step = matches[0] if len(matches) == 1 else None
+            reason = step.population_scope_change_reason if step is not None else None
+            declared = bool(step is not None and step.population_scope is not None and reason)
+            population_changes.append({
+                "product": required.output_product, "previous_scope": required.population_scope,
+                "proposed_scope": step.population_scope if step is not None else None,
+                "reason": reason, "explicit_amendment": declared,
+            })
+            findings.append(PlanScientificFinding(
+                code="POPULATION_SCOPE_AMENDMENT_DECLARED" if declared else "PLAN_POPULATION_REQUIREMENT_DRIFT",
+                severity="major" if declared else "blocker", dimension="icu_clinical_design",
+                message=(f"The descriptive result changes its population from {population_labels[required.population_scope]} "
+                         f"to {population_labels.get(step.population_scope if step else None, 'a missing or ambiguous population')}. "
+                         f"Declared amendment: {reason or 'none'}."),
+                evidence_refs=["research_context", "analysis_plan"],
+                remediation=("Review this explicit scientific scope change in the complete new plan; the reason is not execution approval."
+                             if declared else "Restore the source-bound population or declare an intentional scientific amendment for complete-plan review."),
+                remediation_route="study_authority_change" if declared else "agent_plan_revision",
+                requires_user_authorization=declared,
+            ))
+    baseline_coverage = baseline_requirement_coverage(context, plan)
+    accepted_baseline = context_baseline_requirements(context)
+    for table in baseline_coverage["tables"]:
+        if table["complete"]:
+            continue
+        unavailable = table["unavailable_coordinates"]
+        findings.append(PlanScientificFinding(
+            code=("ACCEPTED_BASELINE_MATERIALIZATION_MISSING" if unavailable
+                  else "ACCEPTED_BASELINE_CONTENT_MISSING"),
+            severity="blocker",
+            dimension="content_completeness",
+            message=(
+                f"Accepted baseline {table['source_step_id']!r} "
+                f"(grouping: {table['group_by']['required'] or 'not required'}), is not preserved. "
+                f"Missing variables: {table['missing_variables']}; "
+                f"unavailable coordinates: {unavailable}; "
+                f"matched table step: {table['matched_step_id']!r}."
+            ),
+            evidence_refs=["research_context", "analysis_plan"],
+            remediation=(
+                "Restore the missing source-bound data coordinates before replanning; "
+                "a change to the accepted requirement needs a newly reviewed scope."
+                if unavailable else
+                "Restore every missing variable in a typed baseline table with the "
+                "accepted grouping; keep any aggregation choice explicit for review."
+            ),
+            remediation_route=("runtime_capability" if unavailable else "agent_plan_revision"),
+        ))
+    variables = {variable.name: variable for variable in context.variables}
+    primary_clusters = [step for step in plan.steps if step.scientific_action_id == PHENOTYPING_PRIMARY_ACTION]
+    compared_outcomes: set[str] = set()
+    for step in plan.steps:
+        if step.scientific_action_id != COMPARISON_ACTION:
+            continue
+        try:
+            validate_comparison_step(step, context)
+            if len(primary_clusters) != 1 or comparison_cohort_input(step) != sole_typed_cohort_input(primary_clusters[0]):
+                raise ValueError("phenotype_comparison_primary_source_invalid")
+            compared_outcomes.update(step.phenotype_comparison_spec.outcome_columns)
+        except ValueError as exc:
+            findings.append(PlanScientificFinding(
+                code="PHENOTYPING_COMPARISON_CONTRACT_INVALID", severity="blocker", dimension="statistical_design",
+                message=f"Step {step.step_id!r}: {exc}", evidence_refs=[f"analysis_plan.json.steps.{step.step_id}.phenotype_comparison_spec"],
+                remediation="Bind a separate descriptive comparison to the exact primary cluster cohort, frozen assignments and explicitly selected clinical/outcome summaries.",
+                remediation_route="agent_plan_revision",
+            ))
+    missing_cluster_outcomes = set(requested_outcomes(context)) - compared_outcomes
+    if primary_clusters and missing_cluster_outcomes:
+        findings.append(PlanScientificFinding(
+            code="PHENOTYPING_OUTCOME_COMPARISON_INCOMPLETE", severity="blocker", dimension="statistical_design",
+            message="No executable post-clustering descriptive comparison covers the requested outcomes: " + ", ".join(sorted(missing_cluster_outcomes)),
+            evidence_refs=["research_context.json.cohort.requested_outcome_columns", "analysis_plan.json.steps"],
+            remediation="Add a secondary phenotyping.outcome_by_cluster step with an explicit summary roster for every requested outcome. Readable inputs, feature profiles and figures alone do not execute this comparison.",
+            remediation_route="agent_plan_revision",
+        ))
+    for step in plan.steps:
+        if step.scientific_action_id != PHENOTYPING_PRIMARY_ACTION:
+            continue
+        try:
+            require_phenotyping_features(
+                step.phenotyping_feature_columns, inputs=step.inputs, descriptors=context.variables,
+                outcome_columns=(*context.cohort.outcome_columns, *([context.target_outcome] if context.target_outcome else [])),
+            )
+        except ValueError as exc:
+            findings.append(PlanScientificFinding(
+                code="PHENOTYPING_FIT_ROSTER_INVALID", severity="blocker", dimension="statistical_design",
+                message=f"Step {step.step_id!r}: {exc}",
+                evidence_refs=[f"analysis_plan.json.steps.{step.step_id}.phenotyping_feature_columns"],
+                remediation="Declare the exact non-outcome fitting roster separately from readable profile inputs, then review a fresh plan.",
+                remediation_route="agent_plan_revision",
+            ))
+    required_source_columns = {
+        context.primary_exposure, context.target_outcome,
+        *context.cohort.outcome_columns,
+        *AdjustmentSetAuthority.from_context(context).operational_covariates,
+    }
+    for issue in declared_raw_input_plan_findings(plan=plan, context=context):
+        if issue.detail.get("reason") != "declared_raw_input_structurally_unavailable":
+            continue
+        required_source = bool(
+            required_source_columns.intersection(issue.detail["unavailable_inputs"])
+        )
+        findings.append(PlanScientificFinding(
+            code="PLAN_INPUT_STRUCTURALLY_UNAVAILABLE",
+            severity="blocker", dimension="statistical_design",
+            message=issue.message,
+            evidence_refs=[
+                f"analysis_plan.json.steps.{issue.detail['step_id']}.inputs",
+                "research_context.json.variables.source_concept",
+                "easyicu.outcome_availability.OUTCOME_CONCEPT_SUPPORTED_DATABASES",
+            ],
+            remediation=(
+                "Establish source-owner support for the required scientific "
+                "variable; preserve the reviewed question and do not substitute "
+                "an endpoint, exposure, or required adjustment."
+                if required_source else
+                "Omit optional structurally unavailable inputs from a fresh "
+                "plan, retaining the source limitation and original data. "
+                "If the variable is needed to answer the question, report the "
+                "source-owner capability gap rather than substituting a result."
+            ),
+            remediation_route="runtime_capability" if required_source else "agent_plan_revision",
+        ))
+    for step in plan.steps:
+        if step.exposure_outcome_distribution_spec is None:
+            continue
+        for issue in distribution_policy_issues(
+            step.exposure_outcome_distribution_spec, variables=variables,
+        ):
+            findings.append(PlanScientificFinding(
+                code="DISTRIBUTION_MISSINGNESS_AUTHORITY_INVALID",
+                severity="blocker",
+                dimension="statistical_design",
+                message=f"Step {step.step_id!r}: {issue.message}",
+                evidence_refs=[
+                    f"analysis_plan.json.steps.{step.step_id}.exposure_outcome_distribution_spec.{issue.field}",
+                    "research_context.json.variables",
+                ],
+                remediation=DISTRIBUTION_MISSINGNESS_GUIDANCE,
+                remediation_route="agent_plan_revision",
+            ))
     literature_facts = _literature_facts(literature, context)
     method_facts = method_source_facts(plan, context)
     design_bindings = _literature_design_bindings(plan, literature)
-    sensitivity = _sensitivity_facts(context, plan)
+    sensitivity = _sensitivity_facts(
+        context, plan, runtime_authority=runtime_authority
+    )
     publication_readiness = build_publication_readiness_facts(
         context=context,
         plan=plan,
@@ -1750,14 +2019,20 @@ def build_plan_scientific_review(
                 authorization_question="Please confirm the intended clinical endpoint and time horizon in a new study version.",
             )
         )
-    if association_study(plan) and missing_model_outcomes:
+    endpoint_result_required = association_study(plan) or canonical_analysis_family(
+        plan.analysis_type
+    ) in {
+        "descriptive_epidemiology", "prediction_model", "dynamic_prediction",
+        "ordinal_dose_response", "survival",
+    }
+    if endpoint_result_required and missing_model_outcomes:
         findings.append(
             PlanScientificFinding(
                 code="REQUESTED_OUTCOME_COVERAGE_INCOMPLETE",
                 severity="blocker",
                 dimension="statistical_design",
                 message=(
-                    "The association plan does not provide an executable model "
+                    "The plan does not provide an outcome-appropriate executable "
                     "contract for every outcome identified from the research "
                     "question: "
                     + ", ".join(missing_model_outcomes)
@@ -1765,13 +2040,16 @@ def build_plan_scientific_review(
                 ),
                 evidence_refs=[
                     "research_context.json.cohort.requested_outcome_columns",
-                    "analysis_plan.json.steps.model_requirements",
+                    "analysis_plan.json.steps",
                 ],
                 remediation=(
-                    "Add one outcome-appropriate executable model requirement "
-                    "for each missing typed outcome, with its own estimand and "
-                    "uncertainty; do not silently reduce a multi-outcome question "
-                    "to the primary endpoint."
+                    "Add an executable analysis contract for every missing typed "
+                    "outcome, preserving the reviewed analysis family. Descriptive "
+                    "questions need typed summaries, not an added regression or "
+                    "uncertainty; model questions need their declared model result. "
+                    "Readable inputs, baseline tables and figure labels alone do "
+                    "not answer an endpoint. Do not reduce a multi-outcome question "
+                    "to its primary endpoint."
                 ),
                 remediation_route="agent_plan_revision",
             )
@@ -1934,6 +2212,31 @@ def build_plan_scientific_review(
                     ),
                 )
             )
+    if descriptive_counts_only_required(context, analysis_type=plan.analysis_type):
+        unresolved_intervals = [
+            step.step_id for step in plan.steps
+            if step.exposure_outcome_distribution_spec is not None
+            and step.exposure_outcome_distribution_spec.schema_version
+            != "easyicu.exposure_outcome_distribution/3"
+        ]
+        if unresolved_intervals:
+            findings.append(PlanScientificFinding(
+                code="DESCRIPTIVE_INTERVAL_DEPENDENCE_UNRESOLVED",
+                severity="blocker",
+                dimension="statistical_design",
+                message=(
+                    "Descriptive intervals lack independent-unit or patient-grouping "
+                    "authority: " + ", ".join(unresolved_intervals)
+                ),
+                evidence_refs=["research_context.json.cohort.provenance", "analysis_plan.json"],
+                remediation=(
+                    "Regenerate the descriptive plan through the shared source-bound "
+                    "counts-only compiler. Retain all stays and report counts and "
+                    "proportions; do not promise intervals or inferential contrasts. "
+                    "Patient-level inference requires verified grouping authority."
+                ),
+                remediation_route="agent_plan_revision",
+            ))
     if repeats and not patient_identity and not repeated_unit_design_closed(context, plan):
         findings.append(
             PlanScientificFinding(
@@ -2126,7 +2429,7 @@ def build_plan_scientific_review(
                 code="CONTINUOUS_COVARIATE_FUNCTIONAL_FORM_UNCHECKED",
                 severity="major",
                 dimension="statistical_design",
-                message="Continuous covariates enter linearly without an executable functional-form check: " + ", ".join(linearity["linear_identity_terms"]),
+                message="Continuous covariates enter linearly without an executable functional-form check: " + ", ".join(linearity["unchecked_linear_identity_terms"]),
                 evidence_refs=["analysis_plan.json.model_requirements"],
                 remediation="Add a prespecified spline/nonlinearity sensitivity with source binding, without changing the headline estimand after results are seen.",
             )
@@ -2135,6 +2438,7 @@ def build_plan_scientific_review(
         robustness_readiness["status"] == "blocked"
         and robustness_readiness["reason"] == "no_typed_sensitivity_authority"
     ):
+        planner_can_repair_robustness = robustness_readiness["planner_revision_supported"]
         findings.append(
             PlanScientificFinding(
                 code="ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED",
@@ -2157,8 +2461,22 @@ def build_plan_scientific_review(
                     "complete plan rather than selecting internal sensitivity "
                     "implementations. Descriptive studies must not invent an "
                     "effect-estimate replay grid."
+                    if planner_can_repair_robustness
+                    else (
+                        "The selected family does not expose a sensitivity replay "
+                        "or custom-analysis owner. Implement a typed family-appropriate "
+                        "sensitivity capability before requesting plan revision. "
+                        "Denominator and measurement audits remain required but do "
+                        "not prove sensitivity robustness. Preserve this limitation "
+                        "and withhold publication readiness; do not widen the question "
+                        "to an adjusted model or retry the same unavailable contract."
+                    )
                 ),
-                remediation_route="agent_plan_revision",
+                remediation_route=(
+                    "agent_plan_revision"
+                    if planner_can_repair_robustness
+                    else "runtime_capability"
+                ),
             )
         )
     elif robustness_readiness["status"] == "too_narrow":
@@ -2302,6 +2620,14 @@ def build_plan_scientific_review(
         dimension_scores=dimensions,
         findings=findings,
         facts={
+            "plan_population_requirements": population_requirements.model_dump(mode="json") if population_requirements else None,
+            "population_scope_changes": population_changes,
+            "accepted_baseline_coverage": baseline_coverage,
+            # Carry the exact host contract into a subsequent plan-revision
+            # request; a failed first replan must not erase its own requirements.
+            "accepted_baseline_requirements": (
+                accepted_baseline.model_dump(mode="json") if accepted_baseline else None
+            ),
             "scientific_capability": capability_assessment.to_dict(),
             "reportable_capability_required": bool(require_reportable_capability),
             "score_interpretation": {
@@ -2375,6 +2701,7 @@ def build_plan_scientific_review(
                 ),
             },
             "remediation_buckets": remediation_buckets,
+            "automatic_revision_blockers": list(plan_revision_blocker_codes(findings)),
             "remediation_boundary": (
                 "Only agent_plan_revision findings may be fed to a fresh Planner "
                 "without changing StudyContext authority. Runtime-capability "
@@ -2407,6 +2734,7 @@ __all__ = [
     "repeated_unit_design_closed",
     "render_plan_scientific_guardrails",
     "render_agent_plan_revision_contract",
+    "plan_revision_blocker_codes",
     "remediation_route_for_finding",
     "required_method_layers_for_context",
     "required_method_layers_for_plan",

@@ -7,7 +7,6 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException
 
 from easyicu.webserver import capabilities
-from easyicu.webserver import settings as settings_store
 from easyicu.webserver.ideas import mining as idea_mining_web
 from easyicu.webserver.routes.request_parsing import body_bool, body_int
 
@@ -23,16 +22,11 @@ def _pubmed_connector_gate(
     connector is off. The reason must be surfaced on the RESPONSE by the
     route — writing it into the request body is invisible to the caller.
     """
-    settings = settings_store.load_settings()
-    if settings.get("connector_pubmed_enabled", True):
+    reason = capabilities.pubmed_connector_block_reason(path="ideas")
+    if reason is None:
         return body, None
     patched = dict(body or {})
     patched["allow_network"] = False
-    reason = "connector_pubmed_enabled_false"
-    capabilities.record_tool_event(
-        "pubmed_connector_blocked",
-        {"reason": reason, "path": "ideas"},
-    )
     return patched, reason
 
 
@@ -49,7 +43,11 @@ def post_ideas_mine(body: Dict[str, Any]) -> dict:
 def post_ideas_resolve_source(body: Dict[str, Any]) -> dict:
     """Resolve a paper/PDF/frontier source seed into bounded metadata."""
     try:
-        return idea_mining_web.resolve_source(body)
+        patched, connector_reason = _pubmed_connector_gate(body)
+        payload = idea_mining_web.resolve_source(patched)
+        if connector_reason:
+            payload["connector_disabled_reason"] = connector_reason
+        return payload
     except idea_mining_web.IdeaMiningWebError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
 

@@ -402,16 +402,17 @@ _SURVIVAL = MethodSuite(
             name="Restricted mean survival time (RMST)",
             purpose="Difference in mean event-free time up to a horizon — interpretable when PH is dubious.",
             tier="standard_supporting",
-            implementation="llm_coded",
-            produces="rmst.csv (group, rmst, ci) + difference",
-            runner=None,
+            implementation="deterministic",
+            produces="rmst_summary.csv (group rmst/ci + difference) + receipt",
+            runner="signed_rmst_contrast",
             notes=(
-                "`methods.rmst` (rmst / rmst_difference) is a reviewed, tested "
-                "kernel offered to the Coder via CURATED_METHOD_KERNELS. It "
-                "computes the integral-form sampling SE deliberately: "
-                "lifelines' restricted_mean_survival_time(return_variance=True) "
-                "returns the population variance, which inflates the CI by "
-                "~sqrt(n). A deterministic host runner is still planned."
+                "Host-owned executor `execution.runners.rmst_executor` claims "
+                "only a step bound to one reviewed two-group RMST specification "
+                "and the typed analysis cohort. `methods.rmst` "
+                "(rmst / rmst_difference) owns the Kaplan-Meier estimate and its "
+                "integral-form sampling SE. No Coder fallback; results remain "
+                "analysis-only, and an external survRM2 oracle is still "
+                "outstanding before any reportable promotion."
             ),
             kernel_modules=("rmst",),
         ),
@@ -709,10 +710,10 @@ _PHENOTYPING = MethodSuite(
             purpose="Compare outcomes across clusters — DESCRIPTIVE, explicitly not causal.",
             tier="standard_supporting",
             implementation="deterministic",
-            produces="outcome_by_cluster.csv; figure panel",
-            runner="phenotyping",
+            produces="outcome_by_cluster.csv with clinical/outcome rows, observed denominators and missing counts",
+            runner="phenotype_comparison",
             reporting_items=("internal_phenotype P8",),
-            notes="figure_strategy blocks 'clusters are causal entities'; kept descriptive by contract.",
+            notes="Source-bound descriptions on frozen cross-sectional assignments; no refit, inference or causal-entity claim. Figures remain separately planned result consumers.",
         ),
         # --- Longitudinal trajectory sub-suite ---
         AnalysisMethod(

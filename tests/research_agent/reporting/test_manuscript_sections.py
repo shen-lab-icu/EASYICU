@@ -9,6 +9,7 @@ from easyicu.research_agent.reporting.manuscript_sections import (
     MANUSCRIPT_SECTION_SPECS,
     ManuscriptReaderQualityContractError,
     ManuscriptSectionContractError,
+    quality_repair_section_errors,
     repair_existing_manuscript_sections,
     repair_named_manuscript_sections,
     render_manuscript_sections,
@@ -29,6 +30,36 @@ def test_manuscript_section_contract_has_fixed_publication_order() -> None:
         "limitations",
         "conclusion",
     ]
+
+
+def test_transport_failure_preserves_completed_sections_for_bounded_resume():
+    checkpoints = []
+    transport_error = RuntimeError('connection interrupted')
+
+    def interrupted(**kwargs):
+        if kwargs['section_name'] == 'Abstract':
+            raise transport_error
+        return _minimal_valid_section(kwargs['section_name'])
+
+    with pytest.raises(RuntimeError) as raised:
+        render_manuscript_sections(call_section=interrupted, common={}, checkpoint=checkpoints.append)
+    assert raised.value is transport_error
+    assert len(checkpoints) == 1
+    assert '**Keywords:**' in checkpoints[0]
+    assert '## Abstract' not in checkpoints[0]
+
+    called = []
+    def continued(**kwargs):
+        called.append(kwargs['section_name'])
+        return _minimal_valid_section(kwargs['section_name'])
+
+    manuscript, repaired = repair_existing_manuscript_sections(
+        checkpoints[0], call_section=continued, common={}, checkpoint=checkpoints.append,
+    )
+    assert 'Title and Keywords' not in called
+    assert 'methods' in repaired and 'results' in repaired
+    assert '## Methods' in manuscript and '## Conclusion' in manuscript
+    assert len(checkpoints) > 1
 
 
 def test_results_contract_requires_complete_non_ph_survival_reporting() -> None:
@@ -201,6 +232,19 @@ Software prose."""
     assert "### Statistical analysis\nEvidence-bound analysis prose." in rendered
 
 
+@pytest.mark.parametrize("section_key", ["abstract", "results"])
+def test_result_instructions_do_not_require_unavailable_inference(section_key: str) -> None:
+    instruction = next(
+        spec.instruction for spec in MANUSCRIPT_SECTION_SPECS if spec.key == section_key
+    )
+
+    assert "counts-only" in instruction
+    assert "only when explicitly supplied" in instruction
+    assert "Do not invent" in instruction
+    assert "size with 95% CI and p, one supporting finding" not in instruction
+    assert "Effect size and 95% CI, cite" not in instruction
+
+
 def test_incomplete_required_subsection_fails_closed_after_retry() -> None:
     seen: list[str] = []
 
@@ -266,9 +310,9 @@ def test_reader_quality_retries_only_abstract_with_missing_label() -> None:
 **Results:** Bounded results.
 
 **Conclusions:**"""
-        assert "READER-QUALITY CONTRACT REPAIR" in str(kwargs["instruction"])
+        assert "READER-QUALITY CONTRACT REPAIR" in str(kwargs["repair_feedback"])
         assert "MANUSCRIPT_ABSTRACT_LABEL_MISSING_OR_EMPTY" in str(
-            kwargs["instruction"]
+            kwargs["repair_feedback"]
         )
         return _minimal_valid_section("Abstract")
 
@@ -323,8 +367,10 @@ def test_reader_quality_fails_closed_when_targeted_retry_still_leaks_internal_te
     with pytest.raises(
         ManuscriptReaderQualityContractError,
         match="MANUSCRIPT_INTERNAL_TERM_EXPOSED",
-    ):
+    ) as raised:
         render_manuscript_sections(call_section=call_section, common={})
+    assert '## Methods' in raised.value.manuscript
+    assert 'host-bound' in raised.value.manuscript
 
 
 def test_reader_quality_final_bounded_repair_closes_repeated_internal_term() -> None:
@@ -338,7 +384,7 @@ def test_reader_quality_final_bounded_repair_closes_repeated_internal_term() -> 
         discussion_calls += 1
         if discussion_calls < 3:
             return "## Discussion\n\nThe result remained host-bound at 1.234567."
-        assert "final bounded repair attempt" in str(kwargs["instruction"])
+        assert "final bounded repair attempt" in str(kwargs["repair_feedback"])
         return "## Discussion\n\nThe descriptive result requires cautious interpretation."
 
     rendered = render_manuscript_sections(call_section=call_section, common={})
@@ -434,7 +480,7 @@ def test_adjacent_contract_repairs_only_explicit_section_owner() -> None:
 
     def call_section(**kwargs: object) -> str:
         calls.append(str(kwargs["section_name"]))
-        assert "EVIDENCE-AUTHORITY CONTRACT REPAIR" in str(kwargs["instruction"])
+        assert "EVIDENCE-AUTHORITY CONTRACT REPAIR" in str(kwargs["repair_feedback"])
         return _minimal_valid_section(str(kwargs["section_name"]))
 
     repaired, keys = repair_named_manuscript_sections(
@@ -447,6 +493,31 @@ def test_adjacent_contract_repairs_only_explicit_section_owner() -> None:
     assert keys == ("methods",)
     assert calls == ["Methods"]
     assert audit_manuscript_quality(repaired).status == "pass"
+
+
+def test_completed_repair_preserves_unpassed_candidate_for_final_owner():
+    from easyicu.research_agent.reporting.manuscript_sections import completed_section_repair_candidate
+
+    manuscript = "\n\n".join(
+        _minimal_valid_section(spec.section_name) for spec in MANUSCRIPT_SECTION_SPECS
+    )
+    with pytest.raises(ManuscriptReaderQualityContractError) as caught:
+        repair_named_manuscript_sections(
+            manuscript, section_errors={"discussion": ("Repair reader wording.",)},
+            call_section=lambda **kwargs: "## Discussion\n\nThis remains host-bound.",
+            common={},
+        )
+    candidate = completed_section_repair_candidate(caught.value, expected_section_keys=("discussion",))
+    assert candidate is not None
+    text, keys = candidate
+    assert keys == ("discussion",)
+    assert "## Data and code availability" in text
+    assert audit_manuscript_quality(text).status != "pass"
+    assert completed_section_repair_candidate(caught.value, expected_section_keys=("methods",)) is None
+    assert completed_section_repair_candidate(
+        ManuscriptReaderQualityContractError(findings=(), manuscript=text),
+        expected_section_keys=("discussion",),
+    ) is None
 
 
 def test_existing_manuscript_migration_repairs_missing_display_callouts() -> None:
@@ -503,6 +574,52 @@ def test_existing_manuscript_migration_retries_only_persistent_owner() -> None:
     assert "host-bound" not in repaired
 
 
+def test_regenerated_results_do_not_spend_another_call_repairing_host_callouts():
+    manuscript = "\n\n".join(
+        _minimal_valid_section(spec.section_name) for spec in MANUSCRIPT_SECTION_SPECS
+    ).replace("Evidence-bound outcome prose.", "The result remained host-bound.")
+    calls = []
+
+    def call_section(**kwargs):
+        calls.append(kwargs["section_name"])
+        return _minimal_valid_section(kwargs["section_name"])
+
+    repaired, keys = repair_existing_manuscript_sections(
+        manuscript, call_section=call_section,
+        common={"evidence_ids": ("table_one", "publication_figure_contract")},
+    )
+    assert calls == ["Results"]
+    assert keys == ("results",)
+    assert "See Table 1 {evidence:table_one}." in repaired
+    assert "See Figure 1 {evidence:publication_figure_contract}." in repaired
+
+
+@pytest.mark.parametrize("named", (False, True))
+def test_every_repair_path_reuses_numeric_display_projection(named):
+    manuscript = "\n\n".join(
+        _minimal_valid_section(spec.section_name) for spec in MANUSCRIPT_SECTION_SPECS
+    ).replace("Evidence-bound outcome prose.", "The result remained host-bound.")
+    calls = []
+
+    def call_section(**kwargs):
+        calls.append(kwargs["section_name"])
+        return _minimal_valid_section("Results").replace(
+            "Evidence-bound outcome prose.",
+            "Mortality was 15.742499% {evidence:registered_result}.",
+        )
+
+    kwargs = {"call_section": call_section, "common": {}}
+    if named:
+        repaired, _ = repair_named_manuscript_sections(
+            manuscript, section_errors={"results": ("Rejected result prose.",)}, **kwargs,
+        )
+    else:
+        repaired, _ = repair_existing_manuscript_sections(manuscript, **kwargs)
+    assert calls == ["Results"]
+    assert "15.742% {evidence:registered_result}" in repaired
+    assert "15.742499" not in repaired
+
+
 def test_adjustment_conflict_repairs_methods_owner_only() -> None:
     manuscript = "\n\n".join(
         _minimal_valid_section(spec.section_name) for spec in MANUSCRIPT_SECTION_SPECS
@@ -534,6 +651,66 @@ def test_adjustment_conflict_repairs_methods_owner_only() -> None:
     assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" not in {
         finding.code for finding in audit_manuscript_quality(repaired).findings
     }
+
+
+def test_adjustment_display_labels_prevent_redundant_methods_repair() -> None:
+    manuscript = "\n\n".join(
+        _minimal_valid_section(spec.section_name) for spec in MANUSCRIPT_SECTION_SPECS
+    ).replace(
+        "Evidence-bound analysis prose.",
+        "The adjustment set comprised patient age, patient sex, and "
+        "patient admission type.",
+    ).replace(
+        "Evidence-bound association prose.",
+        "The adjusted odds ratio was 1.61, after adjustment for age, sex, and adm.",
+    )
+    calls: list[str] = []
+
+    def call_section(**kwargs: object) -> str:
+        calls.append(str(kwargs["section_name"]))
+        raise AssertionError("equivalent display labels should need no section repair")
+
+    repaired, repaired_keys = repair_existing_manuscript_sections(
+        manuscript,
+        call_section=call_section,
+        common={
+            "reader_display_labels": {
+                "age": "Patient age",
+                "sex": "Patient sex",
+                "adm": "Patient admission type",
+            },
+        },
+    )
+
+    assert repaired_keys == ()
+    assert calls == []
+    assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" not in {
+        finding.code for finding in audit_manuscript_quality(repaired).findings
+    }
+
+
+def test_quality_repair_owner_uses_reader_display_labels() -> None:
+    manuscript = "\n\n".join(
+        _minimal_valid_section(spec.section_name) for spec in MANUSCRIPT_SECTION_SPECS
+    ).replace(
+        "Evidence-bound analysis prose.",
+        "The adjustment set comprised patient age, patient sex, and "
+        "patient admission type.",
+    ).replace(
+        "Evidence-bound association prose.",
+        "The adjusted odds ratio was 1.61, after adjustment for age, sex, and adm.",
+    )
+    labels = {
+        "age": "Patient age",
+        "sex": "Patient sex",
+        "adm": "Patient admission type",
+    }
+
+    assert "methods" in quality_repair_section_errors(manuscript)
+    assert "methods" not in quality_repair_section_errors(
+        manuscript,
+        reader_display_labels=labels,
+    )
 
 
 def test_verified_administrative_authority_is_rendered_exactly() -> None:

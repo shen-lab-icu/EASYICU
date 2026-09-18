@@ -72,11 +72,11 @@ def _call_name(node: ast.Call) -> str | None:
 def _identity_transforms(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         plan_authority,
-        "_preserve_figure_steps_after_replan",
+        "preserve_figure_steps_after_replan",
         lambda *, current, revised: (revised, []),
     )
     monkeypatch.setattr(
-        plan_authority._figure_plan,
+        plan_authority.figure_plan_shaping,
         "augment_report_typed_product_inputs",
         lambda *, plan: (plan, []),
     )
@@ -96,7 +96,7 @@ def _identity_transforms(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda *, plan, context, **_kwargs: (plan, []),
     )
     monkeypatch.setattr(
-        plan_authority._figure_plan,
+        plan_authority.figure_plan_shaping,
         "bind_deterministic_figure_panels",
         lambda *, plan: (plan, []),
     )
@@ -152,9 +152,9 @@ def test_candidate_transform_order_keeps_second_snapshot_restore() -> None:
         if name
         in {
             "_preserve_completed_step_snapshots_after_replan",
-            "_preserve_figure_steps_after_replan",
+            "preserve_figure_steps_after_replan",
             "augment_report_typed_product_inputs",
-            "_cap_plan_preserving_figure_steps",
+            "cap_plan_preserving_figure_steps",
             "_project_locked_robustness_specs_after_replan",
             "augment_trajectory_plan_products",
             "close_measurement_companion_inputs",
@@ -163,9 +163,9 @@ def test_candidate_transform_order_keeps_second_snapshot_restore() -> None:
     ]
     assert relevant == [
         "_preserve_completed_step_snapshots_after_replan",
-        "_preserve_figure_steps_after_replan",
+        "preserve_figure_steps_after_replan",
         "augment_report_typed_product_inputs",
-        "_cap_plan_preserving_figure_steps",
+        "cap_plan_preserving_figure_steps",
         "_project_locked_robustness_specs_after_replan",
         "augment_trajectory_plan_products",
         "close_measurement_companion_inputs",
@@ -371,7 +371,7 @@ def test_normalizer_passes_only_current_successful_ids_to_cap(
 
     monkeypatch.setattr(
         plan_authority,
-        "_cap_plan_preserving_figure_steps",
+        "cap_plan_preserving_figure_steps",
         capture_cap,
     )
     plan_authority.normalize_replan_candidate(

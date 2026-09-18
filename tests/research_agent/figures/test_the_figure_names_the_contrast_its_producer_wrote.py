@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import os
 from pathlib import Path
 
 import pytest
@@ -231,12 +232,17 @@ def test_the_producer_really_declares_these_columns():
         assert column in ADJUSTED_ASSOCIATION_ESTIMATES_COLUMNS, column
 
 
+@pytest.mark.requires_corpus
 def test_the_recorded_corpus_still_contains_multi_row_tables():
     """Stops being meaningful only if staged exposures stop being produced."""
 
     import pandas as pd
 
-    corpus = Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+    corpus = Path(
+        os.environ.get(
+            "EASYICU_CORPUS_ROOT", "/Volumes/外置硬盘/easyicu_data/canonical9_runs"
+        )
+    )
     if not corpus.exists():
         pytest.skip("recorded run corpus is not mounted")
 

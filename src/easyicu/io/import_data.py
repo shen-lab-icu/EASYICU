@@ -17,6 +17,23 @@ from ..config import DataSourceConfig, TableConfig
 
 LOGGER = logging.getLogger(__name__)
 
+
+class TableImportError(RuntimeError):
+    """Per-table import failure with structured errors (fail-closed).
+
+    Attributes:
+        ok: Tables imported successfully.
+        failed: Mapping of table name -> error message for each failure.
+    """
+
+    def __init__(self, ok: list, failed: dict) -> None:
+        self.ok = list(ok)
+        self.failed = dict(failed)
+        details = "; ".join(f"{name}: {err}" for name, err in self.failed.items())
+        super().__init__(
+            f"Failed to import {len(self.failed)} table(s): {details}"
+        )
+
 def import_table(
     table_cfg: TableConfig,
     data_dir: Path,
@@ -190,7 +207,7 @@ def import_src(
     force: bool = False,
     verbose: bool = True,
     cleanup: bool = False,
-) -> None:
+) -> list:
     """Import all tables for a data source.
 
     Args:
@@ -200,6 +217,14 @@ def import_src(
         force: If True, re-import existing tables
         verbose: If True, print progress information
         cleanup: If True, delete CSV files after successful import
+
+    Returns:
+        List of successfully imported table names (empty when nothing to do).
+
+    Raises:
+        TableImportError: When one or more tables fail, carrying ``ok`` and
+            per-table ``failed`` (``{table: error}``). Callers must not treat
+            a partial import as success.
     """
     if verbose:
         logging.basicConfig(level=logging.INFO)
@@ -224,28 +249,30 @@ def import_src(
 
     if not tables:
         LOGGER.info("All requested tables have already been imported")
-        return
+        return []
 
     if verbose:
         LOGGER.info(f"Importing {len(tables)} table(s) for {config.name}")
 
-    # Import each table
-    failed = []
+    # Import each table (fail-closed: collect per-table errors, then raise)
+    ok: list = []
+    failed: dict = {}
     for table_name in tables:
         try:
             table_cfg = config.get_table(table_name)
             import_table(table_cfg, data_dir, force=force, verbose=verbose)
+            ok.append(table_name)
         except Exception as e:
             LOGGER.error(f"Failed to import table {table_name}: {e}")
-            failed.append(table_name)
+            failed[table_name] = str(e)
 
     if failed:
-        LOGGER.warning(f"Failed to import {len(failed)} tables: {', '.join(failed)}")
-    elif verbose:
+        raise TableImportError(ok=ok, failed=failed)
+    if verbose:
         LOGGER.info(f"Successfully imported all {len(tables)} tables")
 
-    # Cleanup CSV files if requested
-    if cleanup and not failed:
+    # Cleanup CSV files if requested (only on full success; failures raise above)
+    if cleanup:
         for table_name in tables:
             table_cfg = config.get_table(table_name)
             for file_entry in table_cfg.files:
@@ -256,6 +283,7 @@ def import_src(
                         csv_file.unlink()
                         if verbose:
                             LOGGER.info(f"Removed {csv_file.name}")
+    return ok
 
 def import_sources(
     source_names: Iterable[str],
@@ -270,10 +298,20 @@ def import_sources(
         registry: Registry containing data source configurations
         data_dirs: Directories corresponding to each source
         **kwargs: Additional arguments passed to import_src
+
+    Raises:
+        TableImportError: If any source fails, with per-source errors in
+            ``failed`` (keys are source names). No partial success is silent.
     """
+    ok: list = []
+    failed: dict = {}
     for source_name, data_dir in zip(source_names, data_dirs):
         try:
             config = registry.get(source_name)
             import_src(config, Path(data_dir), **kwargs)
+            ok.append(source_name)
         except Exception as e:
             LOGGER.error(f"Failed to import {source_name}: {e}")
+            failed[source_name] = str(e)
+    if failed:
+        raise TableImportError(ok=ok, failed=failed)

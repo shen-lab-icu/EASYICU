@@ -303,6 +303,16 @@ def test_legacy_unscoped_mechanical_error_stays_active_if_any_step_failed() -> N
     ("validator", "message", "gate_key"),
     [
         (
+            "manuscript_figure_projection",
+            "A reader figure has no source-bound explanatory legend.",
+            "manuscript_figures_complete",
+        ),
+        (
+            "manuscript_figure_projection",
+            "Source-bound figure projection failed: changed image bytes",
+            "manuscript_figures_complete",
+        ),
+        (
             "writer_agent",
             "WriterAgent failed before producing a manuscript scaffold: timeout",
             "manuscript_bound_clean",

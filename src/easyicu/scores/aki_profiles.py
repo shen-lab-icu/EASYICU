@@ -21,11 +21,11 @@ import pandas as pd
 
 from .kdigo_aki import (
     KDIGOComponentSchemaError,
-    _detect_id_col,
-    _detect_time_col,
-    _detect_value_col,
-    _resolve_time_unit,
-    _strict_numeric_component,
+    detect_id_col,
+    detect_time_col,
+    detect_value_col,
+    resolve_time_unit,
+    strict_numeric_component,
     kdigo_creatinine,
     kdigo_stages,
     kdigo_uo,
@@ -737,8 +737,8 @@ def _component_keys(
         raise AKIProfilePrerequisiteError(
             "At least one non-empty component is required"
         )
-    resolved_id = _detect_id_col(anchor, id_col)
-    resolved_time = _detect_time_col(anchor, time_col)
+    resolved_id = detect_id_col(anchor, id_col)
+    resolved_time = detect_time_col(anchor, time_col)
     if resolved_id is None or resolved_time is None:
         raise KDIGOComponentSchemaError(
             component="source_native_aki",
@@ -751,7 +751,7 @@ def _component_keys(
 def _time_hours(
     series: pd.Series, time_col: str, time_unit: Optional[str]
 ) -> pd.Series:
-    unit = _resolve_time_unit(series, time_col, time_unit)
+    unit = resolve_time_unit(series, time_col, time_unit)
     if unit == "datetime":
         return (series - series.min()) / pd.Timedelta(hours=1)
     if unit == "timedelta":
@@ -767,8 +767,8 @@ def _native_spine(
     for frame in frames:
         if frame is None or frame.empty:
             continue
-        source_id = _detect_id_col(frame, id_col)
-        source_time = _detect_time_col(frame, time_col)
+        source_id = detect_id_col(frame, id_col)
+        source_time = detect_time_col(frame, time_col)
         if source_id is None or source_time is None:
             continue
         keys.append(
@@ -954,7 +954,7 @@ def _mimic_iii_uo(
     time_unit: Optional[str],
 ) -> pd.DataFrame:
     frame = urine_df[[id_col, time_col, urine_col]].copy()
-    frame[urine_col] = _strict_numeric_component(
+    frame[urine_col] = strict_numeric_component(
         frame[urine_col],
         component="mimic_iii_urine",
         reason_code="mimic_iii_urine_non_numeric",
@@ -1006,9 +1006,9 @@ def _event_stage_at_exact_rows(
     stage = pd.Series(pd.NA, index=result.index, dtype="Int64")
     if rrt_df is None or rrt_df.empty:
         return stage
-    source_id = _detect_id_col(rrt_df, id_col)
-    source_time = _detect_time_col(rrt_df, time_col)
-    value_col = _detect_value_col(rrt_df, "rrt")
+    source_id = detect_id_col(rrt_df, id_col)
+    source_time = detect_time_col(rrt_df, time_col)
+    value_col = detect_value_col(rrt_df, "rrt")
     if source_id is None or source_time is None or value_col is None:
         raise AKIProfileError("RRT source has no ID/time/value contract")
     active = rrt_df.loc[
@@ -1046,11 +1046,11 @@ def _rolling_stage_max(
 def _one_weight_per_entity(
     weight_df: pd.DataFrame, id_col: str, weight_col: str
 ) -> pd.DataFrame:
-    source_id = _detect_id_col(weight_df, id_col)
+    source_id = detect_id_col(weight_df, id_col)
     source_value = (
         weight_col
         if weight_col in weight_df
-        else _detect_value_col(weight_df, weight_col)
+        else detect_value_col(weight_df, weight_col)
     )
     if source_id is None or source_value is None:
         raise AKIProfileError("Weight source has no ID/value contract")
@@ -1088,7 +1088,7 @@ def _sicdb_profile(
     entity_ids = sorted(
         set().union(
             *(
-                set(frame[_detect_id_col(frame, resolved_id)].dropna())
+                set(frame[detect_id_col(frame, resolved_id)].dropna())
                 for frame in (crea_df, urine_df, rrt_df)
                 if frame is not None and not frame.empty
             )
@@ -1204,7 +1204,7 @@ def _entity_has_event(
 ) -> bool:
     if frame is None or frame.empty:
         return False
-    value_col = _detect_value_col(frame, "rrt")
+    value_col = detect_value_col(frame, "rrt")
     if value_col is None:
         return False
     subset = frame.loc[frame[id_col] == entity_id].copy()
@@ -1292,7 +1292,7 @@ def _eicu_components_profile(
     source_value = (
         urine_col
         if urine_col in urine_df
-        else _detect_value_col(urine_df, "cellvaluenumeric")
+        else detect_value_col(urine_df, "cellvaluenumeric")
     )
     if source_value is None:
         raise AKIProfileError("eICU urine component has no numeric value column")
@@ -1324,8 +1324,8 @@ def _hirid_author_endpoint_profile(
     id_col: Optional[str],
     time_col: Optional[str],
 ) -> pd.DataFrame:
-    resolved_id = _detect_id_col(endpoint, id_col)
-    resolved_time = _detect_time_col(endpoint, time_col)
+    resolved_id = detect_id_col(endpoint, id_col)
+    resolved_time = detect_time_col(endpoint, time_col)
     if resolved_id is None or resolved_time is None:
         raise AKIProfileError("HiRID author endpoint has no ID/time columns")
     result = endpoint.copy()

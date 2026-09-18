@@ -31,6 +31,7 @@ import hashlib
 import json
 import re
 from typing import Any, Sequence
+from ..bibliographic_metadata import complete_missing_authors
 
 __all__ = [
     "METHOD_CARDS",
@@ -116,7 +117,7 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
             "observational studies."
         ),
         source_year="2007",
-        source_venue="Annals of Internal Medicine / BMJ / Lancet (co-published)",
+        source_venue="Annals of Internal Medicine",
         source_pmid="17938396",
         source_doi="10.7326/0003-4819-147-8-200710160-00010",
         source_url="https://pubmed.ncbi.nlm.nih.gov/17938396/",
@@ -263,7 +264,7 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
             "observational studies."
         ),
         source_year="2007",
-        source_venue="Annals of Internal Medicine / BMJ / Lancet (co-published)",
+        source_venue="Annals of Internal Medicine",
         design_elements=("dependence",),
     ),
     MethodCard(
@@ -330,7 +331,7 @@ METHOD_CARDS: tuple[MethodCard, ...] = (
             "observational studies."
         ),
         source_year="2007",
-        source_venue="Annals of Internal Medicine / BMJ / Lancet (co-published)",
+        source_venue="Annals of Internal Medicine",
         design_elements=("outcome", "estimand"),
     ),
 )
@@ -445,7 +446,7 @@ def method_literature_citations() -> tuple[dict[str, Any], ...]:
             "url": card.source_url or None,
             "bibliographic_notices": list(card.source_bibliographic_notices),
         }
-    return tuple(seen.values())
+    return tuple(complete_missing_authors(record)[0] for record in seen.values())
 
 
 def method_literature_pack(layers: Sequence[str] | None = None) -> dict[str, Any]:

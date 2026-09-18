@@ -40,6 +40,7 @@ from ..intake.materialized_trajectory import (
     VerifiedMaterializedTrajectoryAuthority,
 )
 from ..contracts.cohort_receipt import COHORT_RECEIPT_COLUMN_FIELDS
+from ..concept_availability import require_supported_variable_source
 from ..icu_rules import ICU_RULES
 from .implementation_identity import metadata_implementation_identity
 from ..schema import ConceptDescriptor, ResearchContext
@@ -1053,7 +1054,7 @@ _CONCEPT_LEVELS_CACHE: Dict[str, Optional[List[Any]]] = {}
 
 
 def _dictionary_declared_levels(source_concept: Optional[str]) -> Optional[List[Any]]:
-    """Return the concept dictionary's own closed factor levels, if it has one."""
+    """Return the concept owner's closed factor or logical value domain."""
 
     if not source_concept:
         return None
@@ -1062,11 +1063,14 @@ def _dictionary_declared_levels(source_concept: Optional[str]) -> Optional[List[
     levels: Optional[List[Any]] = None
     try:  # local import to avoid import-time cost / cycles, as icu_rules does
         from ...concept.loader import load_dictionary
+        from ...concept.export_metadata import concept_declares_event_status
 
         definition = load_dictionary().get(source_concept)
         raw = getattr(definition, "levels", None)
         if isinstance(raw, (list, tuple)) and raw:
             levels = list(raw)
+        elif concept_declares_event_status(source_concept, definition):
+            levels = [0, 1]
     except Exception:
         levels = None
     _CONCEPT_LEVELS_CACHE[source_concept] = levels
@@ -1134,6 +1138,11 @@ def declared_domain_for_variable(
                     list(range(lower_int, upper_int + 1)),
                     "declared_ordinal_integer_range",
                 )
+    transform = getattr(variable, "unit_normalization", None)
+    if transform and not _transform_preserves_concept_values(transform):
+        # A source event's status domain is not the domain of its timestamp,
+        # measurement count, or another derived quantity.
+        return None, None
     levels = _dictionary_declared_levels(getattr(variable, "source_concept", None))
     if levels:
         return levels, "declared_concept_dictionary_levels"
@@ -1179,6 +1188,7 @@ def resolved_raw_input_contracts(
                 raise ValueError(
                     f"Planner-declared raw input {name!r} lacks a context descriptor"
                 )
+            require_supported_variable_source(variable, context.cohort.database)
             contracts[name] = _legacy_raw_input_contract(variable)
         payload: Dict[str, Any] = {
             "schema_version": "easyicu.resolved_raw_input_contracts/1",
@@ -1205,6 +1215,8 @@ def resolved_raw_input_contracts(
     for name in raw_names:
         binding = cohort.column_bindings.get(name)
         variable = variables.get(name)
+        if variable is not None:
+            require_supported_variable_source(variable, cohort.source_database)
         if binding is None and (
             name != cohort.identity_column
             or name not in cohort.cohort_columns

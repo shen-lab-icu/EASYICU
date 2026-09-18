@@ -112,6 +112,38 @@ def test_requirements_lockfile_has_header_and_entries(ra):
     assert entry_lines
 
 
+def test_requirements_lockfile_deduplicates_editable_distribution_metadata(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.replication import notebook as notebook_module
+
+    easyicu = SimpleNamespace(metadata={"Name": "easyicu"}, version="1.0.0")
+    easyicu_display_variant = SimpleNamespace(
+        metadata={"Name": "EasyICU"}, version="1.0.0"
+    )
+    numpy = SimpleNamespace(metadata={"Name": "numpy"}, version="2.0.0")
+    snapshots = iter(
+        [
+            [easyicu, numpy],
+            [easyicu, easyicu_display_variant, easyicu, easyicu, numpy],
+        ]
+    )
+    monkeypatch.setattr(
+        notebook_module._im,
+        "distributions",
+        lambda: next(snapshots),
+    )
+
+    first = notebook_module.build_requirements_lockfile()
+    resumed = notebook_module.build_requirements_lockfile()
+
+    assert resumed == first
+    assert resumed.splitlines().count("easyicu==1.0.0") == 1
+    assert resumed.splitlines().count("numpy==2.0.0") == 1
+
+
 def test_notebook_is_valid_nbformat(ra):
     nb = ra.build_notebook(
         research_question="Q",

@@ -22,6 +22,11 @@ later became intentionally self-contained in ``04b19fa`` (it now carries its
 own imports), so the live generator must not pretend to reproduce those older
 bytes.  The golden below instead pins the current host scaffold, while the
 region tests remain load-bearing for the authority boundary.
+
+It moved once more for the E2 dependence-audit deadlock: the receipt's
+conversion temporary is now host-prefixed and it publishes ``coercion_loss_n``,
+so the host can no longer be asked to repair a variable it happens to share
+with the agent's own code.
 """
 
 from __future__ import annotations
@@ -40,7 +45,7 @@ from easyicu.research_agent.schema import AnalysisStep
 _STEP_ID = "07_standard_robustness_sensitivity"
 _CONTRACTS_SHA = "4d8bd1f3b81c0ad100bfc5b6f04f94acac7f74ba54ebf8f52d230fbae794c708"
 _CURRENT_SCAFFOLD_SHA = (
-    "8b6071825faebdb597fdaf4816f84280b2b5a1f942e372382fea8a92a4e498ae"
+    "2ef76ad7838798dafa75512135feccce0f828d226b64362db37b7231c31f6d3b"
 )
 
 

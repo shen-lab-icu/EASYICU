@@ -10,9 +10,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
-from ..planning.figure_step_contract import _preserve_figure_steps_after_replan
-from ..planning.plan_graph import _cap_plan_preserving_figure_steps
-from ..planning import figure_plan_shaping as _figure_plan
+from ..planning.figure_step_contract import preserve_figure_steps_after_replan
+from ..planning.plan_graph import cap_plan_preserving_figure_steps
+from ..planning import figure_plan_shaping
 from ..robustness.panel import (
     RobustnessSpec,
     robustness_specs_for_execution,
@@ -24,7 +24,7 @@ from ..trajectory.plan_contract import augment_trajectory_plan_products
 from .declared_levels import bind_step_declared_levels
 from .table_one_binding import bind_table_one_execution_spec
 from .plan_input_closure import close_measurement_companion_inputs
-from .plan_scope import _plan_scientific_scope_signature, _plan_signature
+from .plan_scope import plan_scientific_scope_signature, plan_signature
 from .planned_role import verified_planned_analysis_role
 
 __all__ = [
@@ -150,8 +150,8 @@ def _preserve_completed_step_snapshots_after_replan(
         revised_ids.add(step_id)
         reinserted_ids.append(step_id)
 
-    current_scope = _plan_scientific_scope_signature(current_plan)
-    revised_scope = _plan_scientific_scope_signature(revised_plan)
+    current_scope = plan_scientific_scope_signature(current_plan)
+    revised_scope = plan_scientific_scope_signature(revised_plan)
     # A replanner owns revisions to the remaining step DAG, not a new research
     # question, cohort, analysis family, robustness lock, display semantics, or
     # rationale.  Preserve that Planner-authored scope even before the first
@@ -301,13 +301,13 @@ def normalize_replan_candidate(
             findings=tuple(findings),
             substantive=False,
         )
-    revised, figure_findings = _preserve_figure_steps_after_replan(
+    revised, figure_findings = preserve_figure_steps_after_replan(
         current=current_plan,
         revised=revised,
     )
     findings.extend(figure_findings)
-    revised = _figure_plan.apply_required_plan_obligations(revised, context, findings)
-    revised, report_input_findings = _figure_plan.augment_report_typed_product_inputs(plan=revised)
+    revised = figure_plan_shaping.apply_required_plan_obligations(revised, context, findings)
+    revised, report_input_findings = figure_plan_shaping.augment_report_typed_product_inputs(plan=revised)
     findings.extend(report_input_findings)
 
     if max_total_steps > 0:
@@ -316,7 +316,7 @@ def normalize_replan_candidate(
             for record in current_successful_step_records(completed_records)
             if record.get("step_id") and record.get("status") == "ok"
         ]
-        revised, cap_findings = _cap_plan_preserving_figure_steps(
+        revised, cap_findings = cap_plan_preserving_figure_steps(
             plan=revised,
             cap=max_total_steps,
             protected_step_ids=protected_step_ids,
@@ -350,7 +350,7 @@ def normalize_replan_candidate(
         context=context,
     )
     findings.extend(companion_findings)
-    revised, panel_findings = _figure_plan.bind_deterministic_figure_panels(plan=revised)
+    revised, panel_findings = figure_plan_shaping.bind_deterministic_figure_panels(plan=revised)
     findings.extend(panel_findings)
 
     # Structural transforms may touch an already completed step. Re-apply the
@@ -382,5 +382,5 @@ def normalize_replan_candidate(
     return NormalizedPlanCandidate(
         plan=revised,
         findings=tuple(findings),
-        substantive=_plan_signature(revised) != _plan_signature(current_plan),
+        substantive=plan_signature(revised) != plan_signature(current_plan),
     )

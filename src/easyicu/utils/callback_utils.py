@@ -3388,6 +3388,44 @@ def add_weight(
         # Weight doesn't exist, add it
         return add_concept(data, env, 'weight', var_name=var_name, **kwargs)
 
+def blood_cell_ratio_at_hour(
+    frame: pd.DataFrame, wbc: pd.DataFrame, *, id_columns: list[str],
+    value_column: str, time_column: str, wbc_time_column: str,
+    reason_column: str, unit_column: str | None = None,
+) -> pd.DataFrame:
+    """Match same-patient hourly concept bins on an explicit relative-hour axis.
+
+    No match is preferable to an unrelated old/future denominator. Callers must
+    normalize raw source clocks before this boundary; no unit is inferred here.
+    """
+    def hours(values):
+        if pd.api.types.is_timedelta64_dtype(values):
+            return values / pd.Timedelta(hours=1)
+        if not pd.api.types.is_numeric_dtype(values):
+            raise ValueError("WBC matching requires a relative-hour time axis")
+        return pd.to_numeric(values, errors="coerce")
+
+    result = frame.copy()
+    result["_wbc_hour"] = np.floor(hours(result[time_column]))
+    denominator = wbc[id_columns + [wbc_time_column, "wbc"]].copy()
+    denominator["_wbc_hour"] = np.floor(hours(denominator[wbc_time_column]))
+    denominator["wbc"] = pd.to_numeric(denominator.wbc, errors="coerce")
+    denominator = denominator.dropna(subset=id_columns + ["_wbc_hour"])
+    keys = id_columns + ["_wbc_hour"]
+    # WBC is already hourly aggregated by its owner. Conflicting duplicates do
+    # not establish one denominator and are explicitly unavailable.
+    grouped = denominator.groupby(keys, dropna=False).wbc
+    resolved = grouped.first().where(grouped.nunique(dropna=False) == 1).rename("_wbc_denominator").reset_index()
+    result = result.merge(resolved, on=keys, how="left", validate="many_to_one")
+    valid = np.isfinite(result._wbc_denominator) & (result._wbc_denominator > 0)
+    numerator = pd.to_numeric(result[value_column], errors="coerce")
+    result[value_column] = (100 * numerator / result._wbc_denominator).where(valid)
+    result[reason_column] = np.where(valid, "calculated_from_wbc", "missing_wbc_measurement")
+    if unit_column and unit_column in result:
+        result.loc[valid, unit_column] = "%"
+    return result.drop(columns=["_wbc_hour", "_wbc_denominator"])
+
+
 def blood_cell_ratio(
     data: pd.DataFrame,
     val_col: str = 'value',

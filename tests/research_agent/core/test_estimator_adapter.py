@@ -157,8 +157,14 @@ def test_adapter_builds_full_eight_row_panel_and_registers_claims(ra, tmp_path) 
     claim_fields = {claim.source_field for claim in evidence.numeric_claims()}
     assert "primary_point_estimate" in claim_fields
     assert "row_primary_point_estimate" not in claim_fields
-    assert "range_low" in claim_fields
-    assert "range_high" in claim_fields
+    # The tightened effect-identity rule (3fd5dfe16): adapter rows that do not
+    # declare a shared estimand/contrast/scale/unit cannot authorize a range
+    # claim. The panel keeps every row and its variant count but reports no
+    # range, and the identity-carrying path is covered by
+    # test_robustness_panel_effect_identity.py.
+    assert panel.range_low is None and panel.range_high is None
+    assert "range_low" not in claim_fields
+    assert "range_high" not in claim_fields
     assert f"row_{specs[0].spec_id}_point_estimate" not in claim_fields
 
 

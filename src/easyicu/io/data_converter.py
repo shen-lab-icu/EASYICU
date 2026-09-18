@@ -654,7 +654,7 @@ class DataConverter:
             tmp_file = status_file.with_name(
                 f"{status_file.name}.{os.getpid()}.{threading.get_ident()}.tmp"
             )
-            with open(tmp_file, 'w') as f:
+            with open(tmp_file, 'w', encoding="utf-8") as f:
                 f.write(payload)
             os.replace(tmp_file, status_file)
         except Exception as e:
@@ -1760,6 +1760,10 @@ class DataConverter:
                         f"Source changed during conversion: {csv_path}",
                     )
                 result["source_content_receipt"] = current_receipt
+                result["data_quality_status"] = (
+                    "partial" if result.get("bad_rows_skipped", 0) else "clean"
+                )
+                result["ready_for_analysis"] = result["data_quality_status"] == "clean"
             
         except Exception as e:
             result['status'] = ConversionStatus.FAILED
@@ -3266,6 +3270,7 @@ class DataConverter:
         evidence_root: Optional[str | Path] = None,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         cluster_by_patient: Optional[bool] = None,
+        register_manifest: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """
         Convert all CSV files to Parquet.
@@ -3273,11 +3278,18 @@ class DataConverter:
         Args:
             force: Force reconversion even if parquet exists
             write_manifest: Write ``conversion_manifest.json`` after status resolution
-            evidence_root: Optional research-agent run/work directory. When provided,
-                the manifest is also registered in an EvidenceStore.
+            evidence_root: Optional research-agent run/work directory. Kept for
+                backward compatibility; evidence binding now requires
+                ``register_manifest`` (protocol injection owned by the
+                research-agent side). When ``evidence_root`` is given without
+                ``register_manifest``, registration is skipped with a warning.
             progress_callback: Optional callable invoked once per converted file
                 with ``{'file', 'current', 'total', 'status', 'result'}``. Lets a
                 UI render per-file progress without re-implementing the loop.
+            register_manifest: Optional ``Callable[[dict], None]`` receiving
+                ``{'path': Path, 'manifest': dict, 'database': str,
+                'data_path': str}``. The research-agent side supplies an
+                EvidenceStore-backed callback; core never imports it directly.
             cluster_by_patient: Opt-in — after conversion, rewrite the
                 id-partitioned tables globally sorted by patient id with fine
                 row groups so patient-cohort queries prune row groups (see
@@ -3310,7 +3322,10 @@ class DataConverter:
             if self.verbose:
                 logger.info(f"No CSV files found in {self.data_path}")
             if write_manifest:
-                self.write_conversion_manifest({}, evidence_root=evidence_root)
+                self.write_conversion_manifest(
+                    {}, evidence_root=evidence_root,
+                    register_manifest=register_manifest,
+                )
             return {}
         
         # Filter files that need conversion
@@ -3328,7 +3343,10 @@ class DataConverter:
                 logger.info(f"All {len(csv_files)} files are already converted")
             results = self.get_conversion_status()
             if write_manifest:
-                self.write_conversion_manifest(results, evidence_root=evidence_root)
+                self.write_conversion_manifest(
+                    results, evidence_root=evidence_root,
+                    register_manifest=register_manifest,
+                )
             return results
         
         if self.verbose:
@@ -3396,7 +3414,9 @@ class DataConverter:
             manifest_results = self.get_conversion_status()
             manifest_results.update(results)
             self.write_conversion_manifest(
-                manifest_results, evidence_root=evidence_root
+                manifest_results,
+                evidence_root=evidence_root,
+                register_manifest=register_manifest,
             )
         return results
 
@@ -3424,6 +3444,7 @@ class DataConverter:
         auto_convert: bool = True,
         *,
         evidence_root: Optional[str | Path] = None,
+        register_manifest: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> bool:
         """
         Ensure all parquet files are ready for loading.
@@ -3451,6 +3472,7 @@ class DataConverter:
             self.write_conversion_manifest(
                 self.get_conversion_status(),
                 evidence_root=evidence_root,
+                register_manifest=register_manifest,
             )
             return True
         
@@ -3466,7 +3488,9 @@ class DataConverter:
         if self.verbose:
             logger.info(f"🔄 Converting {len(missing)} files to parquet...")
         
-        results = self.convert_all(evidence_root=evidence_root)
+        results = self.convert_all(
+            evidence_root=evidence_root, register_manifest=register_manifest
+        )
         
         # Check results
         failed = [name for name, r in results.items() if r.get('status') == ConversionStatus.FAILED]
@@ -3488,19 +3512,28 @@ class DataConverter:
         results: Optional[Dict[str, Dict[str, Any]]] = None,
         *,
         evidence_root: Optional[str | Path] = None,
+        register_manifest: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Path:
         """Write and optionally evidence-bind a conversion manifest.
 
         The manifest links raw CSV inputs, parquet outputs, status metadata,
         and SHA-256 hashes so downstream research-agent runs can cite the
         upstream standardisation step without exposing database-specific SQL.
+
+        Evidence binding is protocol-injected via ``register_manifest`` (owned
+        by the research-agent side), which receives ``{'path': Path,
+        'manifest': dict, 'database': str, 'data_path': str}``. ``evidence_root``
+        is kept for backward compatibility: when given without
+        ``register_manifest``, the previous lazy EvidenceStore registration is
+        attempted (deprecated; prefers ``register_manifest`` when both are
+        given). Core never imports EvidenceStore at module top level.
         """
 
         results = dict(results or self.get_conversion_status())
         # 完整 SHA256 需把每个输入/输出文件再整读一遍——在慢速挂载上代价极高。
         # 仅当本次 manifest 要做 research-agent 证据绑定时才计算密码学哈希；
         # 普通转换用 size+mtime 指纹即可。
-        hash_files = evidence_root is not None
+        hash_files = evidence_root is not None or register_manifest is not None
         manifest = {
             "schema_version": "easyicu.conversion_manifest/1",
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -3523,9 +3556,34 @@ class DataConverter:
         }
         path = self.data_path / self.CONVERSION_MANIFEST_FILE
         path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
-        if evidence_root is not None:
+        # Protocol injection: the research-agent side supplies register_manifest
+        # so core never needs EvidenceStore directly. `evidence_root` without a
+        # callback keeps the previous lazy-registration behavior for backward
+        # compatibility (deprecated path; existing tests depend on it).
+        if register_manifest is not None:
             try:
-                from easyicu.research_agent.authority.evidence_store import EvidenceStore
+                register_manifest(
+                    {
+                        "path": path,
+                        "manifest": manifest,
+                        "database": self.database,
+                        "data_path": str(self.data_path),
+                    }
+                )
+            except Exception as exc:
+                logger.warning(f"Failed to register conversion manifest evidence: {exc}")
+            if evidence_root is not None:
+                logger.debug(
+                    "register_manifest supplied; evidence_root=%s ignored "
+                    "for binding (manifest written to %s).",
+                    evidence_root,
+                    path,
+                )
+        elif evidence_root is not None:
+            try:
+                from easyicu.research_agent.authority.evidence_store import (
+                    EvidenceStore,
+                )
 
                 store = EvidenceStore(Path(evidence_root))
                 store.register_file(
@@ -3535,7 +3593,10 @@ class DataConverter:
                         "parquet outputs, conversion status, and SHA-256 hashes."
                     ),
                     source_path=path,
-                    aliases=["conversion_manifest", f"conversion_manifest_{self.database}"],
+                    aliases=[
+                        "conversion_manifest",
+                        f"conversion_manifest_{self.database}",
+                    ],
                     producer="easyicu.data_converter",
                     generation_mode="deterministic_conversion_manifest",
                     metadata={
@@ -3544,7 +3605,9 @@ class DataConverter:
                     },
                 )
             except Exception as exc:
-                logger.warning(f"Failed to register conversion manifest evidence: {exc}")
+                logger.warning(
+                    f"Failed to register conversion manifest evidence: {exc}"
+                )
         return path
 
     def _conversion_manifest_entry(
@@ -3565,6 +3628,9 @@ class DataConverter:
             "error": result.get("error"),
             "row_count": result.get("row_count"),
             "bad_rows_skipped": result.get("bad_rows_skipped", 0),
+            "data_quality_status": result.get("data_quality_status") or (
+                "partial" if result.get("bad_rows_skipped", 0) else "clean"
+            ),
             "shards": result.get("shards"),
             "partition_col": result.get("partition_col"),
             "partition_breaks": result.get("partition_breaks"),

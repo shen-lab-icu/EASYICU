@@ -371,7 +371,16 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
     if is_module:
         source = "module"
         layout = ["EasyICU module export", "EasyICU 模块导出"]
-        ready = True
+        from easyicu.research_agent.intake.export_package import (
+            ExportPackageError, inspect_export_layout,
+        )
+        try:
+            inspect_export_layout(path)
+        except (ExportPackageError, ValueError, OSError) as exc:
+            return {"ok": False, "path": str(path), "source": "module", "ready": False,
+                    "error": getattr(exc, "code", "export_layout_invalid"),
+                    "privacy": {"raw_rows_read": False, "patient_identifiers_returned": False}}
+        ready = True  # Layout only; scientific execution still requires sealed intake.
         tables = parquet_count + csv_count
     elif parquet_count > 0:
         source = "prepared"
@@ -426,11 +435,15 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
             source = "raw"
             ready = False
 
+    conversion_quality = _conversion_quality_for_path(path)
+    ready = ready and conversion_quality["data_quality_status"] == "clean"
     result: Dict[str, Any] = {
         "ok": True,
         "path": str(path),
         "db": db_label,
         "db_key": db_key,
+        "readiness_scope": "layout_only",
+        "conversion_quality": conversion_quality,
         "layout": layout,
         "source": source,
         "tables": tables,
@@ -482,11 +495,23 @@ def make_convert_runner(raw_path: str, database: str) -> Any:
                     "rows": res.get("row_count"),
                     "shards": res.get("shards"),
                     "error": res.get("error"),
+                    "bad_rows_skipped": res.get("bad_rows_skipped", 0),
+                    "data_quality_status": "partial" if res.get("bad_rows_skipped", 0) else "clean",
                     "counts": dict(counts),
                 }
             )
 
         results = converter.convert_all(force=False, progress_callback=cb)
+        # Include cached conversion receipts too: no callback is emitted for an
+        # entirely cached run, and skipped files can still contain dropped rows.
+        if hasattr(converter, "get_conversion_status"):
+            results = {**converter.get_conversion_status(), **results}
+        quality = _conversion_quality(results)
+        counts = {
+            "converted": sum(r.get("status") == ConversionStatus.COMPLETED for r in results.values()),
+            "failed": sum(r.get("status") == ConversionStatus.FAILED for r in results.values()),
+            "skipped": sum(r.get("status") == ConversionStatus.SKIPPED for r in results.values()),
+        }
         nothing = counts["converted"] == 0 and counts["failed"] == 0
         return {
             "converted": counts["converted"],
@@ -494,9 +519,39 @@ def make_convert_runner(raw_path: str, database: str) -> Any:
             "skipped": counts["skipped"],
             "total_files": len(results),
             "nothing_to_do": nothing,
+            **quality,
         }
 
     return runner
+
+
+def _conversion_quality(results: Mapping[str, Any]) -> Dict[str, Any]:
+    bad_rows = 0
+    incomplete = False
+    for result in results.values():
+        if not isinstance(result, Mapping):
+            raise ValueError("invalid conversion receipt")
+        count = result.get("bad_rows_skipped", 0)
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise ValueError("invalid dropped-row count")
+        bad_rows += count
+        incomplete |= result.get("status") not in {"completed", "skipped"}
+    partial = bad_rows > 0 or incomplete
+    return {"bad_rows_skipped": bad_rows, "data_quality_status": "partial" if partial else "clean",
+            "ready_for_analysis": not partial}
+
+
+def _conversion_quality_for_path(path: Path) -> Dict[str, Any]:
+    receipt = path / ".easyicu_conversion_status.json"
+    if not receipt.exists():
+        return _conversion_quality({})
+    try:
+        results = json.loads(receipt.read_text(encoding="utf-8"))
+        if not isinstance(results, dict):
+            raise ValueError("invalid conversion status")
+        return _conversion_quality(results)
+    except (ValueError, OSError):
+        return {"bad_rows_skipped": None, "data_quality_status": "unknown", "ready_for_analysis": False}
 
 
 _EXPORT_EXT = {"csv": "csv", "excel": "xlsx", "parquet": "parquet"}
@@ -2037,6 +2092,10 @@ def make_export_runner(
         import json
         import time
 
+        quality = _conversion_quality_for_path(Path(data_path).expanduser())
+        if quality["data_quality_status"] != "clean":
+            raise ExportCohortError("source_conversion_quality_incomplete", quality)
+
         # On this memory-tight machine the batch estimator over-predicts ~5x and
         # trips the low-mem path; force the fast in-process path (see CLAUDE.md).
         os.environ.setdefault("EASYICU_FORCE_INPROCESS_BATCH", "1")
@@ -2888,6 +2947,59 @@ def describe_export_source(raw_path: str) -> Dict[str, Any]:
     }
 
 
+def _research_pipeline_intake_diagnostic(exc: BaseException) -> Dict[str, Any]:
+    """Publish owner codes and remedies, never exception text or private names."""
+
+    code = getattr(exc, "code", None)
+    if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9_]{2,79}", code):
+        code = "export_package_unreadable"
+    messages = {
+        "export_manifest_json_invalid": "The export manifest is not valid UTF-8 JSON.",
+        "export_manifest_missing": "The export manifest could not be read.",
+        "manifest_marker_invalid": "The export manifest must be a regular file.",
+        "manifest_marker_missing": "The export package has no supported manifest.",
+        "manifest_concept_ids_invalid": (
+            "Manifest concept_ids must contain unique non-empty strings. Data files "
+            "require this declaration unless explicitly marked as zero-row structural placeholders."
+        ),
+        "manifest_file_missing": "A manifest-listed package member is missing.",
+        "manifest_path_escape": "A manifest member must name a file within the export package.",
+        "manifest_file_symlink": "A manifest member must not traverse a symbolic link.",
+        "manifest_file_mutated": "A package member changed during intake validation.",
+        "manifest_format_invalid": "The manifest or a package member declares an unsupported format.",
+        "manifest_schema_invalid": "The export manifest schema is unsupported.",
+        "manifest_row_count_mismatch": "A package member's row count differs from the manifest.",
+        "column_metadata_required": "The export package requires column metadata.",
+        "column_metadata_digest_mismatch": "Column metadata differs from its recorded digest.",
+        "export_package_unreadable": "One or more export package files could not be read.",
+    }
+    message = messages.get(code, f"The export package failed intake contract {code}.")
+    detail: Dict[str, Any] = {
+        "intake_error_code": code,
+        "intake_error_message": (
+            f"{message} Check the package contract and prepare a current export "
+            "from the source database if its contents are incomplete or outdated."
+        ),
+    }
+    member = getattr(exc, "member", None)
+    if isinstance(member, str) and member:
+        # These are public package-format names. Arbitrary relative names can
+        # still contain private identifiers; absolute/Windows paths and control
+        # characters must not be reflected either. Keep an exact digest coordinate
+        # for every other member instead of guessing which filenames are safe.
+        if member in {
+            *_MODULE_MANIFESTS,
+            *_EXPORT_METADATA_FILES,
+            "column_metadata.json",
+        }:
+            detail["intake_member"] = member
+        else:
+            detail["intake_member_sha256"] = hashlib.sha256(
+                member.encode("utf-8", errors="surrogatepass")
+            ).hexdigest()
+    return detail
+
+
 def validate_research_pipeline_source(
     raw_path: str,
     *,
@@ -2984,7 +3096,9 @@ def validate_research_pipeline_source(
                     "observed_binding_sha256": None,
                 },
             ) from exc
-        raise ExportCohortError("research_pipeline_manifest_invalid") from exc
+        raise ExportCohortError(
+            "research_pipeline_manifest_invalid", _research_pipeline_intake_diagnostic(exc)
+        ) from exc
 
     binding["binding_sha256"] = hashlib.sha256(
         json.dumps(

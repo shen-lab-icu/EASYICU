@@ -1,3 +1,4 @@
+/* Owner: Cross-DB setup widget. */
 /* Cross-DB setup owner: source selection, raw-root scan, sample budget, and route setup state. */
 (function () {
   'use strict';
