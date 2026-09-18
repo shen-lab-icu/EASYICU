@@ -114,3 +114,66 @@ def test_result_csv_row_is_scanned(tmp_path: Path):
 
 def test_missing_steps_dir_returns_empty(tmp_path: Path):
     assert primary_result_plausibility_errors(tmp_path) == []
+
+
+def test_low_events_per_variable_is_advised_not_failed(tmp_path: Path):
+    # Governance mining: sample-size justification in ~17% of top papers.
+    # 40 events over 9 covariates + exposure = EPV 4 -> advisory, while the
+    # physical-impossibility gate stays green (review finding: EPV adequacy
+    # is a judgment call, never a failed gate).
+    _summary(
+        tmp_path,
+        "02_adjusted_model",
+        {
+            "estimate": 1.4,
+            "p_value": 0.03,
+            "n": 500,
+            "n_events": 40,
+            "covariates": ";".join(f"x{i}" for i in range(9)),
+        },
+    )
+    assert primary_result_plausibility_errors(tmp_path) == []
+    notes = result_integrity.low_events_per_variable_advisories(tmp_path)
+    assert any("events per variable" in e for e in notes), notes
+
+
+def test_adequate_events_per_variable_is_clean(tmp_path: Path):
+    # 200 events over 4 covariates + exposure = EPV 40 -> silent everywhere.
+    _summary(
+        tmp_path,
+        "02_adjusted_model",
+        {
+            "estimate": 1.4,
+            "p_value": 0.03,
+            "n": 2000,
+            "n_events": 200,
+            "covariates": "age;sex;score;lactate",
+        },
+    )
+    assert primary_result_plausibility_errors(tmp_path) == []
+    assert result_integrity.low_events_per_variable_advisories(tmp_path) == []
+
+
+def test_epv_skips_rows_without_model_counts(tmp_path: Path):
+    # Descriptive rows without events/covariates must not trip the rule.
+    _summary(tmp_path, "00_table_one", {"n": 500, "n_missing_age": 12})
+    assert primary_result_plausibility_errors(tmp_path) == []
+    assert result_integrity.low_events_per_variable_advisories(tmp_path) == []
+
+
+def test_epv_prefers_explicit_parameter_count(tmp_path: Path):
+    # A declared n_parameters overrides the roster approximation (review
+    # finding: multi-df terms would otherwise undercount and leak).
+    _summary(
+        tmp_path,
+        "02_adjusted_model",
+        {
+            "estimate": 1.4,
+            "n": 2000,
+            "n_events": 200,
+            "covariates": "age;sex",
+            "n_parameters": 40,
+        },
+    )
+    notes = result_integrity.low_events_per_variable_advisories(tmp_path)
+    assert any("events per variable" in e for e in notes), notes

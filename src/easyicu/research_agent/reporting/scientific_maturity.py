@@ -1460,6 +1460,31 @@ def build_scientific_maturity_audit(
                 ),
             )
         )
+    if association_study and covariates:
+        from .result_integrity import low_events_per_variable_advisories
+
+        for advisory in low_events_per_variable_advisories(run_dir):
+            findings.append(
+                ScientificMaturityFinding(
+                    code="LOW_EVENTS_PER_VARIABLE",
+                    # The count is only a screening heuristic: roster names
+                    # can undercount model degrees of freedom, while a fixed
+                    # threshold cannot decide a reviewed design's adequacy.
+                    severity="minor",
+                    dimension="statistical_design",
+                    message=advisory,
+                    evidence_refs=[
+                        "manifest.json.current_plan_authority",
+                        "analysis_plan.json.model_requirements",
+                    ],
+                    remediation=(
+                        "Check the fitted parameter count and record the "
+                        "study-specific sample-size rationale for independent "
+                        "review. This heuristic does not itself decide whether "
+                        "the analysis or article is adequate."
+                    ),
+                )
+            )
     if association_study and not covariates:
         planner_owned = covariate_selection != "exact"
         findings.append(

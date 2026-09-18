@@ -159,6 +159,7 @@ from .research_context.builder import (
 )
 from .research_context.typed import parse_research_context_json
 from .gates.preplan import preplan_data_failure_reason, preplan_data_findings
+from .gates.literature_retrieval_gate import literature_retrieval_findings
 from .authority.context_numeric_claims import register_context_numeric_claims
 from .authority.declared_levels import bind_step_declared_levels
 from .authority.plan_input_closure import close_measurement_companion_inputs
@@ -410,6 +411,7 @@ from .literature import (
     render_hypothesis_blueprint_for_prompt,
 )
 from .planning.preplan_literature import prepare_preplan_literature
+from .planning.literature_retrieval_contract import contract_for_plan_finalization
 from .planning import literature_design_authority as _literature_design
 from .planning.preplan_know_how import (
     PlannerKnowHowBinding,
@@ -633,6 +635,138 @@ def _load_resume_state(run_dir: Path) -> Optional[Dict[str, Any]]:
     if not isinstance(legacy, dict):
         raise ValueError(f"Cannot resume from non-object checkpoint: {checkpoint}")
     return legacy
+
+
+# ---------------------------------------------------------------------------
+# Track 2 — minimal session-resume semantics (long-task memory).
+# ---------------------------------------------------------------------------
+#
+# These pure helpers decide which suspended/failed sessions from the
+# EvidenceStore-backed session event log may resume. They retain only valid
+# artefacts (intersection with currently verified evidence ids) and continue
+# the affected sessions; a session with no next executable diagnosis or with
+# attempts >= max_attempts is never resumed, so retries always terminate.
+
+SESSION_RESUME_DEFAULT_MAX_ATTEMPTS = 3
+
+_SESSION_RESUME_RESUMABLE_STATUSES = frozenset({"suspended", "failed"})
+
+
+@dataclass(frozen=True)
+class SessionResumeDecision:
+    """Which sessions resume, which artefacts are retained, whether to stop."""
+
+    resume_session_keys: Tuple[Tuple[str, str, str], ...] = ()
+    retained_evidence_ids: Tuple[str, ...] = ()
+    dropped_session_keys: Tuple[Tuple[str, str, str], ...] = ()
+    stopped: bool = True
+    reason: str = "no_resumable_sessions"
+
+
+def session_resume_decision(
+    *,
+    sessions: Sequence[Mapping[str, Any]],
+    valid_evidence_ids: Sequence[str],
+    max_attempts: int = SESSION_RESUME_DEFAULT_MAX_ATTEMPTS,
+) -> SessionResumeDecision:
+    """Decide session resume from log-derived session dicts.
+
+    Each ``sessions`` entry carries ``project_id``/``task_id``/``session_id``,
+    ``status``, ``attempt_count``, ``next_diagnosis`` and
+    ``valid_evidence_ids`` (as produced by ``SessionEventLog.to_dict``).
+    Only currently valid artefacts are retained. Sessions reaching the stop
+    condition (no next diagnosis, or attempts exhausted) are dropped and
+    never retried.
+    """
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be >= 1")
+    valid_set = {str(item) for item in (valid_evidence_ids or []) if str(item)}
+    resume: List[Tuple[str, str, str]] = []
+    dropped: List[Tuple[str, str, str]] = []
+    retained: List[str] = []
+    exhausted = False
+    for raw in sessions or []:
+        if not isinstance(raw, Mapping):
+            continue
+        key = (
+            str(raw.get("project_id") or ""),
+            str(raw.get("task_id") or ""),
+            str(raw.get("session_id") or ""),
+        )
+        if not all(key):
+            continue
+        status = str(raw.get("status") or "").strip().lower()
+        try:
+            attempts = int(raw.get("attempt_count", 0))
+        except (TypeError, ValueError):
+            attempts = 0
+        diagnosis = str(raw.get("next_diagnosis") or "").strip()
+        logged_valid = [
+            str(item)
+            for item in (raw.get("valid_evidence_ids") or [])
+            if str(item) in valid_set
+        ]
+        if status == "completed":
+            for evidence_id in logged_valid:
+                if evidence_id not in retained:
+                    retained.append(evidence_id)
+            continue
+        if status not in _SESSION_RESUME_RESUMABLE_STATUSES:
+            continue
+        if not diagnosis:
+            dropped.append(key)
+            exhausted = True
+            continue
+        if attempts >= max_attempts:
+            dropped.append(key)
+            exhausted = True
+            continue
+        resume.append(key)
+        for evidence_id in logged_valid:
+            if evidence_id not in retained:
+                retained.append(evidence_id)
+    if resume:
+        return SessionResumeDecision(
+            resume_session_keys=tuple(resume),
+            retained_evidence_ids=tuple(retained),
+            dropped_session_keys=tuple(dropped),
+            stopped=False,
+            reason="ready_to_resume",
+        )
+    if dropped and exhausted:
+        return SessionResumeDecision(
+            resume_session_keys=(),
+            retained_evidence_ids=tuple(retained),
+            dropped_session_keys=tuple(dropped),
+            stopped=True,
+            reason="stop_condition_reached",
+        )
+    return SessionResumeDecision(
+        resume_session_keys=(),
+        retained_evidence_ids=tuple(retained),
+        dropped_session_keys=tuple(dropped),
+        stopped=True,
+        reason="no_resumable_sessions",
+    )
+
+
+def session_resume_from_event_log_dict(
+    *,
+    log_dict: Mapping[str, Any],
+    valid_evidence_ids: Sequence[str],
+    max_attempts: int = SESSION_RESUME_DEFAULT_MAX_ATTEMPTS,
+) -> SessionResumeDecision:
+    """Restore a resume decision from a ``SessionEventLog.to_dict`` payload."""
+    if not isinstance(log_dict, Mapping):
+        raise ValueError("log_dict must be a mapping")
+    raw_sessions = log_dict.get("sessions", []) or []
+    if not isinstance(raw_sessions, Sequence):
+        raise ValueError("log_dict sessions must be a sequence")
+    return session_resume_decision(
+        sessions=[item for item in raw_sessions if isinstance(item, Mapping)],
+        valid_evidence_ids=valid_evidence_ids,
+        max_attempts=max_attempts,
+    )
 
 
 @dataclass(frozen=True)
@@ -2801,6 +2935,16 @@ class ResearchAgentPipeline:
                 _scientific_plan_gate.append_literature_design_authority_finding(
                     findings, plan, preplan_literature
                 )
+            if self._config.require_literature_retrieval_evidence:
+                findings.extend(
+                    literature_retrieval_findings(
+                        plan=plan,
+                        contract=contract_for_plan_finalization(
+                            plan=plan,
+                            preplan_literature=preplan_literature,
+                        ),
+                    )
+                )
             review_gate = _scientific_plan_gate.prepare_scientific_plan_review_gate(
                 context=context,
                 plan=plan,
@@ -3617,13 +3761,20 @@ class ResearchAgentPipeline:
         emit_progress: Callable[..., None],
         resume_from_step_id: Optional[str] = None,
         stop_after_step_id: Optional[str] = None,
+        session_event_log: Optional[Any] = None,
+        session_key: Optional[Tuple[str, str, str]] = None,
     ) -> "ExecutePhaseResult":
         """Delegate to :mod:`execution.phase`.
 
         The execute loop body is in :mod:`execution.phase` so this
         file does not have to host both the orchestration shell and the
         execute-phase guts. Late-imported to keep ``import pipeline``
-        free of a cycle.
+        free of a cycle. The Track 2 session pair passes straight
+        through; both absent preserves the legacy path. Production
+        callers supply the pair via ``resume_session_key`` on
+        :meth:`run`, resolved against the run's persisted session log;
+        lifecycle ownership (who starts/suspends with which key) stays
+        with the caller -- this delegate never auto-selects a session.
         """
         from .execution.phase import run_execute_phase
 
@@ -3639,6 +3790,8 @@ class ResearchAgentPipeline:
             emit_progress=emit_progress,
             resume_from_step_id=resume_from_step_id,
             stop_after_step_id=stop_after_step_id,
+            session_event_log=session_event_log,
+            session_key=session_key,
         )
 
     def _run_write_phase(
@@ -4185,6 +4338,7 @@ class ResearchAgentPipeline:
         manuscript_language: Optional[str] = None,
         resume_run_id: Optional[str] = None,
         resume_from_step_id: Optional[str] = None,
+        resume_session_key: Optional[Tuple[str, str, str]] = None,
         stop_after_step_id: Optional[str] = None,
         stop_after_analysis: bool = False,
         experiment_spec: Optional[Union[ExperimentSpec, Dict[str, Any]]] = None,
@@ -4223,6 +4377,8 @@ class ResearchAgentPipeline:
                 "client. Pass MockLLMClient() only for tests or deterministic "
                 "demo runs; the pipeline no longer falls back to mock silently."
             )
+        # Fail fast on a malformed session key before planning spends budget.
+        _validate_resume_session_key(resume_session_key)
         if resume_run_id and self._capability_runtime.activation is not None:
             raise ValueError(
                 "Approved capability activation requires a new run; resume is forbidden"
@@ -4779,6 +4935,7 @@ class ResearchAgentPipeline:
                 cohort_path=cohort_path,
                 notes=notes,
                 resume_from_step_id=resume_from_step_id,
+                resume_session_key=resume_session_key,
                 run_dir=run_dir,
                 run_id=run_id,
                 self=self,
@@ -6828,6 +6985,57 @@ def _pipeline_run___provenance_hook(
         )
 
 
+def _validate_resume_session_key(value: Any) -> Optional[Tuple[str, str, str]]:
+    """Validate an explicit resume session key early (fail fast on shape)."""
+
+    if value is None:
+        return None
+    if (
+        not isinstance(value, (tuple, list))
+        or len(value) != 3
+        or not all(isinstance(part, str) and part.strip() for part in value)
+    ):
+        raise ValueError(
+            "resume_session_key must be a (project_id, task_id, session_id) "
+            "triple of non-empty strings"
+        )
+    return (value[0], value[1], value[2])
+
+
+def _resolve_session_resume_inputs(
+    *, resume_session_key: Any, evidence: Any
+) -> Optional[Tuple[Any, Tuple[str, str, str]]]:
+    """Load the persisted session log for an explicit resume key.
+
+    Returns ``(log, key)`` or ``None`` when no resume was requested.  An
+    unknown session fails closed here (before any step runs); stop
+    conditions and completed sessions are enforced downstream by the
+    execute-phase filter, which sees the same log.  Lifecycle ownership
+    stays with the caller: this resolves explicit requests only and never
+    auto-selects a session.
+    """
+
+    key = _validate_resume_session_key(resume_session_key)
+    if key is None:
+        return None
+    if evidence is None:
+        raise ValueError(
+            "resume_session_key requires a plan result with an evidence "
+            "store to load the session log from"
+        )
+    from .authority.evidence_store import SessionEventLog
+
+    log = SessionEventLog.load_latest(evidence)
+    try:
+        log.get_session(*key)
+    except KeyError as exc:
+        raise ValueError(
+            f"no recorded session {key!r} in this run's session event log; "
+            "resume requires a prior suspended or failed session"
+        ) from exc
+    return (log, key)
+
+
 def _pipeline_run___execute_invoker(
     plan_result,
     *,
@@ -6835,6 +7043,7 @@ def _pipeline_run___execute_invoker(
     cohort_path: Any,
     notes: Any,
     resume_from_step_id: Any,
+    resume_session_key: Any = None,
     run_dir: Any,
     run_id: Any,
     self: Any,
@@ -6842,6 +7051,19 @@ def _pipeline_run___execute_invoker(
     staged_trajectory_binding: Any,
     stop_after_step_id: Any,
 ):
+    resolved = _resolve_session_resume_inputs(
+        resume_session_key=resume_session_key,
+        evidence=plan_result.evidence,
+    )
+    # Keep the legacy call shape byte-identical when no resume was
+    # requested: patched delegates in tests and downstream callers accept
+    # exactly the historical keywords.
+    resume_kwargs: dict[str, Any] = {}
+    if resolved is not None:
+        resume_kwargs = {
+            "session_event_log": resolved[0],
+            "session_key": resolved[1],
+        }
     return self._run_execute_phase(
         plan_result=plan_result,
         cohort_path=cohort_path,
@@ -6853,6 +7075,7 @@ def _pipeline_run___execute_invoker(
         emit_progress=_emit_progress,
         resume_from_step_id=resume_from_step_id,
         stop_after_step_id=stop_after_step_id,
+        **resume_kwargs,
     )
 
 

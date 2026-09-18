@@ -743,7 +743,14 @@ class CoderAgent:
             + _cohort_predicate_partition_safety_contract(step)
             + _typed_input_scope_contract(step)
             + family_primary_result_execution_guide(step)
-            + coder_method_capability_block()
+            # Render-only steps carry no method constraints (same predicate
+            # as the scoped context below): withholding the capability block
+            # keeps their transport budget independent of capability growth.
+            + (
+                coder_method_capability_block()
+                if coder_context_requires_method_constraints(step)
+                else ""
+            )
             + trajectory_phenotyping_code_contract(
                 context=context,
                 step=step,

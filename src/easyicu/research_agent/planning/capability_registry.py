@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import re
-from typing import TYPE_CHECKING, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
 from ..contracts.capability_ids import (
     CAPABILITY_FAMILIES,
@@ -743,6 +743,232 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Track 1 wiring: verified_tool promotion grants consulted at resolution.
+#
+# The registry below maps executor module paths to the (tool, version, card
+# digest) a reviewed promotion granted.  ``resolve_primary_capability``
+# annotates coherent verdicts whose executor holds a grant (see the
+# ``ba11f52`` note on PrimaryCapabilityVerdict: a label that reaches
+# run_status.json must match the real execution owner).  Asserted
+# ``verified_tool`` identities without a registered grant fail closed via
+# ``require_capability_tool_identity``.  Registration is explicit and empty
+# by default: nothing in the default runtime holds verified_tool until a
+# reviewed card plus a matching digest-bound decision is filed here.
+# Tool Card owners are imported lazily so this hot module stays free of the
+# methods/authority import cost at load time.
+
+_TOOL_CARD_GRANTS: Dict[str, Dict[str, str]] = {}
+
+
+def register_tool_card_grant(
+    *, executor_module: str, card: Any, decision: Any
+) -> Dict[str, str]:
+    """File a reviewed ``verified_tool`` grant for one executor module.
+
+    Fail-closed: incomplete cards, ungranted decisions, and decisions whose
+    digest does not match the card are all refused with ``ValueError``.
+    Returns a copy of the stored grant record.
+    """
+    from ..authority.tool_promotion import PromotionDecision
+    from ..methods.tool_card import tool_card_completeness_issues, tool_card_sha256
+
+    module = str(executor_module or "").strip()
+    if not module:
+        raise ValueError("executor_module must be a non-empty module path")
+    if not isinstance(decision, PromotionDecision):
+        raise ValueError("decision must be a PromotionDecision")
+    issues = tool_card_completeness_issues(card)
+    if issues:
+        raise ValueError(
+            "incomplete Tool Card cannot back a verified_tool grant: "
+            + "; ".join(issues)
+        )
+    if not bool(decision.granted_verified_tool):
+        raise ValueError("promotion decision did not grant verified_tool")
+    card_sha = tool_card_sha256(card)
+    if str(decision.card_sha256 or "") != card_sha:
+        raise ValueError("promotion decision digest does not match the Tool Card")
+    bound = str(getattr(decision, "executor_module", "") or "").strip()
+    if not bound:
+        raise ValueError(
+            "promotion decision binds no executor module; re-issue it with "
+            "an executor_module so the grant cannot be re-pointed"
+        )
+    if bound != module:
+        raise ValueError(
+            f"promotion decision binds {bound!r} but registration targets "
+            f"{module!r}: a grant cannot cover an unrelated executor"
+        )
+    record = {
+        "tool_name": str(card.tool_name),
+        "tool_version": str(card.tool_version),
+        "card_sha256": card_sha,
+    }
+    _TOOL_CARD_GRANTS[module] = record
+    return dict(record)
+
+
+def granted_tool_identity(executor_module: str) -> Optional[str]:
+    """Return ``"verified_tool"`` when a grant covers ``executor_module``.
+
+    Checked-in grant files load lazily on first query (once per process);
+    explicit test registrations always take effect immediately.
+    """
+    _ensure_checked_in_tool_cards_loaded()
+    if str(executor_module or "").strip() in _TOOL_CARD_GRANTS:
+        return "verified_tool"
+    return None
+
+
+def require_capability_tool_identity(
+    *, executor_module: str, asserted_identity: Optional[str]
+) -> Optional[str]:
+    """Enforce asserted tool identities at capability resolution.
+
+    No assertion returns the granted identity (or ``None``): everything
+    stays sandbox/candidate by default.  Asserting ``"verified_tool"``
+    without a registered grant raises ``ToolPromotionError``; any other
+    asserted string raises ``ValueError``.
+    """
+    from ..authority.tool_promotion import ToolPromotionError
+
+    granted = granted_tool_identity(executor_module)
+    asserted = str(asserted_identity or "").strip()
+    if not asserted:
+        return granted
+    if asserted == "verified_tool":
+        if granted == "verified_tool":
+            return granted
+        raise ToolPromotionError(
+            f"executor {executor_module!r} claims verified_tool without a "
+            "registered promotion grant"
+        )
+    raise ValueError(f"unknown tool identity: {asserted!r}")
+
+
+# ---------------------------------------------------------------------------
+# Checked-in Tool Card grants (first issuance: lasso / SHAP / PSM / RCS).
+#
+# Grant files live next to the kernels they cover at
+# ``methods/tool_cards/*.card.json`` and ship inside the wheel (see
+# ``package-data``).  Loading is lazy-once and validated fail-closed: an
+# incomplete card, an ungranted or digest-mismatched decision, or a malformed
+# envelope refuses the whole load so a half-registered promotion set can
+# never reach resolution.  Re-issuance procedure: rebuild the envelope with
+# the documented ceremony (fixtures referenced by the card's population
+# assumption), replace the JSON, and the loader tests re-verify digests.
+
+_TOOL_CARD_GRANT_FILE_SCHEMA = "easyicu.tool_card_grant_file/1"
+_TOOL_CARD_GRANT_ENVELOPE_KEYS = frozenset(
+    {"schema_version", "executor_module", "issued_note", "card", "decision"}
+)
+_CHECKED_IN_TOOL_CARDS_LOADED = False
+
+
+def _checked_in_tool_cards_dir() -> Any:
+    from pathlib import Path
+
+    return (
+        Path(__file__).resolve().parent.parent / "methods" / "tool_cards"
+    )
+
+
+def load_checked_in_tool_cards(
+    *, directory: Any = None
+) -> Dict[str, Dict[str, str]]:
+    """Validate checked-in grant files and register them.
+
+    Every file must carry a complete card, a granting digest-bound decision
+    and a non-empty executor module; any violation raises ``ValueError``
+    before anything is registered.  Returns the grant records keyed by
+    executor module.  Re-running refreshes the same records (idempotent).
+    """
+    import json
+    from pathlib import Path
+
+    from ..authority.tool_promotion import PromotionDecision
+    from ..methods.tool_card import (
+        ToolCard,
+        tool_card_completeness_issues,
+        tool_card_sha256,
+    )
+
+    root = Path(directory) if directory is not None else _checked_in_tool_cards_dir()
+    if not root.is_dir():
+        raise ValueError(f"tool card grant directory missing: {root}")
+    paths = sorted(root.glob("*.card.json"))
+    if not paths:
+        raise ValueError(f"no tool card grant files in {root}")
+    staged: list[tuple[str, ToolCard, PromotionDecision]] = []
+    for path in paths:
+        try:
+            envelope = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"unreadable tool card grant file {path}: {exc}") from exc
+        if not isinstance(envelope, dict) or set(envelope) - _TOOL_CARD_GRANT_ENVELOPE_KEYS:
+            raise ValueError(
+                f"malformed tool card grant envelope {path}: "
+                "expected keys "
+                f"{sorted(_TOOL_CARD_GRANT_ENVELOPE_KEYS)}"
+            )
+        if envelope.get("schema_version") != _TOOL_CARD_GRANT_FILE_SCHEMA:
+            raise ValueError(
+                f"unsupported tool card grant schema in {path}: "
+                f"{envelope.get('schema_version')!r}"
+            )
+        module = str(envelope.get("executor_module") or "").strip()
+        if not module:
+            raise ValueError(f"tool card grant file {path} lacks executor_module")
+        card = ToolCard.model_validate(envelope.get("card"), strict=True)
+        decision = PromotionDecision.model_validate(
+            envelope.get("decision"), strict=True
+        )
+        issues = tool_card_completeness_issues(card)
+        if issues:
+            raise ValueError(
+                f"checked-in card in {path} is incomplete: " + "; ".join(issues)
+            )
+        if not bool(decision.granted_verified_tool):
+            raise ValueError(
+                f"checked-in decision in {path} did not grant verified_tool"
+            )
+        if str(decision.card_sha256 or "") != tool_card_sha256(card):
+            raise ValueError(
+                f"checked-in decision digest mismatches the card in {path}"
+            )
+        staged.append((module, card, decision))
+    records: Dict[str, Dict[str, str]] = {}
+    for module, card, decision in staged:
+        records[module] = register_tool_card_grant(
+            executor_module=module, card=card, decision=decision
+        )
+    return records
+
+
+def _ensure_checked_in_tool_cards_loaded() -> None:
+    global _CHECKED_IN_TOOL_CARDS_LOADED
+    if _CHECKED_IN_TOOL_CARDS_LOADED:
+        return
+    load_checked_in_tool_cards()
+    _CHECKED_IN_TOOL_CARDS_LOADED = True
+
+
+def _granted_tool_note(capability: Any) -> str:
+    """Annotate coherent verdicts whose executor holds a promotion grant."""
+    for module in (
+        str(getattr(capability, "primary_runner_module", "") or ""),
+        str(getattr(capability, "scientific_validator_owner", "") or ""),
+    ):
+        record = _TOOL_CARD_GRANTS.get(module)
+        if module and record is not None:
+            return (
+                f"; tool_identity=verified_tool({module}"
+                f";card {record['card_sha256'][:8]})"
+            )
+    return ""
+
+
 def _assert_capability_vocabulary_matches_registry() -> None:
     """Keep stable persisted ids synchronized with executable registrations."""
 
@@ -1105,7 +1331,8 @@ def _verdict_for(
             else capability.scientific_validation
         ),
         failure_reason=failure_reason,
-        detail=detail,
+        detail=detail
+        + (_granted_tool_note(capability) if failure_reason is None else ""),
         capability=capability,
     )
 

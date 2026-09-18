@@ -302,6 +302,12 @@ class PipelineConfig:
     # must shape all seven design dimensions before Provider planning, and the
     # selected design must record its exact adopt/adapt/diverge decisions.
     require_literature_design_authority: bool = False
+    # Opt-in next-stage contract: plan finalization additionally requires
+    # conducted bibliographic retrieval bound to the three hard decisions
+    # (population / outcome-window / method applicability). Off by default;
+    # enable deliberately per run. Submission-profile binding is follow-up
+    # work (mirrors require_literature_design_authority minus profiles).
+    require_literature_retrieval_evidence: bool = False
     # A diagnostic Planner-only run may persist and expose the exact review
     # checkpoint, but no caller may resume it into Execute.
     planner_only: bool = False
@@ -708,6 +714,23 @@ class PipelineConfig:
             if self.planner_strategy != "progressive_v2":
                 raise ValueError(
                     "require_literature_design_authority requires progressive_v2"
+                )
+        if self.require_literature_retrieval_evidence:
+            if not self.enable_literature:
+                raise ValueError(
+                    "require_literature_retrieval_evidence requires enable_literature"
+                )
+            if not self.require_human_plan_review:
+                raise ValueError(
+                    "require_literature_retrieval_evidence requires "
+                    "require_human_plan_review; set "
+                    "require_human_plan_review=True (the Guided Web Copilot "
+                    "enables it) or leave retrieval evidence off for "
+                    "diagnostic runs"
+                )
+            if self.planner_strategy != "progressive_v2":
+                raise ValueError(
+                    "require_literature_retrieval_evidence requires progressive_v2"
                 )
         if self.planner_strategy not in {"monolithic_v1", "progressive_v2"}:
             raise ValueError(

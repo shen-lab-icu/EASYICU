@@ -287,6 +287,13 @@ __all__ = [
     "EvidenceStore",
     "EvidenceEnforcementMode",
     "EvidenceEnforcementError",
+    "SessionEventLog",
+    "SessionEventKind",
+    "SessionStatus",
+    "SessionEvent",
+    "SessionNode",
+    "TaskNode",
+    "ProjectNode",
     "ScientificClaim",
     "EasyICUCasePackage",
     "index_export_package",
@@ -434,6 +441,72 @@ __all__ = [
     "build_workflow_graph",
     "render_workflow_graph_mermaid",
     "build_execution_replay",
+    # Expansion tracks: tool promotion (T1), session resume (T2),
+    # retrieval evidence (T3), independent eval harness (T4)
+    "TOOL_CARD_SCHEMA",
+    "ToolCapabilityIdentity",
+    "SINGLE_RUN_IDENTITIES",
+    "ToolCard",
+    "ToolInputSpec",
+    "ToolOutputSpec",
+    "ValidationEvidence",
+    "has_recorded_origin_run",
+    "tool_card_sha256",
+    "tool_card_completeness_issues",
+    "TOOL_PROMOTION_DECISION_SCHEMA",
+    "COMPOSED_WORKFLOW_DECISION_SCHEMA",
+    "MIN_INDEPENDENT_REPRODUCTIONS",
+    "ToolPromotionError",
+    "ReproductionAttempt",
+    "ApplicabilityAttestation",
+    "PromotionDecision",
+    "ComposedWorkflowDecision",
+    "classify_single_run",
+    "decide_tool_promotion",
+    "require_verified_tool",
+    "decide_composed_workflow",
+    "require_composed_workflow",
+    "register_tool_card_grant",
+    "granted_tool_identity",
+    "require_capability_tool_identity",
+    "SESSION_RESUME_DEFAULT_MAX_ATTEMPTS",
+    "SessionResumeDecision",
+    "session_resume_decision",
+    "session_resume_from_event_log_dict",
+    "SESSION_STEP_RESUME_DEFAULT_MAX_ATTEMPTS",
+    "SessionStepResumePlan",
+    "plan_session_resume_steps",
+    "should_stop_session_retry",
+    "session_resume_step_filter",
+    "record_session_step_outcomes",
+    "require_session_log_pair",
+    "LITERATURE_RETRIEVAL_DECISIONS",
+    "LiteratureRetrievalContract",
+    "LiteratureRetrievalSearch",
+    "LiteratureRetrievalHit",
+    "LiteratureRetrievalSupport",
+    "contract_for_plan_finalization",
+    "contract_from_bundle",
+    "supports_from_plan",
+    "literature_retrieval_findings",
+    "literature_retrieval_gate_blocks",
+    "HeldOutItem",
+    "PreregistrationLock",
+    "lock_preregistration",
+    "FailureRecord",
+    "FailureLedger",
+    "RecoveryRecord",
+    "RecoveryCounts",
+    "count_recoveries",
+    "IndependentEvalReport",
+    "build_report",
+    "SCOPE_MATRIX",
+    "FAILURE_KINDS",
+    "RECOVERY_KINDS",
+    "is_excluded_from_denominator",
+    "PendingU4Decision",
+    "request_journal_quality_adjudication",
+    "U4_STATUS_PENDING",
     # Pipeline
     "ResearchAgentPipeline",
     "PipelineConfig",
@@ -855,6 +928,122 @@ def __getattr__(name: str):
         from .authority.scientific_claims import ScientificClaim
 
         return ScientificClaim
+    if name in {
+        "SessionEventLog",
+        "SessionEventKind",
+        "SessionStatus",
+        "SessionEvent",
+        "SessionNode",
+        "TaskNode",
+        "ProjectNode",
+    }:
+        from .authority import evidence_store as _session_evidence_store
+
+        return getattr(_session_evidence_store, name)
+    if name in {
+        "TOOL_CARD_SCHEMA",
+        "ToolCapabilityIdentity",
+        "SINGLE_RUN_IDENTITIES",
+        "ToolCard",
+        "ToolInputSpec",
+        "ToolOutputSpec",
+        "ValidationEvidence",
+        "has_recorded_origin_run",
+        "tool_card_sha256",
+        "tool_card_completeness_issues",
+    }:
+        from .methods import tool_card as _tool_card
+
+        return getattr(_tool_card, name)
+    if name in {
+        "TOOL_PROMOTION_DECISION_SCHEMA",
+        "COMPOSED_WORKFLOW_DECISION_SCHEMA",
+        "MIN_INDEPENDENT_REPRODUCTIONS",
+        "ToolPromotionError",
+        "ReproductionAttempt",
+        "ApplicabilityAttestation",
+        "PromotionDecision",
+        "ComposedWorkflowDecision",
+        "classify_single_run",
+        "decide_tool_promotion",
+        "require_verified_tool",
+        "decide_composed_workflow",
+        "require_composed_workflow",
+    }:
+        from .authority import tool_promotion as _tool_promotion
+
+        return getattr(_tool_promotion, name)
+    if name in {
+        "register_tool_card_grant",
+        "granted_tool_identity",
+        "require_capability_tool_identity",
+    }:
+        from .planning import capability_registry as _capability_registry
+
+        return getattr(_capability_registry, name)
+    if name in {
+        "SESSION_RESUME_DEFAULT_MAX_ATTEMPTS",
+        "SessionResumeDecision",
+        "session_resume_decision",
+        "session_resume_from_event_log_dict",
+    }:
+        from . import pipeline as _resume_pipeline
+
+        return getattr(_resume_pipeline, name)
+    if name in {
+        "SESSION_STEP_RESUME_DEFAULT_MAX_ATTEMPTS",
+        "SessionStepResumePlan",
+        "plan_session_resume_steps",
+        "should_stop_session_retry",
+        "session_resume_step_filter",
+        "record_session_step_outcomes",
+        "require_session_log_pair",
+    }:
+        from .execution import phase as _resume_phase
+
+        return getattr(_resume_phase, name)
+    if name in {
+        "LITERATURE_RETRIEVAL_DECISIONS",
+        "LiteratureRetrievalContract",
+        "LiteratureRetrievalSearch",
+        "LiteratureRetrievalHit",
+        "LiteratureRetrievalSupport",
+        "contract_for_plan_finalization",
+        "contract_from_bundle",
+        "supports_from_plan",
+    }:
+        from .planning import literature_retrieval_contract as _retrieval_contract
+
+        return getattr(_retrieval_contract, name)
+    if name in {
+        "literature_retrieval_findings",
+        "literature_retrieval_gate_blocks",
+    }:
+        from .gates import literature_retrieval_gate as _retrieval_gate
+
+        return getattr(_retrieval_gate, name)
+    if name in {
+        "HeldOutItem",
+        "PreregistrationLock",
+        "lock_preregistration",
+        "FailureRecord",
+        "FailureLedger",
+        "RecoveryRecord",
+        "RecoveryCounts",
+        "count_recoveries",
+        "IndependentEvalReport",
+        "build_report",
+        "SCOPE_MATRIX",
+        "FAILURE_KINDS",
+        "RECOVERY_KINDS",
+        "is_excluded_from_denominator",
+        "PendingU4Decision",
+        "request_journal_quality_adjudication",
+        "U4_STATUS_PENDING",
+    }:
+        from .evaluation import independent_eval_harness as _eval_harness
+
+        return getattr(_eval_harness, name)
     if name in {
         "EasyICUCasePackage",
         "index_export_package",

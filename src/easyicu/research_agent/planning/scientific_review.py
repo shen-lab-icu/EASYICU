@@ -18,7 +18,7 @@ import json
 import math
 import re
 from datetime import datetime, timezone
-from typing import Any, Literal, Mapping, Optional
+from typing import Any, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -553,6 +553,67 @@ def _sensitivity_specs(context: ResearchContext) -> tuple[Any, ...]:
 
     preferences = context.user_preferences
     return tuple(getattr(preferences, "sensitivity_specs", ()) or ())
+
+
+_FIRST_STAY_RULE_METHODS = frozenset(
+    {
+        "non_readmission_restriction",
+        *EXECUTABLE_METHODS_BY_STRATEGY["first_stay"],
+    }
+)
+
+
+def _repeated_stay_step_declared(step: Any, context: Any) -> bool:
+    """Whether one step explicitly declares its repeat-stay rule."""
+
+    if _method_head(step) in _FIRST_STAY_RULE_METHODS:
+        return True
+    for requirement in step.model_requirements or ():
+        if getattr(requirement, "dependence", None) is not None:
+            return True
+    distribution = getattr(step, "exposure_outcome_distribution_spec", None)
+    if (
+        distribution is not None
+        and getattr(distribution, "schema_version", "")
+        == "easyicu.exposure_outcome_distribution/3"
+    ):
+        # Counts-only descriptive projection: counts are counts, and no
+        # independence-assuming estimate is produced here. (Independent-row
+        # Table 1 tests stay blocked elsewhere.)
+        return True
+    if context is None:
+        return False
+    patient_group = context_patient_group_authority(context)
+    return bool(
+        _method_head(step)
+        in {"signed_landmark_restricted_cubic_spline", "time_varying_exposure_model"}
+        and patient_group is not None
+        and patient_group.group_source in (step.inputs or ())
+    )
+
+
+def _repeated_stay_rule_declared(
+    plan: Optional[AnalysisPlan],
+    context: Any = None,
+    sensitivity_executable_axes: Sequence[str] = (),
+) -> bool:
+    """Whether the repeat-stay rule is explicitly declared somewhere.
+
+    Checkable exits only, no prose inference (review finding: the
+    remediation promises that confirming clustered/mixed handling clears
+    the finding, so those confirmations must count here too): a first-stay
+    method, a bound dependence contract, an executed repeated-stays
+    sensitivity axis, a counts-only descriptive projection, or a reviewed
+    signed runtime bound to patient grouping.
+    """
+
+    if plan is None:
+        return False
+    if any(
+        _repeated_stay_step_declared(step, context) for step in plan.steps
+    ):
+        return True
+    return "readmission" in set(sensitivity_executable_axes or ())
 
 
 def repeated_unit_design_closed(
@@ -2272,6 +2333,70 @@ def build_plan_scientific_review(
                     "one-stay, clustered, or mixed estimator. The researcher reviews "
                     "the resulting plan as a whole and is not asked to choose the "
                     "statistical implementation."
+                ),
+                remediation_route="agent_plan_revision",
+            )
+        )
+    elif repeats and not _repeated_stay_rule_declared(
+        plan, context, sensitivity.get("executable", ())
+    ):
+        findings.append(
+            PlanScientificFinding(
+                code="REPEATED_STAY_DEDUP_UNDECLARED",
+                severity="major",
+                dimension="icu_clinical_design",
+                message=(
+                    "Repeated stays are possible and the design closes them, but "
+                    "no step declares the repeat-stay rule: first-stay "
+                    "restriction or confirmed clustered/mixed handling with a "
+                    "reported repeat structure. Silence here is how repeated "
+                    "stays leak into independence-assuming estimates."
+                ),
+                evidence_refs=["research_context.json", "analysis_plan.json"],
+                remediation=(
+                    "Declare the rule explicitly: restrict to one stay per "
+                    "patient with an audit step, or confirm the clustered/mixed "
+                    "handling and report the repeat-stay structure (patients "
+                    "with >1 stay, distribution of stay counts)."
+                ),
+                remediation_route="agent_plan_revision",
+            )
+        )
+    model_requirement_sets = [
+        requirement.analysis_set
+        for step in plan.steps
+        for requirement in (step.model_requirements or ())
+    ]
+    if (
+        model_requirement_sets
+        and all(value == "complete_case" for value in model_requirement_sets)
+        and "missing" not in set(sensitivity.get("executable", ()))
+        and not any(
+            getattr(spec, "missing_override", None)
+            for spec in plan.robustness_specs
+        )
+    ):
+        findings.append(
+            PlanScientificFinding(
+                code="MISSINGNESS_UNEXAMINED_COMPLETE_CASE",
+                severity="major",
+                dimension="statistical_design",
+                message=(
+                    "Every model requirement runs complete-case with no "
+                    "missing-data sensitivity axis and no missing override: "
+                    "the plan never examines what complete-case deletion or "
+                    "any single-value handling assumes away."
+                ),
+                evidence_refs=[
+                    "analysis_plan.json.model_requirements",
+                    "analysis_plan.json.robustness_specs",
+                ],
+                remediation=(
+                    "Add a missing-data sensitivity axis (multiple imputation "
+                    "or a declared complete-case examination) or a locked "
+                    "missing override with variables; single-value handling "
+                    "in generated code must additionally pass the "
+                    "single-imputation preflight rule."
                 ),
                 remediation_route="agent_plan_revision",
             )

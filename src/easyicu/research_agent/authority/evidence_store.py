@@ -52,6 +52,7 @@ from __future__ import annotations
 import enum
 import copy
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 import hashlib
 import json
 import os
@@ -3468,6 +3469,545 @@ def _binding_caveat(record: EvidenceRecord, *, verbose: bool = False) -> str:
     return ""
 
 
+# ---------------------------------------------------------------------------
+# Track 2 — long-task memory: projects/tasks/sessions + typed session event log
+# ---------------------------------------------------------------------------
+#
+# The three-level model (project → task → session) and its append-only typed
+# event log live here so every suspend/resume decision is backed by the same
+# EvidenceStore authority that owns artefacts. Session snapshots persist via
+# ``EvidenceStore.register_json`` (kind="log"); no sidecar path bypasses it.
+#
+# Typed events (R6 自主恢复三类证据 + 失败保留要求):
+#   * attempt_rationale  — 尝试依据: why this attempt runs with these inputs.
+#   * completed_artifact — 已完成产物: evidence_id + producing step retained.
+#   * failure_reason     — 失败原因: error type/message/step for a failed attempt.
+#   * next_diagnosis     — 下一可执行诊断: one concrete executable next action.
+# Suspend/resume are status transitions on the session node; the four typed
+# events above are the audit trail that justifies them.
+
+
+class SessionEventKind(str, enum.Enum):
+    """Typed session-log event kinds (Track 2 long-task memory)."""
+
+    ATTEMPT_RATIONALE = "attempt_rationale"
+    COMPLETED_ARTIFACT = "completed_artifact"
+    FAILURE_REASON = "failure_reason"
+    NEXT_DIAGNOSIS = "next_diagnosis"
+
+
+class SessionStatus(str, enum.Enum):
+    """Lifecycle status of one session node."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    SUSPENDED = "suspended"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+_SESSION_RESUMABLE_STATUSES = frozenset(
+    {SessionStatus.SUSPENDED.value, SessionStatus.FAILED.value}
+)
+
+_SESSION_EVENT_LOG_EVIDENCE_ID = "session_event_log"
+_SESSION_EVENT_LOG_FILENAME = "session_event_log.json"
+
+
+def _require_session_component(value: str, *, label: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{label} must be a non-empty string")
+    return _path_component(text, label=label)
+
+
+@dataclass
+class SessionEvent:
+    """One typed, append-only session-log event."""
+
+    sequence: int
+    event_id: str
+    project_id: str
+    task_id: str
+    session_id: str
+    kind: str
+    payload: Dict[str, Any] = field(default_factory=dict)
+    created_at: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "sequence": int(self.sequence),
+            "event_id": str(self.event_id),
+            "project_id": str(self.project_id),
+            "task_id": str(self.task_id),
+            "session_id": str(self.session_id),
+            "kind": str(self.kind),
+            "payload": dict(self.payload or {}),
+            "created_at": str(self.created_at or ""),
+        }
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> "SessionEvent":
+        if not isinstance(raw, Mapping):
+            raise ValueError("session event payload must be a mapping")
+        kind = str(raw.get("kind") or "")
+        if kind not in {member.value for member in SessionEventKind}:
+            raise ValueError(f"unknown session event kind: {kind!r}")
+        return cls(
+            sequence=int(raw.get("sequence", 0)),
+            event_id=str(raw.get("event_id") or ""),
+            project_id=str(raw.get("project_id") or ""),
+            task_id=str(raw.get("task_id") or ""),
+            session_id=str(raw.get("session_id") or ""),
+            kind=kind,
+            payload=dict(raw.get("payload") or {}),
+            created_at=str(raw.get("created_at") or ""),
+        )
+
+
+@dataclass
+class SessionNode:
+    """One suspendable/resumable session under a task."""
+
+    project_id: str
+    task_id: str
+    session_id: str
+    status: str = SessionStatus.PENDING.value
+    attempt_count: int = 0
+    valid_evidence_ids: List[str] = field(default_factory=list)
+    failure_reason: Optional[str] = None
+    next_diagnosis: Optional[str] = None
+
+    def key(self) -> Tuple[str, str, str]:
+        return (self.project_id, self.task_id, self.session_id)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "project_id": self.project_id,
+            "task_id": self.task_id,
+            "session_id": self.session_id,
+            "status": self.status,
+            "attempt_count": int(self.attempt_count),
+            "valid_evidence_ids": list(self.valid_evidence_ids),
+            "failure_reason": self.failure_reason,
+            "next_diagnosis": self.next_diagnosis,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> "SessionNode":
+        if not isinstance(raw, Mapping):
+            raise ValueError("session node payload must be a mapping")
+        return cls(
+            project_id=str(raw.get("project_id") or ""),
+            task_id=str(raw.get("task_id") or ""),
+            session_id=str(raw.get("session_id") or ""),
+            status=str(raw.get("status") or SessionStatus.PENDING.value),
+            attempt_count=int(raw.get("attempt_count", 0)),
+            valid_evidence_ids=[
+                str(item) for item in (raw.get("valid_evidence_ids") or [])
+            ],
+            failure_reason=raw.get("failure_reason"),
+            next_diagnosis=raw.get("next_diagnosis"),
+        )
+
+
+@dataclass
+class TaskNode:
+    """One task grouping sessions under a project."""
+
+    project_id: str
+    task_id: str
+    status: str = SessionStatus.PENDING.value
+    session_ids: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "project_id": self.project_id,
+            "task_id": self.task_id,
+            "status": self.status,
+            "session_ids": list(self.session_ids),
+        }
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> "TaskNode":
+        if not isinstance(raw, Mapping):
+            raise ValueError("task node payload must be a mapping")
+        return cls(
+            project_id=str(raw.get("project_id") or ""),
+            task_id=str(raw.get("task_id") or ""),
+            status=str(raw.get("status") or SessionStatus.PENDING.value),
+            session_ids=[str(item) for item in (raw.get("session_ids") or [])],
+        )
+
+
+@dataclass
+class ProjectNode:
+    """Top level of the Track 2 three-level task model."""
+
+    project_id: str
+    status: str = SessionStatus.PENDING.value
+    task_ids: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "project_id": self.project_id,
+            "status": self.status,
+            "task_ids": list(self.task_ids),
+        }
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> "ProjectNode":
+        if not isinstance(raw, Mapping):
+            raise ValueError("project node payload must be a mapping")
+        return cls(
+            project_id=str(raw.get("project_id") or ""),
+            status=str(raw.get("status") or SessionStatus.PENDING.value),
+            task_ids=[str(item) for item in (raw.get("task_ids") or [])],
+        )
+
+
+class SessionEventLog:
+    """Append-only typed event log for projects/tasks/sessions.
+
+    Durability goes through the owning :class:`EvidenceStore` via
+    :meth:`save` / :meth:`load_latest`; there is no sidecar writer that
+    bypasses evidence authority.
+    """
+
+    def __init__(self, store: "EvidenceStore") -> None:
+        self._store = store
+        self._events: List[SessionEvent] = []
+        self._sessions: Dict[Tuple[str, str, str], SessionNode] = {}
+        self._tasks: Dict[Tuple[str, str], TaskNode] = {}
+        self._projects: Dict[str, ProjectNode] = {}
+        self._sequence = 0
+
+    # -- hierarchy ------------------------------------------------------
+    def start_project(self, project_id: str) -> ProjectNode:
+        safe_id = _require_session_component(project_id, label="project_id")
+        node = self._projects.get(safe_id)
+        if node is None:
+            node = ProjectNode(project_id=safe_id)
+            self._projects[safe_id] = node
+        return node
+
+    def start_task(self, project_id: str, task_id: str) -> TaskNode:
+        safe_project = _require_session_component(project_id, label="project_id")
+        safe_task = _require_session_component(task_id, label="task_id")
+        self.start_project(safe_project)
+        key = (safe_project, safe_task)
+        node = self._tasks.get(key)
+        if node is None:
+            node = TaskNode(project_id=safe_project, task_id=safe_task)
+            self._tasks[key] = node
+        project = self._projects[safe_project]
+        if safe_task not in project.task_ids:
+            project.task_ids.append(safe_task)
+        return node
+
+    def _require_session(self, project_id: str, task_id: str, session_id: str) -> SessionNode:
+        key = (
+            _require_session_component(project_id, label="project_id"),
+            _require_session_component(task_id, label="task_id"),
+            _require_session_component(session_id, label="session_id"),
+        )
+        node = self._sessions.get(key)
+        if node is None:
+            raise KeyError(f"unknown session: {key}")
+        return node
+
+    # -- typed events ----------------------------------------------------
+    def _append(
+        self,
+        *,
+        project_id: str,
+        task_id: str,
+        session_id: str,
+        kind: SessionEventKind,
+        payload: Optional[Mapping[str, Any]] = None,
+    ) -> SessionEvent:
+        safe_project = _require_session_component(project_id, label="project_id")
+        safe_task = _require_session_component(task_id, label="task_id")
+        safe_session = _require_session_component(session_id, label="session_id")
+        self._sequence += 1
+        event = SessionEvent(
+            sequence=self._sequence,
+            event_id=f"session_event_{self._sequence:06d}",
+            project_id=safe_project,
+            task_id=safe_task,
+            session_id=safe_session,
+            kind=kind.value,
+            payload=dict(payload or {}),
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+        self._events.append(event)
+        return event
+
+    def start_session(
+        self,
+        project_id: str,
+        task_id: str,
+        session_id: str,
+        *,
+        attempt_rationale: str,
+    ) -> SessionEvent:
+        """Begin (or re-attempt) a session; records its 尝试依据."""
+        rationale = str(attempt_rationale or "").strip()
+        if not rationale:
+            raise ValueError("attempt_rationale must be a non-empty string")
+        safe_project = _require_session_component(project_id, label="project_id")
+        safe_task = _require_session_component(task_id, label="task_id")
+        safe_session = _require_session_component(session_id, label="session_id")
+        self.start_task(safe_project, safe_task)
+        key = (safe_project, safe_task, safe_session)
+        node = self._sessions.get(key)
+        if node is None:
+            node = SessionNode(
+                project_id=safe_project, task_id=safe_task, session_id=safe_session
+            )
+            self._sessions[key] = node
+        task = self._tasks[(safe_project, safe_task)]
+        if safe_session not in task.session_ids:
+            task.session_ids.append(safe_session)
+        node.status = SessionStatus.RUNNING.value
+        node.attempt_count += 1
+        return self._append(
+            project_id=safe_project,
+            task_id=safe_task,
+            session_id=safe_session,
+            kind=SessionEventKind.ATTEMPT_RATIONALE,
+            payload={"attempt": node.attempt_count, "rationale": rationale},
+        )
+
+    def log_completed_artifact(
+        self,
+        project_id: str,
+        task_id: str,
+        session_id: str,
+        *,
+        evidence_id: str,
+        produced_by_step: str = "",
+    ) -> SessionEvent:
+        """Record one 已完成产物 retained for resume."""
+        safe_evidence = _require_session_component(evidence_id, label="evidence_id")
+        node = self._require_session(project_id, task_id, session_id)
+        if safe_evidence not in node.valid_evidence_ids:
+            node.valid_evidence_ids.append(safe_evidence)
+        return self._append(
+            project_id=node.project_id,
+            task_id=node.task_id,
+            session_id=node.session_id,
+            kind=SessionEventKind.COMPLETED_ARTIFACT,
+            payload={"evidence_id": safe_evidence, "produced_by_step": produced_by_step},
+        )
+
+    def log_failure_reason(
+        self,
+        project_id: str,
+        task_id: str,
+        session_id: str,
+        *,
+        reason: str,
+        step_id: str = "",
+    ) -> SessionEvent:
+        """Record one 失败原因; the session keeps prior valid artefacts."""
+        text = str(reason or "").strip()
+        if not text:
+            raise ValueError("failure reason must be a non-empty string")
+        node = self._require_session(project_id, task_id, session_id)
+        node.status = SessionStatus.FAILED.value
+        node.failure_reason = text
+        return self._append(
+            project_id=node.project_id,
+            task_id=node.task_id,
+            session_id=node.session_id,
+            kind=SessionEventKind.FAILURE_REASON,
+            payload={"reason": text, "step_id": step_id},
+        )
+
+    def log_next_diagnosis(
+        self,
+        project_id: str,
+        task_id: str,
+        session_id: str,
+        *,
+        diagnosis: str,
+        step_id: str = "",
+    ) -> SessionEvent:
+        """Record one 下一可执行诊断: the single next executable action."""
+        text = str(diagnosis or "").strip()
+        if not text:
+            raise ValueError("next diagnosis must be a non-empty string")
+        node = self._require_session(project_id, task_id, session_id)
+        node.next_diagnosis = text
+        return self._append(
+            project_id=node.project_id,
+            task_id=node.task_id,
+            session_id=node.session_id,
+            kind=SessionEventKind.NEXT_DIAGNOSIS,
+            payload={"diagnosis": text, "step_id": step_id},
+        )
+
+    def fail_session(
+        self,
+        project_id: str,
+        task_id: str,
+        session_id: str,
+        *,
+        reason: str,
+        next_diagnosis: str,
+        step_id: str = "",
+    ) -> Tuple[SessionEvent, SessionEvent]:
+        """Retain valid artefacts while recording failure + next diagnosis."""
+        first = self.log_failure_reason(
+            project_id, task_id, session_id, reason=reason, step_id=step_id
+        )
+        second = self.log_next_diagnosis(
+            project_id, task_id, session_id, diagnosis=next_diagnosis, step_id=step_id
+        )
+        return first, second
+
+    def complete_session(
+        self, project_id: str, task_id: str, session_id: str
+    ) -> SessionNode:
+        node = self._require_session(project_id, task_id, session_id)
+        node.status = SessionStatus.COMPLETED.value
+        return node
+
+    def suspend_session(
+        self, project_id: str, task_id: str, session_id: str
+    ) -> SessionNode:
+        """Suspend a running/failed session; typed events already explain why."""
+        node = self._require_session(project_id, task_id, session_id)
+        if node.status not in {
+            SessionStatus.RUNNING.value,
+            SessionStatus.FAILED.value,
+            SessionStatus.PENDING.value,
+        }:
+            raise ValueError(f"cannot suspend session in status {node.status!r}")
+        node.status = SessionStatus.SUSPENDED.value
+        return node
+
+    def resume_session(
+        self,
+        project_id: str,
+        task_id: str,
+        session_id: str,
+        *,
+        attempt_rationale: str,
+    ) -> SessionEvent:
+        """Resume a suspended/failed session with a fresh 尝试依据 attempt."""
+        node = self._require_session(project_id, task_id, session_id)
+        if node.status not in {
+            SessionStatus.SUSPENDED.value,
+            SessionStatus.FAILED.value,
+        }:
+            raise ValueError(f"cannot resume session in status {node.status!r}")
+        return self.start_session(
+            node.project_id,
+            node.task_id,
+            node.session_id,
+            attempt_rationale=attempt_rationale,
+        )
+
+    # -- queries ----------------------------------------------------------
+    def get_session(
+        self, project_id: str, task_id: str, session_id: str
+    ) -> SessionNode:
+        return self._require_session(project_id, task_id, session_id)
+
+    def session_attempts(self, project_id: str, task_id: str, session_id: str) -> int:
+        return self._require_session(project_id, task_id, session_id).attempt_count
+
+    def events_for_session(
+        self, project_id: str, task_id: str, session_id: str
+    ) -> List[SessionEvent]:
+        node = self._require_session(project_id, task_id, session_id)
+        return [
+            event
+            for event in self._events
+            if (event.project_id, event.task_id, event.session_id) == node.key()
+        ]
+
+    def resumable_sessions(self) -> List[SessionNode]:
+        """Sessions that may resume: suspended/failed with a next diagnosis."""
+        return [
+            node
+            for node in self._sessions.values()
+            if node.status in _SESSION_RESUMABLE_STATUSES
+            and str(node.next_diagnosis or "").strip()
+        ]
+
+    def events(self) -> List[SessionEvent]:
+        return list(self._events)
+
+    # -- persistence through EvidenceStore ----------------------------------
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "schema_version": "easyicu.session_event_log/1",
+            "sequence": self._sequence,
+            "projects": [node.to_dict() for node in self._projects.values()],
+            "tasks": [node.to_dict() for node in self._tasks.values()],
+            "sessions": [node.to_dict() for node in self._sessions.values()],
+            "events": [event.to_dict() for event in self._events],
+        }
+
+    @classmethod
+    def from_dict(cls, store: "EvidenceStore", raw: Mapping[str, Any]) -> "SessionEventLog":
+        if not isinstance(raw, Mapping):
+            raise ValueError("session event log payload must be a mapping")
+        log = cls(store)
+        for item in raw.get("projects", []) or []:
+            node = ProjectNode.from_dict(item)
+            log._projects[node.project_id] = node
+        for item in raw.get("tasks", []) or []:
+            node = TaskNode.from_dict(item)
+            log._tasks[(node.project_id, node.task_id)] = node
+        for item in raw.get("sessions", []) or []:
+            node = SessionNode.from_dict(item)
+            log._sessions[node.key()] = node
+        for item in raw.get("events", []) or []:
+            event = SessionEvent.from_dict(item)
+            log._events.append(event)
+        log._sequence = int(raw.get("sequence", len(log._events)))
+        log._sequence = max(log._sequence, len(log._events))
+        return log
+
+    def save(self):  # type: ignore[no-untyped-def]
+        """Persist this log as evidence; returns the new EvidenceRecord."""
+        return self._store.register_json(
+            kind="log",
+            description="Track 2 session event log (typed attempt/failure/diagnosis events).",
+            payload=self.to_dict(),
+            filename=_SESSION_EVENT_LOG_FILENAME,
+            evidence_id=_SESSION_EVENT_LOG_EVIDENCE_ID,
+            producer="session_event_log",
+            generation_mode="deterministic_host",
+            on_sha_change="new_id",
+        )
+
+    @classmethod
+    def load_latest(cls, store: "EvidenceStore") -> "SessionEventLog":
+        """Restore the newest persisted session log, or an empty log."""
+        matches = [
+            record
+            for record in store.records()
+            if record.evidence_id == _SESSION_EVENT_LOG_EVIDENCE_ID
+            or record.evidence_id.startswith(f"{_SESSION_EVENT_LOG_EVIDENCE_ID}_v")
+        ]
+        for record in reversed(matches):
+            try:
+                text = (store.root / record.relative_path).read_text(encoding="utf-8")
+                payload = json.loads(text)
+            except (OSError, ValueError, TypeError):
+                continue
+            try:
+                return cls.from_dict(store, payload)
+            except (ValueError, TypeError):
+                continue
+        return cls(store)
+
+
 __all__ = [
     "EvidenceStore",
     "evidence_artifact_basename_stem",
@@ -3480,4 +4020,11 @@ __all__ = [
     "DerivedFormulaError",
     "sha256_of_file",
     "sha256_of_bytes",
+    "SessionEventKind",
+    "SessionStatus",
+    "SessionEvent",
+    "SessionNode",
+    "TaskNode",
+    "ProjectNode",
+    "SessionEventLog",
 ]
