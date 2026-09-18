@@ -6,7 +6,8 @@ Kernel module under test:
 Reproduction-honesty note (read before reusing this card): the
 ``independent_reproduction`` evidence below is a *deterministic rerun on
 fixed data under a different process-global RNG state with the kernel's
-own seed configuration pinned*.  It verifies byte-reproducibility; it is
+own seed configuration pinned*.  It verifies exact local reruns and the
+portable synthetic-origin receipt; it is
 NOT a fresh data draw and NOT a different knot placement.  Knot count and
 positions are modelling choices: any reuse must report them alongside the
 numbers (the typed results always carry ``knots``), and the boundary
@@ -43,6 +44,7 @@ from easyicu.research_agent.methods.rcs_dose_response import (
 )
 from easyicu.research_agent.methods.tool_card import (
     ToolCard,
+    synthetic_origin_sha256,
     tool_card_completeness_issues,
     tool_card_sha256,
 )
@@ -79,6 +81,33 @@ def _card_fixture() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 def _card_origin() -> RCSFitResult:
     x, y, cov = _card_fixture()
     return rcs_fit(y, rcs_basis(x, n_knots=4), cov)
+
+
+def _card_origin_payload() -> dict:
+    x, y, cov = _card_fixture()
+    fit = rcs_fit(y, rcs_basis(x, n_knots=4), cov)
+    fit_output = {k: v for k, v in fit.to_json().items() if k != "basis_sha256"}
+    return {
+        "kind": "rcs_dose_response_origin/1",
+        "inputs": {"x": x.tolist(), "y": y.tolist(), "cov": cov.tolist()},
+        "fit": fit_output,
+        "nonlinearity": nonlinearity_wald_test(fit).to_json(),
+        "curve": predict_curve(fit, 20.0, 80.0, n_grid=50).to_json(),
+    }
+
+
+def _card_origin_digest() -> str:
+    return synthetic_origin_sha256(_card_origin_payload())
+
+
+def test_rcs_card_origin_binds_curve_and_nonlinearity() -> None:
+    payload = _card_origin_payload()
+    baseline = synthetic_origin_sha256(payload)
+    payload["curve"]["predicted"][0] += 0.01
+    assert synthetic_origin_sha256(payload) != baseline
+    payload = _card_origin_payload()
+    payload["nonlinearity"]["statistic"] += 1.0
+    assert synthetic_origin_sha256(payload) != baseline
 
 
 # ---------------------------------------------------------------------------
@@ -447,15 +476,17 @@ def test_rcs_tool_card_promotion_and_grant() -> None:
     _clear_grant()
     try:
         origin = _card_origin()
-        origin_digest = rcs_sha256(origin)
+        origin_digest = _card_origin_digest()
         assert nonlinearity_wald_test(origin).p_value < 1e-6
 
         np.random.seed(999)
         try:
             rerun = _card_origin()
+            rerun_digest = _card_origin_digest()
         finally:
             np.random.seed()
-        assert rcs_sha256(rerun) == origin_digest
+        assert rcs_sha256(rerun) == rcs_sha256(origin)
+        assert rerun_digest == origin_digest
 
         card = _rcs_card(origin_digest)
         assert tool_card_completeness_issues(card) == []
@@ -467,7 +498,7 @@ def test_rcs_tool_card_promotion_and_grant() -> None:
                 ReproductionAttempt.model_validate(
                     {
                         "attempt_id": "rcs-repro-1",
-                        "output_sha256": rcs_sha256(rerun),
+                        "output_sha256": rerun_digest,
                         "passed": True,
                         "independent": True,
                     },
@@ -532,7 +563,7 @@ def test_rcs_checked_in_envelope_loads_and_origin_reproduces(tmp_path) -> None:
     registry_module._TOOL_CARD_GRANTS.clear()
     registry_module._CHECKED_IN_TOOL_CARDS_LOADED = False
     try:
-        origin_digest = rcs_sha256(_card_origin())
+        origin_digest = _card_origin_digest()
         envelope = _build_rcs_envelope(origin_digest)
 
         staged = tmp_path / "cards"

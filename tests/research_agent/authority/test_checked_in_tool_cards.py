@@ -3,7 +3,7 @@
 The four ``methods/tool_cards/*.card.json`` envelopes are the first
 checked-in promotion set (lasso / SHAP / PSM / RCS). This file proves the loader
 registers exactly them, refuses tampering, and — for PSM — that the
-envelope's origin digest reproduces byte-identical from the documented
+envelope's portable synthetic-origin digest reproduces from the documented
 issuance fixture (a mirror of the kernel's own synthetic fixture, kept
 inline so this test needs no cross-test imports).
 
@@ -24,7 +24,11 @@ import numpy as np
 import pytest
 
 from easyicu.research_agent.methods import propensity_weighting as pw
-from easyicu.research_agent.methods.tool_card import ToolCard, tool_card_sha256
+from easyicu.research_agent.methods.tool_card import (
+    ToolCard,
+    synthetic_origin_sha256,
+    tool_card_sha256,
+)
 from easyicu.research_agent.planning import capability_registry as registry_module
 
 PSM_EXECUTOR_MODULE = "easyicu.research_agent.methods.propensity_weighting"
@@ -78,6 +82,22 @@ def _read_envelope(tool_name: str) -> dict:
     return json.loads((root / f"{tool_name}.card.json").read_text(encoding="utf-8"))
 
 
+def _psm_card_origin_digest(treated, covariates, matched, iptw) -> str:
+    matching_output = {k: v for k, v in matched.to_json().items() if k != "digest"}
+    iptw_output = {k: v for k, v in iptw.to_json().items() if k != "digest"}
+    return synthetic_origin_sha256(
+        {
+            "kind": "psm_confounding_adjustment_origin/1",
+            "inputs": {
+                "treatment": treated.tolist(),
+                "covariates": covariates.tolist(),
+            },
+            "matching": matching_output,
+            "iptw": iptw_output,
+        }
+    )
+
+
 def test_checked_in_cards_register_all_verified_grants(_isolated_registry) -> None:
     records = registry_module.load_checked_in_tool_cards()
     assert sorted(records) == sorted(EXPECTED_MODULES)
@@ -96,7 +116,7 @@ def test_checked_in_psm_origin_reproduces_live(_isolated_registry) -> None:
         treated, covariates, ps, covariate_names=["x1", "x2"]
     )
     iptw = pw.compute_iptw_weights(treated, ps)
-    suite_digest = pw.adjustment_suite_digest(matched=matched, iptw=iptw)
+    suite_digest = _psm_card_origin_digest(treated, covariates, matched, iptw)
     envelope = _read_envelope("psm_confounding_adjustment")
     assert suite_digest == envelope["card"]["origin_output_sha256"]
     card = ToolCard.model_validate(envelope["card"], strict=True)
@@ -122,6 +142,9 @@ def test_psm_origin_moves_when_weights_move(_isolated_registry) -> None:
     assert pw.adjustment_suite_digest(
         matched=matched, iptw=truncated
     ) != pw.adjustment_suite_digest(matched=matched, iptw=plain)
+    assert _psm_card_origin_digest(
+        treated, covariates, matched, truncated
+    ) != _psm_card_origin_digest(treated, covariates, matched, plain)
 
 
 def test_loader_rejects_tampered_envelope(_isolated_registry, tmp_path) -> None:
