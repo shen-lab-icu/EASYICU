@@ -81,12 +81,48 @@ DIRECT_REFRESHABLE_MODULES = frozenset(
         "respiratory",
         "sofa1_score",
         "sofa2_score",
+        # 2026-09-18 v6 per governance "改哪提哪": directly changed
+        # chemistry (crea 15->25), blood_gas (po2 40->20), vasopressors
+        # (norepi_equiv median->sum, adh 0-0.15, phn 0-15). Additive only;
+        # existing six entries and all downstream logic unchanged.
+        "chemistry",
+        "blood_gas",
+        "vasopressors",
     }
 )
 MODULE_DEPENDENCY_CLOSURE: dict[str, tuple[str, ...]] = {
     "demographics": ("demographics",),
     "outcome": ("outcome",),
     "renal": ("renal",),
+    # 2026-09-18 v6: chemistry feeds renal (KDIGO via crea) and both SOFA
+    # renal/liver/coag components; blood_gas feeds respiratory (PAFI via
+    # po2+fio2) and SOFA_resp; vasopressors feed SOFA_cardio via the 60-min
+    # rates (norepi_equiv itself is NOT a SOFA input). Each expands to the
+    # affected module plus its derived consumers, mirroring the respiratory
+    # precedent above. Sepsis labels follow their SOFA scores.
+    "chemistry": (
+        "chemistry",
+        "renal",
+        "sofa1_score",
+        "sofa2_score",
+        "sepsis3_sofa1",
+        "sepsis3_sofa2",
+    ),
+    "blood_gas": (
+        "blood_gas",
+        "respiratory",
+        "sofa1_score",
+        "sofa2_score",
+        "sepsis3_sofa1",
+        "sepsis3_sofa2",
+    ),
+    "vasopressors": (
+        "vasopressors",
+        "sofa1_score",
+        "sofa2_score",
+        "sepsis3_sofa1",
+        "sepsis3_sofa2",
+    ),
     "respiratory": (
         "respiratory",
         "sofa1_score",
@@ -223,7 +259,8 @@ def _validate_modules(modules: Sequence[str]) -> tuple[str, ...]:
     if disallowed:
         raise ModuleRefreshError(
             "This audited refresh entry point currently allows only demographics, "
-            "outcome, renal, respiratory, sofa1_score and sofa2_score; "
+            "outcome, renal, respiratory, sofa1_score, sofa2_score, chemistry, "
+            "blood_gas and vasopressors; "
             f"got disallowed modules: {sorted(disallowed)}"
         )
     return selected
@@ -2427,7 +2464,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=[],
         help=(
             "Raw-derived module to refresh (demographics, outcome, renal, "
-            "respiratory or sofa1_score/sofa2_score); repeatable."
+            "respiratory, sofa1_score/sofa2_score, chemistry, blood_gas or "
+            "vasopressors); repeatable."
         ),
     )
     parser.add_argument(

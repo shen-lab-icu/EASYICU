@@ -28,6 +28,10 @@ def test_selected_module_refresh_is_limited_to_correctness_modules() -> None:
     assert refresher._validate_modules(["respiratory"]) == ("respiratory",)
     assert refresher._validate_modules(["sofa1_score"]) == ("sofa1_score",)
     assert refresher._validate_modules(["sofa2_score"]) == ("sofa2_score",)
+    # 2026-09-18 v6 additive: directly changed chemistry/blood_gas/vasopressors.
+    assert refresher._validate_modules(["chemistry"]) == ("chemistry",)
+    assert refresher._validate_modules(["blood_gas"]) == ("blood_gas",)
+    assert refresher._validate_modules(["vasopressors"]) == ("vasopressors",)
     assert refresher._validate_modules(["renal", "respiratory"]) == (
         "renal",
         "respiratory",
@@ -68,6 +72,31 @@ def test_respiratory_refresh_expands_to_score_and_sepsis_dependencies() -> None:
         "sofa2_score",
         "sepsis3_sofa2",
     )
+    # 2026-09-18 v6 additive closures: chemistry->renal+scores+sepsis,
+    # blood_gas->respiratory+scores+sepsis, vasopressors->scores+sepsis.
+    assert set(refresher._expand_module_dependency_closure(["chemistry"])) == {
+        "chemistry",
+        "renal",
+        "sofa1_score",
+        "sofa2_score",
+        "sepsis3_sofa1",
+        "sepsis3_sofa2",
+    }
+    assert set(refresher._expand_module_dependency_closure(["blood_gas"])) == {
+        "blood_gas",
+        "respiratory",
+        "sofa1_score",
+        "sofa2_score",
+        "sepsis3_sofa1",
+        "sepsis3_sofa2",
+    }
+    assert set(refresher._expand_module_dependency_closure(["vasopressors"])) == {
+        "vasopressors",
+        "sofa1_score",
+        "sofa2_score",
+        "sepsis3_sofa1",
+        "sepsis3_sofa2",
+    }
 
 
 def test_release_plan_is_database_by_module_under_fixed_8gib_contract() -> None:
