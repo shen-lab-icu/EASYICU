@@ -14,6 +14,7 @@ the ``verified_tool`` identity is decided by the host in
 from __future__ import annotations
 
 import hashlib
+import math
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -135,6 +136,29 @@ def tool_card_sha256(card: ToolCard) -> str:
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
+def synthetic_origin_sha256(payload: object) -> str:
+    """Bind a synthetic Tool Card origin across supported numeric runtimes.
+
+    Only this *issuance receipt* rounds finite floats to eight significant
+    digits; kernel result digests and patient-facing evidence remain exact.
+    Callers must explicitly supply the fixture inputs and every output claimed
+    by the card, omitting nested exact-result digests that encode BLAS jitter.
+    """
+
+    def portable(value: object) -> object:
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise ValueError("synthetic origin contains a non-finite float")
+            return float(format(value, ".8g"))
+        if isinstance(value, dict):
+            return {key: portable(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [portable(item) for item in value]
+        return value
+
+    return hashlib.sha256(_canonical_json(portable(payload)).encode("utf-8")).hexdigest()
+
+
 def tool_card_completeness_issues(card: ToolCard) -> list[str]:
     """Return human-readable gaps blocking any promotion of ``card``.
 
@@ -191,6 +215,7 @@ __all__ = [
     "ToolOutputSpec",
     "ValidationEvidence",
     "has_recorded_origin_run",
+    "synthetic_origin_sha256",
     "tool_card_completeness_issues",
     "tool_card_sha256",
 ]
