@@ -463,6 +463,27 @@ def test_project_research_artifact_route_uses_path_free_identity(monkeypatch) ->
     assert invalid.status_code == 422
 
 
+def test_project_research_artifact_download_is_digest_pinned_review_export(monkeypatch) -> None:
+    fake = FakeService()
+    seen = []
+
+    def download(**kwargs):
+        seen.append(kwargs)
+        return {"content": b'{"kind":"easyicu_review_export"}', "media_type": "application/json"}
+
+    fake.get_research_artifact_download = download
+    monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)
+    client = TestClient(app)
+    digest = "a" * 64
+    url = "/api/copilot/pi/projects/project-a/runs/run_a/artifacts/result_tables.json/download"
+    response = client.get(f"{url}?expected_sha256={digest}")
+    assert response.status_code == 200
+    assert response.headers["content-disposition"] == 'attachment; filename="result_tables.review.json"'
+    assert response.json()["kind"] == "easyicu_review_export"
+    assert seen == [{"project_id": "project-a", "run_id": "run_a", "artifact_name": "result_tables.json", "expected_sha256": digest}]
+    assert client.get(url).status_code == 422
+
+
 def test_project_research_evidence_route_requires_id_and_digest(monkeypatch) -> None:
     fake = FakeService()
     monkeypatch.setattr(route_module, "get_pi_copilot_service", lambda: fake)

@@ -120,7 +120,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20260728-demo-mode1" in index_html
-    assert "js/api.js?v=20260909-research-displays1" in index_html
+    assert "js/api.js?v=20260919-result-export1" in index_html
 
 
 def test_floating_copilot_launcher_is_removed_but_shell_hooks_survive() -> None:
@@ -183,7 +183,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260827-no-fab1" in index_html
-    assert "js/app.js?v=20260908-conversation-files1" in index_html
+    assert "js/app.js?v=20260919-skill-hub1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
     assert "js/screens-extraction.js?v=20260914-source-refresh1" in index_html
     assert "js/screens-agent.js?" not in index_html
@@ -335,7 +335,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260908-conversation-files1" in index_html
+    assert "js/app.js?v=20260919-skill-hub1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 
 
@@ -354,7 +354,7 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
     assert "打开唯一的 EasyICU 研究助手对话" in _static_js("app.js")
     assert "Page guide" not in dock_js
     assert (
-        "js/screens-guided-projects.js?v=20260908-conversation-files1" in index_html
+        "js/screens-guided-projects.js?v=20260919-skill-hub2" in index_html
     )
     assert (
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
@@ -398,7 +398,7 @@ def test_native_page_guide_backend_is_retired_from_the_shell_entry() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "page-guide dock intentionally is not constructed" in dock_js
-    assert "js/api.js?v=20260909-research-displays1" in index_html
+    assert "js/api.js?v=20260919-result-export1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
 
 
@@ -552,11 +552,11 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     redesign_css = _static_css("redesign.css")
 
     assert "css/guided.css?v=20260829-readability2" in index_html
-    assert "css/guided-projects.css?v=20260902-type-scale2" in index_html
+    assert "css/guided-projects.css?v=20260918-audit3" in index_html
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
-    assert "js/api.js?v=20260909-research-displays1" in index_html
+    assert "js/api.js?v=20260919-result-export1" in index_html
     assert (
-        "js/screens-guided-projects.js?v=20260908-conversation-files1" in index_html
+        "js/screens-guided-projects.js?v=20260919-skill-hub2" in index_html
     )
     provider_pos = index_html.find("screens-guided-idea-provider.js")
     projects_pos = index_html.find("screens-guided-projects.js")
@@ -852,7 +852,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     assert (
         render_pos < main_pos
     ), "screens-agent-render.js must load before screens-guided-pi-run-files.js"
-    assert "js/screens-agent-render.js?v=20260914-reader-lineage1" in index_html
+    assert "js/screens-agent-render.js?v=20260919-science-review1" in index_html
     assert "css/agent-plan.css?v=20260829-plan-flow1" in index_html
 
 
@@ -1484,7 +1484,7 @@ def test_native_idea_mining_backend_remains_wired_without_a_second_primary_entry
     assert "css/ideas.css?v=20260803-owner-migration" in index_html
     assert "css/shell.css?v=20260812-route-a11y1" in index_html
     assert "js/icons.js?v=20260901-composer-plus1" in index_html
-    assert "js/app.js?v=20260908-conversation-files1" in index_html
+    assert "js/app.js?v=20260919-skill-hub1" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
@@ -2300,7 +2300,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260727-patient-demo2" in index_html
-    assert "api.js?v=20260909-research-displays1" in index_html
+    assert "api.js?v=20260919-result-export1" in index_html
     assert "screens-dict.js?v=20260830-viz-final1" in index_html
     assert "deepdive.css?v=20260830-viz-final1" in index_html
 
@@ -2539,7 +2539,8 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "Created a new project folder" not in guided_project_surface
     assert 'class="gd-top"' not in guided_js
     assert 'class="gd-home-link"' not in guided_js
-    assert '<button class="gd-rail-brand" type="button" data-open="entry"' in projects_js
+    assert '<button type="button" class="gpi-global-brand" data-open="entry"' in projects_js
+    assert '<button class="gd-rail-brand" type="button" data-gpi-show-projects' in projects_js
     assert 'data-project-rail-toggle' in projects_js
     assert 'class="gd-rail-restore"' in projects_js
     assert 'class="gd-rail-collapse"' in projects_js
@@ -2547,7 +2548,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "isProjectRailCollapsed" in projects_js
     assert "gd-project-rail-collapsed" in guided_js
     assert 'data-open="entry"' in projects_js
-    assert "Back to EasyICU home" in projects_js
+    assert "t('Home', '主页')" in projects_js
     assert "${t('Exit', '退出')}" not in guided_js
     assert 'class="gd-rail-utils"' in projects_js
     assert 'data-open="settings"' in projects_js
@@ -2604,17 +2605,17 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20260909-research-displays1" in index_html
-    assert "screens-guided-projects.js?v=20260908-conversation-files1" in index_html
+    assert "api.js?v=20260919-result-export1" in index_html
+    assert "screens-guided-projects.js?v=20260919-skill-hub2" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
     assert "screens-guided.js?v=20260903-session-deeplink2" in index_html
     assert "guided.css?v=20260829-readability2" in index_html
-    assert "guided-projects.css?v=20260902-type-scale2" in index_html
+    assert "guided-projects.css?v=20260918-audit3" in index_html
     assert "gd-rail-heading" in projects_js
-    assert "gd-name\">${t('EasyICU ICU Research Assistant', 'EasyICU 重症科研助手')}</span>" in projects_js
+    assert "<small>${t('Project', '项目')}</small>${esc(activeProject)}" in projects_js
     assert "${t('New / open research project', '新建 / 打开研究项目')}" in projects_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js

@@ -2196,6 +2196,7 @@ class PiCopilotService:
             started = self._get_record(record.session_id)
             started.active_message_job_id = job.id
             started.last_turn_status = "running"
+            started.conversation_updated_at = utc_now()
             started.last_turn_allowed_actions = sorted(requested_actions)
             self._save_record(started)
             if regenerate_target is not None:
@@ -2665,22 +2666,59 @@ class PiCopilotService:
                 if row.project_id == clean_project_id
                 and (not clean_agent_mode or row.agent_mode == clean_agent_mode)
             ][:max_items]
-        records = [
-            self._reconcile_replay_execution(
-                self._scoped_record(row.session_id, project_id=clean_project_id)
+        if records:
+            authoritative_context_id = self.project_store.assert_matches(
+                clean_project_id,
+                records[0].binding.study_context_id,
             )
-            for row in records
-        ]
+            for row in records[1:]:
+                if row.binding.study_context_id != authoritative_context_id:
+                    self.project_store.assert_matches(
+                        clean_project_id,
+                        row.binding.study_context_id,
+                    )
+        # The task rail is a read-only index.  It must not scan host-action
+        # replay or reconcile process-local jobs for every saved conversation;
+        # the selected task's get_session call performs that authoritative
+        # check.  Keeping the list path metadata-only prevents one long
+        # scientific trace from delaying every project switch.
         sessions: list[Dict[str, Any]] = []
         for row in records:
-            public = self._public_session(row, include_replay=False)
-            replay = self.replay_store.snapshot(
-                session_id=row.session_id,
-                project_id=clean_project_id,
-                limit=1,
+            public = {
+                "session_id": row.session_id,
+                "project_id": row.project_id,
+                "title": row.title,
+                "automatic_title": _session_title_is_automatic(row.title),
+                "agent_mode": row.agent_mode,
+                "language": row.language,
+                "thinking_level": row.thinking_level,
+                "message_count": 0,
+                "binding": row.binding.model_dump(mode="json"),
+                "data_source_authorization": (
+                    row.data_source_authorization.model_dump(mode="json")
+                ),
+                "research_provider": row.research_provider.public_projection(),
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+                "last_message_job_id": row.last_message_job_id,
+                "active_message_job_id": row.active_message_job_id,
+                "last_turn_status": row.last_turn_status,
+                "pinned_for_presentation": row.pinned_for_presentation,
+            }
+            has_history = bool(
+                row.active_message_job_id
+                or row.last_message_job_id
+                or row.last_turn_status
             )
-            turn_page = replay.get("turn_page") or {}
-            public["history_turn_count"] = int(turn_page.get("total") or 0)
+            public["has_history"] = has_history
+            # The exact replay depth belongs to the selected task response.
+            # Returning null here prevents the task index from parsing a large
+            # scientific trace merely to render its left-rail label.
+            public["history_turn_count"] = None if has_history else 0
+            public["last_activity_at"] = str(
+                row.conversation_updated_at
+                or ("" if has_history else row.created_at)
+            )
             sessions.append(public)
         return {
             "ok": True,
@@ -3812,6 +3850,34 @@ class PiCopilotService:
             },
         }
 
+    def get_research_artifact_download(
+        self,
+        *,
+        project_id: str,
+        run_id: str,
+        artifact_name: str,
+        expected_sha256: str,
+    ) -> Dict[str, Any]:
+        """Export the governed browser projection, not private host JSON."""
+
+        preview = self.get_research_artifact(
+            project_id=project_id,
+            run_id=run_id,
+            artifact_name=artifact_name,
+            expected_sha256=expected_sha256,
+        )
+        exported = {
+            "kind": "easyicu_review_export",
+            "source_artifact": preview["artifact"],
+            "run_id": preview["run_id"],
+            "payload": preview["payload"],
+            "governance": preview["governance"],
+        }
+        return {
+            "content": json.dumps(exported, ensure_ascii=False, indent=2).encode("utf-8"),
+            "media_type": "application/json",
+        }
+
     def get_research_evidence_preview(
         self,
         *,
@@ -4028,15 +4094,43 @@ class PiCopilotService:
             if replay_turns and isinstance(replay_turns[-1], Mapping)
             else {}
         )
+        latest_conversation_turn = next(
+            (
+                row
+                for row in reversed(replay_turns)
+                if isinstance(row, Mapping) and row.get("kind") != "host_action"
+            ),
+            {},
+        )
+        conversation_activity = str(
+            record.conversation_updated_at
+            or latest_replay_turn.get("started_at")
+            or latest_conversation_turn.get("started_at")
+            or record.created_at
+        )
+        has_history = bool(
+            record.active_message_job_id
+            or record.last_message_job_id
+            or record.last_turn_status
+            or latest_conversation_turn
+        )
         return {
             "session_id": record.session_id,
             "project_id": record.project_id,
             "title": record.title,
+            "automatic_title": _session_title_is_automatic(record.title),
             "agent_mode": record.agent_mode,
             "language": record.language,
             "thinking_level": state.get("thinking_level") or record.thinking_level,
             "model": state.get("model"),
             "message_count": int(state.get("message_count") or 0),
+            "has_history": has_history,
+            "history_turn_count": sum(
+                1
+                for row in replay_turns
+                if isinstance(row, Mapping) and row.get("kind") != "host_action"
+            ),
+            "last_activity_at": conversation_activity,
             "streaming": bool(state.get("streaming")),
             "enabled_tools": (
                 list(state.get("enabled_tools") or [])[:40]

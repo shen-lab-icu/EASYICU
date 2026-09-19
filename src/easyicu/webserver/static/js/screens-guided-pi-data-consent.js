@@ -74,23 +74,15 @@
     }
     if (current.status !== 'confirmed' || current.confirmation_mode !== 'reuse_project_source') return '';
     const selected = selectedScopeAction(current);
-    const choice = (action, en, zh) => {
-      const isSelected = action === selected;
-      const selectedText = isSelected ? ` · ${ctx.tr('Selected', '已选择')}` : '';
-      return `<span class="btn${isSelected ? ' primary' : ''}" role="listitem"${isSelected ? ' aria-current="true"' : ''}>${ctx.tr(en, zh)}${selectedText}</span>`;
-    };
-    return `<section class="gpi-data-consent" aria-label="${ctx.tr('Historical data-preparation choice', '历史数据准备选择')}">
-      <span class="gpi-data-consent-icon">${ctx.icon('shield', 16)}</span>
-      <div class="gpi-data-consent-body">
-        <strong>${ctx.tr('Options provided at the time', '当时提供的选项')}</strong>
-        <p>${ctx.esc(sourceLabel(current) || ctx.tr('Validated project source', '已验证的项目数据源'))}</p>
-        <div class="gpi-data-consent-actions" role="list">
-          ${choice('use_study_required_data', 'Prepare only study-required data (recommended)', '只准备本研究需要的数据（推荐）')}
-          ${choice('begin_full_data_selection', 'Extract all supported data', '提取全部支持数据')}
-          ${choice('reuse_project_source', 'Reuse the previous complete package', '使用之前的完整数据包')}
-        </div>
-        <small>${ctx.tr('The recommended option plans first and materializes only named concepts; full extraction opens the local extraction owner; reuse starts no new extraction. This history record is read-only.', '推荐项会先生成计划，再只物化计划点名的概念；全量提取会打开本地提取功能；复用不会启动新的提取。这是只读历史记录。')}</small>
-      </div>
+    const decision = selected === 'begin_full_data_selection'
+      ? ctx.tr('All supported data was selected', '已选择全部支持数据')
+      : selected === 'reuse_project_source'
+        ? ctx.tr('The existing project package was reused', '已使用项目中已有的数据包')
+        : ctx.tr('Only study-required data was selected', '已选择只准备研究所需数据');
+    return `<section class="gpi-past-decision" aria-label="${ctx.tr('Historical data-preparation choice', '历史数据准备选择')}">
+      <span aria-hidden="true">${ctx.icon('check', 14)}</span>
+      <strong>${ctx.tr('Data source confirmed', '已确认数据源')}</strong>
+      <span>${ctx.esc(sourceLabel(current) || ctx.tr('Validated project source', '已验证的项目数据源'))} · ${ctx.esc(decision)}</span>
     </section>`;
   }
 

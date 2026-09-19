@@ -305,7 +305,7 @@
     const items = step.choices
       .map((choice) => `<li>${esc(plainLabel(choice))}</li>`)
       .join('');
-    return `<section class="gpi-next-step is-past" aria-label="${heading}"><strong>${heading}</strong><ul class="gpi-next-past">${items}</ul></section>`;
+    return `<details class="gpi-next-step is-past" aria-label="${heading}"><summary>${heading}<span aria-hidden="true">⌄</span></summary><ul class="gpi-next-past">${items}</ul></details>`;
   }
 
   function render(step, options) {

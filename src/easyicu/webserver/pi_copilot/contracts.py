@@ -307,6 +307,10 @@ class PiSessionRecord(BaseModel):
     )
     created_at: str = Field(default_factory=utc_now)
     updated_at: str = Field(default_factory=utc_now)
+    # User-visible activity clock. Host reconciliation and other metadata
+    # writes update ``updated_at`` but must not make an old conversation look
+    # newly active in the project task rail.
+    conversation_updated_at: Optional[str] = None
     last_message_job_id: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("last_message_job_id", "last_job_id"),

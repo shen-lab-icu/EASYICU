@@ -3372,6 +3372,15 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       if (piOwner && piOwner.mount) {
         if (piOwner.setProjectDiscoveryLoading) piOwner.setProjectDiscoveryLoading(true);
         piReady = Promise.resolve(piOwner.mount(root.querySelector('#gdPiShell')));
+        // The URL is already a project identity. Start its conversation while
+        // the left-rail catalog and legacy folder memory load independently.
+        // The catalog will supply the display title and folder binding later.
+        const projectOwner = window.EasyICU.guidedPi.require('project');
+        const requestedId = !selectedGuidedDraft && projectOwner.requestedProjectId
+          ? projectOwner.requestedProjectId() : '';
+        if (requestedId && piOwner.bindProject) {
+          piOwner.bindProject({ id: requestedId, title: requestedId });
+        }
       }
       const draftsReady = loadGuidedDrafts();
       Promise.allSettled([Promise.resolve(draftsReady), piReady]).finally(() => {
@@ -3769,6 +3778,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         const openEl = e.target.closest('[data-open]');
         if (openEl) {
           const target = openEl.dataset.open;
+          if (target === 'settings' && openEl.dataset.openCapabilityTab === 'skills') {
+            try { window.sessionStorage.setItem('easyicu.settings.openCapabilityTab', 'skills'); } catch (_) {}
+          }
           // Copilot -> classic exits must carry the collected study config as a
           // real prefill instead of dumping the user on a blank expert form.
           if (target === 'extraction' && EXTRACT.state() && window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.set) {
@@ -3788,6 +3800,15 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         if (stEl) { jumpToStep(stEl.dataset.study); return; }
         // sessions rail
         const projectOwner = window.EU_GUIDED_PROJECTS;
+        if (e.target.closest('[data-gpi-show-projects]')) {
+          const picker = document.querySelector('#gdResearchProjectRail .gd-project-picker');
+          if (picker) {
+            picker.open = true;
+            const summary = picker.querySelector('summary');
+            if (summary) summary.focus();
+          }
+          return;
+        }
         const projectRailToggle = e.target.closest('[data-project-rail-toggle]');
         if (projectRailToggle && projectOwner && projectOwner.setProjectRailCollapsed) {
           const collapsed = !(projectOwner.isProjectRailCollapsed && projectOwner.isProjectRailCollapsed());

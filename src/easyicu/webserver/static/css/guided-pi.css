@@ -2,12 +2,9 @@
 .gd-conv.pi-active #gdLegacyShell{display:none}
 .gd-conv.pi-active{min-width:0;overflow:hidden}
 .gd-conv:not(.pi-active) .gd-pi-shell{flex:0 0 auto}
-.gd-main.threecol.gpi-setup-focus{grid-template-columns:292px minmax(0,1fr)}
+.gd-main.threecol.gpi-setup-focus{grid-template-columns:var(--gd-project-rail-width,292px) minmax(0,1fr)}
 .gd-main.threecol.gpi-setup-focus>.gd-aside{display:none}
-.gd-main.threecol.gpi-empty-session-focus{grid-template-columns:292px minmax(0,1fr)}
-.gd-main.threecol.gpi-empty-session-focus>.gd-aside{display:none}
-.gd-main.threecol.gpi-setup-focus.gd-project-rail-collapsed,
-.gd-main.threecol.gpi-empty-session-focus.gd-project-rail-collapsed{grid-template-columns:minmax(0,1fr)}
+.gd-main.threecol.gpi-setup-focus.gd-project-rail-collapsed{grid-template-columns:minmax(0,1fr)}
 .gd-pi-shell[hidden]{display:none}
 .gd-legacy-shell{flex:1;min-height:0;display:flex;flex-direction:column}
 .gd-pi-shell{
@@ -281,6 +278,10 @@
 .gpi-confirmation-resources{margin-top:10px}.gpi-confirmation-resources>summary{cursor:pointer;color:var(--ink-3);font-size:12.5px;font-weight:650}.gpi-confirmation-resources>div{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
 .gpi-confirmation-resources.is-expanded>strong{font-size:12px;color:var(--ink-3)}
 .gpi-confirmation-resources.is-expanded>div{gap:6px 14px;margin-top:5px;padding:7px 9px;border:1px solid var(--hair-2);border-radius:8px;background:color-mix(in srgb,var(--paper) 82%,var(--surface-2))}
+.gpi-confirmation-resources.is-historical{border-top:1px solid var(--hair-2);padding-top:9px}
+.gpi-confirmation-resources.is-historical>summary{font-size:12.5px;line-height:1.5}
+.gpi-confirmation-resources.is-historical>div{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-top:9px}
+.gpi-confirmation-resources.is-historical .gpi-resource-link{display:block;width:100%;min-width:0;padding:8px 10px;border:1px solid var(--hair-2);border-radius:7px;background:var(--paper);font-size:12.5px;line-height:1.35;text-align:left}
 .gpi-confirmation.is-plan-approval{align-items:start;padding:14px 15px}
 .gpi-confirmation.is-plan-approval .gpi-confirmation-icon{margin-top:2px}
 .gpi-confirmation.is-plan-approval .gpi-confirmation-data-status.is-compact{margin-top:9px;padding:0;border:0;background:transparent}

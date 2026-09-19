@@ -1,0 +1,85 @@
+/* Desktop Skill Hub: a catalog and a readable contract page, not a settings form. */
+.eusk-shell{--sk-ink:#202522;--sk-muted:#66706c;--sk-line:#e1e4df;--sk-bg:#fafbf8;--sk-accent:#d7e988;display:grid;grid-template-columns:64px minmax(0,1fr);width:100%;height:100dvh;min-height:550px;background:#fff;color:var(--sk-ink);font-family:var(--font-sans,system-ui,sans-serif)}
+.eusk-shell button,.eusk-shell input,.eusk-shell select,.eusk-shell textarea{font:inherit}
+.eusk-shell button{cursor:pointer}
+.eusk-rail{display:flex;flex-direction:column;align-items:center;gap:12px;padding:14px 5px;border-right:1px solid var(--sk-line);background:var(--sk-bg)}
+.eusk-rail button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;width:50px;min-height:48px;padding:4px 2px;border:0;border-radius:11px;background:transparent;color:#5e6762;font-size:10px;line-height:1.1}
+.eusk-rail button:hover,.eusk-rail button.active{color:#202522;background:#eef3d2}
+.eusk-rail button svg{display:block}
+.eusk-rail .eusk-brand{width:42px;height:42px;min-height:42px;margin-bottom:10px;border-radius:12px;background:#202522;color:white}
+.eusk-rail-spacer{flex:1}
+.eusk-main{min-width:0;overflow:auto}
+.eusk-main-inner{width:min(1280px,calc(100% - 96px));margin:0 auto;padding:38px 0 90px}
+.eusk-head,.eusk-detail-head{display:flex;align-items:flex-start;justify-content:space-between;gap:24px}
+.eusk-head h1,.eusk-detail-head h1{margin:2px 0 0;color:#202522;font-size:34px;line-height:1.15;font-weight:650;letter-spacing:-.035em}
+.eusk-head p,.eusk-detail-head p{max-width:760px;margin:12px 0 0;color:var(--sk-muted);font-size:15px;line-height:1.6}
+.eusk-eyebrow{display:block;color:#6a7668;font-size:10px;font-weight:750;letter-spacing:.16em}
+.eusk-new,.eusk-use{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:38px;padding:0 17px;border:1px solid #d1dc78;border-radius:999px;background:#e7f195;color:#2a3325;font-size:13px;font-weight:650;box-shadow:0 4px 12px #23320c0a}
+.eusk-new:hover,.eusk-use:hover{background:#dce983}
+.eusk-create-menu{position:relative}.eusk-create-menu>summary{list-style:none;cursor:pointer}.eusk-create-menu>summary::-webkit-details-marker{display:none}.eusk-create-menu>div{position:absolute;right:0;top:46px;z-index:10;width:290px;padding:7px;border:1px solid var(--sk-line);border-radius:12px;background:#fff;box-shadow:0 16px 38px #1e2f1f21}.eusk-create-menu>div button{display:grid;grid-template-columns:25px minmax(0,1fr);gap:9px;width:100%;padding:11px;border:0;border-radius:8px;background:transparent;color:var(--sk-ink);text-align:left}.eusk-create-menu>div button:hover{background:#f4f7e9}.eusk-create-menu>div button>span:first-child{padding-top:2px;color:#687943}.eusk-create-menu strong,.eusk-create-menu small{display:block}.eusk-create-menu strong{font-size:13px}.eusk-create-menu small{margin-top:3px;color:var(--sk-muted);font-size:11px;line-height:1.35}
+.eusk-search{display:flex;align-items:center;gap:10px;height:46px;margin:26px 0 16px;padding:0 15px;border:1px solid var(--sk-line);border-radius:11px;color:#78837c;background:#fff}
+.eusk-search:focus-within{border-color:#adbf6e;box-shadow:0 0 0 3px #e5edce}
+.eusk-search input{flex:1;min-width:0;height:100%;border:0;outline:0;background:transparent;color:var(--sk-ink);font-size:14px}
+.eusk-mode-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0 0 16px;padding:4px;border:1px solid var(--sk-line);border-radius:13px;background:#f7f8f4}
+.eusk-mode-tabs button{display:grid;grid-template-columns:auto auto 1fr;align-items:center;justify-content:start;gap:7px;min-height:43px;padding:0 14px;border:1px solid transparent;border-radius:9px;background:transparent;color:#5f6962;text-align:left;font-size:13px}
+.eusk-mode-tabs button:hover{background:#fbfcf8;color:#2c352d}.eusk-mode-tabs button[aria-selected=true]{border-color:#d9dfcf;background:#fff;color:#253026;font-weight:650;box-shadow:0 2px 7px #24351c0a}
+.eusk-mode-tabs span{display:inline-flex;align-items:center;justify-content:center;min-width:23px;height:20px;padding:0 6px;border-radius:999px;background:#e8eddd;color:#526043;font-size:11px;font-weight:700}
+.eusk-mode-tabs button[aria-selected=true] span{background:#e8f09f;color:#3d4c20}.eusk-mode-tabs small{justify-self:end;color:#858e87;font-size:10.5px;font-weight:500}
+.eusk-filters{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding-bottom:18px;border-bottom:1px solid var(--sk-line)}
+.eusk-filter-label{margin-right:5px;color:#7d8580;font-size:11px;font-weight:750;letter-spacing:.08em}
+.eusk-pill{height:32px;padding:0 13px;border:1px solid var(--sk-line);border-radius:999px;background:white;color:#47514a;font-size:12px}
+.eusk-pill.active{border-color:#dbe6b6;background:#f7fae9;color:#253021}
+.eusk-pill span{margin-left:4px;color:#8a948b}
+.eusk-category{margin-left:auto}
+.eusk-category select{height:33px;max-width:200px;padding:0 12px;border:1px solid var(--sk-line);border-radius:999px;background:white;color:#47514a;font-size:12px}
+.eusk-hide{display:inline-flex;align-items:center;gap:5px;color:#69726c;font-size:12px;white-space:nowrap}
+.eusk-hide input,.eusk-install input[type=checkbox]{accent-color:#83992f}
+.eusk-catalog-summary{display:flex;align-items:center;flex-wrap:wrap;gap:7px 18px;padding:15px 2px 0;color:#5c685e;font-size:12px;line-height:1.5}.eusk-catalog-summary span{white-space:nowrap}.eusk-catalog-summary small{margin-left:auto;color:#7a847c;font-size:11px}
+.eusk-group{padding:26px 0 3px}
+.eusk-group h2{display:flex;align-items:center;gap:8px;margin:0 0 16px;color:#283229;font:600 17px/1.3 Georgia,serif}
+.eusk-group h2:after{content:'';flex:1;border-top:1px solid var(--sk-line)}
+.eusk-group h2 small{color:#98a197;font:500 11px/1.3 var(--font-sans,system-ui,sans-serif)}
+.eusk-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.eusk-card{display:flex;flex-direction:column;min-width:0;min-height:190px;border:1px solid var(--sk-line);border-radius:17px;background:#fff;transition:border-color .15s,box-shadow .15s,transform .15s}
+.eusk-card:hover,.eusk-card:focus-within{border-color:#bdd082;box-shadow:0 10px 25px #22350f12;transform:translateY(-2px)}
+.eusk-card.disabled{opacity:.7}
+.eusk-card-open{flex:1;display:block;width:100%;padding:18px 18px 6px;border:0;border-radius:17px 17px 0 0;background:transparent;color:inherit;text-align:left}
+.eusk-card-open strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 19px/1.25 Georgia,serif}
+.eusk-card-open small{display:block;margin-top:8px;color:#778376;font-size:10px;font-weight:750;letter-spacing:.12em;text-transform:uppercase}
+.eusk-card-open p{display:-webkit-box;overflow:hidden;-webkit-line-clamp:3;-webkit-box-orient:vertical;margin:13px 0 0;color:#515b54;font-size:13px;line-height:1.55}
+.eusk-card-foot{display:flex;align-items:center;gap:6px;min-height:40px;padding:0 18px 12px;color:#879087;font-size:10.5px}
+.eusk-card-foot>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.eusk-source{margin-left:auto;white-space:nowrap}
+.eusk-state{padding:5px 9px;border:1px solid #e1e4df;border-radius:999px;white-space:nowrap}
+.eusk-state.on{border-color:#e0e9a9;background:#f9fce8;color:#536426}
+.eusk-empty{padding:55px 20px;text-align:center;color:#64706a}
+.eusk-empty strong{display:block;color:#2d362f;font-size:16px}
+.eusk-empty p{margin:8px 0 0;font-size:13px}
+.eusk-back{margin-bottom:26px;padding:5px 0;border:0;background:transparent;color:#677168;font-size:13px}
+.eusk-back:hover{color:#203620}
+.eusk-detail-head{padding-bottom:28px;border-bottom:1px solid var(--sk-line)}
+.eusk-detail-head h1{margin-top:9px}
+.eusk-detail-head small{display:block;margin-top:12px;color:#8a938d;font-size:12px}
+.eusk-detail-actions{display:flex;align-items:center;gap:8px;white-space:nowrap}
+.eusk-actions-menu{position:relative}.eusk-actions-menu>summary{display:flex;align-items:center;justify-content:center;width:38px;height:38px;border:1px solid var(--sk-line);border-radius:50%;cursor:pointer;list-style:none}.eusk-actions-menu>summary::-webkit-details-marker{display:none}.eusk-actions-menu>div{position:absolute;right:0;top:43px;z-index:5;min-width:180px;padding:6px;border:1px solid var(--sk-line);border-radius:10px;background:#fff;box-shadow:0 9px 24px #2030201a}.eusk-actions-menu button{display:block;width:100%;padding:9px 10px;border:0;border-radius:6px;background:transparent;color:var(--sk-ink);text-align:left;font-size:12px}.eusk-actions-menu button:hover{background:#f4f7e9}
+.eusk-state-button{min-height:38px;padding:0 14px;border:1px solid var(--sk-line);border-radius:999px;background:#fff;color:#4d594e;font-size:12px}
+.eusk-state-button.on{border-color:#dce9a2;background:#f8fbe8;color:#4e6024}
+.eusk-tabs{display:flex;gap:2px;margin-top:14px;border-bottom:1px solid var(--sk-line)}
+.eusk-tabs button{min-width:100px;padding:13px 16px;border:0;border-bottom:2px solid transparent;background:transparent;color:#6c776f;font-size:13px}
+.eusk-tabs button[aria-selected=true]{border-bottom-color:#a3b956;color:#283327;font-weight:650}
+.eusk-detail-body{max-width:980px;padding:20px 4px 40px;color:#414c44;font-size:14px;line-height:1.6}
+.eusk-detail-body h2{margin:20px 0 8px;color:#252d27;font-size:19px}
+.eusk-detail-body h3{margin:0 0 8px;color:#39463a;font-size:13px}
+.eusk-method-callout{margin-top:22px;padding:16px 18px;border:1px solid #dde7b6;border-radius:12px;background:#f9fbef}.eusk-method-callout span{color:#718047;font-size:10px;font-weight:750;letter-spacing:.1em;text-transform:uppercase}.eusk-method-callout p{margin:7px 0 0;color:#394638;line-height:1.65}
+.eusk-method-summary{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:10px;margin:5px 0 25px}.eusk-method-summary>div{display:grid;gap:6px;padding:14px;border:1px solid var(--sk-line);border-radius:10px;background:#fbfcf9}.eusk-method-summary span{color:#7a847d;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}.eusk-method-summary code{overflow-wrap:anywhere;color:#33402f;font-size:12px}.eusk-method-summary strong{font-size:12px}
+.eusk-skill-instructions{margin-top:26px;padding-top:8px;border-top:1px solid var(--sk-line)}.eusk-skill-instructions p{margin:10px 0}.eusk-skill-instructions .gpi-md-heading{margin:20px 0 8px;color:#273329;font-weight:650}.eusk-skill-instructions .gpi-md-list{margin:8px 0;padding-left:24px}.eusk-skill-instructions pre{overflow:auto;white-space:pre-wrap}
+.eusk-contract{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:24px}
+.eusk-contract>div{padding:17px;border:1px solid var(--sk-line);border-radius:12px;background:#fbfcf9;overflow-wrap:anywhere}
+.eusk-contract ul{margin:0;padding-left:18px}.eusk-contract li+li{margin-top:7px}
+.eusk-binding{margin-top:28px;padding:13px 16px;border-left:3px solid #cfdb87;background:#f8faee;color:#5a674d;font-size:12px}
+.eusk-file-row{display:flex;align-items:center;gap:8px;padding:12px;border:1px solid var(--sk-line);border-radius:8px;font-size:13px}.eusk-file-row small{margin-left:auto;color:#8b948d}
+.eusk-file-preview{margin-top:20px;border:1px solid var(--sk-line);border-radius:11px;overflow:hidden}.eusk-file-preview h2{margin:0;padding:13px 16px;border-bottom:1px solid var(--sk-line);background:#fafbf8;font-size:14px}.eusk-file-preview pre{max-height:60vh;overflow:auto;margin:0;padding:20px;color:#344039;font:12.5px/1.65 var(--font-mono,monospace);white-space:pre-wrap;overflow-wrap:anywhere}
+.eusk-install{display:grid;gap:18px;max-width:850px;margin-top:25px;padding:25px;border:1px solid var(--sk-line);border-radius:14px;background:#fff}.eusk-install label{display:grid;gap:7px;color:#4d5a51;font-size:13px}.eusk-install textarea{width:100%;min-height:250px;padding:14px;border:1px solid var(--sk-line);border-radius:8px;color:#253029;line-height:1.6;resize:vertical}.eusk-install fieldset{display:flex;gap:25px;padding:12px;border:1px solid var(--sk-line);border-radius:8px}.eusk-install fieldset label{display:flex;align-items:center;gap:5px}.eusk-install-foot{display:flex;justify-content:flex-end;gap:10px}.eusk-install-foot>button:first-child{padding:0 14px;border:1px solid var(--sk-line);border-radius:99px;background:white}.eusk-upload-note{display:flex;gap:11px;padding:13px 14px;border:1px solid #e0e6c9;border-radius:9px;background:#fafced;color:#47553f}.eusk-upload-note>span{padding-top:2px}.eusk-upload-note strong{font-size:13px}.eusk-upload-note p{margin:3px 0 0;color:#687362;font-size:12px;line-height:1.5}
+.eusk-message{margin-bottom:15px;padding:11px 14px;border:1px solid #d9e3aa;border-radius:8px;background:#f8fbe9;color:#51632c;font-size:13px}.eusk-message.error{border-color:#e8c9c9;background:#fff5f5;color:#9c3d3d}
+@media(max-width:1050px){.eusk-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.eusk-main-inner{width:calc(100% - 60px)}}
+@media(max-width:700px){.eusk-shell{grid-template-columns:50px minmax(0,1fr)}.eusk-rail button{width:43px}.eusk-main-inner{width:calc(100% - 32px);padding-top:24px}.eusk-grid,.eusk-contract,.eusk-method-summary{grid-template-columns:1fr}.eusk-head,.eusk-detail-head{flex-wrap:wrap}.eusk-category{margin-left:0}.eusk-mode-tabs{grid-template-columns:1fr}.eusk-mode-tabs small{display:none}.eusk-head h1,.eusk-detail-head h1{font-size:28px}}

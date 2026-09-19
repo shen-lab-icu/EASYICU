@@ -21,6 +21,7 @@
     codexLogin: null, codexModels: [], codexBusy: false, codexPoll: null,
     projectInitialization: null, projectIssue: '', workflow: null, latestRun: null, workflowError: '',
     projectLoading: false, projectDiscoveryLoading: false,
+    workflowPromise: null, workflowPromiseId: '',
     agentMode: 'research', accessMode: 'assist', pendingAuthorityRebind: false,
     demoMode: false, demoScrollTopPending: false, currentTurnResources: [],
     workflowReceipts: [], editingMessageId: '', sessionSelectionRevision: 0,
@@ -48,6 +49,10 @@
       .replace(/\bpi_action_authorization_required\b/gi, tr(
         'the required EasyICU data authorization is not active for this turn',
         '本轮数据准备授权尚未生效',
+      ))
+      .replace(/\bpi_session_data_source_confirmation_required\b/gi, tr(
+        'this conversation still needs the selected data source to be confirmed',
+        '本会话仍需确认所选数据源',
       ))
       .replace(/\bpi_[a-z0-9_]+\b/gi, tr('an EasyICU internal status', 'EasyICU 内部状态'))
       .replace(/\beasyicu\.webserver\.pi_copilot(?:\.[a-z0-9_.]+)?\b/gi, 'EasyICU Copilot');
@@ -129,7 +134,39 @@
   function uiLanguage() { return window.EU_LANG === 'zh' ? 'zh' : 'en'; }
   function sessionLanguage(session) { return session && session.language === 'zh' ? 'zh' : 'en'; }
   function sessionMatchesUiLanguage(session) { return sessionLanguage(session) === uiLanguage(); }
-  function displaySessionTitle(value) { return window.EU_PRODUCT_LABELS?.copilotTitle?.(value) ?? String(value ?? '').slice(0, 200); }
+  function displaySessionTitle(value, fallback) { return window.EU_PRODUCT_LABELS?.copilotTitle?.(value, fallback) ?? String(value ?? fallback ?? '').slice(0, 200); }
+  function navigationSessionTitle(row) {
+    if (row && row.automatic_title) {
+      return tr('New research task', '新研究任务');
+    }
+    return displaySessionTitle(row && row.title, tr('Research conversation', '研究对话'));
+  }
+  function sessionStatusLabel(row) {
+    if (row && (row.active_message_job_id || row.last_turn_status === 'running')) return tr('Running', '运行中');
+    if (row && ['failed', 'interrupted', 'cancelled'].includes(String(row.last_turn_status || ''))) return tr('Needs attention', '需处理');
+    if (row && row.last_turn_status === 'done') return tr('Completed', '已完成');
+    const count = Number(row && row.history_turn_count || 0);
+    if (count > 0) return tr(`${count} turns`, `${count} 轮`);
+    if (row && row.has_history) return tr('Has conversation', '已有对话');
+    return tr('Not started', '未开始');
+  }
+  function compactSessionTime(row) {
+    const raw = String(row && (row.last_activity_at || row.created_at) || '').trim();
+    const timestamp = Date.parse(raw);
+    if (!Number.isFinite(timestamp)) return '';
+    const elapsed = Math.max(0, Date.now() - timestamp);
+    const minute = 60000;
+    const hour = 60 * minute;
+    const day = 24 * hour;
+    if (elapsed < minute) return tr('now', '刚刚');
+    if (elapsed < hour) return tr(`${Math.floor(elapsed / minute)}m`, `${Math.floor(elapsed / minute)} 分钟前`);
+    if (elapsed < day) return tr(`${Math.floor(elapsed / hour)}h`, `${Math.floor(elapsed / hour)} 小时前`);
+    if (elapsed < 7 * day) return tr(`${Math.floor(elapsed / day)}d`, `${Math.floor(elapsed / day)} 天前`);
+    const date = new Date(timestamp);
+    return new Intl.DateTimeFormat(window.EU_LANG === 'zh' ? 'zh-CN' : 'en', {
+      month: 'numeric', day: 'numeric',
+    }).format(date);
+  }
   function sessionTraceLabel(row) {
     const sessionId = String(row && row.session_id || '').trim();
     const shortId = sessionId ? sessionId.slice(-8) : '';
@@ -209,7 +246,7 @@
     configureProvider, finishProviderSetup,
   } = PROVIDER_CONTROL;
   const RUN_OUTCOME = MODULES.require('runOutcome').create({
-    tr, esc, iconHtml, resourceButton, api, projectId,
+    tr, esc, iconHtml, resourceButton, api, projectId, host: () => state.host,
     canPreview: () => Boolean(state.session) && !state.busy && !state.childJobId && !sessionIsStale(),
     preview: () => MODULES.optional('preview'),
     workflowContext: previewWorkflowContext,
@@ -272,7 +309,9 @@
     project: () => state.project,
     shell: () => state.shell,
     workflow: () => state.workflow,
-    resultsHtml: () => RUN_OUTCOME.renderShelf(state.latestRun, state.workflow),
+    latestRun: () => state.latestRun,
+    workflowError: () => state.workflowError,
+    resultsHtml: (query, options) => RUN_OUTCOME.renderShelf(state.latestRun, state.workflow, query, options),
     reviewActionHtml: () => RUN_OUTCOME.renderReviewAction(state.latestRun, state.workflow),
     hasPendingReview: () => Boolean(state.host && state.host.querySelector('.gpi-confirmation')),
     openResource: button => EVENTS.openResourceButton(button),
@@ -350,7 +389,7 @@
   });
   const EVENTS = MODULES.require('events').create({
     state, RESOURCE_OWNER, RUN_FILES, MESSAGE_ACTIONS, STARTERS, IDEA_SOURCE, COHORT_ELIGIBILITY,
-    DATA_CONSENT, RUN_OUTCOME, STUDY_WORKSPACE, render, projectId, previewWorkflowContext,
+    DATA_CONSENT, RUN_OUTCOME, STUDY_WORKSPACE, ASIDE, render, projectId, previewWorkflowContext,
     openSession, closeDemo, openDemo, switchMode, loadCodexResearchStatus,
     openAuthorizationPopup, startCodexLogin, cancelCodexLogin, logoutCodex,
     loadCodexModels, tr, apiResearchReady, finishProviderSetup, loadStatus,
@@ -515,10 +554,10 @@
 
   function restoringPanel() {
     return `
-      <div class="gpi-activate gpi-restoring" role="status" aria-live="polite">
-        <div class="gpi-kicker">EASYICU COPILOT · ${tr('RESTORING PROJECT', '正在恢复项目')}</div>
-        <h2>${tr('Restoring your current research', '正在恢复当前研究')}</h2>
-        <p>${tr('EasyICU is loading the saved project, model connection, and conversation together.', 'EasyICU 正在一起读取已保存的项目、模型连接和对话。')}</p>
+      <div class="gpi-panel gpi-restoring" aria-busy="true">
+        <header class="gpi-head"><div class="gpi-head-title"><div class="gpi-kicker">EasyICU</div><div class="gpi-title">${esc(displayProjectTitle(state.project && state.project.title, projectId()))}</div></div></header>
+        <div class="gpi-log" data-gpi-log><div class="gpi-restore-message" role="status" aria-live="polite"><span class="gpi-running-spinner" aria-hidden="true"></span>${tr('Loading this project’s conversations…', '正在读取当前项目的对话…')}</div></div>
+        <div class="gpi-compose"><div class="gpi-compose-card"><textarea disabled aria-label="${tr('Message', '消息')}" placeholder="${tr('Continue when the conversation loads', '对话加载后可继续提问')}"></textarea></div></div>
       </div>`;
   }
 
@@ -552,6 +591,8 @@
     }
     const cls = row.role === 'user' ? 'user' : 'assistant';
     const messageView = STUDY_WORKSPACE.messageView(row, projectId());
+    const messageSkillHtml = messageView.requestedSkill
+      ? `<div class="gpi-message-skill">✧ ${tr('Requested Skill', '指定技能')} · ${esc(messageView.requestedSkill)}</div>` : '';
     const messageResourcesHtml = RESOURCE_OWNER.renderForMessage(messageView, 8);
     const historicalDataConsentHtml = options && options.historicalDataConsent
       && DATA_CONSENT && typeof DATA_CONSENT.renderPast === 'function'
@@ -570,10 +611,11 @@
       ? nextOwner.project(publicRow.text) : null;
     const interactive = Boolean(options && options.interactive);
     const visibleText = nextStep ? nextOwner.bodyText(nextStep) : row.role === 'user' ? messageView.text : publicRow.text;
+    const historicalChoiceAnswered = Boolean(options && options.historicalChoiceAnswered);
     const nextStepHtml = !nextStep
       ? ''
       : !interactive
-        ? nextOwner.renderPast(nextStep, window.EU_LANG)
+        ? (historicalChoiceAnswered ? '' : nextOwner.renderPast(nextStep, window.EU_LANG))
         : typeof nextOwner.render === 'function'
       ? nextOwner.render(nextStep, {
         language: window.EU_LANG,
@@ -593,7 +635,7 @@
       || (visibleText ? `<div class="gpi-text${row.errorCode ? ' gpi-model-error' : ''}">${row.role === 'assistant' ? assistantTextHtml(visibleText) : esc(visibleText)}</div>` : `<div class="gpi-streaming"><i></i><i></i><i></i></div>`);
     return `<article class="gpi-message ${cls}${messageActions.actionsHtml ? ' has-actions' : ''}" data-gpi-message-id="${esc(row.id || '')}">
       <div class="gpi-message-body">
-        ${contentHtml}
+        ${messageSkillHtml}${contentHtml}
         ${messageResourcesHtml}
         ${RUN_FILES.render(row)}
         ${historicalDataConsentHtml}
@@ -618,23 +660,8 @@
     };
     return `<nav class="gpi-workflow" aria-label="${tr('EasyICU research workflow', 'EasyICU 科研流程')}">
       <div class="gpi-workflow-meta"><strong>${reviewerDemo ? tr('Reviewer workflow', '审稿流程') : tr('Research workflow', '科研流程')}</strong><span class="shell-sr-only">${esc(workflow.completed_required_stages || 0)}/${esc(workflow.required_stage_count || 7)} ${tr('required stages complete', '个必需阶段已完成')}</span></div>
-      <ol>${stages.map(stage => `<li class="${esc(stage.status || 'blocked')}" title="${esc(stage.reason_code || '')}" aria-current="${stage.id === workflow.current_stage ? 'step' : 'false'}"><i></i><span>${esc(names[stage.id] || stage.label || stage.id)}</span></li>`).join('')}</ol>
+      <ol>${stages.map(stage => `<li class="${esc(stage.status || 'blocked')}" title="${esc(names[stage.id] || stage.label || stage.id)}" aria-current="${stage.id === workflow.current_stage ? 'step' : 'false'}"><i></i><span>${esc(names[stage.id] || stage.label || stage.id)}</span></li>`).join('')}</ol>
     </nav>`;
-  }
-
-  function accessModeHtml() {
-    const modes = [
-      ['ask', tr('Ask before every tool action', '每次工具操作前都询问')],
-      ['assist', tr('Auto-approve low-risk setup and inspection; ask before extraction and full analysis', '自动批准低风险配置与检查；提取和完整分析前仍询问')],
-      ['full', tr('Allow all available tools; explicit scientific confirmation gates still apply', '允许所有可用工具；明确的科学确认门禁仍然有效')],
-    ];
-    return `<details class="gpi-access-menu">
-      <summary>${iconHtml(state.accessMode === 'full' ? 'unlock' : 'shield', 15)}<span>${esc(accessModeLabel(state.accessMode))}</span><span class="gpi-access-chevron" aria-hidden="true">${iconHtml('chevron', 13)}</span></summary>
-      <div class="gpi-access-popover" role="group" aria-label="${tr('Agent access level', 'Agent 访问级别')}">
-        ${modes.map(([mode, description]) => `<button type="button" data-gpi-access-mode="${mode}" aria-pressed="${state.accessMode === mode}"><span><strong>${esc(accessModeLabel(mode))}</strong><small>${esc(description)}</small></span>${state.accessMode === mode ? iconHtml('check', 15) : ''}</button>`).join('')}
-        <p>${tr('Access levels never reveal credentials, patient rows, or arbitrary host files.', '任何访问级别都不会开放凭据、患者行级数据或任意本机文件。')}</p>
-      </div>
-    </details>`;
   }
 
   function sessionPanel() {
@@ -644,18 +671,30 @@
     const connection = session.model_connection || null;
     const stale = sessionIsStale();
     const workspace = agentMode() === 'workspace';
+    const freshTask = !state.messages.length;
     const ideaExplorationTurn = !workspace
       && TRANSCRIPT.latestTurnCompletedIdeaExploration(state.messages);
-    const showProjectContinuationCards = !workspace && !ideaExplorationTurn;
+    const showProjectContinuationCards = !workspace && !freshTask && !ideaExplorationTurn;
     const dataConsentRequired = showProjectContinuationCards
       && DATA_CONSENT && DATA_CONSENT.requiresConfirmation(session);
-    const fullTimeline = RUN_FILES.timeline(state.messages.concat(state.workflowReceipts));
+    const fullTimeline = freshTask ? [] : RUN_FILES.timeline(state.messages.concat(state.workflowReceipts));
     const timeline = state.regenerating && REGENERATION
       ? REGENERATION.visibleRows(fullTimeline, state.regeneration)
       : fullTimeline;
     const activeChild = timeline.slice().reverse().find(row => row.role === 'activity' && row.childJobId && row.status === 'running');
-    const interactionLocked = state.busy || Boolean(activeChild);
+    const interactionLocked = state.busy || Boolean(activeChild) || state.projectLoading;
     const latestAssistant = timeline.slice().reverse().find(row => ['assistant', 'activity'].includes(row.role));
+    const answeredAssistantIds = new Set();
+    let pendingAssistantId = '';
+    timeline.forEach(row => {
+      if (row && row.role === 'assistant') {
+        if (pendingAssistantId) answeredAssistantIds.add(pendingAssistantId);
+        pendingAssistantId = String(row.id || '');
+      } else if (row && row.role === 'user' && pendingAssistantId) {
+        answeredAssistantIds.add(pendingAssistantId);
+        pendingAssistantId = '';
+      }
+    });
     let precedingUserText = '';
     let precedingUserEntryId = '';
     let historicalDataConsentProjected = false;
@@ -674,6 +713,8 @@
         retryText: row.role === 'assistant' ? precedingUserText : '',
         retryUserEntryId: row.role === 'assistant' ? precedingUserEntryId : '',
         historicalDataConsent,
+        historicalChoiceAnswered: row.role === 'assistant'
+          && answeredAssistantIds.has(String(row.id || '')),
       });
       if (historicalDataConsent) historicalDataConsentProjected = true;
       if (row.role === 'user') {
@@ -685,7 +726,7 @@
     const outcome = showProjectContinuationCards ? RUN_OUTCOME.render(state.latestRun, state.workflow) : '';
     const emptyResearch = !workspace && !messages && !outcome;
     const resultsView = Boolean(outcome) && !dataConsentRequired;
-    const conversation = resultsView ? STUDY_WORKSPACE.history(messages, [projectId(), session.session_id].join(':'), interactionLocked) : messages;
+    const conversation = messages;
     const dataConsentHtml = dataConsentRequired
       ? DATA_CONSENT.render(session, { tr, esc, icon: iconHtml })
       : '';
@@ -695,10 +736,11 @@
     const headerOptions = {
       tr, esc, icon: iconHtml,
       projectTitle: displayProjectTitle(state.project && state.project.title, projectId()),
-      sessionTitle: displaySessionTitle(session.title),
+      sessionTitle: navigationSessionTitle(session),
       busy: interactionLocked,
       workspace,
       pinned: Boolean(session.pinned_for_presentation),
+      layout: ASIDE.layoutOptions(),
       connectionLabel: connection
         ? ([connection.provider, connection.model].filter(Boolean).join(' · ') || 'model')
         : ([model.id || (state.runtime && state.runtime.model), research.provider, research.model].filter(Boolean).join(' / ') || 'legacy model binding'),
@@ -717,11 +759,10 @@
         ${stale ? `<div class="gpi-stale"><strong>${tr('Authority changed', '权威状态已变化')}</strong><span>${tr('The EasyICU study binding, revision, or active run changed. Rebind before continuing.', 'EasyICU 研究绑定、版本或活动运行已变化，请先重新绑定。')}</span><button class="btn sm" type="button" data-gpi-rebind>${tr('Rebind current state', '重新绑定当前状态')}</button></div>` : ''}
         <div class="gpi-log${messages ? '' : ' gpi-log-start'}" data-gpi-log>
           ${RUN_FILES.notice()}
-          ${resultsView ? outcome : ''}
           ${conversation || (resultsView ? '' : workspace
               ? `<div class="gpi-empty"><strong>${tr('Build something in this project', '在当前项目中创建产物')}</strong><span>${tr('EasyICU Copilot can read, write, edit, check, and preview files in this project’s isolated workspace, while retaining EasyICU research tools.', 'EasyICU 研究助手可以在当前项目的隔离工作区中读取、写入、编辑、检查并预览文件，同时保留 EasyICU 研究工具。')}</span></div>`
               : emptyResearchHtml)}
-          ${!resultsView ? outcome : ''}
+          ${outcome}
           ${showProjectContinuationCards ? dataConsentHtml : ''}
           ${showProjectContinuationCards && !dataConsentRequired ? (COHORT_ELIGIBILITY.render() || workflowConfirmationHtml()) : ''}
         </div>
@@ -733,11 +774,11 @@
               <span><strong>${esc(activeChild.cancelRequested ? tr('Stopping the research task', '正在停止科研任务') : (activeChild.runningTitle || tr('EasyICU research task is running', 'EasyICU 科研任务正在运行')))}</strong><small>${activeChild.cancelRequested ? tr('The cancellation request was sent. Waiting for the current safe checkpoint.', '已发送停止请求，正在等待当前安全检查点结束。') : tr('New messages are paused until this task finishes or asks for confirmation.', '任务完成或需要你确认后，才可继续发送消息。')}</small></span>
               <time data-gpi-live-elapsed="${Number(activeChild.startedAt || Date.now())}">${esc(ACTIVITY.durationText ? ACTIVITY.durationText(activeChild.startedAt) : '')}</time>
               <button class="btn danger sm" type="button" data-gpi-cancel-child-job="${esc(activeChild.childJobId)}" ${activeChild.cancelRequested ? 'disabled' : ''}>${activeChild.cancelRequested ? tr('Stopping…', '正在停止…') : tr('Stop generation', '停止生成')}</button>
-            </div>` : `${!workspace && IDEA_SOURCE ? IDEA_SOURCE.status({ tr, esc }) : ''}${STUDY_WORKSPACE.renderReference(projectId(), session.session_id)}<textarea data-gpi-input rows="2" maxlength="12000" placeholder="${workspace ? tr('Ask EasyICU Copilot to create or edit a project artifact — do not paste patient rows or identifiers.', '让 EasyICU 研究助手创建或编辑当前项目产物——请勿粘贴患者行级数据或标识符。') : tr('Describe your research idea or question…', '描述你的想法或研究问题……')}" ${interactionLocked || stale ? 'disabled' : ''}>${esc(state.draft)}</textarea>
+            </div>` : `${!workspace && IDEA_SOURCE ? IDEA_SOURCE.status({ tr, esc }) : ''}${STUDY_WORKSPACE.renderReference(projectId(), session.session_id)}${STUDY_WORKSPACE.renderSkillReference(projectId(), session)}<textarea data-gpi-input rows="2" maxlength="12000" placeholder="${state.projectLoading ? tr('Research status is syncing. Continue when it finishes…', '正在同步研究状态，完成后可继续提问……') : workspace ? tr('Ask EasyICU Copilot to create or edit a project artifact — do not paste patient rows or identifiers.', '让 EasyICU 研究助手创建或编辑当前项目产物——请勿粘贴患者行级数据或标识符。') : tr('Describe your research idea or question…', '描述你的想法或研究问题……')}" ${interactionLocked || stale ? 'disabled' : ''}>${esc(state.draft)}</textarea>
               <div class="gpi-actions">
-                <div class="gpi-action-leading">${!workspace && IDEA_SOURCE ? IDEA_SOURCE.controls({ tr, esc, icon: iconHtml, disabled: interactionLocked || stale }) : ''}${accessModeHtml()}</div>
+                <div class="gpi-action-leading">${!workspace && IDEA_SOURCE ? IDEA_SOURCE.controls({ tr, esc, icon: iconHtml, disabled: interactionLocked || stale }) : ''}${!workspace ? STUDY_WORKSPACE.renderMaterials(RUN_OUTCOME.collection(state.latestRun, state.workflow), projectId(), session.session_id, interactionLocked || stale || Boolean(state.workflowError)) : ''}${STUDY_WORKSPACE.renderSkillPicker(projectId(), session, interactionLocked || stale)}${STUDY_WORKSPACE.renderAccessMode(state.accessMode, accessModeLabel, iconHtml)}</div>
                 <div class="gpi-action-trailing">${HEADER.renderModelControl(headerOptions)}
-                ${state.busy ? `<button class="btn danger" type="button" data-gpi-stop>${tr('Stop', '停止')}</button>` : `<button class="btn primary" type="button" data-gpi-send ${stale ? 'disabled' : ''}>${tr('Send', '发送')}</button>`}</div>
+                ${state.busy ? `<button class="btn danger" type="button" data-gpi-stop>${tr('Stop', '停止')}</button>` : `<button class="btn primary" type="button" data-gpi-send aria-label="${tr('Send', '发送')}" title="${tr('Send', '发送')}" ${interactionLocked || stale ? 'disabled' : ''}>${iconHtml('arrow', 15)}</button>`}</div>
               </div>`}
           </div>
         </div>
@@ -792,7 +833,7 @@
     const previousLog = preserveScroll && state.host.querySelector('[data-gpi-log]');
     const previousTop = previousLog ? previousLog.scrollTop : null;
     if (!state.demoMode) RUN_FILES.sync();
-    const restoring = state.loading || state.projectLoading || state.projectDiscoveryLoading;
+    const restoring = !state.session && (state.loading || state.projectLoading || state.projectDiscoveryLoading);
     const setupFocused = !restoring && state.shell !== 'legacy'
       && !state.demoMode
       && (state.showSetup || !connectionReady() || state.projectIssue === 'pi_project_study_context_missing');
@@ -802,6 +843,7 @@
       && !RUN_OUTCOME.resultsAvailable(state.latestRun, state.workflow);
     const main = state.host.closest('.gd-main');
     if (main) {
+      main.classList.toggle('gpi-workspace', state.shell !== 'legacy');
       main.classList.toggle('gpi-setup-focus', setupFocused);
       main.classList.toggle('gpi-empty-session-focus', emptySessionFocused);
     }
@@ -824,10 +866,16 @@
       });
     }
     syncProjectWorkflowAside();
+    STUDY_WORKSPACE.syncNavigation({ projectId: projectId(), sessions: state.sessions.filter(sessionMatchesUiLanguage),
+      selectedId: state.session && state.session.session_id, loading: restoring, disabled: state.busy || Boolean(state.childJobId) || state.projectLoading,
+      visible: state.shell !== 'legacy', title: navigationSessionTitle, status: sessionStatusLabel,
+      time: compactSessionTime, open: openSession, create: createSession,
+      resources: RUN_OUTCOME.collection(state.latestRun, state.workflow), openResource: EVENTS.openResource });
     requestAnimationFrame(() => {
+      STUDY_WORKSPACE.restoreMaterials(state.host);
       const log = state.host && state.host.querySelector('[data-gpi-log]');
       if (log) {
-        log.scrollTop = previousTop !== null ? previousTop : state.demoScrollTopPending || (state.host.querySelector('.gpi-results-session') && !state.host.querySelector('[data-gpi-study-history][open]')) ? 0 : log.scrollHeight;
+        log.scrollTop = previousTop !== null ? previousTop : state.demoScrollTopPending ? 0 : log.scrollHeight;
         state.demoScrollTopPending = false;
       }
       ACTIVITY.syncLiveClock(state.host, state.busy || Boolean(state.childJobId));
@@ -863,7 +911,7 @@
   }
 
   async function createSession() {
-    if (state.creating || !projectId()) return;
+    if (state.creating || state.projectLoading || !projectId()) return;
     const expectedProjectId = projectId();
     const selectionRevision = ++state.sessionSelectionRevision;
     if (!connectionReady()) {
@@ -909,6 +957,7 @@
       });
       if (expectedProjectId !== projectId() || selectionRevision !== state.sessionSelectionRevision) return;
       state.session = payload.session; state.messages = transcriptMessages(state.session);
+      STUDY_WORKSPACE.applyHubIntent(expectedProjectId, state.session);
       state.agentMode = state.session.agent_mode || state.agentMode;
       hydrateProjectedJob(state.workflow && state.workflow.active_job);
       state.projectInitialization = null;
@@ -951,6 +1000,13 @@
         : payload.session;
       if (expectedProjectId !== projectId() || expectedSelectionRevision !== state.sessionSelectionRevision) return;
       state.session = hydrated;
+      if (state.sessions.some(row => row.session_id === state.session.session_id)) {
+        state.sessions = state.sessions.map(row => row.session_id === state.session.session_id
+          ? { ...row, ...state.session }
+          : row);
+      } else {
+        state.sessions = [state.session].concat(state.sessions);
+      }
       state.messages = transcriptMessages(state.session);
       state.agentMode = state.session.agent_mode || 'research';
       (Array.isArray(state.session.archived_child_jobs) ? state.session.archived_child_jobs : []).forEach(hydrateProjectedJob);
@@ -966,6 +1022,12 @@
       const projectOwner = MODULES.require('project');
       if (projectOwner && projectOwner.syncLocation) {
         projectOwner.syncLocation(expectedProjectId, sessionId);
+      }
+      // The transcript is ready now. Show it while the independent workflow
+      // projection finishes, rather than keeping the conversation blocked.
+      render();
+      if (window.EU_GUIDED_STARTUP && window.EU_GUIDED_STARTUP.finish) {
+        window.EU_GUIDED_STARTUP.finish(document);
       }
       if (refreshWorkflow !== false || !state.workflow) await loadWorkflow();
       await PLAN_ACTIONS.continueSystemOwnedPlanProgression({passive: true});
@@ -1280,35 +1342,49 @@
     latest.expanded = false;
   }
 
-  async function loadWorkflow() {
+  function loadWorkflow() {
     const expectedProjectId = projectId();
-    if (!expectedProjectId || !api().loadPiCopilotProjectWorkflow) return;
-    try {
-      const payload = await api().loadPiCopilotProjectWorkflow(expectedProjectId);
-      if (expectedProjectId !== projectId()) return;
-      state.workflowError = '';
-      state.workflow = payload && payload.workflow ? payload.workflow : null;
-      state.latestRun = payload && payload.latest_run ? payload.latest_run : { present: false };
-      if (state.workflow) state.workflow.active_job = (payload && payload.active_job) || { present: false };
-      reconcileDurableWrapupActivity();
-      hydrateProjectedJob(payload && payload.active_job);
-      const activeJob = payload && payload.active_job;
-      if (activeJob && activeJob.present && activeJob.status === 'running' && activeJob.job_id) {
-        const kind = String(activeJob.kind || '');
-        const code = activeJob.report_only === true
-          ? 'easyicu_report_repair_submitted'
-          : /extract/i.test(kind)
-          ? 'easyicu_extraction_submitted'
-          : (/research|agent/i.test(kind) ? 'easyicu_full_run_submitted' : 'easyicu_run_submitted');
-        watchChildJob(String(activeJob.job_id), code);
-      }
-    } catch (error) {
-      if (expectedProjectId === projectId()) {
-        state.workflow = null;
-        state.latestRun = null;
-        state.workflowError = tr('Could not read current task status. Refresh to retry: ', '无法读取当前任务状态，请刷新重试：') + errorText(error);
-      }
+    if (!expectedProjectId || !api().loadPiCopilotProjectWorkflow) return Promise.resolve();
+    if (state.workflowPromise && state.workflowPromiseId === expectedProjectId) {
+      return state.workflowPromise;
     }
+    const pending = (async () => {
+      try {
+        const payload = await api().loadPiCopilotProjectWorkflow(expectedProjectId);
+        if (expectedProjectId !== projectId()) return;
+        state.workflowError = '';
+        state.workflow = payload && payload.workflow ? payload.workflow : null;
+        state.latestRun = payload && payload.latest_run ? payload.latest_run : { present: false };
+        void RUN_OUTCOME.loadScientificReview(state.latestRun, state.workflow);
+        if (state.workflow) state.workflow.active_job = (payload && payload.active_job) || { present: false };
+        reconcileDurableWrapupActivity();
+        hydrateProjectedJob(payload && payload.active_job);
+        const activeJob = payload && payload.active_job;
+        if (activeJob && activeJob.present && activeJob.status === 'running' && activeJob.job_id) {
+          const kind = String(activeJob.kind || '');
+          const code = activeJob.report_only === true
+            ? 'easyicu_report_repair_submitted'
+            : /extract/i.test(kind)
+            ? 'easyicu_extraction_submitted'
+            : (/research|agent/i.test(kind) ? 'easyicu_full_run_submitted' : 'easyicu_run_submitted');
+          watchChildJob(String(activeJob.job_id), code);
+        }
+      } catch (error) {
+        if (expectedProjectId === projectId()) {
+          state.workflow = null;
+          state.latestRun = null;
+          state.workflowError = tr('Could not read current task status. Refresh to retry: ', '无法读取当前任务状态，请刷新重试：') + errorText(error);
+        }
+      }
+    })();
+    state.workflowPromiseId = expectedProjectId;
+    const settled = pending.finally(() => {
+      if (state.workflowPromiseId !== expectedProjectId || state.workflowPromise !== settled) return;
+      state.workflowPromise = null;
+      state.workflowPromiseId = '';
+    });
+    state.workflowPromise = settled;
+    return settled;
   }
 
   async function prepareProject() {
@@ -1341,7 +1417,13 @@
       : null;
     const sameProject = projectId() === String((next && next.id) || '');
     const currentReceipt = state.project && state.project.binding_receipt;
-    if (sameProject && JSON.stringify(currentReceipt || null) === JSON.stringify((next && next.binding_receipt) || null)) return;
+    if (sameProject && JSON.stringify(currentReceipt || null) === JSON.stringify((next && next.binding_receipt) || null)) {
+      if (next && state.project && state.project.title !== next.title) {
+        state.project = { ...state.project, title: next.title };
+        render();
+      }
+      return Promise.resolve();
+    }
     closeSource();
     closeChildSource();
     state.sessionSelectionRevision += 1;
@@ -1349,6 +1431,9 @@
     state.demoScrollTopPending = false;
     state.project = next;
     STUDY_WORKSPACE.removeReference();
+    STUDY_WORKSPACE.removeSkill();
+    STUDY_WORKSPACE.removeMethod();
+    STUDY_WORKSPACE.removeBuilder();
     const projectOwner = MODULES.require('project');
     if (projectOwner && projectOwner.syncLocation) {
       const requestedSession = next && projectOwner.requestedSessionId
@@ -1462,7 +1547,7 @@
     state.source.onerror = () => { if (!state.busy) closeSource(); };
   }
   async function sendText(text, grantsOverride, turnIntent, visibleUserMessage = true) {
-    if (!state.session || state.busy || state.childJobId || sessionIsStale()) return;
+    if (!state.session || state.projectLoading || state.busy || state.childJobId || sessionIsStale()) return;
     if (!sessionMatchesUiLanguage(state.session)) {
       handleLanguageChange();
       return;
@@ -1491,7 +1576,7 @@
     if (visibleUserMessage) state.messages.push({ id: 'user-' + submittedAt, role: 'user', text, complete: true });
     const activity = ensureActivity(new Date(submittedAt).toISOString());
     upsertActivityStep(activity, { id: 'submitted', kind: 'submitted', status: 'complete', at: submittedAt });
-    if (visibleUserMessage) { state.draft = ''; STUDY_WORKSPACE.consume(expectedProjectId, expectedSessionId); }
+    if (visibleUserMessage) { state.draft = ''; STUDY_WORKSPACE.consume(expectedProjectId, expectedSessionId); STUDY_WORKSPACE.consumeSkill(expectedProjectId, state.session); }
     state.busy = true; state.error = ''; render();
     try {
       const payload = await api().sendPiCopilotMessage(state.session.session_id, {
@@ -1569,14 +1654,16 @@
     return true;
   }
   async function sendMessage() {
-    if (!state.session || state.busy || state.childJobId || sessionIsStale()) return;
+    if (!state.session || state.projectLoading || state.busy || state.childJobId || sessionIsStale()) return;
     const input = state.host.querySelector('[data-gpi-input]');
     const text = String((input && input.value) || state.draft || '').trim();
     const referencing = STUDY_WORKSPACE.hasReference(projectId(), state.session.session_id);
     if (!referencing && await PLAN_ACTIONS.continueUserRequestedSystemProgression(text)) return;
     const intent = referencing ? undefined : state.pendingEntryIntent
       || (IDEA_SOURCE && IDEA_SOURCE.suggestsIdeaMining(text) ? 'idea_mining_entry' : undefined);
-    await sendText(STUDY_WORKSPACE.decorateMessage(text, projectId(), state.session.session_id), undefined, intent);
+    await sendText(STUDY_WORKSPACE.decorateMessage(
+      STUDY_WORKSPACE.decorateSkillMessage(text, projectId(), state.session), projectId(), state.session.session_id,
+    ), undefined, intent);
   }
   async function confirmCohortEligibility(selection) {
     if (!selection || !state.session || state.busy || state.childJobId || sessionIsStale()) return;
@@ -1754,9 +1841,24 @@
     if (!host) return Promise.resolve();
     if (state.host === host) return state.startupPromise || Promise.resolve();
     closeSource(); closeChildSource(); state.host = host; state.conv = host.closest('.gd-conv'); state.shell = 'pi';
+    // Restore the project/session first. That path resets the composer draft;
+    // seeding before it completed made Open from Skill Hub silently disappear.
     if (state.conv) state.conv.classList.add('pi-active');
     wire(); document.addEventListener('click', dismissHeaderOverflow);
-    state.startupPromise = Promise.resolve(loadStatus()).finally(() => {
+    state.startupPromise = Promise.resolve(loadStatus()).then(async () => {
+      const hubIntent = STUDY_WORKSPACE.hasHubIntent(), previousSessionId = state.session && state.session.session_id;
+      if (hubIntent && projectId() && state.session && !state.creating) await createSession();
+      if (hubIntent && previousSessionId && state.session && state.session.session_id === previousSessionId) return;
+      if (hubIntent && state.session && (!previousSessionId || state.session.session_id !== previousSessionId)) state.draft = '';
+      try {
+        const suggestion = window.sessionStorage.getItem('easyicu.skillHub.question');
+        if (suggestion && state.session && (!previousSessionId || state.session.session_id !== previousSessionId)) {
+          state.draft = suggestion;
+          window.sessionStorage.removeItem('easyicu.skillHub.question');
+          render();
+        }
+      } catch (_) {}
+    }).finally(() => {
       state.startupPromise = null;
     });
     return state.startupPromise;

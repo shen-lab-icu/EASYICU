@@ -275,6 +275,7 @@
       <div class="nav" style="padding-top:0;">
         <button type="button" class="nav-item ${route === 'tutorial' ? 'active' : ''}" data-nav="tutorial"><span class="ico">${icon('help', 17)}</span>${t('Get Started', '快速上手')}</button>
         <button type="button" class="nav-item ${route === 'dictionary' ? 'active' : ''}" data-nav="dictionary"><span class="ico">${icon('list', 17)}</span>${t('Data Dictionary', '数据字典')}</button>
+        <button type="button" class="nav-item ${route === 'skills' ? 'active' : ''}" data-nav="skills"><span class="ico">${icon('layers', 17)}</span>${t('Skills', '技能')}</button>
         <button type="button" class="nav-item ${route === 'settings' ? 'active' : ''}" data-nav="settings"><span class="ico">${icon('gear', 17)}</span>${t('Settings', '设置')}</button>
       </div>
       </nav>

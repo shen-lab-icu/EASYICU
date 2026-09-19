@@ -110,18 +110,30 @@
   }
 
   function renderShellRail(ctx) {
-    const { t, icon } = helpers(ctx);
+    const { t, icon, esc } = helpers(ctx);
+    const activeProject = projectTitle(ctx.selectedGuidedDraft && ctx.selectedGuidedDraft.title,
+      t('Choose a project', '选择研究项目'));
     return `
       <button class="gd-rail-restore" type="button" data-project-rail-toggle aria-label="${t('Show research projects', '显示研究项目栏')}" title="${t('Show research projects', '显示研究项目栏')}">${icon('chevron', 14)}</button>
       <aside class="gd-rail" id="gdResearchProjectRail">
+        <nav class="gpi-global-nav" aria-label="${t('EasyICU navigation', 'EasyICU 导航')}">
+          <button type="button" class="gpi-global-brand" data-open="entry" aria-label="${t('Home', '主页')}" title="${t('Home', '主页')}">${icon('spark', 19)}</button>
+          <button type="button" class="gpi-global-item active" data-gpi-show-projects aria-current="page" title="${t('Research projects', '研究项目')}">${icon('folder', 19)}<span>${t('Projects', '项目')}</span></button>
+          <button type="button" class="gpi-global-item" data-open="skills" title="${t('Research skills', '研究技能')}">${icon('layers', 19)}<span>${t('Skills', '技能')}</span></button>
+          <button type="button" class="gpi-global-item" data-open="extraction" title="${t('Data workspace', '数据工作台')}">${icon('grid', 19)}<span>${t('Data', '数据')}</span></button>
+          <div class="gpi-global-spacer"></div>
+          <button type="button" class="gpi-global-item" data-open="settings" title="${t('Settings', '设置')}">${icon('gear', 18)}<span>${t('Settings', '设置')}</span></button>
+          <button type="button" class="gpi-global-item" data-lang-toggle title="${t('Switch language', '切换语言')}">${icon('globe', 18)}<span>${window.EU_LANG === 'zh' ? 'EN' : '中'}</span></button>
+        </nav>
         <div class="gd-rail-top">
           <div class="gd-rail-heading">
-            <button class="gd-rail-brand" type="button" data-open="entry" aria-label="${t('Back to EasyICU home', '返回 EasyICU 首页')}" title="${t('Back to EasyICU home', '返回 EasyICU 首页')}"><span class="brand-mark">${icon('spark', 15)}</span><span class="gd-name">${t('EasyICU ICU Research Assistant', 'EasyICU 重症科研助手')}</span></button>
+            <button class="gd-rail-brand" type="button" data-gpi-show-projects aria-label="${t('Switch research project', '切换研究项目')}" title="${esc(activeProject)}"><span class="brand-mark">${icon('spark', 18)}</span><span class="gd-name"><small>${t('Project', '项目')}</small>${esc(activeProject)}</span></button>
             <button class="gd-rail-collapse" type="button" data-project-rail-toggle aria-controls="gdResearchProjectRail" aria-label="${t('Hide research projects', '隐藏研究项目栏')}" title="${t('Hide research projects', '隐藏研究项目栏')}">${icon('chevron', 14)}</button>
           </div>
           <div class="gd-folder-controls" id="gdFolderControls"></div>
         </div>
         <div class="gd-rail-list" id="gdSessions"></div>
+        <section id="gdConversationRail" class="gpi-conversations" hidden></section>
         <div class="gd-rail-foot">
           <div class="gd-rail-utils" aria-label="${t('Guided Copilot utilities', '研究引导工具')}">
             <button class="gd-utilbtn" type="button" data-open="entry" title="${t('Home', '主页')}" aria-label="${t('Home', '主页')}">${icon('back', 14)}</button>
@@ -131,6 +143,7 @@
             </button>
           </div>
           <button class="btn sm block gd-data-workspace" data-open="extraction">${icon('grid', 13)} ${t('Data workspace', '数据工作台')}</button>
+          <button class="btn sm block gd-data-workspace" type="button" data-open="skills">${icon('layers', 13)} ${t('Research skills', '研究技能')}</button>
         </div>
       </aside>`;
   }
@@ -139,6 +152,13 @@
     const { t, icon, esc, fmtRunTime } = helpers(ctx);
     const host = document.getElementById('gdSessions');
     if (!host) return;
+    const brandName = host.closest?.('.gd-rail')?.querySelector('.gd-rail-brand .gd-name');
+    const currentTitle = projectTitle(ctx.selectedGuidedDraft && ctx.selectedGuidedDraft.title,
+      t('Choose a project', '选择研究项目'));
+    if (brandName) {
+      brandName.innerHTML = `<small>${t('Project', '项目')}</small>${esc(currentTitle)}`;
+      brandName.closest('button').title = currentTitle;
+    }
     const rows = ctx.localDraftRows();
     const activeId = ctx.selectedGuidedDraft && ctx.selectedGuidedDraft.id;
     const rowIds = new Set(rows.map(row => row && row.id).filter(Boolean));
@@ -173,7 +193,7 @@
             const meta = projectMeta(row, t);
             const time = fmtRunTime(row.updated_at || row.created_at);
             return `
-            <div class="gd-sessline ${projectManagementActive ? 'is-managing' : ''} ${selected ? 'is-selected' : ''}">
+            <div class="gd-sessline ${projectManagementActive ? 'is-managing' : ''} ${selected ? 'is-selected' : ''}" data-project-search-row="${esc(title.toLocaleLowerCase())}">
               ${projectManagementActive ? `<label class="gd-sess-select" title="${active ? t('The current project cannot be selected', '当前正在使用的项目不能勾选') : t('Select project', '选择项目')}"><input type="checkbox" data-select-localdraft="${i}" ${selected ? 'checked' : ''} ${selectable ? '' : 'disabled'} /><span aria-hidden="true"></span></label>` : ''}
               <button class="gd-sess draft ${active ? 'active' : ''} ${configurationMissing ? 'configuration-missing' : ''}" data-localdraft="${i}" title="${configurationMissing ? t('Configuration is missing; open recovery options', '研究配置已失效；打开恢复选项') : t('Open research project', '打开研究项目')}: ${esc(title)}" ${active ? 'aria-current="true"' : ''}>
                 <span class="gd-sess-status" aria-hidden="true"></span>
@@ -184,11 +204,35 @@
             </div>`;
           }).join('')
           : (externalHtml || `<div class="gd-empty-local"><div class="ss-t">${t('No study folders yet', '还没有研究文件夹')}</div><div class="ss-m">${t('Create or open a project before starting a Copilot conversation.', '开始研究助手对话前，请先创建或打开一个项目。')}</div></div>`);
-    host.innerHTML = `
+    const oldPicker = host.querySelector('.gd-project-picker');
+    const search = oldPicker && typeof oldPicker.querySelector === 'function'
+      && oldPicker.dataset.projectId === (activeId || '')
+      ? String(oldPicker.querySelector('[data-project-search]')?.value || '') : '';
+    // The project catalog is a selector, not the default reading surface. An
+    // early loading render must not leave every project expanded after URL restore.
+    const pickerOpen = projectManagementActive || (!activeId && !ctx.guidedDrafts.loading)
+      || !!(oldPicker && oldPicker.dataset.projectId === activeId && oldPicker.open);
+    host.innerHTML = `<details class="gd-project-picker" data-project-id="${esc(activeId || '')}"${pickerOpen ? ' open' : ''}>
+      <summary><small>${t('Current project', '当前项目')}</small><span>${esc(projectTitle(ctx.selectedGuidedDraft && ctx.selectedGuidedDraft.title, t('Choose a project', '选择研究项目')))}</span><i aria-hidden="true">⌄</i></summary>
+      <div class="gd-project-picker-list">
       <div class="gd-project-heading"><span>${t('Research projects', '研究项目')}</span><span class="gd-project-heading-actions"><button class="gd-manage-mini ${projectManagementActive ? 'active' : ''}" type="button" data-project-manage>${projectManagementActive ? t('Done', '完成') : t('Manage', '管理')}</button><button class="gd-refresh-mini" type="button" data-refreshdrafts title="${t('Refresh research projects', '刷新研究项目')}" aria-label="${t('Refresh research projects', '刷新研究项目')}">${icon('refresh', 12)}</button></span></div>
+      ${rows.length ? `<label class="gd-project-search"><span class="sr-only">${t('Search research projects', '搜索研究项目')}</span><input type="search" data-project-search placeholder="${t('Search projects…', '搜索项目…')}" value="${esc(search)}" autocomplete="off"></label>` : ''}
       <div class="gd-project-summary">${icon('folder', 14)}<div><strong>${t('Local research workspace', '本地研究工作区')}</strong><span>${t('Study setup, runs, evidence, and conversation history stay here.', '研究配置、运行、证据和对话历史都保存在这里。')}</span></div></div>
       ${draftHtml}
-      ${projectManagementActive ? `<div class="gd-project-selection-bar"><label><input type="checkbox" data-select-all-projects ${eligibleCount && selectedRows.length === eligibleCount ? 'checked' : ''} ${eligibleCount ? '' : 'disabled'} /> ${t('Select all', '全选')}</label><span><strong>${selectedRows.length}</strong> ${t('selected; current project excluded', '项已选；当前项目不参与')}</span><button class="btn sm danger" type="button" data-remove-selected-projects ${selectedRows.length ? '' : 'disabled'}>${t('Remove selected', '移除所选')}</button></div>` : ''}`;
+      ${rows.length ? `<p class="gd-project-search-empty" data-project-search-empty hidden>${t('No matching projects', '没有匹配的项目')}</p>` : ''}
+      ${projectManagementActive ? `<div class="gd-project-selection-bar"><label><input type="checkbox" data-select-all-projects ${eligibleCount && selectedRows.length === eligibleCount ? 'checked' : ''} ${eligibleCount ? '' : 'disabled'} /> ${t('Select all', '全选')}</label><span><strong>${selectedRows.length}</strong> ${t('selected; current project excluded', '项已选；当前项目不参与')}</span><button class="btn sm danger" type="button" data-remove-selected-projects ${selectedRows.length ? '' : 'disabled'}>${t('Remove selected', '移除所选')}</button></div>` : ''}</div></details>`;
+    const filterRows = () => {
+      const needle = String(host.querySelector('[data-project-search]')?.value || '').trim().toLocaleLowerCase();
+      let visible = 0;
+      host.querySelectorAll('[data-project-search-row]').forEach(row => {
+        row.hidden = !!needle && !row.dataset.projectSearchRow.includes(needle);
+        if (!row.hidden) visible++;
+      });
+      const empty = host.querySelector('[data-project-search-empty]');
+      if (empty) empty.hidden = visible !== 0;
+    };
+    host.oninput = event => { if (event.target.matches('[data-project-search]')) filterRows(); };
+    if (search) filterRows();
   }
 
   function renderFolderControls(ctx) {

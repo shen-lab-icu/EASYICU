@@ -8,7 +8,8 @@
 
   function sessionHasHistory(session) {
     if (!session || typeof session !== 'object') return false;
-    return Number(session.message_count || 0) > 0
+    return session.has_history === true
+      || Number(session.message_count || 0) > 0
       || Number(session.history_turn_count || 0) > 0
       || Boolean(String(session.last_message_job_id || '').trim())
       || Boolean(String(session.active_message_job_id || '').trim());

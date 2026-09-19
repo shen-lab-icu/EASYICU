@@ -10,7 +10,11 @@ global.localStorage = {
   getItem(key) { return localStorageValues.has(key) ? localStorageValues.get(key) : null; },
   setItem(key, value) { localStorageValues.set(key, String(value)); },
 };
-const host = { innerHTML: '' };
+let previousPicker = null;
+const brandButton = { title: '' };
+const brandName = { innerHTML: '', closest: () => brandButton };
+const host = { innerHTML: '', querySelector: () => previousPicker,
+  closest: () => ({ querySelector: () => brandName }) };
 const removalHost = { innerHTML: '' };
 global.document = {
   getElementById(id) {
@@ -55,14 +59,22 @@ global.EU_GUIDED_PROJECTS.renderProjectRail(context({
   study_context_revision: 9,
 }));
 assert.match(host.innerHTML, /Existing E1 project/);
+assert.equal(brandButton.title, 'Existing E1 project');
 assert.match(host.innerHTML, /Bound StudyContext · r9/);
 assert.doesNotMatch(host.innerHTML, /No study folders yet/);
+assert.doesNotMatch(host.innerHTML, /data-project-id="study-e1" open/);
+previousPicker = { dataset: { projectId: 'study-e1' }, open: true };
+global.EU_GUIDED_PROJECTS.renderProjectRail(context({ id: 'study-e1', title: 'Existing E1 project' }));
+assert.match(host.innerHTML, /data-project-id="study-e1" open/);
 
 global.EU_GUIDED_PROJECTS.renderProjectRail(context({
   id: 'idea-unbound',
   title: 'Unbound idea project',
 }));
+assert.equal(brandButton.title, 'Unbound idea project');
 assert.match(host.innerHTML, /Project selected · setup continues here/);
+assert.doesNotMatch(host.innerHTML, /data-project-id="idea-unbound" open/);
+previousPicker = null;
 assert.doesNotMatch(host.innerHTML, /No study folders yet/);
 
 global.EU_GUIDED_PROJECTS.renderProjectRail(context(null));

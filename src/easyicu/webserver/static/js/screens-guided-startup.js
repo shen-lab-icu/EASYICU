@@ -19,13 +19,8 @@
     if (!active) return '';
     return `
       <div class="gd-startup-shield" data-guided-startup-shield role="status" aria-live="polite">
-        <div class="gpi-activate gpi-restoring gd-startup-card">
-          <div class="gpi-kicker">EASYICU COPILOT · ${t('RESTORING PROJECT', '正在恢复项目')}</div>
-          <h2>${t('Restoring your current research', '正在恢复当前研究')}</h2>
-          <p>${t(
-            'EasyICU is loading the saved project, model connection, and conversation together.',
-            'EasyICU 正在一起读取已保存的项目、模型连接和对话。',
-          )}</p>
+        <div class="gd-startup-card">
+          <span>${t('Restoring your research workspace…', '正在恢复研究工作区…')}</span>
           <div class="gd-startup-progress" aria-hidden="true"><span></span></div>
         </div>
       </div>`;

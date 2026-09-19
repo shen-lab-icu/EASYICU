@@ -9,16 +9,21 @@
   z-index:80;
   display:grid;
   place-items:start center;
-  padding:clamp(72px,10vh,132px) 28px 28px;
-  background:var(--bg);
+  padding:14px 28px;
+  background:transparent;
 }
 .gd-startup-card{
-  width:min(560px,100%);
-  min-height:174px;
+  width:min(320px,100%);
+  padding:12px 16px;
+  border:1px solid var(--hair);
+  border-radius:8px;
+  background:var(--surface);
+  box-shadow:0 4px 18px #25332f0d;
+  font-size:12px;color:var(--ink-3);
 }
 .gd-startup-progress{
   height:3px;
-  margin-top:20px;
+  margin-top:8px;
   overflow:hidden;
   border-radius:999px;
   background:var(--surface-2);

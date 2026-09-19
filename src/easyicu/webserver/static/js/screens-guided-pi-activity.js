@@ -424,7 +424,7 @@
       const latest = visibleSteps[visibleSteps.length - 1] || allSteps[allSteps.length - 1];
       const running = row && row.status === 'running';
       const failed = row && (row.status === 'error' || row.status === 'cancelled');
-      const kicker = tr('Activity', '执行明细');
+      const kicker = tr('Show traces', '查看执行过程');
       if (running) {
         const title = row.runningTitle || (latest && latest.kind !== 'submitted'
           ? stepLabel(latest) : tr('EasyICU Copilot is preparing the next action', 'EasyICU 研究助手正在准备下一步'));
@@ -490,22 +490,45 @@
     function renderTimeline(rows, renderRow) {
       let pending = [];
       const output = [];
-      function flush() {
-        if (!pending.length) return;
-        const history = pending.length > 2 ? pending.slice(0, -1) : [];
-        if (history.length) {
-          const failed = history.filter(row => ['failed', 'cancelled', 'interrupted'].includes(row.status)).length;
-          output.push(`<details class="gpi-execution-history"><summary>${esc(tr(
-            `Earlier execution records (${history.length}; ${failed} incomplete)`,
-            `此前执行记录（${history.length} 次，${failed} 次未完成）`,
-          ))}</summary>${history.map(renderRow).join('')}</details>`);
+
+      function traceHtml() {
+        if (!pending.length) return '';
+        if (pending.length === 1) {
+          const html = `<div class="gpi-turn-trace">${renderRow(pending[0])}</div>`;
+          pending = [];
+          return html;
         }
-        output.push(...(history.length ? pending.slice(-1) : pending).map(renderRow));
+        const failed = pending.filter(row => ['error', 'failed', 'cancelled', 'interrupted'].includes(row.status)).length;
+        const rowsHtml = pending.map(renderRow).join('');
+        const summary = tr(
+          `Show traces · ${pending.length} records${failed ? ` · ${failed} incomplete` : ''}`,
+          `查看执行过程 · ${pending.length} 条记录${failed ? ` · ${failed} 条未完成` : ''}`,
+        );
         pending = [];
+        return `<details class="gpi-execution-history gpi-turn-traces"><summary>${esc(summary)}</summary><div class="gpi-turn-trace-list">${rowsHtml}</div></details>`;
       }
+
+      function flush() {
+        const html = traceHtml();
+        if (html) output.push(html);
+      }
+
       rows.forEach(row => {
-        if (row && row.role === 'activity' && row.status !== 'running') pending.push(row);
-        else { flush(); output.push(renderRow(row)); }
+        if (row && row.role === 'activity' && row.status !== 'running') {
+          pending.push(row);
+          return;
+        }
+        // A completed tool/lifecycle trace explains the assistant answer that
+        // follows it. Render the answer first and tuck the trace immediately
+        // underneath, matching the reading order used by research workspaces:
+        // question -> answer -> optional execution evidence.
+        if (row && row.role === 'assistant' && pending.length) {
+          output.push(renderRow(row));
+          flush();
+          return;
+        }
+        flush();
+        output.push(renderRow(row));
       });
       flush();
       return output.join('');

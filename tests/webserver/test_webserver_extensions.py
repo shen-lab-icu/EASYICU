@@ -11,6 +11,7 @@ def _skill() -> str:
         "---\n"
         "name: clear-writing\n"
         "description: Keep scientific writing concise.\n"
+        "category: Clinical Research\n"
         "---\n"
         "Use short paragraphs.\n"
     )
@@ -44,8 +45,31 @@ def test_extension_api_installs_toggles_and_removes_skill(
     assert installed.status_code == 200
     row = installed.json()["skill"]
     assert row["name"] == "clear-writing"
+    assert row["category"] == "Clinical Research"
     assert len(row["digest"]) == 64
     assert "path" not in str(installed.json()).casefold()
+
+    detail = client.get("/api/extensions/skills/clear-writing")
+    assert detail.status_code == 200
+    assert detail.json()["instructions"] == "Use short paragraphs."
+    assert detail.json()["skill_md"] == _skill()
+    assert detail.json()["digest"] == row["digest"]
+    assert detail.json()["category"] == "Clinical Research"
+    assert "path" not in str(detail.json()).casefold()
+
+    invalid_category = client.post(
+        "/api/extensions/skills/install",
+        json={
+            "skill_md": _skill().replace("Clinical Research", "../private"),
+            "stages": ["conversation"],
+            "enabled": False,
+            "expected_sha256": _revision(client),
+        },
+    )
+    assert invalid_category.status_code == 400
+
+    missing = client.get("/api/extensions/skills/not-installed")
+    assert missing.status_code == 400
 
     disabled = client.post(
         "/api/extensions/state",

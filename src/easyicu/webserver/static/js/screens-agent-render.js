@@ -1242,6 +1242,101 @@
       <p class="ag-result-reader-note">${esc(t('Readable numbers are rounded only for display. The immutable JSON and registered source tables retain the original precision and lineage.', '可读视图只改变显示精度；不可变 JSON 与登记源表仍保留原始数值和完整溯源。'))}</p>
     </div>`;
   }
+
+  const scientificReviewCopyZh = Object.freeze({
+    'Technical executability is not evidence of novelty or publication value.': '技术上可以执行，不等于已经证明研究具有创新性或投稿价值。',
+    'A dated search returned sources and the plan mapping is complete.': '已完成带日期的文献检索，并记录了文献与研究计划的对应关系。',
+    'The cohort definition and export authority are explicit.': '队列定义和数据导出权限已有明确记录。',
+    'Execution completeness does not close the open scientific design defects.': '分析执行完成，不代表尚未解决的科学设计问题已经关闭。',
+    'Draft generation is not equivalent to publication readiness.': '生成稿件不等于已经达到投稿条件。',
+    'No accepted, digest-bound prior-art review proves that this question is a reliable or sufficiently differentiated research idea.': '尚无已接受且绑定版本的既往研究审阅，能够证明该问题可靠并具有足够差异化。',
+    'Run Idea Mining prior-art retrieval, inspect same-topic hits, and accept the refreshed handoff before treating the idea as publishable.': '先完成研究想法的既往文献检索，核对同主题研究，并接受更新后的交接记录，再判断该问题能否用于投稿。',
+    'The persisted independent reviewer package still contains an open major-revision or reject-level scientific finding.': '独立审阅记录中仍有尚未关闭的重大修订或拒稿级科学问题。',
+    'Resolve or explicitly adjudicate every major finding and regenerate the reviewer receipt before human publication review.': '逐项解决或明确裁定所有重大问题，并重新生成审阅记录后，再进入人工投稿审阅。',
+    'The run has no independent, source-bound comparison showing how its population/setting, exposure/time zero, outcome/estimand, analysis/robustness, data-source transportability, and clinical or methodological contribution differ from retained comparison sources.': '当前运行缺少独立且绑定来源的对照，尚未说明研究人群与场景、暴露与时间零点、结局与估计目标、分析与稳健性、数据来源可迁移性，以及临床或方法学贡献与保留文献有何差异。',
+    'Create a comparator matrix from retained source excerpts, record substantive differences on all six dimensions, and obtain independent review. A new database/concept instantiation alone is not a novelty claim.': '依据保留的原文证据建立对照矩阵，记录六个维度的实质差异并完成独立审阅。仅更换数据库或实现同一概念，不能单独构成创新性。',
+    'The reporting checklist contains unresolved items.': '报告规范检查表中仍有未解决项目。',
+    'Address each item or record an evidence-backed not-applicable decision before calling the draft submission-ready.': '逐项处理，或记录有证据支持的“不适用”判断后，才能将稿件标记为可投稿。',
+    'An evidence-bound draft exists at most; publication authority has not been granted by the Research Agent gates.': '当前最多形成了证据绑定草稿；研究闸门尚未授予投稿使用权限。',
+    'Close scientific, display, reporting, provenance, and human-review gates on one exact run authority before external use.': '在同一精确运行版本上关闭科学、展示、报告、溯源和人工审阅闸门后，方可对外使用。',
+  });
+  const scientificReviewCodeLabels = Object.freeze({
+    IDEA_PRIOR_ART_AUTHORITY_NOT_ESTABLISHED: ['Prior-art evidence is not established', '既往研究依据尚未建立'],
+    SCIENTIFIC_REVIEW_MAJOR_REVISION_OPEN: ['Major scientific revision remains open', '重大科学修订尚未关闭'],
+    NOVELTY_POSITIONING_NOT_ESTABLISHED: ['Novelty positioning is not established', '创新性定位尚未建立'],
+    REPORTING_CHECKLIST_ITEMS_OPEN: ['Reporting checklist items remain open', '报告规范项目尚未关闭'],
+    PAPER_AUTHORITY_NOT_GRANTED: ['Publication use is not authorized', '尚未取得投稿使用权限'],
+  });
+  function scientificReviewText(value) {
+    const text = String(value || '');
+    return scientificReviewCopyZh[text] ? t(text, scientificReviewCopyZh[text]) : text;
+  }
+  function scientificDomainLabel(value) {
+    const key = String(value || '').toLowerCase();
+    const labels = {
+      idea: t('Idea and novelty', '想法与创新性'), literature: t('Literature evidence', '文献依据'),
+      data: t('Data and cohort', '数据与队列'), analysis: t('Analysis and robustness', '分析与稳健性'),
+      manuscript: t('Manuscript and reporting', '稿件与报告'),
+    };
+    return labels[key] || value || t('Scientific review', '科学审阅');
+  }
+  function scientificReviewStatus(value) {
+    const key = String(value || '').toLowerCase();
+    const labels = {
+      not_assessed: t('Not assessed', '未评估'), passed: t('Passed', '已通过'),
+      blocked: t('Blocked', '已阻断'), warning: t('Attention', '需关注'),
+      blocker: t('Blocker', '阻断'), major: t('Major', '重大'), minor: t('Minor', '一般'),
+    };
+    return labels[key] || runStatusLabel(value);
+  }
+  function scientificFindingTitle(code, domain) {
+    const key = String(code || '');
+    if (scientificReviewCodeLabels[key]) return t(...scientificReviewCodeLabels[key]);
+    return key ? t('Scientific review finding', `${scientificDomainLabel(domain)}待处理项`) : t('Review finding', '科学审阅待处理项');
+  }
+  function scientificReadinessView(payload) {
+    const p = payload && typeof payload === 'object' ? payload : {};
+    const domains = Array.isArray(p.domains) ? p.domains : [];
+    const findings = Array.isArray(p.findings) ? p.findings : [];
+    const summary = artifactTable(
+      t('Review boundary', '审阅边界'),
+      [t('Item', '项目'), t('Current state', '当前状态')],
+      [
+        [t('Run', '运行'), p.run_id || ''],
+        [t('Claim ceiling', '论断上限'), runStatusLabel(p.claim_ceiling || p.status)],
+        [t('Human review', '人工审阅'), p.human_review_required ? t('Required', '需要') : t('Not required', '不需要')],
+        [t('Publication use', '投稿使用'), p.paper_authorized ? t('Authorized', '已授权') : t('Not authorized', '未授权')],
+        [t('Open findings', '待处理项'), String(findings.length)],
+      ],
+    );
+    const domainTable = artifactTable(
+      t('Review domains', '审阅领域'),
+      [t('Domain', '领域'), t('Evidence', '证据'), t('Status', '状态'), t('Conclusion', '结论')],
+      domains.map(row => [
+        scientificDomainLabel(row.domain),
+        t(`${Array.isArray(row.evidence_refs) ? row.evidence_refs.length : 0} references`, `${Array.isArray(row.evidence_refs) ? row.evidence_refs.length : 0} 项`),
+        scientificReviewStatus(row.status),
+        scientificReviewText(row.summary),
+      ]),
+      t('No review domains are present.', '没有可展示的审阅领域。'),
+    );
+    const findingTable = artifactTable(
+      t('Open scientific findings', '待处理科学问题'),
+      [t('Severity', '级别'), t('Finding', '问题'), t('Why it matters', '影响'), t('Next step', '下一步')],
+      findings.map(row => [
+        scientificReviewStatus(row.severity),
+        scientificFindingTitle(row.code, row.domain),
+        scientificReviewText(row.message),
+        scientificReviewText(row.remediation),
+      ]),
+      t('No open scientific findings are present.', '没有待处理科学问题。'),
+      { disclosure: findings.length > 3, open: false, meta: t(`${findings.length} findings`, `${findings.length} 项`) },
+    );
+    return `<div class="ag-artifact-readable ag-scientific-review-reader">
+      <div class="ag-artifact-readable-head"><div><div class="eyebrow">${esc(t('Scientific review', '科学审阅'))}</div><div class="ag-artifact-readable-title">${esc(t('Review conclusions and permissions are shown in plain language. Raw JSON remains available for audit.', '以可读语言展示审阅结论和权限；原始 JSON 仍保留用于审计。'))}</div></div><span class="pill" style="height:22px;">${esc(runStatusLabel(p.status || p.claim_ceiling))}</span></div>
+      ${summary}${domainTable}${findingTable}
+    </div>`;
+  }
   function artifactStructuredView(name, payload) {
     const n = String(name || '').toLowerCase();
     const p = payload && typeof payload === 'object' ? payload : {};
@@ -1254,6 +1349,7 @@
     }
     if (n === 'agent_plan.json') return agentPlanView(p);
     if (n === 'scientific_plan_review.json') return scientificPlanReviewView(p);
+    if (String(p.schema_version || '') === 'easyicu.web-scientific-readiness/1') return scientificReadinessView(p);
     if (n.includes('result_tables')) return resultTablesView(p);
     const sections = [];
     const summary = artifactSummaryRows(
@@ -1414,6 +1510,6 @@
     runStatusLabel, runStatusHint, gateCheckLabel, readableArtifactText, firstValue, fmtCount,
     artifactKind, artifactTitle, artifactCategory, artifactSummary, artifactRank, defaultArtifactName,
     thumb, scrubDataUrls, figureGallery, artifactScalar, artifactKeyLabel,
-    artifactSummaryRows, artifactTable, objectArrayRows, firstObjectArray, stepRowsFrom, manuscriptProvenanceView, artifactStructuredView,
+    artifactSummaryRows, artifactTable, objectArrayRows, firstObjectArray, stepRowsFrom, manuscriptProvenanceView, scientificReadinessView, artifactStructuredView,
   };
 })();

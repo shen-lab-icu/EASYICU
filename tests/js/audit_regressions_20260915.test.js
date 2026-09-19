@@ -139,7 +139,7 @@ test('P2-11 send and regenerate discard stale success and errors after session s
     const pending = deferred(), watched = [];
     const c = context({ state: { session: { session_id: 'A' }, sessionSelectionRevision: 1, messages: [] }, projectId: () => 'project',
       sessionIsStale: () => false, sessionMatchesUiLanguage: () => true, IDEA_SOURCE: null, REGENERATION: null,
-      STUDY_WORKSPACE: { consume() {} },
+      STUDY_WORKSPACE: { consume() {}, consumeSkill() {} },
       PLAN_ACTIONS: { regenerationAuthority: () => ({ grants: [] }) }, turnGrants: () => [],
       ensureActivity: () => ({}), upsertActivityStep() {}, render() {}, finishActivity: () => { throw Error('old error changed activity'); },
       errorText: String, watchJob: id => watched.push(id),
