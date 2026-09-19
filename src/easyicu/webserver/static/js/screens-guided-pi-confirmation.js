@@ -345,6 +345,8 @@
       const reviewMaterials = reviewResources
         ? confirmation.code === 'plan_scientific_changes_required'
           ? `<details class="gpi-confirmation-resources"><summary>${esc(tr('View rationale and complete evidence', '查看理由与完整证据'))}</summary>${decisionRationale}<div>${reviewResources}</div></details>`
+          : confirmation.code === 'failed_pipeline_requires_fresh_plan'
+            ? `<details class="gpi-confirmation-resources is-historical"><summary>${esc(confirmation.reviewMaterialsTitle)} · ${reviewResourceButtons.length}</summary><div>${reviewResources}</div></details>`
           : `<div class="gpi-confirmation-resources is-expanded"><strong>${esc(confirmation.reviewMaterialsTitle || (confirmation.compactApproval ? tr('Quick review', '快速审阅') : tr('View the plan and references', '查看计划与依据')))}</strong><div>${reviewResourceButtons[0] || ''}${confirmation.compactApproval ? `<button class="gpi-resource-link" type="button" data-gpi-confirm-preview-data>${esc(tr('Data readiness check', '数据准备检查'))}</button>` : ''}${reviewResourceButtons.slice(1).join('')}</div></div>`
         : '';
       const compactOtherAction = confirmation.compactApproval && confirmation.rejectMessage

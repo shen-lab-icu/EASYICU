@@ -1,7 +1,7 @@
 /* Owner: Guided Copilot project rail, local-project rows, and its responsive
    shell column allocation. */
-.gd-main.threecol{grid-template-columns:292px minmax(0,1fr) 292px}
-.gd-main.threecol.gd-project-rail-collapsed{grid-template-columns:minmax(0,1fr) 292px}
+.gd-main.threecol{grid-template-columns:var(--gd-project-rail-width,292px) minmax(0,1fr) var(--gd-context-aside-width,292px)}
+.gd-main.threecol.gd-project-rail-collapsed{grid-template-columns:minmax(0,1fr) var(--gd-context-aside-width,292px)}
 .gd-main.gd-project-rail-collapsed>.gd-rail{display:none}
 .gd-main.gd-project-rail-collapsed>.gd-rail-restore{display:grid}
 
@@ -207,7 +207,7 @@
 .gd-rail-foot .btn.gd-data-workspace{font-size:13.5px}
 
 @media (max-width:1180px){
-  .gd-main.threecol{grid-template-columns:292px minmax(0,1fr)}
+  .gd-main.threecol{grid-template-columns:var(--gd-project-rail-width,292px) minmax(0,1fr)}
   .gd-main.threecol.gd-project-rail-collapsed{grid-template-columns:minmax(0,1fr)}
   .gd-main.threecol>.gd-aside{display:none}
 }

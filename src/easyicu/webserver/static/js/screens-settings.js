@@ -204,6 +204,27 @@
     </div>`;
   }
 
+  function builtInSkillCards() {
+    const records = cap('publication_skills');
+    const skills = Array.isArray(records.items) ? records.items : [];
+    const titles = {
+      'nature-figure': dual('Evidence figures', '证据图件'),
+      'nature-writing': dual('Evidence writing', '证据写作'),
+    };
+    const scopes = {
+      'nature-figure': dual('', '先确定图件论断，再由登记的源数据与代码生成数值结果图。'),
+      'nature-writing': dual('', '按段落职责组织论文论证，并逐项绑定证据和文献。'),
+    };
+    const list = values => `<ul>${(Array.isArray(values) ? values : []).map(value => `<li>${h(value)}</li>`).join('')}</ul>`;
+    return `<div class="settings-skill-catalog" aria-label="${dual('Built-in skill packages', '内置技能包')}">
+      <div class="settings-skill-catalog-head"><strong>${dual('Built-in skill packages', '内置技能包')}</strong><span>${dual('Select a package to inspect its contract. Enabled skills take effect on new runs.', '点击查看适用范围和契约；启用状态对新运行生效。')}</span></div>
+      ${skills.map(skill => `<details class="settings-skill-card">
+        <summary><span><small>${h(skill.stage || '')}</small><strong>${h(titles[skill.id] || skill.title || skill.id)}</strong><span>${h(window.EU_LANG === 'zh' && scopes[skill.id] || skill.scope || '')}</span></span><em class="${skill.enabled ? 'on' : ''}">${skill.enabled ? dual('Enabled', '已启用') : dual('Off', '未启用')}</em></summary>
+        <div class="settings-skill-card-body"><div><b>${dual('Inputs', '输入')}</b>${list(skill.inputs)}</div><div><b>${dual('Outputs', '输出')}</b>${list(skill.outputs)}</div><div><b>${dual('Evidence rules', '证据规则')}</b>${list(skill.invariants)}</div><small>${h(skill.version || '')}</small></div>
+      </details>`).join('')}
+    </div>`;
+  }
+
   function capabilityBody() {
     const pubmedOn = settingOn('connector_pubmed_enabled', true);
     const zoteroOn = settingOn('connector_zotero_enabled', false);
@@ -228,6 +249,7 @@
         ${capRow('nature_writing_skill_enabled', dual('Nature Writing', 'Nature 写作'), dual('Adds paragraph-role, terminology, calibrated-claim, evidence, literature, and novelty rules to Writer.', '为 Writer 加入段落职责、术语一致性、措辞校准、证据、文献和创新性规则。'), true)}
         ${row(dual('Run binding', '运行绑定'), dual('The active switches are frozen into each new Agent run and written to an evidence receipt. Existing runs do not change retroactively.', '每次新 Agent 运行都会固化当前开关并写入证据回执；已有运行不会被追溯修改。'), truthCtl(`${activeSkillCount}/2 ${dual('active by default', '默认启用')}`))}
         ${row(dual('Skill scope', '技能范围'), dual('These skills coordinate local workflow contracts. They do not send patient rows outside this machine.', '这些技能编排本地工作流契约，不会把患者行发出本机。'), lockedCtl(dual('evidence-bound', '证据约束'), dual('Result figures and manuscript claims remain source-bound and audited.', '结果图与论文论断始终绑定来源并接受审计。')))}
+        ${builtInSkillCards()}
         ${extensionUi().renderSkills ? extensionUi().renderSkills() : ''}
       </div>`;
     }
@@ -475,6 +497,12 @@
       </div>`;
     },
     render() {
+      try {
+        if (window.sessionStorage.getItem('easyicu.settings.openCapabilityTab') === 'skills') {
+          settingsCapabilityTab = 'skills';
+          window.sessionStorage.removeItem('easyicu.settings.openCapabilityTab');
+        }
+      } catch (_) {}
       return `
       <div class="settings-page">
       <div class="page-head" style="margin-bottom:18px;">

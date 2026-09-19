@@ -61,6 +61,60 @@ def test_publication_skill_capabilities_default_on_and_respect_each_switch(
     assert publication["active_skill_ids"] == ["nature-writing"]
 
 
+def test_method_skill_catalog_projects_registered_method_contracts(monkeypatch) -> None:
+    monkeypatch.setattr(
+        settings_store,
+        "load_settings",
+        lambda: _settings(science_skills_enabled=True),
+    )
+
+    body = TestClient(app).get("/api/capabilities").json()
+    catalog = body["capabilities"]["method_skills"]
+    by_id = {row["id"]: row for row in catalog["items"]}
+    components = {row["id"]: row for row in catalog["components"]}
+
+    assert len(by_id) == 15
+    assert len(components) == 38
+    assert catalog["workflow_count"] == 15
+    assert catalog["available_method_count"] == 38
+    assert catalog["planned_method_count"] == 12
+    assert by_id["survival-time-to-event"]["capability_id"] == (
+        "survival_time_to_event_v1"
+    )
+    assert by_id["survival-time-to-event"]["action_ids"] == [
+        "time_to_event.cox_hr",
+        "time_to_event.km_logrank",
+        "time_to_event.ph_check",
+    ]
+    assert by_id["survival-time-to-event"]["claim_ceiling"] == "reportable"
+    assert by_id["target-trial-emulation"]["claim_ceiling"] == "analysis_only"
+    assert components["prediction.decision_curve"]["implementation"] == "llm_coded"
+    assert components["prediction.decision_curve"]["claim_ceiling"] == "analysis_only"
+    assert components["time_to_event.cox_hr"]["implementation"] == "deterministic"
+    assert components["time_to_event.cox_hr"]["method_family"] == "time_to_event"
+    assert all("owner_module" not in row for row in by_id.values())
+    assert all("runner" not in row for row in components.values())
+    assert catalog["active_skill_ids"] == list(by_id)
+    assert catalog["active_component_ids"] == list(components)
+
+
+def test_method_skill_catalog_respects_science_skills_master_switch(monkeypatch) -> None:
+    monkeypatch.setattr(
+        settings_store,
+        "load_settings",
+        lambda: _settings(science_skills_enabled=False),
+    )
+
+    catalog = TestClient(app).get("/api/capabilities").json()["capabilities"][
+        "method_skills"
+    ]
+    assert catalog["enabled"] is False
+    assert catalog["active_skill_ids"] == []
+    assert catalog["active_component_ids"] == []
+    assert all(row["enabled"] is False for row in catalog["items"])
+    assert all(row["enabled"] is False for row in catalog["components"])
+
+
 def test_capability_tool_check_blocks_unknown_and_external_tools(monkeypatch) -> None:
     monkeypatch.setattr(
         settings_store,

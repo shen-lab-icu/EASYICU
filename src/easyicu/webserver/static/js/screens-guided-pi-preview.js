@@ -344,7 +344,9 @@
       panels.setContextAsideCollapsed(state.previousAsideCollapsed, main);
       state.previousAsideCollapsed = null;
     }
-    if (study) study.hidden = !!open;
+    // CSS swaps the shelf for the preview on ordinary desktops and keeps both
+    // visible on wide research workstations. Do not hide the shelf in the DOM.
+    if (study) study.hidden = false;
     if (state.host) state.host.hidden = !open;
     if (aside) aside.classList.toggle('gpi-preview-open', !!open);
     if (main) main.classList.toggle('gpi-preview-open', !!open);
@@ -387,6 +389,7 @@
       return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('System validation dossier · Engineering evidence only', '系统验证报告 · 仅限工程证据'))}</strong><span>${esc(tr('Not a clinical manuscript; cannot grant scientific or publication authority.', '不是临床论文；不能授予科学或发表权限。'))}</span></div>`;
     }
     if (!state.governance) {
+      if (isResearchDocument() && /^[a-f0-9]{64}$/.test(state.resource.sha256 || '')) return `<div class="gpi-preview-provenance is-research" role="note"><strong>${tr('Research document · Version pinned', '研究文档 · 版本已绑定')}</strong><span>${tr('Scientific status remains in the review records.', '科学状态以审阅记录为准。')}</span></div>`;
       return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('EasyICU run artifact · Governance pending', 'EasyICU 运行产物 · 治理状态待确认'))}</strong><span>${esc(tr('Loading Host gate status…', '正在加载 Host 运行闸状态…'))}</span></div>`;
     }
     const ceiling = governance.claim_ceiling;
@@ -448,12 +451,21 @@
         ? renderer.renderSource(state.resource)
         : `<div class="gpi-preview-state error">${esc(tr('Literature renderer unavailable', '文献渲染器不可用'))}</div>`;
     } else if (state.mode === 'document' && isDocument()) {
-      const documentUrl = previewUrl();
-      const url = documentUrl && /\.pdf$/i.test(state.resource.artifact || '')
-        ? documentUrl + '#view=FitH&navpanes=0' : documentUrl;
-      body = url
-        ? `<iframe class="gpi-preview-frame gpi-preview-document-frame" src="${esc(url)}" sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`
-        : `<div class="gpi-preview-state error">${icon('alert', 16)}<strong>${tr('Preview unavailable', '无法预览')}</strong><span>${tr('The registered document digest is missing, so this preview cannot be pinned to the run ledger.', '登记文档摘要缺失，预览无法钉定到运行台账。')}</span></div>`;
+      const url = previewUrl();
+      if (!url) body = `<div class="gpi-preview-state error">${icon('alert', 16)}<strong>${tr('Preview unavailable', '无法预览')}</strong><span>${tr('The registered document digest is missing, so this preview cannot be pinned to the run ledger.', '登记文档摘要缺失，预览无法钉定到运行台账。')}</span></div>`;
+      else if (/\.pdf$/i.test(state.resource.artifact || '')) {
+        // Chrome blocks its native PDF plugin in sandboxed frames. Keep the
+        // sandbox contract; offer the exact bytes and the matching online article.
+        const current = state.projectId === state.studyProjectId
+          && state.studyResources.some(row => resourceKey(row) === resourceKey(state.resource));
+        const article = current ? state.studyResources.findIndex(row => row.kind === 'research_report'
+          && row.run_id === state.resource.run_id && row.artifact === 'article_report.json') : -1;
+        body = `<section class="gpi-pdf-access"><span class="gpi-pdf-mark" aria-hidden="true">PDF</span><h2>${tr('Read the formatted PDF', '阅读完整排版的 PDF')}</h2>
+          <p>${tr('Embedded PDF reading is unavailable in this preview. Download the file to read it in a PDF viewer.', '当前预览环境不支持内嵌 PDF 阅读，请下载后用 PDF 阅读器打开。')}</p>
+          <small>${esc(state.resource.artifact)}</small><div><a class="btn primary" href="${esc(url)}" download="${esc(state.resource.artifact)}">${tr('Download this PDF', '下载此 PDF')}</a>
+          ${article >= 0 ? `<button class="btn" type="button" data-gpi-study-resource="${article}">${tr('Read the matching article online', '在线阅读对应文章')}</button>` : ''}</div>
+        </section>`;
+      } else body = `<iframe class="gpi-preview-frame gpi-preview-document-frame" src="${esc(url)}" sandbox="allow-scripts" referrerpolicy="no-referrer" title="${esc(tr('Preview of ', '预览：') + state.resource.label)}"></iframe>`;
     } else if (state.mode === 'web' && isHtml()) {
       const url = previewUrl();
       body = url
@@ -531,12 +543,14 @@
     const referenceOwner = window.EasyICU.guidedPi.optional('studyWorkspace');
     const canReference = state.projectId === state.studyProjectId && state.referenceResource && referenceOwner
       && referenceOwner.create({ tr, esc }).canReference(state.resource);
+    const documentDownload = isResearchDocument() && /\.pdf$/i.test(state.resource.artifact || '') ? previewUrl() : '';
     state.host.innerHTML = `
       <div class="gpi-reader-context"><button type="button" data-gpi-preview-close>${icon('back', 14)} ${tr('Back to conversation', '返回对话')}</button><span title="${esc(state.studyTitle)}">${esc(state.projectId === state.studyProjectId ? state.studyTitle : '')}</span></div>
       <header class="gpi-preview-head">
         <div class="gpi-preview-file-icon" aria-hidden="true">${icon(state.mode === 'web' ? 'globe' : 'file', 16)}</div>
         <div class="gpi-preview-ident"><strong title="${esc(reference)}">${esc(state.resource.label)}</strong>${provenance}</div>
         ${canReference ? `<button class="gpi-preview-layout gpi-preview-reference-action" type="button" data-gpi-preview-reference>${tr('Reference in conversation', '引用到对话')}</button>` : ''}
+        ${documentDownload ? `<a class="gpi-preview-layout gpi-preview-download" href="${esc(documentDownload)}" download="${esc(state.resource.artifact)}">${tr('Download PDF', '下载 PDF')}</a>` : ''}
         <button class="gpi-preview-layout" type="button" data-gpi-preview-focus aria-pressed="${state.focused}">${state.focused ? tr('Show conversation', '边聊边看') : tr('Focus reading', '专注阅读')}</button>
         <button class="gpi-preview-close" type="button" data-gpi-preview-close aria-label="${tr('Close preview', '关闭预览')}" title="${tr('Close preview', '关闭预览')}">${icon('close', 15)}</button>
       </header>
@@ -750,7 +764,7 @@
     if (!safe || (!project && safe.kind !== 'demo_artifact' && safe.kind !== 'demo_document' && safe.kind !== 'literature_source')) return;
     state.request += 1;
     state.loading = false;
-    if (!state.resource || state.projectId !== project) state.focused = /^research_(report|document|artifact)$/.test(safe.kind);
+    if (!state.resource || state.projectId !== project) state.focused = false;
     if (state.projectId !== project) state.recentResources = [];
     const catalogResource = project === state.studyProjectId && state.studyResources.find(row =>
       resourceKey(row) === resourceKey(safe) && row.sha256 === safe.sha256);

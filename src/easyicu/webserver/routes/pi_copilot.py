@@ -595,6 +595,36 @@ def get_pi_copilot_research_artifact(
 
 
 @router.get(
+    "/api/copilot/pi/projects/{project_id}/runs/{run_id}/artifacts/{artifact_name}/download"
+)
+def download_pi_copilot_research_artifact(
+    project_id: ShortText,
+    run_id: RunIdText,
+    artifact_name: ArtifactNameText,
+    expected_sha256: Sha256Text,
+) -> Response:
+    try:
+        payload = get_pi_copilot_service().get_research_artifact_download(
+            project_id=project_id,
+            run_id=run_id,
+            artifact_name=artifact_name,
+            expected_sha256=expected_sha256,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+    return Response(
+        content=payload["content"],
+        media_type=payload["media_type"],
+        headers={
+            "Content-Disposition": f'attachment; filename="{artifact_name[:-5]}.review.json"',
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+        },
+    )
+
+
+@router.get(
     "/api/copilot/pi/projects/{project_id}/runs/{run_id}/evidence/{evidence_id}"
 )
 def get_pi_copilot_research_evidence_preview(

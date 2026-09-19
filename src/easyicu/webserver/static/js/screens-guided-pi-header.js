@@ -11,9 +11,7 @@
      title does not already contain it. */
   function kickerText(options) {
     const project = String(options.projectTitle || '').trim();
-    const session = String(options.sessionTitle || '').trim();
-    if (!project || (session && session.indexOf(project) >= 0)) return 'EasyICU';
-    return `EasyICU · ${project}`;
+    return project || 'EasyICU';
   }
 
   function renderModelControl(options) {
@@ -26,9 +24,21 @@
   function render(options) {
     const { tr, esc, icon } = options;
     return `<header class="gpi-head">
-      <div class="gpi-head-title"><div class="gpi-kicker">${esc(kickerText(options))}</div><div class="gpi-title" title="${esc(options.sessionTitle)}">${esc(options.sessionTitle)} <span class="gpi-live" role="status" aria-live="polite">${options.busy ? tr('working', '工作中') : tr('ready', '就绪')}</span></div></div>
+      <div class="gpi-head-title"><span class="gpi-kicker" title="${esc(kickerText(options))}">${esc(kickerText(options))}</span><span class="gpi-head-separator" aria-hidden="true">/</span><span class="gpi-title" title="${esc(options.sessionTitle)}"><span class="gpi-session-title-text">${esc(options.sessionTitle)}</span></span><span class="gpi-live" role="status" aria-live="polite">${options.busy ? tr('working', '工作中') : tr('ready', '就绪')}</span></div>
       <div class="gpi-head-meta">
         <button class="gpi-head-new" type="button" data-gpi-new>${icon('plus', 13)} ${tr('New conversation', '新会话')}</button>
+        <details class="gpi-layout-control">
+          <summary>${icon('grid', 13)} ${tr('Layout', '布局')}</summary>
+          <div class="gpi-layout-popover" role="group" aria-label="${tr('Visible workspace panels', '工作区显示面板')}">
+            <strong>${tr('Workspace panels', '工作区面板')}</strong>
+            ${[
+              ['progress', tr('To-dos', '待办')],
+              ['results', tr('Results', '成果')],
+              ['compute', tr('Compute', '计算')],
+              ['notes', tr('Notes', '笔记')],
+            ].map(([key, label]) => `<button type="button" data-gpi-layout-toggle="${key}" aria-label="${esc(label)}" aria-pressed="${Boolean(options.layout && options.layout[key])}"><span>${esc(label)}</span><span aria-hidden="true">${options.layout && options.layout[key] ? '✓' : ''}</span></button>`).join('')}
+          </div>
+        </details>
         <details class="gpi-head-overflow">
           <summary>${tr('More', '更多')}<span aria-hidden="true">⌄</span></summary>
           <div class="gpi-head-overflow-menu" role="menu">

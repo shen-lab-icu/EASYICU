@@ -8,7 +8,7 @@
   function create(options) {
     const {
       state, RESOURCE_OWNER, RUN_FILES, MESSAGE_ACTIONS, STARTERS, IDEA_SOURCE, COHORT_ELIGIBILITY,
-      DATA_CONSENT, RUN_OUTCOME, STUDY_WORKSPACE, render, projectId, previewWorkflowContext,
+      DATA_CONSENT, RUN_OUTCOME, STUDY_WORKSPACE, ASIDE, render, projectId, previewWorkflowContext,
       openSession, closeDemo, openDemo, switchMode, loadCodexResearchStatus,
       openAuthorizationPopup, startCodexLogin, cancelCodexLogin, logoutCodex,
       loadCodexModels, tr, apiResearchReady, finishProviderSetup, loadStatus,
@@ -23,12 +23,18 @@
     } = options;
 
     function dismissHeaderOverflow(event) {
+      const materials = state.host && state.host.querySelector('[data-gpi-material-picker][open]');
+      if (materials && !materials.contains(event.target)) STUDY_WORKSPACE.closeMaterials(state.host, false);
+      const skills = state.host && state.host.querySelector('[data-gpi-skill-picker][open]');
+      if (skills && !skills.contains(event.target)) STUDY_WORKSPACE.closeSkills(state.host, false);
       const menu = state.host && state.host.querySelector('.gpi-head-overflow[open]');
       if (menu) {
         const action = event.target && event.target.closest
           ? event.target.closest('.gpi-head-overflow-menu button') : null;
         if (!menu.contains(event.target) || action) menu.removeAttribute('open');
       }
+      const layout = state.host && state.host.querySelector('.gpi-layout-control[open]');
+      if (layout && !layout.contains(event.target)) layout.removeAttribute('open');
       const sourceMenu = state.host && state.host.querySelector('.gpi-idea-source-menu[open]');
       if (!sourceMenu) return;
       const sourceAction = event.target && event.target.closest
@@ -66,6 +72,7 @@
       if (!STUDY_WORKSPACE.setReference(descriptor, projectId(), state.session.session_id)) return false;
       const input = state.host && state.host.querySelector('[data-gpi-input]');
       if (input) state.draft = input.value;
+      STUDY_WORKSPACE.closeMaterials(state.host, false);
       const preview = window.EasyICU.guidedPi.optional('preview');
       if (preview) preview.close();
       render(true);
@@ -101,6 +108,70 @@
       if (!state.host) return;
       state.host.addEventListener('click', event => {
         if (RUN_FILES && RUN_FILES.handleClick(event)) return;
+        const layoutToggle = event.target.closest('[data-gpi-layout-toggle]');
+        if (layoutToggle && ASIDE) {
+          const enabled = ASIDE.togglePanel(layoutToggle.dataset.gpiLayoutToggle);
+          layoutToggle.setAttribute('aria-pressed', String(enabled));
+          layoutToggle.lastElementChild.textContent = enabled ? '✓' : '';
+          return;
+        }
+        const followUp = event.target.closest('[data-gpi-followup]');
+        if (followUp) {
+          if (state.busy || state.childJobId || !state.session || state.session.stale?.stale) return;
+          const prompt = RUN_OUTCOME.followUps(state.latestRun, state.workflow)[Number(followUp.dataset.gpiFollowup)];
+          if (prompt) prepareEntryCompose({ text: prompt, intent: '' });
+          return;
+        }
+        const reviewTab = event.target.closest('[data-gpi-review-tab]');
+        if (reviewTab) {
+          const review = reviewTab.closest('.gpi-review-summary');
+          const index = Number(reviewTab.dataset.gpiReviewTab);
+          if (!review || !RUN_OUTCOME.selectReviewTab(index)) return;
+          review.querySelectorAll('[data-gpi-review-tab]').forEach(button => {
+            button.setAttribute('aria-selected', String(button === reviewTab));
+          });
+          review.querySelectorAll('[data-gpi-review-panel]').forEach(panel => {
+            panel.hidden = Number(panel.dataset.gpiReviewPanel) !== index;
+          });
+          return;
+        }
+        if (event.target.closest('[data-gpi-material-close]')) { STUDY_WORKSPACE.closeMaterials(state.host, true); return; }
+        if (event.target.closest('[data-gpi-skill-close]')) { STUDY_WORKSPACE.closeSkills(state.host, true); return; }
+        if (event.target.closest('[data-gpi-skill-remove]')) { STUDY_WORKSPACE.removeSkill(); render(true); return; }
+        if (event.target.closest('[data-gpi-builder-remove]')) { STUDY_WORKSPACE.removeBuilder(); render(true); return; }
+        if (event.target.closest('[data-gpi-method-remove]')) { STUDY_WORKSPACE.removeMethod(); render(true); return; }
+        if (event.target.closest('[data-gpi-builder-hub]')) { location.hash = '#skills'; return; }
+        if (event.target.closest('[data-gpi-method-hub]')) { location.hash = '#skills'; return; }
+        if (event.target.closest('[data-gpi-skill-hub]')) { location.hash = '#skills'; return; }
+        const skillChoice = event.target.closest('[data-gpi-skill-select]');
+        if (skillChoice) {
+          if (state.busy || state.childJobId || !state.session) return;
+          if (STUDY_WORKSPACE.selectSkill(skillChoice, projectId(), state.session)) render(true);
+          return;
+        }
+        const material = event.target.closest('[data-gpi-material-preview], [data-gpi-material-reference]');
+        if (material) {
+          if (!state.session || state.busy || state.childJobId) return;
+          const resource = STUDY_WORKSPACE.selectedMaterial(material, RUN_OUTCOME.collection(state.latestRun, state.workflow), projectId(), state.session.session_id);
+          if (!resource) return;
+          if (material.hasAttribute('data-gpi-material-reference')) referenceResource(resource, projectId());
+          else { STUDY_WORKSPACE.closeMaterials(state.host, false); openResource(resource); }
+          return;
+        }
+        const materialsTrigger = event.target.closest('[data-gpi-material-picker] > summary');
+        if (materialsTrigger) requestAnimationFrame(() => {
+          const menu = materialsTrigger.parentElement;
+          const search = menu.open && menu.querySelector('[data-gpi-material-search]');
+          if (search) search.focus();
+        });
+        const skillsTrigger = event.target.closest('[data-gpi-skill-picker] > summary');
+        if (skillsTrigger) requestAnimationFrame(() => {
+          const menu = skillsTrigger.parentElement;
+          if (menu.open) {
+            const search = menu.querySelector('[data-gpi-skill-search]');
+            if (search) search.focus();
+          }
+        });
         if (event.target.closest('[data-gpi-reference-remove]')) { STUDY_WORKSPACE.removeReference(); render(true); return; }
         if (event.target.closest('[data-gpi-refresh-status]')) { loadStatus(); return; }
         if (IDEA_SOURCE && IDEA_SOURCE.handleClick(event, {
@@ -242,6 +313,8 @@
       });
       state.host.addEventListener('input', event => {
         if (event.target.matches('[data-gpi-input]')) state.draft = event.target.value;
+        if (event.target.matches('[data-gpi-material-search]')) STUDY_WORKSPACE.filterMaterials(state.host, event.target.value);
+        if (event.target.matches('[data-gpi-skill-search]')) STUDY_WORKSPACE.filterSkills(state.host, event.target.value);
       });
       state.host.addEventListener('change', event => {
         if (RUN_FILES && RUN_FILES.handleChange(event)) return;
@@ -291,6 +364,12 @@
       });
       state.host.addEventListener('keydown', event => {
         if (event.key === 'Escape') {
+          if (state.host.querySelector('[data-gpi-material-picker][open]')) {
+            event.preventDefault(); STUDY_WORKSPACE.closeMaterials(state.host, true); return;
+          }
+          if (state.host.querySelector('[data-gpi-skill-picker][open]')) {
+            event.preventDefault(); STUDY_WORKSPACE.closeSkills(state.host, true); return;
+          }
           const menu = state.host.querySelector('.gpi-head-overflow[open]');
           if (menu) {
             menu.removeAttribute('open');

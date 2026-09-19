@@ -2714,10 +2714,18 @@ def test_pi_conversations_are_immutably_scoped_to_one_project(
     legacy = PiSessionRecord(session_id="pi-legacy")
     service._write_records([alpha, beta, legacy])
 
+    def fail_on_empty_replay_snapshot(**_kwargs):
+        raise AssertionError("empty task lists must not scan replay storage")
+
+    service.replay_store.snapshot = fail_on_empty_replay_snapshot
+
     listed = service.list_sessions(project_id="project-alpha")
     assert [row["session_id"] for row in listed["sessions"]] == ["pi-alpha"]
     assert listed["sessions"][0]["project_id"] == "project-alpha"
     assert listed["sessions"][0]["history_turn_count"] == 0
+    assert listed["sessions"][0]["has_history"] is False
+    assert listed["sessions"][0]["automatic_title"] is True
+    assert listed["sessions"][0]["last_activity_at"] == alpha.created_at
 
     with pytest.raises(PiCopilotError) as mismatch:
         service.get_session("pi-alpha", project_id="project-beta")
@@ -6553,6 +6561,18 @@ def test_project_artifact_preview_resolves_authority_and_scrubs_host_paths(
     }
     assert "project_dir" not in encoded
     assert "/private/" not in encoded
+
+    review_export = service.get_research_artifact_download(
+        project_id="project-a",
+        run_id="run_20260808",
+        artifact_name="table1_summary.json",
+        expected_sha256="c" * 64,
+    )
+    exported = json.loads(review_export["content"])
+    assert exported["kind"] == "easyicu_review_export"
+    assert exported["source_artifact"]["sha256"] == "c" * 64
+    assert exported["payload"]["source"] == {"database": "mimiciv"}
+    assert "/private/" not in review_export["content"].decode("utf-8")
 
     with pytest.raises(PiCopilotError) as digest_mismatch:
         service.get_research_artifact(

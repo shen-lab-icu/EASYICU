@@ -212,13 +212,22 @@
 
   async function boot() {
     try {
+      const initialLanguage = window.EU_LANG;
+      const initialDataMode = window.EU_DATA;
       await Promise.all([hydrateCatalog(), hydrateSettings(), hydrateWorkspaceRegistry()]);
       try {
         await hydrateCapabilities();
       } catch (err) {
         console.warn('[EasyICU] capability fetch failed:', err);
       }
-      rerender();
+      // Guided owns a live conversation DOM. Rebuilding the whole screen after
+      // catalog hydration destroys that DOM and starts project restoration a
+      // second time. Settings that change its language or data mode still need
+      // the normal render; otherwise the already-mounted screen is current.
+      if (!document.getElementById('gdPiShell')
+        || initialLanguage !== window.EU_LANG || initialDataMode !== window.EU_DATA) {
+        rerender();
+      }
       console.info('[EasyICU] hydrated: %d concepts, settings loaded (ai_enabled=%s)',
         window.EU_CATALOG.totalConcepts, window.EU_SETTINGS.ai_enabled);
     } catch (err) {
@@ -352,6 +361,9 @@
   async function loadExtensions() {
     window.EU_EXTENSIONS = await getJSON('/api/extensions');
     return window.EU_EXTENSIONS;
+  }
+  function loadExtensionSkill(name) {
+    return getJSON('/api/extensions/skills/' + encodeURIComponent(name || ''));
   }
   async function installExtensionSkill(body) {
     const result = await postJSON('/api/extensions/skills/install', body || {});
@@ -532,6 +544,12 @@
       + (/^[a-f0-9]{64}$/.test(digest)
         ? '?expected_sha256=' + encodeURIComponent(digest) : '')
     );
+  }
+  function piCopilotResearchArtifactDownloadUrl(projectId, runId, artifact, expectedSha256) {
+    return '/api/copilot/pi/projects/' + encodeURIComponent(projectId)
+      + '/runs/' + encodeURIComponent(runId)
+      + '/artifacts/' + encodeURIComponent(artifact)
+      + '/download?expected_sha256=' + encodeURIComponent(expectedSha256);
   }
   function loadPiCopilotResearchEvidence(projectId, runId, evidenceId, expectedSha256) {
     return getJSON(
@@ -721,6 +739,7 @@
   window.EU_API.loadAgentScienceWorkbench = loadAgentScienceWorkbench;
   window.EU_API.loadCapabilities = loadCapabilities;
   window.EU_API.loadExtensions = loadExtensions;
+  window.EU_API.loadExtensionSkill = loadExtensionSkill;
   window.EU_API.installExtensionSkill = installExtensionSkill;
   window.EU_API.installExtensionMcp = installExtensionMcp;
   window.EU_API.setExtensionState = setExtensionState;
@@ -770,6 +789,7 @@
   window.EU_API.loadPiCopilotWorkspaceFile = loadPiCopilotWorkspaceFile;
   window.EU_API.piCopilotWorkspacePreviewUrl = piCopilotWorkspacePreviewUrl;
   window.EU_API.loadPiCopilotResearchArtifact = loadPiCopilotResearchArtifact;
+  window.EU_API.piCopilotResearchArtifactDownloadUrl = piCopilotResearchArtifactDownloadUrl;
   window.EU_API.loadPiCopilotResearchEvidence = loadPiCopilotResearchEvidence;
   window.EU_API.loadPiCopilotDataPackageReview = loadPiCopilotDataPackageReview;
   window.EU_API.preparePiCopilotDataPackageReview = preparePiCopilotDataPackageReview;

@@ -109,6 +109,15 @@ def get_extensions() -> Dict[str, Any]:
     return payload
 
 
+@router.get("/api/extensions/skills/{name}")
+def get_installed_skill(name: str) -> Dict[str, Any]:
+    """Inspect the current local SKILL.md without exposing registry paths."""
+    try:
+        return _registry().current_skill(name)
+    except ExtensionRegistryError as exc:
+        _raise_extension_error(exc)
+
+
 @router.post("/api/extensions/skills/install")
 def post_install_skill(body: SkillInstallRequest) -> Dict[str, Any]:
     try:

@@ -1,5 +1,5 @@
 /* Owner: Guided Copilot shell side-panel controls and column allocation. */
-.gd-main.threecol.gd-context-aside-collapsed{grid-template-columns:292px minmax(0,1fr)}
+.gd-main.threecol.gd-context-aside-collapsed{grid-template-columns:var(--gd-project-rail-width,292px) minmax(0,1fr)}
 .gd-main.threecol.gd-project-rail-collapsed.gd-context-aside-collapsed{grid-template-columns:minmax(0,1fr)}
 .gd-main.gd-context-aside-collapsed>.gd-aside{display:none}
 .gd-main.gd-context-aside-collapsed>.gd-aside-restore{display:grid}

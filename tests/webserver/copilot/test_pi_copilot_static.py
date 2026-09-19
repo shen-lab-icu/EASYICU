@@ -68,7 +68,7 @@ process.stdout.write(JSON.stringify({candidate, executable, requiredDecision}));
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260916-study-workspace3" in index
+    assert "css/guided-pi.css?v=20260918-structure2" in index
     assert "css/guided-pi-idea-source.css?v=20260902-type-scale2" in index
     assert "css/guided-pi-demo.css?v=20260815-reviewer-demo2" in index
     assert "css/guided-pi-preview.css?v=20260916-study-workspace3" in index
@@ -80,13 +80,13 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-modules.js?v=20260902-module-contract1" in index
     assert "js/screens-guided-pi-literature.js?v=20260828-literature-search1" in index
     assert "js/screens-guided-pi-markdown.js?v=20260901-idea-value2" in index
-    assert "js/screens-guided-pi-next-actions.js?v=20260901-entry-routing1" in index
+    assert "js/screens-guided-pi-next-actions.js?v=20260919-taskcanvas1" in index
     assert "js/screens-guided-pi-message-actions.js?v=20260829-plan-retry2" in index
     assert "js/screens-guided-pi-regeneration.js?v=20260830-plan-branch2" in index
     assert "js/screens-guided-pi-starters.js?v=20260902-zero-direction1" in index
     assert "js/screens-guided-pi-idea-source.js?v=20260901-composer-plus1" in index
-    assert "js/screens-guided-pi-header.js?v=20260916-study-workspace3" in index
-    assert "css/guided-pi-workspace.css?v=20260916-study-workspace3" in index
+    assert "js/screens-guided-pi-header.js?v=20260919-taskcanvas1" in index
+    assert "css/guided-pi-workspace.css?v=20260919-dialogue2" in index
     assert "js/screens-guided-pi-demo.js?v=20260815-real-render2" in index
     assert "js/screens-guided-pi-workbench-preview.js?v=20260829-data-readiness1" in index
     assert (
@@ -98,31 +98,31 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     )
     assert "js/screens-guided-pi-analysis-report.js?v=20260916-study-workspace3" in index
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
-    assert "js/screens-guided-pi-preview.js?v=20260917-product-label1" in index
-    assert "js/screens-guided-pi-replay.js?v=20260914-execution-retry1" in index
+    assert "js/screens-guided-pi-preview.js?v=20260919-taskcanvas2" in index
+    assert "js/screens-guided-pi-replay.js?v=20260919-task-index1" in index
     assert "js/screens-guided-pi-resources.js?v=20260909-report-revision1" in index
-    assert "js/screens-guided-pi-run-outcome.js?v=20260916-study-workspace3" in index
-    assert "js/screens-guided-pi-activity.js?v=20260908-duration1" in index
+    assert "js/screens-guided-pi-run-outcome.js?v=20260919-review-language2" in index
+    assert "js/screens-guided-pi-activity.js?v=20260919-dialogue2" in index
     assert (
         "js/screens-guided-pi-provider.js?v=20260825-api-consent1"
         in index
     )
     assert "js/screens-guided-pi-provider-control.js?v=20260830-owner-split1" in index
-    assert "js/screens-guided-pi-events.js?v=20260916-study-workspace3" in index
+    assert "js/screens-guided-pi-events.js?v=20260919-method-skills1" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
-    assert "js/screens-guided-pi-data-consent.js?v=20260908-source-receipt1" in index
+    assert "js/screens-guided-pi-data-consent.js?v=20260919-dialogue2" in index
     assert "js/screens-guided-pi-data-binding.js?v=20260908-source-conversation1" in index
     assert "js/screens-guided-pi-confirmation.js?v=20260907-stopped-plan-retry1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20260914-execution-retry1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260903-agent-owned-plan1" in index
     assert "js/screens-guided-pi-error-text.js?v=20260917-error-text1" in index
-    assert "js/screens-guided-pi.js?v=20260917-error-text1" in index
+    assert "js/screens-guided-pi.js?v=20260919-dialogue2" in index
     assert "js/screens-guided.js?v=20260903-session-deeplink2" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
     )
-    assert "js/api.js?v=20260909-research-displays1" in index
+    assert "js/api.js?v=20260919-result-export1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"
@@ -245,11 +245,14 @@ def test_refresh_hides_intermediate_provider_project_and_activation_panels() -> 
     index = _read("index.html")
 
     assert (
-        "const restoring = state.loading || state.projectLoading || "
-        "state.projectDiscoveryLoading"
+        "const restoring = !state.session && (state.loading || state.projectLoading || "
+        "state.projectDiscoveryLoading)"
     ) in shell
     assert "restoring\n      ? restoringPanel()" in shell
-    assert "正在恢复当前研究" in shell
+    assert "正在读取当前项目的对话" in shell
+    assert "main.classList.toggle('gpi-workspace', state.shell !== 'legacy')" in shell
+    assert ".gd-main:has(#gdPiShell:not([hidden]) .gpi-panel)" not in _read("css/guided-pi-workspace.css")
+    assert "STUDY_WORKSPACE.history(messages" not in shell
     assert "state.projectLoading = !!next" in shell
     assert "state.projectLoading = false" in shell
     assert "function setProjectDiscoveryLoading(active)" in shell
@@ -270,8 +273,8 @@ def test_refresh_hides_intermediate_provider_project_and_activation_panels() -> 
     assert "data-guided-startup-shield" in startup
     assert ".gd-main.gd-startup-active" in startup_css
     assert ".gd-startup-shield" in startup_css
-    assert "css/guided-startup.css?v=20260827-atomic-restore1" in index
-    assert "js/screens-guided-startup.js?v=20260827-atomic-restore1" in index
+    assert "css/guided-startup.css?v=20260918-structure2" in index
+    assert "js/screens-guided-startup.js?v=20260918-structure2" in index
     assert index.index("js/screens-guided-startup.js") < index.index("js/screens-guided.js")
     assert "gd-startup" not in _read("css/guided-projects.css")
 
@@ -1210,11 +1213,11 @@ def test_confirmed_data_scope_replays_its_original_choices_on_the_source_turn() 
 
     assert payload["matches"] is True
     assert payload["rejectsLaterMessage"] is False
-    assert "Options provided at the time" in payload["history"]
-    assert "Prepare only study-required data (recommended)" in payload["history"]
-    assert "Extract all supported data" in payload["history"]
-    assert "Reuse the previous complete package" in payload["history"]
-    assert "Selected" in payload["history"]
+    assert "Historical data-preparation choice" in payload["history"]
+    assert "Data source confirmed" in payload["history"]
+    assert "MIMIC-IV v3.1" in payload["history"]
+    assert "Only study-required data was selected" in payload["history"]
+    assert "Options provided at the time" not in payload["history"]
     assert "data-gpi-data-source-action" not in payload["history"]
     assert "historicalDataConsent" in shell
     assert "DATA_CONSENT.renderPast" in shell
@@ -3583,14 +3586,12 @@ def test_workflow_stage_list_preserves_expansion_below_current_results() -> None
 def test_conversation_header_does_not_print_the_same_name_twice() -> None:
     owner = _read("js/screens-guided-pi-header.js")
 
-    assert (
-        "if (!project || (session && session.indexOf(project) >= 0)) "
-        "return 'EasyICU';"
-    ) in owner
+    assert "return project || 'EasyICU';" in owner
+    assert 'class="gpi-head-separator"' in owner
     assert "EASYICU COPILOT · ${esc(options.projectTitle)}" not in owner
     # The header squeezes the title to ellipsis on a 1280 laptop; keep the
     # full name reachable rather than unrecoverable.
-    assert '<div class="gpi-title" title="${esc(options.sessionTitle)}">' in owner
+    assert '<span class="gpi-title" title="${esc(options.sessionTitle)}">' in owner
 
 
 def test_workflow_strip_leaves_the_stage_count_to_the_status_panel() -> None:
@@ -3691,7 +3692,7 @@ def test_guided_shell_supports_independent_left_and_right_panel_collapse() -> No
     preview = _read("js/screens-guided-pi-preview.js")
     panel_css = _read("css/guided-panels.css")
     assert "screens-guided-panels.js?v=20260829-bilateral-collapse1" in index
-    assert "guided-panels.css?v=20260829-horizontal-arrows1" in index
+    assert "guided-panels.css?v=20260918-audit3" in index
     assert "data-context-aside-toggle" in guided
     assert "guidedContextAsideClass()" in guided
     assert "gd-context-aside-collapsed" in _read("js/screens-guided-panels.js")
@@ -3784,12 +3785,12 @@ def test_guided_shell_readability_changes_stay_with_their_css_owners() -> None:
     assert "→" not in starters
     assert ".gpi-starter-actions b{" not in pi_css
     assert ".gpi-head-overflow-menu" in pi_css
-    assert ".gd-main.threecol.gpi-empty-session-focus>.gd-aside{display:none}" in pi_css
+    assert ".gd-main.threecol.gpi-empty-session-focus>.gd-aside{display:none}" not in pi_css
     assert ".gpi-panel.gpi-empty-session .gpi-workflow{display:none}" in pi_css
     assert ".gpi-panel.gpi-empty-session .gpi-compose" not in pi_css
     assert ".gpi-panel.gpi-empty-session .gpi-log-start{flex:0" not in pi_css
     assert ".gd-sess .ss-t" in projects_css and "font-size:15.5px" in projects_css
-    assert "grid-template-columns:292px minmax(0,1fr) 292px" in projects_css
+    assert "grid-template-columns:var(--gd-project-rail-width,292px) minmax(0,1fr) var(--gd-context-aside-width,292px)" in projects_css
     assert ".gd-aside-head .at{ font-size: 18px" in study_css
     assert ".study-item .si-t{ font-size: 15px" in study_css
     assert ".gd-pipeline-disclosure" in study_css
@@ -4753,7 +4754,7 @@ def test_pi_activity_owner_renders_safe_expanded_lifecycle_details() -> None:
         ],
       }});
       process.stdout.write(JSON.stringify({{
-        activity: html.includes('Activity'),
+        traces: html.includes('Show traces'),
         finishedTurnCollapses: !html.includes(' open>'),
         historicalFailureCollapses: !failedHtml.includes(' open>'),
         currentFailureCollapses: !currentFailedHtml.includes(' open>'),
@@ -4782,7 +4783,7 @@ def test_pi_activity_owner_renders_safe_expanded_lifecycle_details() -> None:
     )
     payload = json.loads(result.stdout)
     assert payload == {
-        "activity": True,
+        "traces": True,
         # A finished turn collapses; its summary already names the tools and
         # the duration. Failed details remain available by clicking the summary.
         "finishedTurnCollapses": True,
@@ -6398,7 +6399,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20260908-writer-status1" in index
-    assert "screens-guided-pi.js?v=20260917-error-text1" in index
+    assert "screens-guided-pi.js?v=20260919-dialogue2" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

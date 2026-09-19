@@ -17,23 +17,87 @@
     const iconHtml = host.iconHtml;
     const projectId = host.projectId;
     const displayProjectTitle = host.displayProjectTitle;
+    let resultQuery = '';
+    let resultProjectId = '';
+    const LAYOUT_KEY = 'easyicu.pi.workspacePanels.v1';
+    const panelKeys = ['progress', 'results', 'compute', 'notes'];
+    let visiblePanels = { progress: true, results: true, compute: true, notes: true };
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(LAYOUT_KEY) || '{}');
+      panelKeys.forEach(key => { if (typeof saved[key] === 'boolean') visiblePanels[key] = saved[key]; });
+    } catch (_) {}
+    let resultSort = 'recommended';
+    let resultView = 'list';
+
+    function togglePanel(key) {
+      if (!panelKeys.includes(key)) return false;
+      visiblePanels[key] = !visiblePanels[key];
+      try { window.localStorage.setItem(LAYOUT_KEY, JSON.stringify(visiblePanels)); } catch (_) {}
+      syncProjectWorkflowAside();
+      return visiblePanels[key];
+    }
+
+    function layoutOptions() { return { ...visiblePanels }; }
+
+    function notesPanel() {
+      const key = `easyicu.pi.projectNotes.v1.${projectId()}`;
+      let value = '';
+      try { value = window.localStorage.getItem(key) || ''; } catch (_) {}
+      return `<div class="gpi-project-notes"><textarea data-gpi-project-notes aria-label="${tr('Project notes', '项目笔记')}" placeholder="${tr('Add notes for this project…', '记录当前项目的备忘……')}">${esc(value)}</textarea><small>${tr('Stored in this browser for this project.', '按项目保存在此浏览器。')}</small></div>`;
+    }
+
+    function runStatus(workflow) {
+      const active = workflow && workflow.active_job && workflow.active_job.present
+        ? workflow.active_job : null;
+      const last = host.latestRun && host.latestRun();
+      const row = active || (last && last.present ? last : null);
+      if (!row) return `<p class="gpi-aside-empty">${tr('No run is active for this project.', '当前项目没有正在执行的任务。')}</p>`;
+      const states = {
+        queued: tr('Queued', '排队中'), running: tr('Running', '运行中'),
+        complete: tr('Completed', '已完成'), completed: tr('Completed', '已完成'),
+        succeeded: tr('Completed', '已完成'), success: tr('Completed', '已完成'),
+        failed: tr('Failed', '未完成'), cancelled: tr('Cancelled', '已取消'),
+      };
+      const status = states[row.status] || (workflow.next_action_code === 'failed_pipeline_requires_fresh_plan'
+        ? tr('Failed · review required', '失败待处理')
+        : row.analysis_results_available === true
+          ? tr('Results saved', '成果已保存') : String(row.status || tr('Recorded', '已有记录')));
+      const progress = Array.isArray(row.progress) ? row.progress.slice(-1)[0] : null;
+      const recentRun = row.run_id ? `<code>${esc(row.run_id)}</code>` : '';
+      const problem = row.error_code ? `<p>${esc(row.error_code)}</p>` : '';
+      return `<div class="gpi-run-status" role="status"><div><strong>${active ? tr('Current task', '当前任务') : tr('Latest run', '最近运行')}</strong><span>${esc(status)}</span></div>${recentRun}${progress && progress.step ? `<p>${esc(progress.step)}${progress.total ? ` · ${Number(progress.current || 0)}/${Number(progress.total)}` : ''}</p>` : ''}${problem}</div>`;
+    }
 
     function syncProjectWorkflowAside() {
       const demo = host.demoMode() && window.EasyICU.guidedPi.optional('demo');
       const workflow = demo && typeof demo.workflow === 'function' ? demo.workflow() : host.workflow();
       if (host.shell() !== 'pi' || (!host.demoMode() && !projectId())) return;
+      if (resultProjectId !== projectId()) { resultProjectId = projectId(); resultQuery = ''; }
       const aside = document.getElementById('gdStudyAside');
       const body = document.getElementById('gdAsideBody');
       const head = aside && aside.querySelector('.gd-aside-head');
       if (!aside || !body || !head) return;
+      const section = (key, title, content) => {
+        if (!visiblePanels[key]) return '';
+        const previousSection = body.querySelector && body.querySelector(`[data-gpi-aside-section="${key}"]`);
+        const open = !previousSection || previousSection.open;
+        return `<details class="gpi-aside-section" data-gpi-aside-section="${key}"${open ? ' open' : ''}><summary>${title}</summary><div>${content}</div></details>`;
+      };
+      const emptyResults = `<p class="gpi-aside-empty">${tr('Results will appear here when available.', '生成的成果将在这里集中展示。')}</p>`;
+      head.innerHTML = `<div class="at">${host.demoMode() ? tr('Reviewer demonstration', '审稿人演示') : tr('Research workspace', '研究工作区')}</div>`;
       if (!workflow) {
-        const receipt = host.project() && host.project().binding_receipt;
-        const revision = receipt && Number.isInteger(receipt.study_context_revision)
-          ? ` · r${receipt.study_context_revision}` : '';
-        head.innerHTML = `<div class="at">${tr('Research progress', '研究进度')}</div><div class="asub">${tr('Loading this project’s saved progress.', '正在读取当前项目的进度。')}</div>`;
-        body.innerHTML = `<div class="gd-pipeline-summary" data-gpi-project-workflow-loading role="status" aria-live="polite">
-          <div class="gd-pipeline-summary-head"><div><strong>${esc(displayProjectTitle(host.project() && host.project().title, projectId()))}${esc(revision)}</strong><div class="gd-pipeline-value">${tr('Loading project progress…', '正在读取项目进度…')}</div></div></div>
-        </div>`;
+        const error = host.workflowError && host.workflowError();
+        body.innerHTML = section('progress', tr('To-dos', '待办'), `<div class="gd-pipeline-summary" data-gpi-project-workflow-loading role="status" aria-live="polite"><div class="gd-pipeline-value">${esc(error || tr('Loading project progress…', '正在读取项目进度…'))}</div></div>`)
+          + section('results', tr('Results', '成果'), emptyResults)
+          + section('notes', tr('Notes', '笔记'), notesPanel())
+          + (!panelKeys.some(key => visiblePanels[key]) ? `<p class="gpi-aside-empty gpi-panels-empty">${tr('Choose panels from Layout above.', '可从顶部「布局」重新显示面板。')}</p>` : '');
+        body.oninput = event => {
+          if (event.target.matches && event.target.matches('[data-gpi-project-notes]')) {
+            try { window.localStorage.setItem(`easyicu.pi.projectNotes.v1.${projectId()}`, event.target.value); } catch (_) {}
+          }
+        };
+        body.onclick = null;
+        body.onchange = null;
         return;
       }
       const stages = Array.isArray(workflow.stages) ? workflow.stages : [];
@@ -66,6 +130,7 @@
         plan_scientific_changes_required: tr('The scientific plan review requires a new study/plan version before analysis', '科学计划审阅要求先形成新的研究/计划版本，当前不能继续分析'),
         plan_configuration_superseded: tr('The study configuration changed; the old plan is superseded and cannot be approved', '研究配置已变化；旧计划已失效，不能再批准'),
         plan_review_not_resumable: tr('The old plan no longer has a live resume authority and must be regenerated', '旧计划的可恢复执行权限已失效，必须重新生成'),
+        failed_pipeline_requires_fresh_plan: tr('The previous run failed. Review the record before creating a fresh plan.', '上次任务未完成，请查看记录后重新生成计划。'),
         scientific_plan_review_policy_stale: tr('The scientific review policy changed; regenerate the plan while keeping the prepared data', '科学审阅规则已更新；保留已准备数据并重新生成计划'),
         operator_plan_approved: tr('Digest-bound plan approved by the user', '摘要绑定计划已由用户批准'),
         analysis_ready: tr('Ready for analysis after plan approval', '计划确认后可以执行分析'),
@@ -107,14 +172,14 @@
       const nextCaption = nextIsActionable
         ? tr('Next step', '下一步')
         : tr('Later stage', '后续阶段');
-      const results = !host.demoMode() && host.resultsHtml ? host.resultsHtml() : '';
+      const results = !host.demoMode() && host.resultsHtml
+        ? host.resultsHtml(resultQuery, { sort: resultSort, view: resultView }) : '';
       const pending = !host.demoMode() && host.hasPendingReview && host.hasPendingReview();
       const reviewAction = !host.demoMode() && host.reviewActionHtml ? host.reviewActionHtml() : '';
       // Keep the user's stage-list preference across workflow refreshes.
       const previous = body.querySelector && body.querySelector('.gd-pipeline-disclosure');
       const expanded = previous && previous.open;
-      head.innerHTML = `<div class="at">${host.demoMode() ? tr('Reviewer demonstration', '审稿人演示') : tr('Current study', '当前研究')}</div><div class="asub">${host.demoMode() ? tr('Read-only view of one registered run.', '一个已登记运行的只读预览。') : tr('Progress, pending decisions and results.', '进度、待办与成果。')}</div>`;
-      body.innerHTML = `${results}
+      const progress = `
       <div class="gd-pipeline-summary" data-gpi-project-workflow-aside>
         <div class="gd-pipeline-summary-head"><div><div class="eyebrow">${tr('Current stage', '当前阶段')}</div><strong>${esc(names[current && current.id] || (current && current.label) || tr('Ready', '就绪'))}</strong><div class="gd-pipeline-value">${esc(reasonText(current))}</div></div></div>
         ${pending ? `<button type="button" class="btn sm gpi-study-pending" data-gpi-aside-pending>${tr('View pending decision', '查看待确认事项')}</button>` : !results && reviewAction ? `<div class="gpi-study-pending">${reviewAction}</div>` : ''}
@@ -129,14 +194,47 @@
         const marker = status === 'done' ? iconHtml('check', 11) : status === 'locked' ? iconHtml('lock', 10) : iconHtml('dot', 10);
         return `<div class="study-item ${status}"><span class="si-dot">${marker}</span><div class="si-txt"><div class="si-t">${esc(names[stage.id] || stage.label || stage.id)}${optional ? tr(' · Optional', ' · 可选') : ''}</div></div></div>`;
       }).join('')}</div></details>`;
+      body.innerHTML = section('progress', tr('To-dos', '待办'), progress)
+        + section('results', tr('Results', '成果'), results || emptyResults)
+        + section('compute', tr('Compute', '计算'), runStatus(workflow))
+        + section('notes', tr('Notes', '笔记'), notesPanel())
+        + (!panelKeys.some(key => visiblePanels[key]) ? `<p class="gpi-aside-empty gpi-panels-empty">${tr('Choose panels from Layout above.', '可从顶部「布局」重新显示面板。')}</p>` : '');
+      body.oninput = event => {
+        if (event.target.matches && event.target.matches('[data-gpi-project-notes]')) {
+          try { window.localStorage.setItem(`easyicu.pi.projectNotes.v1.${projectId()}`, event.target.value); } catch (_) {}
+          return;
+        }
+        if (!event.target.matches || !event.target.matches('[data-gpi-results-search]')) return;
+        resultQuery = event.target.value;
+        const needle = resultQuery.trim().toLocaleLowerCase();
+        let visible = 0;
+        body.querySelectorAll('[data-gpi-result-file]').forEach(row => {
+          row.hidden = !String(row.dataset.gpiResultFile || '').toLocaleLowerCase().includes(needle);
+          if (!row.hidden) visible++;
+        });
+        const empty = body.querySelector('[data-gpi-results-empty]');
+        if (empty) empty.hidden = visible !== 0;
+      };
       body.onclick = event => {
+        const view = event.target.closest('[data-gpi-results-view]');
+        if (view) {
+          resultView = view.dataset.gpiResultsView === 'details' ? 'details' : 'list';
+          syncProjectWorkflowAside();
+          return;
+        }
         const resource = event.target.closest('[data-gpi-resource-kind]');
         if (resource && host.openResource) { host.openResource(resource); return; }
         if (event.target.closest('[data-gpi-aside-pending]') && host.revealPendingReview) host.revealPendingReview();
       };
+      body.onchange = event => {
+        if (!event.target.matches('[data-gpi-results-sort]')) return;
+        resultSort = ['recommended', 'name', 'size'].includes(event.target.value)
+          ? event.target.value : 'recommended';
+        syncProjectWorkflowAside();
+      };
     }
 
-    return { syncProjectWorkflowAside };
+    return { syncProjectWorkflowAside, togglePanel, layoutOptions };
   }
 
   window.EasyICU.guidedPi.declare('aside', { create });

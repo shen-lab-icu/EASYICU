@@ -38,7 +38,7 @@ MAX_ACTIVE_SKILLS = 8
 MAX_ACTIVE_SKILL_BYTES = 48_000
 MAX_WRITING_ADVISORY_BYTES = 8_000
 _SKILL_FRONTMATTER_KEYS = frozenset(
-    {"name", "description", "disable-model-invocation"}
+    {"name", "description", "category", "disable-model-invocation"}
 )
 _MODEL_VISIBLE_SECRET_OR_HOST_PATH = re.compile(
     r"(?:file://|/(?:Users|home|private|tmp|var|etc|opt|Volumes)/|[A-Za-z]:\\|"
@@ -143,6 +143,15 @@ def parse_skill_markdown(skill_markdown: str) -> Dict[str, Any]:
             "extension_skill_description_invalid",
             "Skill description must contain between 1 and 1024 characters.",
         )
+    category_value = metadata.get("category", "General")
+    if not isinstance(category_value, str):
+        category_value = ""
+    category = re.sub(r"\s+", " ", category_value).strip()
+    if not re.fullmatch(r"[\w &+.-]{1,64}", category):
+        raise ExtensionRegistryError(
+            "extension_skill_category_invalid",
+            "Skill category must be a short text label without paths or markup.",
+        )
     disable = metadata.get("disable-model-invocation", False)
     if not isinstance(disable, bool):
         raise ExtensionRegistryError(
@@ -163,6 +172,7 @@ def parse_skill_markdown(skill_markdown: str) -> Dict[str, Any]:
     return {
         "name": name,
         "description": description,
+        "category": category,
         "disable_model_invocation": disable,
         "instructions": body,
         "canonical_markdown": canonical,
@@ -344,6 +354,7 @@ class ExtensionRegistry:
             row = {
                 "name": parsed["name"],
                 "description": parsed["description"],
+                "category": parsed["category"],
                 "digest": parsed["digest"],
                 "size_bytes": parsed["size_bytes"],
                 "stages": list(clean_stages),
@@ -500,6 +511,7 @@ class ExtensionRegistry:
             for key in (
                 "name",
                 "description",
+                "category",
                 "digest",
                 "size_bytes",
                 "stages",
@@ -547,6 +559,32 @@ class ExtensionRegistry:
                     "snapshot_timing": "new_session_or_run",
                 },
             }
+
+    def current_skill(self, name: str) -> Dict[str, Any]:
+        """Return the reviewed instructions for the currently installed version.
+
+        The public catalog exposes only metadata. A detail view may read the
+        exact object selected by the registry, never an arbitrary file path or
+        a digest supplied by the browser.
+        """
+        clean_name = _clean_name(name, code="extension_skill_name_invalid")
+        with self._locked():
+            state = self._read_state_unlocked()
+            row = next(
+                (item for item in state["skills"] if item.get("name") == clean_name),
+                None,
+            )
+            if row is None:
+                raise ExtensionRegistryError(
+                    "extension_not_found", "The requested Skill is not installed."
+                )
+            descriptor = self._public_skill(row)
+            loaded = self.load_skill(name=clean_name, digest=str(row["digest"]))
+        return {
+            **descriptor,
+            "instructions": loaded["instructions"],
+            "skill_md": loaded["canonical_markdown"],
+        }
 
     def snapshot(self) -> ExtensionActivationSnapshot:
         with self._locked():
@@ -615,6 +653,7 @@ class ExtensionRegistry:
                 "digest",
                 "disable_model_invocation",
                 "instructions",
+                "canonical_markdown",
             )
         }
 

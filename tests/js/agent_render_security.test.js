@@ -58,6 +58,21 @@ const hostileStructured = renderer.artifactStructuredView('fallback.json', {
 assert.ok(hostileStructured.includes('&lt;img'), 'object keys must be rendered as text');
 assert.ok(!hostileStructured.includes(`<th>${hostileKey}</th>`), 'object key must not create table-header markup');
 
+const readiness = renderer.artifactStructuredView('scientific_readiness.json', {
+  schema_version: 'easyicu.web-scientific-readiness/1', run_id: 'run_review', status: 'analysis_only',
+  claim_ceiling: 'analysis_only', human_review_required: true, paper_authorized: false,
+  domains: [{ domain: 'idea', status: 'not_assessed', evidence_refs: ['idea_handoff'],
+    summary: 'Technical executability is not evidence of novelty or publication value.' }],
+  findings: [{ severity: 'blocker', domain: 'idea', code: 'IDEA_PRIOR_ART_AUTHORITY_NOT_ESTABLISHED',
+    message: 'No accepted, digest-bound prior-art review proves that this question is a reliable or sufficiently differentiated research idea.',
+    remediation: 'Run Idea Mining prior-art retrieval, inspect same-topic hits, and accept the refreshed handoff before treating the idea as publishable.' }],
+});
+assert.match(readiness, /Scientific review/);
+assert.match(readiness, /Idea and novelty/);
+assert.match(readiness, /Prior-art evidence is not established/);
+assert.doesNotMatch(readiness, /IDEA_PRIOR_ART_AUTHORITY_NOT_ESTABLISHED|not_assessed/,
+  'readable review must not expose backend status and finding codes');
+
 const hostileTableChrome = renderer.artifactTable(
   '<svg onload="globalThis.pwned=2">',
   ['safe'],

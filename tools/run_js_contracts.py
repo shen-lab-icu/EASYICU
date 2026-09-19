@@ -60,6 +60,7 @@ CONTRACTS: dict[str, list[str]] = {
     "guided_classic_exit.test.js": [],
     # Loads both dedicated Copilot data-view owners itself; takes no arguments.
     "guided_pi_data_workbench.test.js": [],
+    "guided_pi_conversation_timeline.test.js": ["screens-guided-pi-activity.js"],
     # Explicit owner list (E-P2-11): no "." directory marker — every file the
     # harness loads is named here, including product-labels.js, so a rename
     # or deletion fails fast in main()'s existence check instead of silently
@@ -92,6 +93,7 @@ CONTRACTS: dict[str, list[str]] = {
     # Reads the whole js/ directory itself; takes no arguments.
     "job_continuity_404.test.js": [],
     "manuscript_reader_navigation.test.js": ["screens-guided-pi-preview.js"],
+    "method_skills_hub.test.js": ["screens-skills.js"],
     "report_progress_refresh.test.js": ["screens-guided-pi-childjob.js"],
     "patient_browse_owners.test.js": [
         "screens-viz-patient-navigation.js",
@@ -123,6 +125,7 @@ CONTRACTS: dict[str, list[str]] = {
         "screens-viz-cohort-charts.js",
     ],
     "run_context_race.test.js": ["screens-agent-study-context.js"],
+    "skills_hub_catalog.test.js": ["screens-skills.js"],
     "study_context_lifecycle.test.js": [
         "study-context.js",
         "screens-viz-study-context.js",

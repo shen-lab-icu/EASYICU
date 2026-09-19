@@ -15,6 +15,7 @@ import urllib.request
 from typing import Any, Dict, List
 
 from easyicu.research_agent.publication_skills import PUBLICATION_SKILLS
+from easyicu.research_agent.method_skills import method_skill_catalog
 from easyicu.webserver import state_paths
 from easyicu.webserver import settings as settings_store
 
@@ -709,6 +710,7 @@ def capability_status() -> Dict[str, Any]:
                     row["id"] for row in publication_skills if row["enabled"]
                 ],
             },
+            "method_skills": method_skill_catalog(enabled=skills_master_enabled),
             "pubmed_connector": {
                 "enabled": settings["connector_pubmed_enabled"],
                 "status": (
