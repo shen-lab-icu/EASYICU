@@ -931,6 +931,26 @@ def test_publication_only_semantic_audit_ignores_order_but_detects_values(
         )
 
 
+def test_finalized_repair_audits_only_modules_unchanged_across_lineage() -> None:
+    refresher = _load_refresher()
+
+    fresh = refresher._reused_modules_for_semantic_audit(
+        current_modules=("outcome",),
+        cumulative_modules=("blood_gas", "outcome"),
+        repairing_finalized_candidate=False,
+    )
+    repair = refresher._reused_modules_for_semantic_audit(
+        current_modules=("outcome",),
+        cumulative_modules=("blood_gas", "outcome"),
+        repairing_finalized_candidate=True,
+    )
+
+    assert "blood_gas" in fresh
+    assert "blood_gas" not in repair
+    assert "outcome" not in fresh
+    assert "outcome" not in repair
+
+
 def test_publication_only_semantic_audit_accepts_only_declared_null_extensions(
     tmp_path: Path,
 ) -> None:
