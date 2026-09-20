@@ -34,14 +34,14 @@ The read-only 8-GiB plan was generated successfully. It is not yet formally
 admissible because four database/module groups use unmeasured or invalidated
 fallback profiles:
 
-- eICU: `sofa2_score`, `sepsis3_sofa2`;
-- HiRID: the requested five modules and their score/Sepsis closure;
 - MIMIC-III: `sofa1_score`, `sofa2_score` and both Sepsis consumers;
 - SICdb: the requested five modules and their score/Sepsis closure.
 
-AUMC and MIMIC-IV already have measured plans for the complete closure. Run the
-four missing benchmark candidates from the same clean checkout, one database at
-a time. The initial batch sizes below are the guarded sizes emitted by the plan:
+AUMC, eICU, HiRID, and MIMIC-IV now have measured plans for the complete
+closure. Run the two remaining benchmark candidates from the same clean
+checkout, one database at a time. The initial batch sizes below are the guarded
+sizes emitted by the plan. The completed eICU and HiRID commands remain below
+as reproducibility records.
 
 The first complete eICU benchmark at commit `46c71e0a` identified a pandas
 per-patient assignment bottleneck in urine-window assessment. Its resource
@@ -50,6 +50,13 @@ optimized. The clean `51d88010` rerun completed at 1,799.4 seconds with a
 3,519.7-MiB peak, and its output hashes exactly matched the earlier run. The
 25,000-stay profile is now registered. See
 `v6_eicu_sofa2_performance_profile_20260920.md`.
+
+The clean HiRID benchmark at `4f42b51e` completed the eleven-module refresh
+closure in 4,017.9 seconds. Its largest module peak was 2,371.5 MiB at a fixed
+14,000-stay batch. Both Sepsis-3 outputs remained structural zero-row tables,
+exactly matching the sealed v5 `sepsis_shared` and Sepsis outputs. The current
+HiRID profiles replace the stale renal one-shot measurement because the numeric
+source-time boundary semantics changed in v6.
 
 ```bash
 SOURCE=/home/zhuhb/workspace/phd-thesis/00-data-foundation/easyicu_full6_runs/releases/full6_native_v5_hirid_aki_rate_e0621aa1_20260906

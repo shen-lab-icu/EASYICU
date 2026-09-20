@@ -283,24 +283,39 @@ def test_measured_miiv_blood_gas_uses_one_shot_with_2gib_available():
     assert plan.advisory_zh is None
 
 
-def test_corrected_hirid_renal_is_one_shot_under_8gib_only_for_measured_scope():
+def test_corrected_hirid_renal_uses_current_boundary_aware_batch_profile():
     plan = plan_extraction_resources(
         "hirid", ["renal"], 33_905, available_memory_mb=8192,
     )
-    assert plan.mode == "one_shot"
-    assert plan.batch_size == 33_905
-    assert plan.reason_code == "measured_profile_fast_path"
-    assert plan.measured_peak_rss_mb == pytest.approx(3483.5)
-    assert plan.required_available_memory_mb == pytest.approx(3831.85)
-    assert set(_MEASURED_ONESHOT_PROFILES["hirid"]) == {"renal"}
+    assert plan.mode == "patient_batches"
+    assert plan.batch_size == 14_000
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.measured_peak_rss_mb == pytest.approx(1_677.7)
+    assert plan.required_available_memory_mb == pytest.approx(1_845.47)
+    assert _MEASURED_ONESHOT_PROFILES["hirid"] == {}
     larger = plan_extraction_resources(
         "hirid", ["renal"], 33_906, available_memory_mb=8192,
     )
-    assert larger.reason_code != "measured_profile_fast_path"
+    assert larger.reason_code == "unmeasured_profile_memory_guard"
     too_small = plan_extraction_resources(
-        "hirid", ["renal"], 33_905, available_memory_mb=3072,
+        "hirid", ["renal"], 33_905, available_memory_mb=1024,
     )
     assert too_small.reason_code == "measured_profile_insufficient_memory"
+
+
+def test_hirid_v6_refresh_closure_has_complete_measured_coverage():
+    modules = [
+        "demographics", "blood_gas", "chemistry", "respiratory",
+        "vasopressors", "medications", "renal", "sofa1_score",
+        "sofa2_score", "sepsis3_sofa1", "sepsis3_sofa2",
+    ]
+    plan = plan_extraction_resources(
+        "hirid", modules, 33_905, available_memory_mb=8192,
+    )
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 14_000
+    assert plan.measured_peak_rss_mb == pytest.approx(2_371.5)
+    assert plan.required_available_memory_mb == pytest.approx(2_608.65)
 
 
 def test_measured_eicu_profile_can_authorize_full_cohort_above_legacy_size_cap():

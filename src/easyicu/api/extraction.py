@@ -229,13 +229,7 @@ _STREAM_CALIBRATED_REFERENCE = {
 # currently available is enough for a full MIMIC-IV one-shot.
 _MEASURED_ONESHOT_HEADROOM = 1.10
 _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
-    "hirid": {
-        # Corrected rate-aware reference AKI at 273d20df, native-v2 renal,
-        # all 33,905 stays, deterministic 8-GiB envelope. External tree peak
-        # (3,483.5 MiB) exceeds the internal sampler (3,231.3 MiB).
-        # This receipt admits renal only, not the other HiRID modules.
-        "renal": {"cohort_stays": 33_905, "peak_rss_mb": 3_483.5, "seconds": 243.3},
-    },
+    "hirid": {},
     "aumc": {
         # Full-cohort module measurements from the sealed 23,106-stay AUMC
         # extraction. These owners are outside the later IMV/SOFA semantic
@@ -523,6 +517,79 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "batch_size": 25_000,
             "peak_rss_mb": 2_896.6,
             "seconds": 12.8,
+        },
+    },
+    "hirid": {
+        # Full v6 refresh closure at 4f42b51e under the deterministic
+        # 8,192-MiB envelope. These profiles replace the older renal one-shot
+        # evidence because the HiRID source-time boundary semantics changed.
+        # The two Sepsis outputs are structural zero-row tables, matching v5,
+        # because sepsis_shared has no timed suspicion evidence in this source.
+        "demographics": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 482.0,
+            "seconds": 102.5,
+        },
+        "blood_gas": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 478.9,
+            "seconds": 59.3,
+        },
+        "chemistry": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 673.9,
+            "seconds": 496.4,
+        },
+        "respiratory": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 2_025.2,
+            "seconds": 588.7,
+        },
+        "vasopressors": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 2_100.4,
+            "seconds": 73.2,
+        },
+        "medications": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 1_486.9,
+            "seconds": 247.8,
+        },
+        "renal": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 1_677.7,
+            "seconds": 680.9,
+        },
+        "sofa1_score": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 2_371.5,
+            "seconds": 732.3,
+        },
+        "sofa2_score": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 2_141.3,
+            "seconds": 998.2,
+        },
+        "sepsis3_sofa1": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 171.6,
+            "seconds": 0.8,
+        },
+        "sepsis3_sofa2": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 171.6,
+            "seconds": 0.8,
         },
     },
     "mimic": {
