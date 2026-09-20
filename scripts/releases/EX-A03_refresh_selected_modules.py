@@ -1448,6 +1448,28 @@ def _validate_publication_only_database_semantics(
     }
 
 
+def _reused_modules_for_semantic_audit(
+    *,
+    current_modules: Sequence[str],
+    cumulative_modules: Sequence[str],
+    repairing_finalized_candidate: bool,
+) -> tuple[str, ...]:
+    """Return modules that can still be compared with the sealed source.
+
+    A fresh candidate inherits earlier changes from its immediate sealed
+    source, so only the current refresh scope must be excluded. During
+    ``--repair-finalized``, the source remains the older release while the
+    candidate already contains every earlier unsealed refresh. Exclude the
+    cumulative scope then so valid earlier v6 changes are not judged against
+    v5 as publication-only mutations.
+    """
+
+    excluded = set(
+        cumulative_modules if repairing_finalized_candidate else current_modules
+    )
+    return tuple(module for module in MODULES if module not in excluded)
+
+
 def _module_files_are_detached_from_source(
     source_database_root: Path,
     candidate_database_root: Path,
@@ -2355,10 +2377,10 @@ def refresh_candidate(
         }
         reused_module_semantic_audit = {}
         for database in selected_databases:
-            reused_modules = tuple(
-                module
-                for module in MODULES
-                if module not in selected_by_database[database]
+            reused_modules = _reused_modules_for_semantic_audit(
+                current_modules=selected_by_database[database],
+                cumulative_modules=per_database_refreshed_modules[database],
+                repairing_finalized_candidate=prior_provenance is not None,
             )
             if reused_modules:
                 reused_module_semantic_audit[database] = (
