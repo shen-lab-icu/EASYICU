@@ -742,6 +742,23 @@ def test_mimic_v6_score_closure_uses_current_measured_batch_profile():
     assert plan.required_available_memory_mb == pytest.approx(3_747.15)
 
 
+def test_sic_v6_refresh_closure_has_complete_measured_coverage():
+    modules = [
+        "demographics", "blood_gas", "chemistry", "respiratory",
+        "vasopressors", "medications", "renal", "sofa1_score",
+        "sofa2_score", "sepsis3_sofa1", "sepsis3_sofa2",
+    ]
+    plan = plan_extraction_resources(
+        "sic", modules, 27_386, available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 16_000
+    assert plan.measured_peak_rss_mb == pytest.approx(5_223.0)
+    assert plan.required_available_memory_mb == pytest.approx(5_745.3)
+
+
 def test_measured_eicu_batch_shrinks_and_warns_below_verified_batch_threshold():
     plan = plan_extraction_resources(
         "eicu",

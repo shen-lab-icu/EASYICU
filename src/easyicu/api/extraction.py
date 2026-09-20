@@ -628,6 +628,78 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "seconds": 17.0,
         },
     },
+    "sic": {
+        # Full v6 refresh closure at 12d8595c under the deterministic
+        # 8,192-MiB envelope. The 16k profile completed both partitions after
+        # SIC episode-bound enforcement. Sepsis outputs remain structural
+        # zero-row tables, matching the sealed v5 source.
+        "demographics": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 325.0,
+            "seconds": 1.4,
+        },
+        "blood_gas": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 487.4,
+            "seconds": 3.9,
+        },
+        "chemistry": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 1_202.7,
+            "seconds": 16.0,
+        },
+        "respiratory": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 4_802.1,
+            "seconds": 78.1,
+        },
+        "vasopressors": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 625.3,
+            "seconds": 14.9,
+        },
+        "medications": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 657.6,
+            "seconds": 29.1,
+        },
+        "renal": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 5_038.3,
+            "seconds": 224.7,
+        },
+        "sofa1_score": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 5_223.0,
+            "seconds": 101.6,
+        },
+        "sofa2_score": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 4_765.9,
+            "seconds": 177.8,
+        },
+        "sepsis3_sofa1": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 168.1,
+            "seconds": 0.6,
+        },
+        "sepsis3_sofa2": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 168.1,
+            "seconds": 0.6,
+        },
+    },
 }
 
 
