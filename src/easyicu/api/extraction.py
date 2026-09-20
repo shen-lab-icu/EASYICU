@@ -599,6 +599,34 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "peak_rss_mb": 7_236.8,
             "seconds": 383.955,
         },
+        # Full MIMIC-III score closure at e0315e05 under the deterministic
+        # 8,192-MiB envelope. The 20k profile completed all four partitions;
+        # score workers stayed below 3.5 GiB while the lightweight Sepsis
+        # consumers reused the freshly published score tables.
+        "sofa1_score": {
+            "cohort_stays": 61_532,
+            "batch_size": 20_000,
+            "peak_rss_mb": 3_325.7,
+            "seconds": 877.4,
+        },
+        "sofa2_score": {
+            "cohort_stays": 61_532,
+            "batch_size": 20_000,
+            "peak_rss_mb": 3_406.5,
+            "seconds": 1_398.7,
+        },
+        "sepsis3_sofa1": {
+            "cohort_stays": 61_532,
+            "batch_size": 20_000,
+            "peak_rss_mb": 2_068.5,
+            "seconds": 17.0,
+        },
+        "sepsis3_sofa2": {
+            "cohort_stays": 61_532,
+            "batch_size": 20_000,
+            "peak_rss_mb": 2_068.5,
+            "seconds": 17.0,
+        },
     },
 }
 

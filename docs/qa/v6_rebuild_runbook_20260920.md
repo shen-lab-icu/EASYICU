@@ -31,17 +31,14 @@ must be republished from v5 without a logical table-content change.
 ## Resource evidence required before the formal run
 
 The read-only 8-GiB plan was generated successfully. It is not yet formally
-admissible because four database/module groups use unmeasured or invalidated
-fallback profiles:
+admissible because SICdb's requested five modules and their score/Sepsis
+closure still use unmeasured or invalidated fallback profiles.
 
-- MIMIC-III: `sofa1_score`, `sofa2_score` and both Sepsis consumers;
-- SICdb: the requested five modules and their score/Sepsis closure.
-
-AUMC, eICU, HiRID, and MIMIC-IV now have measured plans for the complete
-closure. Run the two remaining benchmark candidates from the same clean
-checkout, one database at a time. The initial batch sizes below are the guarded
-sizes emitted by the plan. The completed eICU and HiRID commands remain below
-as reproducibility records.
+AUMC, eICU, HiRID, MIMIC-III, and MIMIC-IV now have measured plans for the
+complete closure. Run the remaining SICdb benchmark candidate from the same
+clean checkout. The initial batch sizes below are the guarded sizes emitted by
+the plan. The completed eICU, HiRID, and MIMIC-III commands remain below as
+reproducibility records.
 
 The first complete eICU benchmark at commit `46c71e0a` identified a pandas
 per-patient assignment bottleneck in urine-window assessment. Its resource
@@ -57,6 +54,13 @@ closure in 4,017.9 seconds. Its largest module peak was 2,371.5 MiB at a fixed
 exactly matching the sealed v5 `sepsis_shared` and Sepsis outputs. The current
 HiRID profiles replace the stale renal one-shot measurement because the numeric
 source-time boundary semantics changed in v6.
+
+The clean MIMIC-III benchmark at `e0315e05` completed the four-module score
+closure in 2,345.7 seconds at a fixed 20,000-stay batch. SOFA-1 and SOFA-2
+peaked at 3,325.7 and 3,406.5 MiB, respectively; each Sepsis consumer took
+17.0 seconds and peaked at 2,068.5 MiB. The successful output receipts contain
+7,809,016 SOFA-1 rows, 7,442,649 SOFA-2 rows, 11,275 Sepsis-3/SOFA-1 rows,
+and 12,330 Sepsis-3/SOFA-2 rows.
 
 ```bash
 SOURCE=/home/zhuhb/workspace/phd-thesis/00-data-foundation/easyicu_full6_runs/releases/full6_native_v5_hirid_aki_rate_e0621aa1_20260906
