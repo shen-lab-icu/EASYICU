@@ -110,14 +110,28 @@ start the formal extraction until `formal_release_admissible` is `true` and
 
 ## Formal replacement candidate
 
-From a clean checkout, run:
+Before the formal AUMC refresh, build the reusable itemid bucket cache once if
+it is absent. The command is memory-bounded and validates row count, schema,
+and a full order-independent row fingerprint before atomically installing the
+cache:
+
+```bash
+python scripts/build_itemid_bucket_cache.py \
+  --data-path /home/zhuhb/workspace/databases/aumc \
+  --table numericitems --key itemid --bucket-count 64 \
+  --memory-limit 2GB --threads 2 --verify-row-hash
+```
+
+The interrupted `full6_native_v6_clean_rebuild_20260920` directory is a
+diagnostic artifact and must not be resumed or sealed. From a clean checkout,
+use a fresh candidate:
 
 ```bash
 python scripts/releases/EX-A03_refresh_selected_modules.py \
   --source-run-root \
   /home/zhuhb/workspace/phd-thesis/00-data-foundation/easyicu_full6_runs/releases/full6_native_v5_hirid_aki_rate_e0621aa1_20260906 \
   --output-root \
-  /home/zhuhb/workspace/phd-thesis/00-data-foundation/easyicu_full6_runs/candidates/full6_native_v6_clean_rebuild_20260920 \
+  /home/zhuhb/workspace/phd-thesis/00-data-foundation/easyicu_full6_runs/candidates/full6_native_v6_clean_rebuild_20260920_r2 \
   --module demographics \
   --module chemistry \
   --module blood_gas \

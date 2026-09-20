@@ -151,6 +151,7 @@ LEGACY_SCHEMA_VERSION = "easyicu_full6_selected_module_refresh_v1"
 RESOURCE_PLAN_SCHEMA_VERSION = "easyicu_selected_module_resource_plan_v1"
 RESOURCE_BENCHMARK_SCHEMA_VERSION = "easyicu_selected_module_resource_benchmark_v1"
 RESOURCE_BENCHMARK_FILENAME = "resource_benchmark_provenance.json"
+BUCKET_CACHE_RECEIPT_SCHEMA = "easyicu_itemid_bucket_cache_v1"
 DEFAULT_RELEASE_MEMORY_BUDGET_MB = 8 * 1024
 FORMALLY_MEASURED_RESOURCE_REASONS = frozenset(
     {
@@ -176,6 +177,73 @@ def _read_json(path: Path, *, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ModuleRefreshError(f"{label} must be one JSON object: {path}")
     return value
+
+
+def _storage_layout_receipts(
+    data_paths: Mapping[str, str],
+) -> dict[str, list[dict[str, Any]]]:
+    """Bind validated raw-table bucket caches used by selected databases."""
+
+    result: dict[str, list[dict[str, Any]]] = {}
+    for database, raw_path in data_paths.items():
+        root = Path(raw_path).resolve()
+        records: list[dict[str, Any]] = []
+        for receipt_path in sorted(root.glob("*_bucket/_BUCKET_BUILD_RECEIPT.json")):
+            _require_regular_file(
+                receipt_path,
+                label=f"{database} bucket-cache build receipt",
+            )
+            _require_regular_file(
+                receipt_path.parent / "_COMPLETE",
+                label=f"{database} bucket-cache completion marker",
+            )
+            receipt = _read_json(
+                receipt_path,
+                label=f"{database} bucket-cache build receipt",
+            )
+            if receipt.get("schema") != BUCKET_CACHE_RECEIPT_SCHEMA:
+                raise ModuleRefreshError(
+                    f"Unsupported bucket-cache receipt schema: {receipt_path}"
+                )
+            source = Path(str(receipt.get("source", ""))).resolve()
+            expected_source = root / receipt_path.parent.name.removesuffix("_bucket")
+            if source != expected_source.resolve():
+                raise ModuleRefreshError(
+                    f"Bucket-cache source mismatch: {source} != {expected_source}"
+                )
+            inventory = receipt.get("source_inventory")
+            if not isinstance(inventory, list) or not inventory:
+                raise ModuleRefreshError(
+                    f"Bucket-cache receipt lacks source inventory: {receipt_path}"
+                )
+            for item in inventory:
+                if not isinstance(item, Mapping):
+                    raise ModuleRefreshError(
+                        f"Invalid bucket-cache source inventory: {receipt_path}"
+                    )
+                shard = source / str(item.get("path", ""))
+                if not shard.is_file() or shard.is_symlink():
+                    raise ModuleRefreshError(
+                        f"Bucket-cache source shard is missing: {shard}"
+                    )
+                stat = shard.stat()
+                if (
+                    int(item.get("size", -1)) != stat.st_size
+                    or int(item.get("mtime_ns", -1)) != stat.st_mtime_ns
+                ):
+                    raise ModuleRefreshError(
+                        f"Bucket-cache source inventory changed: {shard}"
+                    )
+            records.append(
+                {
+                    "cache_path": str(receipt_path.parent),
+                    "receipt_sha256": REPUBLICATION._sha256_file(receipt_path),
+                    "receipt": receipt,
+                }
+            )
+        if records:
+            result[database] = records
+    return result
 
 
 def _parse_data_path_overrides(values: Sequence[str]) -> dict[str, str]:
@@ -1871,6 +1939,7 @@ def refresh_candidate(
     data_paths = _resolve_data_paths(
         source_run_manifest, data_path_overrides, selected_databases
     )
+    storage_layout_receipts = _storage_layout_receipts(data_paths)
     source_run_manifest_sha256 = REPUBLICATION._sha256_file(
         source / "run_manifest.json"
     )
@@ -2032,6 +2101,7 @@ def refresh_candidate(
                     resource_policy_override_reason
                 ),
                 "resource_plan": execution_resource_plan,
+                "raw_storage_layout_receipts": storage_layout_receipts,
                 "runtime": refreshed[database],
                 "output_receipts": output_receipts,
                 "formal_release_admissible": False,
@@ -2343,6 +2413,7 @@ def refresh_candidate(
                 else "database_subset_across_lineage"
             ),
             "raw_data_paths": combined_data_paths,
+            "latest_raw_storage_layout_receipts": storage_layout_receipts,
             "resource_policy": {
                 "owner": "easyicu.api.extraction.plan_module_extraction_resources",
                 "memory_budget_mb": float(resource_budget_mb),
