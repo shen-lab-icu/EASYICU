@@ -10,11 +10,12 @@ was therefore no evidence that paging or the memory ceiling caused the long
 runtime.
 
 One representative source-order-interleaved 25,000-stay partition was profiled
-with Python `cProfile`. It used the same concept list, patient partitioning,
-single concept worker, and fixed resource setup as the isolated streamed
-release path. `/usr/bin/time -v` separately recorded wall time, CPU use, RSS,
-major faults, and swaps. The temporary `.prof` and output Parquet files remain
-outside Git.
+with Python `cProfile`. It used the same concept list and patient partitioning.
+The exploratory process imported the host-sized parallel planner before the
+isolated writer installed its environment, so its wall time is diagnostic and
+must not be read as the formal 8-GiB single-thread runtime. `/usr/bin/time -v`
+separately recorded wall time, CPU use, RSS, major faults, and swaps. The
+temporary `.prof` and output Parquet files remain outside Git.
 
 ## Root cause
 
@@ -51,9 +52,10 @@ both runs reported zero swaps and zero major page faults.
 
 ## Release consequence
 
-The original full-cohort resource receipt predates this optimization and cannot
-authorize the formal v6 refresh. Repeat the eICU benchmark from the clean
-optimization commit, retain the 25,000-stay batch size, and register only the
-new receipt. The observed single-batch result suggests an eICU SOFA-2 runtime
-near 11--13 minutes instead of 48.5 minutes, but the complete rerun is the
-authoritative value.
+The clean `51d88010` rerun under the formal 8,192-MiB envelope produced exactly
+the same 15,720,946 SOFA-2 rows and 17,781 Sepsis-3 rows as the pre-optimization
+run. Both Parquet SHA-256 values also matched exactly. SOFA-2 elapsed time fell
+from 2,911.0 to 1,731.9 seconds (40.5%); total closure time fell from 2,978.1 to
+1,799.4 seconds (39.6%). Process-tree peak RSS rose from 3,226.6 to 3,519.7 MiB,
+which remains below half of the 8-GiB contract. The new receipt authorizes a
+fixed 25,000-stay batch for both closure modules.
