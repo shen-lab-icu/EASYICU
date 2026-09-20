@@ -388,22 +388,7 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
 # A key listed here must not also appear in either measured profile registry.
 _INVALIDATED_MEASURED_PROFILES: Mapping[
     tuple[str, str], Mapping[str, str]
-] = {
-    (
-        "eicu",
-        "sofa2_score",
-    ): {
-        "reason": "8-GiB planning budget did not constrain lower-layer worker runtime",
-        "invalidated_by": "resource_budget_execution_envelope_20260904",
-    },
-    (
-        "eicu",
-        "sepsis3_sofa2",
-    ): {
-        "reason": "8-GiB planning budget did not constrain lower-layer worker runtime",
-        "invalidated_by": "resource_budget_execution_envelope_20260904",
-    },
-}
+] = {}
 
 # Modules whose full-cohort one-shot crossed the 8-GiB release contract keep a
 # separate measured batch profile. A successful batch peak authorises only the
@@ -523,8 +508,22 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "peak_rss_mb": 6_294.5,
             "seconds": 586.933,
         },
-        # Post-IMV SOFA-2 entries remain invalidated above until the exact
-        # 8-GiB lower-layer execution envelope has a complete benchmark.
+        # Full post-IMV SOFA-2 closure at 51d88010 under the deterministic
+        # 8,192-MiB lower-layer envelope. The output hashes exactly match the
+        # pre-optimization 46c71e0a benchmark; only NumPy-buffered urine-window
+        # assignment changed. The process-tree sampler is authoritative.
+        "sofa2_score": {
+            "cohort_stays": 200_859,
+            "batch_size": 25_000,
+            "peak_rss_mb": 3_519.7,
+            "seconds": 1_731.9,
+        },
+        "sepsis3_sofa2": {
+            "cohort_stays": 200_859,
+            "batch_size": 25_000,
+            "peak_rss_mb": 2_896.6,
+            "seconds": 12.8,
+        },
     },
     "mimic": {
         "medications": {
