@@ -585,6 +585,12 @@ def test_eicu_renal_uses_isolated_deferred_stream_batches() -> None:
     assert ("eicu", "renal") in api._DEFERRED_STREAM_MERGE_TARGETS
 
 
+def test_mimic_renal_uses_isolated_deferred_stream_batches() -> None:
+    for database in ("mimic", "miiv"):
+        assert api._requires_isolated_stream_batch(database, "renal") is True
+        assert (database, "renal") in api._DEFERRED_STREAM_MERGE_TARGETS
+
+
 def test_miiv_other_scores_uses_measured_batch_process_isolation() -> None:
     assert api._requires_isolated_stream_batch("miiv", "other_scores") is True
     assert api._requires_isolated_stream_batch("miiv_demo", "other_scores") is False
