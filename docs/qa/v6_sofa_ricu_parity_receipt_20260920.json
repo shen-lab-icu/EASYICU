@@ -1,0 +1,85 @@
+{
+  "audit_date": "2026-09-20",
+  "purpose": "Separate SOFA callback parity from the v5-to-v6 formal export change.",
+  "software": {
+    "r": "4.1.2",
+    "ricu": "0.6.3",
+    "easyicu_v5_runtime_commit": "e0621aa1",
+    "easyicu_audited_commit": "a3191f74",
+    "formal_export_fix_commit": "147f52d3"
+  },
+  "source_code_comparison": {
+    "functions": [
+      "_callback_sofa_score",
+      "_compose_fill_limits",
+      "_merge_tables"
+    ],
+    "v5_vs_audited_source_identical": true
+  },
+  "ricu_reference": {
+    "root": "/home/zhuhb/project/ricu_to_python/ricu_data_new/miiv",
+    "stays": 50,
+    "hourly_total_rows": 12743,
+    "sha256": {
+      "miiv_sofa.csv": "e59f8f54df5ce1f5119f0b50f3da789949c8700d89947253ffe3411c2a1c63e3",
+      "miiv_sofa_resp.csv": "f6ed57b3942bfcb9a022d87c37b99ea2eb9959d0b53f577389bc7b9a2056b198",
+      "miiv_sofa_coag.csv": "2ee1a7b0bfc6ea894ff7b71c2d40a21378c642b713b4740bf57c0b1be7dbed29",
+      "miiv_sofa_liver.csv": "0f4672f660c1841600a787f288903d6cbd715edba8e2eaf8ddadf5dd15f88ee6",
+      "miiv_sofa_cardio.csv": "153663efc13c3552d237eb25ea2371fccd79dc54b3b05bca46cd1df8c867d30b",
+      "miiv_sofa_cns.csv": "f707a747771110fb777e6c920e495603d3735641acb0741f76da195437f42083",
+      "miiv_sofa_renal.csv": "1e4335023c17754c0c910a7d83f17c58d7fbeee7a193bf438a07a33736d5578f"
+    }
+  },
+  "identical_component_input_callback_parity": {
+    "r_rows": 12743,
+    "easyicu_rows": 12743,
+    "key_mismatches": 0,
+    "rolled_component_mismatches": {
+      "sofa_resp": 0,
+      "sofa_coag": 0,
+      "sofa_liver": 0,
+      "sofa_cardio": 0,
+      "sofa_cns": 0,
+      "sofa_renal": 0
+    },
+    "total_mismatches": 0
+  },
+  "formal_export_comparison_to_ricu_total": {
+    "v5": {
+      "path": "00-data-foundation/easyicu_full6_runs/releases/full6_native_v5_hirid_aki_rate_e0621aa1_20260906/exports/miiv/sofa1_score.parquet",
+      "sha256": "a25c9b7df34a690708c5ccc6af8d2b15ade3578b62b6dcb090a0357cc4342d15",
+      "aligned_rows": 4384,
+      "exact_total_agreement": 0.21697080291970803,
+      "mean_absolute_error": 2.999087591240876,
+      "correlation": 0.605583436633085,
+      "hours_0_to_24": {
+        "aligned_rows": 1241,
+        "exact_total_agreement": 0.20306204673650283,
+        "mean_absolute_error": 3.032232070910556
+      }
+    },
+    "v6_candidate": {
+      "path": "00-data-foundation/easyicu_full6_runs/candidates/full6_native_v6_dictfix_aumc_miiv_fe382262_20260918/exports/miiv/sofa1_score.parquet",
+      "sha256": "ffaa83331d19d10d00df04b2191d8261ab4b74287ac1f83fe5b96abe0ef2f7f6",
+      "aligned_rows": 3929,
+      "exact_total_agreement": 0.8910664291168237,
+      "mean_absolute_error": 0.2270297785696106,
+      "correlation": 0.9783259357150227,
+      "hours_0_to_24": {
+        "aligned_rows": 1241,
+        "exact_total_agreement": 0.8348106365834005,
+        "mean_absolute_error": 0.28122481869460114
+      },
+      "unequal_total_rows": 428,
+      "component_mismatch_counts_among_unequal_totals": {
+        "sofa_resp": 366,
+        "sofa_coag": 25,
+        "sofa_liver": 13,
+        "sofa_cardio": 9,
+        "sofa_cns": 0,
+        "sofa_renal": 48
+      }
+    }
+  },
+  "interpretation": "The fill-gaps and trailing-24-hour SOFA algorithm is unchanged from v5 and exactly matches ricu when component inputs are identical. The material v5-to-v6 difference is the formal module loader preserving rolled callback components instead of merging separately loaded point components and rebuilding the total from those point states. Residual v6-to-ricu differences arise before aggregation, predominantly in respiratory component inputs."
+}
