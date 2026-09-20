@@ -265,7 +265,6 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
         "vasopressors": {"cohort_stays": 200_859, "peak_rss_mb": 5_517.3, "seconds": 21.048},
         "ventilator": {"cohort_stays": 200_859, "peak_rss_mb": 7_435.9, "seconds": 105.388},
         "vitals": {"cohort_stays": 200_859, "peak_rss_mb": 5_362.4, "seconds": 158.082},
-        "medications": {"cohort_stays": 200_859, "peak_rss_mb": 7_320.6, "seconds": 175.857},
         "neurological": {"cohort_stays": 200_859, "peak_rss_mb": 5_073.9, "seconds": 88.829},
         "sepsis_shared": {"cohort_stays": 200_859, "peak_rss_mb": 4_977.7, "seconds": 11.817},
         # ``sofa2_score`` and ``sepsis3_sofa2`` remain excluded from the
@@ -343,11 +342,6 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "peak_rss_mb": 6_259.9,
             "seconds": 165.533,
         },
-        "sofa2_score": {
-            "cohort_stays": 94_458,
-            "peak_rss_mb": 6_315.5,
-            "seconds": 437.698,
-        },
         "sepsis3_sofa1": {
             "cohort_stays": 94_458,
             "peak_rss_mb": 5_749.6,
@@ -381,7 +375,18 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
 # A key listed here must not also appear in either measured profile registry.
 _INVALIDATED_MEASURED_PROFILES: Mapping[
     tuple[str, str], Mapping[str, str]
-] = {}
+] = {
+    ("eicu", "medications"): {
+        "reason": "current_full_cohort_peak_exceeded_8gib_contract",
+        "observed_peak_rss_mb": "11249.3",
+        "observed_at_commit": "a23f396f",
+    },
+    ("miiv", "sofa2_score"): {
+        "reason": "current_full_cohort_peak_exceeded_8gib_contract",
+        "observed_peak_rss_mb": "13896.5",
+        "observed_at_commit": "a23f396f",
+    },
+}
 
 # Modules whose full-cohort one-shot crossed the 8-GiB release contract keep a
 # separate measured batch profile. A successful batch peak authorises only the
