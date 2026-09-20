@@ -1413,6 +1413,36 @@ def _interleave_stream_patient_ids(
     return interleaved, planned_batches
 
 
+def _order_stream_patient_ids(
+    patient_ids: List,
+    batch_size: int,
+    database: str,
+) -> tuple[List, int, str]:
+    """Choose a database-aware patient order for streamed extraction.
+
+    AUMC's large parquet tables are clustered by ``admissionid`` inside each
+    row group.  Contiguous admission batches therefore let DuckDB prune most
+    row groups and make all batches together approximate one source scan.
+    Interleaving those IDs defeats every row-group min/max statistic and makes
+    each small batch rescan the complete 4.3-GiB ``numericitems`` dataset.
+
+    Other databases retain the density-balancing interleave until their
+    physical layouts have independent pruning evidence.  In particular eICU
+    needs it because its source-ordered tail has a much larger working set.
+    """
+
+    normalized = _normalise_stream_database(database)
+    ids = list(patient_ids)
+    size = int(batch_size)
+    if size < 1:
+        raise ValueError("stream batch_size must be positive")
+    planned_batches = (len(ids) + size - 1) // size if ids else 0
+    if normalized == "aumc":
+        return ids, planned_batches, "source_order_contiguous_prunable_v1"
+    ordered, planned_batches = _interleave_stream_patient_ids(ids, size)
+    return ordered, planned_batches, "source_order_interleaved_v1"
+
+
 def _get_extraction_mp_context(mp_module, *, platform_name: Optional[str] = None):
     """Resolve the extraction worker context with a cross-platform safe default.
 
@@ -2280,9 +2310,12 @@ def _stream_module_batches_to_parquet(
     id_col, all_ids = next(iter(patient_ids_filter.items()))
     if batch_size < 1:
         raise ValueError("streamed module export batch_size must be positive")
-    all_ids, planned_partition_count = _interleave_stream_patient_ids(
+    all_ids, planned_partition_count, patient_partition_strategy = (
+        _order_stream_patient_ids(
         list(all_ids),
         int(batch_size),
+        str(load_kwargs.get("database") or ""),
+        )
     )
 
     destination = Path(output_dir) / f"{module_name}.parquet"
@@ -2512,7 +2545,7 @@ def _stream_module_batches_to_parquet(
         "initial_batch_size": int(batch_size),
         "final_planned_batch_size": current_batch_size,
         "adaptive_batch_growth": bool(adaptive_batch_growth),
-        "patient_partition_strategy": "source_order_interleaved_v1",
+        "patient_partition_strategy": patient_partition_strategy,
         "batch_process_isolation": isolate_batch_process,
         "deferred_batch_merge": defer_merge,
         "initial_planned_partition_count": planned_partition_count,
@@ -2909,9 +2942,12 @@ def _stream_special_extraction_batches(
             )
         except ValueError:
             pass
-    all_ids, planned_partition_count = _interleave_stream_patient_ids(
+    all_ids, planned_partition_count, patient_partition_strategy = (
+        _order_stream_patient_ids(
         list(all_ids),
         safe_batch_size,
+        database,
+        )
     )
     concepts = [
         concept
@@ -3230,7 +3266,7 @@ def _stream_special_extraction_batches(
         "elapsed_sec": round(time.time() - started, 1),
         "batch_size": safe_batch_size,
         "batch_count": batch_count,
-        "patient_partition_strategy": "source_order_interleaved_v1",
+        "patient_partition_strategy": patient_partition_strategy,
         "initial_planned_partition_count": planned_partition_count,
         **module_memory_sampler.stop(),
     }

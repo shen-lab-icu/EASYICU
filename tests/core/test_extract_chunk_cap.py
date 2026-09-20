@@ -24,6 +24,7 @@ from easyicu.api.extraction import (
     _MEASURED_ONESHOT_PROFILES,
     _adapt_stream_batch_size_from_first_batch,
     _interleave_stream_patient_ids,
+    _order_stream_patient_ids,
     _next_stream_retry_batch_size,
     _extract_worker_env_setup,
     _resource_budget_execution_limits,
@@ -900,3 +901,30 @@ def test_interleaved_stream_partition_is_noop_for_one_shot_cohort():
     ordered, planned_batches = _interleave_stream_patient_ids(patient_ids, 10)
     assert ordered == patient_ids
     assert planned_batches == 1
+
+
+def test_aumc_stream_partition_preserves_prunable_source_order():
+    patient_ids = list(range(23_106))
+    ordered, planned_batches, strategy = _order_stream_patient_ids(
+        patient_ids,
+        5_000,
+        "aumc",
+    )
+
+    assert ordered == patient_ids
+    assert planned_batches == 5
+    assert strategy == "source_order_contiguous_prunable_v1"
+
+
+def test_eicu_stream_partition_retains_density_balancing_interleave():
+    patient_ids = list(range(200_859))
+    ordered, planned_batches, strategy = _order_stream_patient_ids(
+        patient_ids,
+        67_000,
+        "eicu",
+    )
+
+    assert planned_batches == 3
+    assert strategy == "source_order_interleaved_v1"
+    assert ordered != patient_ids
+    assert set(ordered) == set(patient_ids)
