@@ -486,7 +486,7 @@ def test_measured_aumc_sofa1_uses_minimum_verified_three_batches():
     assert _n_chunks(23_106, plans["sofa1_score"].batch_size) == 3
 
 
-def test_eicu_full_request_uses_complete_measured_batch_coverage():
+def test_eicu_full_request_is_blocked_by_invalidated_medication_profile():
     plan = plan_extraction_resources(
         "eicu",
         list(EXTRACT_MODULES),
@@ -494,11 +494,9 @@ def test_eicu_full_request_uses_complete_measured_batch_coverage():
         available_memory_mb=8 * 1024,
     )
 
-    assert plan.reason_code == "measured_profile_fastest_safe_batch"
-    assert plan.batch_size == 25_000
-    assert plan.measured_peak_rss_mb == pytest.approx(7_435.9)
-    assert plan.required_available_memory_mb == pytest.approx(8_179.49)
-    assert plan.advisory is None
+    assert plan.reason_code == "invalidated_profile_memory_guard"
+    assert plan.measured_peak_rss_mb is None
+    assert plan.advisory is not None
 
 
 def test_eicu_renal_uses_measured_isolated_five_batch_profile():
@@ -551,6 +549,24 @@ def test_invalidated_profiles_cannot_remain_in_measured_registries():
     for database, module in _INVALIDATED_MEASURED_PROFILES:
         assert module not in _MEASURED_ONESHOT_PROFILES.get(database, {})
         assert module not in _MEASURED_BATCH_PROFILES.get(database, {})
+
+
+@pytest.mark.parametrize(
+    ("database", "module", "num_patients"),
+    (("eicu", "medications", 200_859), ("miiv", "sofa2_score", 94_458)),
+)
+def test_current_over_8gib_full_cohort_profiles_are_quarantined(
+    database, module, num_patients
+):
+    plan = plan_extraction_resources(
+        database,
+        [module],
+        num_patients,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.reason_code == "invalidated_profile_memory_guard"
+    assert plan.mode == "patient_batches"
 
 
 def test_eicu_mixed_request_keeps_each_measured_module_strategy_at_8gib():
@@ -645,7 +661,7 @@ def test_module_batch_overrides_fail_closed(overrides):
         )
 
 
-def test_miiv_full_module_set_has_current_measured_coverage():
+def test_miiv_full_module_set_is_blocked_by_invalidated_sofa2_profile():
     plan = plan_extraction_resources(
         "miiv",
         list(EXTRACT_MODULES),
@@ -654,12 +670,10 @@ def test_miiv_full_module_set_has_current_measured_coverage():
     )
 
     assert plan.mode == "patient_batches"
-    assert plan.reason_code == "measured_profile_fastest_safe_batch"
-    assert plan.batch_size == 10_000
-    assert plan.measured_peak_rss_mb == pytest.approx(7_286.7)
-    assert plan.required_available_memory_mb == pytest.approx(8_015.37)
-    assert plan.advisory is None
-    assert plan.advisory_zh is None
+    assert plan.reason_code == "invalidated_profile_memory_guard"
+    assert plan.measured_peak_rss_mb is None
+    assert plan.advisory is not None
+    assert plan.advisory_zh is not None
 
 
 def test_miiv_medications_scales_to_5k_for_strict_8gib_worker_budget():
