@@ -259,7 +259,6 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
         "vasopressors": {"cohort_stays": 200_859, "peak_rss_mb": 5_517.3, "seconds": 21.048},
         "ventilator": {"cohort_stays": 200_859, "peak_rss_mb": 7_435.9, "seconds": 105.388},
         "vitals": {"cohort_stays": 200_859, "peak_rss_mb": 5_362.4, "seconds": 158.082},
-        "renal": {"cohort_stays": 200_859, "peak_rss_mb": 6_354.4, "seconds": 438.054},
         "medications": {"cohort_stays": 200_859, "peak_rss_mb": 7_320.6, "seconds": 175.857},
         "neurological": {"cohort_stays": 200_859, "peak_rss_mb": 5_073.9, "seconds": 88.829},
         "sepsis_shared": {"cohort_stays": 200_859, "peak_rss_mb": 4_977.7, "seconds": 11.817},
@@ -382,7 +381,15 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
 # A key listed here must not also appear in either measured profile registry.
 _INVALIDATED_MEASURED_PROFILES: Mapping[
     tuple[str, str], Mapping[str, str]
-] = {}
+] = {
+    ("eicu", "renal"): {
+        "reason": (
+            "The current KDIGO/episode-bound implementation exceeded the "
+            "8,192-MiB contract during the 2026-09-20 v6 rebuild; the older "
+            "full-cohort profile predates these semantics."
+        ),
+    },
+}
 
 # Modules whose full-cohort one-shot crossed the 8-GiB release contract keep a
 # separate measured batch profile. A successful batch peak authorises only the
@@ -1993,6 +2000,11 @@ _ISOLATED_STREAM_BATCH_TARGETS = frozenset(
         # accumulate across the five full-cohort batches.
         ("miiv", "medications"),
         ("eicu", "sofa2_score"),
+        # The current KDIGO/episode-bound implementation crossed 8 GiB when
+        # the stale full-cohort profile admitted all 200,859 stays at once.
+        # A fresh interpreter per patient partition prevents native allocator
+        # residency from accumulating across renal batches.
+        ("eicu", "renal"),
         # Full-cohort AUMC respiratory boundary runs retained Arrow/native
         # allocator pages across successive batches: 8k, 7k and 6k all crossed
         # the same 7,447-MiB process-tree stop late in the run even though their
@@ -2003,12 +2015,14 @@ _ISOLATED_STREAM_BATCH_TARGETS = frozenset(
     }
 )
 
-# Deferred merging was measured only for AUMC respiratory. eICU SOFA-2 keeps
-# its established append-after-each-child schedule until separately measured.
+# Deferred merging keeps the Arrow writer out of the parent while a heavy
+# isolated child is alive. eICU SOFA-2 keeps its established
+# append-after-each-child schedule until separately measured.
 _DEFERRED_STREAM_MERGE_TARGETS = frozenset(
     {
         ("aumc", "respiratory"),
         ("miiv", "medications"),
+        ("eicu", "renal"),
     }
 )
 
