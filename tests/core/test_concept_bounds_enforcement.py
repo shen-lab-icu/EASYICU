@@ -544,10 +544,19 @@ def test_isolated_stream_batches_preserve_output_and_remove_parts(
         ["extract", "extract", "append", "append"] if database == "aumc"
         else ["extract", "append", "extract", "append"]
     )
-    assert calls == [[1, 3], [2, 4]]
+    expected_ids = (
+        [[1, 2], [3, 4]] if database == "aumc" else [[1, 3], [2, 4]]
+    )
+    assert calls == expected_ids
     assert daemon_flags == [False, False]
-    assert exported["stay_id"].tolist() == [1, 3, 2, 4]
-    assert exported["test_signal"].tolist() == [1.0, 3.0, 2.0, 4.0]
+    expected_flat = [value for batch in expected_ids for value in batch]
+    assert exported["stay_id"].tolist() == expected_flat
+    assert exported["test_signal"].tolist() == [float(value) for value in expected_flat]
+    assert manifest["patient_partition_strategy"] == (
+        "source_order_contiguous_prunable_v1"
+        if database == "aumc"
+        else "source_order_interleaved_v1"
+    )
     assert not list(tmp_path.glob(".test_module.batch-*.parquet"))
     assert not (tmp_path / ".test_module.partial.parquet").exists()
 
