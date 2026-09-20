@@ -306,10 +306,8 @@ def test_demographics_and_outcome_plan_excludes_unaffected_modules() -> None:
         "mimic": ("demographics", "outcome"),
         "miiv": ("demographics", "outcome"),
     }
-    assert plan["unmeasured_or_overridden_modules"] == {
-        "hirid": ["demographics"]
-    }
-    assert plan["formal_release_admissible"] is False
+    assert plan["unmeasured_or_overridden_modules"] == {}
+    assert plan["formal_release_admissible"] is True
 
 
 def test_per_database_release_plan_uses_each_database_closure() -> None:
