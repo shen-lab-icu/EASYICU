@@ -95,22 +95,66 @@ describe 25 mg/dL as part of KDIGO.
 
 ## SOFA reconciliation
 
-The large SOFA-1 increase is mainly explained by a correction introduced after
-v5. The old grouped export requested total SOFA and the six organ components
-separately; sparse point-state components then overwrote the 24-hour rolled
-components returned with total SOFA. The current extraction path keeps the
-total and rolled organs from one callback call.
+The SOFA filling/window algorithm itself did **not** change between v5 and v6.
+The v5 runtime commit (`e0621aa1`) and the audited source commit (`a3191f74`)
+contain byte-identical implementations of `_callback_sofa_score`,
+`_compose_fill_limits`, and `_merge_tables`. Both implement the R ricu sequence:
+
+1. `fill_gaps()` inserts empty rows on the hourly grid between the first and
+   last observed component time. It does not interpolate or carry a component
+   value forward.
+2. `slide(..., before = 24 hours)` takes each organ's worst observed score in
+   the trailing window.
+3. The total is the row sum of the six rolled organs, with an entirely missing
+   organ contributing zero to that sum.
+
+The large SOFA-1 increase is instead explained by a correction to the formal
+module extraction after v5. The old grouped export requested total SOFA and the
+six organ concepts separately. The separately loaded concepts are sparse
+point-in-time states; during the output merge they replaced the rolled organ
+states returned by the total-score callback. The native publisher then rebuilt
+the total from those point states, so both the published organs and total lost
+the trailing-window meaning. Commit `147f52d3` changed the module loader to
+request `sofa` once with `keep_components=True`, preserving the total and all
+six rolled organs from the same callback result.
 
 For five reproduced MIMIC-IV stays, the current implementation and the v6
 candidate had identical row counts and component summaries (`n=294`, mean total
 SOFA 4.0034). The v5 file for the same stays had `n=385`, mean SOFA 0.6494 and
-mostly sparse point states. Across databases, first-24-hour maximum SOFA rises
-by roughly one point after this correction. This is an expected material
-version change and must be reported in the release notes, but it is not evidence
-that the v6 total-score calculation is wrong.
+mostly sparse point states.
+
+This interpretation was checked directly against R ricu 0.6.3, rather than
+only against EasyICU's comments or tests. The retained R reference contains 50
+MIMIC-IV stays and 12,743 hourly SOFA rows. Feeding its six point-component
+tables into the R `sofa_score()` callback and the EasyICU callback produced the
+same 12,743 keys, six rolled components, and totals with zero mismatches. Against
+the independently extracted R total, the formal exports compared as follows on
+exactly aligned `stay_id + charttime` rows:
+
+| Export | Aligned rows | Exact total agreement | Mean absolute error | Correlation |
+|---|---:|---:|---:|---:|
+| v5 | 4,384 | 21.67% | 2.999 | 0.606 |
+| v6 candidate | 3,929 | 89.11% | 0.227 | 0.978 |
+
+In hours 0--24, v5 exact agreement was 20.31% with MAE 3.032, whereas the v6
+candidate reached 83.48% with MAE 0.281. The residual v6 disagreements are
+mainly respiratory component differences (366 of the 428 unequal totals),
+consistent with the candidate's intentional source/dictionary changes such as
+the lower PaO2 acceptance bound. They are not caused by a different SOFA
+filling algorithm. Across databases, first-24-hour maximum SOFA rises by
+roughly one point after preserving the rolled components. This is an expected
+material version change and must be reported in the release notes. It does not
+make the current v6 candidate sealable because the independent urine/KDIGO and
+provenance failures above remain release-blocking.
 
 Traditional SOFA provenance:
 <https://pubmed.ncbi.nlm.nih.gov/8844239/>.
+
+R ricu implementation used for the parity audit:
+<https://github.com/eth-mds/ricu/blob/main/R/callback-sofa.R>.
+
+Machine-readable input hashes and comparison metrics are recorded in
+`docs/qa/v6_sofa_ricu_parity_receipt_20260920.json`.
 
 ## Vasopressor reconciliation
 
