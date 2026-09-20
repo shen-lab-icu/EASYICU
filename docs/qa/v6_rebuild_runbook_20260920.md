@@ -43,6 +43,13 @@ AUMC and MIMIC-IV already have measured plans for the complete closure. Run the
 four missing benchmark candidates from the same clean checkout, one database at
 a time. The initial batch sizes below are the guarded sizes emitted by the plan:
 
+The first complete eICU benchmark at commit `46c71e0a` identified a pandas
+per-patient assignment bottleneck in urine-window assessment. Its resource
+receipt is diagnostic only because the implementation was subsequently
+optimized. See `v6_eicu_sofa2_performance_profile_20260920.md`; the command
+below must be rerun from the optimization commit before its profile is
+registered.
+
 ```bash
 SOURCE=/home/zhuhb/workspace/phd-thesis/00-data-foundation/easyicu_full6_runs/releases/full6_native_v5_hirid_aki_rate_e0621aa1_20260906
 CANDIDATES=/home/zhuhb/workspace/phd-thesis/00-data-foundation/easyicu_full6_runs/candidates
