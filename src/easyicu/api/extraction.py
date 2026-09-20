@@ -375,18 +375,7 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
 # A key listed here must not also appear in either measured profile registry.
 _INVALIDATED_MEASURED_PROFILES: Mapping[
     tuple[str, str], Mapping[str, str]
-] = {
-    ("eicu", "medications"): {
-        "reason": "current_full_cohort_peak_exceeded_8gib_contract",
-        "observed_peak_rss_mb": "11249.3",
-        "observed_at_commit": "a23f396f",
-    },
-    ("miiv", "sofa2_score"): {
-        "reason": "current_full_cohort_peak_exceeded_8gib_contract",
-        "observed_peak_rss_mb": "13896.5",
-        "observed_at_commit": "a23f396f",
-    },
-}
+] = {}
 
 # Modules whose full-cohort one-shot crossed the 8-GiB release contract keep a
 # separate measured batch profile. A successful batch peak authorises only the
@@ -418,6 +407,18 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "batch_size": 20_000,
             "peak_rss_mb": 4_900.5,
             "seconds": 1_291.2,
+        },
+        # Current SOFA-2 semantics at 486bb169. Four 30k streamed partitions
+        # matched the current one-shot table's complete row-multiset
+        # fingerprint. The batch peak stays below 8 GiB; the separately
+        # observed 13,896.5-MiB one-shot peak authorises an automatic one-shot
+        # only when that full-cohort measurement plus headroom fits.
+        "sofa2_score": {
+            "cohort_stays": 94_458,
+            "batch_size": 30_000,
+            "peak_rss_mb": 5_056.7,
+            "full_cohort_peak_rss_mb": 13_896.5,
+            "seconds": 1_985.6,
         },
     },
     "aumc": {
@@ -488,6 +489,17 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
         },
     },
     "eicu": {
+        # Current medication semantics at 486bb169. Five 50k streamed
+        # partitions matched the current one-shot table's complete
+        # row-multiset fingerprint. Keep the measured 11,249.3-MiB one-shot
+        # peak as a separate high-memory admission threshold.
+        "medications": {
+            "cohort_stays": 200_859,
+            "batch_size": 50_000,
+            "peak_rss_mb": 1_669.3,
+            "full_cohort_peak_rss_mb": 11_249.3,
+            "seconds": 333.6,
+        },
         # The stale full-cohort profile crossed 8 GiB after the current
         # KDIGO/episode-bound changes. At commit 589d2e85, 50k isolated
         # batches plus a deferred merge completed all five partitions; use
@@ -840,10 +852,14 @@ def _measured_batch_recommendation(
     database: str,
     modules: Optional[Sequence[str]],
     num_patients: int,
-) -> Optional[tuple[int, float, float]]:
+) -> Optional[tuple[int, float, float, Optional[float]]]:
     """Return the registered fully-covered measured batch recommendation.
 
-    The tuple is ``(batch_size, required_available_mb, measured_peak_mb)``.
+    The tuple is ``(batch_size, required_available_mb, measured_peak_mb,
+    full_cohort_required_mb)``. The last value is present only when every
+    selected module has a direct full-cohort measurement; it prevents a small
+    batch measurement from accidentally authorising an unsafe one-shot while
+    still allowing 16/32/64-GiB hosts to use measured fast paths.
     One-shot-profiled modules do not constrain a mixed request's batch size;
     every requested module must nevertheless have either a one-shot or batch
     profile so an unmeasured module cannot borrow another module's authority.
@@ -875,10 +891,25 @@ def _measured_batch_recommendation(
     measured_peak_mb = max(
         float(profile["peak_rss_mb"]) for profile in selected_profiles
     )
+    full_cohort_peaks = []
+    for profile in selected_profiles:
+        full_peak = profile.get("full_cohort_peak_rss_mb")
+        if full_peak is None and "batch_size" not in profile:
+            full_peak = profile["peak_rss_mb"]
+        if full_peak is None:
+            full_cohort_peaks = []
+            break
+        full_cohort_peaks.append(float(full_peak))
+    full_cohort_required_mb = (
+        max(full_cohort_peaks) * _MEASURED_ONESHOT_HEADROOM
+        if full_cohort_peaks
+        else None
+    )
     return (
         min(int(num_patients), batch_size),
         measured_peak_mb * _MEASURED_ONESHOT_HEADROOM,
         measured_peak_mb,
+        full_cohort_required_mb,
     )
 
 
@@ -894,6 +925,7 @@ def _scale_measured_batch_above_baseline(
     required_available_mb: float,
     available_memory_mb: float,
     total_patients: int,
+    full_cohort_required_mb: Optional[float] = None,
 ) -> int:
     """Spend memory above the 8-GiB measured envelope on larger batches.
 
@@ -907,16 +939,27 @@ def _scale_measured_batch_above_baseline(
     available = max(0.0, float(available_memory_mb))
     if available <= _MEASURED_BATCH_BASELINE_AVAILABLE_MB:
         return recorded
+    if (
+        full_cohort_required_mb is not None
+        and available >= float(full_cohort_required_mb)
+    ):
+        return int(total_patients)
 
     mib_per_stay = max(1.0, float(required_available_mb)) / recorded
     extra_stays = int(
         (available - _MEASURED_BATCH_BASELINE_AVAILABLE_MB) / mib_per_stay
     )
     capacity = recorded + max(0, extra_stays)
-    if capacity >= int(total_patients):
+    if capacity >= int(total_patients) and full_cohort_required_mb is None:
         return int(total_patients)
     quantized = (capacity // _STREAM_BATCH_QUANTUM) * _STREAM_BATCH_QUANTUM
-    return max(recorded, quantized)
+    scaled = max(recorded, quantized)
+    if full_cohort_required_mb is not None:
+        # A known one-shot cliff remains authoritative until its measured
+        # threshold fits. Avoid a nearly-full first batch and tiny residual by
+        # keeping at least two balanced partitions below that threshold.
+        scaled = min(scaled, (int(total_patients) + 1) // 2)
+    return min(int(total_patients), scaled)
 
 
 def _process_tree_rss_mb() -> float:
@@ -1137,13 +1180,14 @@ def _resolve_stream_batch_size(
         total,
     )
     if measured_batch is not None:
-        recommended_batch, required_mb, _ = measured_batch
+        recommended_batch, required_mb, _, full_cohort_required_mb = measured_batch
         if available >= required_mb:
             return _scale_measured_batch_above_baseline(
                 recommended_batch,
                 required_mb,
                 available,
                 total,
+                full_cohort_required_mb,
             )
         scaled_capacity = recommended_batch * available / max(1.0, required_mb)
         return min(
@@ -1289,7 +1333,7 @@ def plan_extraction_resources(
         total,
     )
     if measured_batch is not None:
-        recorded_batch, required_mb, measured_peak_mb = measured_batch
+        recorded_batch, required_mb, measured_peak_mb, _ = measured_batch
         if available >= required_mb:
             scaled = batch_size > recorded_batch
             return ExtractionResourcePlan(

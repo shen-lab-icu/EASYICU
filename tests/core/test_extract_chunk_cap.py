@@ -486,7 +486,7 @@ def test_measured_aumc_sofa1_uses_minimum_verified_three_batches():
     assert _n_chunks(23_106, plans["sofa1_score"].batch_size) == 3
 
 
-def test_eicu_full_request_is_blocked_by_invalidated_medication_profile():
+def test_eicu_full_request_uses_complete_measured_batch_coverage():
     plan = plan_extraction_resources(
         "eicu",
         list(EXTRACT_MODULES),
@@ -494,9 +494,11 @@ def test_eicu_full_request_is_blocked_by_invalidated_medication_profile():
         available_memory_mb=8 * 1024,
     )
 
-    assert plan.reason_code == "invalidated_profile_memory_guard"
-    assert plan.measured_peak_rss_mb is None
-    assert plan.advisory is not None
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 25_000
+    assert plan.measured_peak_rss_mb == pytest.approx(7_435.9)
+    assert plan.required_available_memory_mb == pytest.approx(8_179.49)
+    assert plan.advisory is None
 
 
 def test_eicu_renal_uses_measured_isolated_five_batch_profile():
@@ -552,21 +554,23 @@ def test_invalidated_profiles_cannot_remain_in_measured_registries():
 
 
 @pytest.mark.parametrize(
-    ("database", "module", "num_patients"),
-    (("eicu", "medications", 200_859), ("miiv", "sofa2_score", 94_458)),
+    ("database", "module", "num_patients", "expected_batch", "peak"),
+    (
+        ("eicu", "medications", 200_859, 50_000, 1_669.3),
+        ("miiv", "sofa2_score", 94_458, 30_000, 5_056.7),
+    ),
 )
-def test_current_over_8gib_full_cohort_profiles_are_quarantined(
-    database, module, num_patients
+def test_current_over_8gib_full_cohort_modules_use_verified_batches(
+    database, module, num_patients, expected_batch, peak
 ):
     plan = plan_extraction_resources(
-        database,
-        [module],
-        num_patients,
-        available_memory_mb=8 * 1024,
+        database, [module], num_patients, available_memory_mb=8 * 1024
     )
 
-    assert plan.reason_code == "invalidated_profile_memory_guard"
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
     assert plan.mode == "patient_batches"
+    assert plan.batch_size == expected_batch
+    assert plan.measured_peak_rss_mb == pytest.approx(peak)
 
 
 def test_eicu_mixed_request_keeps_each_measured_module_strategy_at_8gib():
@@ -661,7 +665,7 @@ def test_module_batch_overrides_fail_closed(overrides):
         )
 
 
-def test_miiv_full_module_set_is_blocked_by_invalidated_sofa2_profile():
+def test_miiv_full_module_set_has_current_measured_coverage():
     plan = plan_extraction_resources(
         "miiv",
         list(EXTRACT_MODULES),
@@ -670,10 +674,12 @@ def test_miiv_full_module_set_is_blocked_by_invalidated_sofa2_profile():
     )
 
     assert plan.mode == "patient_batches"
-    assert plan.reason_code == "invalidated_profile_memory_guard"
-    assert plan.measured_peak_rss_mb is None
-    assert plan.advisory is not None
-    assert plan.advisory_zh is not None
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 10_000
+    assert plan.measured_peak_rss_mb == pytest.approx(7_286.7)
+    assert plan.required_available_memory_mb == pytest.approx(8_015.37)
+    assert plan.advisory is None
+    assert plan.advisory_zh is None
 
 
 def test_miiv_medications_scales_to_5k_for_strict_8gib_worker_budget():
@@ -737,6 +743,44 @@ def test_miiv_renal_scales_continuously_above_8gib_baseline(
     assert plan.batch_size == expected_batch
     assert plan.mode == expected_mode
     assert plan.reason_code == expected_reason
+
+
+@pytest.mark.parametrize(
+    ("database", "module", "num_patients", "available_gib", "expected_batch", "expected_mode"),
+    [
+        ("eicu", "medications", 200_859, 8, 50_000, "patient_batches"),
+        ("eicu", "medications", 200_859, 12, 100_430, "patient_batches"),
+        ("eicu", "medications", 200_859, 16, 200_859, "one_shot"),
+        ("eicu", "medications", 200_859, 32, 200_859, "one_shot"),
+        ("eicu", "medications", 200_859, 64, 200_859, "one_shot"),
+        ("miiv", "sofa2_score", 94_458, 8, 30_000, "patient_batches"),
+        ("miiv", "sofa2_score", 94_458, 12, 47_229, "patient_batches"),
+        ("miiv", "sofa2_score", 94_458, 16, 94_458, "one_shot"),
+        ("miiv", "sofa2_score", 94_458, 32, 94_458, "one_shot"),
+        ("miiv", "sofa2_score", 94_458, 64, 94_458, "one_shot"),
+    ],
+)
+def test_known_one_shot_cliffs_scale_safely_with_available_memory(
+    database, module, num_patients, available_gib, expected_batch, expected_mode
+):
+    plan = plan_extraction_resources(
+        database,
+        [module],
+        num_patients,
+        available_memory_mb=available_gib * 1024,
+    )
+
+    assert plan.batch_size == expected_batch
+    assert plan.mode == expected_mode
+    assert plan.reason_code == (
+        "measured_profile_fastest_safe_batch"
+        if available_gib == 8
+        else (
+            "measured_profile_scaled_one_shot"
+            if expected_mode == "one_shot"
+            else "measured_profile_scaled_batch"
+        )
+    )
 
 
 def test_measured_mimic_vasopressors_use_one_shot_at_8gib():
