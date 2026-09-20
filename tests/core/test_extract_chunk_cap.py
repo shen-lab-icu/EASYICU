@@ -714,7 +714,7 @@ def test_measured_mimic_medications_use_fastest_verified_two_batches():
     assert plan.advisory is None
 
 
-def test_mimic_full_module_request_remains_guarded_until_last_five_are_measured():
+def test_mimic_full_module_request_remains_guarded_by_unmeasured_other_scores():
     plan = plan_extraction_resources(
         "mimic",
         list(EXTRACT_MODULES),
@@ -725,6 +725,21 @@ def test_mimic_full_module_request_remains_guarded_until_last_five_are_measured(
     assert plan.mode == "patient_batches"
     assert plan.reason_code == "unmeasured_profile_memory_guard"
     assert plan.advisory_zh
+
+
+def test_mimic_v6_score_closure_uses_current_measured_batch_profile():
+    modules = [
+        "sofa1_score", "sofa2_score", "sepsis3_sofa1", "sepsis3_sofa2",
+    ]
+    plan = plan_extraction_resources(
+        "mimic", modules, 61_532, available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 20_000
+    assert plan.measured_peak_rss_mb == pytest.approx(3_406.5)
+    assert plan.required_available_memory_mb == pytest.approx(3_747.15)
 
 
 def test_measured_eicu_batch_shrinks_and_warns_below_verified_batch_threshold():
