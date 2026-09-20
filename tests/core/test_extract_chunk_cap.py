@@ -486,7 +486,7 @@ def test_measured_aumc_sofa1_uses_minimum_verified_three_batches():
     assert _n_chunks(23_106, plans["sofa1_score"].batch_size) == 3
 
 
-def test_eicu_full_request_quarantines_stale_renal_oneshot_profile():
+def test_eicu_full_request_uses_complete_measured_batch_coverage():
     plan = plan_extraction_resources(
         "eicu",
         list(EXTRACT_MODULES),
@@ -494,11 +494,26 @@ def test_eicu_full_request_quarantines_stale_renal_oneshot_profile():
         available_memory_mb=8 * 1024,
     )
 
-    assert plan.reason_code == "invalidated_profile_memory_guard"
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
     assert plan.batch_size == 25_000
-    assert plan.measured_peak_rss_mb is None
-    assert plan.required_available_memory_mb is None
-    assert "invalidated" in str(plan.advisory).lower()
+    assert plan.measured_peak_rss_mb == pytest.approx(7_435.9)
+    assert plan.required_available_memory_mb == pytest.approx(8_179.49)
+    assert plan.advisory is None
+
+
+def test_eicu_renal_uses_measured_isolated_five_batch_profile():
+    plan = plan_extraction_resources(
+        "eicu",
+        ["renal"],
+        200_859,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 50_000
+    assert plan.measured_peak_rss_mb == pytest.approx(6_102.5)
+    assert plan.required_available_memory_mb == pytest.approx(6_712.75)
+    assert _n_chunks(200_859, plan.batch_size) == 5
 
 
 def test_mixed_batch_summary_includes_larger_oneshot_peak(monkeypatch):

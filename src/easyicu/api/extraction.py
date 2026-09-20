@@ -381,15 +381,7 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
 # A key listed here must not also appear in either measured profile registry.
 _INVALIDATED_MEASURED_PROFILES: Mapping[
     tuple[str, str], Mapping[str, str]
-] = {
-    ("eicu", "renal"): {
-        "reason": (
-            "The current KDIGO/episode-bound implementation exceeded the "
-            "8,192-MiB contract during the 2026-09-20 v6 rebuild; the older "
-            "full-cohort profile predates these semantics."
-        ),
-    },
-}
+] = {}
 
 # Modules whose full-cohort one-shot crossed the 8-GiB release contract keep a
 # separate measured batch profile. A successful batch peak authorises only the
@@ -479,6 +471,17 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
         },
     },
     "eicu": {
+        # The stale full-cohort profile crossed 8 GiB after the current
+        # KDIGO/episode-bound changes. At commit 589d2e85, 50k isolated
+        # batches plus a deferred merge completed all five partitions; use
+        # the largest internal batch sample, which exceeded the coarser
+        # whole-module sampler.
+        "renal": {
+            "cohort_stays": 200_859,
+            "batch_size": 50_000,
+            "peak_rss_mb": 6_102.5,
+            "seconds": 651.8,
+        },
         "respiratory": {
             "cohort_stays": 200_859,
             "batch_size": 50_000,

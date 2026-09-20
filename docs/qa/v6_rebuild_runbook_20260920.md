@@ -46,6 +46,14 @@ optimized. The clean `51d88010` rerun completed at 1,799.4 seconds with a
 25,000-stay profile is now registered. See
 `v6_eicu_sofa2_performance_profile_20260920.md`.
 
+The formal v6 attempt exposed one stale eICU renal one-shot profile: the
+current KDIGO/episode-bound implementation exceeded the 8,192-MiB contract
+when all 200,859 stays were admitted at once. The replacement benchmark at
+commit `589d2e85` completed five isolated 50,000-stay partitions with deferred
+merge in 651.8 seconds. Its largest internal batch sample was 6,102.5 MiB and
+the published native table contained 10,117,644 rows. The 50,000-stay profile
+is registered; the older full-cohort profile is no longer admissible.
+
 The clean HiRID benchmark at `4f42b51e` completed the eleven-module refresh
 closure in 4,017.9 seconds. Its largest module peak was 2,371.5 MiB at a fixed
 14,000-stay batch. Both Sepsis-3 outputs remained structural zero-row tables,
