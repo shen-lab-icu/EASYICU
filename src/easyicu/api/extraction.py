@@ -376,12 +376,6 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
 _INVALIDATED_MEASURED_PROFILES: Mapping[
     tuple[str, str], Mapping[str, str]
 ] = {
-    ("mimic", "renal"): {
-        "reason": (
-            "The current KDIGO/episode-bound implementation exceeded the "
-            "8,192-MiB contract during the 2026-09-20 v6 rebuild."
-        ),
-    },
     ("miiv", "renal"): {
         "reason": (
             "The current KDIGO/episode-bound implementation has a 14-GiB "
@@ -610,6 +604,16 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
         },
     },
     "mimic": {
+        # The current KDIGO/episode-bound implementation crossed 13 GiB when
+        # admitted by its stale full-cohort profile. At commit 6ca37694, 20k
+        # isolated batches plus deferred merge completed all four partitions
+        # and matched the current one-shot table by bidirectional EXCEPT ALL.
+        "renal": {
+            "cohort_stays": 61_532,
+            "batch_size": 20_000,
+            "peak_rss_mb": 5_287.4,
+            "seconds": 993.1,
+        },
         "medications": {
             "cohort_stays": 61_532,
             "batch_size": 31_000,
