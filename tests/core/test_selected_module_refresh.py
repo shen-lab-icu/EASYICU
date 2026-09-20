@@ -361,6 +361,34 @@ def test_measured_miiv_score_plan_is_formally_admissible() -> None:
     assert plan["unmeasured_or_overridden_modules"] == {}
 
 
+def test_measured_miiv_v6_refresh_closure_is_formally_admissible() -> None:
+    refresher = _load_refresher()
+    manifest = {
+        "sources": {
+            "miiv": {"module_metrics": {"outcome": {"rows": 94_458}}}
+        }
+    }
+
+    plan = refresher._build_refresh_resource_plan(
+        manifest,
+        requested_modules=(
+            "demographics", "chemistry", "blood_gas", "vasopressors",
+            "medications",
+        ),
+        databases=("miiv",),
+        memory_budget_mb=8 * 1024,
+    )
+
+    modules = plan["databases"]["miiv"]["modules"]
+    assert modules["renal"]["batch_size"] == 20_000
+    assert modules["renal"]["planned_batches"] == 5
+    assert modules["renal"]["reason_code"] == (
+        "measured_profile_fastest_safe_batch"
+    )
+    assert plan["formal_release_admissible"] is True
+    assert plan["unmeasured_or_overridden_modules"] == {}
+
+
 def test_measured_mimic_score_plan_is_formally_admissible() -> None:
     refresher = _load_refresher()
     manifest = {

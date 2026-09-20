@@ -74,6 +74,23 @@ four isolated 20,000-stay partitions with deferred merge completed in 993.1
 seconds with a 5,287.4-MiB peak. The published 5,559,432-row table matched the
 current one-shot oracle by bidirectional `EXCEPT ALL` (zero rows both ways).
 
+The same audit invalidated the old MIMIC-IV renal one-shot profile, whose
+current process-tree receipt exceeded 14 GiB. At commit `62b025f9`, five
+isolated 20,000-stay partitions with deferred merge completed in 1,291.2
+seconds. The largest internal batch peak was 4,900.5 MiB; all 7,959,217
+published rows had unique `(stay_id, charttime)` keys and stayed inside the
+declared -24-hour pre-ICU / +24-hour post-discharge episode allowance. The old
+7,881,178-row table was produced at `e0621aa1`, before the current episode-bound
+and null-urine corrections, and is retained as historical evidence rather than
+used as a current-code equality oracle.
+
+Measured batch profiles use their recorded size at the 8-GiB baseline. Above
+that baseline, the planner spends only additional available memory, charging
+each added stay the full measured peak-per-stay plus 10% headroom. Thus heavy
+modules grow continuously on 12/16/32/64-GiB environments and become one-shot
+when the conservatively extrapolated full cohort fits; explicit batch choices
+still take precedence.
+
 The clean SICdb benchmark at `12d8595c` completed the eleven-module refresh
 closure in 693.1 seconds at a fixed 16,000-stay batch. The largest observed
 peak was 5,223.0 MiB in SOFA-1; renal peaked at 5,038.3 MiB and SOFA-2 at

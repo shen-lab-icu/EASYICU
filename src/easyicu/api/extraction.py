@@ -125,6 +125,12 @@ _STREAM_BATCH_MIN = 5_000
 _STREAM_BATCH_MAX = 67_000
 _STREAM_BATCH_RETRY_FACTOR = 0.75
 _STREAM_BATCH_MAX_RETRIES = 3
+# Measured batch profiles below were produced under the formal 8-GiB
+# available-memory contract.  Keep the recorded batch at that boundary, then
+# spend only memory above the measured envelope on larger batches.  This makes
+# 12/16/32/64-GiB hosts progressively faster without turning the 8-GiB
+# release boundary into an unmeasured extrapolation.
+_MEASURED_BATCH_BASELINE_AVAILABLE_MB = 8 * 1024
 
 # ``resource_budget_mb`` is an execution contract, not only a batch-planning
 # hint.  Without a worker envelope, an 8-GiB release launched on a large shared
@@ -375,14 +381,7 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
 # A key listed here must not also appear in either measured profile registry.
 _INVALIDATED_MEASURED_PROFILES: Mapping[
     tuple[str, str], Mapping[str, str]
-] = {
-    ("miiv", "renal"): {
-        "reason": (
-            "The current KDIGO/episode-bound implementation has a 14-GiB "
-            "one-shot receipt; the older 7.4-GiB profile is stale."
-        ),
-    },
-}
+] = {}
 
 # Modules whose full-cohort one-shot crossed the 8-GiB release contract keep a
 # separate measured batch profile. A successful batch peak authorises only the
@@ -402,6 +401,18 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "batch_size": 10_000,
             "peak_rss_mb": 6_132.1,
             "seconds": 346.567,
+        },
+        # Current KDIGO/episode-bound code at 62b025f9.  Five isolated 20k
+        # batches with deferred merge completed under the 8-GiB contract.  The
+        # largest internal batch sample exceeded the coarser module sampler.
+        # The older full-cohort table came from e0621aa1, before the current
+        # episode-bound and null-urine corrections, so it is not an equality
+        # oracle for this profile.
+        "renal": {
+            "cohort_stays": 94_458,
+            "batch_size": 20_000,
+            "peak_rss_mb": 4_900.5,
+            "seconds": 1_291.2,
         },
     },
     "aumc": {
@@ -873,6 +884,36 @@ def _quantize_stream_capacity(capacity: float, quantum: int) -> int:
     return max(_STREAM_BATCH_MIN, min(_STREAM_BATCH_MAX, quantized))
 
 
+def _scale_measured_batch_above_baseline(
+    recorded_batch_size: int,
+    required_available_mb: float,
+    available_memory_mb: float,
+    total_patients: int,
+) -> int:
+    """Spend memory above the 8-GiB measured envelope on larger batches.
+
+    The recorded batch remains authoritative at the formal baseline.  Above
+    it, every additional stay is charged the full observed peak-per-stay with
+    the existing 10% headroom already included.  Fixed process overhead is
+    therefore charged repeatedly, making this deliberately conservative.
+    """
+
+    recorded = min(max(1, int(recorded_batch_size)), int(total_patients))
+    available = max(0.0, float(available_memory_mb))
+    if available <= _MEASURED_BATCH_BASELINE_AVAILABLE_MB:
+        return recorded
+
+    mib_per_stay = max(1.0, float(required_available_mb)) / recorded
+    extra_stays = int(
+        (available - _MEASURED_BATCH_BASELINE_AVAILABLE_MB) / mib_per_stay
+    )
+    capacity = recorded + max(0, extra_stays)
+    if capacity >= int(total_patients):
+        return int(total_patients)
+    quantized = (capacity // _STREAM_BATCH_QUANTUM) * _STREAM_BATCH_QUANTUM
+    return max(recorded, quantized)
+
+
 def _process_tree_rss_mb() -> float:
     """Return current RSS for this process tree without making psutil mandatory."""
     try:
@@ -1093,7 +1134,12 @@ def _resolve_stream_batch_size(
     if measured_batch is not None:
         recommended_batch, required_mb, _ = measured_batch
         if available >= required_mb:
-            return recommended_batch
+            return _scale_measured_batch_above_baseline(
+                recommended_batch,
+                required_mb,
+                available,
+                total,
+            )
         scaled_capacity = recommended_batch * available / max(1.0, required_mb)
         return min(
             recommended_batch,
@@ -1238,11 +1284,20 @@ def plan_extraction_resources(
         total,
     )
     if measured_batch is not None:
-        _, required_mb, measured_peak_mb = measured_batch
+        recorded_batch, required_mb, measured_peak_mb = measured_batch
         if available >= required_mb:
+            scaled = batch_size > recorded_batch
             return ExtractionResourcePlan(
                 mode=mode,
-                reason_code="measured_profile_fastest_safe_batch",
+                reason_code=(
+                    "measured_profile_scaled_one_shot"
+                    if scaled and mode == "one_shot"
+                    else (
+                        "measured_profile_scaled_batch"
+                        if scaled
+                        else "measured_profile_fastest_safe_batch"
+                    )
+                ),
                 batch_size=batch_size,
                 available_memory_mb=available,
                 required_available_memory_mb=required_mb,
