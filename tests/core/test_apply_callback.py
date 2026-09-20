@@ -376,6 +376,24 @@ class TestTransformFunFloor:
         assert list(out["value"]) == [1.0, 2.0, 3.0]
 
 
+def test_fahrenheit_conversion_includes_blank_unit_on_fahrenheit_only_source():
+    frame = pd.DataFrame(
+        {"temp": [98.6, 100.4], "valueuom": [None, "degF"]}
+    )
+
+    result = _apply_callback(
+        frame,
+        _src(
+            "convert_unit(fahr_to_cels, 'C', 'f')",
+            unit_var="valueuom",
+        ),
+        concept_name="temp",
+    )
+
+    assert result["temp"].tolist() == pytest.approx([37.0, 38.0])
+    assert result["valueuom"].tolist() == ["C", "C"]
+
+
 class TestTransformFunCeiling:
     def test_ceiling_applied_to_concept_column(self):
         df = pd.DataFrame({"value": [1.1, 2.4, 3.0]})

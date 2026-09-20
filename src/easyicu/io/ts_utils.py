@@ -97,6 +97,7 @@ def change_interval(
     is_window_concept: bool = False,
     time_unit: Optional[str] = None,
     row_evidence_columns: Optional[List[str]] = None,
+    id_cols: Optional[List[str]] = None,
 ) -> ICUTable | pd.DataFrame:
     """Change the time resolution of a time series table.
     
@@ -114,6 +115,9 @@ def change_interval(
         copy: Whether to copy the input data (default True). Set to False for performance if input can be modified.
         time_unit: Explicit unit for a numeric relative-time axis. Numeric
             times fail closed when this is omitted.
+        id_cols: Patient/stay identifier columns for a plain DataFrame. When
+            omitted, canonical ICU identifier columns are detected. These
+            columns are always grouping keys and are never aggregated.
 
     Returns:
         New ICUTable or DataFrame with adjusted time resolution
@@ -170,23 +174,48 @@ def change_interval(
         ]
 
         df = _round_time_columns(df, time_cols)
+
+        if id_cols is None:
+            canonical_id_cols = (
+                "stay_id",
+                "icustay_id",
+                "patientunitstayid",
+                "admissionid",
+                "patientid",
+                "CaseID",
+                "subject_id",
+                "hadm_id",
+            )
+            dataframe_id_cols = [
+                column for column in canonical_id_cols if column in df.columns
+            ]
+        else:
+            missing_id_cols = [column for column in id_cols if column not in df.columns]
+            if missing_id_cols:
+                raise KeyError(
+                    f"DataFrame identifier columns are missing: {missing_id_cols}"
+                )
+            dataframe_id_cols = list(dict.fromkeys(id_cols))
+
+        group_cols = [*dataframe_id_cols, primary_time_col]
         
         if aggregation:
-            # Group by time and aggregate
+            # Group independently within each patient/stay and time bucket.
             numeric_cols = df.select_dtypes(include=['number']).columns
-            agg_dict = {col: aggregation for col in numeric_cols if col != primary_time_col}
+            agg_dict = {
+                col: aggregation for col in numeric_cols if col not in group_cols
+            }
             if agg_dict:
                 try:
-                    df = df.groupby(primary_time_col, as_index=False).agg(agg_dict)
+                    df = df.groupby(group_cols, as_index=False, dropna=False).agg(agg_dict)
                 except Exception:
-                    # 聚合失败时退化为去重，避免抛错
-                    df = df.drop_duplicates(subset=[primary_time_col], keep="first")
+                    # 聚合失败时退化为按患者/时间去重，仍不得跨患者合并。
+                    df = df.drop_duplicates(subset=group_cols, keep="first")
             else:
-                # 无可聚合的数值列，退化为去重
-                df = df.drop_duplicates(subset=[primary_time_col], keep="first")
+                # 无可聚合的数值列，退化为按患者/时间去重。
+                df = df.drop_duplicates(subset=group_cols, keep="first")
         else:
-            # Just drop duplicates
-            df = df.drop_duplicates(subset=[primary_time_col], keep="first")
+            df = df.drop_duplicates(subset=group_cols, keep="first")
         
         return df
     

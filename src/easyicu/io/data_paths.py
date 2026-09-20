@@ -8,6 +8,7 @@ imports stay local and lightweight.
 from __future__ import annotations
 
 import os
+import re
 
 from easyicu.databases.profiles import DATABASE_ALIASES, normalize_database_key
 
@@ -64,8 +65,18 @@ def _latest_numeric_subdir(path: str) -> str | None:
         return None
     if not subdirs:
         return None
-    subdirs.sort(reverse=True)
+    def version_key(name: str) -> tuple[tuple[int, object], ...]:
+        return tuple(
+            (0, int(part)) if part.isdigit() else (1, part.casefold())
+            for part in re.findall(r"\d+|[A-Za-z]+", name)
+        )
+
+    subdirs.sort(key=version_key, reverse=True)
     return os.path.join(path, subdirs[0])
+
+
+def _normalized_label(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.casefold())
 
 
 def find_database_path(root: str, db_name: str) -> str:
@@ -77,11 +88,11 @@ def find_database_path(root: str, db_name: str) -> str:
     aliases = DATABASE_ALIASES.get(database_key, (db_name,))
 
     if os.path.isdir(root):
-        root_basename = os.path.basename(os.path.normpath(root)).lower()
-        matched = root_basename == database_key or root_basename in aliases or any(
-            alias in root_basename or root_basename.startswith(alias)
-            for alias in aliases
-        )
+        root_basename = os.path.basename(os.path.normpath(root))
+        accepted_labels = {
+            _normalized_label(label) for label in (database_key, *aliases)
+        }
+        matched = _normalized_label(root_basename) in accepted_labels
         if matched:
             return _latest_numeric_subdir(root) or root
         if _path_looks_like_database(root):
@@ -108,13 +119,14 @@ def find_database_path(root: str, db_name: str) -> str:
             entry_path = os.path.join(root, entry)
             if not os.path.isdir(entry_path):
                 continue
-            entry_lower = entry.lower()
-            if entry_lower == database_key or any(
-                alias in entry_lower for alias in aliases
-            ):
+            if _normalized_label(entry) in {
+                _normalized_label(label) for label in (database_key, *aliases)
+            }:
                 return _latest_numeric_subdir(entry_path) or entry_path
 
-    return root
+    raise FileNotFoundError(
+        f"Could not resolve database {db_name!r} below data root {root!r}"
+    )
 
 
 __all__ = [

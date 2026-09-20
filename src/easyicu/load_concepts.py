@@ -782,7 +782,8 @@ class ConceptLoader:
                 df = df[df[sub_col].isin(target_vals)]
         
         # 4. 选择需要的列
-        required_cols = [self._get_id_column(df, id_type)]
+        id_col = self._get_id_column(df, id_type)
+        required_cols = [id_col]
         
         # 时间列
         time_col = self._get_time_column(df)
@@ -809,7 +810,10 @@ class ConceptLoader:
         
         # 6. 对齐时间间隔
         if 'time' in df.columns and interval:
-            df = change_interval(df, interval=interval, time_col='time')
+            id_cols = [id_col] if id_col and id_col in df.columns else None
+            df = change_interval(
+                df, interval=interval, time_col='time', id_cols=id_cols
+            )
         
         return df
     
@@ -996,7 +1000,10 @@ class ConceptLoader:
         
         # 7. 对齐时间间隔
         if 'time' in df.columns and interval:
-            df = change_interval(df, interval=interval, time_col='time')
+            id_cols = [id_col] if id_col and id_col in df.columns else None
+            df = change_interval(
+                df, interval=interval, time_col='time', id_cols=id_cols
+            )
         
         return df
     

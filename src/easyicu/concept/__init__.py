@@ -6281,20 +6281,78 @@ class ConceptResolver:
             if index_column and index_column in data.columns:
                 from ..utils.time_units import (
                     ICU_TIME_FALLBACK_LIMIT_HOURS,
+                    ICU_TIME_POST_DISCHARGE_HOURS,
+                    ICU_TIME_PRE_ADMISSION_HOURS,
                 )
 
                 event_hours = pd.to_numeric(
                     data[index_column], errors="coerce"
                 )
+                primary_id = next(
+                    (column for column in id_columns if column in data.columns),
+                    None,
+                )
+                if primary_id is None:
+                    raise ValueError(
+                        "SICdb episode-bound validation requires a CaseID column"
+                    )
+                if {"ICUOffset", "TimeOfStay"}.issubset(data.columns):
+                    bounds = data[[primary_id, "ICUOffset", "TimeOfStay"]].copy()
+                else:
+                    try:
+                        cases = data_source.load_table(
+                            "cases",
+                            columns=[primary_id, "ICUOffset", "TimeOfStay"],
+                            verbose=False,
+                        )
+                        cases_df = cases.data if hasattr(cases, "data") else cases
+                        bounds = cases_df[
+                            [primary_id, "ICUOffset", "TimeOfStay"]
+                        ].copy()
+                    except Exception as exc:
+                        raise ValueError(
+                            "SICdb episode-bound validation requires "
+                            "cases.ICUOffset and cases.TimeOfStay"
+                        ) from exc
+                if bounds.duplicated(subset=[primary_id], keep=False).any():
+                    conflicting = bounds.drop_duplicates().duplicated(
+                        subset=[primary_id], keep=False
+                    )
+                    if conflicting.any():
+                        raise ValueError(
+                            "SICdb cases contains conflicting ICU episode bounds"
+                        )
+                bounds = bounds.drop_duplicates(subset=[primary_id], keep="last")
+                upper = (
+                    pd.to_numeric(bounds["TimeOfStay"], errors="coerce")
+                    - pd.to_numeric(bounds["ICUOffset"], errors="coerce")
+                ) / 3600.0 + float(ICU_TIME_POST_DISCHARGE_HOURS)
+                upper_by_id = pd.Series(
+                    upper.to_numpy(), index=bounds[primary_id]
+                )
+                upper_hours = data[primary_id].map(upper_by_id).fillna(
+                    ICU_TIME_FALLBACK_LIMIT_HOURS
+                )
+                allowed_pre_hours = (
+                    float(pre_admission_hours)
+                    if pre_admission_hours is not None
+                    else float(ICU_TIME_PRE_ADMISSION_HOURS)
+                )
+                if not np.isfinite(allowed_pre_hours) or allowed_pre_hours < 0:
+                    raise ValueError(
+                        "pre_admission_hours must be a finite non-negative number"
+                    )
                 invalid_time = event_hours.notna() & (
-                    event_hours.abs() > ICU_TIME_FALLBACK_LIMIT_HOURS
+                    (event_hours < -allowed_pre_hours)
+                    | (event_hours > upper_hours)
                 )
                 excluded = int(invalid_time.sum())
                 if excluded:
                     logger.warning(
-                        "dropping %d SIC row(s) outside the 366-day "
-                        "source-time sanity bound",
+                        "dropping %d SIC row(s) outside the ICU episode "
+                        "(%gh pre-ICU history; 24h post-discharge allowance)",
                         excluded,
+                        allowed_pre_hours,
                     )
                     data = data.loc[~invalid_time].copy()
             return data
@@ -6310,16 +6368,45 @@ class ConceptResolver:
             if data.empty or not index_column or index_column not in data.columns:
                 return data
 
+            def _quarantine_hirid_time(frame: pd.DataFrame) -> pd.DataFrame:
+                from ..utils.time_units import (
+                    ICU_TIME_FALLBACK_LIMIT_HOURS,
+                    ICU_TIME_PRE_ADMISSION_HOURS,
+                )
+
+                event_hours = pd.to_numeric(frame[index_column], errors="coerce")
+                allowed_pre_hours = (
+                    float(pre_admission_hours)
+                    if pre_admission_hours is not None
+                    else float(ICU_TIME_PRE_ADMISSION_HOURS)
+                )
+                if not np.isfinite(allowed_pre_hours) or allowed_pre_hours < 0:
+                    raise ValueError(
+                        "pre_admission_hours must be a finite non-negative number"
+                    )
+                invalid_time = event_hours.notna() & (
+                    (event_hours < -allowed_pre_hours)
+                    | (event_hours > ICU_TIME_FALLBACK_LIMIT_HOURS)
+                )
+                excluded = int(invalid_time.sum())
+                if excluded:
+                    logger.warning(
+                        "dropping %d HiRID row(s) outside the declared pre-ICU "
+                        "window or 366-day source-time sanity bound",
+                        excluded,
+                    )
+                return frame.loc[~invalid_time].copy()
+
             if pd.api.types.is_timedelta64_dtype(data[index_column]):
                 data[index_column] = (
                     data[index_column].dt.total_seconds() / 3600.0
                 )
                 _normalize_duration_to_hours(data)
-                return data
+                return _quarantine_hirid_time(data)
 
             if pd.api.types.is_numeric_dtype(data[index_column]):
                 _normalize_duration_to_hours(data)
-                return data
+                return _quarantine_hirid_time(data)
 
             primary_id = next(
                 (column for column in id_columns if column in data.columns),
@@ -6399,7 +6486,7 @@ class ConceptResolver:
             if index_column != origin_col:
                 frame = frame.drop(columns=[origin_col])
             _normalize_duration_to_hours(frame)
-            return frame
+            return _quarantine_hirid_time(frame)
         
         # Early return checks (no verbose output for performance)
         if data.empty or not index_column or index_column not in data.columns:
@@ -8859,9 +8946,9 @@ class ConceptResolver:
 
                     # 扩展窗口到时间序列 (vectorized; replaces an iterrows loop that
                     # ran ~270x slower on a 100k-row WinTbl).
-                    # 🔧 FIX 2026-03-13 semantics preserved by end_mode="floored_clamped":
-                    #   start_floored = floor(start / iv) * iv
-                    #   end           = max(floor((start_floored + dur) / iv) * iv, 0)
+                    # Match the recursive resolver path and R ricu: compute
+                    # the final endpoint from raw start + duration, then place
+                    # the window on the requested grid.
                     # 🔧 FIX 2026-03-13 also preserved: only ``concept_name`` is copied as
                     # the value column; extra WinTbl columns (stop, doseunit, …) are
                     # dropped here so value_column detection downstream is unambiguous.
@@ -8873,8 +8960,8 @@ class ConceptResolver:
                         id_cols=list(id_cols),
                         value_columns=[concept_name] if concept_name in result.data.columns else [],
                         interval_hours=interval_hours,
-                        end_mode="floored_clamped",
-                        duration_zero_single=False,
+                        end_mode="raw",
+                        duration_zero_single=True,
                     )
                     
 

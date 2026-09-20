@@ -47,6 +47,25 @@ def test_wintbl_expansion_is_independently_owned_and_preserves_row_shape() -> No
     assert concept_module._expand_wintbl_vectorized is expand_wintbl_vectorized
 
 
+def test_wintbl_endpoint_uses_raw_start_before_grid_alignment() -> None:
+    source = pd.DataFrame(
+        {"stay_id": [7], "time": [0.75], "duration": [0.5], "dose": [1.5]}
+    )
+
+    expanded = expand_wintbl_vectorized(
+        source,
+        idx_col="time",
+        dur_col="duration",
+        id_cols=["stay_id"],
+        value_columns=["dose"],
+        interval_hours=1.0,
+        end_mode="raw",
+        duration_zero_single=True,
+    )
+
+    assert expanded["time"].tolist() == [0.0, 1.0]
+
+
 @pytest.mark.parametrize("interval", [0.0, -1.0])
 def test_wintbl_expansion_rejects_a_nonpositive_interval(interval: float) -> None:
     with pytest.raises(ValueError, match="interval_hours must be positive"):

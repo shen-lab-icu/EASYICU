@@ -192,7 +192,20 @@ def data_path_fingerprint(
     """Fingerprint dataset content with a persistent stat-to-digest index."""
     root = Path(data_path).expanduser().resolve()
     excluded = Path(exclude_dir).expanduser().resolve() if exclude_dir else None
-    index_path = excluded / _CONTENT_RECEIPT_INDEX if excluded else None
+    # A cache directory that contains the dataset cannot safely act as the
+    # persistent receipt location for that dataset: it is outside the excluded
+    # subtree rule and coarse filesystem ctime can make a same-size rewrite
+    # look unchanged. In that uncommon layout, hash source files directly.
+    cache_is_ancestor = (
+        excluded is not None
+        and excluded != root
+        and root.is_relative_to(excluded)
+    )
+    index_path = (
+        excluded / _CONTENT_RECEIPT_INDEX
+        if excluded is not None and not cache_is_ancestor
+        else None
+    )
     excluded_subtree = (
         excluded
         if excluded is not None

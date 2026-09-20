@@ -291,6 +291,8 @@ def load_demographics(
         patient_ids=patient_ids,
         database=database,
         data_path=data_path,
+        interval=interval,
+        win_length=win_length,
         merge=True,
         verbose=verbose,
     )
@@ -689,66 +691,19 @@ def load_blood_gas(
             print("  ❌ 没有可用的概念")
         return pd.DataFrame()
 
-    # 逐个尝试加载，跳过无法加载的概念（某些概念可能在特定数据库中没有配置）
-    results = []
-    loaded_concepts = []
-    for concept in available_concepts:
-        try:
-            df = load_concepts(
-                concepts=[concept],
-                patient_ids=patient_ids,
-                database=database,
-                data_path=data_path,
-                interval=interval,
-                win_length=win_length,
-                merge=True,
-                verbose=False,
-            )
-            if df is not None and not df.empty:
-                results.append(df)
-                loaded_concepts.append(concept)
-        except Exception:
-            pass  # 跳过无法加载的概念
-
-    if not results:
-        if verbose:
-            print("  ❌ 没有成功加载的概念")
-        return pd.DataFrame()
-
-    if verbose:
-        print(f"  ✅ 成功加载 {len(loaded_concepts)} 个概念: {loaded_concepts}")
-
-    # 合并结果
-    if len(results) == 1:
-        return results[0]
-
-    # 多个结果需要合并
-    merged = results[0]
-    for df in results[1:]:
-        # 找到共同的 ID 和时间列进行合并
-        id_cols = [
-            c
-            for c in merged.columns
-            if "id" in c.lower()
-            or c
-            in [
-                "stay_id",
-                "subject_id",
-                "patientunitstayid",
-                "admissionid",
-                "patientid",
-            ]
-        ]
-        time_cols = [
-            c for c in merged.columns if "time" in c.lower() or c == "charttime"
-        ]
-        merge_cols = list(set(id_cols + time_cols) & set(df.columns))
-        if merge_cols:
-            merged = pd.merge(merged, df, on=merge_cols, how="outer")
-        else:
-            merged = pd.concat([merged, df], ignore_index=True)
-
-    return merged
+    # Use the canonical multi-concept loader once. It owns identifier/time
+    # metadata and must surface extraction errors instead of guessing join
+    # keys or returning a silently incomplete panel.
+    return load_concepts(
+        concepts=available_concepts,
+        patient_ids=patient_ids,
+        database=database,
+        data_path=data_path,
+        interval=interval,
+        win_length=win_length,
+        merge=True,
+        verbose=verbose,
+    )
 
 
 def load_hematology(
