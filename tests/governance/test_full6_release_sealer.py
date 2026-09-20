@@ -106,6 +106,38 @@ def test_physical_column_expansion_preserves_event_time_and_owner_receipts() -> 
     ]
 
 
+def test_required_renal_concepts_cannot_be_published_entirely_null(
+    tmp_path: Path,
+) -> None:
+    parquet = tmp_path / "renal.parquet"
+    concepts = list(sealer.FULL6_REQUIRED_NONEMPTY_CONCEPTS["renal"])
+    pq.write_table(
+        pa.table(
+            {
+                "stay_id": pa.array([1, 2], type=pa.int64()),
+                "charttime": pa.array([0.0, 1.0], type=pa.float64()),
+                **{
+                    concept: pa.array([None, None], type=pa.float64())
+                    for concept in concepts
+                },
+            }
+        ),
+        parquet,
+    )
+
+    with pytest.raises(
+        sealer.ReleaseValidationError,
+        match="required full6 concept.*entirely NULL",
+    ):
+        sealer._validate_required_concept_coverage(
+            duckdb.connect(),
+            parquet_path=parquet,
+            database="miiv",
+            module="renal",
+            concepts=concepts,
+        )
+
+
 def _build_synthetic_release(run_root: Path) -> None:
     export_root = run_root / "exports"
     timing_rows = []
@@ -127,6 +159,26 @@ def _build_synthetic_release(run_root: Path) -> None:
                 primary_key = ["stay_id"]
                 row_grain = "one_row_per_icu_stay"
                 null_key_equality = "not_applicable"
+                physical_concepts = ["value"]
+            elif module == "renal":
+                table = pa.table(
+                    {
+                        "stay_id": pa.array([1, 2], type=pa.int64()),
+                        "charttime": pa.array([0.0, 1.0], type=pa.float64()),
+                        "uo_6h": pa.array([0.6, 0.4], type=pa.float64()),
+                        "uo_12h": pa.array([0.7, 0.3], type=pa.float64()),
+                        "uo_24h": pa.array([0.8, 0.2], type=pa.float64()),
+                        "aki_stage_uo_reference": pa.array(
+                            [0, 2], type=pa.int64()
+                        ),
+                    }
+                )
+                primary_key = ["stay_id", "charttime"]
+                row_grain = "one_row_per_icu_stay_relative_hour"
+                null_key_equality = "nulls_equal"
+                physical_concepts = list(
+                    sealer.FULL6_REQUIRED_NONEMPTY_CONCEPTS["renal"]
+                )
             else:
                 table = pa.table(
                     {
@@ -138,6 +190,7 @@ def _build_synthetic_release(run_root: Path) -> None:
                 primary_key = ["stay_id", "charttime"]
                 row_grain = "one_row_per_icu_stay_relative_hour"
                 null_key_equality = "nulls_equal"
+                physical_concepts = ["value"]
             parquet = database_root / f"{module}.parquet"
             pq.write_table(table, parquet)
             physical_schema = {
@@ -164,7 +217,7 @@ def _build_synthetic_release(run_root: Path) -> None:
                     "primary_key": primary_key,
                     "row_grain": row_grain,
                     "row_grain_audit": audit,
-                    "physical_concept_ids": ["value"],
+                    "physical_concept_ids": physical_concepts,
                 }
             )
         manifest = {

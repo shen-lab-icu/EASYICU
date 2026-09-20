@@ -107,6 +107,14 @@ CORRECTIONS = (
 )
 OWNER_RECEIPT_SUFFIXES = ("_observed", "_available")
 EVENT_TIME_COMPANIONS = {"death": "death_time"}
+FULL6_REQUIRED_NONEMPTY_CONCEPTS = {
+    "renal": (
+        "uo_6h",
+        "uo_12h",
+        "uo_24h",
+        "aki_stage_uo_reference",
+    ),
+}
 
 
 def _public_parquet_paths(database_root: Path) -> set[str]:
@@ -451,6 +459,53 @@ def _validate_null_time_semantics(
     return result
 
 
+def _validate_required_concept_coverage(
+    connection: duckdb.DuckDBPyConnection,
+    *,
+    parquet_path: Path,
+    database: str,
+    module: str,
+    concepts: list[str],
+) -> dict[str, int]:
+    """Require core full-cohort concepts to contain observed values.
+
+    A physical column can exist only because native publication projected the
+    common six-database schema.  Schema equality therefore cannot detect a
+    failed upstream dependency that left a clinically required concept wholly
+    NULL.  In v6 candidate generation, MIMIC-IV admission weight was dropped
+    before urine-window calculation; all UO rates and the UO KDIGO component
+    were silently published as NULL.  A formal six-database release must fail
+    closed on that condition.
+    """
+
+    required = FULL6_REQUIRED_NONEMPTY_CONCEPTS.get(module, ())
+    missing = [concept for concept in required if concept not in concepts]
+    if missing:
+        raise ReleaseValidationError(
+            f"{database}/{module}: missing required full6 concept(s) {missing!r}"
+        )
+    if not required:
+        return {}
+
+    projections = ", ".join(
+        f"count({_quote_identifier(concept)}) AS {_quote_identifier(concept)}"
+        for concept in required
+    )
+    row = connection.execute(
+        f"SELECT {projections} FROM read_parquet(?)",
+        [os.fspath(parquet_path)],
+    ).fetchone()
+    assert row is not None
+    counts = {concept: int(value) for concept, value in zip(required, row)}
+    empty = [concept for concept, value in counts.items() if value == 0]
+    if empty:
+        raise ReleaseValidationError(
+            f"{database}/{module}: required full6 concept(s) are entirely NULL: "
+            f"{empty!r}"
+        )
+    return counts
+
+
 def _validate_sidecar(database_root: Path, manifest: dict[str, Any]) -> None:
     receipt = manifest.get("column_metadata")
     if not isinstance(receipt, dict):
@@ -616,6 +671,13 @@ def _validate_file_entry(
         module=module,
         concepts=physical_concepts,
     )
+    required_concept_coverage = _validate_required_concept_coverage(
+        connection,
+        parquet_path=parquet_path,
+        database=database,
+        module=module,
+        concepts=physical_concepts,
+    )
     return {
         "module": module,
         "rows": actual_rows,
@@ -623,6 +685,7 @@ def _validate_file_entry(
         "schema": tuple(actual_schema.items()),
         "physical_concepts": tuple(physical_concepts),
         "null_time_audit": null_time_audit,
+        "required_concept_coverage": required_concept_coverage,
     }
 
 
