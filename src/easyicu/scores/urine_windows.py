@@ -101,14 +101,19 @@ def assess_urine_windows(
         data["weight"] = resolution.weight if resolution.weight is not None else np.nan
     times = _hours(data[time_column])
     out = data[ids + [time_column]].copy()
+    row_count = len(data)
+    covered_by_window: dict[int, np.ndarray] = {}
+    rate_by_window: dict[int, np.ndarray] = {}
+    reason_by_window: dict[int, np.ndarray] = {}
     for window in WINDOWS:
-        name = f"uo_{window}h"
-        out[f"{name}_covered_h"] = 0.0
-        out[f"{name}_assessment_rate"] = np.nan
-        out[f"{name}_assessment_reason"] = "insufficient_window"
-    out["uo_6h_oliguria_gt6h"] = False
-    out["uo_6h_oliguria_duration_h"] = np.nan
-    out["uo_6h_oliguria_rate"] = np.nan
+        covered_by_window[window] = np.zeros(row_count, dtype=float)
+        rate_by_window[window] = np.full(row_count, np.nan, dtype=float)
+        reason_by_window[window] = np.full(
+            row_count, "insufficient_window", dtype=object
+        )
+    oliguria_gt6h = np.zeros(row_count, dtype=bool)
+    oliguria_duration_h = np.full(row_count, np.nan, dtype=float)
+    oliguria_rate = np.full(row_count, np.nan, dtype=float)
 
     for positions in data.groupby(ids, sort=False, observed=True).indices.values():
         pos = np.asarray(positions)
@@ -145,9 +150,8 @@ def assess_urine_windows(
             whole_volume_bins = source_is_rate | (partial < 1e-9)
             weight_ok = np.isfinite(weights) & (weights > 0)
             assessable = full & whole_volume_bins & weight_ok
-            name = f"uo_{window}h"
-            out.loc[pos, f"{name}_covered_h"] = np.maximum(0.0, covered)
-            out.loc[pos[assessable], f"{name}_assessment_rate"] = (
+            covered_by_window[window][pos] = np.maximum(0.0, covered)
+            rate_by_window[window][pos[assessable]] = (
                 volume[assessable] / window / weights[assessable]
             )
             reason = np.full(len(pos), "insufficient_window", dtype=object)
@@ -158,7 +162,7 @@ def assess_urine_windows(
                 if source_is_rate
                 else "complete_estimated_bins"
             )
-            out.loc[pos, f"{name}_assessment_reason"] = reason
+            reason_by_window[window][pos] = reason
 
         # Find the closest complete segment start strictly before t-6. Reset
         # continuity at every invalid segment or genuine gap, per patient.
@@ -180,9 +184,22 @@ def assess_urine_windows(
         rate[assessable] = (
             volume[assessable] / duration[assessable] / weights[assessable]
         )
-        out.loc[pos, "uo_6h_oliguria_duration_h"] = np.where(
+        oliguria_duration_h[pos] = np.where(
             assessable, duration, np.nan
         )
-        out.loc[pos, "uo_6h_oliguria_rate"] = rate
-        out.loc[pos, "uo_6h_oliguria_gt6h"] = assessable & (rate < 0.3)
+        oliguria_rate[pos] = rate
+        oliguria_gt6h[pos] = assessable & (rate < 0.3)
+
+    # Assign each result column once. Repeated ``DataFrame.loc`` writes per
+    # patient make pandas rebuild indexers hundreds of thousands of times on a
+    # full ICU cohort even though ``pos`` is already a positional integer
+    # array. The NumPy buffers above preserve the same row order and dtypes.
+    for window in WINDOWS:
+        name = f"uo_{window}h"
+        out[f"{name}_covered_h"] = covered_by_window[window]
+        out[f"{name}_assessment_rate"] = rate_by_window[window]
+        out[f"{name}_assessment_reason"] = reason_by_window[window]
+    out["uo_6h_oliguria_gt6h"] = oliguria_gt6h
+    out["uo_6h_oliguria_duration_h"] = oliguria_duration_h
+    out["uo_6h_oliguria_rate"] = oliguria_rate
     return out
