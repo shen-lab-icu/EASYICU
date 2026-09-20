@@ -645,7 +645,7 @@ def test_module_batch_overrides_fail_closed(overrides):
         )
 
 
-def test_measured_miiv_full_module_set_keeps_current_medications_batch_at_8gib():
+def test_miiv_full_module_set_quarantines_stale_renal_profile():
     plan = plan_extraction_resources(
         "miiv",
         list(EXTRACT_MODULES),
@@ -654,12 +654,12 @@ def test_measured_miiv_full_module_set_keeps_current_medications_batch_at_8gib()
     )
 
     assert plan.mode == "patient_batches"
-    assert plan.reason_code == "measured_profile_fastest_safe_batch"
-    assert plan.batch_size == 10_000
-    assert plan.measured_peak_rss_mb == pytest.approx(7_362.0)
-    assert plan.required_available_memory_mb == pytest.approx(8_098.2)
-    assert plan.advisory is None
-    assert plan.advisory_zh is None
+    assert plan.reason_code == "invalidated_profile_memory_guard"
+    assert plan.batch_size == 37_000
+    assert plan.measured_peak_rss_mb is None
+    assert plan.required_available_memory_mb == 24_576.0
+    assert plan.advisory
+    assert plan.advisory_zh
 
 
 def test_miiv_medications_scales_to_5k_for_strict_8gib_worker_budget():
@@ -682,7 +682,7 @@ def test_miiv_medications_scales_to_5k_for_strict_8gib_worker_budget():
     assert medication_plan.advisory_zh
 
 
-def test_measured_miiv_renal_warns_only_below_its_one_shot_threshold():
+def test_miiv_renal_quarantines_stale_oneshot_profile():
     plan = plan_extraction_resources(
         "miiv",
         ["renal"],
@@ -691,9 +691,9 @@ def test_measured_miiv_renal_warns_only_below_its_one_shot_threshold():
     )
 
     assert plan.mode == "patient_batches"
-    assert plan.reason_code == "measured_profile_insufficient_memory"
-    assert plan.measured_peak_rss_mb == pytest.approx(7_362.0)
-    assert plan.required_available_memory_mb == pytest.approx(8_098.2)
+    assert plan.reason_code == "invalidated_profile_memory_guard"
+    assert plan.measured_peak_rss_mb is None
+    assert plan.required_available_memory_mb == 24_576.0
     assert plan.advisory
     assert plan.advisory_zh
 
@@ -739,7 +739,7 @@ def test_mimic_full_module_request_remains_guarded_by_unmeasured_other_scores():
     )
 
     assert plan.mode == "patient_batches"
-    assert plan.reason_code == "unmeasured_profile_memory_guard"
+    assert plan.reason_code == "invalidated_profile_memory_guard"
     assert plan.advisory_zh
 
 

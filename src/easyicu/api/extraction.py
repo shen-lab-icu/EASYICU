@@ -307,11 +307,6 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "peak_rss_mb": 3_544.406,
             "seconds": 107.3,
         },
-        "renal": {
-            "cohort_stays": 94_458,
-            "peak_rss_mb": 7_362.0,
-            "seconds": 281.666,
-        },
         "respiratory": {
             "cohort_stays": 94_458,
             "peak_rss_mb": 5_077.9,
@@ -367,7 +362,6 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
         "vasopressors": {"cohort_stays": 61_532, "peak_rss_mb": 7_415.4, "seconds": 111.911},
         "ventilator": {"cohort_stays": 61_532, "peak_rss_mb": 2_220.9, "seconds": 91.871},
         "vitals": {"cohort_stays": 61_532, "peak_rss_mb": 6_577.7, "seconds": 68.271},
-        "renal": {"cohort_stays": 61_532, "peak_rss_mb": 6_231.2, "seconds": 210.256},
         "respiratory": {"cohort_stays": 61_532, "peak_rss_mb": 7_182.0, "seconds": 96.099},
         "neurological": {"cohort_stays": 61_532, "peak_rss_mb": 6_044.1, "seconds": 39.021},
         "circulatory": {"cohort_stays": 61_532, "peak_rss_mb": 6_159.8, "seconds": 447.094},
@@ -381,7 +375,20 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
 # A key listed here must not also appear in either measured profile registry.
 _INVALIDATED_MEASURED_PROFILES: Mapping[
     tuple[str, str], Mapping[str, str]
-] = {}
+] = {
+    ("mimic", "renal"): {
+        "reason": (
+            "The current KDIGO/episode-bound implementation exceeded the "
+            "8,192-MiB contract during the 2026-09-20 v6 rebuild."
+        ),
+    },
+    ("miiv", "renal"): {
+        "reason": (
+            "The current KDIGO/episode-bound implementation has a 14-GiB "
+            "one-shot receipt; the older 7.4-GiB profile is stale."
+        ),
+    },
+}
 
 # Modules whose full-cohort one-shot crossed the 8-GiB release contract keep a
 # separate measured batch profile. A successful batch peak authorises only the
@@ -2008,6 +2015,8 @@ _ISOLATED_STREAM_BATCH_TARGETS = frozenset(
         # A fresh interpreter per patient partition prevents native allocator
         # residency from accumulating across renal batches.
         ("eicu", "renal"),
+        ("mimic", "renal"),
+        ("miiv", "renal"),
         # Full-cohort AUMC respiratory boundary runs retained Arrow/native
         # allocator pages across successive batches: 8k, 7k and 6k all crossed
         # the same 7,447-MiB process-tree stop late in the run even though their
@@ -2026,6 +2035,8 @@ _DEFERRED_STREAM_MERGE_TARGETS = frozenset(
         ("aumc", "respiratory"),
         ("miiv", "medications"),
         ("eicu", "renal"),
+        ("mimic", "renal"),
+        ("miiv", "renal"),
     }
 )
 
