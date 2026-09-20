@@ -580,6 +580,11 @@ def test_aumc_respiratory_uses_measured_batch_process_isolation() -> None:
     assert api._requires_isolated_stream_batch("aumc", "other_scores") is False
 
 
+def test_eicu_renal_uses_isolated_deferred_stream_batches() -> None:
+    assert api._requires_isolated_stream_batch("eicu", "renal") is True
+    assert ("eicu", "renal") in api._DEFERRED_STREAM_MERGE_TARGETS
+
+
 def test_miiv_other_scores_uses_measured_batch_process_isolation() -> None:
     assert api._requires_isolated_stream_batch("miiv", "other_scores") is True
     assert api._requires_isolated_stream_batch("miiv_demo", "other_scores") is False
