@@ -489,6 +489,37 @@ def test_data_path_resolution_checks_only_selected_databases(tmp_path: Path) -> 
     ) == {"eicu": str(eicu.resolve()), "mimic": str(mimic.resolve())}
 
 
+def test_storage_layout_receipts_bind_current_source_inventory(tmp_path: Path) -> None:
+    refresher = _load_refresher()
+    raw = tmp_path / "aumc"
+    source = raw / "numericitems"
+    cache = raw / "numericitems_bucket"
+    source.mkdir(parents=True)
+    cache.mkdir()
+    shard = source / "1.parquet"
+    shard.write_bytes(b"source")
+    stat = shard.stat()
+    receipt = {
+        "schema": refresher.BUCKET_CACHE_RECEIPT_SCHEMA,
+        "source": str(source.resolve()),
+        "source_inventory": [
+            {"path": shard.name, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+        ],
+    }
+    receipt_path = cache / "_BUCKET_BUILD_RECEIPT.json"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    (cache / "_COMPLETE").write_text("complete\n", encoding="utf-8")
+
+    result = refresher._storage_layout_receipts({"aumc": str(raw)})
+
+    assert result["aumc"][0]["receipt"] == receipt
+    assert result["aumc"][0]["receipt_sha256"]
+
+    shard.write_bytes(b"changed")
+    with pytest.raises(refresher.ModuleRefreshError, match="inventory changed"):
+        refresher._storage_layout_receipts({"aumc": str(raw)})
+
+
 def test_database_subset_resume_is_refused_without_transaction_receipt(
     tmp_path: Path,
 ) -> None:

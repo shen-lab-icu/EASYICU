@@ -395,6 +395,35 @@ has a non-zero total. The measured 5,000-stay policy is registered only for
 `sofa2_score` and `sepsis3_sofa2`; no evidence here changes the strategy or
 content of another AUMC module.
 
+### AUMC numericitems bucket-cache benchmark (2026-09-20)
+
+Profiling the current v6 closure showed that repeated physical scans of the
+977,625,612-row AUMC `numericitems` table, rather than the patient-side pandas
+operations, dominated runtime. A 1,000-stay respiratory profile spent 35.0 of
+41.5 profiled seconds in ten partition-directory reads. The source table was
+therefore materialised once as 64 DuckDB-hash itemid buckets with
+`scripts/build_itemid_bucket_cache.py`. The build used a 2-GiB DuckDB limit,
+two threads, and took 297.6 seconds. It preserved all 977,625,612 rows and the
+15-column schema. A full order-independent fingerprint also matched exactly:
+`bit_xor(hash(row))=15715576969709351166` and
+`sum(hash(row))=9017066009531723350620441766` on both layouts.
+
+At commit `50ddf673`, the same fixed 5,000-stay, 8,192-MiB benchmark completed
+the current respiratory/SOFA closure in 681.3 seconds. `respiratory` fell from
+1,182.2 to 163.6 seconds (7.2x) while retaining 2,537,136 pre-publication rows;
+after applying the same native-v2 time boundary, its 2,537,110 published rows
+had zero differences in both multiset directions. SOFA-1 took 174.3 seconds,
+SOFA-2 took 316.1 seconds, and the two Sepsis consumers took 5.1 seconds each.
+Peak RSS remained below the 8-GiB contract: 7,095.6 MiB for respiratory,
+3,504.4 MiB for SOFA-1, and 6,750.4 MiB for SOFA-2.
+
+This optimisation changes only the physical source layout. It does not justify
+one-shot AUMC extraction: respiratory still uses 86.6% of the 8-GiB envelope
+before headroom, and no larger post-cache batch has passed the formal boundary.
+The existing module-specific batches therefore remain in force. Formal refresh
+provenance validates and embeds the bucket build receipt, including the source
+file inventory, so a stale cache fails closed before raw extraction begins.
+
 ## Evidence and limits
 
 - Eight-module benchmark:
