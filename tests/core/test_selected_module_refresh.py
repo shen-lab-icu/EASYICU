@@ -338,13 +338,11 @@ def test_per_database_release_plan_uses_each_database_closure() -> None:
         "sepsis3_sofa1",
         "sepsis3_sofa2",
     }
-    assert plan["formal_release_admissible"] is False
-    assert plan["unmeasured_or_overridden_modules"] == {
-        "miiv": ["sofa2_score"]
-    }
+    assert plan["formal_release_admissible"] is True
+    assert plan["unmeasured_or_overridden_modules"] == {}
 
 
-def test_invalidated_miiv_sofa2_plan_blocks_formal_refresh() -> None:
+def test_measured_miiv_score_plan_is_formally_admissible() -> None:
     refresher = _load_refresher()
     manifest = {
         "sources": {
@@ -359,16 +357,14 @@ def test_invalidated_miiv_sofa2_plan_blocks_formal_refresh() -> None:
         memory_budget_mb=8 * 1024,
     )
 
-    assert plan["formal_release_admissible"] is False
-    assert plan["unmeasured_or_overridden_modules"] == {
-        "miiv": ["sofa2_score"]
-    }
+    assert plan["formal_release_admissible"] is True
+    assert plan["unmeasured_or_overridden_modules"] == {}
     assert plan["databases"]["miiv"]["modules"]["sofa2_score"][
-        "reason_code"
-    ] == "invalidated_profile_memory_guard"
+        "batch_size"
+    ] == 30_000
 
 
-def test_invalidated_miiv_sofa2_blocks_v6_refresh_closure() -> None:
+def test_measured_miiv_v6_refresh_closure_is_formally_admissible() -> None:
     refresher = _load_refresher()
     manifest = {
         "sources": {
@@ -392,10 +388,8 @@ def test_invalidated_miiv_sofa2_blocks_v6_refresh_closure() -> None:
     assert modules["renal"]["reason_code"] == (
         "measured_profile_fastest_safe_batch"
     )
-    assert plan["formal_release_admissible"] is False
-    assert plan["unmeasured_or_overridden_modules"] == {
-        "miiv": ["sofa2_score"]
-    }
+    assert plan["formal_release_admissible"] is True
+    assert plan["unmeasured_or_overridden_modules"] == {}
 
 
 def test_measured_mimic_score_plan_is_formally_admissible() -> None:
