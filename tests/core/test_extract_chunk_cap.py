@@ -739,8 +739,20 @@ def test_mimic_full_module_request_remains_guarded_by_unmeasured_other_scores():
     )
 
     assert plan.mode == "patient_batches"
-    assert plan.reason_code == "invalidated_profile_memory_guard"
+    assert plan.reason_code == "unmeasured_profile_memory_guard"
     assert plan.advisory_zh
+
+
+def test_mimic_renal_uses_measured_isolated_four_batch_profile():
+    plan = plan_extraction_resources(
+        "mimic", ["renal"], 61_532, available_memory_mb=8 * 1024,
+    )
+
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 20_000
+    assert plan.measured_peak_rss_mb == pytest.approx(5_287.4)
+    assert plan.required_available_memory_mb == pytest.approx(5_816.14)
+    assert _n_chunks(61_532, plan.batch_size) == 4
 
 
 def test_mimic_v6_score_closure_uses_current_measured_batch_profile():
