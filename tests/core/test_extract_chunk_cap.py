@@ -645,7 +645,7 @@ def test_module_batch_overrides_fail_closed(overrides):
         )
 
 
-def test_miiv_full_module_set_quarantines_stale_renal_profile():
+def test_miiv_full_module_set_has_current_measured_coverage():
     plan = plan_extraction_resources(
         "miiv",
         list(EXTRACT_MODULES),
@@ -654,12 +654,12 @@ def test_miiv_full_module_set_quarantines_stale_renal_profile():
     )
 
     assert plan.mode == "patient_batches"
-    assert plan.reason_code == "invalidated_profile_memory_guard"
-    assert plan.batch_size == 37_000
-    assert plan.measured_peak_rss_mb is None
-    assert plan.required_available_memory_mb == 24_576.0
-    assert plan.advisory
-    assert plan.advisory_zh
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 10_000
+    assert plan.measured_peak_rss_mb == pytest.approx(7_286.7)
+    assert plan.required_available_memory_mb == pytest.approx(8_015.37)
+    assert plan.advisory is None
+    assert plan.advisory_zh is None
 
 
 def test_miiv_medications_scales_to_5k_for_strict_8gib_worker_budget():
@@ -682,20 +682,47 @@ def test_miiv_medications_scales_to_5k_for_strict_8gib_worker_budget():
     assert medication_plan.advisory_zh
 
 
-def test_miiv_renal_quarantines_stale_oneshot_profile():
+def test_miiv_renal_uses_current_isolated_five_batch_profile():
     plan = plan_extraction_resources(
         "miiv",
         ["renal"],
         94_458,
-        available_memory_mb=8_000,
+        available_memory_mb=8 * 1024,
     )
 
     assert plan.mode == "patient_batches"
-    assert plan.reason_code == "invalidated_profile_memory_guard"
-    assert plan.measured_peak_rss_mb is None
-    assert plan.required_available_memory_mb == 24_576.0
-    assert plan.advisory
-    assert plan.advisory_zh
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 20_000
+    assert plan.measured_peak_rss_mb == pytest.approx(4_900.5)
+    assert plan.required_available_memory_mb == pytest.approx(5_390.55)
+    assert _n_chunks(94_458, plan.batch_size) == 5
+    assert plan.advisory is None
+    assert plan.advisory_zh is None
+
+
+@pytest.mark.parametrize(
+    ("available_gib", "expected_batch", "expected_mode", "expected_reason"),
+    [
+        (8, 20_000, "patient_batches", "measured_profile_fastest_safe_batch"),
+        (12, 35_000, "patient_batches", "measured_profile_scaled_batch"),
+        (16, 50_000, "patient_batches", "measured_profile_scaled_batch"),
+        (32, 94_458, "one_shot", "measured_profile_scaled_one_shot"),
+        (64, 94_458, "one_shot", "measured_profile_scaled_one_shot"),
+    ],
+)
+def test_miiv_renal_scales_continuously_above_8gib_baseline(
+    available_gib, expected_batch, expected_mode, expected_reason
+):
+    plan = plan_extraction_resources(
+        "miiv",
+        ["renal"],
+        94_458,
+        available_memory_mb=available_gib * 1024,
+    )
+
+    assert plan.batch_size == expected_batch
+    assert plan.mode == expected_mode
+    assert plan.reason_code == expected_reason
 
 
 def test_measured_mimic_vasopressors_use_one_shot_at_8gib():

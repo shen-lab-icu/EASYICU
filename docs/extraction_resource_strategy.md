@@ -451,3 +451,11 @@ safe threshold for an unlisted module or database. Add a new production
 profile only after a clean full-cohort run records commit identity, cohort size,
 elapsed time, process-tree peak RSS, output validity, and partition-invariance
 evidence where batching can affect semantics.
+
+For a registered batch profile, 8 GiB remains the measured baseline rather
+than a permanent batch-size ceiling. When more memory is currently available,
+the planner increases the batch continuously from that baseline. It charges
+the full observed peak-per-stay, including 10% headroom, against only the memory
+above 8 GiB and rounds down to 5,000 stays. This deliberately conservative
+model lets 12/16/32/64-GiB environments use fewer scans and eventually one
+shot, while an 8-GiB formal run keeps the exact measured batch.
