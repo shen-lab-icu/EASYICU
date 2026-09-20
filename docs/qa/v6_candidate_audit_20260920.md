@@ -195,6 +195,9 @@ row-by-row validation.
 
 ## Required rebuild and promotion sequence
 
+The executable scope, resource-profile prerequisites, commands, and acceptance
+gates are recorded in `docs/qa/v6_rebuild_runbook_20260920.md`.
+
 1. Re-extract all changed modules for all six databases from one clean commit
    containing the identity-table fix and longitudinal `rrt_criteria` change.
 2. Include demographics in the refresh closure and record the exact per-module
