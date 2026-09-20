@@ -1748,6 +1748,31 @@ def _miiv_icustays_source() -> SimpleNamespace:
     )
 
 
+def test_miiv_identity_table_identifier_is_not_treated_as_event_time():
+    """An id_tbl key is identity, not a numeric ICU-relative timestamp."""
+
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    resolver._icustays_cache = None
+    frame = pd.DataFrame(
+        {
+            "stay_id": [30_000_001, 30_000_002],
+            "weight": [70.0, 80.0],
+        }
+    )
+    source = SimpleNamespace(
+        config=SimpleNamespace(name="miiv"),
+        load_table=lambda *_args, **_kwargs: pytest.fail(
+            "identity-only concepts have no time axis to align"
+        ),
+    )
+
+    out = resolver._align_time_to_admission(
+        frame, source, ["stay_id"], "stay_id"
+    )
+
+    pd.testing.assert_frame_equal(out, frame)
+
+
 def test_miiv_source_times_outside_the_icu_episode_are_quarantined():
     """MIMIC rolling-join history must not enter producer staging.
 

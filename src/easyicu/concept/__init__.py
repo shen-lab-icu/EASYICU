@@ -6412,6 +6412,15 @@ class ConceptResolver:
         primary_id = id_columns[0]
         if primary_id not in data.columns:
             return data
+
+        # Identity-level concepts (for example MIMIC-IV admission weight)
+        # use their identifier as ``index_column`` because ``id_tbl`` has no
+        # clinical time axis.  Treating that numeric identifier as relative
+        # hours makes the ICU-episode quarantine drop every row (for example,
+        # a large stay identifier looks like an event millions of hours after ICU
+        # admission).  There is no timestamp to align or bound on this path.
+        if index_column in id_columns:
+            return data
         
         # 🔧 FIX: 确定数据库特定的 stay-level ID 列名
         # MIMIC-III 使用 icustay_id，MIMIC-IV 使用 stay_id
