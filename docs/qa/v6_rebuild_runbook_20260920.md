@@ -30,15 +30,13 @@ must be republished from v5 without a logical table-content change.
 
 ## Resource evidence required before the formal run
 
-The read-only 8-GiB plan was generated successfully. It is not yet formally
-admissible because SICdb's requested five modules and their score/Sepsis
-closure still use unmeasured or invalidated fallback profiles.
+The read-only 8-GiB plan and all required database/module measurements have
+completed. The registered plan is formally admissible; rerun the complete
+six-database plan after this registration and require an empty
+`unmeasured_or_overridden_modules` map before launching the formal candidate.
 
-AUMC, eICU, HiRID, MIMIC-III, and MIMIC-IV now have measured plans for the
-complete closure. Run the remaining SICdb benchmark candidate from the same
-clean checkout. The initial batch sizes below are the guarded sizes emitted by
-the plan. The completed eICU, HiRID, and MIMIC-III commands remain below as
-reproducibility records.
+All six databases now have measured plans for the complete closure. The
+commands below remain as reproducibility records.
 
 The first complete eICU benchmark at commit `46c71e0a` identified a pandas
 per-patient assignment bottleneck in urine-window assessment. Its resource
@@ -61,6 +59,12 @@ peaked at 3,325.7 and 3,406.5 MiB, respectively; each Sepsis consumer took
 17.0 seconds and peaked at 2,068.5 MiB. The successful output receipts contain
 7,809,016 SOFA-1 rows, 7,442,649 SOFA-2 rows, 11,275 Sepsis-3/SOFA-1 rows,
 and 12,330 Sepsis-3/SOFA-2 rows.
+
+The clean SICdb benchmark at `12d8595c` completed the eleven-module refresh
+closure in 693.1 seconds at a fixed 16,000-stay batch. The largest observed
+peak was 5,223.0 MiB in SOFA-1; renal peaked at 5,038.3 MiB and SOFA-2 at
+4,765.9 MiB. Both Sepsis outputs remained structural zero-row tables, matching
+the sealed v5 `sepsis_shared` and Sepsis outputs.
 
 ```bash
 SOURCE=/home/zhuhb/workspace/phd-thesis/00-data-foundation/easyicu_full6_runs/releases/full6_native_v5_hirid_aki_rate_e0621aa1_20260906

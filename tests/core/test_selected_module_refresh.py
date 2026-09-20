@@ -385,6 +385,37 @@ def test_measured_mimic_score_plan_is_formally_admissible() -> None:
     assert plan["unmeasured_or_overridden_modules"] == {}
 
 
+def test_measured_sic_v6_refresh_plan_is_formally_admissible() -> None:
+    refresher = _load_refresher()
+    manifest = {
+        "sources": {
+            "sic": {"module_metrics": {"outcome": {"rows": 27_386}}}
+        }
+    }
+
+    plan = refresher._build_refresh_resource_plan(
+        manifest,
+        requested_modules=(
+            "demographics", "chemistry", "blood_gas", "vasopressors",
+            "medications",
+        ),
+        databases=("sic",),
+        memory_budget_mb=8 * 1024,
+    )
+
+    assert set(plan["databases"]["sic"]["modules"]) == {
+        "demographics", "blood_gas", "chemistry", "respiratory",
+        "vasopressors", "medications", "renal", "sofa1_score",
+        "sofa2_score", "sepsis3_sofa1", "sepsis3_sofa2",
+    }
+    assert all(
+        record["batch_size"] == 16_000
+        for record in plan["databases"]["sic"]["modules"].values()
+    )
+    assert plan["formal_release_admissible"] is True
+    assert plan["unmeasured_or_overridden_modules"] == {}
+
+
 def test_measured_aumc_sofa2_closure_is_formally_admissible() -> None:
     refresher = _load_refresher()
     manifest = {
