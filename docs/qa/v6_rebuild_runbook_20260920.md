@@ -20,10 +20,12 @@ The raw-derived refresh request for every database is:
 - `demographics`;
 - `chemistry`;
 - `blood_gas`;
-- `vasopressors`.
+- `vasopressors`;
+- `medications` (the two WinTbl resolver routes now share the audited raw-start
+  endpoint rule; this directly affects the numeric `dex` window concept).
 
 The audited dependency expansion adds `respiratory`, `renal`, `sofa1_score`,
-`sofa2_score`, `sepsis3_sofa1`, and `sepsis3_sofa2`. The other nine modules
+`sofa2_score`, `sepsis3_sofa1`, and `sepsis3_sofa2`. The other eight modules
 must be republished from v5 without a logical table-content change.
 
 ## Resource evidence required before the formal run
@@ -33,9 +35,9 @@ admissible because four database/module groups use unmeasured or invalidated
 fallback profiles:
 
 - eICU: `sofa2_score`, `sepsis3_sofa2`;
-- HiRID: the requested four modules and their score/Sepsis closure;
+- HiRID: the requested five modules and their score/Sepsis closure;
 - MIMIC-III: `sofa1_score`, `sofa2_score` and both Sepsis consumers;
-- SICdb: the requested four modules and their score/Sepsis closure.
+- SICdb: the requested five modules and their score/Sepsis closure.
 
 AUMC and MIMIC-IV already have measured plans for the complete closure. Run the
 four missing benchmark candidates from the same clean checkout, one database at
@@ -56,7 +58,8 @@ python scripts/releases/EX-A03_refresh_selected_modules.py \
   --source-run-root "$SOURCE" \
   --output-root "$CANDIDATES/benchmark_hirid_v6_rebuild_fullclosure_20260920" \
   --database hirid --module demographics --module chemistry \
-  --module blood_gas --module vasopressors --benchmark-only \
+  --module blood_gas --module vasopressors --module medications \
+  --benchmark-only \
   --batch-size 14000 --allow-resource-policy-override \
   --resource-policy-override-reason "Measure current HiRID closure before formal v6 rebuild"
 
@@ -71,7 +74,8 @@ python scripts/releases/EX-A03_refresh_selected_modules.py \
   --source-run-root "$SOURCE" \
   --output-root "$CANDIDATES/benchmark_sic_v6_rebuild_fullclosure_20260920" \
   --database sic --module demographics --module chemistry \
-  --module blood_gas --module vasopressors --benchmark-only \
+  --module blood_gas --module vasopressors --module medications \
+  --benchmark-only \
   --batch-size 16000 --allow-resource-policy-override \
   --resource-policy-override-reason "Measure current SICdb closure before formal v6 rebuild"
 ```
@@ -94,7 +98,8 @@ python scripts/releases/EX-A03_refresh_selected_modules.py \
   --module demographics \
   --module chemistry \
   --module blood_gas \
-  --module vasopressors
+  --module vasopressors \
+  --module medications
 ```
 
 The refresh command must produce one `module_refresh_provenance.json`, one

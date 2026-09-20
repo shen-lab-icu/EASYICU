@@ -14,6 +14,7 @@ from easyicu.base import (
 from easyicu.config import load_src_cfg
 from easyicu.database_config import SUPPORTED_DATABASES
 from easyicu.databases.profiles import public_database_keys
+from easyicu.databases.detection import detect_database_identity
 from easyicu.io.data_converter import DataConverter
 from easyicu.patient_filter import (
     FilterCriteria,
@@ -193,6 +194,14 @@ def test_conflicting_database_markers_fail_closed(tmp_path) -> None:
 
     assert caught.value.code == "database_detection_ambiguous"
     assert caught.value.candidates == ("aumc", "sic")
+
+
+def test_aumc_single_numericitems_parquet_is_detected(tmp_path) -> None:
+    pd.DataFrame({"admissionid": [1], "itemid": [2]}).to_parquet(
+        tmp_path / "numericitems.parquet"
+    )
+
+    assert detect_database_identity(tmp_path) == "aumc"
 
 
 def test_mixed_prepared_database_schemas_fail_closed(tmp_path) -> None:

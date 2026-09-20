@@ -313,7 +313,8 @@ def test_data_paths_and_crossdb_views_share_profile_alias_label_and_order(
     assert find_database_path(str(tmp_path), "MIMIC-IV") == str(version)
     # The canonical MIMIC-III key must not become a broad ``mimic`` substring
     # alias that accidentally selects a MIMIC-IV directory.
-    assert find_database_path(str(tmp_path), "mimic") == str(tmp_path)
+    with pytest.raises(FileNotFoundError, match="Could not resolve database"):
+        find_database_path(str(tmp_path), "mimic")
     mimic_iii_version = tmp_path / "mimiciii" / "1.4"
     mimic_iii_version.mkdir(parents=True)
     assert find_database_path(str(tmp_path), "mimic") == str(mimic_iii_version)
@@ -326,3 +327,20 @@ def test_data_paths_and_crossdb_views_share_profile_alias_label_and_order(
         "mimiciv",
         "mimic-iv",
     ]
+
+
+def test_data_path_resolution_uses_numeric_version_order_and_exact_aliases(tmp_path):
+    for version in ("9.9", "10.0"):
+        (tmp_path / "sicdb" / version).mkdir(parents=True)
+    (tmp_path / "music").mkdir()
+
+    assert find_database_path(str(tmp_path), "sic") == str(
+        tmp_path / "sicdb" / "10.0"
+    )
+
+
+def test_data_path_resolution_does_not_match_alias_substrings(tmp_path):
+    (tmp_path / "music").mkdir()
+
+    with pytest.raises(FileNotFoundError):
+        find_database_path(str(tmp_path), "sic")

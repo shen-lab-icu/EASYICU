@@ -237,7 +237,12 @@ def test_sic_interval_duration_seconds_are_declared_as_hours():
     """SIC data_range durations must not expand seconds as hours."""
 
     resolver = ConceptResolver.__new__(ConceptResolver)
-    source = SimpleNamespace(config=SimpleNamespace(name="sic"))
+    source = SimpleNamespace(
+        config=SimpleNamespace(name="sic"),
+        load_table=lambda *_args, **_kwargs: pd.DataFrame(
+            {"CaseID": [1], "ICUOffset": [0.0], "TimeOfStay": [86_400.0]}
+        ),
+    )
     frame = pd.DataFrame(
         {
             "CaseID": [1],
@@ -262,7 +267,12 @@ def test_sic_interval_duration_seconds_are_declared_as_hours():
 
 def test_sic_extreme_source_interval_is_quarantined_before_expansion():
     resolver = ConceptResolver.__new__(ConceptResolver)
-    source = SimpleNamespace(config=SimpleNamespace(name="sic"))
+    source = SimpleNamespace(
+        config=SimpleNamespace(name="sic"),
+        load_table=lambda *_args, **_kwargs: pd.DataFrame(
+            {"CaseID": [1], "ICUOffset": [0.0], "TimeOfStay": [86_400.0]}
+        ),
+    )
     frame = pd.DataFrame(
         {
             "CaseID": [1, 1],
@@ -286,6 +296,48 @@ def test_sic_extreme_source_interval_is_quarantined_before_expansion():
 
     assert out["charttime"].tolist() == [2.0]
     assert out["dur_var"].tolist() == [2.0]
+
+
+def test_sic_rows_after_episode_allowance_are_quarantined():
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    source = SimpleNamespace(
+        config=SimpleNamespace(name="sic"),
+        load_table=lambda *_args, **_kwargs: pd.DataFrame(
+            {
+                "CaseID": [1],
+                "ICUOffset": [3_600.0],
+                "TimeOfStay": [90_000.0],
+            }
+        ),
+    )
+    frame = pd.DataFrame(
+        {"CaseID": [1, 1], "charttime": [47.0, 49.0], "value": [1.0, 2.0]}
+    )
+
+    out = resolver._align_time_to_admission(
+        frame, source, ["CaseID"], "charttime"
+    )
+
+    # ICU LOS is 24 h, with the shared 24 h post-discharge allowance.
+    assert out["charttime"].tolist() == [47.0]
+
+
+def test_hirid_numeric_rows_outside_sanity_bound_are_quarantined():
+    resolver = ConceptResolver.__new__(ConceptResolver)
+    source = SimpleNamespace(config=SimpleNamespace(name="hirid"))
+    frame = pd.DataFrame(
+        {
+            "patientid": [1, 1, 1],
+            "charttime": [-25.0, 2.0, 9_000.0],
+            "value": [1.0, 2.0, 3.0],
+        }
+    )
+
+    out = resolver._align_time_to_admission(
+        frame, source, ["patientid"], "charttime"
+    )
+
+    assert out["charttime"].tolist() == [2.0]
 
 
 def test_hirid_general_admissiontime_uses_declared_origin_without_icustays():
