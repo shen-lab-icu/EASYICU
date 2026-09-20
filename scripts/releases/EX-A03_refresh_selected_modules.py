@@ -83,11 +83,12 @@ DIRECT_REFRESHABLE_MODULES = frozenset(
         "sofa2_score",
         # 2026-09-18 v6 per governance "改哪提哪": directly changed
         # chemistry (crea 15->25), blood_gas (po2 40->20), vasopressors
-        # (norepi_equiv median->sum, adh 0-0.15, phn 0-15). Additive only;
-        # existing six entries and all downstream logic unchanged.
+        # (norepi_equiv median->sum, adh 0-0.15, phn 0-15), plus medications
+        # after the shared WinTbl endpoint correction.
         "chemistry",
         "blood_gas",
         "vasopressors",
+        "medications",
     }
 )
 MODULE_DEPENDENCY_CLOSURE: dict[str, tuple[str, ...]] = {
@@ -123,6 +124,9 @@ MODULE_DEPENDENCY_CLOSURE: dict[str, tuple[str, ...]] = {
         "sepsis3_sofa1",
         "sepsis3_sofa2",
     ),
+    # The shared WinTbl endpoint correction changes numeric dexamethasone
+    # exposure windows. No score or Sepsis module consumes that medication.
+    "medications": ("medications",),
     "respiratory": (
         "respiratory",
         "sofa1_score",
@@ -260,7 +264,7 @@ def _validate_modules(modules: Sequence[str]) -> tuple[str, ...]:
         raise ModuleRefreshError(
             "This audited refresh entry point currently allows only demographics, "
             "outcome, renal, respiratory, sofa1_score, sofa2_score, chemistry, "
-            "blood_gas and vasopressors; "
+            "blood_gas, vasopressors and medications; "
             f"got disallowed modules: {sorted(disallowed)}"
         )
     return selected
@@ -2465,7 +2469,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help=(
             "Raw-derived module to refresh (demographics, outcome, renal, "
             "respiratory, sofa1_score/sofa2_score, chemistry, blood_gas or "
-            "vasopressors); repeatable."
+            "vasopressors or medications); repeatable."
         ),
     )
     parser.add_argument(
