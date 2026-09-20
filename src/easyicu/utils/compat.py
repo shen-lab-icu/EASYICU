@@ -837,8 +837,17 @@ def merge_concepts_r_style(
                 # bounds transform carries no observation.  Retaining it as a
                 # static row manufactures an all-null (id, time=NULL) record
                 # when no other concept is available for that stay.
+                # A static status owner may also emit the recorded event
+                # coordinate as ``<concept>_time``.  It is a value companion,
+                # not the row index: hospital-death status must cover every
+                # admission even when no death clock was recorded.  Preserve
+                # that closed, owner-issued sidecar through the public merge.
+                static_columns = ["id", name]
+                companion_time = f"{name}_time"
+                if companion_time in df.columns:
+                    static_columns.append(companion_time)
                 static = (
-                    df[["id", name]]
+                    df[static_columns]
                     .dropna(subset=["id", name])
                     .drop_duplicates(subset=["id"], keep="last")
                 )
@@ -858,7 +867,11 @@ def merge_concepts_r_style(
         # excluded.
         keep_cols.extend(
             column
-            for column in (f"{name}_observed", f"{name}_available")
+            for column in (
+                f"{name}_observed",
+                f"{name}_available",
+                f"{name}_time",
+            )
             if column in df.columns
         )
         keep_cols = [c for c in keep_cols if c in df.columns]
