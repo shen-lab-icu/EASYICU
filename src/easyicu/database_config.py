@@ -29,6 +29,10 @@ ID_COLUMNS: Dict[str, List[str]] = {
     'hirid': ['patientid'],
     'mimic': ['icustay_id', 'subject_id', 'hadm_id'],
     'sic': ['CaseID', 'PatientID'],
+    'nwicu': ['stay_id', 'subject_id', 'hadm_id'],
+    'zhejiang_eicu': ['patient_SN', 'Hospital_ID'],
+    'jinhua': ['hadm_id', 'subject_id'],
+    'zigong': ['INP_NO', 'PATIENT_ID'],
 }
 
 # Primary time columns
@@ -39,6 +43,10 @@ TIME_COLUMNS: Dict[str, str] = {
     'hirid': 'datetime',
     'mimic': 'charttime',
     'sic': 'Offset',
+    'nwicu': 'charttime',
+    'zhejiang_eicu': 'VitalSign_DateTime',
+    'jinhua': 'charttime_base',
+    'zigong': 'ChartTime',
 }
 
 # Alternative time columns (start/end times for intervals)
@@ -49,6 +57,10 @@ START_TIME_COLUMNS: Dict[str, str] = {
     'hirid': 'datetime',
     'mimic': 'starttime',
     'sic': 'Offset',
+    'nwicu': 'starttime',
+    'zhejiang_eicu': 'Med_startTime',
+    'jinhua': 'starttime_base',
+    'zigong': 'Drug_time',
 }
 
 END_TIME_COLUMNS: Dict[str, str] = {
@@ -58,6 +70,10 @@ END_TIME_COLUMNS: Dict[str, str] = {
     'hirid': 'datetime',
     'mimic': 'endtime',
     'sic': 'OffsetDrugEnd',
+    'nwicu': 'endtime',
+    'zhejiang_eicu': 'Med_stopTime',
+    'jinhua': 'endtime_base',
+    'zigong': 'StopTime',
 }
 
 # Value columns (generic measurement values)
@@ -68,6 +84,10 @@ VALUE_COLUMNS: Dict[str, str] = {
     'hirid': 'value',
     'mimic': 'valuenum',
     'sic': 'value',
+    'nwicu': 'valuenum',
+    'zhejiang_eicu': 'VitalSign_value',
+    'jinhua': 'value',
+    'zigong': 'LabValue',
 }
 
 # Unit columns (measurement units)
@@ -78,6 +98,10 @@ UNIT_COLUMNS: Dict[str, str] = {
     'hirid': 'unit',
     'mimic': 'valueuom',
     'sic': 'unit',
+    'nwicu': 'valueuom',
+    'zhejiang_eicu': 'VitalSign_unit',
+    'jinhua': 'subcategory_unit',
+    'zigong': 'Unit',
 }
 
 # ============================================================================
@@ -92,6 +116,10 @@ TIME_IS_OFFSET: Dict[str, bool] = {
     'hirid': False, # Uses datetime
     'mimic': False, # Uses datetime
     'sic': True,    # Uses numeric offsets from ICU admission
+    'nwicu': False,
+    'zhejiang_eicu': True,
+    'jinhua': True,
+    'zigong': True,
 }
 
 # Threshold for detecting pre-ICU records (minutes)
@@ -298,6 +326,26 @@ FIO2_DATABASE_BEHAVIOR = {
         'convert_threshold': 1.0,
     },
     'sic': {
+        'format': 'auto',
+        'needs_conversion': True,
+        'convert_threshold': 1.0,
+    },
+    'nwicu': {
+        'format': 'auto',
+        'needs_conversion': True,
+        'convert_threshold': 1.0,
+    },
+    'zhejiang_eicu': {
+        'format': 'auto',
+        'needs_conversion': True,
+        'convert_threshold': 1.0,
+    },
+    'jinhua': {
+        'format': 'auto',
+        'needs_conversion': True,
+        'convert_threshold': 1.0,
+    },
+    'zigong': {
         'format': 'auto',
         'needs_conversion': True,
         'convert_threshold': 1.0,

@@ -1,0 +1,190 @@
+{
+  "age": {
+    "sources": {
+      "nwicu": [{"table": "patients", "val_var": "anchor_age", "class_name": "col_itm"}],
+      "zhejiang_eicu": [{"table": "ptadmitable", "val_var": "Age_cut", "callback": "apply_map(c(`(0,18]` = 9, `(18,30]` = 24, `(30,40]` = 35, `(40,50]` = 45, `(50,60]` = 55, `(60,70]` = 65, `(70,80]` = 75, `(80,90]` = 85, `(90,150]` = 95))", "class_name": "col_itm"}],
+      "jinhua": [{"table": "medical_record_front_page", "val_var": "age", "class_name": "col_itm"}],
+      "zigong": [{"table": "dtbaseline", "val_var": "Age", "class_name": "col_itm"}]
+    }
+  },
+  "sex": {
+    "sources": {
+      "nwicu": [{"table": "patients", "val_var": "gender", "callback": "apply_map(c(M = 'Male', F = 'Female'))", "class_name": "col_itm"}],
+      "zhejiang_eicu": [{"table": "ptadmitable", "val_var": "Sex", "class_name": "col_itm"}],
+      "jinhua": [{"table": "medical_record_front_page", "val_var": "patient_gender_en", "class_name": "col_itm"}],
+      "zigong": [{"table": "dtbaseline", "val_var": "SEX", "class_name": "col_itm"}]
+    }
+  },
+  "death": {
+    "sources": {
+      "nwicu": [{"table": "nwicu_outcomes", "index_var": "dischtime", "val_var": "hospital_expire_flag", "callback": "transform_fun(comp_na(`==`, 1))", "class_name": "col_itm"}],
+      "zhejiang_eicu": [{"table": "ptadmitable", "index_var": "Discharge_DateTime", "val_var": "StatusOnDischarge", "callback": "transform_fun(comp_na(`==`, 'Dead'))", "class_name": "col_itm"}],
+      "jinhua": [{"table": "patient_expire_hospital", "val_var": "expire_flag", "callback": "transform_fun(comp_na(`==`, 1))", "class_name": "col_itm"}]
+    }
+  },
+  "hr": {
+    "sources": {
+      "nwicu": [{"ids": 320045, "table": "chartevents", "sub_var": "itemid", "index_var": "charttime"}],
+      "zhejiang_eicu": [{"ids": ["Heart Rate", "Pulse rate"], "table": "vitalsign", "sub_var": "VitalSign_DESC"}],
+      "jinhua": [{"ids": "Pulse", "table": "vital_signs", "sub_var": "subcategory_name_en"}],
+      "zigong": [{"table": "dtnursingchart", "val_var": "heart_rate", "class_name": "col_itm"}]
+    }
+  },
+  "temp": {
+    "sources": {
+      "nwicu": [{"ids": 323761, "table": "chartevents", "sub_var": "itemid", "callback": "convert_unit(fahr_to_cels, 'C', 'f')"}],
+      "zhejiang_eicu": [{"ids": "Temperature", "table": "vitalsign", "sub_var": "VitalSign_DESC"}],
+      "jinhua": [{"ids": "Temperature", "table": "vital_signs", "sub_var": "subcategory_name_en"}],
+      "zigong": [{"table": "dtnursingchart", "val_var": "temperature", "class_name": "col_itm"}]
+    }
+  },
+  "resp": {
+    "sources": {
+      "nwicu": [{"ids": 320210, "table": "chartevents", "sub_var": "itemid"}],
+      "zhejiang_eicu": [{"ids": "Respiratory rate", "table": "vitalsign", "sub_var": "VitalSign_DESC"}],
+      "jinhua": [{"ids": "Respiratory", "table": "vital_signs", "sub_var": "subcategory_name_en"}],
+      "zigong": [{"table": "dtnursingchart", "val_var": "breathing", "class_name": "col_itm"}]
+    }
+  },
+  "spo2": {
+    "sources": {
+      "nwicu": [{"ids": 320277, "table": "chartevents", "sub_var": "itemid"}],
+      "zhejiang_eicu": [{"ids": "Oxygen saturation (Pulse Oxymetry)", "table": "vitalsign", "sub_var": "VitalSign_DESC"}, {"ids": "SpO2", "table": "nursingchart_vitalsign", "sub_var": "NursingEvent_item"}],
+      "jinhua": [{"ids": "Spo2", "table": "vital_signs", "sub_var": "subcategory_name_en"}],
+      "zigong": [{"table": "dtnursingchart", "val_var": "Blood_oxygen_saturation", "class_name": "col_itm"}]
+    }
+  },
+  "sbp": {
+    "sources": {
+      "nwicu": [{"ids": [320050, 320179], "table": "chartevents", "sub_var": "itemid"}],
+      "zhejiang_eicu": [{"ids": "Systolic Blood pressure", "table": "vitalsign", "sub_var": "VitalSign_DESC"}],
+      "jinhua": [{"table": "medical_record", "val_var": "systolic_blood_pressure", "class_name": "col_itm"}],
+      "zigong": [{"table": "dtnursingchart", "val_var": "Blood_pressure_high", "class_name": "col_itm"}]
+    }
+  },
+  "dbp": {
+    "sources": {
+      "nwicu": [{"ids": [320051, 320180], "table": "chartevents", "sub_var": "itemid"}],
+      "zhejiang_eicu": [{"ids": "Diastolic Blood pressure", "table": "vitalsign", "sub_var": "VitalSign_DESC"}],
+      "jinhua": [{"table": "medical_record", "val_var": "diastolic_blood_pressure", "class_name": "col_itm"}],
+      "zigong": [{"table": "dtnursingchart", "val_var": "Blood_pressure_low", "class_name": "col_itm"}]
+    }
+  },
+  "map": {
+    "sources": {
+      "zigong": [{"table": "dtnursingchart", "val_var": "MAP", "class_name": "col_itm"}]
+    }
+  },
+  "fio2": {
+    "sources": {
+      "zigong": [{"table": "dtnursingchart", "val_var": "FIO2", "class_name": "col_itm"}]
+    }
+  },
+  "cvp": {
+    "sources": {
+      "zigong": [{"table": "dtnursingchart", "val_var": "Central_venous_pressure", "class_name": "col_itm"}]
+    }
+  },
+  "urine": {
+    "sources": {
+      "zigong": [{"table": "dtnursingchart", "val_var": "Urine_volume", "class_name": "col_itm"}]
+    }
+  },
+  "weight": {
+    "sources": {
+      "nwicu": [{"ids": 326531, "table": "chartevents", "sub_var": "itemid", "callback": "convert_unit(binary_op(`/`, 35.274), 'kg')"}],
+      "zhejiang_eicu": [{"ids": "Body weight", "table": "vitalsign", "sub_var": "VitalSign_DESC"}],
+      "jinhua": [{"ids": "Weight", "table": "vital_signs", "sub_var": "subcategory_name_en"}]
+    }
+  },
+  "height": {
+    "sources": {
+      "nwicu": [{"ids": 326707, "table": "chartevents", "sub_var": "itemid", "callback": "convert_unit(binary_op(`*`, 2.54), 'cm')"}],
+      "zhejiang_eicu": [{"ids": "Height", "table": "vitalsign", "sub_var": "VitalSign_DESC"}],
+      "jinhua": [{"ids": "Height", "table": "vital_signs", "sub_var": "subcategory_name_en"}]
+    }
+  },
+  "crea": {
+    "sources": {
+      "nwicu": [{"ids": 100002, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
+      "zigong": [{"ids": "Creatinine (enzymatic method) (CRE)", "table": "dtlab", "sub_var": "Item", "callback": "convert_unit(binary_op(`*`, 0.011309), 'mg/dL')"}]
+    }
+  },
+  "bili": {
+    "sources": {
+      "nwicu": [{"ids": 100020, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
+      "zigong": [{"ids": "Total bilirubin (TBIL)", "table": "dtlab", "sub_var": "Item", "callback": "convert_unit(binary_op(`*`, 0.058467), 'mg/dL')"}]
+    }
+  },
+  "bili_dir": {
+    "sources": {
+      "nwicu": [{"ids": 100049, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
+      "zigong": [{"ids": "Direct bilirubin (DBIL)", "table": "dtlab", "sub_var": "Item", "callback": "convert_unit(binary_op(`*`, 0.058467), 'mg/dL')"}]
+    }
+  },
+  "plt": {
+    "sources": {
+      "nwicu": [{"ids": 100014, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
+      "zigong": [{"ids": "Platelet (PLT)", "table": "dtlab", "sub_var": "Item"}]
+    }
+  },
+  "alb": {
+    "sources": {
+      "nwicu": [{"ids": 100021, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
+      "zigong": [{"ids": "Albumin (ALB)", "table": "dtlab", "sub_var": "Item", "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL')"}]
+    }
+  },
+  "glu": {
+    "sources": {
+      "nwicu": [{"ids": [100001, 100045], "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
+      "zigong": [{"ids": ["Glucose (Glu)", "Glucose concentration (cglu)"], "table": "dtlab", "sub_var": "Item", "callback": "convert_unit(binary_op(`*`, 18.016), 'mg/dL')"}]
+    }
+  },
+  "na": {
+    "sources": {
+      "nwicu": [{"ids": [100010, 100050], "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
+      "zigong": [{"ids": ["Sodium (NA)", "Sodium ion (Na +)", "Sodium ion concentration (CNA +)"], "table": "dtlab", "sub_var": "Item"}]
+    }
+  },
+  "k": {
+    "sources": {
+      "nwicu": [{"ids": [100011, 100047], "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
+      "zigong": [{"ids": ["Potassium (k)", "Potassium ion (K +)", "Potassium ion concentration (CK +)"], "table": "dtlab", "sub_var": "Item"}]
+    }
+  },
+  "cl": {
+    "sources": {
+      "nwicu": [{"ids": 100012, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
+      "zigong": [{"ids": ["Chloride ion (Cl -)", "Chloride ion concentration (CCL -)"], "table": "dtlab", "sub_var": "Item"}]
+    }
+  },
+  "hgb": {
+    "sources": {
+      "nwicu": [{"ids": 100007, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
+      "zigong": [{"ids": "Hemoglobin (Hgb)", "table": "dtlab", "sub_var": "Item", "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL')"}]
+    }
+  },
+  "hct": {
+    "sources": {
+      "nwicu": [{"ids": 100006, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
+      "zigong": [{"ids": "Hematocrit (HCT)", "table": "dtlab", "sub_var": "Item"}]
+    }
+  },
+  "wbc": {
+    "sources": {
+      "nwicu": [{"ids": 100016, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
+      "zigong": [{"ids": "White blood cell (WBC)", "table": "dtlab", "sub_var": "Item"}]
+    }
+  },
+  "lact": {
+    "sources": {
+      "nwicu": [{"ids": 100031, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}]
+    }
+  },
+  "ph": {
+    "sources": {
+      "nwicu": [{"ids": 100339, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
+      "zigong": [{"ids": "PH (PH)", "table": "dtlab", "sub_var": "Item"}]
+    }
+  }
+}

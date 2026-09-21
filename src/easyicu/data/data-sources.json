@@ -11123,5 +11123,109 @@
         }
       }
     }
+  },
+  {
+    "name": "nwicu",
+    "profile": {
+      "display_name": "NWICU",
+      "reference_release": "0.1.0",
+      "aliases": ["nwicu", "northwestern-icu", "nwicu-northwestern-icu"],
+      "display_order": 70
+    },
+    "id_cfg": {
+      "patient": {"id": "subject_id", "position": 1, "start": "anchor_year", "end": "dod", "table": "patients"},
+      "hadm": {"id": "hadm_id", "position": 2, "start": "admittime", "end": "dischtime", "table": "admissions"},
+      "icustay": {"id": "stay_id", "position": 3, "start": "intime", "end": "outtime", "table": "icustays"}
+    },
+    "tables": {
+      "patients": {"files": "patients.parquet", "defaults": {"id_var": "subject_id", "time_vars": "dod"}},
+      "admissions": {"files": "admissions.parquet", "defaults": {"id_var": "hadm_id", "index_var": "admittime", "time_vars": ["admittime", "dischtime", "deathtime", "edregtime", "edouttime"]}},
+      "icustays": {"files": "icustays.parquet", "defaults": {"id_var": "stay_id", "index_var": "intime", "time_vars": ["intime", "outtime"]}},
+      "nwicu_outcomes": {"files": "nwicu_outcomes.parquet", "defaults": {"id_var": "stay_id", "index_var": "dischtime", "val_var": "hospital_expire_flag", "time_vars": "dischtime"}},
+      "chartevents": {"files": "chartevents.parquet", "defaults": {"id_var": "stay_id", "index_var": "charttime", "val_var": "valuenum", "sub_var": "itemid", "unit_var": "valueuom", "time_vars": ["charttime", "storetime"]}},
+      "labevents": {"files": "labevents.parquet", "defaults": {"id_var": "hadm_id", "index_var": "charttime", "val_var": "valuenum", "sub_var": "itemid", "unit_var": "valueuom", "time_vars": ["charttime", "storetime"]}},
+      "d_items": {"files": "d_items.parquet", "defaults": {"id_var": "itemid", "val_var": "label"}},
+      "d_labitems": {"files": "d_labitems.parquet", "defaults": {"id_var": "itemid", "val_var": "label"}},
+      "prescriptions": {"files": "prescriptions.parquet", "defaults": {"id_var": "hadm_id", "index_var": "starttime", "val_var": "drug", "sub_var": "drug", "time_vars": ["starttime", "stoptime"]}},
+      "emar": {"files": "emar.parquet", "defaults": {"id_var": "hadm_id", "index_var": "charttime", "val_var": "medication", "sub_var": "medication", "time_vars": ["charttime", "scheduletime", "storetime"]}},
+      "diagnoses_icd": {"files": "diagnoses_icd.parquet", "defaults": {"id_var": "hadm_id", "val_var": "icd_code"}},
+      "procedureevents": {"files": "procedureevents.parquet", "defaults": {"id_var": "stay_id", "index_var": "starttime", "sub_var": "itemid", "time_vars": ["starttime", "endtime", "storetime"]}}
+    }
+  },
+  {
+    "name": "zhejiang_eicu",
+    "profile": {
+      "display_name": "Zhejiang eICU",
+      "reference_release": "OMIX005817",
+      "aliases": ["zhejiang-eicu", "zhejiang_eicu", "omix005817"],
+      "display_order": 80
+    },
+    "id_cfg": {
+      "patient": {"id": "subject_id", "position": 1, "table": "stays"},
+      "hadm": {"id": "hadm_id", "position": 2, "start": "intime", "end": "outtime", "table": "stays"},
+      "icustay": {"id": "patient_SN", "position": 3, "start": "intime", "end": "outtime", "table": "stays"}
+    },
+    "tables": {
+      "stays": {"files": "stays.parquet", "defaults": {"id_var": "patient_SN", "index_var": "intime", "time_vars": ["intime", "outtime"]}},
+      "ptadmitable": {"files": "ptadmitable.parquet", "defaults": {"id_var": "patient_SN", "index_var": "Discharge_DateTime", "time_vars": "Discharge_DateTime"}},
+      "vitalsign": {"files": "vitalsign.parquet", "defaults": {"id_var": "patient_SN", "index_var": "VitalSign_DateTime", "val_var": "VitalSign_value", "sub_var": "VitalSign_DESC", "unit_var": "VitalSign_unit", "time_vars": "VitalSign_DateTime"}},
+      "nursingchart_vitalsign": {"files": "nursingchart_vitalsign.parquet", "defaults": {"id_var": "patient_SN", "index_var": "Event_DateTime", "val_var": "NursingEvent_val", "sub_var": "NursingEvent_item", "unit_var": "NursingEvent_Unit", "time_vars": "Event_DateTime"}},
+      "nursingchart_io": {"files": "nursingchart_io.parquet", "defaults": {"id_var": "patient_SN", "index_var": "Event_DateTime", "val_var": "NursingIO_val", "sub_var": "NursingIO_item", "unit_var": "NursingIO_Unit", "time_vars": "Event_DateTime"}},
+      "lab": {"files": "lab.parquet", "defaults": {"id_var": "patient_SN", "index_var": "Lab_DateTime", "val_var": "Lab_results", "sub_var": "Lab_itemName_Eng", "unit_var": "Unit_measure", "time_vars": ["Lab_DateTime", "LabSampleCollect_DateTime"]}},
+      "medication": {"files": "medication.parquet", "defaults": {"id_var": "patient_SN", "index_var": "Med_startTime", "val_var": "Med_DESC_Eng", "sub_var": "Med_DESC_Eng", "unit_var": "Med_unit", "time_vars": ["Med_startTime", "Med_stopTime"]}},
+      "diagnosis": {"files": "diagnosis.parquet", "defaults": {"id_var": "patient_SN", "index_var": "Diagnosis_DateTime", "val_var": "ICD10_code", "time_vars": "Diagnosis_DateTime"}},
+      "hospitaltransfer": {"files": "hospitaltransfer.parquet", "defaults": {"id_var": "patient_SN", "index_var": "TransferIn_DateTime", "time_vars": ["TransferIn_DateTime", "TransferOut_DateTime"]}},
+      "microbiologyculture": {"files": "microbiologyculture.parquet", "defaults": {"id_var": "patient_SN", "index_var": "MicrobiologyCulture_DateTime", "val_var": "MicrobiologyCulture_Finding", "time_vars": "MicrobiologyCulture_DateTime"}}
+    }
+  },
+  {
+    "name": "jinhua",
+    "profile": {
+      "display_name": "CMAISE Jinhua ICU",
+      "reference_release": "OMIX007493-02",
+      "aliases": ["jinhua", "cmaise-jinhua", "CMAISE_JinhuaNICU", "omix007493"],
+      "display_order": 90
+    },
+    "id_cfg": {
+      "patient": {"id": "subject_id", "position": 1, "table": "stays"},
+      "hadm": {"id": "hadm_id", "position": 2, "start": "intime", "end": "outtime", "table": "stays"},
+      "icustay": {"id": "hadm_id", "position": 3, "start": "intime", "end": "outtime", "table": "stays"}
+    },
+    "tables": {
+      "stays": {"files": "stays.parquet", "defaults": {"id_var": "hadm_id", "index_var": "intime", "time_vars": ["intime", "outtime"]}},
+      "medical_record_front_page": {"files": "medical_record_front_page.parquet", "defaults": {"id_var": "hadm_id", "index_var": "admittime_base", "time_vars": ["admittime_base", "dischtime_base"]}},
+      "medical_record": {"files": "medical_record.parquet", "defaults": {"id_var": "hadm_id", "index_var": "admittime_base", "time_vars": ["admittime_base", "dischtime_base", "adverse_event_time_base"]}},
+      "vital_signs": {"files": "vital_signs.parquet", "defaults": {"id_var": "hadm_id", "index_var": "charttime_base", "val_var": "value", "sub_var": "subcategory_name_en", "unit_var": "subcategory_unit", "time_vars": "charttime_base"}},
+      "laboratory_test": {"files": "laboratory_test.parquet", "defaults": {"id_var": "hadm_id", "index_var": "report_time_base", "val_var": "test_results_quantitative", "sub_var": "inspection_subproject_name_en", "time_vars": ["report_time_base", "test_specimen_time_base"]}},
+      "medication": {"files": "medication.parquet", "defaults": {"id_var": "hadm_id", "index_var": "starttime_base", "val_var": "drug_name_en", "sub_var": "drug_name_en", "unit_var": "medication_dose_unit", "time_vars": ["starttime_base", "endtime_base"]}},
+      "diagnosis": {"files": "diagnosis.parquet", "defaults": {"id_var": "hadm_id", "index_var": "diagnosis_time_base", "val_var": "diagnostic_code", "time_vars": "diagnosis_time_base"}},
+      "patient_expire_hospital": {"files": "patient_expire_hospital.parquet", "defaults": {"id_var": "hadm_id", "val_var": "expire_flag"}},
+      "transfer": {"files": "transfer.parquet", "defaults": {"id_var": "hadm_id", "index_var": "intime_base", "time_vars": ["intime_base", "outtime_base"]}},
+      "microbiology_culture": {"files": "microbiology_culture.parquet", "defaults": {"id_var": "hadm_id", "index_var": "test_time_base", "val_var": "culture_results", "time_vars": "test_time_base"}}
+    }
+  },
+  {
+    "name": "zigong",
+    "profile": {
+      "display_name": "Zigong ICU Infection Cohort",
+      "reference_release": "1.1",
+      "aliases": ["zigong", "zigong-icu-infection", "icu-infection-zigong-fourth"],
+      "display_order": 100
+    },
+    "id_cfg": {
+      "patient": {"id": "subject_id", "position": 1, "table": "stays"},
+      "hadm": {"id": "hadm_id", "position": 2, "start": "intime", "end": "outtime", "table": "stays"},
+      "icustay": {"id": "INP_NO", "position": 3, "start": "intime", "end": "outtime", "table": "stays"}
+    },
+    "tables": {
+      "stays": {"files": "stays.parquet", "defaults": {"id_var": "INP_NO", "index_var": "intime", "time_vars": ["intime", "outtime"]}},
+      "dtbaseline": {"files": "dtbaseline.parquet", "defaults": {"id_var": "INP_NO", "index_var": "ICU_discharge_time", "time_vars": ["ICU_discharge_time", "DISCHARGE_DATE_TIME"]}},
+      "dtnursingchart": {"files": "dtnursingchart.parquet", "defaults": {"id_var": "INP_NO", "index_var": "ChartTime", "time_vars": "ChartTime"}},
+      "dtlab": {"files": "dtlab.parquet", "defaults": {"id_var": "INP_NO", "index_var": "LabTime", "val_var": "LabValue", "sub_var": "Item", "unit_var": "Unit", "time_vars": "LabTime"}},
+      "dtdrugs": {"files": "dtdrugs.parquet", "defaults": {"id_var": "PATIENT_ID", "index_var": "Drug_time", "val_var": "DrugName", "sub_var": "DrugName", "time_vars": "Drug_time"}},
+      "dticd": {"files": "dticd.parquet", "defaults": {"id_var": "INP_NO", "val_var": "ICD_Code"}},
+      "dtoutcome": {"files": "dtoutcome.parquet", "defaults": {"id_var": "PATIENT_ID", "index_var": "Follow_Date", "val_var": "Follow_Vital", "time_vars": ["Follow_Date", "Death_Date"]}},
+      "dttransfer": {"files": "dttransfer.parquet", "defaults": {"id_var": "INP_NO", "index_var": "StartTime", "time_vars": ["StartTime", "StopTime"]}}
+    }
   }
 ]

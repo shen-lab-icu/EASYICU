@@ -24,6 +24,11 @@ DEFAULT_DATABASE_VERSIONS = {
     "mimic-iii": "1.4",
     "sicdb": "1.0.6",
     "sic": "1.0.6",
+    "nwicu": "0.1.0",
+    "northwestern-icu": "0.1.0",
+    "zhejiang_eicu": "OMIX005817",
+    "jinhua": "OMIX007493-02",
+    "zigong": "1.1",
 }
 
 

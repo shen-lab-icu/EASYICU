@@ -123,6 +123,25 @@ class BaseICULoader:
             
             # 检查用户路径是否直接包含数据文件（如 admissions.parquet, numericitems/ 等）
             if user_path.is_dir():
+                # Prefer the central registry-backed detector. Community
+                # databases write an identity receipt during preparation, so
+                # keeping another hard-coded marker list here would reject
+                # otherwise valid prepared paths as new profiles are added.
+                detected_from_path = detect_database_identity(
+                    user_path,
+                    use_environment=False,
+                    strict=False,
+                )
+                compatible_identity = detected_from_path == database
+                if database.endswith("_demo"):
+                    compatible_identity = compatible_identity or (
+                        detected_from_path == database.removesuffix("_demo")
+                    )
+                if compatible_identity:
+                    if self.verbose:
+                        logger.info("Using user-provided database path: %s", user_path)
+                    return user_path
+
                 # 检查是否是有效的数据库目录（包含特征文件）
                 # AUMC 特征文件: admissions.csv/parquet, numericitems/
                 # MIIV 特征文件: admissions.csv/parquet, chartevents/

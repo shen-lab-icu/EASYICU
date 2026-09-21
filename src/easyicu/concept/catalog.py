@@ -799,7 +799,18 @@ CONCEPT_DB_COVERAGE = {
     'uo_24h': 6,
 }
 
-SUPPORTED_DB_KEYS = ('miiv', 'mimic', 'eicu', 'aumc', 'hirid', 'sic')
+SUPPORTED_DB_KEYS = (
+    'miiv',
+    'mimic',
+    'eicu',
+    'aumc',
+    'hirid',
+    'sic',
+    'nwicu',
+    'zhejiang_eicu',
+    'jinhua',
+    'zigong',
+)
 
 
 # 🔧 ADD (2026-02-05): 支持时序分析的模块（排除静态数据模块）

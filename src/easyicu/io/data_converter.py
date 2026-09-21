@@ -41,6 +41,11 @@ from easyicu.databases.detection import (
     DatabaseDetectionError,
     detect_database_identity,
 )
+from easyicu.io.community_databases import (
+    COMMUNITY_DATABASES,
+    ensure_community_stays,
+    prepare_community_archives,
+)
 
 if TYPE_CHECKING:
     import pyarrow
@@ -1660,17 +1665,18 @@ class DataConverter:
         for col in df.select_dtypes(include=['object']).columns:
             if col not in known_cols:
                 try:
-                    # Check if column has any non-string values
-                    sample = df[col].dropna().head(100)
-                    has_non_string = False
-                    if len(sample) > 0:
-                        for val in sample:
-                            if not isinstance(val, str):
-                                has_non_string = True
-                                break
-                    
-                    if has_non_string:
-                        df[col] = df[col].apply(lambda x: str(x) if pd.notna(x) and not isinstance(x, str) else x)
+                    # Sampling the first 100 values is unsafe: a later value in
+                    # the same chunk may be numeric/bytes even when the sample
+                    # is all text (observed in Zigong nursing data). Normalize
+                    # every non-null object deterministically before Arrow sees
+                    # the column.
+                    df[col] = df[col].apply(
+                        lambda x: (
+                            str(x)
+                            if pd.notna(x) and not isinstance(x, str)
+                            else x
+                        )
+                    )
                 except Exception:
                     # If any error, force convert to string
                     df[col] = df[col].astype(str)
@@ -3305,6 +3311,11 @@ class DataConverter:
             cluster_by_patient = os.environ.get(
                 "EASYICU_CLUSTER_BY_PATIENT", ""
             ).strip().lower() in ("1", "true", "yes", "on")
+        extracted_community_archives: List[str] = []
+        if self.database in COMMUNITY_DATABASES:
+            extracted_community_archives = prepare_community_archives(
+                self.data_path, self.database
+            )
         # HiRID ships its bulk tables as tar.gz archives; extract them so
         # _get_csv_files / sharding see the unpacked data. Idempotent — skips
         # when shards already exist.
@@ -3321,6 +3332,13 @@ class DataConverter:
         if not csv_files:
             if self.verbose:
                 logger.info(f"No CSV files found in {self.data_path}")
+            if self.database in COMMUNITY_DATABASES:
+                ensure_community_stays(
+                    self.data_path,
+                    self.database,
+                    extracted_archives=extracted_community_archives,
+                    force=force,
+                )
             if write_manifest:
                 self.write_conversion_manifest(
                     {}, evidence_root=evidence_root,
@@ -3342,6 +3360,13 @@ class DataConverter:
             if self.verbose:
                 logger.info(f"All {len(csv_files)} files are already converted")
             results = self.get_conversion_status()
+            if self.database in COMMUNITY_DATABASES:
+                ensure_community_stays(
+                    self.data_path,
+                    self.database,
+                    extracted_archives=extracted_community_archives,
+                    force=force,
+                )
             if write_manifest:
                 self.write_conversion_manifest(
                     results, evidence_root=evidence_root,
@@ -3400,6 +3425,31 @@ class DataConverter:
         # 🚀 perf A1/A2: drop bucket/shard cache so a subsequent call sees
         # the new shards/buckets written by this run.
         self._invalidate_dir_caches()
+        if self.database in COMMUNITY_DATABASES:
+            failed = [
+                name
+                for name, result in results.items()
+                if result.get("status") == ConversionStatus.FAILED
+            ]
+            if not failed:
+                try:
+                    manifest = ensure_community_stays(
+                        self.data_path,
+                        self.database,
+                        extracted_archives=extracted_community_archives,
+                        force=force,
+                    )
+                    if manifest is not None:
+                        results["community_stay_index"] = {
+                            "status": ConversionStatus.COMPLETED,
+                            "row_count": manifest["stay_count"],
+                            "stay_table": manifest["stay_table"],
+                        }
+                except Exception as exc:  # noqa: BLE001 - recorded as conversion failure
+                    results["community_stay_index"] = {
+                        "status": ConversionStatus.FAILED,
+                        "error": str(exc),
+                    }
         # Opt-in patient-clustering pass (extra read+write; see method docs).
         if cluster_by_patient:
             try:
@@ -3463,12 +3513,24 @@ class DataConverter:
                     logger.info(f"📦 Extracted HiRID archives: {', '.join(extracted)}")
             except Exception as e:
                 logger.warning(f"HiRID archive extraction failed: {e}")
+        if self.database in COMMUNITY_DATABASES:
+            try:
+                prepare_community_archives(self.data_path, self.database)
+            except Exception as e:
+                logger.error("Community database archive preparation failed: %s", e)
+                return False
         
         is_ready, missing = self.is_ready()
         
         if is_ready:
             if self.verbose:
                 logger.info(f"✅ All data files are ready in {self.data_path}")
+            if self.database in COMMUNITY_DATABASES:
+                try:
+                    ensure_community_stays(self.data_path, self.database)
+                except Exception as e:
+                    logger.error("Community database stay-index preparation failed: %s", e)
+                    return False
             self.write_conversion_manifest(
                 self.get_conversion_status(),
                 evidence_root=evidence_root,
