@@ -29,7 +29,18 @@ from easyicu.outcome_availability import (
 if TYPE_CHECKING:
     from .schema import ConceptDescriptor
 
-PUBLIC_DATABASES = ("mimic", "miiv", "eicu", "aumc", "hirid", "sic")
+PUBLIC_DATABASES = (
+    "mimic",
+    "miiv",
+    "eicu",
+    "aumc",
+    "hirid",
+    "sic",
+    "nwicu",
+    "zhejiang_eicu",
+    "jinhua",
+    "zigong",
+)
 
 _OUTCOME_BLIND_FORBIDDEN_FIELDS = (
     "outcome_rate",
@@ -50,6 +61,13 @@ _DATABASE_ALIASES = {
     "mimic-iv": "miiv",
     "miv": "miiv",
     "sicdb": "sic",
+    "northwestern-icu": "nwicu",
+    "nwicu-northwestern-icu": "nwicu",
+    "zhejiang-eicu": "zhejiang_eicu",
+    "omix005817": "zhejiang_eicu",
+    "cmaise-jinhua": "jinhua",
+    "omix007493": "jinhua",
+    "zigong-icu-infection": "zigong",
 }
 
 _CONCEPT_ALIASES = {

@@ -35,7 +35,18 @@ from easyicu.io.data_paths import DATABASE_ALIASES, find_database_path
 from easyicu.webserver import crossdb_review
 
 
-EXPECTED_PUBLIC = ("miiv", "eicu", "aumc", "hirid", "mimic", "sic")
+EXPECTED_PUBLIC = (
+    "miiv",
+    "eicu",
+    "aumc",
+    "hirid",
+    "mimic",
+    "sic",
+    "nwicu",
+    "zhejiang_eicu",
+    "jinhua",
+    "zigong",
+)
 
 
 def test_legacy_database_metadata_is_registry_backed() -> None:
@@ -47,7 +58,7 @@ def test_aumc_global_millisecond_clock_is_offset_based() -> None:
     assert is_offset_based("aumc") is True
 
 
-def test_packaged_registry_has_six_typed_public_profiles_and_two_demo_profiles() -> (
+def test_packaged_registry_has_ten_typed_public_profiles_and_two_demo_profiles() -> (
     None
 ):
     registry = get_packaged_registry()
@@ -87,6 +98,17 @@ def test_packaged_registry_has_six_typed_public_profiles_and_two_demo_profiles()
         ("hirid", "HiRID", "1.1.1", 40, "general", "patientid"),
         ("mimic", "MIMIC-III", "1.4", 50, "icustays", "icustay_id"),
         ("sic", "SICdb", "1.0.6", 60, "cases", "CaseID"),
+        ("nwicu", "NWICU", "0.1.0", 70, "icustays", "stay_id"),
+        (
+            "zhejiang_eicu",
+            "Zhejiang eICU",
+            "OMIX005817",
+            80,
+            "stays",
+            "patient_SN",
+        ),
+        ("jinhua", "CMAISE Jinhua ICU", "OMIX007493-02", 90, "stays", "hadm_id"),
+        ("zigong", "Zigong ICU Infection Cohort", "1.1", 100, "stays", "INP_NO"),
     ],
 )
 def test_public_profile_metadata_and_icustay_contract(

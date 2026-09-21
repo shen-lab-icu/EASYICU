@@ -1370,7 +1370,7 @@ class ConceptResolver:
         
         # 🚀 批量加载优化：检测是否可以使用DuckDB批量加载
         # 宽表如vitalperiodic有多个值列，可以一次性加载并聚合
-        WIDE_TABLES = {'vitalperiodic', 'vitalaperiodic'}
+        WIDE_TABLES = {'vitalperiodic', 'vitalaperiodic', 'dtnursingchart'}
         wide_table_batch_results = {}  # {concept_name: DataFrame}
         wide_table_merged_df = None  # 🚀 保存批量加载的合并结果，避免重复合并
         wide_table_covered_names = set()
@@ -2419,7 +2419,7 @@ class ConceptResolver:
                             
                             # 🔧 FIX 2026-02-08: 同时支持 MIMIC-III 和 MIMIC-IV
                             # MIMIC-IV 使用 stay_id，MIMIC-III 使用 icustay_id
-                            if (db_name in ['miiv', 'mimic_demo', 'mimic'] and 
+                            if (db_name in ['miiv', 'mimic_demo', 'mimic', 'nwicu'] and
                                 source.table in hospital_tables and 
                                 effective_id_var == 'subject_id'):
                                 # 确定目标 ID 列名
@@ -3064,8 +3064,14 @@ class ConceptResolver:
                         elif db_name in ('eicu', 'eicu_demo'):
                             _duckdb_id_col = 'patientunitstayid'
                             _duckdb_time_col = 'charttime'
-                        else:
+                        elif db_name == 'nwicu':
                             _duckdb_id_col = 'stay_id'
+                            _duckdb_time_col = 'charttime'
+                        else:
+                            _table_cfg = data_source.config.get_table(source.table)
+                            _duckdb_id_col = (
+                                _table_cfg.defaults.id_var or 'stay_id'
+                            )
                             _duckdb_time_col = 'charttime'
                         
                         table = ICUTable(
@@ -5902,6 +5908,79 @@ class ConceptResolver:
         # AUMC times are ABSOLUTE timestamps in MINUTES (converted from ms in datasource.py).
         # For AUMC, we need to subtract admittedat to get relative time since ICU admission.
         db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+        if db_name in {"zhejiang_eicu", "jinhua", "zigong"}:
+            if data.empty or not index_column or index_column not in data.columns:
+                return data
+            # The DuckDB producer already emits canonical relative hours.
+            if index_column == "charttime":
+                _normalize_duration_to_hours(data)
+                return data
+            primary_id = next(
+                (column for column in id_columns if column in data.columns), None
+            )
+            if primary_id is None or index_column in id_columns:
+                return data
+            icustay_cfg = data_source.config.id_configs.get("icustay")
+            if (
+                icustay_cfg is None
+                or not icustay_cfg.table
+                or not icustay_cfg.start
+            ):
+                raise ConceptError(
+                    f"{db_name} time alignment requires a declared stay origin"
+                )
+            origin_column = icustay_cfg.start
+            frame = data.copy()
+            source_contains_origin = origin_column in frame.columns
+            if not source_contains_origin:
+                try:
+                    origins = data_source.load_table(
+                        icustay_cfg.table,
+                        columns=[primary_id, origin_column],
+                        verbose=False,
+                    )
+                    origin_frame = origins.data if hasattr(origins, "data") else origins
+                    origin_frame = origin_frame[
+                        [primary_id, origin_column]
+                    ].drop_duplicates(subset=[primary_id], keep="last")
+                    frame = frame.merge(
+                        origin_frame,
+                        on=primary_id,
+                        how="left",
+                        validate="many_to_one",
+                    )
+                except Exception as exc:
+                    raise ConceptError(
+                        f"{db_name} time alignment failed while loading "
+                        f"{icustay_cfg.table}.{origin_column}: {exc!r}"
+                    ) from exc
+            origin = pd.to_numeric(frame[origin_column], errors="coerce")
+            if origin.notna().sum() == 0:
+                raise ConceptError(
+                    f"{db_name} time alignment found no usable stay origins"
+                )
+            scale = {
+                "zhejiang_eicu": 24.0,
+                "jinhua": 1.0 / 60.0,
+                "zigong": 1.0,
+            }[db_name]
+            columns_to_convert = {index_column}
+            if time_columns:
+                columns_to_convert.update(
+                    column for column in time_columns if column in frame.columns
+                )
+            for column in columns_to_convert:
+                if column in frame.columns and pd.api.types.is_numeric_dtype(
+                    frame[column]
+                ):
+                    frame[column] = (
+                        pd.to_numeric(frame[column], errors="coerce") * scale
+                    ) - origin
+            if not source_contains_origin and index_column != origin_column:
+                frame = frame.drop(columns=[origin_column])
+            _normalize_duration_to_hours(frame)
+            return frame
+
         if db_name in ['eicu', 'eicu_demo']:
             # eICU时间列是相对于入院时间的offset,单位是分钟
             # 转换为小时以与其他数据库保持一致
@@ -6509,9 +6588,21 @@ class ConceptResolver:
         if index_column in id_columns:
             return data
         
-        # 🔧 FIX: 确定数据库特定的 stay-level ID 列名
-        # MIMIC-III 使用 icustay_id，MIMIC-IV 使用 stay_id
-        db_stay_id_col = 'icustay_id' if db_name == 'mimic' else 'stay_id'
+        # Resolve the stay key and origin table from the profile. Legacy
+        # MIMIC defaults remain as fallbacks, while community databases can
+        # retain their native encounter identifiers.
+        id_configs = getattr(data_source.config, 'id_configs', {})
+        icustay_cfg = id_configs.get('icustay')
+        db_stay_id_col = (
+            icustay_cfg.id
+            if icustay_cfg is not None and icustay_cfg.id
+            else ('icustay_id' if db_name == 'mimic' else 'stay_id')
+        )
+        stay_origin_table = (
+            icustay_cfg.table
+            if icustay_cfg is not None and icustay_cfg.table
+            else 'icustays'
+        )
         
         # 特殊处理：如果primary_id不是stay_id/icustay_id，需要先join icustays获取
         # 这对于labevents（使用subject_id）很重要
@@ -6526,7 +6617,7 @@ class ConceptResolver:
                     cols_to_load.append(db_stay_id_col)
                 
                 if self._icustays_cache is None or cache_key not in str(self._icustays_cache.columns.tolist()):
-                    icustays_temp = data_source.load_table('icustays', columns=cols_to_load, verbose=False)
+                    icustays_temp = data_source.load_table(stay_origin_table, columns=cols_to_load, verbose=False)
                     if hasattr(icustays_temp, 'data'):
                         icustays_temp_df = icustays_temp.data
                     else:
@@ -6575,7 +6666,7 @@ class ConceptResolver:
                 if self._icustays_cache is not None and 'intime' in self._icustays_cache.columns and primary_id in self._icustays_cache.columns:
                     icustays_temp_df = self._icustays_cache
                 else:
-                    icustays_temp = data_source.load_table('icustays', columns=[primary_id, 'intime', 'outtime', 'los'], verbose=False)
+                    icustays_temp = data_source.load_table(stay_origin_table, columns=[primary_id, 'intime', 'outtime', 'los'], verbose=False)
                     if hasattr(icustays_temp, 'data'):
                         icustays_temp_df = icustays_temp.data
                     else:
@@ -6661,7 +6752,7 @@ class ConceptResolver:
             if need_warm_cache:
                 try:
                     icu_cols = [primary_id, 'intime', 'outtime', 'los']
-                    icustays_table = data_source.load_table('icustays', columns=icu_cols, verbose=False)
+                    icustays_table = data_source.load_table(stay_origin_table, columns=icu_cols, verbose=False)
                     icu_df = icustays_table.data if hasattr(icustays_table, 'data') else icustays_table
                     icu_df = icu_df.copy()
                     icu_df['intime'] = pd.to_datetime(icu_df['intime'], errors='coerce', utc=True).dt.tz_localize(None)
@@ -6768,7 +6859,7 @@ class ConceptResolver:
                     icustays_df = self._icustays_cache.copy()
                 else:
                     # Load icustays table to get admission times
-                    icustays_table = data_source.load_table('icustays', columns=[primary_id, 'intime', 'outtime', 'los'], verbose=False)
+                    icustays_table = data_source.load_table(stay_origin_table, columns=[primary_id, 'intime', 'outtime', 'los'], verbose=False)
                     if hasattr(icustays_table, 'data'):
                         icustays_df = icustays_table.data
                     else:

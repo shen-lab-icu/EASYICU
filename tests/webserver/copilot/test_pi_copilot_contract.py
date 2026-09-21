@@ -3760,6 +3760,10 @@ def test_registered_data_source_choices_are_path_free(
         "hirid",
         "mimic",
         "sic",
+        "nwicu",
+        "zhejiang_eicu",
+        "jinhua",
+        "zigong",
     ]
 
     result = tool_module.execute_tool(

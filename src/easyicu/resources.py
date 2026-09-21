@@ -112,6 +112,12 @@ def load_dictionary(
     )
 
     extra_names: list[str] = list(extras or [])
+    if (
+        name in {"concept-dict", "concept-dict.json"}
+        and not directories
+        and "community-concept-sources" not in extra_names
+    ):
+        extra_names.insert(0, "community-concept-sources")
     if include_sofa2 and "sofa2-dict" not in extra_names:
         extra_names.append("sofa2-dict")
 

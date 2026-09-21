@@ -12,17 +12,19 @@
 EasyICU is a Python toolkit for intensive care unit (ICU) data analysis. It provides unified access to the supported public ICU databases, automated extraction of hundreds of standardized clinical concepts, and a **web-based interface** for cohort definition, feature review, visualization, and export. Exact current counts are generated from the shipped registries in [the catalog summary](docs/catalog_summary.md), rather than copied into prose.
 
 > **Clinical evidence status:** version `1.0.0` is a software/API release label,
-> not a claim of database-specific clinical validation. The six supported
+> not a claim of database-specific clinical validation. The six full-concept
 > database mappings currently remain `mapping_only`; independent clinical
 > review and cross-database output-comparability validation are pending. The
 > SOFA-2 implementation has algorithm-level golden and fail-closed boundary
-> tests, which do not validate each database mapping.
+> tests, which do not validate each database mapping. NWICU, Zhejiang eICU,
+> CMAISE Jinhua ICU, and the Zigong infection cohort currently expose an
+> audited core-concept subset only; SOFA/SOFA-2 conformance is `not_assessed`.
 
 ## Why EasyICU
 
 EasyICU has two layers that answer the two halves of one question — *how trustworthy is a reported ICU result?* The **concept layer** governs the clinical definition that produces a number; the **evidence-bound agent layer** governs the trail that records it.
 
-- **One mapped concept layer across six public ICU databases**: EasyICU uses clinical concepts rather than database-specific variable lists, making cross-database analysis easier to write, review, and reuse. The unit of cross-database analysis is the *concept* (`hr`, `crea`, `sofa2`…), not a database's private field name. Mapping coverage does not by itself establish database-specific clinical equivalence or cross-database comparability.
+- **One concept layer across ten registered public ICU sources**: six databases retain the established broad mappings and four community sources expose audited core subsets. The unit of cross-database analysis is the *concept* (`hr`, `crea`, `sofa2`…), not a database's private field name. Mapping coverage does not by itself establish database-specific clinical equivalence or cross-database comparability.
 - **Reproducible from both code and UI**: the same prepared data can be used in the web app and in Python scripts or notebooks.
 - **Evidence-bound, auditable analysis agent**: an optional research-agent layer turns a question + cohort into analysis where produced artefacts (script, log, table, statistic, figure) are hashed into a SHA-256 evidence store. For the structured artefact types and registered numeric claims covered by deterministic validators, mismatches are checked and unverifiable claims are **held back at the manuscript boundary** rather than published — a *fail-closed* design, not a general proof of arbitrary analysis code.
 - **Cross-database replication for reliability**: the same research question can be re-run across databases as a replication protocol, so a conclusion's robustness can be *inspected* rather than assumed.
@@ -182,6 +184,20 @@ from the local Stage27 archive patch.
 | AmsterdamUMCdb | https://amsterdammedicaldatascience.nl/ |
 | HiRID | https://hirid.intensivecare.ai/ |
 | SICdb | https://physionet.org/content/sicdb/ |
+| NWICU | Local credentialed PhysioNet release (0.1.0) |
+| Zhejiang eICU | OMIX005817 |
+| CMAISE Jinhua ICU | OMIX007493-02 |
+| Zigong ICU Infection Cohort | PhysioNet 1.1; infection-enriched cohort |
+
+The four community sources support raw ZIP/nested-CSV conversion, identity
+detection, stay indexing, and audited demographic, outcome, vital-sign, and
+selected laboratory mappings. Unmapped concepts remain explicitly unavailable.
+Zhejiang uses an encounter-level stay proxy, Jinhua collapses multiple ICU
+episodes within an admission, and Zigong is not an unselected general-ICU
+population. Their deidentified time offsets are normalized explicitly from
+days (Zhejiang), minutes (Jinhua), or hours (Zigong) to ICU-relative hours.
+These limits are written to the local
+`community_preparation_manifest.json` receipt.
 
 ## Web Workflow At A Glance
 
@@ -221,7 +237,7 @@ The native **Cohort Statistics** view provides descriptive aggregates, coverage 
 
 ### Cross-Database Benchmark
 
-The **Cross-DB Benchmark** tab harmonizes the same clinical concepts across all six supported ICU databases and overlays their feature distributions for direct comparison — a key sanity check when a study aims to generalize across cohorts.
+The **Cross-DB Benchmark** tab harmonizes a clinical concept across registered databases that actually declare a mapping for it and overlays their distributions for direct comparison — a key sanity check when a study aims to generalize across cohorts.
 
 ![Cross-Database Benchmark](docs/images/06_cross_db_benchmark.jpg)
 

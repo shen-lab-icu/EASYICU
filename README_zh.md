@@ -12,15 +12,17 @@
 EasyICU 是一个面向重症监护室（ICU）数据分析的 Python 工具包。它统一接入支持的公开 ICU 数据库，支持数百种标准化临床概念的自动提取，并提供 **Web 可视化界面**，帮助用户完成队列定义、特征审阅、可视化分析与数据导出。当前精确数量由已发布 registry 自动生成，见[目录摘要](docs/catalog_summary.md)，不再在说明文字里手工复制。
 
 > **临床证据状态：**`1.0.0` 是软件/API 发布版本，不代表数据库特异性
-> 临床验证已经完成。当前六个支持数据库的映射仍均为 `mapping_only`；
+> 临床验证已经完成。原有六个全概念数据库的映射仍均为 `mapping_only`；
 > 独立临床复核与跨库输出可比性验证尚未完成。SOFA-2 已有算法级 golden
-> 与失败关闭边界测试，但这些测试不能替代逐数据库映射验证。
+> 与失败关闭边界测试，但这些测试不能替代逐数据库映射验证。新增的 NWICU、
+> Zhejiang eICU、CMAISE Jinhua ICU 和 Zigong 感染队列目前只完成首批核心概念接入，
+> SOFA/SOFA-2 合同状态为 `not_assessed`。
 
 ## 为什么是 EasyICU
 
 EasyICU 有两层，对应同一个问题的两半——*一个被报告的 ICU 结果有多可信？* **概念层**约束「产生这个数字的临床定义」，**证据绑定 Agent 层**约束「记录这个数字的证据链」。
 
-- **用一套已映射的临床概念层覆盖六个公开 ICU 数据库**：EasyICU 以临床概念而不是数据库专属变量表作为核心抽象，更适合跨数据库研究、复用和同行审阅。跨库分析的单位是「概念」（`hr`、`crea`、`sofa2`…），而不是某个数据库的私有字段名。映射存在本身不等于数据库特异性临床等价，也不证明跨库输出已经可比。
+- **用一套临床概念层注册十个公开 ICU 数据源**：六个数据库具有既有全概念映射，四个 community 数据源具有经审计的核心概念映射。EasyICU 以临床概念而不是数据库专属变量表作为核心抽象；映射存在本身不等于数据库特异性临床等价，也不证明跨库输出已经可比。
 - **同时支持代码与图形界面的可复现工作流**：同一份准备完成的数据既可用于 Web 界面，也可用于 Python 脚本和 notebook。
 - **证据绑定、可审计的分析 Agent**：可选的 research-agent 层把「问题 + 队列」变成可审计的分析——产物（脚本、日志、表格、统计量、图形）会以 SHA-256 登记进证据库。对于确定性验证器已覆盖的结构化产物和已注册数值声明，系统会核对不一致并在**稿件边界拦下**无法核验的声明；这是一种 *fail-closed* 设计，不是对任意分析代码的通用形式化证明。
 - **用跨库复制验证可靠性**：同一个研究问题可作为 replication protocol 在多个数据库上各跑一遍，让一个结论的稳健性可以被*检查*，而不是被假定。
@@ -163,6 +165,17 @@ Stage27 之前的 git 历史或本地 Stage27 archive patch 恢复。
 | AmsterdamUMCdb | https://amsterdammedicaldatascience.nl/ |
 | HiRID | https://hirid.intensivecare.ai/ |
 | SICdb | https://physionet.org/content/sicdb/ |
+| NWICU | 本地受限 PhysioNet 发布包（0.1.0） |
+| Zhejiang eICU | OMIX005817 |
+| CMAISE Jinhua ICU | OMIX007493-02 |
+| Zigong ICU Infection Cohort | PhysioNet 1.1；感染富集专病队列 |
+
+后四个 community 数据源支持原始 ZIP/嵌套 CSV 转换、数据库识别、stay 索引，
+以及经审计的人口学、结局、生命体征和部分化验映射。未映射概念会明确返回不可用。
+Zhejiang 的 stay 是住院级代理，Jinhua 将一次住院中的多段 ICU 记录合并为一个窗口，
+Zigong 不是无选择的通用 ICU 队列。三者的脱敏时间偏移分别按天（Zhejiang）、
+分钟（Jinhua）和小时（Zigong）显式归一到 ICU 相对小时。完整限制会写入本地
+`community_preparation_manifest.json`。
 
 ## Web 工作流总览
 
@@ -202,7 +215,7 @@ Stage27 之前的 git 历史或本地 Stage27 archive patch 恢复。
 
 ### Cross-Database Benchmark
 
-**Cross-DB Benchmark（跨库对照）** Tab 把同一组临床概念在六个支持的 ICU 数据库间标准化对齐，并叠加其分布以直接对比。这里的 "Benchmark" 是 Web 界面中的探索性对照与质量检查入口，不代表正式模型排行榜或外部 benchmark 结论。
+**Cross-DB Benchmark（跨库对照）** Tab 把同一临床概念在已注册且具备该概念映射的 ICU 数据库间标准化对齐，并叠加其分布以直接对比。这里的 "Benchmark" 是 Web 界面中的探索性对照与质量检查入口，不代表正式模型排行榜或外部 benchmark 结论。
 
 ![Cross-Database Benchmark](docs/images/06_cross_db_benchmark.jpg)
 
