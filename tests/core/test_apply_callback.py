@@ -316,6 +316,42 @@ def _src(callback: str | None, **fields) -> ConceptSource:
     return ConceptSource(callback=callback, **fields)
 
 
+def test_weight_lookup_uses_patient_id_instead_of_row_id() -> None:
+    from types import SimpleNamespace
+
+    class _Resolver:
+        def __init__(self) -> None:
+            self.patient_ids = None
+
+        def _load_single_concept(self, *_args, patient_ids=None, **_kwargs):
+            self.patient_ids = patient_ids
+            return SimpleNamespace(
+                data=pd.DataFrame({"icustay_id": [11], "weight": [70.0]})
+            )
+
+    resolver = _Resolver()
+    frame = pd.DataFrame(
+        {
+            "row_id": [999],
+            "subject_id": [7],
+            "icustay_id": [11],
+            "value": [7.0],
+            "unit": ["mg/min"],
+        }
+    )
+
+    result = _apply_callback(
+        frame,
+        _src("mimic_kg_rate", value_var="value", unit_var="unit"),
+        concept_name="drug_rate",
+        resolver=resolver,
+        data_source=SimpleNamespace(config=SimpleNamespace(name="mimic")),
+    )
+
+    assert resolver.patient_ids == {"icustay_id": [11]}
+    assert result["value"].tolist() == [0.1]
+
+
 def _enumerate_dict_callbacks() -> set[str]:
     """Collect every callback string used in shipped concept dictionaries.
 

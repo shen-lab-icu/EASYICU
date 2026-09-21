@@ -1050,9 +1050,27 @@ class ICUDataSource:
                                              'CaseID', 'caseid'}  # 🔧 FIX 2026-01-26: 添加 SICdb CaseID
                             if spec.column in id_columns_set and patient_ids_filter.column in id_columns_set:
                                 # 这个过滤器已经被转换处理了，跳过
+                                if patient_ids_filter.column not in frame.columns:
+                                    logger.warning(
+                                        "Patient filter column %s is absent from %s; "
+                                        "returning an empty table instead of widening scope",
+                                        patient_ids_filter.column,
+                                        table_name,
+                                    )
+                                    frame = frame.iloc[0:0].copy()
+                                    break
                                 continue
                         elif spec.column == patient_ids_filter.column and spec.op == patient_ids_filter.op:
                             # 完全相同的过滤器，已经在 _load_raw_frame 中处理，跳过
+                            if patient_ids_filter.column not in frame.columns:
+                                logger.warning(
+                                    "Patient filter column %s is absent from %s; "
+                                    "returning an empty table instead of widening scope",
+                                    patient_ids_filter.column,
+                                    table_name,
+                                )
+                                frame = frame.iloc[0:0].copy()
+                                break
                             continue
                     
                     # 安全检查：只应用列存在的过滤器
@@ -1397,6 +1415,13 @@ class ICUDataSource:
         # 🔍 调试日志：显示请求的列（仅在DEBUG级别显示）
         if columns:
             logger.debug(f"_load_raw_frame: table={table_name}, columns={list(columns)}")
+
+        if (
+            patient_ids_filter is not None
+            and patient_ids_filter.op == FilterOp.IN
+            and not patient_ids_filter._value_set
+        ):
+            return pd.DataFrame(columns=list(columns) if columns else [])
 
         if concept_itemid_filter is not None and not concept_itemid_filter[1]:
             return pd.DataFrame(columns=list(columns) if columns else [])
@@ -1888,6 +1913,13 @@ class ICUDataSource:
         concept_itemid_filter: Optional[Tuple[str, set]] = None,  # 🚀 概念特定 itemid 过滤器
         wide_table_value_columns: Optional[List[str]] = None  # 🚀 宽表value列用于NULL过滤
     ) -> pd.DataFrame:
+        if (
+            patient_ids_filter is not None
+            and patient_ids_filter.op == FilterOp.IN
+            and not patient_ids_filter._value_set
+        ):
+            return pd.DataFrame(columns=list(columns) if columns else [])
+
         # 🚀 大表 itemid 预过滤配置
         # 检测是否为需要 itemid 过滤的大表
         # 🔧 2024-12-02: 重新启用白名单过滤，白名单已包含所有 sofa2-dict.json 中定义的 itemid
@@ -2335,6 +2367,13 @@ class ICUDataSource:
         Returns:
             DataFrame with the requested data
         """
+        if (
+            patient_ids_filter is not None
+            and patient_ids_filter.op == FilterOp.IN
+            and not patient_ids_filter._value_set
+        ):
+            return pd.DataFrame(columns=list(columns) if columns else [])
+
         try:
             import duckdb
         except ImportError:
@@ -2481,6 +2520,13 @@ class ICUDataSource:
                                       对于vitalperiodic等宽表，传入如['heartrate']
                                       会生成WHERE heartrate IS NOT NULL条件
         """
+        if (
+            patient_ids_filter is not None
+            and patient_ids_filter.op == FilterOp.IN
+            and not patient_ids_filter._value_set
+        ):
+            return pd.DataFrame(columns=list(columns) if columns else [])
+
         try:
             import duckdb
         except ImportError:
@@ -2665,6 +2711,13 @@ class ICUDataSource:
         Args:
             itemid_filter_config: 可选的 (列名, itemid集合) 元组，用于大表预过滤
         """
+        if (
+            patient_ids_filter is not None
+            and patient_ids_filter.op == FilterOp.IN
+            and not patient_ids_filter._value_set
+        ):
+            return pd.DataFrame(columns=list(columns) if columns else [])
+
         try:
             import pyarrow.dataset as ds
             

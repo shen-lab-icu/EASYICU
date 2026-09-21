@@ -806,6 +806,7 @@ def _step_deterministic_contract_findings(
         step=step,
         step_summary=step_summary,
         out_dir=out_dir,
+        completed_step_records=completed_step_records,
     )
     # Runs beside the reconciliation trace because it is the same failure seen
     # one step earlier: that validator catches a consumer that bound the wrong

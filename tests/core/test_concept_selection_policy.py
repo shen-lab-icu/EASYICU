@@ -33,6 +33,19 @@ def test_negated_sofa2_request_does_not_authorize_variant() -> None:
     assert decision.allowed is False
 
 
+def test_numeric_sofa_references_do_not_authorize_sofa2_variant() -> None:
+    for message in (
+        "SOFA 28-day mortality in sepsis",
+        "评估乳酸清除率与 SOFA 2.5 分界的关系",
+        "SOFA 2016 定义下的脃毒症诊断准确性",
+    ):
+        decision = evaluate_concept_selection(
+            "sep3_sofa2",
+            user_intent=message,
+        )
+        assert decision.allowed is False, message
+
+
 def test_ordinary_concept_does_not_require_special_authorization() -> None:
     decision = evaluate_concept_selection(
         "sep3_sofa1",

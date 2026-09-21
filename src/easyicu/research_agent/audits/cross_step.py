@@ -3094,6 +3094,89 @@ class CrossStepReconciliationTraceValidator:
         return None
 
     @classmethod
+    def _registered_parent_step(
+        cls, summary: Dict[str, Any], parent_path: Path
+    ) -> Optional[str]:
+        selected = str(parent_path)
+
+        def visit(value: Any) -> Optional[str]:
+            if isinstance(value, dict):
+                upstream_step = value.get("upstream_step") or value.get(
+                    "requested_step"
+                )
+                if isinstance(upstream_step, str):
+                    for key, raw_path in value.items():
+                        key_text = cls._normalise(key)
+                        if "path" in key_text and str(raw_path or "") == selected:
+                            return upstream_step
+                for child in value.values():
+                    found = visit(child)
+                    if found:
+                        return found
+            elif isinstance(value, list):
+                for child in value:
+                    found = visit(child)
+                    if found:
+                        return found
+            return None
+
+        return visit(summary)
+
+    @staticmethod
+    def _run_root_for_output(out_dir: Path) -> Path:
+        resolved = Path(out_dir).resolve()
+        for parent in (resolved, *resolved.parents):
+            if parent.name == "steps":
+                return parent.parent
+        return resolved
+
+    @classmethod
+    def _parent_binding_issue(
+        cls,
+        *,
+        parent_path: Path,
+        step_summary: Dict[str, Any],
+        out_dir: Path,
+        completed_step_records: Optional[Sequence[Dict[str, Any]]],
+    ) -> Optional[Dict[str, Any]]:
+        resolved_parent = parent_path.resolve()
+        run_root = cls._run_root_for_output(out_dir)
+        try:
+            resolved_parent.relative_to(run_root)
+        except ValueError:
+            return {
+                "issue": "parent_table_outside_run_directory",
+                "parent_table": str(resolved_parent),
+                "run_root": str(run_root),
+            }
+        if completed_step_records is None:
+            return None
+        upstream_step = cls._registered_parent_step(step_summary, parent_path)
+        if not upstream_step:
+            return {"issue": "parent_table_missing_upstream_step_binding"}
+        lock = CrossStepRegisteredOutputValidator._upstream_table_lock(
+            upstream_step, completed_step_records
+        )
+        if lock is None:
+            return {
+                "issue": "parent_table_not_registered_by_upstream_step",
+                "upstream_step": upstream_step,
+            }
+        registered_paths = [
+            Path(value).name
+            for value in lock["table_artifacts"]
+            if Path(value).suffix.lower() in CrossStepRegisteredOutputValidator._TABLE_SUFFIXES
+        ]
+        if parent_path.name not in registered_paths:
+            return {
+                "issue": "parent_table_path_not_in_upstream_record",
+                "upstream_step": upstream_step,
+                "parent_table": str(parent_path),
+                "registered_table_paths": registered_paths,
+            }
+        return None
+
+    @classmethod
     def _reconciliation_table_path(
         cls, summary: Dict[str, Any], out_dir: Path
     ) -> Optional[Path]:
@@ -3634,11 +3717,31 @@ class CrossStepReconciliationTraceValidator:
         step: AnalysisStep,
         step_summary: Dict[str, Any],
         out_dir: Path,
+        completed_step_records: Optional[Sequence[Dict[str, Any]]] = None,
     ) -> List[ValidationFinding]:
         parent_path = self._registered_parent_path(step_summary)
         current_path = self._reconciliation_table_path(step_summary, Path(out_dir))
         if parent_path is None:
             return []
+        binding_issue = self._parent_binding_issue(
+            parent_path=parent_path,
+            step_summary=step_summary,
+            out_dir=Path(out_dir),
+            completed_step_records=completed_step_records,
+        )
+        if binding_issue is not None:
+            return [
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message=(
+                        f"Step {step.step_id} selected a reconciliation parent "
+                        "table that is not bound to the current run and its "
+                        "registered upstream step."
+                    ),
+                    detail={"step_id": step.step_id, **binding_issue},
+                )
+            ]
         if current_path is None:
             candidates = self._reconciliation_candidate_paths(
                 step_summary, Path(out_dir)
@@ -3674,8 +3777,24 @@ class CrossStepReconciliationTraceValidator:
         try:
             parent = pd.read_csv(parent_path)
             current = pd.read_csv(current_path)
-        except Exception:
-            return []
+        except Exception as exc:
+            return [
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message=(
+                        f"Step {step.step_id} declared reconciliation inputs "
+                        "that could not be read."
+                    ),
+                    detail={
+                        "step_id": step.step_id,
+                        "parent_table": str(parent_path),
+                        "reconciliation_table": str(current_path),
+                        "issue": "reconciliation_input_unreadable",
+                        "read_error": str(exc)[:300],
+                    },
+                )
+            ]
         issues = self._trace_issues(current, parent)
         issues.extend(
             self._declared_range_flag_issues(

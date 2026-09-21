@@ -80,12 +80,16 @@ def _clean_inputs(
     e = np.asarray(list(event_observed), dtype=float)
     if d.shape[0] != e.shape[0]:
         raise ValueError("durations and event_observed must have equal length")
-    finite = np.isfinite(d)
+    # Duration and event state describe one observation and must be cleaned as
+    # a pair.  In particular, ``NaN != 0`` is True in NumPy; filtering only the
+    # duration therefore turned a missing event flag into an observed event.
+    finite = np.isfinite(d) & np.isfinite(e)
     d, e = d[finite], e[finite]
     if np.any(d < 0):
         raise ValueError("durations must be non-negative")
-    # Coerce event flags to 0/1; anything truthy and finite is an event.
-    e = (e != 0).astype(float)
+    if not np.isin(e, [0.0, 1.0]).all():
+        raise ValueError("event_observed must contain only 0/1, True/False, or missing")
+    e = e.astype(float)
     return d, e
 
 

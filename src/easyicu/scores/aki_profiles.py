@@ -72,6 +72,7 @@ RENAL_AKI_BUNDLE_OUTPUTS = (
     "creatinine_evidence_reason",
     "urine_evidence_status",
     "rrt_evidence_status",
+    "rrt_evidence_reason",
     "creat_low_past_48hr",
     "creat_low_past_7day",
     "creat_baseline_n_48h",
@@ -272,6 +273,7 @@ def build_renal_aki_bundle(
         "creatinine_ascertainment_reason": "creatinine_evidence_reason",
         "urine_ascertainment": "urine_evidence_status",
         "rrt_ascertainment": "rrt_evidence_status",
+        "rrt_ascertainment_reason": "rrt_evidence_reason",
         "creat_low_past_48hr": "creat_low_past_48hr",
         "creat_low_past_7day": "creat_low_past_7day",
         "creat_baseline_n_48h": "creat_baseline_n_48h",
@@ -396,6 +398,7 @@ def load_renal_aki_bundle(
     max_patients: Optional[int] = None,
     verbose: bool = True,
     preloaded_data: Optional[Mapping[str, pd.DataFrame]] = None,
+    rrt_source_complete: bool = False,
 ) -> pd.DataFrame:
     """Load normalized inputs and build the current renal AKI contract.
 
@@ -463,7 +466,7 @@ def load_renal_aki_bundle(
         urine_source_is_rate=_normalize_database(database) == "hirid",
         time_unit="hours",
         interval=pd.Timedelta(hours=1),
-        rrt_source_complete=rrt_df is not None,
+        rrt_source_complete=rrt_source_complete,
     )
 
 

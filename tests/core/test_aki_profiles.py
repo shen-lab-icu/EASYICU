@@ -160,6 +160,38 @@ def test_renal_bundle_separates_cross_database_rrt_from_miiv_native_crrt():
     assert "creatinine_evidence_status" in result
 
 
+def test_empty_rrt_source_requires_explicit_completed_search_receipt():
+    creatinine = pd.DataFrame(
+        {"stay_id": [1, 1], "charttime": [0, 60], "crea": [1.0, 1.1]}
+    )
+    empty_rrt = pd.DataFrame(columns=["stay_id", "charttime", "rrt"])
+
+    unresolved = build_renal_aki_bundle(
+        "miiv",
+        crea_df=creatinine,
+        rrt_df=empty_rrt,
+        id_col="stay_id",
+        time_col="charttime",
+        time_unit="minutes",
+    )
+    completed = build_renal_aki_bundle(
+        "miiv",
+        crea_df=creatinine,
+        rrt_df=empty_rrt,
+        id_col="stay_id",
+        time_col="charttime",
+        time_unit="minutes",
+        rrt_source_complete=True,
+    )
+
+    assert unresolved["rrt_evidence_status"].eq("indeterminate").all()
+    assert unresolved["rrt_evidence_reason"].eq("source_absent").all()
+    assert completed["rrt_evidence_status"].eq("negative").all()
+    assert completed["rrt_evidence_reason"].eq(
+        "source_searched_no_active_rrt"
+    ).all()
+
+
 @pytest.mark.parametrize("database", ["aumc", "sic"])
 def test_future_case_native_profile_is_not_broadcast_into_dynamic_renal(database):
     creatinine = pd.DataFrame(

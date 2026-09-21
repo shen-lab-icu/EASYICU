@@ -735,6 +735,15 @@ def filter_evidence_bound_scaffold(
                 filtered_claims.append(rejected)
                 continue
             if _looks_result_like_sentence(sentence):
+                if section == "## Methods":
+                    # Numeric method details are admitted only through an exact
+                    # host-registered ManuscriptMethodFact (handled above).
+                    # A generic evidence id proves that an artifact exists; it
+                    # does not prove that this sentence describes that artifact.
+                    rejected = sentence.strip()
+                    removed.append(rejected)
+                    filtered_claims.append(rejected)
+                    continue
                 # Registered evidence may authorize a numeric fact; the later
                 # numeric-provenance gate still binds every value to its exact
                 # owner and refuses foreign or ambiguous citations.  Exact

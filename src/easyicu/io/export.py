@@ -58,11 +58,10 @@ def write_psv(
     
     # Convert time to hours if datetime
     if index_col and pd.api.types.is_datetime64_any_dtype(data[index_col]):
-        # Convert to hours from start
-        for patient_id, group in data.groupby(id_col):
-            min_time = group[index_col].min()
-            data.loc[data[id_col] == patient_id, index_col] = \
-                (group[index_col] - min_time).dt.total_seconds() / 3600
+        # Assign the complete numeric result at once.  Assigning floats into a
+        # datetime64 column group by group raises in modern pandas.
+        starts = data.groupby(id_col, dropna=False)[index_col].transform("min")
+        data[index_col] = (data[index_col] - starts) / pd.Timedelta(hours=1)
     
     # Split by patient and write files
     for patient_id, group in data.groupby(id_col):

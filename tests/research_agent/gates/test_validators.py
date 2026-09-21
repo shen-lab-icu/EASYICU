@@ -860,6 +860,49 @@ def test_cross_step_reconciliation_trace_accepts_exact_parent_rows(
     assert findings == []
 
 
+def test_cross_step_reconciliation_trace_rejects_parent_outside_run(
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    summary, fixture_dir = _write_reconciliation_trace_fixture(outside, correct=True)
+    out_dir = tmp_path / "run" / "steps" / "04_reconciliation" / "outputs"
+    out_dir.mkdir(parents=True)
+    source = fixture_dir / "absolute_risk_representation_reconciliation.csv"
+    pd.read_csv(source).to_csv(out_dir / source.name, index=False)
+
+    findings = CrossStepReconciliationTraceValidator().audit(
+        step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile parent."),
+        step_summary=summary,
+        out_dir=out_dir,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["issue"] == "parent_table_outside_run_directory"
+
+
+def test_cross_step_reconciliation_trace_requires_upstream_path_registration(
+    tmp_path: Path,
+) -> None:
+    out_dir = tmp_path / "run" / "steps" / "04_reconciliation" / "outputs"
+    out_dir.mkdir(parents=True)
+    summary, _ = _write_reconciliation_trace_fixture(out_dir, correct=True)
+    completed = [_prior_registered_table_record()]
+    completed[0]["step_summary"]["output_files"] = {
+        "different": "different_parent.csv"
+    }
+
+    findings = CrossStepReconciliationTraceValidator().audit(
+        step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile parent."),
+        step_summary=summary,
+        out_dir=out_dir,
+        completed_step_records=completed,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["issue"] == "parent_table_path_not_in_upstream_record"
+
+
 def test_cross_step_reconciliation_trace_normalises_semantic_row_schema(
     tmp_path: Path,
 ) -> None:

@@ -23,7 +23,7 @@ import re
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 from .schema import AnalysisStep
-from .numeric_scalars import coerce_finite_float
+from .numeric_scalars import coerce_finite_float, strict_optional_finite_float
 
 
 def _expected_numeric_annotations_for_step(
@@ -161,6 +161,23 @@ def _first_numeric_scalar_with_key_fragment(
     return None
 
 
+def _first_strict_numeric_scalar_with_key_fragment(
+    payload: Dict[str, Any], fragments: Sequence[str]
+) -> Optional[float]:
+    """Return a matching finite number without coercing strings or booleans."""
+
+    lowered_fragments = tuple(fragment.lower() for fragment in fragments if fragment)
+    if not lowered_fragments:
+        return None
+    for key, value in _flatten_scalar_dict(payload).items():
+        if not any(fragment in key.lower() for fragment in lowered_fragments):
+            continue
+        numeric = strict_optional_finite_float(value)
+        if numeric is not None:
+            return numeric
+    return None
+
+
 def _first_numeric_effect_from_text(payload: Any) -> Optional[float]:
     """Extract only explicitly labelled prose effects.
 
@@ -194,12 +211,14 @@ def _first_numeric_effect_from_text(payload: Any) -> Optional[float]:
 __all__ = [
     "coerce_finite_float",
     "first_numeric_scalar_with_key_fragment",
+    "first_strict_numeric_scalar_with_key_fragment",
     "first_present_scalar",
     "flatten_scalar_dict",
     "_expected_numeric_annotations_for_step",
     "_coerce_scalar",
     "_first_present_scalar",
     "_first_numeric_scalar_with_key_fragment",
+    "_first_strict_numeric_scalar_with_key_fragment",
     "_flatten_scalar_dict",
     "_first_numeric_effect_from_text",
 ]
@@ -211,6 +230,12 @@ def first_numeric_scalar_with_key_fragment(
     """Public cross-owner entrypoint for :func:`_first_numeric_scalar_with_key_fragment`."""
 
     return _first_numeric_scalar_with_key_fragment(payload, fragments)
+
+
+def first_strict_numeric_scalar_with_key_fragment(
+    payload: Dict[str, Any], fragments: Sequence[str]
+) -> Optional[float]:
+    return _first_strict_numeric_scalar_with_key_fragment(payload, fragments)
 
 
 def first_present_scalar(

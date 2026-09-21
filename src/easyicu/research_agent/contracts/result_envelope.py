@@ -48,9 +48,13 @@ _PRODUCT_RE = re.compile(
 _SAFE_STRING_FIELD_TOKENS = frozenset(
     {
         "analysis",
+        "axis",
+        "cohort",
         "complete",
+        "contrast",
         "effect",
         "event",
+        "estimand",
         "exposure",
         "family",
         "fit",
@@ -61,10 +65,13 @@ _SAFE_STRING_FIELD_TOKENS = frozenset(
         "outcome",
         "role",
         "scale",
+        "spec",
         "status",
         "step",
         "unit",
         "variable",
+        "variant",
+        "window",
     }
 )
 _VALUE_KEYS = (

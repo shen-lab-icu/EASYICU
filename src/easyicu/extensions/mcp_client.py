@@ -292,22 +292,7 @@ async def _open_and_call(
             "extension_mcp_runtime_unavailable",
             "Install EasyICU with the mcp extra before using MCP servers.",
         ) from exc
-    name = str(tool_name or "").strip()
-    if name not in server.allowed_tools:
-        raise McpClientError(
-            "extension_mcp_tool_not_allowed",
-            "The requested MCP tool is not in this server's frozen allowlist.",
-            details={"server": server.name, "tool": name},
-        )
-    clean_arguments = _validate_arguments(arguments)
-    argument_bytes = len(
-        json.dumps(clean_arguments, ensure_ascii=False).encode("utf-8")
-    )
-    if argument_bytes > MAX_MCP_ARGUMENT_BYTES:
-        raise McpClientError(
-            "extension_mcp_arguments_too_large",
-            "MCP tool arguments exceed the bounded JSON limit.",
-        )
+    name, clean_arguments = validate_mcp_tool_call(server, tool_name, arguments)
     endpoint, transport = _validated_endpoint(server.url)
     try:
         with anyio.fail_after(timeout_seconds):
@@ -346,6 +331,32 @@ async def _open_and_call(
     }
 
 
+def validate_mcp_tool_call(
+    server: McpServerActivation,
+    tool_name: str,
+    arguments: Mapping[str, Any],
+) -> tuple[str, Dict[str, Any]]:
+    """Validate a frozen MCP call before consuming a one-use host grant."""
+
+    name = str(tool_name or "").strip()
+    if name not in server.allowed_tools:
+        raise McpClientError(
+            "extension_mcp_tool_not_allowed",
+            "The requested MCP tool is not in this server's frozen allowlist.",
+            details={"server": server.name, "tool": name},
+        )
+    clean_arguments = _validate_arguments(arguments)
+    argument_bytes = len(
+        json.dumps(clean_arguments, ensure_ascii=False).encode("utf-8")
+    )
+    if argument_bytes > MAX_MCP_ARGUMENT_BYTES:
+        raise McpClientError(
+            "extension_mcp_arguments_too_large",
+            "MCP tool arguments exceed the bounded JSON limit.",
+        )
+    return name, clean_arguments
+
+
 def list_mcp_tools(url: str, *, timeout_seconds: float = 10.0) -> Dict[str, Any]:
     return anyio.run(partial(_open_and_list, url, float(timeout_seconds)))
 
@@ -368,4 +379,9 @@ def call_mcp_tool(
     )
 
 
-__all__ = ["McpClientError", "call_mcp_tool", "list_mcp_tools"]
+__all__ = [
+    "McpClientError",
+    "call_mcp_tool",
+    "list_mcp_tools",
+    "validate_mcp_tool_call",
+]

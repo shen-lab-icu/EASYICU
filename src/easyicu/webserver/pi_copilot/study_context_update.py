@@ -730,6 +730,16 @@ def update_study_context(
         for key in _STUDY_SETUP_FIELDS - {"bind_active_export", "bind_source_id"}
         if key in params
     }
+    if isinstance(patch.get("confirmations"), Mapping):
+        from easyicu.concept.selection_policy import (
+            is_concept_selection_authority_key,
+        )
+
+        patch["confirmations"] = {
+            key: value
+            for key, value in patch["confirmations"].items()
+            if not is_concept_selection_authority_key(key)
+        }
     if isinstance(patch.get("sensitivity_specs"), list):
         patch["sensitivity_specs"] = [
             {key: value for key, value in spec.items() if value is not None}
@@ -765,14 +775,16 @@ def update_study_context(
     }
     if "sepsis3_sofa2" in proposed_modules:
         from easyicu.concept.selection_policy import (
+            concept_selection_authority_key,
             concept_selection_confirmation_key,
             evaluate_concept_selection,
         )
 
         concept_id = "sep3_sofa2"
         confirmation_key = concept_selection_confirmation_key(concept_id)
+        authority_key = concept_selection_authority_key(concept_id)
         previously_confirmed = bool(
-            ((current or {}).get("confirmations") or {}).get(confirmation_key)
+            ((current or {}).get("confirmations") or {}).get(authority_key)
         )
         decision = evaluate_concept_selection(
             concept_id,
@@ -799,6 +811,7 @@ def update_study_context(
         confirmations = dict(((current or {}).get("confirmations") or {}))
         confirmations.update(dict(patch.get("confirmations") or {}))
         confirmations[confirmation_key] = True
+        confirmations[authority_key] = True
         patch["confirmations"] = confirmations
     proposed_cohort = params.get("cohort")
     if isinstance(proposed_cohort, Mapping) and "preset" in proposed_cohort:
@@ -1362,10 +1375,13 @@ def update_study_context(
                 context.user_message or (current or {}).get("question") or ""
             )
             confirmation_key = concept_selection_confirmation_key(primary_concept)
+            from easyicu.concept.selection_policy import concept_selection_authority_key
+
+            authority_key = concept_selection_authority_key(primary_concept)
             confirmations = dict(((current or {}).get("confirmations") or {}))
             confirmations.update(dict(patch.get("confirmations") or {}))
             previously_confirmed = bool(
-                ((current or {}).get("confirmations") or {}).get(confirmation_key)
+                ((current or {}).get("confirmations") or {}).get(authority_key)
             )
             decision = evaluate_concept_selection(
                 primary_concept,
@@ -1388,6 +1404,7 @@ def update_study_context(
             # confirmation cannot authorize itself because it is ignored
             # above; the current user turn or a prior owner receipt must pass.
             confirmations[confirmation_key] = True
+            confirmations[authority_key] = True
             patch["confirmations"] = confirmations
         patch["execution_concepts"] = normalized_execution
     if "analysis_design" in patch:
@@ -1519,6 +1536,7 @@ def update_study_context(
             patch,
             current_context=current,
             lifecycle_write=False,
+            _server_concept_selection_authority_write=True,
         )
     except study_contexts.StudyContextError as exc:
         return _result(
@@ -1567,6 +1585,7 @@ def update_study_context(
             expected_revision=(int(current.get("revision") or 0) if current else None),
             require_revision=bool(current),
             lifecycle_write=False,
+            _server_concept_selection_authority_write=True,
         )
     except study_contexts.StudyContextError as exc:
         return _result(

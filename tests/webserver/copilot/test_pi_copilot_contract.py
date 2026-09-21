@@ -3325,7 +3325,7 @@ def test_control_tools_fail_closed_without_owner_contracts(
     run_block = tool_module.execute_tool(
         "easyicu_run", {"run_type": "preflight"}, no_grant
     )
-    assert run_block["code"] == "pi_action_authorization_required"
+    assert run_block["code"] == "study_context_required"
 
     run_grant = ToolExecutionContext(
         session=session, allowed_actions=frozenset({"provider_run"})
@@ -3343,6 +3343,43 @@ def test_control_tools_fail_closed_without_owner_contracts(
         no_grant,
     )
     assert replan_block["code"] == "scientific_replan_not_supported"
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "action", "expected_code"),
+    [
+        ("easyicu_mine_ideas", {}, "idea", "idea_topic_required"),
+        (
+            "easyicu_start_extraction",
+            {},
+            "extract",
+            "study_context_required",
+        ),
+        (
+            "easyicu_run",
+            {"run_type": "invalid"},
+            "run",
+            "unsupported_run_type",
+        ),
+    ],
+)
+def test_invalid_control_request_does_not_consume_one_use_grant(
+    monkeypatch: pytest.MonkeyPatch,
+    tool_name: str,
+    arguments: dict[str, Any],
+    action: str,
+    expected_code: str,
+) -> None:
+    monkeypatch.setattr(tool_module, "_bound_context", lambda _binding: None)
+    context = ToolExecutionContext(
+        session=PiSessionRecord(session_id="pi-invalid-grant"),
+        allowed_actions={action},
+    )
+
+    result = tool_module.execute_tool(tool_name, arguments, context)
+
+    assert result["code"] == expected_code
+    assert context.grant.consume_once(action) == "granted"
 
 
 def test_superseded_plan_replan_starts_fresh_pipeline_run(
@@ -4999,7 +5036,13 @@ def test_conversational_setup_rejects_unrequested_explicit_only_feature_module(
 
     blocked = tool_module.execute_tool(
         "easyicu_update_study_context",
-        {"modules": ["demographics", "sepsis3_sofa2", "outcome"]},
+        {
+            "modules": ["demographics", "sepsis3_sofa2", "outcome"],
+            "confirmations": {
+                "concept_selection_sep3_sofa2_authorized": True,
+                "concept_selection_sep3_sofa2_user_turn_verified": True,
+            },
+        },
         ToolExecutionContext(
             session=session,
             user_message="研究成人 ICU 人群的 Sepsis-3 患病率",
@@ -5023,6 +5066,7 @@ def test_conversational_setup_rejects_unrequested_explicit_only_feature_module(
     assert accepted["code"] == "study_context_updated"
     assert writes[0]["confirmations"] == {
         "concept_selection_sep3_sofa2_authorized": True,
+        "concept_selection_sep3_sofa2_user_turn_verified": True,
     }
 
 
@@ -5636,6 +5680,7 @@ def test_conversational_setup_persists_host_verified_explicit_concept_authorizat
         "feature_time_window": True,
         "export_format": True,
         "concept_selection_sep3_sofa2_authorized": True,
+        "concept_selection_sep3_sofa2_user_turn_verified": True,
     }
 
 
@@ -5981,6 +6026,7 @@ def test_study_setup_requires_one_turn_grant_and_uses_typed_owner(
         "expected_revision": 5,
         "require_revision": True,
         "lifecycle_write": False,
+        "_server_concept_selection_authority_write": True,
     }
 
     one_grant = ToolExecutionContext(

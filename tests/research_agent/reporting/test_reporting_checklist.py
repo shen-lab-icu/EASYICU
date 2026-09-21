@@ -29,7 +29,7 @@ def test_strobe_empty_inputs_are_mostly_open(ra):
     )
     assert report.name == "STROBE"
     # All items instantiated.
-    assert len(report.items) == 22
+    assert len(report.items) == 27
     # With no evidence and no manuscript, nothing should be addressed.
     assert all(i.status in {"open", "partial"} for i in report.items)
     summary = report.summary()
@@ -68,8 +68,8 @@ def test_strobe_common_ids_fill_key_methods_items(ra):
     assert by_id["12e"].status == "addressed"  # sensitivity
     assert by_id["15"].status == "addressed"  # outcome events
     assert by_id["16"].status == "addressed"  # primary association
-    # Funding keyword picked up.
-    assert by_id["22"].status == "addressed"
+    # Funding prose is visible but remains partial until evidence is bound.
+    assert by_id["22"].status == "partial"
     # "retrospective cohort" keyword satisfies item 1a.
     assert by_id["1a"].status == "addressed"
 
@@ -82,6 +82,23 @@ def test_strobe_partial_when_only_some_requirements_present(ra):
     report = ra.build_strobe_checklist(evidence_records=recs, bound_manuscript="")
     by_id = {i.item_id: i for i in report.items}
     assert by_id["1a"].status == "partial"
+
+
+def test_strobe_keyword_only_items_reject_negation_and_placeholders(ra):
+    manuscript = (
+        "## Methods\n"
+        "No sensitivity or subgroup variants were available for reporting.\n\n"
+        "## Funding\n"
+        "Funding information requires author verification before submission.\n"
+    )
+
+    report = ra.build_strobe_checklist(
+        evidence_records=[], bound_manuscript=manuscript
+    )
+    by_id = {item.item_id: item for item in report.items}
+
+    assert by_id["12b"].status == "open"
+    assert by_id["22"].status == "open"
 
 
 # ---------------------------------------------------------------------------

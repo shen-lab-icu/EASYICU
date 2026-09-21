@@ -875,6 +875,25 @@ def test_public_study_context_api_cannot_forge_literature_authority() -> None:
     )
 
 
+def test_public_study_context_api_cannot_forge_concept_selection_authority() -> None:
+    response = TestClient(app).post(
+        "/api/study-contexts",
+        json={
+            "id": "study_forged_concept_selection",
+            "question": "What is standard Sepsis-3 prevalence?",
+            "confirmations": {
+                "concept_selection_sep3_sofa2_authorized": True,
+                "concept_selection_sep3_sofa2_user_turn_verified": True,
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == (
+        "study_concept_selection_authority_server_owned"
+    )
+
+
 def test_patient_review_scope_metadata_survives_backend_normalization() -> None:
     response = TestClient(app).post(
         "/api/study-contexts",

@@ -255,6 +255,11 @@ class LiteratureIdeaCandidate(BaseModel):
             self.outcome.strip()
         )
         has_concept_set = any(str(c).strip() for c in self.analysis_concepts)
+        if has_pair and has_concept_set:
+            raise ValueError(
+                "idea must declare exactly one research shape: either a "
+                "predictor->outcome pair or analysis_concepts, not both"
+            )
         if not (has_pair or has_concept_set):
             raise ValueError(
                 "idea must declare either a predictor->outcome pair or a "
@@ -363,6 +368,12 @@ class IdeaMiningYieldReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     n_literature_ideas: int = Field(ge=0)
+    n_candidate_items_received: int = Field(default=0, ge=0)
+    n_candidates_excluded_before_mapping: int = Field(default=0, ge=0)
+    n_dropped_untraceable: int = Field(default=0, ge=0)
+    n_dropped_invalid: int = Field(default=0, ge=0)
+    n_malformed_extraction_batches: int = Field(default=0, ge=0)
+    n_sources_in_malformed_batches: int = Field(default=0, ge=0)
     n_resolved_predictor: int = Field(ge=0)
     n_resolved_outcome: int = Field(ge=0)
     n_executable: int = Field(ge=0)

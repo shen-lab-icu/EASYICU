@@ -77,6 +77,44 @@ DEBUG_MODE = False
 logger = logging.getLogger(__name__)
 
 
+_PATIENT_ID_PRIORITY = {
+    "mimic": ("icustay_id", "hadm_id", "subject_id"),
+    "mimic_demo": ("stay_id", "hadm_id", "subject_id"),
+    "miiv": ("stay_id", "hadm_id", "subject_id"),
+    "eicu": ("patientunitstayid", "patienthealthsystemstayid", "uniquepid"),
+    "eicu_demo": ("patientunitstayid", "patienthealthsystemstayid", "uniquepid"),
+    "aumc": ("admissionid", "patientid"),
+    "hirid": ("patientid",),
+    "sic": ("CaseID", "caseid"),
+}
+
+
+def _patient_id_column(frame: pd.DataFrame, data_source=None) -> Optional[str]:
+    """Choose a real cohort identifier and never a technical ``row_id``."""
+
+    name = getattr(getattr(data_source, "config", None), "name", "")
+    candidates = list(_PATIENT_ID_PRIORITY.get(str(name).lower(), ()))
+    candidates.extend(
+        (
+            "stay_id",
+            "icustay_id",
+            "patientunitstayid",
+            "admissionid",
+            "patientid",
+            "CaseID",
+            "caseid",
+            "hadm_id",
+            "subject_id",
+        )
+    )
+    by_lower = {str(column).lower(): str(column) for column in frame.columns}
+    for candidate in candidates:
+        actual = by_lower.get(candidate.lower())
+        if actual is not None:
+            return actual
+    return None
+
+
 def _duckdb_sql_path_literal(path) -> str:
     """Quote a filesystem path for a DuckDB SQL string literal."""
 
@@ -2440,15 +2478,15 @@ def _apply_callback(
         if not frame.empty and 'weight' not in frame.columns and resolver is not None and data_source is not None:
             try:
                 # 获取患者ID列
-                id_cols = [c for c in frame.columns if c.lower().endswith('id') and c != 'itemid']
-                if id_cols:
-                    unique_ids = frame[id_cols[0]].unique().tolist()
+                id_col = _patient_id_column(frame, data_source)
+                if id_col:
+                    unique_ids = frame[id_col].unique().tolist()
                     # 加载 weight 概念
                     weight_table = resolver._load_single_concept(
                         'weight',
                         data_source,
                         aggregator=False,  # 不聚合，保留原始值
-                        patient_ids={id_cols[0]: unique_ids},
+                        patient_ids={id_col: unique_ids},
                         verbose=False,
                         _bypass_callback=True,  # 避免回调循环
                     )
@@ -2458,11 +2496,10 @@ def _apply_callback(
                         if 'weight' in weight_df.columns:
                             weight_df['weight'] = pd.to_numeric(weight_df['weight'], errors='coerce')
                             # 合并到frame
-                            merge_cols = [c for c in id_cols if c in weight_df.columns]
-                            if merge_cols:
+                            if id_col in weight_df.columns:
                                 frame = frame.merge(
-                                    weight_df[merge_cols + ['weight']].drop_duplicates(),
-                                    on=merge_cols,
+                                    weight_df[[id_col, 'weight']].drop_duplicates(),
+                                    on=id_col,
                                     how='left'
                                 )
             except Exception as e:
@@ -2994,14 +3031,14 @@ def _apply_callback(
         # Try to add weight and divide
         if 'weight' not in frame.columns and resolver is not None and data_source is not None:
             try:
-                id_cols = [c for c in frame.columns if c.lower().endswith('id') and c != 'itemid']
-                if id_cols:
-                    unique_ids = frame[id_cols[0]].unique().tolist()
+                id_col = _patient_id_column(frame, data_source)
+                if id_col:
+                    unique_ids = frame[id_col].unique().tolist()
                     weight_table = resolver._load_single_concept(
                         'weight',
                         data_source,
                         aggregator=False,
-                        patient_ids={id_cols[0]: unique_ids},
+                        patient_ids={id_col: unique_ids},
                         verbose=False,
                         _bypass_callback=True,
                     )
@@ -3009,11 +3046,10 @@ def _apply_callback(
                         weight_df = weight_table.data
                         if 'weight' in weight_df.columns:
                             weight_df['weight'] = pd.to_numeric(weight_df['weight'], errors='coerce')
-                            merge_cols = [c for c in id_cols if c in weight_df.columns]
-                            if merge_cols:
+                            if id_col in weight_df.columns:
                                 frame = frame.merge(
-                                    weight_df[merge_cols + ['weight']].drop_duplicates(),
-                                    on=merge_cols,
+                                    weight_df[[id_col, 'weight']].drop_duplicates(),
+                                    on=id_col,
                                     how='left'
                                 )
             except Exception:

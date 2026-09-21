@@ -197,6 +197,15 @@ class _ConstantRecallClient:
         return {"hit_count": self.hit_count, "top_hits": []}
 
 
+class _SequentialRecallClient:
+    def __init__(self, responses):
+        self.responses = iter(responses)
+
+    def search_prior_art(self, query: str, *, max_results: int = 20) -> object:
+        del query, max_results
+        return next(self.responses)
+
+
 def _gap_idea() -> LiteratureIdeaCandidate:
     return LiteratureIdeaCandidate(
         source_snapshot_id="source-snapshot/sha256:abc123",
@@ -245,6 +254,31 @@ def test_secondary_index_corroboration_holds_a_real_gap() -> None:
         searched_at="2026-06-04T00:00:00+00:00",
     )
     assert assessment.novelty_label == "apparently_gap"
+
+
+def test_failed_exact_search_cannot_create_an_apparent_gap() -> None:
+    assessment = assess_prior_art_for_idea(
+        _gap_idea(),
+        search_client=_SequentialRecallClient(
+            [{"hit_count": 0, "top_hits": [], "search_ok": True}, None]
+        ),
+        searched_at="2026-06-04T00:00:00+00:00",
+    )
+
+    assert assessment.novelty_label == "crowded_but_differentiable"
+    assert "NOT screened" in assessment.same_topic_screen_status
+
+
+def test_failed_corroboration_cannot_hold_an_apparent_gap() -> None:
+    assessment = assess_prior_art_for_idea(
+        _gap_idea(),
+        search_client=FakePriorArtSearchClient(),
+        corroborating_search_client=_SequentialRecallClient([None]),
+        searched_at="2026-06-04T00:00:00+00:00",
+    )
+
+    assert assessment.novelty_label == "crowded_but_differentiable"
+    assert "corroboration failed" in assessment.novelty_statement
 
 
 def test_corroboration_client_is_never_consulted_for_non_gap_labels() -> None:
@@ -641,6 +675,7 @@ def test_candidate_record_build_only_swallows_unregistered_candidates() -> None:
             registry=BrokenRegistry(),
             hypothesis_family_id="family-a",
             source_snapshot_id="source-snapshot/sha256:abc123",
+            candidate_screening_denominator=1,
         )
 
 
@@ -747,17 +782,92 @@ def test_extract_literature_ideas_skip_policy_drops_only_untraceable() -> None:
     )
 
     dropped: list[str] = []
+    accounting: dict[str, int] = {}
     ideas = extract_literature_ideas(
         materials=[material],
         source_snapshot_id="source-snapshot/sha256:abc123",
         llm=llm,
         untraceable_quote_policy="skip",
         dropped_untraceable=dropped,
+        extraction_accounting=accounting,
     )
 
     assert len(ideas) == 1
     assert ideas[0].exposure_or_predictor == "lactate clearance"
     assert dropped == ["neutral_review_2026"]
+    assert accounting["n_candidate_items_received"] == 2
+    assert accounting["n_dropped_untraceable"] == 1
+    report = idea_mining_mod._build_yield_report(
+        ideas,
+        [],
+        extraction_accounting=accounting,
+    )
+    assert report.n_candidate_items_received == 2
+    assert report.n_literature_ideas == 1
+    assert report.n_candidates_excluded_before_mapping == 1
+
+
+def test_literature_idea_rejects_pair_and_concept_set_shape_together() -> None:
+    with pytest.raises(ValueError, match="exactly one research shape"):
+        LiteratureIdeaCandidate(
+            source_snapshot_id="source-snapshot/sha256:shape",
+            citation_key="neutral_review_2026",
+            source_adapter_level="user_supplied_excerpt",
+            population="adult ICU patients",
+            exposure_or_predictor="lactate",
+            outcome="mortality",
+            analysis_concepts=["lactate", "creatinine"],
+            rationale="Conflicting candidate shape.",
+            source_quote="future work should evaluate monitoring definitions",
+            analysis_family="data_quality_audit",
+        )
+
+
+def test_dropped_extraction_item_remains_in_preregistered_denominator(tmp_path) -> None:
+    material = SourceMaterial(
+        citation=_citation(),
+        source_adapter_level="user_supplied_excerpt",
+        source_text="Lactate was associated with survival in shock.",
+    )
+    llm = CapturingIdeaLLM(
+        [
+            {
+                "citation_key": "neutral_review_2026",
+                "population": "adult ICU patients",
+                "exposure_or_predictor": "lactate",
+                "outcome": "survival",
+                "rationale": "Grounded.",
+                "source_quote": "Lactate was associated with survival",
+                "analysis_family": "association",
+            },
+            {
+                "citation_key": "neutral_review_2026",
+                "population": "adult ICU patients",
+                "exposure_or_predictor": "creatinine",
+                "outcome": "survival",
+                "rationale": "Ungrounded.",
+                "source_quote": "This sentence is absent from the source.",
+                "analysis_family": "association",
+            },
+        ]
+    )
+
+    result = run_idea_mining_dry_run(
+        materials=[material],
+        llm=llm,
+        available_concepts=["lactate", "death"],
+        concept_aliases={"death": ["survival"]},
+        outcome_determinability={
+            "death": OutcomeDeterminability(outcome="death", status="known_0_1")
+        },
+        output_dir=tmp_path / "candidate_denominator",
+        untraceable_quote_policy="skip",
+    )
+
+    assert result.yield_report.n_candidate_items_received == 2
+    assert result.yield_report.n_literature_ideas == 1
+    assert result.yield_report.n_dropped_untraceable == 1
+    assert result.candidate_records[0].multiple_testing_family_size == 2
 
 
 def test_extract_literature_ideas_skip_policy_drops_schema_invalid_item() -> None:
@@ -3298,6 +3408,47 @@ def test_actionable_screen_rejects_zero_joint_zero_contrast_and_age_mismatch() -
     assert [
         candidate.resolved_predictor_concept for candidate in selected_candidates
     ] == ["valid_marker"]
+
+
+def test_explicit_population_mismatch_is_non_executable_without_bounded_screen(
+    tmp_path,
+) -> None:
+    material = SourceMaterial(
+        citation=_citation(),
+        source_adapter_level="user_supplied_excerpt",
+        source_text="Future work should test lactate and mortality in children.",
+    )
+    snapshot = freeze_source_snapshot([material])
+    idea = LiteratureIdeaCandidate(
+        source_snapshot_id=snapshot.source_snapshot_id,
+        citation_key="neutral_review_2026",
+        source_adapter_level="user_supplied_excerpt",
+        population="children in the ICU",
+        exposure_or_predictor="lactate",
+        outcome="mortality",
+        rationale="The pediatric question remains unresolved.",
+        source_quote="Future work should test lactate and mortality in children.",
+        analysis_family="association",
+    )
+
+    result = run_idea_mining_dry_run(
+        materials=[material],
+        llm=CapturingIdeaLLM([]),
+        available_concepts=["lactate", "death"],
+        concept_aliases={"lactate": ["lactate"], "death": ["mortality"]},
+        outcome_determinability={
+            "death": OutcomeDeterminability(outcome="death", status="known_0_1")
+        },
+        output_dir=tmp_path / "population_mismatch",
+        analytic_population_age_group="adult",
+        precomputed_literature_ideas=[idea],
+    )
+
+    assert result.yield_report.n_executable == 0
+    assert any(
+        "explicitly contradicts the analytic adult cohort" in reason
+        for reason in result.executable_candidates[0].non_executable_reasons
+    )
 
 
 def test_actionable_screen_requires_broad_observation_for_treatment_without_absence_contract() -> (
