@@ -579,7 +579,7 @@ def test_patient_preview_parquet_batch_failure_never_falls_back_to_full_read(
 def test_extraction_folder_picker_uses_text_content_for_server_names() -> None:
     script = (
         Path(__file__).resolve().parents[2]
-        / "src/easyicu/webserver/static/js/screens-extraction.js"
+        / "src/easyicu/webserver/static/js/screens-extraction-folder-picker.js"
     ).read_text(encoding="utf-8")
 
     assert "name.textContent = String(en.name || '')" in script

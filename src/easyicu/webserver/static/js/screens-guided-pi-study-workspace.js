@@ -283,6 +283,30 @@
       }
     }
     function setMaterialCategory(value) { picker.category = String(value || 'all'); return true; }
+    // A conversation with no history, no job and no turn outcome is an empty
+    // draft created by "new task". They are only removable, never informative,
+    // so the rail folds them behind one count instead of shipping a wall of
+    // identical "new research task" rows.
+    function isEmptyConversation(row) {
+      return !row.has_history && !row.active_message_job_id
+        && !row.last_message_job_id && !row.last_turn_status;
+    }
+    function groupEmptyTaskRows(sessions, rendered, selectedId) {
+      const outside = [];
+      const empty = [];
+      sessions.forEach((row, index) => {
+        // The selected draft is pinned outside so collapsing never hides the
+        // conversation the user is looking at.
+        if (!isEmptyConversation(row) || String(row.session_id) === String(selectedId)) outside.push(index);
+        else empty.push(index);
+      });
+      if (empty.length < 2) return rendered.join('');
+      const summary = `<summary class="gpi-conversation-empty-summary">${tr('Empty tasks', '空任务')}`
+        + `<span class="gpi-conversation-empty-count">${empty.length}</span></summary>`;
+      return `${outside.map(index => rendered[index]).join('')}`
+        + `<details class="gpi-conversation-empty-group" data-gpi-rail-empty-group>`
+        + `${summary}${empty.map(index => rendered[index]).join('')}</details>`;
+    }
     function syncNavigation(ctx) {
       const rail = document.getElementById('gdConversationRail');
       if (!rail) return;
@@ -294,7 +318,8 @@
         <label class="gpi-conversation-search" hidden><span class="sr-only">${tr('Search tasks', '搜索任务')}</span><input type="search" data-gpi-rail-task-search placeholder="${tr('Search tasks…', '搜索任务…')}" autocomplete="off"></label>
         <nav aria-label="${tr('Conversations in this project', '当前项目中的对话')}">${ctx.loading
           ? `<p role="status">${tr('Loading conversations…', '正在读取对话…')}</p>`
-          : ctx.sessions.length ? ctx.sessions.map(row => {
+          : ctx.sessions.length ? (() => {
+            const rendered = ctx.sessions.map(row => {
             const status = typeof ctx.status === 'function' ? ctx.status(row)
               : (row.agent_mode === 'workspace' ? tr('Workspace', '工作区') : tr('Research', '研究'));
             const time = typeof ctx.time === 'function' ? ctx.time(row) : '';
@@ -304,7 +329,9 @@
             const title = ctx.title(row);
             const canRemove = !row.has_history && !row.active_message_job_id && !row.last_message_job_id && !row.last_turn_status;
             return `<div class="gpi-conversation-row" data-gpi-rail-session-row data-gpi-rail-session-text="${esc(`${title} ${status}`.toLowerCase())}"><button type="button" class="gpi-conversation-item${stateClass}" data-gpi-rail-session="${esc(row.session_id)}" ${row.session_id === ctx.selectedId ? 'aria-current="page"' : ''} ${locked ? 'disabled' : ''}><span class="gpi-conversation-copy"><strong>${esc(title)}</strong><small><i aria-hidden="true"></i>${esc(status)}</small></span>${time ? `<time datetime="${esc(row.last_activity_at || row.created_at || '')}">${esc(time)}</time>` : ''}</button><details class="gpi-conversation-menu"><summary aria-label="${esc(tr('Task actions', '任务操作'))}" title="${esc(tr('Task actions', '任务操作'))}">•••</summary><div><button type="button" data-gpi-rail-rename="${esc(row.session_id)}" ${locked ? 'disabled' : ''}>${tr('Rename', '重命名')}</button>${canRemove ? `<button type="button" data-gpi-rail-remove="${esc(row.session_id)}" ${locked ? 'disabled' : ''}>${tr('Remove empty task', '删除空任务')}</button>` : ''}</div></details></div>`;
-          }).join('')
+            });
+            return groupEmptyTaskRows(ctx.sessions, rendered, ctx.selectedId);
+          })()
             : `<p>${tr('No conversations yet. Start one in this project.', '暂无对话，可在当前项目中开始。')}</p>`}</nav></div>
         <section class="gpi-project-materials" aria-label="${tr('Drive', '资料')}"><div class="gpi-conversations-heading"><strong>${tr('Drive', '资料')}</strong><button type="button" data-gpi-rail-material-search-toggle aria-label="${tr('Search Drive', '搜索资料')}" title="${tr('Search', '搜索')}">${iconHtml('search', 15)}</button></div>
           <label class="gpi-project-material-search" hidden><span class="sr-only">${tr('Search Drive', '搜索资料')}</span><input type="search" data-gpi-rail-material-search placeholder="${tr('Filter files…', '筛选文件…')}" autocomplete="off"></label>
@@ -360,6 +387,10 @@
           rail.querySelectorAll('[data-gpi-rail-session-row]').forEach(row => {
             row.hidden = Boolean(query && !row.dataset.gpiRailSessionText.includes(query));
           });
+          // Grouped rows stay unreachable while the group is closed, so a live
+          // query opens it and clearing the query collapses it again.
+          const emptyGroup = rail.querySelector('[data-gpi-rail-empty-group]');
+          if (emptyGroup) emptyGroup.open = Boolean(query);
           return;
         }
         if (!event.target.matches('[data-gpi-rail-material-search]')) return;

@@ -329,6 +329,18 @@ class PiProviderConfigRequest(BaseModel):
     enable_ai: StrictBool = False
 
 
+class PiProviderModelRequest(BaseModel):
+    """A model change on an already-verified connection.
+
+    Deliberately carries no credential: the browser never holds one, and the
+    store reuses the private config it already verified.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: ModelText
+
+
 def _raise_http(error: PiCopilotError) -> None:
     raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
@@ -512,6 +524,22 @@ def get_pi_copilot_codex_models(request: Request) -> dict:
         return codex_account_sessions.models(request)
     except codex_account_sessions.CodexAccountSessionError as exc:
         _raise_codex_http(exc)
+
+
+@router.get("/api/copilot/pi/research-provider/api/models")
+def get_pi_copilot_api_models() -> dict:
+    try:
+        return get_pi_copilot_service().research_provider_models()
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/research-provider/model")
+def post_pi_copilot_api_model(body: PiProviderModelRequest) -> dict:
+    try:
+        return get_pi_copilot_service().switch_research_model(body.model)
+    except PiCopilotError as exc:
+        _raise_http(exc)
 
 
 @router.post("/api/copilot/pi/projects/initialize")

@@ -30,4 +30,4 @@ def test_monitor_is_retired_but_shared_renderers_and_history_remain():
     owner = (static / 'js/screens-guided-pi-run-files.js').read_text()
     assert 'showModal' not in owner
     assert 'projectTimeline' in owner
-    assert 'RUN_FILES.render(row)' in (static / 'js/screens-guided-pi.js').read_text()
+    assert 'RUN_FILES.render(row)' in (static / 'js/screens-guided-pi-session-view.js').read_text()

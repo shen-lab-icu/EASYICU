@@ -138,6 +138,16 @@ EXPECTED_PI_COPILOT_ROUTES = [
         "get_pi_copilot_codex_models",
     ),
     (
+        "GET",
+        "/api/copilot/pi/research-provider/api/models",
+        "get_pi_copilot_api_models",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/research-provider/model",
+        "post_pi_copilot_api_model",
+    ),
+    (
         "POST",
         "/api/copilot/pi/projects/initialize",
         "post_pi_copilot_project_initialize",

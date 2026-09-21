@@ -70,7 +70,10 @@ def test_muted_text_tokens_meet_aa_on_sunken_surface() -> None:
 
 
 def test_guided_workspace_light_interaction_states_keep_dark_accent_text() -> None:
-    source = (STATIC_CSS / "guided-pi-workspace.css").read_text(encoding="utf-8")
+    source = "\n".join(
+        (STATIC_CSS / name).read_text(encoding="utf-8")
+        for name in ("guided-pi-workspace.css", "guided-pi-desktop.css")
+    )
 
     assert "--accent-ink:#ffffff" not in source
     assert source.count("--accent-ink:#174547") == 2

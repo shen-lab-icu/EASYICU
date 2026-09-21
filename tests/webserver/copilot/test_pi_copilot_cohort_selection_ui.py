@@ -110,7 +110,7 @@ process.stdout.write(JSON.stringify({
 
 
 def test_cohort_selection_only_replaces_a_plan_stage_blocker() -> None:
-    shell = _read("js/screens-guided-pi.js")
+    shell = _read("js/screens-guided-pi-session-view.js")
     owner = _read("js/screens-guided-pi-cohort-eligibility.js")
 
     # The Planner proposes inclusion/exclusion and the analysis unit in the

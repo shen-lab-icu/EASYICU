@@ -62,7 +62,10 @@ def test_desktop_modules_share_rail_geometry_and_route_motion() -> None:
     index = _read("index.html")
     skills = _read("css", "skills-hub.css")
     canvas = _read("css", "workspace-canvas.css")
-    guided = _read("css", "guided-pi-workspace.css")
+    guided = "\n".join((
+        _read("css", "guided-pi-workspace.css"),
+        _read("css", "guided-pi-desktop.css"),
+    ))
     app = _read("js", "app.js")
 
     assert "css/workspace-canvas.css?v=20260921-evidence1" in index

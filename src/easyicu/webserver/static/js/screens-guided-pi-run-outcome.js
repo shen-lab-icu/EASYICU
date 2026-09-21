@@ -418,7 +418,7 @@
         workflow && workflow.analysis_validation_retry_available === true
       );
       if (retryAvailable && manuscriptReady && validated && numericVerified) {
-        detailActions.push(`<button class="btn sm" type="button" data-gpi-run-outcome-retry="report_only">${iconHtml('refresh', 13)} ${esc(tr('Recheck report without rerunning analysis', '重新校验报告（不重跑分析）'))}</button>`);
+        primaryActions.push(`<button class="btn sm" type="button" data-gpi-run-outcome-retry="report_only">${iconHtml('refresh', 13)} ${esc(tr('Recheck report without rerunning analysis', '重新校验报告（不重跑分析）'))}</button>`);
       }
       if (retryAvailable && (!validated || !manuscriptReady)) {
         const retryLabel = validated && numericVerified

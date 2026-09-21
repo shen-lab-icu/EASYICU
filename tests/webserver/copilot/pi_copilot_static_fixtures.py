@@ -22,7 +22,15 @@ NODE_MODULE_HARNESS = Path(__file__).resolve().parents[2] / "js" / (
 
 
 def _read(relative: str) -> str:
-    return (STATIC / relative).read_text(encoding="utf-8")
+    source = (STATIC / relative).read_text(encoding="utf-8")
+    if relative == "js/screens-guided-pi.js":
+        # Static contracts treat the shell and its extracted session renderer
+        # as one logical owner. Preserve browser load order in the aggregate.
+        view = (STATIC / "js/screens-guided-pi-session-view.js").read_text(
+            encoding="utf-8"
+        )
+        return f"{view}\n{source}"
+    return source
 
 
 # The screen modules destructure `esc` from window.EU_HTML at the top of their

@@ -16,9 +16,14 @@
 
   function renderModelControl(options) {
     const { tr, esc, icon } = options;
-    // D-P3-3: truncated model label keeps its full text in title (button title
+    // D-P3-3: truncated model label keeps its full text in title (summary title
     // stays the help copy; the inner span carries the connection label).
-    return `<button class="gpi-model-binding" type="button" data-gpi-config title="${esc(tr('Change model connection; changes apply to a new conversation', '更改模型连接；变更将在新会话中生效'))}" aria-label="${esc(tr('Change model connection', '更改模型连接'))}"><span title="${esc(options.connectionLabel)}">${esc(options.connectionLabel)}</span>${icon('chevdown', 12)}</button>`;
+    //
+    // This used to be a button that threw the whole composer away and opened
+    // the connection page. It is now a menu: the model rows are filled by the
+    // model-menu owner when the details opens, so switching needs no composer
+    // re-render, and the connection settings stay reachable as one row inside.
+    return `<details class="gpi-model-control"><summary class="gpi-model-binding" title="${esc(tr('Switch model on this connection', '在当前连接上切换模型'))}" aria-label="${esc(tr('Available models', '可用模型'))}"><span title="${esc(options.connectionLabel)}">${esc(options.connectionLabel)}</span>${icon('chevdown', 12)}</summary><div class="gpi-model-popover" role="group" aria-label="${esc(tr('Models on this connection', '当前连接的模型'))}" data-gpi-model-popover><button type="button" class="gpi-model-settings" data-gpi-config>${esc(tr('Connection settings', '连接设置'))}</button></div></details>`;
   }
 
   function render(options) {

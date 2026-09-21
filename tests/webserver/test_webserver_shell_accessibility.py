@@ -83,7 +83,7 @@ def test_spa_navigation_updates_title_announces_route_and_moves_focus() -> None:
     assert "target.dataset.euRouteFocus = 'true'" in app_js
     assert "if (preserveRouteFocus) focusRouteContent()" in app_js
     assert ".shell-sr-only" in shell_css
-    assert '[data-eu-route-focus="true"]:focus' in _asset("css", "workspace-canvas.css")
+    assert '[data-eu-route-focus="true"]:focus' in _asset("css", "workspace-workbench.css")
 
 
 def test_guided_fullscreen_route_has_one_focusable_page_heading() -> None:

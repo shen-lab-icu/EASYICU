@@ -10,15 +10,21 @@ working without a 50-file refactor.
 
 from __future__ import annotations
 
+from importlib.util import find_spec
+
 import pytest
 
-from tests.webserver.copilot import research_workflow_fixtures as _legacy
+if find_spec("starlette") is not None:
+    from tests.webserver.copilot import research_workflow_fixtures as _legacy
+else:  # The root collector skips this optional-extra suite before test imports.
+    _legacy = None
 
 
 @pytest.fixture
 def workflow_complete_study() -> dict:
     """A bounded, confirmed StudyContext dict for workflow contract tests."""
 
+    assert _legacy is not None
     return _legacy.complete_study()
 
 
@@ -26,6 +32,7 @@ def workflow_complete_study() -> dict:
 def workflow_confirmed_cohort_decision():
     """The ``confirmed_cohort_decision`` helper as a fixture factory."""
 
+    assert _legacy is not None
     return _legacy.confirmed_cohort_decision
 
 

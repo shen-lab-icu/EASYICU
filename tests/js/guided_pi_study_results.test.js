@@ -433,6 +433,22 @@ sessionRail.onclick(sessionClick('s1'));
 assert.deepEqual(navigationCalls, ['s1']);
 workspace.syncNavigation({ ...navigation, projectId: 'p2', sessions: [] });
 assert.doesNotMatch(sessionRail.innerHTML, /Current session/);
+
+// Empty drafts collapse behind one count so the rail stays readable, and the
+// selected conversation is never hidden inside a closed group.
+const emptyDraft = id => ({ session_id: id, title: 'New research task' });
+const mixedSessions = [emptyDraft('e1'), { ...navigation.sessions[0] }, emptyDraft('e2'), emptyDraft('e3')];
+workspace.syncNavigation({ ...navigation, sessions: mixedSessions });
+assert.match(sessionRail.innerHTML, /class="gpi-conversation-empty-group" data-gpi-rail-empty-group>/);
+assert.match(sessionRail.innerHTML, /class="gpi-conversation-empty-count">3<\/span>/);
+assert.ok(sessionRail.innerHTML.indexOf('Current session')
+  < sessionRail.innerHTML.indexOf('gpi-conversation-empty-group'), 'completed work stays outside the group');
+workspace.syncNavigation({ ...navigation, sessions: mixedSessions, selectedId: 'e2' });
+assert.match(sessionRail.innerHTML, /class="gpi-conversation-empty-count">2<\/span>/);
+assert.ok(sessionRail.innerHTML.indexOf('data-gpi-rail-session="e2"')
+  < sessionRail.innerHTML.indexOf('gpi-conversation-empty-group'), 'the selected draft is pinned, not buried');
+workspace.syncNavigation({ ...navigation, sessions: [...navigation.sessions, emptyDraft('e1')] });
+assert.doesNotMatch(sessionRail.innerHTML, /gpi-conversation-empty-group/);
 assert.match(outcome.render(latest, workflow), /<table class="gpi-deliverables">/);
 assert.doesNotMatch(outcome.render(latest, workflow), /gpi-result-shortcut/);
 
