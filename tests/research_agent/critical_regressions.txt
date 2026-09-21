@@ -16,3 +16,5 @@ tests/research_agent/authority/test_robustness_display_authority.py
 tests/research_agent/figures/test_landmark_association_figure_executor.py
 tests/research_agent/figures/test_figure_plan_surface_binding.py
 tests/research_agent/execution/test_deterministic_missingness_runner.py
+tests/governance/test_current_foundation_lock.py
+tests/governance/test_research_agent_resource_baseline.py

@@ -76,6 +76,7 @@ def test_parallel_config_uses_the_same_cgroup_memory_envelope(
         "get_system_memory",
         lambda: (total_gb, available_gb),
     )
+    monkeypatch.setattr(parallel_config, "get_cpu_count", lambda: 16)
     config = parallel_config.get_parallel_config()
     assert config.performance_tier == "limited"
     assert config.max_workers == 2

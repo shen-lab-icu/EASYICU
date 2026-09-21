@@ -687,6 +687,10 @@ def test_parallel_config_uses_two_worker_safe_default_at_16gb(
     monkeypatch,
 ) -> None:
     monkeypatch.delenv("EASYICU_PARALLEL_MAX_WORKERS", raising=False)
+    monkeypatch.setattr(
+        "easyicu.runtime.parallel_config.get_cpu_count",
+        lambda: 16,
+    )
 
     config = get_parallel_config(override_memory_gb=16)
 

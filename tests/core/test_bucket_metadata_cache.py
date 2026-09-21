@@ -6,6 +6,7 @@ import duckdb
 import pandas as pd
 import pytest
 
+import easyicu.datasource as datasource_module
 from easyicu.config import DataSourceConfig
 from easyicu.datasource import (
     ICUDataSource,
@@ -446,3 +447,55 @@ def test_parquet_schema_cache_reuses_file_level_schema_for_overlapping_sets(tmp_
     overlapping_columns = data_source._get_parquet_columns_for_files([second, third])
     assert overlapping_columns == {"itemid", "valuenum"}
     assert len(data_source._parquet_file_columns_cache) == 3
+
+
+@pytest.mark.parametrize("loader_kind", ["single", "multi"])
+def test_bucket_loaders_fail_closed_when_schema_cannot_be_inspected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    loader_kind: str,
+) -> None:
+    table_dir = tmp_path / "chartevents"
+    table_dir.mkdir()
+    pd.DataFrame(
+        {
+            "stay_id": [1],
+            "itemid": [220045],
+            "charttime": [pd.Timestamp("2026-01-01")],
+            "valuenum": [80.0],
+        }
+    ).to_parquet(table_dir / "part.parquet", index=False)
+    source = _make_data_source(tmp_path)
+    monkeypatch.setattr(
+        source,
+        "_get_parquet_columns_for_files",
+        lambda _paths: set(),
+    )
+
+    class BrokenSchemaConnection:
+        def execute(self, _sql: str):
+            raise duckdb.IOException("schema probe failed")
+
+    monkeypatch.setattr(
+        datasource_module,
+        "_get_duckdb_connection",
+        lambda: BrokenSchemaConnection(),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Could not inspect Parquet schema for 'chartevents'",
+    ):
+        if loader_kind == "single":
+            load_bucketed_table_aggregated(
+                source,
+                "chartevents",
+                "valuenum",
+                [220045],
+            )
+        else:
+            load_bucketed_table_multi_aggregated(
+                source,
+                "chartevents",
+                {"hr": [220045]},
+            )

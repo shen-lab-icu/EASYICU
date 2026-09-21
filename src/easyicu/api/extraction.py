@@ -125,6 +125,12 @@ _STREAM_BATCH_MIN = 5_000
 _STREAM_BATCH_MAX = 67_000
 _STREAM_BATCH_RETRY_FACTOR = 0.75
 _STREAM_BATCH_MAX_RETRIES = 3
+# Measured batch profiles below were produced under the formal 8-GiB
+# available-memory contract.  Keep the recorded batch at that boundary, then
+# spend only memory above the measured envelope on larger batches.  This makes
+# 12/16/32/64-GiB hosts progressively faster without turning the 8-GiB
+# release boundary into an unmeasured extrapolation.
+_MEASURED_BATCH_BASELINE_AVAILABLE_MB = 8 * 1024
 
 # ``resource_budget_mb`` is an execution contract, not only a batch-planning
 # hint.  Without a worker envelope, an 8-GiB release launched on a large shared
@@ -229,13 +235,7 @@ _STREAM_CALIBRATED_REFERENCE = {
 # currently available is enough for a full MIMIC-IV one-shot.
 _MEASURED_ONESHOT_HEADROOM = 1.10
 _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
-    "hirid": {
-        # Corrected rate-aware reference AKI at 273d20df, native-v2 renal,
-        # all 33,905 stays, deterministic 8-GiB envelope. External tree peak
-        # (3,483.5 MiB) exceeds the internal sampler (3,231.3 MiB).
-        # This receipt admits renal only, not the other HiRID modules.
-        "renal": {"cohort_stays": 33_905, "peak_rss_mb": 3_483.5, "seconds": 243.3},
-    },
+    "hirid": {},
     "aumc": {
         # Full-cohort module measurements from the sealed 23,106-stay AUMC
         # extraction. These owners are outside the later IMV/SOFA semantic
@@ -265,8 +265,6 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
         "vasopressors": {"cohort_stays": 200_859, "peak_rss_mb": 5_517.3, "seconds": 21.048},
         "ventilator": {"cohort_stays": 200_859, "peak_rss_mb": 7_435.9, "seconds": 105.388},
         "vitals": {"cohort_stays": 200_859, "peak_rss_mb": 5_362.4, "seconds": 158.082},
-        "renal": {"cohort_stays": 200_859, "peak_rss_mb": 6_354.4, "seconds": 438.054},
-        "medications": {"cohort_stays": 200_859, "peak_rss_mb": 7_320.6, "seconds": 175.857},
         "neurological": {"cohort_stays": 200_859, "peak_rss_mb": 5_073.9, "seconds": 88.829},
         "sepsis_shared": {"cohort_stays": 200_859, "peak_rss_mb": 4_977.7, "seconds": 11.817},
         # ``sofa2_score`` and ``sepsis3_sofa2`` remain excluded from the
@@ -314,11 +312,6 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "peak_rss_mb": 3_544.406,
             "seconds": 107.3,
         },
-        "renal": {
-            "cohort_stays": 94_458,
-            "peak_rss_mb": 7_362.0,
-            "seconds": 281.666,
-        },
         "respiratory": {
             "cohort_stays": 94_458,
             "peak_rss_mb": 5_077.9,
@@ -349,11 +342,6 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "peak_rss_mb": 6_259.9,
             "seconds": 165.533,
         },
-        "sofa2_score": {
-            "cohort_stays": 94_458,
-            "peak_rss_mb": 6_315.5,
-            "seconds": 437.698,
-        },
         "sepsis3_sofa1": {
             "cohort_stays": 94_458,
             "peak_rss_mb": 5_749.6,
@@ -374,7 +362,6 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
         "vasopressors": {"cohort_stays": 61_532, "peak_rss_mb": 7_415.4, "seconds": 111.911},
         "ventilator": {"cohort_stays": 61_532, "peak_rss_mb": 2_220.9, "seconds": 91.871},
         "vitals": {"cohort_stays": 61_532, "peak_rss_mb": 6_577.7, "seconds": 68.271},
-        "renal": {"cohort_stays": 61_532, "peak_rss_mb": 6_231.2, "seconds": 210.256},
         "respiratory": {"cohort_stays": 61_532, "peak_rss_mb": 7_182.0, "seconds": 96.099},
         "neurological": {"cohort_stays": 61_532, "peak_rss_mb": 6_044.1, "seconds": 39.021},
         "circulatory": {"cohort_stays": 61_532, "peak_rss_mb": 6_159.8, "seconds": 447.094},
@@ -388,22 +375,7 @@ _MEASURED_ONESHOT_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
 # A key listed here must not also appear in either measured profile registry.
 _INVALIDATED_MEASURED_PROFILES: Mapping[
     tuple[str, str], Mapping[str, str]
-] = {
-    (
-        "eicu",
-        "sofa2_score",
-    ): {
-        "reason": "8-GiB planning budget did not constrain lower-layer worker runtime",
-        "invalidated_by": "resource_budget_execution_envelope_20260904",
-    },
-    (
-        "eicu",
-        "sepsis3_sofa2",
-    ): {
-        "reason": "8-GiB planning budget did not constrain lower-layer worker runtime",
-        "invalidated_by": "resource_budget_execution_envelope_20260904",
-    },
-}
+] = {}
 
 # Modules whose full-cohort one-shot crossed the 8-GiB release contract keep a
 # separate measured batch profile. A successful batch peak authorises only the
@@ -423,6 +395,30 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "batch_size": 10_000,
             "peak_rss_mb": 6_132.1,
             "seconds": 346.567,
+        },
+        # Current KDIGO/episode-bound code at 62b025f9.  Five isolated 20k
+        # batches with deferred merge completed under the 8-GiB contract.  The
+        # largest internal batch sample exceeded the coarser module sampler.
+        # The older full-cohort table came from e0621aa1, before the current
+        # episode-bound and null-urine corrections, so it is not an equality
+        # oracle for this profile.
+        "renal": {
+            "cohort_stays": 94_458,
+            "batch_size": 20_000,
+            "peak_rss_mb": 4_900.5,
+            "seconds": 1_291.2,
+        },
+        # Current SOFA-2 semantics at 486bb169. Four 30k streamed partitions
+        # matched the current one-shot table's complete row-multiset
+        # fingerprint. The batch peak stays below 8 GiB; the separately
+        # observed 13,896.5-MiB one-shot peak authorises an automatic one-shot
+        # only when that full-cohort measurement plus headroom fits.
+        "sofa2_score": {
+            "cohort_stays": 94_458,
+            "batch_size": 30_000,
+            "peak_rss_mb": 5_056.7,
+            "full_cohort_peak_rss_mb": 13_896.5,
+            "seconds": 1_985.6,
         },
     },
     "aumc": {
@@ -493,6 +489,28 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
         },
     },
     "eicu": {
+        # Current medication semantics at 486bb169. Five 50k streamed
+        # partitions matched the current one-shot table's complete
+        # row-multiset fingerprint. Keep the measured 11,249.3-MiB one-shot
+        # peak as a separate high-memory admission threshold.
+        "medications": {
+            "cohort_stays": 200_859,
+            "batch_size": 50_000,
+            "peak_rss_mb": 1_669.3,
+            "full_cohort_peak_rss_mb": 11_249.3,
+            "seconds": 333.6,
+        },
+        # The stale full-cohort profile crossed 8 GiB after the current
+        # KDIGO/episode-bound changes. At commit 589d2e85, 50k isolated
+        # batches plus a deferred merge completed all five partitions; use
+        # the largest internal batch sample, which exceeded the coarser
+        # whole-module sampler.
+        "renal": {
+            "cohort_stays": 200_859,
+            "batch_size": 50_000,
+            "peak_rss_mb": 6_102.5,
+            "seconds": 651.8,
+        },
         "respiratory": {
             "cohort_stays": 200_859,
             "batch_size": 50_000,
@@ -523,15 +541,212 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
             "peak_rss_mb": 6_294.5,
             "seconds": 586.933,
         },
-        # Post-IMV SOFA-2 entries remain invalidated above until the exact
-        # 8-GiB lower-layer execution envelope has a complete benchmark.
+        # Full post-IMV SOFA-2 closure at 51d88010 under the deterministic
+        # 8,192-MiB lower-layer envelope. The output hashes exactly match the
+        # pre-optimization 46c71e0a benchmark; only NumPy-buffered urine-window
+        # assignment changed. The process-tree sampler is authoritative.
+        "sofa2_score": {
+            "cohort_stays": 200_859,
+            "batch_size": 25_000,
+            "peak_rss_mb": 3_519.7,
+            "seconds": 1_731.9,
+        },
+        "sepsis3_sofa2": {
+            "cohort_stays": 200_859,
+            "batch_size": 25_000,
+            "peak_rss_mb": 2_896.6,
+            "seconds": 12.8,
+        },
+    },
+    "hirid": {
+        # Full v6 refresh closure at 4f42b51e under the deterministic
+        # 8,192-MiB envelope. These profiles replace the older renal one-shot
+        # evidence because the HiRID source-time boundary semantics changed.
+        # The two Sepsis outputs are structural zero-row tables, matching v5,
+        # because sepsis_shared has no timed suspicion evidence in this source.
+        "demographics": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 482.0,
+            "seconds": 102.5,
+        },
+        "blood_gas": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 478.9,
+            "seconds": 59.3,
+        },
+        "chemistry": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 673.9,
+            "seconds": 496.4,
+        },
+        "respiratory": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 2_025.2,
+            "seconds": 588.7,
+        },
+        "vasopressors": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 2_100.4,
+            "seconds": 73.2,
+        },
+        "medications": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 1_486.9,
+            "seconds": 247.8,
+        },
+        "renal": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 1_677.7,
+            "seconds": 680.9,
+        },
+        "sofa1_score": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 2_371.5,
+            "seconds": 732.3,
+        },
+        "sofa2_score": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 2_141.3,
+            "seconds": 998.2,
+        },
+        "sepsis3_sofa1": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 171.6,
+            "seconds": 0.8,
+        },
+        "sepsis3_sofa2": {
+            "cohort_stays": 33_905,
+            "batch_size": 14_000,
+            "peak_rss_mb": 171.6,
+            "seconds": 0.8,
+        },
     },
     "mimic": {
+        # The current KDIGO/episode-bound implementation crossed 13 GiB when
+        # admitted by its stale full-cohort profile. At commit 6ca37694, 20k
+        # isolated batches plus deferred merge completed all four partitions
+        # and matched the current one-shot table by bidirectional EXCEPT ALL.
+        "renal": {
+            "cohort_stays": 61_532,
+            "batch_size": 20_000,
+            "peak_rss_mb": 5_287.4,
+            "seconds": 993.1,
+        },
         "medications": {
             "cohort_stays": 61_532,
             "batch_size": 31_000,
             "peak_rss_mb": 7_236.8,
             "seconds": 383.955,
+        },
+        # Full MIMIC-III score closure at e0315e05 under the deterministic
+        # 8,192-MiB envelope. The 20k profile completed all four partitions;
+        # score workers stayed below 3.5 GiB while the lightweight Sepsis
+        # consumers reused the freshly published score tables.
+        "sofa1_score": {
+            "cohort_stays": 61_532,
+            "batch_size": 20_000,
+            "peak_rss_mb": 3_325.7,
+            "seconds": 877.4,
+        },
+        "sofa2_score": {
+            "cohort_stays": 61_532,
+            "batch_size": 20_000,
+            "peak_rss_mb": 3_406.5,
+            "seconds": 1_398.7,
+        },
+        "sepsis3_sofa1": {
+            "cohort_stays": 61_532,
+            "batch_size": 20_000,
+            "peak_rss_mb": 2_068.5,
+            "seconds": 17.0,
+        },
+        "sepsis3_sofa2": {
+            "cohort_stays": 61_532,
+            "batch_size": 20_000,
+            "peak_rss_mb": 2_068.5,
+            "seconds": 17.0,
+        },
+    },
+    "sic": {
+        # Full v6 refresh closure at 12d8595c under the deterministic
+        # 8,192-MiB envelope. The 16k profile completed both partitions after
+        # SIC episode-bound enforcement. Sepsis outputs remain structural
+        # zero-row tables, matching the sealed v5 source.
+        "demographics": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 325.0,
+            "seconds": 1.4,
+        },
+        "blood_gas": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 487.4,
+            "seconds": 3.9,
+        },
+        "chemistry": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 1_202.7,
+            "seconds": 16.0,
+        },
+        "respiratory": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 4_802.1,
+            "seconds": 78.1,
+        },
+        "vasopressors": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 625.3,
+            "seconds": 14.9,
+        },
+        "medications": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 657.6,
+            "seconds": 29.1,
+        },
+        "renal": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 5_038.3,
+            "seconds": 224.7,
+        },
+        "sofa1_score": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 5_223.0,
+            "seconds": 101.6,
+        },
+        "sofa2_score": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 4_765.9,
+            "seconds": 177.8,
+        },
+        "sepsis3_sofa1": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 168.1,
+            "seconds": 0.6,
+        },
+        "sepsis3_sofa2": {
+            "cohort_stays": 27_386,
+            "batch_size": 16_000,
+            "peak_rss_mb": 168.1,
+            "seconds": 0.6,
         },
     },
 }
@@ -637,10 +852,14 @@ def _measured_batch_recommendation(
     database: str,
     modules: Optional[Sequence[str]],
     num_patients: int,
-) -> Optional[tuple[int, float, float]]:
+) -> Optional[tuple[int, float, float, Optional[float]]]:
     """Return the registered fully-covered measured batch recommendation.
 
-    The tuple is ``(batch_size, required_available_mb, measured_peak_mb)``.
+    The tuple is ``(batch_size, required_available_mb, measured_peak_mb,
+    full_cohort_required_mb)``. The last value is present only when every
+    selected module has a direct full-cohort measurement; it prevents a small
+    batch measurement from accidentally authorising an unsafe one-shot while
+    still allowing 16/32/64-GiB hosts to use measured fast paths.
     One-shot-profiled modules do not constrain a mixed request's batch size;
     every requested module must nevertheless have either a one-shot or batch
     profile so an unmeasured module cannot borrow another module's authority.
@@ -672,10 +891,25 @@ def _measured_batch_recommendation(
     measured_peak_mb = max(
         float(profile["peak_rss_mb"]) for profile in selected_profiles
     )
+    full_cohort_peaks = []
+    for profile in selected_profiles:
+        full_peak = profile.get("full_cohort_peak_rss_mb")
+        if full_peak is None and "batch_size" not in profile:
+            full_peak = profile["peak_rss_mb"]
+        if full_peak is None:
+            full_cohort_peaks = []
+            break
+        full_cohort_peaks.append(float(full_peak))
+    full_cohort_required_mb = (
+        max(full_cohort_peaks) * _MEASURED_ONESHOT_HEADROOM
+        if full_cohort_peaks
+        else None
+    )
     return (
         min(int(num_patients), batch_size),
         measured_peak_mb * _MEASURED_ONESHOT_HEADROOM,
         measured_peak_mb,
+        full_cohort_required_mb,
     )
 
 
@@ -684,6 +918,48 @@ def _quantize_stream_capacity(capacity: float, quantum: int) -> int:
 
     quantized = (max(0, int(capacity)) // int(quantum)) * int(quantum)
     return max(_STREAM_BATCH_MIN, min(_STREAM_BATCH_MAX, quantized))
+
+
+def _scale_measured_batch_above_baseline(
+    recorded_batch_size: int,
+    required_available_mb: float,
+    available_memory_mb: float,
+    total_patients: int,
+    full_cohort_required_mb: Optional[float] = None,
+) -> int:
+    """Spend memory above the 8-GiB measured envelope on larger batches.
+
+    The recorded batch remains authoritative at the formal baseline.  Above
+    it, every additional stay is charged the full observed peak-per-stay with
+    the existing 10% headroom already included.  Fixed process overhead is
+    therefore charged repeatedly, making this deliberately conservative.
+    """
+
+    recorded = min(max(1, int(recorded_batch_size)), int(total_patients))
+    available = max(0.0, float(available_memory_mb))
+    if available <= _MEASURED_BATCH_BASELINE_AVAILABLE_MB:
+        return recorded
+    if (
+        full_cohort_required_mb is not None
+        and available >= float(full_cohort_required_mb)
+    ):
+        return int(total_patients)
+
+    mib_per_stay = max(1.0, float(required_available_mb)) / recorded
+    extra_stays = int(
+        (available - _MEASURED_BATCH_BASELINE_AVAILABLE_MB) / mib_per_stay
+    )
+    capacity = recorded + max(0, extra_stays)
+    if capacity >= int(total_patients) and full_cohort_required_mb is None:
+        return int(total_patients)
+    quantized = (capacity // _STREAM_BATCH_QUANTUM) * _STREAM_BATCH_QUANTUM
+    scaled = max(recorded, quantized)
+    if full_cohort_required_mb is not None:
+        # A known one-shot cliff remains authoritative until its measured
+        # threshold fits. Avoid a nearly-full first batch and tiny residual by
+        # keeping at least two balanced partitions below that threshold.
+        scaled = min(scaled, (int(total_patients) + 1) // 2)
+    return min(int(total_patients), scaled)
 
 
 def _process_tree_rss_mb() -> float:
@@ -904,9 +1180,15 @@ def _resolve_stream_batch_size(
         total,
     )
     if measured_batch is not None:
-        recommended_batch, required_mb, _ = measured_batch
+        recommended_batch, required_mb, _, full_cohort_required_mb = measured_batch
         if available >= required_mb:
-            return recommended_batch
+            return _scale_measured_batch_above_baseline(
+                recommended_batch,
+                required_mb,
+                available,
+                total,
+                full_cohort_required_mb,
+            )
         scaled_capacity = recommended_batch * available / max(1.0, required_mb)
         return min(
             recommended_batch,
@@ -1051,11 +1333,20 @@ def plan_extraction_resources(
         total,
     )
     if measured_batch is not None:
-        _, required_mb, measured_peak_mb = measured_batch
+        recorded_batch, required_mb, measured_peak_mb, _ = measured_batch
         if available >= required_mb:
+            scaled = batch_size > recorded_batch
             return ExtractionResourcePlan(
                 mode=mode,
-                reason_code="measured_profile_fastest_safe_batch",
+                reason_code=(
+                    "measured_profile_scaled_one_shot"
+                    if scaled and mode == "one_shot"
+                    else (
+                        "measured_profile_scaled_batch"
+                        if scaled
+                        else "measured_profile_fastest_safe_batch"
+                    )
+                ),
                 batch_size=batch_size,
                 available_memory_mb=available,
                 required_available_memory_mb=required_mb,
@@ -1245,6 +1536,36 @@ def _interleave_stream_patient_ids(
         for patient_id in ids[offset::planned_batches]
     ]
     return interleaved, planned_batches
+
+
+def _order_stream_patient_ids(
+    patient_ids: List,
+    batch_size: int,
+    database: str,
+) -> tuple[List, int, str]:
+    """Choose a database-aware patient order for streamed extraction.
+
+    AUMC's large parquet tables are clustered by ``admissionid`` inside each
+    row group.  Contiguous admission batches therefore let DuckDB prune most
+    row groups and make all batches together approximate one source scan.
+    Interleaving those IDs defeats every row-group min/max statistic and makes
+    each small batch rescan the complete 4.3-GiB ``numericitems`` dataset.
+
+    Other databases retain the density-balancing interleave until their
+    physical layouts have independent pruning evidence.  In particular eICU
+    needs it because its source-ordered tail has a much larger working set.
+    """
+
+    normalized = _normalise_stream_database(database)
+    ids = list(patient_ids)
+    size = int(batch_size)
+    if size < 1:
+        raise ValueError("stream batch_size must be positive")
+    planned_batches = (len(ids) + size - 1) // size if ids else 0
+    if normalized == "aumc":
+        return ids, planned_batches, "source_order_contiguous_prunable_v1"
+    ordered, planned_batches = _interleave_stream_patient_ids(ids, size)
+    return ordered, planned_batches, "source_order_interleaved_v1"
 
 
 def _get_extraction_mp_context(mp_module, *, platform_name: Optional[str] = None):
@@ -1797,6 +2118,13 @@ _ISOLATED_STREAM_BATCH_TARGETS = frozenset(
         # accumulate across the five full-cohort batches.
         ("miiv", "medications"),
         ("eicu", "sofa2_score"),
+        # The current KDIGO/episode-bound implementation crossed 8 GiB when
+        # the stale full-cohort profile admitted all 200,859 stays at once.
+        # A fresh interpreter per patient partition prevents native allocator
+        # residency from accumulating across renal batches.
+        ("eicu", "renal"),
+        ("mimic", "renal"),
+        ("miiv", "renal"),
         # Full-cohort AUMC respiratory boundary runs retained Arrow/native
         # allocator pages across successive batches: 8k, 7k and 6k all crossed
         # the same 7,447-MiB process-tree stop late in the run even though their
@@ -1807,12 +2135,16 @@ _ISOLATED_STREAM_BATCH_TARGETS = frozenset(
     }
 )
 
-# Deferred merging was measured only for AUMC respiratory. eICU SOFA-2 keeps
-# its established append-after-each-child schedule until separately measured.
+# Deferred merging keeps the Arrow writer out of the parent while a heavy
+# isolated child is alive. eICU SOFA-2 keeps its established
+# append-after-each-child schedule until separately measured.
 _DEFERRED_STREAM_MERGE_TARGETS = frozenset(
     {
         ("aumc", "respiratory"),
         ("miiv", "medications"),
+        ("eicu", "renal"),
+        ("mimic", "renal"),
+        ("miiv", "renal"),
     }
 )
 
@@ -2114,9 +2446,12 @@ def _stream_module_batches_to_parquet(
     id_col, all_ids = next(iter(patient_ids_filter.items()))
     if batch_size < 1:
         raise ValueError("streamed module export batch_size must be positive")
-    all_ids, planned_partition_count = _interleave_stream_patient_ids(
+    all_ids, planned_partition_count, patient_partition_strategy = (
+        _order_stream_patient_ids(
         list(all_ids),
         int(batch_size),
+        str(load_kwargs.get("database") or ""),
+        )
     )
 
     destination = Path(output_dir) / f"{module_name}.parquet"
@@ -2346,7 +2681,7 @@ def _stream_module_batches_to_parquet(
         "initial_batch_size": int(batch_size),
         "final_planned_batch_size": current_batch_size,
         "adaptive_batch_growth": bool(adaptive_batch_growth),
-        "patient_partition_strategy": "source_order_interleaved_v1",
+        "patient_partition_strategy": patient_partition_strategy,
         "batch_process_isolation": isolate_batch_process,
         "deferred_batch_merge": defer_merge,
         "initial_planned_partition_count": planned_partition_count,
@@ -2743,9 +3078,12 @@ def _stream_special_extraction_batches(
             )
         except ValueError:
             pass
-    all_ids, planned_partition_count = _interleave_stream_patient_ids(
+    all_ids, planned_partition_count, patient_partition_strategy = (
+        _order_stream_patient_ids(
         list(all_ids),
         safe_batch_size,
+        database,
+        )
     )
     concepts = [
         concept
@@ -3064,7 +3402,7 @@ def _stream_special_extraction_batches(
         "elapsed_sec": round(time.time() - started, 1),
         "batch_size": safe_batch_size,
         "batch_count": batch_count,
-        "patient_partition_strategy": "source_order_interleaved_v1",
+        "patient_partition_strategy": patient_partition_strategy,
         "initial_planned_partition_count": planned_partition_count,
         **module_memory_sampler.stop(),
     }

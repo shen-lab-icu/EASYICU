@@ -1,6 +1,6 @@
 cff-version: 1.2.0
-# Copyright holder aligned with LICENSE and pyproject.toml authors:
-# Haibo Zhu and EasyICU contributors.
+# EasyICU citation authors are listed below. Attribution for ricu-derived
+# clinical configuration is recorded in THIRD_PARTY_NOTICES.md.
 message: "If you use EasyICU in your research, please cite this software repository."
 title: "EasyICU"
 version: "1.0.0"
@@ -11,7 +11,7 @@ authors:
   - name: "EasyICU contributors"
 repository-code: "https://github.com/shen-lab-icu/EASYICU"
 url: "https://github.com/shen-lab-icu/EASYICU"
-license: "MIT"
+license: "GPL-3.0-only"
 abstract: >-
   EasyICU is a reproducible infrastructure for cross-database ICU research
   with standardized concept extraction, clinician-friendly web workflows,

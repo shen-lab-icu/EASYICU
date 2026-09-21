@@ -67,13 +67,14 @@
 
 验收日志、源码 SHA-256 与浏览器/图件 fixture 位于：
 
-- [检查命令与结果回执](../output/playwright/audit20260915/validation-receipt.json)
-- [Python 合并检查](../output/playwright/audit20260915/pytest-combined.log)
-- [JS 契约清单](../output/playwright/audit20260915/js-contracts.log)
-- [源码与静态检查回执](../output/playwright/audit20260915/source-verification.json)
-- [浏览器截图](../output/playwright/audit20260915/browser-fixture.png)
-- [合成 Figure 5](../output/playwright/audit20260915/figure_fixture/research_output/r5_obesity_crossdb/Figure5.png)
+- [检查命令与结果回执](evidence/full_codebase_audit_20260915/validation-receipt.json)
+- [Python 合并检查](evidence/full_codebase_audit_20260915/pytest-combined.log)
+- [JS 契约清单](evidence/full_codebase_audit_20260915/js-contracts.log)
+- [源码与静态检查回执](evidence/full_codebase_audit_20260915/source-verification.json)
+- [浏览器截图](evidence/full_codebase_audit_20260915/browser-fixture.png)
+- [合成 Figure 5](evidence/full_codebase_audit_20260915/Figure5.png)
 
 准确命令与逐文件测试范围已写入检查回执。进度页已同步，`tools/lint_progress.py` 检查 6 个 CURRENT.md 通过、0 warning；9 月 14 日旧结论原文移入 web/HISTORY.md。本轮隔离浏览器与静态服务器已关闭。
 
-该目录是被 Git 忽略的本地工程验收产物，本文件保存逐项持久交接。
+上述六项审阅证据已复制到 Git 跟踪的 `docs/evidence/` 目录；体量更大的
+本地临时 fixture 仍留在被忽略的 `output/` 目录。

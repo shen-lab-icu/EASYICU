@@ -15,6 +15,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LinearSegmentedColormap
 
+from easyicu.state_paths import projects_root
+
 
 PALETTE_NATURE = {
     "baseline_dark": "#0B559F",
@@ -30,7 +32,6 @@ PALETTE_NATURE = {
     "neutral_muted": "#606060",
 }
 
-ROOT = Path("/Users/haibo/easyicu/projects")
 DEFAULT_OUT = Path("output/fig2_canonical9_scorecard")
 
 TASK_ORDER = [
@@ -510,7 +511,7 @@ def write_dimension_audit(scorecards: list[dict], out_dir: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--project-root", type=Path, default=ROOT)
+    parser.add_argument("--project-root", type=Path, default=projects_root())
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
 

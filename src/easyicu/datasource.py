@@ -3282,8 +3282,10 @@ def load_bucketed_table_aggregated(
                     f"SELECT * FROM read_parquet({glob_pattern}, union_by_name=true) LIMIT 0"
                 ).description
             }
-        except Exception:
-            raw_columns = set()
+        except Exception as exc:
+            raise RuntimeError(
+                f"Could not inspect Parquet schema for {table_name!r}"
+            ) from exc
 
     # 🔧 FIX 2026-05-11: case-insensitive 列存在性检查（同 multi-concept 路径，应对 MIMIC-III 1.4 大写列名）
     raw_columns_by_lower = {str(c).lower(): str(c) for c in raw_columns}
@@ -4129,8 +4131,10 @@ def load_bucketed_table_multi_aggregated(
                 raw_columns = {col[0] for col in conn.execute(
                     f"SELECT * FROM read_parquet({glob_pattern}, union_by_name=true) LIMIT 0"
                 ).description}
-            except Exception:
-                pass
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Could not inspect Parquet schema for {table_name!r}"
+                ) from exc
         # 🔧 FIX 2026-05-11: MIMIC-III 1.4 早期转换的 parquet 列名为大写 (HADM_ID/ICUSTAY_ID)，
         # 而 Python 端 `in` 判断区分大小写，会错判 hospital_tables 是否需要 hadm_id rolling join。
         # DuckDB 本身 case-insensitive，所以 SQL 端无需改动，只需要这里小写化比较。

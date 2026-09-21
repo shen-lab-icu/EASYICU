@@ -5,6 +5,12 @@ dictionary-driven concept layer. They are loaded via
 `easyicu.concept_loader.load_dictionary()` and
 `easyicu.resources.load_concept_dictionaries(...)`.
 
+The primary concept and data-source configuration includes modified material
+derived from the GPL-3-licensed
+[ricu](https://github.com/eth-mds/ricu) project. The combined EasyICU
+distribution is therefore licensed under `GPL-3.0-only`; see the repository's
+`LICENSE`, `COPYING`, and `THIRD_PARTY_NOTICES.md` files.
+
 ## Files
 
 ### `concept-dict.json` — primary dictionary
@@ -22,19 +28,9 @@ Exact base, overlay, merged, database, clinical-contract, and capability counts
 are generated from the shipped registries in
 [`docs/catalog_summary.md`](../../../docs/catalog_summary.md). Do not maintain a
 second hand-written count here.
-This is the number of *entries in this file*; the web-side catalog reports
-a larger loadable total (see the root `README.md`) because it also exposes
-derived/special concepts — KDIGO AKI staging, circulatory-failure
-indicators, and the SOFA-2 overlay below — that are computed by callbacks
-rather than stored as their own dictionary entries. The 198 break down
-roughly as:
-
-- 6 demographics, 3 outcomes
-- 8 vitals, 14 respiratory, 12 ventilator, 9 blood gas
-- 22 chemistry, 20 hematology
-- 17 vasopressors, 49 medications
-- 20 renal, 11 neurological, 3 circulatory
-- 4 other scores, 3 sepsis-shared, SOFA-1 (7) + sep3_sofa1 (1)
+The web-side catalog may report a larger loadable total because it also exposes
+derived concepts and overlays that are computed by callbacks rather than stored
+as standalone entries in this file.
 
 ### `sofa2-dict.json` — SOFA-2 overlay (NOT a peer file)
 

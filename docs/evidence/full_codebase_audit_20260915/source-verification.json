@@ -1,0 +1,169 @@
+{
+  "baseline": "c3c1a81d14ecd25b1838754c012efed8f11186fc",
+  "verified_head": "7e55a1fecd88585bed1b4c85fba4278a8dee0b50",
+  "branch": "codex/dev9-web-acceptance-20260906",
+  "git_status_before_report": "",
+  "file_sha256": {
+    "docs/full_codebase_audit_20260915.md": "896b712dc7f1390a46a809ce51813fbffba107d7c1d7af131048be3dc7e1e843",
+    "pyproject.toml": "6d9f7ea612af2b1ca6db0fe5ceb0f3612b239dfaae71e02661fd7bf63ed362c4",
+    "scripts/r5_fig5_nature.py": "4a4d6a229c3114655102474c1c2f527a58cdc521964be7d2736fb55c3622b6ea",
+    "src/easyicu/research_agent/orchestration/config.py": "18b06f77ec0d533ab9f2ed472978c9a4acd6c614cd60102319148abf09ec7b4e",
+    "src/easyicu/webserver/static/css/agent.css": "98459e62735215ae7d778dcf880472e1b54cba761997af4293497d0253f2500e",
+    "src/easyicu/webserver/static/css/tokens.css": "5d9eb07c2562e8dfb9b3828334efcc0a787a078d9adbe924cb673f0826a94689",
+    "src/easyicu/webserver/static/js/screens-agent-render.js": "55f48d04fbcb0303f078f42b0b81056034e49176e5df1127b2c20871d311cf34",
+    "src/easyicu/webserver/static/js/screens-extraction-job-continuity.js": "57d903cc3f6780e143684ba74a872d017a7f02f30c2262479fc9d162de46ae25",
+    "src/easyicu/webserver/static/js/screens-extraction.js": "06bc162661816c844954e7c958fb6ab27e47f605527590069d4e5a55d440a83b",
+    "src/easyicu/webserver/static/js/screens-guided-pi-plan-actions.js": "464f0b65886746c72f93d10bd00d01e3b3b19dedcc4f7c8ed68df0e82f683e29",
+    "src/easyicu/webserver/static/js/screens-guided-pi-preview.js": "35f3c896d861e4afb3101fb937ece3196b9eba95d7a69fee56014bbdcf6edf7a",
+    "src/easyicu/webserver/static/js/screens-guided-pi-run-files.js": "85298c374cef4f61d6b6d067000502e43633989dfe65d3ad1908fe09ff8782ad",
+    "src/easyicu/webserver/static/js/screens-guided-pi.js": "fcf4bb8298c52a89aef70caa06c339476d8549adb8c7aa7fbb2680f53ec350a9",
+    "src/easyicu/webserver/static/js/screens-guided.js": "de48368700b6aab77bda76b1548aa508c923a7e4fcc71f3a1829e30d8a52d419",
+    "src/easyicu/webserver/static/js/screens-viz-cohort.js": "8b9fe80ec0858d91e2b1200066da7d564c494ff571cc678467d221eaf8b84564",
+    "tests/core/test_audit_tool_truthfulness.py": "39b966844585b8b905da3866dd0491a57195ec3b1f621012363ceb7795394bf5",
+    "tests/js/audit_regressions_20260915.test.js": "63494aef268399ce9b185883fb54415f80c0e51d19c34993fc0279f40e1d0d7b",
+    "tests/research_agent/core/test_bench_submission_profile.py": "d4b5597f877baa0b4aab189c4293fa331af204938303ecd2bda9b8b6dcd77c52",
+    "tests/research_agent/integration/test_pipeline_config_contract.py": "f1c9e6133f9e1077e533885fc40c034fa76cdf7a0ab7e911b1928dafe5e5c9e8",
+    "tests/webserver/copilot/test_pi_copilot_message_actions.py": "0c7605d54e8271f8e291112681ed2ac01ac04ab4ef148d050dab573014af1a17",
+    "tests/webserver/copilot/test_pi_history_retirement.py": "ea315d8af3d4278657e00867fe4307abe4aedae4d0d07e47e058c94cccf31754",
+    "tests/webserver/test_audit_frontend_regressions.py": "a4977a6cb958d8e0e2aa72ec639d036a745371ac65b21a9aae8b849b426d24f9",
+    "tests/webserver/test_static_frontend_ownership.py": "fda7bfd2069ebeba0d2c5192708441cb830fbfb9e203c91b3853fef5eed02317",
+    "tests/webserver/test_webserver_onward_paths.py": "7df7a1bcd08ecee55e6a6c5495b8b89e53fc6a54850a604827497b75fc1e34d5",
+    "tests/webserver/test_webserver_settings_contract.py": "2b89f62e5d79b34f483d0017b93d1e692e1a1b173aaa5eeeecd87748e7389585",
+    "tests/webserver/test_webserver_shell_accessibility.py": "5d9cef26d0a0f29f21f567834c3041b7a3a54db1dc7db5e118d27b4d5f9a1654",
+    "tests/webserver/test_webserver_static_routes.py": "cf9a6d04cea81b4b6f9db20ac1cafaf178f470a5583f04107364b803f583a5b5",
+    "tests/webserver/test_webserver_study_context_frontend.py": "2877230d28a21e93ef8819166adb512be4d6cd66302bcc4974f0fffae800d79b",
+    "tests/webserver/test_webserver_ux_reliability.py": "a0ec26f0b56fa9ad34d9b9f2f321ec8cc5d19dc2b810a7106f5beee5cdcb4e62",
+    "tools/build_top_level_mechanism_qc.py": "c4afd19f48e30fdd6202616c94f70244d6965c664c234a9116b61e121d6e52ae",
+    "tools/run_js_contracts.py": "38b0bc431c4b2e71162648d949d08b695d5114118cf3ca9c766084ebd7c8e335",
+    "tools/run_openrouter_fullflow_validation.py": "91a1f6b0c4f2d2a3d91b1285d58d5ecbd83978c9804b7fbdfd32707877f20d14"
+  },
+  "checks": [
+    {
+      "command": [
+        ".venv/bin/ruff",
+        "check",
+        "scripts/r5_fig5_nature.py",
+        "src/easyicu/research_agent/orchestration/config.py",
+        "tests/core/test_audit_tool_truthfulness.py",
+        "tests/research_agent/core/test_bench_submission_profile.py",
+        "tests/research_agent/integration/test_pipeline_config_contract.py",
+        "tests/webserver/copilot/test_pi_copilot_message_actions.py",
+        "tests/webserver/copilot/test_pi_history_retirement.py",
+        "tests/webserver/test_audit_frontend_regressions.py",
+        "tests/webserver/test_static_frontend_ownership.py",
+        "tests/webserver/test_webserver_onward_paths.py",
+        "tests/webserver/test_webserver_settings_contract.py",
+        "tests/webserver/test_webserver_shell_accessibility.py",
+        "tests/webserver/test_webserver_static_routes.py",
+        "tests/webserver/test_webserver_study_context_frontend.py",
+        "tests/webserver/test_webserver_ux_reliability.py",
+        "tools/build_top_level_mechanism_qc.py",
+        "tools/run_js_contracts.py",
+        "tools/run_openrouter_fullflow_validation.py"
+      ],
+      "exit_code": 0,
+      "output": "All checks passed!\n"
+    },
+    {
+      "command": [
+        "git",
+        "diff",
+        "--check",
+        "c3c1a81d14ecd25b1838754c012efed8f11186fc",
+        "HEAD"
+      ],
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "node",
+        "--check",
+        "src/easyicu/webserver/static/js/screens-agent-render.js"
+      ],
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "node",
+        "--check",
+        "src/easyicu/webserver/static/js/screens-extraction-job-continuity.js"
+      ],
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "node",
+        "--check",
+        "src/easyicu/webserver/static/js/screens-extraction.js"
+      ],
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "node",
+        "--check",
+        "src/easyicu/webserver/static/js/screens-guided-pi-plan-actions.js"
+      ],
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "node",
+        "--check",
+        "src/easyicu/webserver/static/js/screens-guided-pi-preview.js"
+      ],
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "node",
+        "--check",
+        "src/easyicu/webserver/static/js/screens-guided-pi-run-files.js"
+      ],
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "node",
+        "--check",
+        "src/easyicu/webserver/static/js/screens-guided-pi.js"
+      ],
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "node",
+        "--check",
+        "src/easyicu/webserver/static/js/screens-guided.js"
+      ],
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "node",
+        "--check",
+        "src/easyicu/webserver/static/js/screens-viz-cohort.js"
+      ],
+      "exit_code": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "node",
+        "--check",
+        "tests/js/audit_regressions_20260915.test.js"
+      ],
+      "exit_code": 0,
+      "output": ""
+    }
+  ]
+}

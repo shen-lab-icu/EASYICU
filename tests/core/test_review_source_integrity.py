@@ -103,6 +103,40 @@ def test_demographics_preserves_io_failure(monkeypatch):
         convenience.load_demographics(verbose=False)
 
 
+def test_demographics_forwards_interval_and_window(monkeypatch):
+    from easyicu.api import convenience
+
+    captured = {}
+
+    def fake_load_concepts(**kwargs):
+        captured.update(kwargs)
+        return pd.DataFrame({"stay_id": [1]})
+
+    monkeypatch.setattr(convenience, "load_concepts", fake_load_concepts)
+    convenience.load_demographics(interval="6h", win_length="48h")
+
+    assert captured["interval"] == "6h"
+    assert captured["win_length"] == "48h"
+
+
+def test_blood_gas_surfaces_extraction_errors(monkeypatch):
+    from easyicu.api import convenience
+
+    monkeypatch.setattr(
+        convenience,
+        "_validate_concepts",
+        lambda concepts, verbose: concepts,
+    )
+    monkeypatch.setattr(
+        convenience,
+        "load_concepts",
+        lambda **kwargs: (_ for _ in ()).throw(PermissionError("denied")),
+    )
+
+    with pytest.raises(PermissionError, match="denied"):
+        convenience.load_blood_gas()
+
+
 def _source_tables(tmp_path, origins=(0,)):
     config = load_data_sources().get("miiv")
     tables = {

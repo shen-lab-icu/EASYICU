@@ -202,7 +202,7 @@ def _content_candidates(path: Path) -> set[str]:
         return set()
     marker_files = {
         "eicu": ("vitalperiodic.parquet", "vitalperiodic.csv"),
-        "aumc": ("numericitems",),
+        "aumc": ("numericitems", "numericitems.parquet", "numericitems.csv"),
         "hirid": ("general_table.csv", "general_table.parquet", "observations"),
         "sic": ("cases.parquet", "data_float_h_bucket"),
     }
