@@ -94,8 +94,8 @@
     "final_data_distribution_check": "PASSED — candidate full6_native_v3_aki_ref_native_d34ca8a5_20260901 contains 6 x 19 readable native-v2 modules. Reference AKI stage is materialized in all six databases; source-native stage is materialized for MIMIC-III/MIMIC-IV, while AUMC/SIC future-looking case endpoints are not embedded in hourly exports, eICU remains components-only, and HiRID fails closed without the required auxiliary source. MIMIC-IV reference/native differences are consistent with the intentional broad-active-RRT versus official-CRRT distinction."
   },
   "clinical_contracts_sha256": "9b2cb43b86a3763b32be9ab010308177d3f8b1c03da0318fd88a7af946533647",
-  "clinical_contract_validator_sha256": "a41bddae25be29f6f40150241ae29f985288243a3c09f3ded5951c4dcda63cb7",
-  "data_sources_sha256": "167bf0d6cbe01aa5a0c23b95bc5cae87c9904b6cff3c9943660fd688eccf9f0c",
+  "clinical_contract_validator_sha256": "b17da6b29d089d17a99c4107199a8597952bdf102a0477bde44b533676be469e",
+  "data_sources_sha256": "be22b21d14f8ff10102787b204243d64606a7ea1fb1953c17337c08bff87c5ad",
   "finalized_foundation_changes": [
     {
       "git_commit": "6fd51234447ddd9fafafc0d34dc7f762c2a529e2",
@@ -116,6 +116,10 @@
     {
       "git_commit": "97f508c6c94751a596481efafe68b41232e6bf42",
       "change": "Preserve the owner-issued death_time companion through the public static-concept merge."
+    },
+    {
+      "git_commit": "853454cd46338a3376414b38e1138b2dac9e83c8",
+      "change": "Register four community ICU databases as additive, mapping-only profiles without changing the sealed six-database extraction outputs."
     }
   ]
 }
