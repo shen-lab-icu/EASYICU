@@ -2726,6 +2726,92 @@ class PiCopilotService:
             "sessions": sessions,
         }
 
+    def rename_session(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        title: str,
+    ) -> Dict[str, Any]:
+        """Rename one project-scoped task without changing its conversation."""
+
+        record = self._scoped_record(session_id, project_id=project_id)
+        clean_title = " ".join(str(title or "").split()).strip()
+        if not clean_title:
+            raise PiCopilotError(
+                "pi_session_title_required",
+                "Enter a task name before saving it.",
+                status_code=422,
+            )
+        record.title = clean_title[:100]
+        self._save_record(record)
+        return {
+            "ok": True,
+            "session": self._public_session(record, include_replay=False),
+        }
+
+    def delete_empty_session(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+    ) -> Dict[str, Any]:
+        """Delete only a task that has never accepted a conversation turn."""
+
+        record = self._scoped_record(session_id, project_id=project_id)
+        if (
+            record.pinned_for_presentation
+            or record.active_message_job_id
+            or record.last_message_job_id
+            or record.last_turn_status
+        ):
+            raise PiCopilotError(
+                "pi_session_not_empty",
+                "Only a task with no conversation history can be removed here.",
+                status_code=409,
+            )
+        state = self._ensure_open(record, transcript_limit=1)
+        public = self._public_session(
+            record,
+            gateway_state=state,
+            replay_limit=8,
+        )
+        if public["streaming"] or public["message_count"] or public["has_history"]:
+            raise PiCopilotError(
+                "pi_session_not_empty",
+                "Only a task with no conversation history can be removed here.",
+                status_code=409,
+            )
+        with self._lock:
+            if session_id in self._busy_sessions:
+                raise PiCopilotError(
+                    "pi_session_busy",
+                    "Wait for the active task to finish before removing it.",
+                    status_code=409,
+                )
+            rows = self._read_records()
+            latest = next((row for row in rows if row.session_id == session_id), None)
+            if latest is None:
+                raise PiCopilotError(
+                    "pi_session_not_found",
+                    "The requested Copilot session does not exist.",
+                    status_code=404,
+                )
+            if (
+                latest.pinned_for_presentation
+                or latest.active_message_job_id
+                or latest.last_message_job_id
+                or latest.last_turn_status
+            ):
+                raise PiCopilotError(
+                    "pi_session_not_empty",
+                    "Only a task with no conversation history can be removed here.",
+                    status_code=409,
+                )
+            self._write_records(row for row in rows if row.session_id != session_id)
+        self._retire_record(record)
+        return {"ok": True, "session_id": session_id, "deleted": True}
+
     def get_session(
         self,
         session_id: str,

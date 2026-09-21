@@ -576,7 +576,11 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     )
 
 
-def project_run_outcome(review: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+def project_run_outcome(
+    review: Optional[Mapping[str, Any]],
+    *,
+    review_evidence_refs: Optional[Iterable[Mapping[str, Any]]] = None,
+) -> Dict[str, Any]:
     """Project a durable, path-free completed-run result for Guided Copilot."""
 
     if not isinstance(review, Mapping) or not review.get("ok"):
@@ -638,6 +642,35 @@ def project_run_outcome(review: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                 for row in list(projection.get("artifact_refs") or [])
                 if row.get("artifact") != "figure_gallery.json"
             ]
+    projected_review_refs = []
+    for row in list(review_evidence_refs or [])[:40]:
+        if not isinstance(row, Mapping):
+            continue
+        evidence_id = _bounded_text(row.get("evidence_id"), 160)
+        digest = _bounded_text(row.get("sha256"), 64).lower()
+        reference = _bounded_text(row.get("reference"), 240)
+        if (
+            not re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", evidence_id)
+            or not re.fullmatch(r"[a-f0-9]{64}", digest)
+            or not reference
+        ):
+            continue
+        projected_review_refs.append(
+            {
+                "reference": reference,
+                "evidence_id": evidence_id,
+                "sha256": digest,
+                "kind": _bounded_text(row.get("kind") or "artifact", 80),
+                "label": _bounded_text(row.get("label") or reference, 160),
+                "description": _bounded_text(row.get("description"), 500),
+                **(
+                    {"pointer": _bounded_text(row.get("pointer"), 500)}
+                    if row.get("pointer")
+                    else {}
+                ),
+            }
+        )
+    projection["review_evidence_refs"] = projected_review_refs
     return ensure_safe_projection(
         {
             key: value
@@ -658,6 +691,7 @@ def project_run_outcome(review: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                 "report_revision_pdf_ready",
                 "analysis_results_available",
                 "figure_count",
+                "review_evidence_refs",
                 "reportable",
             }
         }

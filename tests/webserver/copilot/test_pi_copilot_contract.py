@@ -714,6 +714,43 @@ def test_completed_run_does_not_offer_an_empty_figure_gallery() -> None:
     ]
 
 
+def test_completed_run_projects_only_digest_bound_review_evidence() -> None:
+    projected = project_run_outcome(
+        {
+            "ok": True,
+            "run_id": "run-review",
+            "gate": {"status": "blocked", "checks": []},
+            "artifacts": [],
+        },
+        review_evidence_refs=[
+            {
+                "reference": "reviewer_report.json",
+                "evidence_id": "reviewer_report_json",
+                "sha256": "a" * 64,
+                "kind": "log",
+                "label": "reviewer_report.json",
+                "description": "Registered reviewer report.",
+            },
+            {
+                "reference": "unsafe.json",
+                "evidence_id": "../unsafe",
+                "sha256": "bad",
+            },
+        ],
+    )
+
+    assert projected["review_evidence_refs"] == [
+        {
+            "reference": "reviewer_report.json",
+            "evidence_id": "reviewer_report_json",
+            "sha256": "a" * 64,
+            "kind": "log",
+            "label": "reviewer_report.json",
+            "description": "Registered reviewer report.",
+        }
+    ]
+
+
 @pytest.fixture
 def study_state(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     current = {
@@ -2860,6 +2897,64 @@ def test_new_pi_conversation_requires_a_project_binding(tmp_path: Path) -> None:
         service.create_session(project_id="", external_llm_opt_in=True)
 
     assert missing.value.code == "pi_project_binding_required"
+
+
+def test_empty_task_can_be_renamed_and_removed(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+) -> None:
+    gateway = FakeGateway()
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
+    created = service.create_session(
+        project_id="project-task-maintenance",
+        external_llm_opt_in=True,
+    )["session"]
+
+    renamed = service.rename_session(
+        created["session_id"],
+        project_id="project-task-maintenance",
+        title="  Lactate   review  ",
+    )["session"]
+    assert renamed["title"] == "Lactate review"
+    assert renamed["automatic_title"] is False
+
+    deleted = service.delete_empty_session(
+        created["session_id"],
+        project_id="project-task-maintenance",
+    )
+    assert deleted == {
+        "ok": True,
+        "session_id": created["session_id"],
+        "deleted": True,
+    }
+    assert service.list_sessions(project_id="project-task-maintenance")["sessions"] == []
+    assert any(method == "session.dispose" for method, _, _ in gateway.calls)
+
+
+def test_task_with_conversation_metadata_cannot_be_removed(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+) -> None:
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json",
+        gateway=FakeGateway(),
+    )
+    created = service.create_session(
+        project_id="project-task-history",
+        external_llm_opt_in=True,
+    )["session"]
+    record = service._get_record(created["session_id"])
+    record.last_message_job_id = "job-history"
+    record.last_turn_status = "done"
+    service._save_record(record)
+
+    with pytest.raises(PiCopilotError) as blocked:
+        service.delete_empty_session(
+            created["session_id"],
+            project_id="project-task-history",
+        )
+
+    assert blocked.value.code == "pi_session_not_empty"
 
 
 def test_message_grants_are_host_held_and_message_job_is_not_scientific(

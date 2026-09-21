@@ -120,7 +120,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20260728-demo-mode1" in index_html
-    assert "js/api.js?v=20260919-result-export1" in index_html
+    assert "js/api.js?v=20260920-skill-package1" in index_html
 
 
 def test_floating_copilot_launcher_is_removed_but_shell_hooks_survive() -> None:
@@ -183,9 +183,9 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260827-no-fab1" in index_html
-    assert "js/app.js?v=20260919-skill-hub1" in index_html
+    assert "js/app.js?v=20260921-evidence1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
-    assert "js/screens-extraction.js?v=20260914-source-refresh1" in index_html
+    assert "js/screens-extraction.js?v=20260920-stepflow4" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20260915-product-label1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
@@ -335,7 +335,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260919-skill-hub1" in index_html
+    assert "js/app.js?v=20260921-evidence1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 
 
@@ -360,7 +360,7 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20260903-session-deeplink2" in index_html
+    assert "js/screens-guided.js?v=20260919-entry1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
 
 
@@ -398,7 +398,7 @@ def test_native_page_guide_backend_is_retired_from_the_shell_entry() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "page-guide dock intentionally is not constructed" in dock_js
-    assert "js/api.js?v=20260919-result-export1" in index_html
+    assert "js/api.js?v=20260920-skill-package1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
 
 
@@ -554,7 +554,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided.css?v=20260829-readability2" in index_html
     assert "css/guided-projects.css?v=20260918-audit3" in index_html
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
-    assert "js/api.js?v=20260919-result-export1" in index_html
+    assert "js/api.js?v=20260920-skill-package1" in index_html
     assert (
         "js/screens-guided-projects.js?v=20260919-skill-hub2" in index_html
     )
@@ -667,7 +667,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260903-session-deeplink2" in index_html
+    assert "js/screens-guided.js?v=20260919-entry1" in index_html
 
     assert "function startGuidedIdeaFlow" in idea_js
     assert "function renderGuidedIdeaApiSetupCard" in idea_js
@@ -852,7 +852,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     assert (
         render_pos < main_pos
     ), "screens-agent-render.js must load before screens-guided-pi-run-files.js"
-    assert "js/screens-agent-render.js?v=20260919-science-review1" in index_html
+    assert "js/screens-agent-render.js?v=20260919-source1" in index_html
     assert "css/agent-plan.css?v=20260829-plan-flow1" in index_html
 
 
@@ -889,8 +889,9 @@ def test_copilot_owns_provider_selection_and_agent_projects_do_not() -> None:
     assert "data-gpi-codex-login" in provider_js
     assert "data-gpi-codex-device" in provider_js
     assert "data-gpi-codex-model" in provider_js
-    assert "ONE MODEL CONNECTION" in provider_js
-    assert "same selected provider and model powers" in provider_js
+    assert "Choose a connection" in provider_js
+    assert "This connection powers both conversation and research assistance" not in provider_js
+    assert "No EasyICU account or registration is required" not in provider_js
     assert "Conversation model API" not in provider_js
     assert "Analysis model" not in provider_js
     assert "research_provider: state.researchProvider" in guided_js
@@ -904,7 +905,7 @@ def test_copilot_owns_provider_selection_and_agent_projects_do_not() -> None:
     assert provider_pos != -1 and control_pos != -1 and main_pos != -1
     assert provider_pos < control_pos < main_pos
     assert (
-        "js/screens-guided-pi-provider.js?v=20260825-api-consent1"
+        "js/screens-guided-pi-provider.js?v=20260919-connection4"
         in index_html
     )
 
@@ -1166,7 +1167,7 @@ def test_native_extraction_folder_connect_defaults_to_auto_detection() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "css/extraction.css?v=20260630-gate-first-ia" in index_html
+    assert "css/extraction.css?v=20260920-stepflow4" in index_html
     assert "data-ex-analyze" in extraction_js
     assert "Choose folder and identify" in extraction_js
     assert "function copilotPrefillSummary()" in extraction_js
@@ -1189,7 +1190,7 @@ def test_native_extraction_folder_connect_defaults_to_auto_detection() -> None:
     assert ".ex-connect-primary" not in redesign_css
 
 
-def test_native_extraction_custom_modules_default_empty_with_bulk_actions() -> None:
+def test_native_extraction_uses_separate_feature_cohort_and_export_steps() -> None:
     extraction_js = _static_js("screens-extraction.js")
     embedded_js = _static_js("screens-extraction-embedded.js")
     sepsis_js = _static_js("screens-extraction-sepsis.js")
@@ -1197,20 +1198,39 @@ def test_native_extraction_custom_modules_default_empty_with_bulk_actions() -> N
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
+    assert "let exAdvCohort = false, exAdvExport = false, exIncludeDefinitions = true;" in extraction_js
+    assert "let exCustomOpen = true;" in extraction_js
     assert (
-        "let exAdvCohort = true, exAdvExport = false, exShowAllMods = true, exIncludeDefinitions = true;"
-        in extraction_js
-    )
-    assert "let exCustomOpen = false;" in extraction_js
-    assert (
-        "if (window.__euExtractFocusICD) { exAdvCohort = true; exCustomOpen = true; exCohortPreset = 'icd'; }"
+        "if (window.__euExtractFocusICD) { exSetupStep = 'cohort'; exAdvCohort = true; exCustomOpen = true; exCohortPreset = 'icd'; }"
         in extraction_js
     )
     module_block = extraction_js.split("const MODS = [", 1)[1].split("];", 1)[0]
+    assert module_block.count(", true, true]") == 0
     assert module_block.count(", false, true]") == 6
     assert module_block.count(", false, false]") == 13
-    assert ", true, true]" not in module_block
     assert ", true, false]" not in module_block
+    assert "function recommendedSelectionActive()" in extraction_js
+    assert "Data modules" in extraction_js
+    assert "mod-open-desc" in extraction_js
+    assert "const shown = MODS;" in extraction_js
+    assert "Browse 13 more modules" not in extraction_js
+    assert "Show recommended modules only" not in extraction_js
+    assert "data-ex-allmods" not in extraction_js
+    assert "Cohort and time window" in extraction_js
+    assert "Export settings" in extraction_js
+    assert "data-ex-advc" in extraction_js
+    assert "data-ex-adve" in extraction_js
+    assert "let exSetupStep = 'modules';" in extraction_js
+    assert "const EX_SETUP_STEPS = [" in extraction_js
+    assert "function setupStepPage()" in extraction_js
+    assert 'data-ex-step-next="cohort"' in extraction_js
+    assert 'data-ex-step-next="export"' in extraction_js
+    assert 'data-ex-step-back="modules"' in extraction_js
+    assert 'data-ex-step-back="cohort"' in extraction_js
+    assert "${cohortCfg({ stepMode: true })}" in extraction_js
+    assert "${exportCfg({ stepMode: true })}" in extraction_js
+    assert "body = `${setupFlow()}${exSetupStep === 'modules' ? handoffBar() : ''}`;" in extraction_js
+    assert '<div class="ex-settings-list">' not in extraction_js
     assert (
         "const saved = Array.isArray(exSelectedConcepts[key]) ? exSelectedConcepts[key] : (m[3] ? ids : []);"
         in extraction_js
@@ -1234,7 +1254,7 @@ def test_native_extraction_custom_modules_default_empty_with_bulk_actions() -> N
     assert "Select all" in extraction_js
     assert "data-ex-clearmods" in extraction_js
     assert "Clear all" in extraction_js
-    assert "Core 6" in extraction_js
+    assert "Use recommended modules" in extraction_js
     assert "data-ex-mod-details" in extraction_js
     assert "data-ex-concept" in extraction_js
     assert "data-ex-concepts-all" in extraction_js
@@ -1308,7 +1328,8 @@ def test_native_extraction_custom_modules_default_empty_with_bulk_actions() -> N
     assert "antibiotic_to_sample_hours: exSepsisAbxToSampleHours" not in extraction_js
     assert 'data-ex-run="recommended"' in extraction_js
     assert "function coreModuleKeys()" in extraction_js
-    assert "Select at least one module before extracting." in extraction_js
+    assert "Select at least one module before extracting." not in extraction_js
+    assert 'data-ex-step-next="cohort" ${selMods().length ? \'\' : \'disabled\'}' in extraction_js
     assert ".cohort-preset-grid" in extraction_css
     assert ".range-ctl" in extraction_css
     assert ".ex-export-destination" in extraction_css
@@ -1334,13 +1355,16 @@ def test_native_extraction_custom_modules_default_empty_with_bulk_actions() -> N
     assert ".sepsis-def-control" in extraction_css
     assert ".sepsis-def-seg button.active" in extraction_css
     assert ".sepsis-def-chip.current" in extraction_css
-    assert ".ex2-summary{ align-self:stretch; min-width:0; }" in extraction_css
-    assert ".sumcard{\n  position:sticky; top:74px; z-index:3;" in extraction_css
-    assert "max-height:calc(100vh - 92px); overflow:auto;" in extraction_css
-    assert (
-        ".sumcard{ position:static; max-height:none; overflow:visible; }"
-        in extraction_css
-    )
+    assert ".ex-setup-flow{ max-width:1100px; margin:0 auto; }" in extraction_css
+    assert ".modgrid{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr));" in extraction_css
+    assert ".ex-setup-steps{" in extraction_css
+    assert ".ex-step-page{" in extraction_css
+    assert ".ex-step-panel{" in extraction_css
+    assert ".ex-step-actions{" in extraction_css
+    assert ".ex-collapsible .cfg-body[hidden]{ display:none; }" in extraction_css
+    assert ".ex-action-dock{" in extraction_css
+    assert "exExpandedMod && String(exExpandedMod).startsWith('sepsis3_')" in extraction_js
+    assert "const exportReady = dataMode() === 'demo' || !!currentExportDir();" in extraction_js
     assert ".cohort-preset-grid" not in redesign_css
     assert ".range-ctl" not in redesign_css
     assert ".ex-export-destination" not in redesign_css
@@ -1369,7 +1393,7 @@ def test_native_extraction_prefers_parquet_export_by_default() -> None:
     assert "尚未选择导出目录" in extraction_js
     assert "Choose an export destination before extracting." in extraction_js
     assert "请先选择导出目录再开始抽取。" in extraction_js
-    assert "const exportReady = !!currentExportDir();" in extraction_js
+    assert "const exportReady = dataMode() === 'demo' || !!currentExportDir();" in extraction_js
     assert (
         "extractDisabled = !selMods().length || !support.ok || !exportReady"
         in extraction_js
@@ -1422,14 +1446,15 @@ def test_native_extraction_module_counts_match_backend_catalog() -> None:
     assert "window.EU_CATALOG && window.EU_CATALOG.groupConcepts" in extraction_js
 
     fallback_total = 0
-    for name, count_text, selected, _is_core in entries:
+    for name, count_text, selected, is_core in entries:
         group_key = keys[name]
         expected = len(cc.CONCEPT_GROUPS_INTERNAL[group_key])
         count = int(count_text)
         fallback_total += count
-        assert selected == "false", f"{name} should require an explicit user selection"
+        assert selected == "false", f"{name} must wait for an explicit user selection"
         assert count == expected, f"{name} fallback count should match {group_key}"
 
+    assert sum(is_core == "true" for _, _, _, is_core in entries) == 6
     assert fallback_total == len(cc.CONCEPT_DICTIONARY)
     assert fallback_total != 219
 
@@ -1484,7 +1509,7 @@ def test_native_idea_mining_backend_remains_wired_without_a_second_primary_entry
     assert "css/ideas.css?v=20260803-owner-migration" in index_html
     assert "css/shell.css?v=20260812-route-a11y1" in index_html
     assert "js/icons.js?v=20260901-composer-plus1" in index_html
-    assert "js/app.js?v=20260919-skill-hub1" in index_html
+    assert "js/app.js?v=20260921-evidence1" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
@@ -2300,7 +2325,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260727-patient-demo2" in index_html
-    assert "api.js?v=20260919-result-export1" in index_html
+    assert "api.js?v=20260920-skill-package1" in index_html
     assert "screens-dict.js?v=20260830-viz-final1" in index_html
     assert "deepdive.css?v=20260830-viz-final1" in index_html
 
@@ -2605,13 +2630,13 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20260919-result-export1" in index_html
+    assert "api.js?v=20260920-skill-package1" in index_html
     assert "screens-guided-projects.js?v=20260919-skill-hub2" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20260903-session-deeplink2" in index_html
+    assert "screens-guided.js?v=20260919-entry1" in index_html
     assert "guided.css?v=20260829-readability2" in index_html
     assert "guided-projects.css?v=20260918-audit3" in index_html
     assert "gd-rail-heading" in projects_js
@@ -3220,7 +3245,7 @@ def test_visual_routes_share_source_choice_with_single_and_multi_source_contract
     assert ".crossdb-offline-fallback" in crossdb_css
     assert "css/official-demo-sources.css?v=20260728-shared-source1" in index_html
     assert "js/screens-viz-crossdb-setup.js?v=20260728-one-click-raw2" in index_html
-    assert "js/screens-viz-crossdb-source.js?v=20260812-crossdb-jobs" in index_html
+    assert "js/screens-viz-crossdb-source.js?v=20260920-fast-demo-status" in index_html
 
 
 def test_native_webapp_foreground_interrupt_returns_shell_status(monkeypatch) -> None:

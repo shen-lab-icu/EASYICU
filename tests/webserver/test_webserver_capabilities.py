@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -73,11 +74,13 @@ def test_method_skill_catalog_projects_registered_method_contracts(monkeypatch) 
     by_id = {row["id"]: row for row in catalog["items"]}
     components = {row["id"]: row for row in catalog["components"]}
 
-    assert len(by_id) == 15
-    assert len(components) == 38
-    assert catalog["workflow_count"] == 15
-    assert catalog["available_method_count"] == 38
-    assert catalog["planned_method_count"] == 12
+    assert len(by_id) == 19
+    assert len(components) == 45
+    assert catalog["workflow_count"] == 10
+    assert catalog["analysis_module_count"] == 9
+    assert catalog["builtin_skill_count"] == 19
+    assert catalog["available_method_count"] == 45
+    assert catalog["planned_method_count"] == 7
     assert by_id["survival-time-to-event"]["capability_id"] == (
         "survival_time_to_event_v1"
     )
@@ -88,8 +91,45 @@ def test_method_skill_catalog_projects_registered_method_contracts(monkeypatch) 
     ]
     assert by_id["survival-time-to-event"]["claim_ceiling"] == "reportable"
     assert by_id["target-trial-emulation"]["claim_ceiling"] == "analysis_only"
+    assert by_id["cohort-characterization-table-one"]["layer"] == "analysis_module"
+    assert by_id["trajectory-phenotyping"]["layer"] == "research_workflow"
+    assert by_id["trajectory-phenotyping"]["included_module_ids"] == [
+        "cohort-characterization-table-one",
+        "missingness-measurement-audit",
+    ]
+    assert "phenotyping.early_subtype_assignment" in by_id[
+        "trajectory-phenotyping"
+    ]["action_ids"]
+    assert by_id["trajectory-phenotyping"]["claim_ceiling"] == "analysis_only"
+    assert by_id["adjusted-exposure-outcome-study"]["included_module_ids"] == [
+        "cohort-characterization-table-one",
+        "missingness-measurement-audit",
+        "exposure-outcome-distribution",
+    ]
+    assert len(by_id["adjusted-exposure-outcome-study"]["workflow_steps"]) == 6
+    assert by_id["ordinal-dose-response-study"]["claim_ceiling"] == "analysis_only"
+    assert by_id["fixed-landmark-association-study"]["claim_ceiling"] == (
+        "reportable"
+    )
+    assert by_id["time-varying-exposure-survival-study"]["capability_id"] == (
+        "association_time_varying_exposure_v1"
+    )
+    assert components["phenotyping.early_subtype_assignment"]["kernel_modules"] == [
+        "subtype_assignment"
+    ]
     assert components["prediction.decision_curve"]["implementation"] == "llm_coded"
     assert components["prediction.decision_curve"]["claim_ceiling"] == "analysis_only"
+    promoted = {
+        "time_to_event.competing_risks_cif": ["competing_risks", "gray_test"],
+        "causal_emulation.propensity_adjustment": ["propensity_weighting"],
+        "causal_emulation.doubly_robust": ["survival_inputs", "doubly_robust"],
+        "causal_emulation.mediation": ["mediation"],
+        "association.rcs_spline": ["rcs_dose_response"],
+        "prediction.reclassification": ["reclassification"],
+    }
+    for component_id, kernel_modules in promoted.items():
+        assert components[component_id]["implementation"] == "llm_coded"
+        assert components[component_id]["kernel_modules"] == kernel_modules
     assert components["time_to_event.cox_hr"]["implementation"] == "deterministic"
     assert components["time_to_event.cox_hr"]["method_family"] == "time_to_event"
     assert all("owner_module" not in row for row in by_id.values())
@@ -113,6 +153,156 @@ def test_method_skill_catalog_respects_science_skills_master_switch(monkeypatch)
     assert catalog["active_component_ids"] == []
     assert all(row["enabled"] is False for row in catalog["items"])
     assert all(row["enabled"] is False for row in catalog["components"])
+
+
+def test_builtin_method_skill_package_exposes_reviewed_documentation(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        settings_store,
+        "load_settings",
+        lambda: _settings(science_skills_enabled=True),
+    )
+
+    response = TestClient(app).get(
+        "/api/capabilities/method-skills/survival-time-to-event/package"
+    )
+
+    assert response.status_code == 200
+    package = response.json()
+    assert package["schema_version"] == "easyicu.method-skill-package/3"
+    assert package["skill_id"] == "survival-time-to-event"
+    assert package["kind"] == "research_workflow"
+    assert package["read_only"] is True
+    assert package["execution_boundary"] == "documentation_only_host_execution_required"
+    files = {row["path"]: row for row in package["files"]}
+    assert set(files) == {
+        "SKILL.md",
+        "references/composition.md",
+        "references/validation_framework.md",
+        "references/workflow_contract.md",
+    }
+    assert "capability: `survival_time_to_event_v1`".lower() in files[
+        "SKILL.md"
+    ]["content"].lower()
+    skill_markdown = files["SKILL.md"]["content"]
+    assert "## When to use this workflow" in skill_markdown
+    assert "## Required data and decisions" in skill_markdown
+    assert "## Workflow" in skill_markdown
+    assert "## Methods and implementation" in skill_markdown
+    assert "## Validation and quality checks" in skill_markdown
+    assert "## Evidence and claim boundary" in skill_markdown
+    assert "## Failure behavior" in skill_markdown
+    assert "## Start this workflow" in skill_markdown
+    assert len(skill_markdown.encode("utf-8")) > 2500
+    assert all(not path.startswith("scripts/") for path in files)
+    assert all(len(row["sha256"]) == 64 for row in files.values())
+    assert len(package["package_sha256"]) == 64
+
+
+def test_builtin_method_component_package_and_unknown_id(monkeypatch) -> None:
+    monkeypatch.setattr(
+        settings_store,
+        "load_settings",
+        lambda: _settings(science_skills_enabled=True),
+    )
+    client = TestClient(app)
+
+    component = client.get(
+        "/api/capabilities/method-skills/prediction.decision_curve/package"
+    )
+    missing = client.get(
+        "/api/capabilities/method-skills/not-a-real-skill/package"
+    )
+
+    assert component.status_code == 200
+    payload = component.json()
+    assert payload["kind"] == "method_component"
+    assert {row["path"] for row in payload["files"]} == {
+        "SKILL.md",
+        "references/method_contract.md",
+        "references/validation_framework.md",
+    }
+    markdown = next(row for row in payload["files"] if row["path"] == "SKILL.md")
+    assert "`prediction.decision_curve`" in markdown["content"]
+    assert "## When to use this method" in markdown["content"]
+    assert "## Method and implementation" in markdown["content"]
+    assert "does not define the cohort, estimand, or complete article workflow" in (
+        markdown["content"]
+    )
+    assert missing.status_code == 404
+    assert missing.json()["detail"]["error"] == "method_skill_package_not_found"
+
+
+def test_trajectory_workflow_package_separates_discovery_and_early_assignment(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        settings_store,
+        "load_settings",
+        lambda: _settings(science_skills_enabled=True),
+    )
+
+    package = TestClient(app).get(
+        "/api/capabilities/method-skills/trajectory-phenotyping/package"
+    ).json()
+    files = {row["path"]: row for row in package["files"]}
+
+    assert package["kind"] == "research_workflow"
+    assert "scripts/adapter.py" not in files
+    assert "references/trajectory_assignment.md" in files
+    assert "scripts/early_subtype_assignment.py" in files
+    assert "freeze" in files["references/trajectory_assignment.md"]["content"].lower()
+    assert "### Trajectory discovery and early assignment" in files["SKILL.md"][
+        "content"
+    ]
+    assert "patient-disjoint development and validation sets" in files["SKILL.md"][
+        "content"
+    ]
+    assert "fit_and_evaluate_early_subtype_assignment" in files[
+        "scripts/early_subtype_assignment.py"
+    ]["content"]
+    ast.parse(files["scripts/early_subtype_assignment.py"]["content"])
+
+
+def test_composed_association_workflow_package_exposes_ordered_project_phases(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        settings_store,
+        "load_settings",
+        lambda: _settings(science_skills_enabled=True),
+    )
+
+    package = TestClient(app).get(
+        "/api/capabilities/method-skills/adjusted-exposure-outcome-study/package"
+    ).json()
+    files = {row["path"]: row for row in package["files"]}
+
+    assert package["kind"] == "research_workflow"
+    assert set(files) == {
+        "SKILL.md",
+        "references/composition.md",
+        "references/validation_framework.md",
+        "references/workflow_contract.md",
+    }
+    skill = files["SKILL.md"]["content"]
+    phases = [
+        "Freeze the cohort, exposure, outcome, time zero",
+        "Describe the cohort with Table 1",
+        "Report exposure prevalence and outcome absolute risks",
+        "Fit the exact typed adjusted model",
+        "Run the registered diagnostics and sensitivity analyses",
+        "Publish the descriptive and adjusted products",
+    ]
+    assert all(phase in skill for phase in phases)
+    assert [skill.index(phase) for phase in phases] == sorted(
+        skill.index(phase) for phase in phases
+    )
+    composition = files["references/composition.md"]["content"]
+    assert "cohort-characterization-table-one" in composition
+    assert "missingness-measurement-audit" in composition
+    assert "exposure-outcome-distribution" in composition
 
 
 def test_capability_tool_check_blocks_unknown_and_external_tools(monkeypatch) -> None:

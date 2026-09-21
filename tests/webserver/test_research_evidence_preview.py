@@ -9,6 +9,8 @@ import pytest
 from easyicu.webserver.research_evidence_preview import (
     EvidencePreviewError,
     build_evidence_preview,
+    project_figure_source_code,
+    project_review_evidence_refs,
 )
 
 
@@ -24,6 +26,7 @@ def _register(
     inputs: list[str] | None = None,
     producer: str = "runner",
     generation_mode: str = "system",
+    metadata: dict | None = None,
 ) -> tuple[Path, str]:
     evidence = run_dir / "evidence"
     evidence.mkdir(parents=True, exist_ok=True)
@@ -45,10 +48,228 @@ def _register(
             "producer": producer,
             "generation_mode": generation_mode,
             "prompt_pack_version": "test-prompts/v1",
+            "metadata": dict(metadata or {}),
         }
     )
     index_path.write_text(json.dumps(records), encoding="utf-8")
     return path, digest
+
+
+def test_review_file_labels_resolve_to_digest_pinned_registry_records(
+    tmp_path: Path,
+) -> None:
+    _, report_digest = _register(
+        tmp_path,
+        evidence_id="reviewer_report_json",
+        kind="log",
+        name="reviewer_report_json__reviewer_report.json",
+        content=b'{"status":"blocked"}',
+    )
+    _, literature_digest = _register(
+        tmp_path,
+        evidence_id="preplan_literature_bundle",
+        kind="log",
+        name="preplan_literature_bundle__preplan_literature_bundle.json",
+        content=b'{"screening_decisions":[]}',
+    )
+
+    projected = project_review_evidence_refs(
+        tmp_path,
+        [
+            "reviewer_report.json",
+            "preplan_literature_bundle.json.screening_decisions",
+            "StudyContext.idea_handoff",
+        ],
+    )
+
+    assert projected == [
+        {
+            "reference": "reviewer_report.json",
+            "evidence_id": "reviewer_report_json",
+            "sha256": report_digest,
+            "kind": "log",
+            "label": "reviewer_report.json",
+            "description": "registered test evidence",
+        },
+        {
+            "reference": "preplan_literature_bundle.json.screening_decisions",
+            "evidence_id": "preplan_literature_bundle",
+            "sha256": literature_digest,
+            "kind": "log",
+            "label": "preplan_literature_bundle.json.screening_decisions",
+            "description": "registered test evidence",
+            "pointer": "/screening_decisions",
+        },
+    ]
+
+
+def test_figure_gallery_projects_only_verified_unique_source_code(tmp_path: Path) -> None:
+    supporting_path, supporting_digest = _register(
+        tmp_path,
+        evidence_id="code_supporting",
+        kind="code",
+        name="code_supporting__analysis.py",
+        content=b"print('supporting')\n",
+        produced_by_step="11_cohort_figure",
+        producer="standard_executor",
+        generation_mode="deterministic_standard",
+    )
+    _path, primary_digest = _register(
+        tmp_path,
+        evidence_id="publication_renderer",
+        kind="code",
+        name="publication_renderer__skill.py",
+        content=b"print('publication')\n",
+        produced_by_step="",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+        metadata={"figure_id": "main_figure", "artifact_role": "figure_renderer"},
+    )
+    _register(
+        tmp_path,
+        evidence_id="figure_supporting",
+        kind="figure",
+        name="figure_supporting__cohort.png",
+        content=b"png",
+        produced_by_step="11_cohort_figure",
+        script_evidence_id="code_supporting",
+    )
+    gallery = {
+        "figures": [
+            {
+                "figure_id": "figure:cohort",
+                "label": "Cohort flow",
+                "relative_path": "steps/11_cohort_figure/outputs/cohort.png",
+            },
+            {
+                "figure_id": "main_figure",
+                "label": "Primary figure",
+                "relative_path": "publication_figures/main_figure.png",
+            },
+            {
+                "label": "Presented cohort flow",
+                "name": "figure_supporting__cohort.png",
+                "source_evidence_id": "figure_supporting",
+            },
+        ]
+    }
+
+    projected = project_figure_source_code(tmp_path, gallery)
+
+    assert "source_code" not in gallery["figures"][0]
+    assert projected["figures"][0]["source_code"] == {
+        "evidence_id": "code_supporting",
+        "sha256": supporting_digest,
+        "display_name": "analysis.py",
+        "language": "python",
+        "description": "registered test evidence",
+        "produced_by_step": "11_cohort_figure",
+        "producer": "standard_executor",
+        "generation_mode": "deterministic_standard",
+    }
+    assert projected["figures"][1]["source_code"]["sha256"] == primary_digest
+    assert projected["figures"][1]["source_code"]["display_name"] == "skill.py"
+    assert projected["figures"][2]["source_code"]["evidence_id"] == "code_supporting"
+    assert projected["figures"][2]["source_code"]["produced_by_step"] == "11_cohort_figure"
+    assert str(tmp_path) not in json.dumps(projected)
+
+    supporting_path.write_text("print('tampered')\n", encoding="utf-8")
+    tampered = project_figure_source_code(tmp_path, gallery)
+    assert "source_code" not in tampered["figures"][0]
+
+
+def test_figure_gallery_resolves_declared_wrapper_pipeline_run(tmp_path: Path) -> None:
+    wrapper = tmp_path / "wrapper"
+    pipeline_run = wrapper / "pipeline" / "run_test"
+    pipeline_run.mkdir(parents=True)
+    (wrapper / "source_run_manifest.json").write_text(
+        json.dumps({"run_id": "run_test"}), encoding="utf-8"
+    )
+    _path, code_digest = _register(
+        pipeline_run,
+        evidence_id="code_figure",
+        kind="code",
+        name="code_figure__analysis.py",
+        content=b"print('figure')\n",
+        produced_by_step="figure_step",
+    )
+    _register(
+        pipeline_run,
+        evidence_id="figure_registered",
+        kind="figure",
+        name="figure_registered__plot.png",
+        content=b"png",
+        produced_by_step="figure_step",
+        script_evidence_id="code_figure",
+    )
+
+    projected = project_figure_source_code(
+        wrapper,
+        {"figures": [{"source_evidence_id": "figure_registered", "name": "plot.png"}]},
+    )
+
+    assert projected["figures"][0]["source_code"]["evidence_id"] == "code_figure"
+    assert projected["figures"][0]["source_code"]["sha256"] == code_digest
+    assert str(pipeline_run) not in json.dumps(projected)
+
+
+def test_figure_gallery_focuses_large_renderer_on_registered_figure_id(
+    tmp_path: Path,
+) -> None:
+    lines = [f"line_{index} = {index}" for index in range(1, 60)]
+    lines[34] = "figure_id = 'main_figure'"
+    _path, digest = _register(
+        tmp_path,
+        evidence_id="publication_renderer",
+        kind="code",
+        name="publication_renderer__skill.py",
+        content=("\n".join(lines) + "\n").encode(),
+        metadata={"figure_id": "main_figure"},
+    )
+
+    projected = project_figure_source_code(
+        tmp_path,
+        {"figures": [{"figure_id": "main_figure", "relative_path": "publication_figures/main.png"}]},
+    )
+
+    source = projected["figures"][0]["source_code"]
+    assert source["sha256"] == digest
+    assert source["focus_start_line"] == 23
+    assert source["focus_end_line"] == 59
+
+
+def test_figure_gallery_uses_renderer_metadata_when_gallery_omits_figure_id(
+    tmp_path: Path,
+) -> None:
+    lines = [f"line_{index} = {index}" for index in range(1, 70)]
+    lines[41] = "figure_id = 'easyicu_publication_figure'"
+    _path, digest = _register(
+        tmp_path,
+        evidence_id="publication_renderer",
+        kind="code",
+        name="publication_renderer__skill.py",
+        content=("\n".join(lines) + "\n").encode(),
+        metadata={"figure_id": "easyicu_publication_figure"},
+    )
+    _register(
+        tmp_path,
+        evidence_id="publication_png",
+        kind="figure",
+        name="publication_png__easyicu_publication_figure.png",
+        content=b"png",
+        script_evidence_id="publication_renderer",
+        metadata={"figure_id": "easyicu_publication_figure"},
+    )
+
+    projected = project_figure_source_code(
+        tmp_path,
+        {"figures": [{"source_evidence_id": "publication_png", "name": "figure.png"}]},
+    )
+
+    source = projected["figures"][0]["source_code"]
+    assert source["sha256"] == digest
+    assert source["focus_start_line"] == 30
+    assert source["focus_end_line"] == 66
 
 
 def test_registered_code_preview_is_digest_pinned_and_host_path_free(

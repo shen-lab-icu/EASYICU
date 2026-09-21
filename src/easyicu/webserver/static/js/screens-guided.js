@@ -3299,6 +3299,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     return true;
   }
 
+
   S.guided = {
     section: 'guided', full: true,
     render() {
@@ -3336,6 +3337,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
               <div class="gd-aside-body" id="gdAsideBody"></div>
             </div>
             <div class="gpi-preview-aside" id="gdPreviewAside" hidden></div>
+            <div class="gpi-source-aside" id="gdSourceAside" hidden></div>
           </aside>
           ${STARTUP && STARTUP.markup ? STARTUP.markup(t) : ''}
         </div>
@@ -3365,6 +3367,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       const preview = window.EasyICU.guidedPi.optional('preview');
       if (preview && preview.mount) {
         preview.mount(root.querySelector('#gdPreviewAside'));
+      }
+      const sourceView = window.EasyICU.guidedPi.optional('sourceView');
+      if (sourceView && sourceView.mount) {
+        sourceView.mount(root.querySelector('#gdSourceAside'));
       }
       renderSessions();
       const piOwner = window.EasyICU.guidedPi.require('shell');
@@ -3778,6 +3784,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         const openEl = e.target.closest('[data-open]');
         if (openEl) {
           const target = openEl.dataset.open;
+          if (target === 'entry') {
+            const shell = window.EasyICU && window.EasyICU.guidedPi
+              ? window.EasyICU.guidedPi.optional('shell') : null;
+            if (shell && shell.startEntry) void shell.startEntry();
+            if (location.hash !== '#guided') location.hash = '#guided';
+            return;
+          }
           if (target === 'settings' && openEl.dataset.openCapabilityTab === 'skills') {
             try { window.sessionStorage.setItem('easyicu.settings.openCapabilityTab', 'skills'); } catch (_) {}
           }

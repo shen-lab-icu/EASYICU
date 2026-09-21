@@ -178,20 +178,23 @@ def test_deterministic_primary_runner_agrees_with_capability_registry():
             )
 
 
-def test_competing_risks_stays_a_declared_planned_boundary():
-    # The single most dangerous "nearby estimand" substitution (a Cox HR sold as a
-    # competing-risks CIF) must remain honest: present, planned, no runner, and
-    # consistent with the capability_registry KNOWN_UNSUPPORTED boundary.
+def test_competing_risks_exposes_cif_without_claiming_fine_gray_regression():
+    # The reviewed Aalen-Johansen/Gray kernels may now support an analysis-only
+    # secondary action.  That promotion must not silently claim a Fine-Gray
+    # regression or allow a cause-naive Cox model to stand in for the CIF.
     survival = ams.get_suite("time_to_event")
     assert survival is not None
-    cif = [m for m in survival.methods if "competing_risks" in m.key]
-    assert cif, "competing-risks CIF must be declared in the survival suite"
-    for m in cif:
-        assert m.tier == "planned" and m.implementation == "planned"
-        assert m.runner is None
+    cif = next(m for m in survival.methods if m.key == "competing_risks_cif")
+    assert cif.tier == "standard_supporting"
+    assert cif.implementation == "llm_coded"
+    assert cif.runner is None
+    assert cif.kernel_modules == ("competing_risks", "gray_test")
+    assert "fine-gray" in cif.notes.lower()
+    assert "do not fit" in cif.notes.lower()
+    assert "cause-naive cox" in cif.notes.lower()
     assert any(
-        "competing" in name.lower() for name, _why in cr.KNOWN_UNSUPPORTED_ESTIMANDS
-    ), "competing-risks CIF must also be a capability_registry KNOWN_UNSUPPORTED estimand"
+        "fine-gray" in name.lower() for name, _why in cr.KNOWN_UNSUPPORTED_ESTIMANDS
+    ), "primary/reportable Fine-Gray authority must remain explicitly unsupported"
 
 
 def test_trajectory_is_present_and_not_mislabelled_lcga():
@@ -211,6 +214,21 @@ def test_trajectory_is_present_and_not_mislabelled_lcga():
     assert "only renders" in traj.notes.lower()
     lcga = next(m for m in pheno.methods if m.key == "lcga_gbtm")
     assert lcga.tier == "planned" and lcga.implementation == "planned"
+
+
+def test_frozen_trajectory_subtype_assignment_is_distinct_and_executable():
+    pheno = ams.get_suite("phenotyping")
+    assert pheno is not None
+    assignment = next(
+        method for method in pheno.methods if method.key == "early_subtype_assignment"
+    )
+
+    assert assignment.tier == "exploratory"
+    assert assignment.implementation == "llm_coded"
+    assert assignment.kernel_modules == ("subtype_assignment",)
+    assert assignment.software_packages == ("sklearn",)
+    assert "frozen subtype labels" in assignment.required_inputs[0]
+    assert "not outcome prediction" in assignment.notes.lower()
 
 
 def test_accessors_and_roadmap_nonempty():

@@ -7,6 +7,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
+from easyicu.research_agent.method_skills import MethodSkillPackageNotFound
 from easyicu.webserver import capabilities
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver.catalog import build_catalog, build_concept_lineage
@@ -72,6 +73,22 @@ def post_settings_reset() -> dict:
 def get_capabilities() -> dict:
     """Return backend capability state consumed by Settings and Agent Science."""
     return capabilities.capability_status()
+
+
+@router.get("/api/capabilities/method-skills/{skill_id}/package")
+def get_method_skill_package(skill_id: str) -> dict:
+    """Return the reviewed files for one built-in workflow or method."""
+
+    try:
+        return capabilities.builtin_method_skill_package(skill_id)
+    except MethodSkillPackageNotFound as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "method_skill_package_not_found",
+                "reason": "The requested built-in Skill is not registered.",
+            },
+        ) from exc
 
 
 @router.post("/api/capabilities/tool-check")

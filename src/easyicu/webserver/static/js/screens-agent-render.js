@@ -310,15 +310,26 @@
   function figureGallery(payload) {
     const figs = payload && Array.isArray(payload.figures) ? payload.figures : [];
     const visible = figs
-      .map(row => ({ row, source: boundedPngDataUrl(row && (row.data_url || row.image_data_url)) }))
-      .filter(item => item.row && item.source);
+      .map(row => ({ row, imageSource: boundedPngDataUrl(row && (row.data_url || row.image_data_url)) }))
+      .filter(item => item.row && item.imageSource);
     if (!visible.length) return '';
+    const sourceButton = row => {
+      const source = row && row.source_code && typeof row.source_code === 'object' ? row.source_code : {};
+      const evidenceId = String(source.evidence_id || '');
+      const sha256 = String(source.sha256 || '').toLowerCase();
+      if (!/^[A-Za-z0-9_.-]{1,160}$/.test(evidenceId) || !/^[a-f0-9]{64}$/.test(sha256)) return '';
+      const focusStart = Number(source.focus_start_line || 0);
+      const focusEnd = Number(source.focus_end_line || 0);
+      const focus = Number.isInteger(focusStart) && Number.isInteger(focusEnd) && focusStart > 0 && focusEnd >= focusStart
+        ? ` data-source-focus-start="${focusStart}" data-source-focus-end="${focusEnd}"` : '';
+      return `<button class="ag-figure-source" type="button" data-gpi-source-code data-source-evidence-id="${escAttr(evidenceId)}" data-source-sha256="${escAttr(sha256)}" data-source-title="${escAttr(t('Figure generation source', '图表生成代码'))}" data-source-output="${escAttr(row.label || row.relative_path || 'figure')}" data-source-step="${escAttr(source.produced_by_step || '')}" data-source-producer="${escAttr(source.producer || '')}" data-source-generation="${escAttr(source.generation_mode || '')}" data-source-display-name="${escAttr(source.display_name || 'analysis.py')}" data-source-language="${escAttr(source.language || 'text')}"${focus}>${icon('search', 13)} ${esc(t('View source', '查看源代码'))}</button>`;
+    };
     return `
       <div class="ag-figure-gallery">
-        ${visible.map(({ row, source }, index) => `
+        ${visible.map(({ row, imageSource }, index) => `
           <figure${displayAnchorAttributes(row)} class="${index === 0 || row.tier === 'primary_publication' || row.status === 'canonical_main' ? 'is-primary' : 'is-supporting'}">
-            <img src="${escAttr(source)}" alt="${escAttr(row.label || row.relative_path || 'figure')}" />
-            <figcaption><strong>${esc(row.label || 'figure')}</strong>${row.caption ? `<p class="ag-figure-caption">${esc(row.caption)}</p>` : ''}<span class="mono">${esc(row.relative_path || row.name || '')}</span></figcaption>
+            <img src="${escAttr(imageSource)}" alt="${escAttr(row.label || row.relative_path || 'figure')}" />
+            <figcaption><strong>${esc(row.label || 'figure')}</strong>${row.caption ? `<p class="ag-figure-caption">${esc(row.caption)}</p>` : ''}<span class="mono">${esc(row.relative_path || row.name || '')}</span>${sourceButton(row)}</figcaption>
           </figure>`).join('')}
       </div>`;
   }

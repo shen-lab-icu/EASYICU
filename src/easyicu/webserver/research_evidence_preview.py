@@ -15,7 +15,7 @@ import os
 import re
 import stat
 from pathlib import Path
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Iterable, Mapping
 
 
 SCHEMA_VERSION = "easyicu.web-evidence-preview/2"
@@ -161,6 +161,323 @@ def _load_records(run_dir: Path) -> list[Mapping[str, Any]]:
             "The evidence registry must be a list of evidence records.",
         )
     return [row for row in records if isinstance(row, Mapping)]
+
+
+def _registered_evidence_root(run_dir: str | Path) -> Path:
+    """Resolve a wrapper run to its declared concrete pipeline run."""
+
+    root = Path(run_dir).resolve()
+    if (root / "evidence" / "evidence_index.json").is_file():
+        return root
+    try:
+        raw = _read_regular_file(
+            root / "source_run_manifest.json", max_bytes=4 * 1024 * 1024
+        )
+        manifest = json.loads(raw.decode("utf-8"))
+    except (EvidencePreviewError, UnicodeDecodeError, json.JSONDecodeError):
+        return root
+    if not isinstance(manifest, Mapping):
+        return root
+    run_id = str(manifest.get("run_id") or "").strip()
+    if not _EVIDENCE_ID.fullmatch(run_id):
+        return root
+    pipeline_root = root / "pipeline"
+    candidate = pipeline_root / run_id
+    try:
+        if stat.S_ISLNK(os.lstat(pipeline_root).st_mode):
+            return root
+        if stat.S_ISLNK(os.lstat(candidate).st_mode):
+            return root
+        resolved_pipeline = pipeline_root.resolve(strict=True)
+        resolved_candidate = candidate.resolve(strict=True)
+    except FileNotFoundError:
+        return root
+    if (
+        resolved_candidate.parent != resolved_pipeline
+        or not resolved_candidate.is_dir()
+        or not (resolved_candidate / "evidence" / "evidence_index.json").is_file()
+    ):
+        return root
+    return resolved_candidate
+
+
+def project_review_evidence_refs(
+    run_dir: str | Path,
+    references: Iterable[Any],
+) -> list[Dict[str, Any]]:
+    """Resolve scientific-review file labels to digest-pinned evidence records.
+
+    Scientific readiness findings intentionally store compact, human-readable
+    references such as ``reviewer_report.json`` or
+    ``preplan_literature_bundle.json.screening_decisions``.  The browser must
+    not turn those labels into paths.  This projection joins them against the
+    immutable evidence registry and returns only the coordinates already
+    accepted by :func:`build_evidence_preview`.
+    """
+
+    root = _registered_evidence_root(run_dir)
+    try:
+        records = _load_records(root)
+    except EvidencePreviewError:
+        return []
+
+    candidates: list[tuple[Mapping[str, Any], str]] = []
+    for record in records:
+        evidence_id = str(record.get("evidence_id") or "").strip()
+        digest = str(record.get("sha256") or "").strip().lower()
+        relative_path = str(record.get("relative_path") or "").strip()
+        if (
+            not _EVIDENCE_ID.fullmatch(evidence_id)
+            or not _SHA256.fullmatch(digest)
+            or not relative_path
+        ):
+            continue
+        basename = Path(relative_path).name
+        published_name = basename.split("__", 1)[-1]
+        candidates.append((record, published_name))
+
+    projected: list[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_reference in references:
+        reference = str(raw_reference or "").strip()[:240]
+        if not reference or reference in seen:
+            continue
+        # A suffix after the registered JSON filename is a field locator, not a
+        # filesystem coordinate.  Preserve it as a JSON pointer hint only.
+        match = re.fullmatch(
+            r"([A-Za-z0-9_.-]+\.(?:json|md|csv|tsv|txt))(?:\.([A-Za-z0-9_.-]+))?",
+            reference,
+            re.I,
+        )
+        if not match:
+            continue
+        file_name = match.group(1)
+        pointer_suffix = str(match.group(2) or "").strip(".")
+        record = next(
+            (row for row, published in candidates if published == file_name),
+            None,
+        )
+        if record is None:
+            continue
+        seen.add(reference)
+        evidence_id = str(record.get("evidence_id") or "")
+        projected.append(
+            {
+                "reference": reference,
+                "evidence_id": evidence_id,
+                "sha256": str(record.get("sha256") or "").lower(),
+                "kind": str(record.get("kind") or "artifact")[:80],
+                "label": reference,
+                "description": str(record.get("description") or "")[:500],
+                **(
+                    {"pointer": "/" + pointer_suffix.replace(".", "/")}
+                    if pointer_suffix
+                    else {}
+                ),
+            }
+        )
+    return projected
+
+
+def _verified_code_locator(
+    run_dir: Path,
+    record: Mapping[str, Any],
+    *,
+    focus_token: str = "",
+) -> Dict[str, Any] | None:
+    """Project one digest-verified code record without exposing its run path."""
+
+    if str(record.get("kind") or "").strip().lower() != "code":
+        return None
+    evidence_id = str(record.get("evidence_id") or "").strip()
+    digest = str(record.get("sha256") or "").strip().lower()
+    if not _EVIDENCE_ID.fullmatch(evidence_id) or not _SHA256.fullmatch(digest):
+        return None
+    try:
+        path = _record_path(run_dir, record.get("relative_path"))
+        if path.suffix.lower() not in _CODE_SUFFIXES or not path.is_file():
+            return None
+        if _sha256_file(path) != digest:
+            return None
+    except EvidencePreviewError:
+        return None
+    metadata = record.get("metadata")
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    locator = {
+        "evidence_id": evidence_id,
+        "sha256": digest,
+        "display_name": _source_file_name(record, path),
+        "language": _LANGUAGES.get(path.suffix.lower(), "text"),
+        "description": str(record.get("description") or "")[:500],
+        "produced_by_step": str(
+            record.get("produced_by_step")
+            or metadata.get("promoted_from_step_id")
+            or ""
+        )[:160],
+        "producer": str(record.get("producer") or "")[:160],
+        "generation_mode": str(record.get("generation_mode") or "")[:160],
+    }
+    clean_focus = str(focus_token or "").strip()
+    if clean_focus and len(clean_focus) <= 160:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            lines = []
+        needle = clean_focus.casefold()
+        match = next(
+            (index for index, line in enumerate(lines) if needle in line.casefold()),
+            None,
+        )
+        if match is not None:
+            locator["focus_start_line"] = max(1, match + 1 - 12)
+            locator["focus_end_line"] = min(len(lines), match + 1 + 24)
+    return locator
+
+
+def project_figure_source_code(
+    run_dir: str | Path, gallery: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Attach safe source-code locators to figure-gallery rows.
+
+    The persisted gallery remains unchanged.  Supporting figures bind through
+    their exact ``steps/<step_id>/outputs`` directory; promoted publication
+    figures bind through the registered renderer's ``metadata.figure_id``.
+    Ambiguous, missing, or digest-mismatched code fails closed by omitting the
+    browser action.
+    """
+
+    projected = dict(gallery or {})
+    figures = gallery.get("figures") if isinstance(gallery, Mapping) else None
+    if not isinstance(figures, list):
+        return projected
+    root = _registered_evidence_root(run_dir)
+    try:
+        records = _load_records(root)
+    except EvidencePreviewError:
+        projected["figures"] = [dict(row) if isinstance(row, Mapping) else row for row in figures]
+        return projected
+
+    def code_for_figure_records(
+        figure_records: list[Mapping[str, Any]],
+    ) -> list[Mapping[str, Any]]:
+        if len(figure_records) != 1:
+            return []
+        figure_record = figure_records[0]
+        metadata = figure_record.get("metadata")
+        metadata = metadata if isinstance(metadata, Mapping) else {}
+        script_ids = {
+            str(value or "").strip()
+            for value in (
+                figure_record.get("script_evidence_id"),
+                metadata.get("script_evidence_id"),
+            )
+            if str(value or "").strip()
+        }
+        if script_ids:
+            return [
+                record
+                for record in records
+                if str(record.get("kind") or "").lower() == "code"
+                and str(record.get("evidence_id") or "") in script_ids
+            ]
+        step_id = str(
+            figure_record.get("produced_by_step")
+            or metadata.get("step_id")
+            or ""
+        ).strip()
+        if not step_id:
+            return []
+        return [
+            record
+            for record in records
+            if str(record.get("kind") or "").lower() == "code"
+            and str(record.get("produced_by_step") or "") == step_id
+        ]
+
+    def source_for(row: Mapping[str, Any]) -> Dict[str, Any] | None:
+        relative_path = str(row.get("relative_path") or "").strip().replace("\\", "/")
+        step_match = re.fullmatch(r"steps/([^/]+)/outputs/[^/]+", relative_path)
+        candidates: list[Mapping[str, Any]] = []
+        source_evidence_id = str(row.get("source_evidence_id") or "").strip()
+        if source_evidence_id:
+            candidates = code_for_figure_records(
+                [
+                    record
+                    for record in records
+                    if str(record.get("kind") or "").lower() == "figure"
+                    and str(record.get("evidence_id") or "") == source_evidence_id
+                ]
+            )
+        elif step_match:
+            step_id = step_match.group(1)
+            candidates = [
+                record
+                for record in records
+                if str(record.get("kind") or "").lower() == "code"
+                and str(record.get("produced_by_step") or "") == step_id
+            ]
+        else:
+            figure_id = str(row.get("figure_id") or "").strip()
+            if figure_id:
+                candidates = [
+                    record
+                    for record in records
+                    if str(record.get("kind") or "").lower() == "code"
+                    and isinstance(record.get("metadata"), Mapping)
+                    and str((record.get("metadata") or {}).get("figure_id") or "") == figure_id
+                ]
+                if not candidates:
+                    candidates = code_for_figure_records(
+                        [
+                            record
+                            for record in records
+                            if str(record.get("kind") or "").lower() == "figure"
+                            and isinstance(record.get("metadata"), Mapping)
+                            and str((record.get("metadata") or {}).get("figure_id") or "") == figure_id
+                            and str(record.get("relative_path") or "").lower().endswith(".png")
+                        ]
+                    )
+        if len(candidates) != 1:
+            return None
+        candidate = candidates[0]
+        candidate_metadata = candidate.get("metadata")
+        candidate_metadata = (
+            candidate_metadata if isinstance(candidate_metadata, Mapping) else {}
+        )
+        # Presentation galleries are allowed to omit their internal figure id.
+        # The verified renderer record still carries the exact figure id (or, for
+        # a planner step, the producing step id), so use that stable registry
+        # metadata to open the source at the code that generated this figure.
+        focus_token = next(
+            (
+                value
+                for value in (
+                    str(row.get("figure_id") or "").strip(),
+                    str(candidate_metadata.get("figure_id") or "").strip(),
+                    str(candidate.get("produced_by_step") or "").strip(),
+                )
+                if value
+            ),
+            "",
+        )
+        return _verified_code_locator(
+            root,
+            candidate,
+            focus_token=focus_token,
+        )
+
+    projected_figures: list[Any] = []
+    for item in figures:
+        if not isinstance(item, Mapping):
+            projected_figures.append(item)
+            continue
+        row = dict(item)
+        source = source_for(item)
+        if source:
+            row["source_code"] = source
+        projected_figures.append(row)
+    projected["figures"] = projected_figures
+    return projected
 
 
 def _load_record(

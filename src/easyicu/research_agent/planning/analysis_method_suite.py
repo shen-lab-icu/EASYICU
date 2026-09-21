@@ -296,10 +296,23 @@ _PREDICTION = MethodSuite(
             key="reclassification",
             name="Net reclassification / IDI vs a baseline model",
             purpose="Incremental value of new predictors over an established score.",
-            tier="planned",
-            implementation="planned",
-            produces="NRI / IDI table",
+            tier="exploratory",
+            implementation="llm_coded",
+            produces="bootstrap categorical/continuous NRI + IDI table",
             runner=None,
+            notes=(
+                "The reviewed kernel compares paired old/new probabilities on "
+                "the same binary-outcome subjects. Results remain analysis-only: "
+                "reclassification does not replace calibration, decision-curve "
+                "or external-validation evidence."
+            ),
+            kernel_modules=("reclassification",),
+            required_inputs=(
+                "binary outcome with both event classes represented",
+                "paired baseline-model and updated-model probabilities for identical subjects",
+                "prespecified clinical cutoffs when categorical NRI is requested",
+                "fixed bootstrap count, confidence level and random seed",
+            ),
             alternative_action_ids=("prediction.decision_curve",),
         ),
         AnalysisMethod(
@@ -418,13 +431,26 @@ _SURVIVAL = MethodSuite(
         ),
         AnalysisMethod(
             key="competing_risks_cif",
-            name="Competing-risks cumulative incidence (Fine-Gray / CIF)",
-            purpose="Cause-specific cumulative incidence when a competing event (e.g. death) precludes the outcome.",
-            tier="planned",
-            implementation="planned",
-            produces="cause-specific CIF",
+            name="Aalen-Johansen competing-risk CIF + Gray comparison",
+            purpose="Describe cause-specific cumulative incidence when a competing event precludes the outcome.",
+            tier="standard_supporting",
+            implementation="llm_coded",
+            produces="cause-specific CIF curves + descriptive group difference + Gray test",
             runner=None,
-            notes="A cause-naive Cox HR is NOT a CIF — this stays a KNOWN_UNSUPPORTED_ESTIMAND that fails closed, never approximated.",
+            notes=(
+                "The reviewed kernels provide analysis-only Aalen-Johansen CIFs, "
+                "bootstrap descriptive group differences and an experimental "
+                "Gray K-sample test. They do not fit a Fine-Gray regression and "
+                "must never substitute a cause-naive Cox HR."
+            ),
+            kernel_modules=("competing_risks", "gray_test"),
+            software_packages=("lifelines",),
+            required_inputs=(
+                "non-negative follow-up time from a declared time origin",
+                "closed event coding with 0=censoring and positive competing-event codes",
+                "declared event of interest and optional comparison group",
+                "fixed timeline/bootstrap/seed policy for reported contrasts",
+            ),
         ),
         AnalysisMethod(
             key="time_varying_hr",
@@ -475,6 +501,28 @@ _CAUSAL = MethodSuite(
             notes="Computed by the agent under the declared causal method; the deterministic causal figure can display the registered overlap product.",
         ),
         AnalysisMethod(
+            key="propensity_adjustment",
+            name="Propensity-score matching / stabilised weighting diagnostics",
+            purpose="Construct prespecified matching or IPTW weights and verify overlap and covariate balance before an effect model.",
+            tier="standard_supporting",
+            implementation="llm_coded",
+            produces="propensity scores + matched pairs or stabilised weights + SMD balance table",
+            runner=None,
+            reporting_items=("STROBE 9", "STROBE 12a"),
+            notes=(
+                "The reviewed kernel creates propensity scores, matches/weights "
+                "and balance diagnostics only. It does not estimate an effect; "
+                "the plan must bind its output to a separate outcome-model owner."
+            ),
+            kernel_modules=("propensity_weighting",),
+            required_inputs=(
+                "binary treatment and exact pretreatment covariate roster",
+                "declared estimand and matching or weighting strategy",
+                "caliper/trim/stabilisation policy fixed before outcome inspection",
+                "separate downstream outcome estimator and contrast",
+            ),
+        ),
+        AnalysisMethod(
             key="evalue",
             name="E-value (sensitivity to unmeasured confounding)",
             purpose="How strong an unmeasured confounder would have to be to explain away the effect.",
@@ -507,12 +555,46 @@ _CAUSAL = MethodSuite(
         ),
         AnalysisMethod(
             key="doubly_robust",
-            name="Doubly-robust / matching sensitivity (AIPW, TMLE, PS matching)",
-            purpose="Re-estimate the effect under an alternative identification to test IPTW robustness.",
+            name="Doubly-robust AIPTW sensitivity",
+            purpose="Re-estimate a point-treatment binary-outcome ATE under a doubly robust identification strategy.",
             tier="exploratory",
-            implementation="planned",
-            produces="alternative-estimator effect table",
+            implementation="llm_coded",
+            produces="AIPTW ATE + influence-function SE/CI + positivity diagnostics",
             runner=None,
+            notes=(
+                "The exact action reserves survival_inputs beside the AIPTW kernel "
+                "so event-time reconciliation cannot be evicted by resource "
+                "ranking. This is point-treatment analysis only, not TMLE, a "
+                "longitudinal MSM or a publication-authorized causal finding."
+            ),
+            kernel_modules=("survival_inputs", "doubly_robust"),
+            required_inputs=(
+                "binary point treatment and binary outcome",
+                "exact pretreatment adjustment matrix",
+                "declared consistency, exchangeability and positivity assumptions",
+                "fixed propensity trim bounds, outcome model and random seed",
+            ),
+        ),
+        AnalysisMethod(
+            key="mediation",
+            name="Product-method mediation sensitivity",
+            purpose="Decompose direct and indirect associations under explicit no-interaction and sequential-ignorability assumptions.",
+            tier="exploratory",
+            implementation="llm_coded",
+            produces="natural direct/indirect/total effect table + bootstrap intervals",
+            runner=None,
+            notes=(
+                "The reviewed kernel fails closed unless both identifying "
+                "assumptions are explicitly declared and an empirical interaction "
+                "screen passes. Binary-outcome effects are log-odds approximations."
+            ),
+            kernel_modules=("mediation",),
+            required_inputs=(
+                "temporally ordered exposure, mediator and outcome",
+                "baseline covariates preceding exposure",
+                "explicit no exposure-mediator interaction assumption",
+                "explicit sequential-ignorability assumption and bootstrap policy",
+            ),
         ),
         AnalysisMethod(
             key="g_methods",
@@ -598,9 +680,20 @@ _ASSOCIATION = MethodSuite(
             name="Restricted cubic spline dose-response (continuous exposure)",
             purpose="Non-linear exposure-response without imposing linearity or arbitrary cut-points.",
             tier="standard_supporting",
-            implementation="planned",
+            implementation="llm_coded",
             produces="spline_dose_response.csv (x, log_or, ci) + spline panel",
             runner=None,
+            notes=(
+                "The reviewed kernel uses declared Harrell-style knots, reports a "
+                "Wald non-linearity test and emits delta-method prediction curves."
+            ),
+            kernel_modules=("rcs_dose_response",),
+            required_inputs=(
+                "continuous exposure and declared reference value",
+                "binary or continuous outcome plus exact adjustment matrix",
+                "prespecified knot count/locations and prediction grid",
+                "declared linear/logistic model family and confidence level",
+            ),
         ),
         AnalysisMethod(
             key="evalue",
@@ -625,15 +718,6 @@ _ASSOCIATION = MethodSuite(
             produces="robustness_panel.csv",
             runner="robustness_sensitivity",  # deterministic_robustness + renderer
             reporting_items=("STROBE 12e",),
-        ),
-        AnalysisMethod(
-            key="mediation",
-            name="Mediation / quantitative bias analysis",
-            purpose="Decompose direct/indirect effects or quantify plausible bias.",
-            tier="planned",
-            implementation="planned",
-            produces="mediation / bias-analysis table",
-            runner=None,
         ),
     ),
 )
@@ -730,6 +814,43 @@ _PHENOTYPING = MethodSuite(
                 "internal_phenotype P9",
             ),
             notes="The agent owns the feature representation, time horizon, clustering method, and k-selection. The `phenotyping` runner only renders standardized, source-backed products; it never chooses the science. Trajectory-feature clustering is deliberately not relabelled as LCGA.",
+        ),
+        AnalysisMethod(
+            key="early_subtype_assignment",
+            name="Early-feature assignment to frozen trajectory subtypes",
+            purpose=(
+                "Test whether clinical features observed before the phenotype-defining "
+                "trajectory window can identify an already frozen subtype label."
+            ),
+            tier="exploratory",
+            implementation="llm_coded",
+            produces=(
+                "held-out subtype probabilities + balanced accuracy/macro-F1/log-loss/"
+                "multiclass-Brier + calibration/confusion/coefficient tables"
+            ),
+            runner=None,
+            reporting_items=(
+                "internal_phenotype P5",
+                "TRIPOD+AI 10c",
+                "TRIPOD+AI 15",
+            ),
+            notes=(
+                "This is a supervised assignment model after phenotype discovery, not "
+                "a second clustering fit and not outcome prediction from trajectory "
+                "shape. Subtype labels must be frozen before modelling; early-feature "
+                "construction must precede the trajectory window; development and "
+                "validation patients must be disjoint. Internal performance remains "
+                "analysis-only and does not establish a clinical diagnostic category."
+            ),
+            kernel_modules=("subtype_assignment",),
+            software_packages=("sklearn",),
+            required_inputs=(
+                "frozen subtype labels from a completed trajectory solution",
+                "early clinical feature roster excluding subtype labels and outcomes",
+                "feature-window end strictly before the phenotype-defining trajectory window",
+                "patient-disjoint development and validation cohorts",
+                "prespecified missing-data, calibration and performance reporting rules",
+            ),
         ),
         AnalysisMethod(
             key="lcga_gbtm",
@@ -963,9 +1084,7 @@ def render_method_suite_markdown() -> str:
             packages = (
                 ", ".join(f"`{value}`" for value in method.software_packages) or "—"
             )
-            lines.append(
-                f"| `{suite.family}.{method.key}` | {kernels} | {packages} |"
-            )
+            lines.append(f"| `{suite.family}.{method.key}` | {kernels} | {packages} |")
     lines.append("")
     for suite in METHOD_SUITE_REGISTRY:
         lines.append(f"## {suite.label}")

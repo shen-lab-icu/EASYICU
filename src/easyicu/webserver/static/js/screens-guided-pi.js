@@ -10,7 +10,7 @@
   const IDEA_SOURCE = MODULES.require('ideaSource');
   const HEADER = MODULES.require('header');
   const REGENERATION = MODULES.require('regeneration');
-  const STUDY_WORKSPACE = MODULES.require('studyWorkspace').create({ tr, esc });
+  const STUDY_WORKSPACE = MODULES.require('studyWorkspace').create({ tr, esc, iconHtml });
 
   const state = {
     host: null, conv: null, runtime: null, sessions: [], session: null,
@@ -57,11 +57,23 @@
       .replace(/\bpi_[a-z0-9_]+\b/gi, tr('an EasyICU internal status', 'EasyICU 内部状态'))
       .replace(/\beasyicu\.webserver\.pi_copilot(?:\.[a-z0-9_.]+)?\b/gi, 'EasyICU Copilot');
   }
+  function enhanceWithInteractiveFilePills(html) {
+    if (!html) return '';
+    return html.replace(/<code>\s*([a-zA-Z0-9_\-\u4e00-\u9fa5]+\.(?:csv|tsv|parquet|png|jpg|jpeg|pdf|json|md|py|sh))\s*<\/code>/gi, (match, filename) => {
+      const isImg = /\.(png|jpg|jpeg|svg|gif)$/i.test(filename);
+      const iconSvg = isImg
+        ? '<svg class="pill-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>'
+        : '<svg class="pill-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+      return `<button type="button" class="gpi-file-pill" data-gpi-file="${esc(filename)}" title="${tr('Click to open in workbench', '点击在工作台预览')} ${esc(filename)}" aria-label="Open ${esc(filename)}">${iconSvg}<span class="pill-name">${esc(filename)}</span><svg class="pill-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>`;
+    });
+  }
+
   function assistantTextHtml(value) {
     const renderer = MODULES.require('markdown');
-    return renderer && typeof renderer.render === 'function'
+    const raw = renderer && typeof renderer.render === 'function'
       ? renderer.render(value)
       : esc(value).replace(/\n/g, '<br>');
+    return enhanceWithInteractiveFilePills(raw);
   }
   function api() { return window.EU_API || {}; }
   function isStaticPreview() { return window.location && window.location.protocol === 'file:'; }
@@ -190,8 +202,13 @@
   }
   function setShell(shell) {
     state.shell = shell === 'pi' ? 'pi' : 'legacy';
+    if (state.shell !== 'pi') closeSourceView();
     if (state.conv) state.conv.classList.toggle('pi-active', state.shell === 'pi');
     render();
+  }
+  function closeSourceView() {
+    const sourceView = MODULES.optional('sourceView');
+    if (sourceView && sourceView.close) sourceView.close();
   }
   function rememberSession(id) {
     const key = projectId()
@@ -730,9 +747,6 @@
     const dataConsentHtml = dataConsentRequired
       ? DATA_CONSENT.render(session, { tr, esc, icon: iconHtml })
       : '';
-    const emptyResearchHtml = STARTERS && typeof STARTERS.render === 'function'
-      ? STARTERS.render({ tr, disabled: interactionLocked || stale })
-      : `<div class="gpi-empty"><strong>${tr('Start with the research question', '先描述研究问题')}</strong></div>`;
     const headerOptions = {
       tr, esc, icon: iconHtml,
       projectTitle: displayProjectTitle(state.project && state.project.title, projectId()),
@@ -748,6 +762,23 @@
         ? tr('One model connection for conversation and analysis', '对话与分析共用的一套模型连接')
         : tr('Legacy conversation and analysis bindings', '旧会话的对话与分析绑定'),
     };
+    const composerCardHtml = `<div class="gpi-compose-card${activeChild ? ' is-running' : ''}">
+      ${activeChild ? `<div class="gpi-compose-running" role="status" aria-live="polite" aria-busy="true">
+        <span class="gpi-running-spinner" aria-hidden="true"></span>
+        <span><strong>${esc(activeChild.cancelRequested ? tr('Stopping the research task', '正在停止科研任务') : (activeChild.runningTitle || tr('EasyICU research task is running', 'EasyICU 科研任务正在运行')))}</strong><small>${activeChild.cancelRequested ? tr('The cancellation request was sent. Waiting for the current safe checkpoint.', '已发送停止请求，正在等待当前安全检查点结束。') : tr('New messages are paused until this task finishes or asks for confirmation.', '任务完成或需要你确认后，才可继续发送消息。')}</small></span>
+        <time data-gpi-live-elapsed="${Number(activeChild.startedAt || Date.now())}">${esc(ACTIVITY.durationText ? ACTIVITY.durationText(activeChild.startedAt) : '')}</time>
+        <button class="btn danger sm" type="button" data-gpi-cancel-child-job="${esc(activeChild.childJobId)}" ${activeChild.cancelRequested ? 'disabled' : ''}>${activeChild.cancelRequested ? tr('Stopping…', '正在停止…') : tr('Stop generation', '停止生成')}</button>
+      </div>` : `${!workspace && IDEA_SOURCE ? IDEA_SOURCE.status({ tr, esc }) : ''}${STUDY_WORKSPACE.renderReference(projectId(), session.session_id)}${STUDY_WORKSPACE.renderSkillReference(projectId(), session)}<textarea data-gpi-input rows="2" maxlength="12000" placeholder="${state.projectLoading ? tr('Research status is syncing. Continue when it finishes…', '正在同步研究状态，完成后可继续提问……') : workspace ? tr('Ask EasyICU Copilot to create or edit a project artifact — do not paste patient rows or identifiers.', '让 EasyICU 研究助手创建或编辑当前项目产物——请勿粘贴患者行级数据或标识符。') : tr('What ICU research question would you like to study?', '你想研究什么 ICU 科学问题？')}" ${interactionLocked || stale ? 'disabled' : ''}>${esc(state.draft)}</textarea>
+        <div class="gpi-actions">
+          <div class="gpi-action-leading">${IDEA_SOURCE ? IDEA_SOURCE.controls({ tr, esc, icon: iconHtml, disabled: interactionLocked || stale, allowIdeaSources: !workspace }) : ''}${STUDY_WORKSPACE.renderMaterials(RUN_OUTCOME.collection(state.latestRun, state.workflow), projectId(), session.session_id, interactionLocked || stale || Boolean(state.workflowError))}${STUDY_WORKSPACE.renderSkillPicker(projectId(), session, interactionLocked || stale)}${STUDY_WORKSPACE.renderAccessMode(state.accessMode, accessModeLabel, iconHtml)}<label class="gpi-switch ${state.autoMode ? 'is-active' : ''}" data-gpi-auto-toggle title="${tr('Automatically continue routine workflow confirmations; scientific and data authority gates still stop for review.', '自动继续常规流程确认；科学与数据授权闸门仍会停下等待审阅。')}"><span class="gpi-switch-track"><span class="gpi-switch-thumb"></span></span><span>${tr('Auto advance', '自动推进')}</span></label></div>
+          <div class="gpi-action-trailing">${HEADER.renderModelControl(headerOptions)}
+          ${state.busy ? `<button class="btn danger" type="button" data-gpi-stop>${tr('Stop', '停止')}</button>` : `<button class="btn primary" type="button" data-gpi-send aria-label="${tr('Send', '发送')}" title="${tr('Send', '发送')}" ${interactionLocked || stale ? 'disabled' : ''}>${iconHtml('arrow', 15)}</button>`}</div>
+        </div>`}
+    </div>`;
+    const emptyResearchHtml = STARTERS && typeof STARTERS.render === 'function'
+      ? STARTERS.render({ tr, disabled: interactionLocked || stale,
+        composer: `<div class="gpi-compose gpi-entry-compose">${composerCardHtml}</div>` })
+      : `<div class="gpi-empty"><strong>${tr('Start with the research question', '先描述研究问题')}</strong></div>`;
     return `
       <div class="gpi-panel${emptyResearch ? ' gpi-empty-session' : ''}${resultsView ? ' gpi-results-session' : ''}">
         ${HEADER.render(headerOptions)}
@@ -767,21 +798,7 @@
           ${showProjectContinuationCards && !dataConsentRequired ? (COHORT_ELIGIBILITY.render() || workflowConfirmationHtml()) : ''}
         </div>
         ${state.error ? `<div class="gpi-error">${esc(state.error)}</div>` : ''}
-        <div class="gpi-compose">
-          <div class="gpi-compose-card${activeChild ? ' is-running' : ''}">
-            ${activeChild ? `<div class="gpi-compose-running" role="status" aria-live="polite" aria-busy="true">
-              <span class="gpi-running-spinner" aria-hidden="true"></span>
-              <span><strong>${esc(activeChild.cancelRequested ? tr('Stopping the research task', '正在停止科研任务') : (activeChild.runningTitle || tr('EasyICU research task is running', 'EasyICU 科研任务正在运行')))}</strong><small>${activeChild.cancelRequested ? tr('The cancellation request was sent. Waiting for the current safe checkpoint.', '已发送停止请求，正在等待当前安全检查点结束。') : tr('New messages are paused until this task finishes or asks for confirmation.', '任务完成或需要你确认后，才可继续发送消息。')}</small></span>
-              <time data-gpi-live-elapsed="${Number(activeChild.startedAt || Date.now())}">${esc(ACTIVITY.durationText ? ACTIVITY.durationText(activeChild.startedAt) : '')}</time>
-              <button class="btn danger sm" type="button" data-gpi-cancel-child-job="${esc(activeChild.childJobId)}" ${activeChild.cancelRequested ? 'disabled' : ''}>${activeChild.cancelRequested ? tr('Stopping…', '正在停止…') : tr('Stop generation', '停止生成')}</button>
-            </div>` : `${!workspace && IDEA_SOURCE ? IDEA_SOURCE.status({ tr, esc }) : ''}${STUDY_WORKSPACE.renderReference(projectId(), session.session_id)}${STUDY_WORKSPACE.renderSkillReference(projectId(), session)}<textarea data-gpi-input rows="2" maxlength="12000" placeholder="${state.projectLoading ? tr('Research status is syncing. Continue when it finishes…', '正在同步研究状态，完成后可继续提问……') : workspace ? tr('Ask EasyICU Copilot to create or edit a project artifact — do not paste patient rows or identifiers.', '让 EasyICU 研究助手创建或编辑当前项目产物——请勿粘贴患者行级数据或标识符。') : tr('Describe your research idea or question…', '描述你的想法或研究问题……')}" ${interactionLocked || stale ? 'disabled' : ''}>${esc(state.draft)}</textarea>
-              <div class="gpi-actions">
-                <div class="gpi-action-leading">${!workspace && IDEA_SOURCE ? IDEA_SOURCE.controls({ tr, esc, icon: iconHtml, disabled: interactionLocked || stale }) : ''}${!workspace ? STUDY_WORKSPACE.renderMaterials(RUN_OUTCOME.collection(state.latestRun, state.workflow), projectId(), session.session_id, interactionLocked || stale || Boolean(state.workflowError)) : ''}${STUDY_WORKSPACE.renderSkillPicker(projectId(), session, interactionLocked || stale)}${STUDY_WORKSPACE.renderAccessMode(state.accessMode, accessModeLabel, iconHtml)}</div>
-                <div class="gpi-action-trailing">${HEADER.renderModelControl(headerOptions)}
-                ${state.busy ? `<button class="btn danger" type="button" data-gpi-stop>${tr('Stop', '停止')}</button>` : `<button class="btn primary" type="button" data-gpi-send aria-label="${tr('Send', '发送')}" title="${tr('Send', '发送')}" ${interactionLocked || stale ? 'disabled' : ''}>${iconHtml('arrow', 15)}</button>`}</div>
-              </div>`}
-          </div>
-        </div>
+        ${emptyResearch ? '' : `<div class="gpi-compose">${composerCardHtml}</div>`}
     </div>`;
   }
 
@@ -832,6 +849,8 @@
     STUDY_WORKSPACE.capture(state.host);
     const previousLog = preserveScroll && state.host.querySelector('[data-gpi-log]');
     const previousTop = previousLog ? previousLog.scrollTop : null;
+    const previousConnection = state.host.querySelector('[data-gpi-connection-page]');
+    const previousConnectionTop = previousConnection ? previousConnection.scrollTop : null;
     if (!state.demoMode) RUN_FILES.sync();
     const restoring = !state.session && (state.loading || state.projectLoading || state.projectDiscoveryLoading);
     const setupFocused = !restoring && state.shell !== 'legacy'
@@ -839,13 +858,21 @@
       && (state.showSetup || !connectionReady() || state.projectIssue === 'pi_project_study_context_missing');
     const emptySessionFocused = !restoring && !setupFocused && state.shell !== 'legacy'
       && !state.demoMode && Boolean(state.session) && agentMode() !== 'workspace'
-      && state.messages.length === 0 && state.workflowReceipts.length === 0
-      && !RUN_OUTCOME.resultsAvailable(state.latestRun, state.workflow);
+      && state.messages.length === 0 && state.workflowReceipts.length === 0;
     const main = state.host.closest('.gd-main');
     if (main) {
       main.classList.toggle('gpi-workspace', state.shell !== 'legacy');
       main.classList.toggle('gpi-setup-focus', setupFocused);
       main.classList.toggle('gpi-empty-session-focus', emptySessionFocused);
+    }
+    const desktopShell = window.EU_DESKTOP_MODULE_SHELL;
+    if (desktopShell && desktopShell.rememberContext && projectId()) {
+      desktopShell.rememberContext({
+        projectId: projectId(),
+        projectTitle: displayProjectTitle(state.project && state.project.title, projectId()),
+        sessionId: state.session && state.session.session_id,
+        sessionTitle: state.session ? navigationSessionTitle(state.session) : tr('New research task', '新研究任务'),
+      });
     }
     state.host.hidden = false;
     state.host.innerHTML = restoring
@@ -870,14 +897,24 @@
       selectedId: state.session && state.session.session_id, loading: restoring, disabled: state.busy || Boolean(state.childJobId) || state.projectLoading,
       visible: state.shell !== 'legacy', title: navigationSessionTitle, status: sessionStatusLabel,
       time: compactSessionTime, open: openSession, create: createSession,
-      resources: RUN_OUTCOME.collection(state.latestRun, state.workflow), openResource: EVENTS.openResource });
+      resources: RUN_OUTCOME.collection(state.latestRun, state.workflow), openResource: EVENTS.openResource,
+      materialsInteractive: !emptySessionFocused, rename: renameSession, remove: removeEmptySession });
     requestAnimationFrame(() => {
       STUDY_WORKSPACE.restoreMaterials(state.host);
+      // Opening a deep-linked artifact while the project/session is still
+      // restoring lets openSession() immediately close it and erase the URL.
+      // Wait until the selected conversation is authoritative, then restore
+      // the digest-pinned artifact/evidence view once the normal shell exists.
+      if (!restoring && state.session && preview && preview.restoreFromLocation) {
+        preview.restoreFromLocation(projectId(), previewWorkflowContext());
+      }
       const log = state.host && state.host.querySelector('[data-gpi-log]');
       if (log) {
         log.scrollTop = previousTop !== null ? previousTop : state.demoScrollTopPending ? 0 : log.scrollHeight;
         state.demoScrollTopPending = false;
       }
+      const connectionPage = state.host && state.host.querySelector('[data-gpi-connection-page]');
+      if (connectionPage) connectionPage.scrollTop = previousConnectionTop === null ? 0 : previousConnectionTop;
       ACTIVITY.syncLiveClock(state.host, state.busy || Boolean(state.childJobId));
     });
   }
@@ -912,6 +949,7 @@
 
   async function createSession() {
     if (state.creating || state.projectLoading || !projectId()) return;
+    closeSourceView();
     const expectedProjectId = projectId();
     const selectionRevision = ++state.sessionSelectionRevision;
     if (!connectionReady()) {
@@ -971,9 +1009,69 @@
     finally { state.creating = false; render(); }
   }
 
+  async function renameSession(row) {
+    if (!row || state.busy || state.childJobId || !api().renamePiCopilotSession) return;
+    const current = navigationSessionTitle(row);
+    const requested = window.prompt(tr('Rename this task', '重命名任务'), current);
+    if (requested === null) return;
+    const title = String(requested || '').replace(/\s+/g, ' ').trim().slice(0, 100);
+    if (!title || title === current) return;
+    try {
+      const payload = await api().renamePiCopilotSession(row.session_id, {
+        project_id: projectId(), title,
+      });
+      const renamed = payload && payload.session;
+      if (!renamed) return;
+      state.sessions = state.sessions.map(item => item.session_id === renamed.session_id ? { ...item, ...renamed } : item);
+      if (state.session && state.session.session_id === renamed.session_id) state.session = { ...state.session, ...renamed };
+      state.error = '';
+    } catch (error) {
+      state.error = errorText(error);
+    }
+    render();
+  }
+
+  async function removeEmptySession(row) {
+    if (!row || row.has_history || state.busy || state.childJobId || !api().deleteEmptyPiCopilotSession) return;
+    if (!window.confirm(tr('Remove this empty task? No conversation or result will be deleted.', '删除这个空任务吗？此操作不会删除任何对话或研究成果。'))) return;
+    const deletingSelected = Boolean(state.session && state.session.session_id === row.session_id);
+    try {
+      await api().deleteEmptyPiCopilotSession(row.session_id, {
+        project_id: projectId(), confirm_empty: true,
+      });
+      state.sessions = state.sessions.filter(item => item.session_id !== row.session_id);
+      state.error = '';
+      if (!deletingSelected) { render(); return; }
+      state.sessionSelectionRevision += 1;
+      state.session = null;
+      state.messages = [];
+      state.workflowReceipts = [];
+      state.draft = '';
+      rememberSession('');
+      const preview = MODULES.optional('preview');
+      if (preview && preview.close) preview.close();
+      const projectOwner = MODULES.require('project');
+      if (projectOwner && projectOwner.syncLocation) projectOwner.syncLocation(projectId(), '');
+      render();
+      const next = state.sessions.find(sessionMatchesUiLanguage);
+      if (next) await openSession(next.session_id);
+    } catch (error) {
+      state.error = errorText(error);
+      render();
+    }
+  }
+
   async function openSession(sessionId, selectionRevision, refreshWorkflow) {
     const expectedProjectId = projectId();
     if (!expectedProjectId) return;
+    closeSourceView();
+    const preview = MODULES.optional('preview');
+    const previewParams = typeof window !== 'undefined' && window.location
+      ? new URLSearchParams(window.location.search || '') : null;
+    const preservePreviewLocation = Boolean(previewParams
+      && previewParams.get('pi_session') === String(sessionId || '')
+      && ['artifact', 'evidence'].includes(previewParams.get('pi_view')));
+    if (preview && preview.close) preview.close({ preserveLocation: preservePreviewLocation });
     const expectedSelectionRevision = selectionRevision == null
       ? ++state.sessionSelectionRevision : selectionRevision;
     closeChildSource();
@@ -1076,6 +1174,7 @@
     if (state.busy || next === agentMode()) return;
     closeSource();
     closeChildSource();
+    closeSourceView();
     state.error = '';
     state.pendingAuthorityRebind = false;
     const preview = MODULES.optional('preview');
@@ -1426,6 +1525,7 @@
     }
     closeSource();
     closeChildSource();
+    closeSourceView();
     state.sessionSelectionRevision += 1;
     state.demoMode = false;
     state.demoScrollTopPending = false;
@@ -1467,7 +1567,12 @@
     state.pendingAuthorityRebind = false;
     const preview = MODULES.optional('preview');
     if (preview && preview.clearProject) {
-      preview.clearProject();
+      const previewParams = typeof window !== 'undefined' && window.location
+        ? new URLSearchParams(window.location.search || '') : null;
+      const preservePreviewLocation = Boolean(next && previewParams
+        && previewParams.get('pi_project') === next.id
+        && ['artifact', 'evidence'].includes(previewParams.get('pi_view')));
+      preview.clearProject({ preserveLocation: preservePreviewLocation });
     }
     render();
     if (next) {
@@ -1772,6 +1877,30 @@
     const prompt = studySetupReviewPrompt(state.workflow);
     await sendText(prompt, ['configure']);
   }
+  async function startEntry() {
+    setShell('pi');
+    const preview = MODULES.optional('preview');
+    if (preview && preview.close) preview.close();
+    if (state.session && state.messages.length === 0 && state.workflowReceipts.length === 0) {
+      render();
+      return;
+    }
+    state.sessionSelectionRevision += 1;
+    state.session = null;
+    state.messages = [];
+    state.draft = '';
+    state.editingMessageId = '';
+    state.pendingEntryIntent = '';
+    state.error = '';
+    STUDY_WORKSPACE.removeReference();
+    STUDY_WORKSPACE.removeSkill();
+    STUDY_WORKSPACE.removeMethod();
+    rememberSession('');
+    const projectOwner = MODULES.require('project');
+    if (projectOwner && projectOwner.syncLocation) projectOwner.syncLocation(projectId(), '');
+    render();
+    await createSession();
+  }
   async function stopMessage() {
     if (!state.session || !state.busy) return;
     try {
@@ -1845,7 +1974,12 @@
     // seeding before it completed made Open from Skill Hub silently disappear.
     if (state.conv) state.conv.classList.add('pi-active');
     wire(); document.addEventListener('click', dismissHeaderOverflow);
+    const capabilitiesReady = api().loadCapabilities
+      ? Promise.resolve(api().loadCapabilities()).catch(() => null)
+      : Promise.resolve(null);
     state.startupPromise = Promise.resolve(loadStatus()).then(async () => {
+      await capabilitiesReady;
+      if (state.host) render(true);
       const hubIntent = STUDY_WORKSPACE.hasHubIntent(), previousSessionId = state.session && state.session.session_id;
       if (hubIntent && projectId() && state.session && !state.creating) await createSession();
       if (hubIntent && previousSessionId && state.session && state.session.session_id === previousSessionId) return;
@@ -1873,6 +2007,7 @@
     mount,
     unmount,
     setShell,
+    startEntry,
     bindProject,
     isActive,
     rebind,

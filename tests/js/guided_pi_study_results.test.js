@@ -32,10 +32,14 @@ const latest = {
   analysis_validated: true, manuscript_ready: true, report_revision_ready: true,
   report_revision_pdf_ready: true,
   artifact_refs: [{ ...ref('evidence_ledger.json'), sha256: ledgerSha },
-    ref('result_tables.json'), ref('figure_gallery.json'),
+    ref('result_tables.json'), ref('figure_gallery.json'), ref('quality_gate.json'),
     ref('literature_evidence.json'), ref('scientific_readiness.json'),
     ref('manuscript_scaffold.pdf', 'research_document'),
     { ...ref('manuscript_revision.pdf', 'research_document'), sha256: pdfSha }],
+  review_evidence_refs: [{
+    reference: 'reviewer_report.json', evidence_id: 'reviewer_report_json',
+    sha256: 'e'.repeat(64), kind: 'log', description: 'Registered reviewer report.',
+  }],
 };
 const workflow = { current_stage: 'interpretation', stages: [
   { id: 'analysis', status: 'complete' }, { id: 'interpretation', status: 'review_required' },
@@ -103,8 +107,15 @@ const host = {
   replaceChildren() { replacements++; this.innerHTML = ''; },
 };
 global.document = { getElementById(id) { return id === 'gdContextAside' ? aside : id === 'gdStudyAside' ? study : null; } };
+global.location = new URL('http://127.0.0.1:8770/?pi_project=project_current#guided');
+global.history = { state: null, replaceState(_state, _title, url) { global.location = new URL(url); } };
 global.EU_API = { piCopilotResearchDocumentUrl: (project, run, artifact, digest) => `/preview/${project}/${run}/${artifact}?sha=${digest}` };
 require(path.join(jsRoot, 'product-labels.js'));
+modules.declare('evidencePreview', {
+  kindLabel: () => 'File',
+  render: () => '<div>registered evidence</div>',
+});
+modules.declare('literature', { renderArtifact: () => '' });
 require(path.join(jsRoot, 'screens-guided-pi-preview.js'));
 const preview = modules.require('preview');
 preview.mount(host);
@@ -112,6 +123,8 @@ const opened = [];
 preview.setStudyResources(collection, 'project_current', row => opened.push(row));
 const pdf = collection.find(row => row.artifact === 'manuscript_revision.pdf');
 assert.equal(preview.open(pdf, 'project_current', { currentRunId: 'run_current' }), true);
+assert.equal(global.location.searchParams.get('pi_view_artifact'), 'manuscript_revision.pdf');
+assert.equal(global.location.searchParams.get('pi_view_sha'), pdfSha);
 assert.match(host.innerHTML, /This run’s results/);
 assert.match(host.innerHTML, /data-gpi-study-resource="0"/);
 assert.match(host.innerHTML, new RegExp(pdfSha));
@@ -149,9 +162,26 @@ assert.ok(!classes.has('gpi-preview-open'));
 preview.open(pdf, 'project_current');
 assert.doesNotMatch(host.innerHTML, /data-gpi-study-resource="/);
 preview.close();
+assert.equal(global.location.searchParams.has('pi_view'), false);
+global.location = new URL(`http://127.0.0.1:8770/?pi_project=project_current&pi_view=artifact&pi_view_kind=research_document&pi_view_run=run_current&pi_view_artifact=manuscript_revision.pdf&pi_view_sha=${pdfSha}#guided`);
+assert.equal(preview.restoreFromLocation('project_current', { currentRunId: 'run_current' }), true);
+assert.match(host.innerHTML, /manuscript_revision\.pdf/);
+preview.close();
+global.EU_API.loadPiCopilotResearchArtifact = async () => ({ payload: {}, governance: {} });
+global.EU_API.loadPiCopilotResearchEvidence = async () => ({ payload: { renderer: 'metadata' } });
+const evidenceSha = 'e'.repeat(64);
+global.location = new URL(`http://127.0.0.1:8770/?pi_project=project_current&pi_view=evidence&pi_view_kind=research_artifact&pi_view_run=run_current&pi_view_artifact=scientific_readiness.json&pi_view_sha=${artifactSha}&pi_view_evidence=reviewer_report_json&pi_view_evidence_sha=${evidenceSha}&pi_view_evidence_kind=log#guided`);
+assert.equal(preview.restoreFromLocation('project_current', { currentRunId: 'run_current' }), true);
+assert.equal(global.location.searchParams.get('pi_view'), 'evidence');
+assert.equal(global.location.searchParams.get('pi_view_evidence'), 'reviewer_report_json');
+assert.match(host.innerHTML, /data-gpi-evidence-tab="reviewer_report_json"/);
+assert.match(host.innerHTML, /aria-label="Close evidence tab"/);
+preview.clearProject({ preserveLocation: true });
+assert.equal(global.location.searchParams.get('pi_view'), 'evidence');
+preview.close();
 
 // Material selection resolves against the current host collection, never a stale row index.
-const materialWorkspace = modules.require('studyWorkspace').create({ tr: en => en, esc: EU_HTML.esc });
+const materialWorkspace = modules.require('studyWorkspace').create({ tr: en => en, esc: EU_HTML.esc, iconHtml: () => '' });
 const materialContext = JSON.stringify(['project_current', 'session_a']);
 const materialRow = { dataset: { gpiMaterialKey: JSON.stringify([pdf.kind, pdf.run_id, pdf.artifact, pdf.sha256]) } };
 const materialMenu = { dataset: { gpiMaterialPicker: materialContext } };
@@ -161,6 +191,7 @@ assert.equal(materialWorkspace.selectedMaterial(materialButton, collection, 'pro
 assert.equal(materialWorkspace.selectedMaterial(materialButton, collection, 'project_current', 'session_b'), null);
 assert.equal(materialWorkspace.selectedMaterial(materialButton, [{ ...pdf, sha256: 'f'.repeat(64) }], 'project_current', 'session_a'), null);
 assert.equal(materialWorkspace.selectedMaterial(materialButton, [], 'project_current', 'session_a'), null);
+materialWorkspace.openMaterials('project_current', 'session_a');
 assert.doesNotMatch(materialWorkspace.renderMaterials([{ ...pdf, sha256: '' }], 'project_current', 'session_a', false), /data-gpi-material-row/);
 assert.match(materialWorkspace.renderMaterials([], 'project_current', 'session_a', false), /No results yet/);
 assert.doesNotMatch(materialWorkspace.renderMaterials(collection, 'project_current', 'session_a', true), /data-gpi-material-reference/);
@@ -175,9 +206,33 @@ assert.equal(materialRows[1].hidden, true);
 assert.equal(noMatches.hidden, true);
 materialWorkspace.filterMaterials(materialHost, 'not present');
 assert.equal(noMatches.hidden, false);
+materialWorkspace.openMaterials('project_current', 'session_a');
 materialWorkspace.capture(materialHost);
 assert.match(materialWorkspace.renderMaterials(collection, 'project_current', 'session_a', false), /value="PDF"/);
 assert.doesNotMatch(materialWorkspace.renderMaterials(collection, 'project_current', 'session_b', false), /value="PDF"| open>/);
+
+// Project tasks expose maintenance without making the whole row an ambiguous menu target.
+const originalGetElementById = global.document.getElementById;
+const taskRail = { hidden: true, innerHTML: '' };
+global.document.getElementById = id => id === 'gdConversationRail' ? taskRail : originalGetElementById(id);
+materialWorkspace.syncNavigation({
+  visible: true, projectId: 'project_current', loading: false, disabled: false,
+  sessions: [{ session_id: 'pi_empty', title: 'New task', has_history: false, created_at: '2026-09-21T00:00:00Z' }],
+  selectedId: 'pi_empty', title: row => row.title, status: () => 'Not started', time: () => '',
+  open: () => {}, create: () => {}, rename: () => {}, remove: () => {}, resources: [],
+});
+assert.match(taskRail.innerHTML, /data-gpi-rail-rename="pi_empty"/);
+assert.match(taskRail.innerHTML, /data-gpi-rail-remove="pi_empty"/);
+materialWorkspace.syncNavigation({
+  visible: true, projectId: 'project_current', loading: false, disabled: false,
+  sessions: [{ session_id: 'pi_history', title: 'Lactate review', has_history: true, last_turn_status: 'done' }],
+  selectedId: '', title: row => row.title, status: () => 'Completed', time: () => '',
+  open: () => {}, create: () => {}, rename: () => {}, remove: () => {}, resources: [],
+});
+assert.match(taskRail.innerHTML, /data-gpi-rail-rename="pi_history"/);
+assert.doesNotMatch(taskRail.innerHTML, /data-gpi-rail-remove="pi_history"/);
+assert.match(materialWorkspace.renderAccessMode('assist', key => key, () => ''), /title="Auto-approve low-risk setup and inspection/);
+global.document.getElementById = originalGetElementById;
 
 // Missing/failed checks cannot acquire a positive scientific status through presentation.
 const pendingRun = { ...latest, analysis_validated: false, numeric_verified: false };
@@ -188,7 +243,7 @@ assert.doesNotMatch(pendingHtml, /is-checked|Execution, evidence binding, and nu
 assert.match(outcome.render({ ...latest, analysis_validated: undefined, numeric_verified: undefined }, workflow), /Unreported/);
 assert.match(outcome.render({ ...latest, numeric_verified: true }, workflow), /is-checked/);
 const noRecords = outcome.render({ ...pendingRun, artifact_refs: latest.artifact_refs.map(row => ({ ...row, run_id: 'run_old' })) }, workflow);
-assert.match(noRecords, /No record available/);
+assert.match(noRecords, /Unreported/);
 assert.doesNotMatch(noRecords.match(/<section class="gpi-review-summary"[\s\S]*?<\/section>/)[0], /data-gpi-resource-run/);
 assert.equal(JSON.stringify({ latest, workflow }), original);
 process.stdout.write('Materials filtering, context and digest isolation, exact PDF download and review status contracts passed.\n');
@@ -258,7 +313,7 @@ assert.match(header.render(options), /data-gpi-mode-switch="workspace"/);
 assert.match(header.renderModelControl(options), /data-gpi-config/);
 assert.match(header.renderModelControl(options), /provider · model/);
 
-const workspace = modules.require('studyWorkspace').create({ tr: en => en, esc: EU_HTML.esc });
+const workspace = modules.require('studyWorkspace').create({ tr: en => en, esc: EU_HTML.esc, iconHtml: () => '' });
 // References are pinned to exact versions and cannot cross projects or sessions.
 assert.equal(workspace.setReference(pdf, 'project_current', 'session_a'), true);
 assert.match(workspace.renderReference('project_current', 'session_a'), /Current PDF/);
@@ -355,12 +410,18 @@ const navigationCalls = [];
 const navigation = { projectId: 'p1', visible: true, sessions: [{ session_id: 's1', title: 'Current session',
   last_turn_status: 'done', last_activity_at: '2026-09-18T06:20:20Z' }], selectedId: 's1',
   title: row => row.title, status: () => 'Completed', time: () => '1d',
-  open: id => navigationCalls.push(id), create: () => navigationCalls.push('new') };
+  open: id => navigationCalls.push(id), create: () => navigationCalls.push('new'),
+  resources: [ref('result_tables.json')], openResource: row => navigationCalls.push(row.artifact) };
 workspace.syncNavigation(navigation);
 assert.match(sessionRail.innerHTML, /aria-current="page"/);
 assert.match(sessionRail.innerHTML, /is-complete/);
 assert.match(sessionRail.innerHTML, /Completed/);
 assert.match(sessionRail.innerHTML, /<time[^>]*>1d<\/time>/);
+assert.match(sessionRail.innerHTML, /data-gpi-rail-material="0"/);
+workspace.syncNavigation({ ...navigation, materialsInteractive: false });
+assert.match(sessionRail.innerHTML, /class="gpi-project-material-row"/);
+assert.doesNotMatch(sessionRail.innerHTML, /data-gpi-rail-material="0"/);
+workspace.syncNavigation(navigation);
 const sessionClick = id => ({ target: { closest: query => query === '[data-gpi-rail-session]' ? { dataset: { gpiRailSession: id } } : null } });
 sessionRail.onclick(sessionClick('other-session'));
 assert.deepEqual(navigationCalls, []);
@@ -393,6 +454,7 @@ const frozenSession = { session_id: 'session_current', extension_activation: { s
   { name: 'clear-writing', description: 'Keep reports concise.', digest: skillDigest, stages: ['conversation'] },
   { name: 'report-only', description: 'Writing stage.', digest: 'f'.repeat(64), stages: ['writing'] },
 ] } };
+workspace.openSkills('project_current', frozenSession);
 assert.match(workspace.renderSkillPicker('project_current', frozenSession, false), /clear-writing/);
 assert.doesNotMatch(workspace.renderSkillPicker('project_current', frozenSession, false), /report-only/);
 const skillButton = { closest: selector => selector === '[data-gpi-skill-row]'
@@ -410,6 +472,24 @@ assert.equal(workspace.decorateSkillMessage('Explain the result.', 'project_curr
   extension_activation: { skills: [] } }), 'Explain the result.');
 workspace.consumeSkill('project_current', frozenSession);
 assert.doesNotMatch(workspace.renderSkillReference('project_current', frozenSession), /clear-writing/);
+global.EU_CAPABILITIES = { capabilities: { method_skills: {
+  items: [{ id: 'table-one', title: 'Table 1', title_zh: '基线表', category: 'Descriptive', category_zh: '描述性分析',
+    description: 'Describe a cohort.', description_zh: '描述队列。', prompt: 'Describe the cohort.', prompt_zh: '请描述队列。',
+    capability_id: 'descriptive_v1', action_ids: ['table.one'], claim_ceiling: 'analysis_only' }],
+  components: [{ id: 'cox', title: 'Cox model', title_zh: 'Cox 模型', category: 'Survival', category_zh: '生存分析',
+    description: 'Estimate a hazard ratio.', description_zh: '估计风险比。', prompt: 'Fit a Cox model.', prompt_zh: '请拟合 Cox 模型。',
+    method_family: 'time_to_event', method_key: 'cox_hr', claim_ceiling: 'reportable' }],
+} } };
+workspace.openSkills('project_current', frozenSession);
+assert.match(workspace.renderSkillPicker('project_current', frozenSession, false), /data-gpi-catalog-select/);
+const methodAction = workspace.selectCatalog({ dataset: { gpiSkillKind: 'method', gpiSkillId: 'table-one' } });
+assert.equal(methodAction.text, 'Describe the cohort.');
+assert.equal(methodAction.method.capabilityId, 'descriptive_v1');
+workspace.openSkills('project_current', frozenSession);
+workspace.setSkillCatalog('methods');
+assert.match(workspace.renderSkillPicker('project_current', frozenSession, false), /Cox model/);
+const componentAction = workspace.selectCatalog({ dataset: { gpiSkillKind: 'method_component', gpiSkillId: 'cox' } });
+assert.equal(componentAction.method.methodFamily, 'time_to_event');
 const pendingSkillHubIntent = new Map([['easyicu.skillHub.use', JSON.stringify({ name: 'clear-writing', digest: skillDigest })]]);
 global.sessionStorage = { getItem: key => pendingSkillHubIntent.get(key) || null,
   removeItem: key => pendingSkillHubIntent.delete(key) };
@@ -444,7 +524,7 @@ pendingSkillHubIntent.set('easyicu.skillHub.question', 'Use the survival workflo
 assert.equal(workspace.hasHubIntent(), true, 'A method Skill starts a new task');
 workspace.applyHubIntent('project_current', frozenSession);
 assert.match(workspace.renderSkillReference('project_current', frozenSession), /Survival and time-to-event analysis/);
-assert.match(workspace.renderSkillReference('project_current', frozenSession), /reportable contract/);
+assert.doesNotMatch(workspace.renderSkillReference('project_current', frozenSession), /reportable contract|analysis only/);
 const methodMessage = workspace.decorateSkillMessage('Analyze time to event.', 'project_current', frozenSession);
 assert.match(methodMessage, /EasyICU method workflow request/);
 assert.match(methodMessage, /survival_time_to_event_v1/);
@@ -476,7 +556,7 @@ const detailedOutcome = modules.require('runOutcome').create({
       assert.equal(artifact, 'scientific_readiness.json');
       assert.equal(digest, artifactSha);
       return { ok: true, payload: { run_id: run, domains: [
-        { domain: 'analysis', status: 'blocked', summary: 'Prespecified model is incomplete.', evidence_refs: ['quality_gate.json'] },
+        { domain: 'analysis', status: 'blocked', summary: 'Prespecified model is incomplete.', evidence_refs: ['reviewer_report.json'] },
       ], findings: [
         { domain: 'analysis', severity: 'blocker', code: 'MODEL_INCOMPLETE', message: 'A required model is missing.', remediation: 'Complete the model.', evidence_refs: ['quality_gate.json'] },
       ] } };
@@ -491,6 +571,11 @@ detailedOutcome.loadScientificReview(latest, workflow).then(async () => {
   assert.match(reviewNode.outerHTML, /A required model is missing/);
   assert.match(reviewNode.outerHTML, /Complete the model/);
   assert.match(reviewNode.outerHTML, /MODEL_INCOMPLETE/);
+  assert.match(reviewNode.outerHTML, /data-gpi-resource-artifact="quality_gate\.json"/);
+  assert.match(reviewNode.outerHTML, /data-gpi-resource-digest="[a-f0-9]{64}"/);
+  assert.match(reviewNode.outerHTML, /data-gpi-evidence-open/);
+  assert.match(reviewNode.outerHTML, /data-evidence-id="reviewer_report_json"/);
+  assert.match(reviewNode.outerHTML, new RegExp(`data-evidence-sha256="${'e'.repeat(64)}"`));
   assert.doesNotMatch(detailedOutcome.render({ ...latest, run_id: 'run_other' }, workflow), /Prespecified model is incomplete/);
   const zhReviewNode = { dataset: { gpiReviewRun: 'run_current' }, outerHTML: '' };
   const zhOutcome = modules.require('runOutcome').create({

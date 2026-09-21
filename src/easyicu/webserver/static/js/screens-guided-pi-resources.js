@@ -84,6 +84,11 @@
     }
     function button(resource, overrideLabel) {
       if (!resource) return '';
+      const evidenceId = String(resource.evidence_id || '').trim();
+      const evidenceSha = String(resource.evidence_sha256 || resource.evidence_digest || '').trim().toLowerCase();
+      const evidenceAttrs = /^[A-Za-z0-9_.-]{1,160}$/.test(evidenceId) && /^[a-f0-9]{64}$/.test(evidenceSha)
+        ? ` data-gpi-evidence-open data-evidence-id="${esc(evidenceId)}" data-evidence-sha256="${esc(evidenceSha)}" data-evidence-kind="${esc(resource.evidence_kind || 'artifact')}" data-evidence-label="${esc(resource.evidence_label || overrideLabel || label(resource))}" data-evidence-pointer="${esc(resource.evidence_pointer || '')}"`
+        : '';
       return `<button class="gpi-resource-link" type="button"
         data-gpi-resource-kind="${esc(kind(resource))}"
         data-gpi-resource-file="${esc(resource.file || '')}"
@@ -110,7 +115,7 @@
         data-gpi-resource-entry-mode="${esc(resource.entry_mode || '')}"
         data-gpi-resource-view="${esc(resource.view || '')}"
         data-gpi-resource-authority="${esc(resource.authority_class || '')}"
-        data-gpi-resource-digest="${esc(resource.snapshot_sha256 || resource.review_sha256 || resource.checked_sha256 || resource.sha256 || '')}">${esc(overrideLabel || label(resource))}</button>`;
+        data-gpi-resource-digest="${esc(resource.snapshot_sha256 || resource.review_sha256 || resource.checked_sha256 || resource.sha256 || '')}"${evidenceAttrs}>${esc(overrideLabel || label(resource))}</button>`;
     }
 
     function renderForMessage(row, limit) {
@@ -131,9 +136,7 @@
       const cards = resources => `<div class="gpi-file-cards">${resources.map(resource => {
         const title = label(resource).replace(/^(?:打开|查看|预览)\s*|^(?:Open|View|Preview)\s+/i, '');
         const filename = String(resource.artifact || resource.file || '').split(/[\\/]/).pop();
-        const format = /\.(pdf|docx|csv|html)$/i.exec(filename || '');
-        const type = format ? format[1].toUpperCase() : (zh ? '交互预览' : 'Interactive preview');
-        return `<div class="gpi-file-card"><div>${button(resource, title)}<span>${esc(type)}${filename ? ` · ${esc(filename)}` : ''}</span></div><span aria-hidden="true">↗</span></div>`;
+        return `<div class="gpi-file-card"><div>${button(resource, title)}<span>${esc(filename || title)}</span></div></div>`;
       }).join('')}</div>`;
       const numberedLiteratureList = resources => `<ol class="gpi-resource-list gpi-literature-resource-list">${resources.map(resource => `<li>${button(resource)}</li>`).join('')}</ol>`;
       const sections = [];
@@ -145,7 +148,7 @@
         const primary = grouped.primary.filter(resource => !technicalArtifacts.has(resource.artifact));
         const technical = grouped.primary.filter(resource => technicalArtifacts.has(resource.artifact));
         if (primary.length) sections.push(`<div class="gpi-resource-section"><span class="gpi-resource-section-title">${esc(onlyPlan ? (zh ? '研究方案' : 'Research plan') : (zh ? '本轮文件' : 'Files from this step'))}</span>${cards(primary)}</div>`);
-        if (technical.length) sections.push(`<details class="gpi-resource-technical"><summary>${esc(zh ? `来源与校验详情（${technical.length}）` : `Sources and validation (${technical.length})`)}</summary>${list(technical)}</details>`);
+        if (technical.length) sections.push(`<details class="gpi-resource-technical"><summary>${esc(zh ? '来源与校验' : 'Sources and validation')}</summary>${list(technical)}</details>`);
       }
       if (hasLiterature) {
         sections.push(`<div class="gpi-resource-section"><span class="gpi-resource-section-title">${esc(zh ? '本题文献检索' : 'Topic literature search')}</span>${grouped.topicLiterature.length
@@ -153,7 +156,7 @@
           : `<p class="gpi-resource-empty">${esc(zh ? '本轮没有可展示的本题检索候选；这不代表没有相关文献。' : 'No topic-search candidates are available in this turn; this does not mean that no relevant literature exists.')}</p>`}</div>`);
       }
       if (grouped.methodLiterature.length) {
-        sections.push(`<details class="gpi-method-literature"><summary>${esc(zh ? `方法学参考（${grouped.methodLiterature.length}）` : `Method references (${grouped.methodLiterature.length})`)}<span>${esc(zh ? '通用设计参考，不是本题检索结果' : 'General design references, not topic-search results')}</span></summary>${list(grouped.methodLiterature)}</details>`);
+        sections.push(`<details class="gpi-method-literature"><summary aria-label="${esc(zh ? `方法学参考（${grouped.methodLiterature.length}）。通用设计参考，不是本题检索结果` : `Method references (${grouped.methodLiterature.length}). General design references, not topic-search results`)}">${esc(zh ? '方法学参考' : 'Method references')}</summary>${list(grouped.methodLiterature)}</details>`);
       }
       return `<div class="gpi-message-resources" aria-label="${esc(zh ? '本轮方案与文献' : 'Plan and literature for this turn')}">${sections.join('')}</div>`;
     }

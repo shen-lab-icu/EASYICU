@@ -15,7 +15,7 @@ let officialEnsureCount = 0;
 global.EU_CROSSDB_SOURCE_HOST = {
   registeredPaths: () => paths,
   runRegistered: () => { runCount += 1; },
-  officialPaths: () => ['/exports/mimic-iv', '/exports/eicu'],
+  officialPaths: () => [],
   openOfficial: () => {},
   repaint: () => {},
   runOfficial: () => { officialRunCount += 1; },
@@ -43,7 +43,7 @@ global.EU_OFFICIAL_DEMO_SOURCES = {
             scope: { patients: 100 },
             download: { size_label: '15.5 MB' },
             provenance: { provider: 'PhysioNet', license: { name: 'ODbL 1.0' } },
-            status: { active: true, state: 'prepared' },
+            status: { active: false, registered: true, state: 'prepared' },
           },
           {
             id: 'eicu_demo',
@@ -53,7 +53,7 @@ global.EU_OFFICIAL_DEMO_SOURCES = {
             scope: { icu_stays: 2500 },
             download: { size_label: '130.6 MB' },
             provenance: { provider: 'PhysioNet', license: { name: 'ODbL 1.0' } },
-            status: { active: true, state: 'prepared' },
+            status: { active: false, registered: true, state: 'prepared' },
           },
         ],
       },
@@ -110,6 +110,8 @@ assert.match(demoHtml, /data-official-demo-sources/);
 assert.match(demoHtml, /Start consistency check/);
 assert.match(demoHtml, /MIMIC-IV Clinical Database Demo/);
 assert.match(demoHtml, /eICU Collaborative Research Database Demo/);
+assert.match(demoHtml, /2 \/ 2 ready/);
+assert.doesNotMatch(demoHtml, /data-demo-source-prepare/);
 assert.match(demoHtml, /data-crossdb-synthetic-fallback/);
 assert.match(demoHtml, /UI rehearsal only/);
 
