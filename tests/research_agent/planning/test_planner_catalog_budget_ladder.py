@@ -41,6 +41,7 @@ from easyicu.research_agent.planning.analysis_types import (
 )
 from easyicu.research_agent.planning.scientific_action_catalog import (
     planner_scientific_action_guide,
+    scientific_actions_for_analysis_type,
 )
 
 
@@ -110,12 +111,18 @@ def test_every_family_survives_every_rung():
 
 def test_a_shortened_rung_keeps_every_action_and_its_status():
     full = planner_scientific_action_guide("association_study", detail="full")
+    expected_statuses = {
+        action.execution_mode
+        for action in scientific_actions_for_analysis_type(
+            "association_study"
+        ).actions
+    }
     for detail in CATALOG_DETAIL_LADDER[1:]:
         shortened = planner_scientific_action_guide(
             "association_study", detail=detail
         )
         assert len(shortened.encode("utf-8")) < len(full.encode("utf-8"))
-        for token in ("host_owned", "coder_generated", "not_available"):
+        for token in expected_statuses:
             assert token in shortened
 
 

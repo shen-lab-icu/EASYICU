@@ -57,7 +57,7 @@ A capability can execute an analysis without having a sufficient scientific vali
 
 Deliberately out of scope — these must **fail closed**, not be approximated by a nearby estimand:
 
-- **Competing-risks cumulative incidence (Fine-Gray / CIF)** — No deterministic runner. A cause-naive Cox HR is NOT a CIF, so a competing-risks question (for example, an event with death as a competing risk) must fail closed to diagnostic_only — not be answered with a Cox HR.
+- **Fine-Gray competing-risk regression as a primary/reportable estimand** — No deterministic/reportable primary Fine-Gray owner. EasyICU exposes analysis-only Aalen-Johansen CIF and Gray comparison as a supporting Coder action; a cause-naive Cox HR must not substitute for Fine-Gray regression or primary competing-risk authority.
 
 ## Fail-closed / gap-report ladder
 

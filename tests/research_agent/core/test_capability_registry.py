@@ -262,7 +262,7 @@ def test_known_unsupported_boundary_is_recorded_and_rendered():
     assert cr.KNOWN_UNSUPPORTED_ESTIMANDS
     md = cr.render_capability_matrix_markdown()
     assert "Known unsupported estimands" in md
-    assert "Competing-risks" in md
+    assert "Fine-Gray competing-risk regression" in md
 
 
 def test_get_capability_disambiguates_association():
