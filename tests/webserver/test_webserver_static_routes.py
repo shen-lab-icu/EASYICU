@@ -120,7 +120,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20260728-demo-mode1" in index_html
-    assert "js/api.js?v=20260920-skill-package1" in index_html
+    assert "js/api.js?v=20260921-model-menu1" in index_html
 
 
 def test_floating_copilot_launcher_is_removed_but_shell_hooks_survive() -> None:
@@ -185,7 +185,8 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "css/dock.css?v=20260827-no-fab1" in index_html
     assert "js/app.js?v=20260921-evidence1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
-    assert "js/screens-extraction.js?v=20260920-stepflow4" in index_html
+    assert "js/screens-extraction-folder-picker.js?v=20260921-owner-split1" in index_html
+    assert "js/screens-extraction.js?v=20260921-owner-split1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20260915-product-label1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
@@ -354,7 +355,7 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
     assert "打开唯一的 EasyICU 研究助手对话" in _static_js("app.js")
     assert "Page guide" not in dock_js
     assert (
-        "js/screens-guided-projects.js?v=20260919-skill-hub2" in index_html
+        "js/screens-guided-projects.js?v=20260921-rail-title1" in index_html
     )
     assert (
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
@@ -398,7 +399,7 @@ def test_native_page_guide_backend_is_retired_from_the_shell_entry() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "page-guide dock intentionally is not constructed" in dock_js
-    assert "js/api.js?v=20260920-skill-package1" in index_html
+    assert "js/api.js?v=20260921-model-menu1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
 
 
@@ -554,9 +555,9 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided.css?v=20260829-readability2" in index_html
     assert "css/guided-projects.css?v=20260918-audit3" in index_html
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
-    assert "js/api.js?v=20260920-skill-package1" in index_html
+    assert "js/api.js?v=20260921-model-menu1" in index_html
     assert (
-        "js/screens-guided-projects.js?v=20260919-skill-hub2" in index_html
+        "js/screens-guided-projects.js?v=20260921-rail-title1" in index_html
     )
     provider_pos = index_html.find("screens-guided-idea-provider.js")
     projects_pos = index_html.find("screens-guided-projects.js")
@@ -833,12 +834,14 @@ def test_project_monitor_excludes_copilot_setup_and_run_initiation() -> None:
 
 def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     """Guided run review uses the shared pure artifact-render owner."""
+    fixtures_js = _static_js("screens-agent-fixtures.js")
     render_js = _static_js("screens-agent-render.js")
     index_html = _static_html("index.html")
 
     # Fixture data + pure renderers are defined in the render file. Copilot
     # configuration catalogs do not belong in this project-monitor owner.
-    assert "const DEMO_STUDIES = [" in render_js
+    assert "window.EU_AGENT_DEMO_STUDIES = Object.freeze([" in fixtures_js
+    assert "const DEMO_STUDIES = window.EU_AGENT_DEMO_STUDIES || [];" in render_js
     assert "const BLOCK_LIBRARY = [" not in render_js
     assert "function artifactStructuredView(name, payload)" in render_js
     assert "function runStatusLabel(status)" in render_js
@@ -846,13 +849,14 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     assert "window.AGENT_RENDER = {" in render_js
 
     # The renderer must load before the Guided run-file consumer.
+    fixtures_pos = index_html.find("screens-agent-fixtures.js")
     render_pos = index_html.find("screens-agent-render.js")
     main_pos = index_html.find("screens-guided-pi-run-files.js?")
-    assert render_pos != -1 and main_pos != -1
+    assert fixtures_pos != -1 and render_pos != -1 and main_pos != -1
     assert (
-        render_pos < main_pos
-    ), "screens-agent-render.js must load before screens-guided-pi-run-files.js"
-    assert "js/screens-agent-render.js?v=20260919-source1" in index_html
+        fixtures_pos < render_pos < main_pos
+    ), "agent fixtures and renderer must load before screens-guided-pi-run-files.js"
+    assert "js/screens-agent-render.js?v=20260921-owner-split1" in index_html
     assert "css/agent-plan.css?v=20260829-plan-flow1" in index_html
 
 
@@ -1163,7 +1167,10 @@ def test_native_extraction_omits_unbound_registered_source_metadata() -> None:
 
 def test_native_extraction_folder_connect_defaults_to_auto_detection() -> None:
     extraction_js = _static_js("screens-extraction.js")
-    extraction_css = _static_css("extraction.css")
+    extraction_css = "\n".join((
+        _static_css("extraction.css"),
+        _static_css("extraction-cohort-definition.css"),
+    ))
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
@@ -1194,7 +1201,10 @@ def test_native_extraction_uses_separate_feature_cohort_and_export_steps() -> No
     extraction_js = _static_js("screens-extraction.js")
     embedded_js = _static_js("screens-extraction-embedded.js")
     sepsis_js = _static_js("screens-extraction-sepsis.js")
-    extraction_css = _static_css("extraction.css")
+    extraction_css = "\n".join((
+        _static_css("extraction.css"),
+        _static_css("extraction-cohort-definition.css"),
+    ))
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
@@ -1377,6 +1387,7 @@ def test_native_extraction_uses_separate_feature_cohort_and_export_steps() -> No
 
 def test_native_extraction_prefers_parquet_export_by_default() -> None:
     extraction_js = _static_js("screens-extraction.js")
+    folder_picker_js = _static_js("screens-extraction-folder-picker.js")
 
     assert "let exFormat = 'parquet';" in extraction_js
     assert (
@@ -1388,7 +1399,7 @@ def test_native_extraction_prefers_parquet_export_by_default() -> None:
     assert "data-ex-export-create" in extraction_js
     assert "Choose or create export destination" in extraction_js
     assert "选择或创建导出目录" in extraction_js
-    assert "Create folder" in extraction_js
+    assert "Create folder" in folder_picker_js
     assert "No export destination selected" in extraction_js
     assert "尚未选择导出目录" in extraction_js
     assert "Choose an export destination before extracting." in extraction_js
@@ -1709,7 +1720,8 @@ def test_native_idea_mining_backend_remains_wired_without_a_second_primary_entry
     assert ".ideas-zotero-source" not in redesign_css
     assert ".ideas-zotero-paste" not in ideas_css
     assert ".ideas-zotero-paste" not in redesign_css
-    # DEMO_STUDIES data moved to screens-agent-render.js; the consumer stays.
+    # DEMO_STUDIES data has a dedicated fixture owner; the renderer consumes it.
+    assert "window.EU_AGENT_DEMO_STUDIES" in _static_js("screens-agent-fixtures.js")
     assert "const DEMO_STUDIES" in _static_js("screens-agent-render.js")
     # Real mode must not fabricate studies or collect setup on the monitor.
 
@@ -2325,7 +2337,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260727-patient-demo2" in index_html
-    assert "api.js?v=20260920-skill-package1" in index_html
+    assert "api.js?v=20260921-model-menu1" in index_html
     assert "screens-dict.js?v=20260830-viz-final1" in index_html
     assert "deepdive.css?v=20260830-viz-final1" in index_html
 
@@ -2630,8 +2642,8 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20260920-skill-package1" in index_html
-    assert "screens-guided-projects.js?v=20260919-skill-hub2" in index_html
+    assert "api.js?v=20260921-model-menu1" in index_html
+    assert "screens-guided-projects.js?v=20260921-rail-title1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
@@ -3420,7 +3432,7 @@ def test_extraction_outputs_are_local_open_controls_and_sync_is_visible() -> Non
     api_js = _static_js("api.js")
     extraction_js = _static_js("screens-extraction.js")
     embedded_js = _static_js("screens-extraction-embedded.js")
-    guided_js = _static_js("screens-guided-pi.js")
+    guided_js = _static_js("screens-guided-pi-session-view.js")
     output_css = _static_css("extraction-output.css")
 
     assert "css/extraction-output.css?v=20260824-local-open1" in index_html

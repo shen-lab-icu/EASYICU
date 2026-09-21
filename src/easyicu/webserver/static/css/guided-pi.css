@@ -140,6 +140,21 @@
 .gpi-head-overflow{flex:none;white-space:nowrap}
 .gpi-head-overflow-menu button{min-height:35px;display:flex;align-items:center;gap:7px;padding:0 10px;border:0;border-radius:7px;background:transparent;color:var(--ink-2);font:inherit;font-size:13.5px;text-align:left;cursor:pointer}.gpi-head-overflow-menu button:hover{background:var(--wash);color:var(--ink-1)}
 .gpi-model-binding:focus-visible,.gpi-head-new:focus-visible,.gpi-head-overflow>summary:focus-visible,.gpi-head-overflow-menu button:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:2px}
+.gpi-model-control{position:relative;flex:none;min-width:0}
+.gpi-model-binding{list-style:none;cursor:pointer}
+.gpi-model-binding::-webkit-details-marker{display:none}
+.gpi-model-popover{position:absolute;z-index:50;top:calc(100% + 7px);right:0;width:236px;display:grid;gap:3px;padding:6px;border:1px solid var(--hair-2);border-radius:10px;background:var(--paper);box-shadow:0 14px 36px rgba(14,17,22,.14)}
+.gpi-model-rows{display:grid;gap:3px;max-height:252px;overflow-y:auto}
+.gpi-model-popover [data-gpi-pick-model]{min-height:35px;display:flex;align-items:center;gap:7px;padding:0 10px;border:0;border-radius:7px;background:transparent;color:var(--ink-2);font:inherit;font-size:13.5px;text-align:left;cursor:pointer}
+.gpi-model-popover [data-gpi-pick-model]:hover{background:var(--wash);color:var(--ink-1)}
+.gpi-model-popover [data-gpi-pick-model][aria-checked="true"]{color:var(--accent-ink);font-weight:600}
+.gpi-model-popover [data-gpi-pick-model] span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gpi-model-popover [data-gpi-pick-model] span:last-child{margin-left:auto;flex:none;width:12px;text-align:center}
+.gpi-model-note{margin:0;padding:8px 10px;color:var(--ink-3);font-size:12px}
+.gpi-model-note.is-error{color:var(--ink-2)}
+.gpi-model-settings{min-height:35px;display:flex;align-items:center;padding:0 10px;margin-top:3px;border:0;border-top:1px solid var(--hair);border-radius:7px;background:transparent;color:var(--ink-3);font:inherit;font-size:12.5px;text-align:left;cursor:pointer}
+.gpi-model-settings:hover{background:var(--wash);color:var(--ink-1)}
+.gpi-model-popover [data-gpi-pick-model]:focus-visible,.gpi-model-settings:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:2px}
 .gpi-workflow{
   flex:0 0 auto;display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:16px;
   padding:9px 22px;border-bottom:1px solid var(--line);background:var(--paper)

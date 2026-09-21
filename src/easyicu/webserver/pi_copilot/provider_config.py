@@ -201,6 +201,52 @@ class PiProviderConfigStore:
             self._write_receipt(config, verification)
         return config, self.public_status(environ=config.as_environment())
 
+    def _require_stored_config(self) -> PiProviderConfig:
+        stored = self.resolved_config()
+        if stored is None:
+            raise PiCopilotError(
+                "pi_provider_connection_not_configured",
+                "Connect a model service before choosing a model.",
+            )
+        return stored
+
+    def discover_models(
+        self,
+        *,
+        verifier: Optional[Verifier] = None,
+    ) -> list[str]:
+        """List the models the stored connection reports, without saving."""
+
+        return discover_provider_models(
+            self._require_stored_config(),
+            transport=verifier,
+        )
+
+    def switch_model(
+        self,
+        model: str,
+        *,
+        verifier: Optional[Verifier] = None,
+    ) -> tuple[PiProviderConfig, Dict[str, Any]]:
+        """Re-verify the stored connection on one different model.
+
+        The browser never receives the credential, so a model change has to
+        reuse the private stored config instead of round-tripping a key
+        through the UI.  Delegating to ``verify_and_save`` keeps the endpoint
+        security check, the catalog membership rule and the verification
+        receipt on exactly the same path a first-time connection takes.
+        """
+
+        stored = self._require_stored_config()
+        return self.verify_and_save(
+            provider=stored.provider,
+            api_key=stored.api_key,
+            base_url=stored.base_url,
+            model=model,
+            api_transport=stored.api_transport,
+            verifier=verifier,
+        )
+
     def environment(
         self,
         *,
@@ -492,30 +538,15 @@ def _default_verification_transport(
     return response.status_code, payload
 
 
-def verify_provider_connection(
-    config: PiProviderConfig,
-    *,
-    transport: Optional[Verifier] = None,
-    timeout: float = 10.0,
-) -> Dict[str, Any]:
-    """Verify model discovery and one bounded inference on the selected wire.
+def _discovery_request(config: PiProviderConfig) -> tuple[str, Dict[str, str]]:
+    """Build the authenticated model-catalog request for this wire protocol.
 
     Pi supports many provider brands, but custom providers converge on four
     wire protocols.  Keep discovery protocol-aware here so a native Anthropic
     or Google endpoint is not incorrectly treated as OpenAI-compatible.
     """
 
-    # Validate immediately before the request as well as during input parsing.
-    try:
-        validate_credential_endpoint(config.base_url)
-    except ProviderUrlSecurityError as exc:
-        raise PiCopilotError(
-            "pi_provider_base_url_rejected",
-            "The model-service address is not allowed by the local security policy.",
-        ) from exc
-    verifier = transport or _default_verification_transport
-    url = f"{config.base_url.rstrip('/')}/models"
-    headers = {"Accept": "application/json"}
+    headers: Dict[str, str] = {"Accept": "application/json"}
     if config.api_transport == "anthropic-messages":
         headers.update(
             {
@@ -532,6 +563,26 @@ def verify_provider_connection(
                 mode=config.openai_auth_header,
             )
         )
+    return f"{config.base_url.rstrip('/')}/models", headers
+
+
+def _request_model_identities(
+    config: PiProviderConfig,
+    *,
+    verifier: Verifier,
+    timeout: float,
+) -> list[str]:
+    """Return the model identifiers this endpoint reports, or fail closed."""
+
+    # Validate immediately before the request as well as during input parsing.
+    try:
+        validate_credential_endpoint(config.base_url)
+    except ProviderUrlSecurityError as exc:
+        raise PiCopilotError(
+            "pi_provider_base_url_rejected",
+            "The model-service address is not allowed by the local security policy.",
+        ) from exc
+    url, headers = _discovery_request(config)
     status_code, payload = verifier(
         "GET",
         url,
@@ -574,6 +625,52 @@ def verify_provider_connection(
     }
     if config.api_transport == "google-generative-ai":
         identifiers = {identifier.removeprefix("models/") for identifier in identifiers}
+    return sorted(identifiers)
+
+
+def discover_provider_models(
+    config: PiProviderConfig,
+    *,
+    transport: Optional[Verifier] = None,
+    timeout: float = 10.0,
+) -> list[str]:
+    """List the models a configured endpoint reports, without requiring a save.
+
+    Verification needs the selected model to appear in this catalog; a browser
+    choosing the next model needs only the catalog itself, so it must not have
+    to fail a save first to learn what is available.
+    """
+
+    return _request_model_identities(
+        config,
+        verifier=transport or _default_verification_transport,
+        timeout=timeout,
+    )
+
+
+def verify_provider_connection(
+    config: PiProviderConfig,
+    *,
+    transport: Optional[Verifier] = None,
+    timeout: float = 10.0,
+) -> Dict[str, Any]:
+    """Verify model discovery and one bounded inference on the selected wire.
+
+    Pi supports many provider brands, but custom providers converge on four
+    wire protocols.  Keep discovery protocol-aware here so a native Anthropic
+    or Google endpoint is not incorrectly treated as OpenAI-compatible.
+    """
+
+    verifier = transport or _default_verification_transport
+    identifiers = _request_model_identities(
+        config,
+        verifier=verifier,
+        timeout=timeout,
+    )
+    # The bounded inference probe below authenticates the same way discovery
+    # does, so rebuild the wire headers rather than carry them out of the
+    # catalog request.
+    _, headers = _discovery_request(config)
     if config.model not in identifiers:
         raise PiCopilotError(
             "pi_provider_model_unavailable",

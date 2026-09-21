@@ -212,8 +212,9 @@
     // early loading render must not leave every project expanded after URL restore.
     const pickerOpen = projectManagementActive || (!activeId && !ctx.guidedDrafts.loading)
       || !!(oldPicker && oldPicker.dataset.projectId === activeId && oldPicker.open);
+    const pickerTitle = projectTitle(ctx.selectedGuidedDraft && ctx.selectedGuidedDraft.title, t('Choose a project', '选择研究项目'));
     host.innerHTML = `<details class="gd-project-picker" data-project-id="${esc(activeId || '')}"${pickerOpen ? ' open' : ''}>
-      <summary><small>${t('Current project', '当前项目')}</small><span>${esc(projectTitle(ctx.selectedGuidedDraft && ctx.selectedGuidedDraft.title, t('Choose a project', '选择研究项目')))}</span><i aria-hidden="true">⌄</i></summary>
+      <summary><small>${t('Current project', '当前项目')}</small><span title="${esc(pickerTitle)}">${esc(pickerTitle)}</span><i aria-hidden="true">⌄</i></summary>
       <div class="gd-project-picker-list">
       <div class="gd-project-heading"><span>${t('Research projects', '研究项目')}</span><span class="gd-project-heading-actions"><button class="gd-manage-mini ${projectManagementActive ? 'active' : ''}" type="button" data-project-manage>${projectManagementActive ? t('Done', '完成') : t('Manage', '管理')}</button><button class="gd-refresh-mini" type="button" data-refreshdrafts title="${t('Refresh research projects', '刷新研究项目')}" aria-label="${t('Refresh research projects', '刷新研究项目')}">${icon('refresh', 12)}</button></span></div>
       ${rows.length ? `<label class="gd-project-search"><span class="sr-only">${t('Search research projects', '搜索研究项目')}</span><input type="search" data-project-search placeholder="${t('Search projects…', '搜索项目…')}" value="${esc(search)}" autocomplete="off"></label>` : ''}

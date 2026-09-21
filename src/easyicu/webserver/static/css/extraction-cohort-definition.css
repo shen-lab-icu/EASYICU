@@ -1,0 +1,249 @@
+/* Sepsis/SOFA definition checkpoint */
+.sepsis-def-panel{
+  margin-top:10px;
+  padding:12px;
+  border:1px solid var(--hair);
+  border-radius:var(--r-2);
+  background:var(--surface);
+}
+.sepsis-def-head{
+  display:flex;
+  align-items:flex-start;
+  gap:10px;
+}
+.sepsis-def-ico{
+  width:26px;
+  height:26px;
+  flex:none;
+  display:grid;
+  place-items:center;
+  border-radius:7px;
+  color:var(--accent-ink);
+  background:color-mix(in srgb,var(--accent-soft) 62%,var(--surface));
+  border:1px solid var(--accent-border);
+}
+.sepsis-def-kicker{
+  font-size:9.5px;
+  font-weight:650;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  color:var(--ink-4);
+}
+.sepsis-def-title{
+  margin-top:2px;
+  font-size:13px;
+  font-weight:700;
+  color:var(--ink);
+}
+.sepsis-def-copy{
+  margin-top:4px;
+  max-width:86ch;
+  font-size:11.5px;
+  line-height:1.45;
+  color:var(--ink-3);
+}
+.sepsis-def-audit-strip{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:12px;
+  align-items:center;
+  margin-top:10px;
+  padding:10px;
+  border:1px solid var(--accent-border);
+  border-radius:8px;
+  background:color-mix(in srgb,var(--accent-soft) 26%,var(--surface));
+}
+.sepsis-def-audit-label{
+  font-size:9.5px;
+  font-weight:650;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+  color:var(--ink-4);
+}
+.sepsis-def-audit-rule{
+  margin-top:2px;
+  font-size:12.5px;
+  font-weight:650;
+  color:var(--ink);
+}
+.sepsis-def-audit-meta{
+  min-width:0;
+  display:flex;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+  gap:5px;
+}
+.sepsis-def-details{
+  min-width:0;
+  margin-top:8px;
+  border:1px solid var(--hair);
+  border-radius:8px;
+  background:var(--surface);
+  overflow:hidden;
+}
+.sepsis-def-details-lite{
+  border-style:dashed;
+  background:color-mix(in srgb,var(--surface) 92%,var(--surface-2));
+}
+.sepsis-def-details summary{
+  min-height:34px;
+  display:flex;
+  align-items:center;
+  gap:7px;
+  padding:8px 10px;
+  color:var(--ink-2);
+  font-size:11.5px;
+  font-weight:650;
+  cursor:pointer;
+  user-select:none;
+}
+.sepsis-def-details summary::-webkit-details-marker{ display:none; }
+.sepsis-def-details summary::after{
+  content:"";
+  width:7px;
+  height:7px;
+  margin-left:auto;
+  border-right:1.5px solid var(--ink-4);
+  border-bottom:1.5px solid var(--ink-4);
+  transform:rotate(45deg) translateY(-2px);
+  transition:transform .14s ease;
+}
+.sepsis-def-details[open] summary::after{
+  transform:rotate(-135deg) translateY(-1px);
+}
+.sepsis-def-detail-body{
+  padding:10px;
+  border-top:1px solid var(--hair);
+}
+.sepsis-def-detail-title{
+  margin:2px 0 7px;
+  font-size:10px;
+  font-weight:700;
+  letter-spacing:.05em;
+  text-transform:uppercase;
+  color:var(--ink-4);
+}
+.sepsis-def-detail-title + .sepsis-def-grid,
+.sepsis-def-chips + .sepsis-def-detail-title{
+  margin-top:12px;
+}
+.sepsis-def-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:10px;
+  margin-top:12px;
+}
+.sepsis-def-grid.compact{
+  grid-template-columns:1fr;
+  gap:8px;
+  margin-top:0;
+  padding:0;
+  border-top:0;
+}
+.sepsis-def-summary{
+  display:flex;
+  flex-wrap:wrap;
+  gap:5px;
+  margin-top:11px;
+}
+.sepsis-def-row{
+  min-width:0;
+  padding:10px;
+  border:1px solid var(--hair);
+  border-radius:7px;
+  background:color-mix(in srgb,var(--surface) 86%,transparent);
+}
+.sepsis-def-label{
+  margin-bottom:7px;
+  font-size:11px;
+  font-weight:650;
+  color:var(--ink-2);
+}
+.sepsis-def-control{
+  min-width:0;
+  padding:10px;
+  border:1px solid var(--hair);
+  border-radius:7px;
+  background:color-mix(in srgb,var(--surface) 86%,transparent);
+}
+.sepsis-def-seg{
+  display:flex;
+  flex-wrap:wrap;
+  gap:5px;
+}
+.sepsis-def-seg button{
+  min-height:26px;
+  padding:4px 8px;
+  border:1px solid var(--hair);
+  border-radius:999px;
+  background:var(--surface);
+  color:var(--ink-3);
+  font:inherit;
+  font-size:11px;
+  line-height:1.2;
+  cursor:pointer;
+}
+.sepsis-def-seg button:hover{
+  background:var(--surface-2);
+  border-color:var(--hair-3);
+}
+.sepsis-def-seg button.active{
+  border-color:color-mix(in srgb,var(--accent-border) 64%,var(--hair));
+  background:color-mix(in srgb,var(--accent-soft) 44%,var(--surface));
+  color:var(--accent-ink);
+  font-weight:650;
+}
+.sepsis-def-static{
+  min-height:28px;
+  display:inline-flex;
+  align-items:center;
+  padding:5px 9px;
+  border:1px solid color-mix(in srgb,var(--accent-border) 60%,var(--hair));
+  border-radius:999px;
+  background:color-mix(in srgb,var(--accent-soft) 36%,var(--surface));
+  color:var(--accent-ink);
+  font-size:11px;
+  font-weight:650;
+  line-height:1.2;
+}
+.sepsis-def-help{
+  margin-top:6px;
+  font-size:10.5px;
+  line-height:1.35;
+  color:var(--ink-4);
+}
+.sepsis-def-chips{
+  display:flex;
+  flex-wrap:wrap;
+  gap:5px;
+}
+.sepsis-def-chip{
+  display:inline-flex;
+  align-items:center;
+  min-height:22px;
+  padding:3px 7px;
+  border-radius:999px;
+  border:1px solid var(--hair);
+  background:var(--surface);
+  color:var(--ink-3);
+  font-size:10.5px;
+  line-height:1.2;
+  white-space:normal;
+}
+.sepsis-def-chip.current{
+  border-color:color-mix(in srgb,var(--accent-border) 64%,var(--hair));
+  background:color-mix(in srgb,var(--accent-soft) 44%,var(--surface));
+  color:var(--accent-ink);
+}
+.sepsis-def-chip.review{
+  border-style:dashed;
+}
+.sepsis-def-foot{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  margin-top:10px;
+  font-size:11px;
+  line-height:1.4;
+  color:var(--ink-4);
+}

@@ -464,6 +464,12 @@
   function loadPiCopilotCodexModels() {
     return getJSON('/api/copilot/pi/research-provider/codex/models');
   }
+  function loadPiCopilotApiModels() {
+    return getJSON('/api/copilot/pi/research-provider/api/models');
+  }
+  function switchPiCopilotModel(model) {
+    return postJSON('/api/copilot/pi/research-provider/model', { model });
+  }
   function createPiCopilotSession(body) {
     return postJSON('/api/copilot/pi/sessions', body || {});
   }
@@ -779,6 +785,8 @@
   window.EU_API.cancelPiCopilotCodexLogin = cancelPiCopilotCodexLogin;
   window.EU_API.logoutPiCopilotCodex = logoutPiCopilotCodex;
   window.EU_API.loadPiCopilotCodexModels = loadPiCopilotCodexModels;
+  window.EU_API.loadPiCopilotApiModels = loadPiCopilotApiModels;
+  window.EU_API.switchPiCopilotModel = switchPiCopilotModel;
   window.EU_API.createPiCopilotSession = createPiCopilotSession;
   window.EU_API.initializePiCopilotProject = initializePiCopilotProject;
   window.EU_API.loadPiCopilotProjectWorkflow = loadPiCopilotProjectWorkflow;

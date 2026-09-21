@@ -163,7 +163,8 @@ def test_resource_cards_preserve_coordinates_and_escape_labels():
     assert 'data-gpi-resource-digest="abc"' in html
     assert '<img' not in html
     assert '<details class="gpi-resource-technical">' in html
-    assert '交互预览' in html
+    assert html.count('class="gpi-file-card"') == 1
+    assert html.count('data-gpi-resource-artifact="result_tables.json"') == 1
 
 
 def test_result_summary_does_not_invent_complete_cases_or_merge_distributions():
@@ -266,7 +267,7 @@ def test_revised_report_never_advertises_the_source_runs_old_pdf(revision):
       process.stdout.write(JSON.stringify(owner.render({{
         present:true,analysis_results_available:true,analysis_validated:true,numeric_verified:true,
         manuscript_ready:true,report_revision_ready:{json.dumps(revision)},run_id:'run_a',
-        artifact_refs:[{{artifact:'evidence_ledger.json',sha256:'a'.repeat(64)}},{{artifact:'manuscript_scaffold.pdf'}}],
+        artifact_refs:[{{run_id:'run_a',artifact:'evidence_ledger.json',sha256:'a'.repeat(64)}},{{run_id:'run_a',artifact:'manuscript_scaffold.pdf'}}],
       }},{{stages:[{{id:'analysis',status:'complete'}}],analysis_validation_retry_available:true}})));
     """)
     assert ('manuscript_scaffold.pdf' in html) is not revision

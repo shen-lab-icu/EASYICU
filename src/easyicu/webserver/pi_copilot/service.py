@@ -735,6 +735,55 @@ class PiCopilotService:
             "secrets_returned": False,
         }
 
+    def research_provider_models(self) -> Dict[str, Any]:
+        """List what the stored API connection reports, without saving anything.
+
+        Verification already refuses a model the endpoint does not report, but
+        that only surfaces the catalog after a failed save.  A model chooser
+        needs the catalog up front.
+        """
+
+        models = self.provider_store.discover_models()
+        return {
+            "schema_version": "easyicu.provider-model-catalog/1",
+            "provider": "openai",
+            "catalog_status": "endpoint_reported",
+            "models_reported": len(models),
+            "models": [{"id": row, "name": row} for row in models[:100]],
+        }
+
+    def switch_research_model(self, model: str) -> Dict[str, Any]:
+        """Move the live gateway to another model on the already-stored connection.
+
+        Reuses the busy-session guard from ``configure_provider`` so a model
+        can never change underneath an answering turn, and reuses the verified
+        save path so the credential still never reaches the browser.
+        """
+
+        with self._lock:
+            if self._busy_sessions:
+                raise PiCopilotError(
+                    "pi_provider_config_busy",
+                    "Stop the active Pi response before changing model service settings.",
+                    status_code=409,
+                )
+        apply_config = getattr(self.gateway, "apply_provider_config", None)
+        if not callable(apply_config):
+            raise PiCopilotError(
+                "pi_provider_gateway_reconfigure_unsupported",
+                "The Pi gateway cannot apply the verified configuration.",
+                status_code=500,
+            )
+        config, configuration = self.provider_store.switch_model(model)
+        apply_config(config)
+        payload = self.runtime_status()
+        return {
+            "ok": True,
+            "runtime": payload["runtime"],
+            "configuration": configuration,
+            "secrets_returned": False,
+        }
+
     def verified_api_research_provider_binding(self) -> ResearchProviderBinding:
         """Compile the verified Pi API config into a secret-free run binding."""
 

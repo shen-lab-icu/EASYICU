@@ -471,3 +471,112 @@ def test_custom_openai_preset_ships_no_submittable_address() -> None:
         / "src/easyicu/webserver/static/js/screens-guided-pi-provider.js"
     ).read_text(encoding="utf-8")
     assert 'placeholder="https://llm-gateway.example/v1"' in provider
+
+
+def _catalog_transport(
+    served: list[str],
+    seen_keys: list[str],
+):
+    """Serve one catalog plus the inference probe, recording the wire key."""
+
+    def transport(
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: Mapping[str, Any] | None,
+        timeout: float,
+    ) -> tuple[int, Any]:
+        # easyicu-local over openai-completions authenticates with x-api-key.
+        seen_keys.append(str(headers.get("x-api-key") or ""))
+        if url.endswith("/models"):
+            assert method == "GET"
+            return 200, {"data": [{"id": row} for row in served]}
+        assert url.endswith("/chat/completions")
+        return 200, {"choices": [{"message": {"content": "READY"}}]}
+
+    return transport
+
+
+def _tmp_store(tmp_path: Path) -> PiProviderConfigStore:
+    return PiProviderConfigStore(
+        config_path=tmp_path / "pi-provider.env",
+        receipt_path=tmp_path / "pi-provider-verification.json",
+    )
+
+
+def test_model_catalog_is_readable_without_failing_a_save(tmp_path: Path) -> None:
+    store = _tmp_store(tmp_path)
+    keys: list[str] = []
+    store.verify_and_save(
+        provider="easyicu-local",
+        api_key="stored-private-key",
+        base_url="http://127.0.0.1:8317/v1",
+        model="first-model",
+        api_transport="openai-completions",
+        verifier=_catalog_transport(["first-model", "second-model"], keys),
+    )
+
+    listed = store.discover_models(
+        verifier=_catalog_transport(["first-model", "second-model"], keys),
+    )
+
+    assert listed == ["first-model", "second-model"]
+    # Reading the catalog must not change what the connection is using.
+    assert store.resolved_config().model == "first-model"
+
+
+def test_switch_model_reuses_the_stored_credential(tmp_path: Path) -> None:
+    store = _tmp_store(tmp_path)
+    keys: list[str] = []
+    store.verify_and_save(
+        provider="easyicu-local",
+        api_key="stored-private-key",
+        base_url="http://127.0.0.1:8317/v1",
+        model="first-model",
+        api_transport="openai-completions",
+        verifier=_catalog_transport(["first-model", "second-model"], keys),
+    )
+    keys.clear()
+
+    config, _status = store.switch_model(
+        "second-model",
+        verifier=_catalog_transport(["first-model", "second-model"], keys),
+    )
+
+    assert config.model == "second-model"
+    # The browser never holds the key, so the switch must reuse the stored one.
+    assert set(keys) == {"stored-private-key"}
+    assert store.resolved_config().model == "second-model"
+
+
+def test_switch_model_keeps_the_previous_config_when_model_is_not_reported(
+    tmp_path: Path,
+) -> None:
+    store = _tmp_store(tmp_path)
+    keys: list[str] = []
+    store.verify_and_save(
+        provider="easyicu-local",
+        api_key="stored-private-key",
+        base_url="http://127.0.0.1:8317/v1",
+        model="first-model",
+        api_transport="openai-completions",
+        verifier=_catalog_transport(["first-model", "second-model"], keys),
+    )
+
+    with pytest.raises(PiCopilotError) as caught:
+        store.switch_model(
+            "ghost-model",
+            verifier=_catalog_transport(["first-model", "second-model"], keys),
+        )
+
+    assert caught.value.code == "pi_provider_model_unavailable"
+    assert store.resolved_config().model == "first-model"
+
+
+def test_model_discovery_requires_a_configured_connection(tmp_path: Path) -> None:
+    store = _tmp_store(tmp_path)
+
+    with pytest.raises(PiCopilotError) as caught:
+        store.discover_models(verifier=_catalog_transport(["anything"], []))
+
+    assert caught.value.code == "pi_provider_connection_not_configured"

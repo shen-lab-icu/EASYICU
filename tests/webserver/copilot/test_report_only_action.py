@@ -97,8 +97,7 @@ def test_duration_rounding_carries_into_minutes():
         tr: (en,zh) => zh, esc: String, iconHtml: () => '',
         resourceName: () => '', resourceKey: () => '', resourceButton: () => '',
       });
-      process.stdout.write(owner.render({role:'activity',status:'complete',
-        startedAt:1000,endedAt:420900,steps:[]}));
+      process.stdout.write(owner.durationText(1000, 420900));
     """
     result = subprocess.run([node, "--eval", script], capture_output=True, text=True, check=True)
     assert "7 分" in result.stdout and "60 秒" not in result.stdout

@@ -266,7 +266,11 @@ def test_host_choice_handler_persists_progress_and_rejects_unrelated_drift(
         },
     )
     monkeypatch.setattr(workflow_owner.agent_runs, "read_run_review", lambda *a: review)
-    monkeypatch.setattr(workflow_owner, "project_run_outcome", lambda _: {})
+    monkeypatch.setattr(
+        workflow_owner,
+        "project_run_outcome",
+        lambda _review, **_kwargs: {},
+    )
     monkeypatch.setattr(workflow_owner.sources, "load_registry", lambda: {})
     projection = workflow_owner.build_project_workflow_projection(
         study_context_id=current["id"], study_override=current
