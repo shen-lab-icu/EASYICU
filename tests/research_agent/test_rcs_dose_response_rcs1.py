@@ -222,6 +222,24 @@ def test_rcs_wald_does_not_reject_linear_truth() -> None:
     assert nonlinearity_wald_test(fit).p_value > 0.05
 
 
+def test_rcs_wald_does_not_treat_sex_covariate_as_spline_term() -> None:
+    rng = np.random.RandomState(4)
+    x = rng.uniform(0.0, 10.0, 400)
+    sex = rng.randint(0, 2, 400)
+    y = (x - 5.0) ** 2 + 8.0 * sex + rng.normal(0.0, 0.5, 400)
+    fit = rcs_fit(
+        y,
+        rcs_basis(x, n_knots=4),
+        covariates=sex.reshape(-1, 1),
+        covariate_names=["sex"],
+    )
+
+    result = nonlinearity_wald_test(fit)
+
+    assert result.nonlinear_terms == ("s1", "s2")
+    assert result.df == 2
+
+
 def test_rcs_binomial_path_and_probability_curve() -> None:
     rng = np.random.RandomState(17)
     n = 400

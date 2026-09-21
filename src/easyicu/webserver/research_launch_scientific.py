@@ -405,9 +405,9 @@ def _validate_primary_concept_selection(
 ) -> None:
     """Enforce the concept owner's user-intent selection policy at launch."""
 
-    if not primary_exposure:
-        return
     from easyicu.concept.selection_policy import (
+        concept_id_for_module,
+        concept_selection_authority_key,
         concept_selection_confirmation_key,
         evaluate_concept_selection,
     )
@@ -417,25 +417,41 @@ def _validate_primary_concept_selection(
     # accepting them here would let a plan authorize its own semantic drift.
     intent = str(study.get("question") or "")
     confirmations = study.get("confirmations")
-    confirmation_key = concept_selection_confirmation_key(primary_exposure)
-    owner_confirmed = bool(
-        isinstance(confirmations, Mapping) and confirmations.get(confirmation_key)
-    )
-    decision = evaluate_concept_selection(
-        primary_exposure,
-        user_intent=intent,
-        owner_confirmed=owner_confirmed,
-    )
-    if decision.allowed:
-        return
-    raise ResearchPipelineRunError(
-        decision.reason_code,
-        (
-            "The configured primary exposure is an explicit-only concept "
-            "variant that the user did not request."
-        ),
-        details=decision.to_dict(),
-    )
+    governed: list[tuple[str, str]] = []
+    if primary_exposure:
+        governed.append((str(primary_exposure), "execution_concepts.primary_exposure"))
+    for module in study.get("modules") or ():
+        concept_id = concept_id_for_module(module)
+        if concept_id:
+            governed.append((concept_id, f"modules.{module}"))
+
+    seen: set[str] = set()
+    for concept_id, field in governed:
+        if concept_id in seen:
+            continue
+        seen.add(concept_id)
+        confirmation_key = concept_selection_confirmation_key(concept_id)
+        authority_key = concept_selection_authority_key(concept_id)
+        owner_confirmed = bool(
+            isinstance(confirmations, Mapping)
+            and confirmations.get(confirmation_key)
+            and confirmations.get(authority_key)
+        )
+        decision = evaluate_concept_selection(
+            concept_id,
+            user_intent=intent,
+            owner_confirmed=owner_confirmed,
+        )
+        if decision.allowed:
+            continue
+        raise ResearchPipelineRunError(
+            decision.reason_code,
+            (
+                "The configured study selects an explicit-only concept "
+                "variant that the user did not request."
+            ),
+            details={**decision.to_dict(), "field": field},
+        )
 
 
 def _source_concept_for_operational_column(

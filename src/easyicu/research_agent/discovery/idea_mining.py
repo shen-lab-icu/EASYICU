@@ -150,7 +150,10 @@ from .idea_mining_feasibility_tier import (  # noqa: F401  (re-exported)
     SourceItemIndex,
     classify_feasibility_tier,
 )
-from .idea_mining_selection import select_actionable_prior_art_screen
+from .idea_mining_selection import (
+    _population_matches_age_group,
+    select_actionable_prior_art_screen,
+)
 
 IDEA_EXTRACTION_SYSTEM_PROMPT = (
     "You extract candidate ICU research directions from review or editorial "
@@ -530,6 +533,7 @@ def extract_literature_ideas(
     max_tokens: int = 4096,
     reflection_rounds: int = 0,
     reflection_search_client: Optional[Any] = None,
+    extraction_accounting: Optional[Dict[str, int]] = None,
 ) -> List[LiteratureIdeaCandidate]:
     """Extract structured literature ideas with a case-neutral JSON prompt.
 
@@ -568,6 +572,10 @@ def extract_literature_ideas(
     step = max(1, int(batch_size))
     for start in range(0, len(parsed_materials), step):
         batch = parsed_materials[start : start + step]
+        if extraction_accounting is not None:
+            extraction_accounting["n_batches_requested"] = (
+                extraction_accounting.get("n_batches_requested", 0) + 1
+            )
         batch_index = start // step
         messages = build_idea_extraction_messages(
             batch,
@@ -611,6 +619,19 @@ def extract_literature_ideas(
             if malformed_batch_policy == "skip":
                 if dropped_malformed_batches is not None:
                     dropped_malformed_batches.append(citation_keys)
+                if extraction_accounting is not None:
+                    extraction_accounting["n_malformed_extraction_batches"] = (
+                        extraction_accounting.get(
+                            "n_malformed_extraction_batches", 0
+                        )
+                        + 1
+                    )
+                    extraction_accounting["n_sources_in_malformed_batches"] = (
+                        extraction_accounting.get(
+                            "n_sources_in_malformed_batches", 0
+                        )
+                        + len(citation_keys)
+                    )
                 continue
             raise
         if batch_receipt_dir is not None:
@@ -620,7 +641,14 @@ def extract_literature_ideas(
                 raw_response=raw,
                 parse_status="parsed",
             )
+        if extraction_accounting is not None:
+            extraction_accounting["n_candidate_items_received"] = (
+                extraction_accounting.get("n_candidate_items_received", 0)
+                + len(payload)
+            )
         for item in payload:
+            before_untraceable = len(dropped_untraceable or [])
+            before_invalid = len(dropped_invalid or [])
             try:
                 coerced = _coerce_extracted_idea_item(
                     item,
@@ -635,10 +663,26 @@ def extract_literature_ideas(
                 if malformed_batch_policy == "skip":
                     if dropped_invalid is not None:
                         dropped_invalid.append(str(exc))
+                    if extraction_accounting is not None:
+                        extraction_accounting["n_dropped_invalid"] = (
+                            extraction_accounting.get("n_dropped_invalid", 0) + 1
+                        )
                     continue
                 raise
             if coerced is not None:
                 candidates.append(coerced)
+            elif extraction_accounting is not None:
+                if len(dropped_untraceable or []) > before_untraceable:
+                    extraction_accounting["n_dropped_untraceable"] = (
+                        extraction_accounting.get("n_dropped_untraceable", 0) + 1
+                    )
+                elif len(dropped_invalid or []) > before_invalid:
+                    extraction_accounting["n_dropped_invalid"] = (
+                        extraction_accounting.get("n_dropped_invalid", 0) + 1
+                    )
+
+    if extraction_accounting is not None:
+        extraction_accounting["n_candidates_admitted_initially"] = len(candidates)
 
     # Phase 2 -- agentic reflection. An optional self-critique/refine loop
     # (inspired by ai-scientist-v2's reflection rounds) that sharpens vague
@@ -670,6 +714,8 @@ def extract_literature_ideas(
     # path so single-pass extraction keeps its exact prior behavior.
     if rounds > 0:
         candidates = _collapse_near_duplicate_ideas(candidates)
+    if extraction_accounting is not None:
+        extraction_accounting["n_candidates_after_reflection"] = len(candidates)
     return candidates
 
 
@@ -1837,6 +1883,7 @@ def run_idea_mining_dry_run(
     dropped_untraceable: List[str] = []
     dropped_invalid: List[str] = []
     dropped_malformed_batches: List[List[str]] = []
+    extraction_accounting: Dict[str, int] = {}
     if precomputed_literature_ideas is None:
         literature_ideas = extract_literature_ideas(
             materials=parsed_materials,
@@ -1850,12 +1897,20 @@ def run_idea_mining_dry_run(
             batch_receipt_dir=extraction_batch_receipt_dir,
             reflection_rounds=reflection_rounds,
             reflection_search_client=reflection_search_client,
+            extraction_accounting=extraction_accounting,
         )
     else:
         literature_ideas = _validated_precomputed_ideas(
             precomputed_literature_ideas,
             materials=parsed_materials,
             source_snapshot_id=manifest.source_snapshot_id,
+        )
+        extraction_accounting.update(
+            {
+                "n_candidate_items_received": len(literature_ideas),
+                "n_candidates_admitted_initially": len(literature_ideas),
+                "n_candidates_after_reflection": len(literature_ideas),
+            }
         )
     # Gap A -- SciMON-style novelty optimisation. Runs BEFORE concept mapping so a
     # crowded query can suggest alternatives while the original idea stays in
@@ -1904,8 +1959,32 @@ def run_idea_mining_dry_run(
         )
         for idea in literature_ideas
     ]
+    if analytic_population_age_group not in {None, "mixed"}:
+        executable_candidates = [
+            (
+                candidate
+                if _population_matches_age_group(
+                    candidate.population,
+                    analytic_population_age_group,
+                )
+                else candidate.model_copy(
+                    update={
+                        "non_executable_reasons": [
+                            *candidate.non_executable_reasons,
+                            "candidate population explicitly contradicts the "
+                            f"analytic {analytic_population_age_group} cohort",
+                        ]
+                    }
+                )
+            )
+            for candidate in executable_candidates
+        ]
     unique_candidates = _unique_hypothesis_candidates(executable_candidates)
-    yield_report = _build_yield_report(literature_ideas, executable_candidates)
+    yield_report = _build_yield_report(
+        literature_ideas,
+        executable_candidates,
+        extraction_accounting=extraction_accounting,
+    )
     family_id = _stable_hypothesis_family_id(
         manifest.source_snapshot_id,
         unique_candidates,
@@ -2110,6 +2189,7 @@ def run_idea_mining_dry_run(
         registry=registry,
         hypothesis_family_id=family_id,
         source_snapshot_id=manifest.source_snapshot_id,
+        candidate_screening_denominator=yield_report.n_candidate_items_received,
     )
     novelty_path: Optional[Path] = None
     discovery_path: Optional[Path] = None
@@ -2265,7 +2345,11 @@ def run_idea_mining_dry_run(
 def _build_yield_report(
     literature_ideas: Sequence[LiteratureIdeaCandidate],
     candidates: Sequence[ExecutableHypothesisCandidate],
+    *,
+    extraction_accounting: Optional[Mapping[str, int]] = None,
 ) -> IdeaMiningYieldReport:
+    accounting = extraction_accounting or {}
+    received = int(accounting.get("n_candidate_items_received", len(literature_ideas)))
     unresolved_predictors = [
         candidate.predictor_label
         for candidate in candidates
@@ -2283,6 +2367,19 @@ def _build_yield_report(
     ]
     return IdeaMiningYieldReport(
         n_literature_ideas=len(literature_ideas),
+        n_candidate_items_received=received,
+        n_candidates_excluded_before_mapping=max(
+            0,
+            received - len(literature_ideas),
+        ),
+        n_dropped_untraceable=int(accounting.get("n_dropped_untraceable", 0)),
+        n_dropped_invalid=int(accounting.get("n_dropped_invalid", 0)),
+        n_malformed_extraction_batches=int(
+            accounting.get("n_malformed_extraction_batches", 0)
+        ),
+        n_sources_in_malformed_batches=int(
+            accounting.get("n_sources_in_malformed_batches", 0)
+        ),
         n_resolved_predictor=sum(
             1 for candidate in candidates if candidate.resolved_predictor_concept
         ),
@@ -3091,8 +3188,12 @@ def _build_candidate_records(
     registry: IdeaCandidateRegistry,
     hypothesis_family_id: str,
     source_snapshot_id: str,
+    candidate_screening_denominator: int,
 ) -> List[IdeaMiningCandidateTriageRecord]:
-    family_size = registry.family_size(hypothesis_family_id)
+    family_size = max(
+        registry.family_size(hypothesis_family_id),
+        int(candidate_screening_denominator),
+    )
     executable_family_size = len(
         {
             registry_ids.get(
@@ -3175,9 +3276,11 @@ def _build_candidate_records(
                 multiple_testing_family_size=family_size,
                 multiple_testing_executable_family_size=executable_family_size,
                 multiple_testing_note=(
-                    "Preregistered all-considered candidate denominator only; "
-                    "executable candidate denominator is reported separately; "
-                    "no p-values are computed or adjusted in S5 dry run."
+                    "All received candidate items, including items excluded before "
+                    "mapping, remain in the conservative all-considered "
+                    "preregistered denominator; "
+                    "the executable denominator is reported separately. No p-values "
+                    "are computed or adjusted in the S5 dry run."
                 ),
                 causal_audit_risk=(
                     "static_triage_marker_requires_post_analysis_causal_audit"

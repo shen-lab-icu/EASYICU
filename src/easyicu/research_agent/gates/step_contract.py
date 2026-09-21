@@ -20,10 +20,11 @@ from ..contracts.phenotype_comparison import phenotype_comparison_output_finding
 from ..planning.figure_plan_mutation import effect_figure_source_authorized
 from ..planning.figure_step_contract import output_declares_figure
 from ..scalar_utils import (
-    first_numeric_scalar_with_key_fragment,
     first_present_scalar,
+    first_strict_numeric_scalar_with_key_fragment,
     flatten_scalar_dict,
 )
+from ..numeric_scalars import strict_optional_finite_float
 from ..schema import AnalysisStep, ResearchContext, ValidationFinding
 from .step_result_evidence import (
     cluster_count_from_summary as _cluster_count_from_summary,
@@ -248,9 +249,10 @@ def _step_contract_findings(
 
     prediction_required = not figure_only_step and _prediction_contract_applies(step)
     if prediction_required:
-        auroc_value = first_present_scalar(
-            step_summary,
-            (
+        auroc_value = strict_optional_finite_float(
+            first_present_scalar(
+                step_summary,
+                (
                 "auroc",
                 "statistic:auroc",
                 "auc",
@@ -264,12 +266,15 @@ def _step_contract_findings(
                 "mean_auroc",
                 "auroc_mean",
                 "auroc_median",
-            ),
+                ),
+            )
         )
         if auroc_value is None:
-            auroc_value = first_numeric_scalar_with_key_fragment(
-                step_summary,
-                ("auroc", "auc"),
+            auroc_value = strict_optional_finite_float(
+                first_strict_numeric_scalar_with_key_fragment(
+                    step_summary,
+                    ("auroc", "auc"),
+                )
             )
         if auroc_value is None:
             # The discrimination estimate may have been produced and bound by an
@@ -320,9 +325,10 @@ def _step_contract_findings(
                 message,
                 ("auroc", "cv_auroc", "mean_auroc", "auroc_median"),
             )
-        calibration_value = first_present_scalar(
-            step_summary,
-            (
+        calibration_value = strict_optional_finite_float(
+            first_present_scalar(
+                step_summary,
+                (
                 "brier_score",
                 "statistic:brier_score",
                 "cv_brier_mean",
@@ -337,12 +343,15 @@ def _step_contract_findings(
                 "calibration_intercept",
                 "statistic:calibration_intercept",
                 "calibration_intercept_median",
-            ),
+                ),
+            )
         )
         if calibration_value is None:
-            calibration_value = first_numeric_scalar_with_key_fragment(
-                step_summary,
-                ("brier", "calibration_slope", "calibration_intercept"),
+            calibration_value = strict_optional_finite_float(
+                first_strict_numeric_scalar_with_key_fragment(
+                    step_summary,
+                    ("brier", "calibration_slope", "calibration_intercept"),
+                )
             )
         if calibration_value is None:
             calibration_fallback = _prediction_calibration_from_completed_records(

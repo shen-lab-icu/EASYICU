@@ -211,6 +211,20 @@ def test_policy_rejects_numeric_fact_with_unregistered_evidence() -> None:
     assert result.removed_result_sentences == (sentence,)
 
 
+def test_unrelated_registered_evidence_cannot_launder_numeric_methods_sentence() -> None:
+    sentence = "The primary model used 20 imputations {evidence:queued_unrelated_step}."
+    scaffold = f"## Methods\n\n{sentence}"
+
+    result = filter_evidence_bound_scaffold(
+        scaffold,
+        resolve_claim=_resolver,
+        resolve_evidence=lambda ref: ref == "queued_unrelated_step",
+    )
+
+    assert sentence not in result.scaffold
+    assert result.removed_result_sentences == (sentence,)
+
+
 def test_registered_evidence_does_not_bypass_qualitative_claim_authority() -> None:
     sentence = "Patients had higher mortality {evidence:outcome_rate}."
 

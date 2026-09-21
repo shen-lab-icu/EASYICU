@@ -201,7 +201,7 @@ CONCEPT_DICTIONARY = {
     'sep3_sofa1': ('Sepsis-3 (SOFA-1 based)', 'Sepsis-3诊断 (基于传统SOFA)', 'boolean'),
     'sep3_sofa2': ('Experimental Sepsis sensitivity (SOFA-2 based)', '实验性脓毒症敏感性定义（基于SOFA-2）', 'boolean'),
     'susp_inf': ('Suspected Infection (ICD or Abx+Culture timing)', '疑似感染 (ICD诊断码或抗生素+培养时间窗)', 'boolean'),
-    'infection_icd': ('ICD Infection Diagnosis (eICU only, Angus 2001)', 'ICD感染诊断 (仅eICU, Angus标准)', 'boolean'),
+    'infection_icd': ('Diagnosis-string infection keyword match (eICU only)', '诊断文本感染关键词匹配（仅 eICU）', 'boolean'),
 
     # 呼吸系统 (扩展)
     'spo2': ('Peripheral Oxygen Saturation', '脉搏血氧饱和度', '%'),
@@ -291,6 +291,7 @@ CONCEPT_DICTIONARY = {
     'creatinine_evidence_reason': ('Creatinine Evidence Reason', '肌酐证据原因', 'category'),
     'urine_evidence_status': ('Urine-output Evidence Status', '尿量证据状态', 'category'),
     'rrt_evidence_status': ('RRT Evidence Status', 'RRT证据状态', 'category'),
+    'rrt_evidence_reason': ('RRT Evidence Reason', 'RRT证据原因', 'category'),
     # 🔧 2026-02-12: 添加规范化后的 KDIGO 扩展列
     'creat_low_past_48hr': ('Lowest Creatinine in Past 48h', '过去48小时内最低肌酐', 'mg/dL'),
     'creat_low_past_7day': ('Baseline Creatinine (7-day lowest)', '基线肌酐（7天内最低值）', 'mg/dL'),
@@ -413,7 +414,7 @@ CONCEPT_DESCRIPTIONS = {
     'sep3_sofa2': ('Experimental sensitivity phenotype: suspected infection + SOFA-2 ≥2 point increase; not canonical Sepsis-3', '实验性敏感性定义：疑似感染 + SOFA-2较基线升高≥2分；并非标准Sepsis-3定义'),
     'sep3_sofa1': ('Sepsis-3 diagnosis: suspected infection + traditional SOFA ≥2 point increase', '基于传统SOFA的Sepsis-3诊断：疑似感染 + SOFA较基线升高≥2分'),
     'susp_inf': ('Suspected infection: (1) ICD infection diagnosis codes (eICU only) OR (2) antibiotics started within 72h of culture OR culture within 24h of antibiotics. Combines infection_icd, abx, and samp concepts.', '疑似感染：(1) ICD感染诊断码（仅eICU可用）或 (2) 培养后72小时内开始抗生素 或 抗生素后24小时内进行培养。由infection_icd、abx和samp概念组合而成'),
-    'infection_icd': ('Infection diagnosis based on Angus 2001 ICD criteria (explicit infection codes). ONLY available in eICU database.', '基于Angus 2001 ICD标准的感染诊断（显性感染编码）。仅eICU数据库可用'),
+    'infection_icd': ('Case-insensitive keyword match over eICU diagnosisstring text; this is not the Angus 2001 ICD-9 code list. ONLY available in eICU.', '对 eICU diagnosisstring 诊断文本进行不区分大小写的关键词匹配；这不是 Angus 2001 ICD-9 码表。仅 eICU 可用'),
     'samp': ('Body fluid sampling (blood, urine, sputum, etc.) for culture-based infection workup. Used as a marker for suspected infection when combined with antibiotic timing.', '体液采样（血液、尿液、痰液等）用于培养检查。与抗生素时间窗结合作为疑似感染的标志'),
 
     # Vitals
@@ -569,7 +570,7 @@ CONCEPT_GROUPS_INTERNAL = {
               # Evidence receipts are QC fields, not a second phenotype.
               'kidney_observation_window_coverage',
               'creatinine_evidence_status', 'creatinine_evidence_reason',
-              'urine_evidence_status', 'rrt_evidence_status',
+              'urine_evidence_status', 'rrt_evidence_status', 'rrt_evidence_reason',
               # 规范化后的列名（从 kdigo_* 展开列规范化而来）
               'creat_low_past_48hr', 'creat_low_past_7day',
               'creat_baseline_n_48h', 'creat_baseline_n_7d',

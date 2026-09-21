@@ -3,8 +3,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from easyicu.concept import ConceptResolver
+from easyicu.concept.errors import ConceptExtractionUnavailable
 from easyicu.concept.schema import ConceptDictionary
 
 
@@ -26,6 +28,11 @@ class _MappingDataSource:
         return SimpleNamespace(
             data=self.mapping[self.mapping["stay_id"].isin(requested)]
         )
+
+
+class _BrokenMappingDataSource(_MappingDataSource):
+    def load_table(self, *_args, **_kwargs):
+        raise OSError("mapping unavailable")
 
 
 def test_patient_id_mapping_cache_loads_missing_disjoint_cohorts() -> None:
@@ -55,3 +62,21 @@ def test_patient_id_mapping_materializes_an_empty_target_filter() -> None:
 
     assert expanded == {"stay_id": [999], "subject_id": []}
     assert source.calls == [[999]]
+
+
+def test_unsupported_patient_id_mapping_fails_closed() -> None:
+    resolver = ConceptResolver(ConceptDictionary(concepts={}))
+    source = _MappingDataSource()
+
+    with pytest.raises(ConceptExtractionUnavailable, match="Cannot map"):
+        resolver._expand_patient_ids({"row_id": [7]}, "subject_id", source)
+    assert source.calls == []
+
+
+def test_patient_id_mapping_load_failure_fails_closed() -> None:
+    resolver = ConceptResolver(ConceptDictionary(concepts={}))
+
+    with pytest.raises(ConceptExtractionUnavailable, match="mapping unavailable"):
+        resolver._expand_patient_ids(
+            {"stay_id": [1]}, "subject_id", _BrokenMappingDataSource()
+        )

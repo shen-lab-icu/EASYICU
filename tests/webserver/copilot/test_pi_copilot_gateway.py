@@ -1646,7 +1646,8 @@ def test_research_system_prompt_routes_short_execution_intent_to_run_owner() -> 
     assert "save that commitment in typed analysis_design" in entrypoint
     assert "typed analysis_design.analysis_family" in entrypoint
     assert "Never upgrade a descriptive unadjusted noncausal contrast" in entrypoint
-    assert "Never call easyicu_resume without an approved/rejected decision" in entrypoint
+    assert "easyicu_resume may only reattach to a live job" in entrypoint
+    assert "cannot submit plan approval or rejection" in entrypoint
     assert "an explicit user rerun request must call easyicu_run" in entrypoint
     assert "Treat every scientific question as one ordinary research project" in entrypoint
     assert "Evaluation orchestration and scoring stay outside the Copilot product surface" in entrypoint
@@ -1736,7 +1737,8 @@ def test_fresh_plan_regeneration_is_a_hidden_typed_single_tool_transition() -> N
 def test_system_prompt_keeps_declined_optional_sensitivity_out_of_study_context() -> None:
     entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
     assert "the user declines, that is not a sensitivity spec or a StudyContext change" in entrypoint
-    assert "call easyicu_resume with decision='approved'" in entrypoint
+    assert "direct the user to the browser review control" in entrypoint
+    assert "must never submit an approved/rejected human-review receipt" in entrypoint
 
 
 def test_research_system_prompt_requires_tool_first_idea_mining() -> None:

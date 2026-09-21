@@ -5,16 +5,19 @@ from __future__ import annotations
 import json
 import math
 import re
-from functools import partial
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from pydantic import ValidationError
 
-from ..numeric_scalars import coerce_optional_finite_float
-from ..scalar_utils import _first_numeric_scalar_with_key_fragment, _first_present_scalar, _flatten_scalar_dict
+from ..numeric_scalars import strict_optional_finite_float
+from ..scalar_utils import (
+    _first_present_scalar,
+    _first_strict_numeric_scalar_with_key_fragment,
+    _flatten_scalar_dict,
+)
 from ..schema import AnalysisStep, ClusterSelectionManifest, ResearchContext, ValidationFinding
 
-_finite_float = partial(coerce_optional_finite_float, allow_bool=False)
+_finite_float = strict_optional_finite_float
 
 def _problematic_metric_keys(
     payload: Any,
@@ -43,15 +46,11 @@ def _problematic_metric_keys(
         if value is None:
             bad = True
         elif isinstance(value, bool):
-            bad = False
+            bad = True
         elif isinstance(value, (int, float)):
-            bad = not math.isfinite(float(value))
+            bad = strict_optional_finite_float(value) is None
         elif isinstance(value, str):
-            text = value.strip().lower()
-            bad = (
-                text in {"", "nan", "none", "null", "model not fitted"}
-                or "not fitted" in text
-            )
+            bad = True
         if bad:
             problems.append({"key": path, "value": value})
 
@@ -307,10 +306,14 @@ def _prediction_auroc_from_completed_records(
         step_summary = record.get("step_summary")
         if not isinstance(step_summary, dict):
             continue
-        value = _first_present_scalar(step_summary, _AUROC_SCALAR_KEYS)
+        value = strict_optional_finite_float(
+            _first_present_scalar(step_summary, _AUROC_SCALAR_KEYS)
+        )
         if value is None:
-            value = _first_numeric_scalar_with_key_fragment(
-                step_summary, ("auroc", "auc")
+            value = strict_optional_finite_float(
+                _first_strict_numeric_scalar_with_key_fragment(
+                    step_summary, ("auroc", "auc")
+                )
             )
         if value is not None:
             return source_step_id, value
@@ -356,10 +359,14 @@ def _prediction_calibration_from_completed_records(
         step_summary = record.get("step_summary")
         if not isinstance(step_summary, dict):
             continue
-        value = _first_present_scalar(step_summary, _CALIBRATION_SCALAR_KEYS)
+        value = strict_optional_finite_float(
+            _first_present_scalar(step_summary, _CALIBRATION_SCALAR_KEYS)
+        )
         if value is None:
-            value = _first_numeric_scalar_with_key_fragment(
-                step_summary, ("brier", "calibration_slope", "calibration_intercept")
+            value = strict_optional_finite_float(
+                _first_strict_numeric_scalar_with_key_fragment(
+                    step_summary, ("brier", "calibration_slope", "calibration_intercept")
+                )
             )
         if value is not None:
             return source_step_id, value

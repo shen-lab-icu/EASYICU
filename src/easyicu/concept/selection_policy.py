@@ -79,6 +79,10 @@ _POLICIES = {
     ),
 }
 
+_MODULE_CONCEPT_IDS = {
+    "sepsis3_sofa2": "sep3_sofa2",
+}
+
 _NEGATED_EXPLICIT_SELECTION = re.compile(
     r"(?:do\s+not|don't|not\s+using|without|exclude|不要|不使用|排除|并非)"
     r".{0,40}(?:sofa\s*[- ]?2|sep3_sofa2)",
@@ -90,6 +94,30 @@ def concept_selection_policy(concept_id: Any) -> Optional[ConceptSelectionPolicy
     """Return the owner-issued selection policy for one canonical concept id."""
 
     return _POLICIES.get(str(concept_id or "").strip())
+
+
+def concept_id_for_module(module: Any) -> Optional[str]:
+    """Return the governed concept selected by one feature module, if any."""
+
+    return _MODULE_CONCEPT_IDS.get(str(module or "").strip().casefold())
+
+
+def _explicit_term_present(text: str, term: str) -> bool:
+    """Match an explicit alias without accepting numeric continuations.
+
+    ``sofa 2`` is an authorization phrase; the ``2`` in ``SOFA 28-day`` or
+    ``SOFA 2.5`` is not.  ASCII identifier boundaries also prevent aliases
+    such as ``sofa2`` from matching longer tokens while retaining the Chinese
+    forms whose adjacent characters are meaningful parts of the issued alias.
+    """
+
+    escaped = re.escape(term.casefold()).replace(r"\ ", r"\s+")
+    return bool(
+        re.search(
+            rf"(?<![a-z0-9_]){escaped}(?![a-z0-9_]|\s*[.\uff0e]\s*\d)",
+            text,
+        )
+    )
 
 
 def evaluate_concept_selection(
@@ -118,7 +146,9 @@ def evaluate_concept_selection(
             selection_mode="ordinary",
         )
     text = " ".join(str(user_intent or "").casefold().split())
-    explicitly_named = any(term.casefold() in text for term in policy.explicit_terms)
+    explicitly_named = any(
+        _explicit_term_present(text, term) for term in policy.explicit_terms
+    )
     negated = bool(_NEGATED_EXPLICIT_SELECTION.search(text))
     allowed = (explicitly_named and not negated) or bool(owner_confirmed)
     return ConceptSelectionDecision(
@@ -141,10 +171,31 @@ def concept_selection_confirmation_key(concept_id: Any) -> str:
     return f"concept_selection_{normalized_id}_authorized"
 
 
+def concept_selection_authority_key(concept_id: Any) -> str:
+    """Return the server-owned receipt key for a verified user selection."""
+
+    normalized_id = re.sub(r"[^a-z0-9_]+", "_", str(concept_id or "").casefold())
+    return f"concept_selection_{normalized_id}_user_turn_verified"
+
+
+def is_concept_selection_authority_key(value: Any) -> bool:
+    """Return whether one confirmation key is reserved for the host owner."""
+
+    return bool(
+        re.fullmatch(
+            r"concept_selection_[a-z0-9_]+_user_turn_verified",
+            str(value or ""),
+        )
+    )
+
+
 __all__ = [
     "ConceptSelectionDecision",
     "ConceptSelectionPolicy",
+    "concept_id_for_module",
+    "concept_selection_authority_key",
     "concept_selection_policy",
     "concept_selection_confirmation_key",
     "evaluate_concept_selection",
+    "is_concept_selection_authority_key",
 ]

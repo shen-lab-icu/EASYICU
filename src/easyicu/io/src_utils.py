@@ -18,6 +18,11 @@ except ImportError:
     def get_src_env(name):
         return None
 
+
+def _packaged_registry() -> DataSourceRegistry:
+    config_path = Path(__file__).resolve().parents[1] / "data" / "data-sources.json"
+    return DataSourceRegistry.from_json(config_path)
+
 def src_name(x: Union[str, DataSourceConfig, ICUDataSource, SrcEnv, DataEnv]) -> str:
     """Get data source name (R ricu src_name).
     
@@ -74,7 +79,7 @@ def src_prefix(x: Union[str, DataSourceConfig, ICUDataSource, SrcEnv]) -> list[s
             return x.config.class_prefix
         # Try to get from registry
         try:
-            registry = DataSourceRegistry.get_default()
+            registry = _packaged_registry()
             config = registry.get(x.name)
             if config:
                 return config.class_prefix
@@ -84,7 +89,7 @@ def src_prefix(x: Union[str, DataSourceConfig, ICUDataSource, SrcEnv]) -> list[s
     # Try to get from registry
     if isinstance(x, str):
         try:
-            registry = DataSourceRegistry.get_default()
+            registry = _packaged_registry()
             config = registry.get(x)
             if config:
                 return config.class_prefix
@@ -131,7 +136,7 @@ def src_data_avail(src: str, data_dir: Optional[Union[str, Path]] = None) -> boo
         >>> src_data_avail('mimic_demo', '/path/to/data')
         True
     """
-    from .utils.file_utils import src_data_dir, dir_exists
+    from ..utils.file_utils import dir_exists, src_data_dir
     
     try:
         if data_dir is None:
@@ -158,12 +163,11 @@ def src_tbl_avail(src: str, tbl: str, data_dir: Optional[Union[str, Path]] = Non
         >>> src_tbl_avail('mimic_demo', 'patients')
         True
     """
-    from .utils.file_utils import src_data_dir, file_exists
-    from ..config import DataSourceRegistry
+    from ..utils.file_utils import file_exists, src_data_dir
     
     try:
         # Get config
-        registry = DataSourceRegistry.get_default()
+        registry = _packaged_registry()
         config = registry.get(src)
         if not config:
             return False
@@ -243,4 +247,3 @@ def is_src_tbl(x: Any) -> bool:
         return True
     
     return False
-

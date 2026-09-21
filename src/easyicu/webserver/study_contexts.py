@@ -793,7 +793,11 @@ def cohort_eligibility_scope_sha256(study: Mapping[str, Any]) -> str:
     return normalize_primary_cohort_scope(study).sha256
 
 
-def _confirmations(value: Any) -> Dict[str, bool]:
+def _confirmations(
+    value: Any,
+    *,
+    allow_concept_selection_authority: bool = False,
+) -> Dict[str, bool]:
     if value is None:
         return {}
     if not isinstance(value, dict):
@@ -815,6 +819,20 @@ def _confirmations(value: Any) -> Dict[str, bool]:
     result: Dict[str, bool] = {}
     for raw_key, raw_value in value.items():
         key = _identifier(raw_key, field="confirmations.key")
+        from easyicu.concept.selection_policy import (
+            is_concept_selection_authority_key,
+        )
+
+        if (
+            is_concept_selection_authority_key(key)
+            and not allow_concept_selection_authority
+        ):
+            raise StudyContextError(
+                {
+                    "error": "study_concept_selection_authority_server_owned",
+                    "field": f"confirmations.{key}",
+                }
+            )
         if not isinstance(raw_value, bool):
             raise StudyContextError(
                 {
@@ -1137,6 +1155,7 @@ def validate_context_update(
     current_context: Optional[Mapping[str, Any]] = None,
     lifecycle_write: bool = True,
     _server_cohort_eligibility_authority_write: bool = False,
+    _server_concept_selection_authority_write: bool = False,
 ) -> Dict[str, Any]:
     """Validate and normalize one proposed update without mutating the store.
 
@@ -1152,6 +1171,9 @@ def validate_context_update(
         raw_context,
         allow_cohort_eligibility_authority=(
             _server_cohort_eligibility_authority_write
+        ),
+        allow_concept_selection_authority=(
+            _server_concept_selection_authority_write
         ),
     )
     current = dict(current_context or {})
@@ -1218,6 +1240,7 @@ def _sanitize_patch(
     *,
     allow_literature_authority: bool = False,
     allow_cohort_eligibility_authority: bool = False,
+    allow_concept_selection_authority: bool = False,
 ) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise StudyContextError({"error": "study_context_body_required"})
@@ -1313,7 +1336,10 @@ def _sanitize_patch(
             schema=_TIME_WINDOW_SCHEMA,
         )
     if "confirmations" in raw:
-        patch["confirmations"] = _confirmations(raw.get("confirmations"))
+        patch["confirmations"] = _confirmations(
+            raw.get("confirmations"),
+            allow_concept_selection_authority=allow_concept_selection_authority,
+        )
     if "cohort_eligibility_authority" in raw:
         if not allow_cohort_eligibility_authority:
             raise StudyContextError(
@@ -1742,12 +1768,16 @@ def upsert_context(
     lifecycle_write: bool = True,
     _server_literature_authority_write: bool = False,
     _server_cohort_eligibility_authority_write: bool = False,
+    _server_concept_selection_authority_write: bool = False,
 ) -> Dict[str, Any]:
     patch = _sanitize_patch(
         raw_context,
         allow_literature_authority=_server_literature_authority_write,
         allow_cohort_eligibility_authority=(
             _server_cohort_eligibility_authority_write
+        ),
+        allow_concept_selection_authority=(
+            _server_concept_selection_authority_write
         ),
     )
     if expected_revision is not None and (
@@ -2120,6 +2150,7 @@ def _scientific_fields_sha256(
         {key: context.get(key) for key in fields},
         allow_literature_authority=True,
         allow_cohort_eligibility_authority=True,
+        allow_concept_selection_authority=True,
     )
     encoded = json.dumps(
         sanitized,

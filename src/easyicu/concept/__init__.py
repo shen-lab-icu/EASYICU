@@ -1117,8 +1117,9 @@ class ConceptResolver:
         else:
             patient_ids = dict(patient_ids)  # 复制，避免修改原始数据
         
-        # 如果已经包含目标ID，直接返回
-        if target_id_var in patient_ids and patient_ids[target_id_var]:
+        # 如果调用方已经提供目标 ID，即使是显式空集也要保留。
+        # 空集表示“不选任何患者”，不能继续映射或被解释为全体。
+        if target_id_var in patient_ids:
             return patient_ids
         
         # 需要进行 ID 转换
@@ -1137,10 +1138,18 @@ class ConceptResolver:
             source_var = 'subject_id'
             source_values = patient_ids['subject_id']
         else:
-            # 无法转换，返回原始值
-            return patient_ids
+            raise ConceptExtractionUnavailable(
+                concept_id=target_id_var,
+                database=db_name or "unknown",
+                stage="patient_id_mapping",
+                detail=(
+                    "Cannot map patient selector "
+                    f"{sorted(patient_ids)} to required ID column {target_id_var!r}"
+                ),
+            )
         
         if not source_values:
+            patient_ids[target_id_var] = []
             return patient_ids
         
         # 加载或使用缓存的 ID 映射表。该表是按请求队列过滤的，
@@ -1169,7 +1178,7 @@ class ConceptResolver:
                 # eICU doesn't use icustays table
                 db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
                 if db_name in ['eicu', 'eicu_demo']:
-                    # eICU uses patientunitstayid as the primary ID, no mapping needed
+                    # eICU does not use the MIMIC icustays mapping table.
                     return patient_ids
                 
                 from ..datasource import FilterSpec, FilterOp
@@ -1210,7 +1219,13 @@ class ConceptResolver:
             except Exception as e:
                 if verbose:
                     print(f"   ⚠️  无法加载 icustays 进行 ID 转换: {e}")
-                return patient_ids
+                raise ConceptExtractionUnavailable(
+                    concept_id=target_id_var,
+                    database=db_name or "unknown",
+                    stage="patient_id_mapping",
+                    detail=f"Cannot map {source_var!r} to {target_id_var!r}: {e}",
+                    cause=e,
+                ) from e
         
         # 从映射表中获取目标ID
         mapping_df = self._id_mapping_cache

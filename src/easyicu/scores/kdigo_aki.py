@@ -1604,6 +1604,7 @@ def load_kdigo_aki(
     verbose: bool = True,
     preloaded_data: Optional[Dict[str, pd.DataFrame]] = None,
     observation_window_coverage: Optional[Mapping[Any, str]] = None,
+    rrt_source_complete: bool = False,
 ) -> pd.DataFrame:
     """Load KDIGO AKI staging for a given database using EasyICU concepts.
     
@@ -1622,6 +1623,8 @@ def load_kdigo_aki(
         observation_window_coverage: Explicit patient-level complete/partial/
             indeterminate coverage receipt.  Without it, component-negative
             rows remain partial rather than being promoted to complete negatives.
+        rrt_source_complete: Explicit receipt that the dedicated positive-event
+            RRT source was successfully searched for the requested cohort.
         
     Returns:
         DataFrame with KDIGO AKI staging including:
@@ -1719,7 +1722,7 @@ def load_kdigo_aki(
         time_unit="hours",
         interval=pd.Timedelta(hours=1),
         observation_window_coverage=observation_window_coverage,
-        rrt_source_complete=True,
+        rrt_source_complete=rrt_source_complete,
     )
     
     if verbose and not result.empty:

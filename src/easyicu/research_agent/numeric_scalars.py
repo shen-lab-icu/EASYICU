@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from numbers import Real
 from typing import Any
 
 
@@ -12,6 +13,15 @@ def coerce_optional_finite_float(value: Any, *, allow_bool: bool = True) -> floa
         number = float(value) if allow_bool or not isinstance(value, bool) else math.nan
     except (TypeError, ValueError):
         return None
+    return number if math.isfinite(number) else None
+
+
+def strict_optional_finite_float(value: Any) -> float | None:
+    """Return a finite JSON numeric scalar; reject strings and booleans."""
+
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return None
+    number = float(value)
     return number if math.isfinite(number) else None
 
 
@@ -27,4 +37,8 @@ def coerce_finite_float(value: Any, *, label: str = "value") -> float:
     return number
 
 
-__all__ = ["coerce_finite_float", "coerce_optional_finite_float"]
+__all__ = [
+    "coerce_finite_float",
+    "coerce_optional_finite_float",
+    "strict_optional_finite_float",
+]

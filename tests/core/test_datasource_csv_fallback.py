@@ -66,6 +66,47 @@ def test_empty_item_filter_short_circuits_partition_read(tmp_path: Path) -> None
     assert result.empty
 
 
+def test_empty_patient_filter_short_circuits_partition_read(tmp_path: Path) -> None:
+    source = ICUDataSource(config=DataSourceConfig(name="unit"), base_path=tmp_path)
+
+    result = source._read_partitioned_data_duckdb(
+        tmp_path,
+        columns=["stay_id", "value"],
+        patient_ids_filter=FilterSpec("stay_id", FilterOp.IN, []),
+    )
+
+    assert list(result.columns) == ["stay_id", "value"]
+    assert result.empty
+
+
+def test_missing_patient_id_column_fails_closed(monkeypatch) -> None:
+    config = DataSourceConfig(
+        name="unit",
+        tables={
+            "events": {
+                "defaults": {
+                    "id_var": "stay_id",
+                    "index_var": "offset",
+                    "val_var": "value",
+                }
+            }
+        },
+    )
+    source = ICUDataSource(config=config)
+    monkeypatch.setattr(
+        source,
+        "_load_raw_frame",
+        lambda *_args, **_kwargs: pd.DataFrame({"offset": [0], "value": [3.0]}),
+    )
+
+    result = source.load_table(
+        "events",
+        filters=[FilterSpec("stay_id", FilterOp.IN, [1])],
+    )
+
+    assert result.data.empty
+
+
 def test_partitioned_duckdb_pushes_string_selector_with_quote(tmp_path: Path) -> None:
     pd.DataFrame(
         {

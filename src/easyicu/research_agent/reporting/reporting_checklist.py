@@ -324,6 +324,49 @@ _STROBE_TEMPLATE: Tuple[Dict[str, Any], ...] = (
         ),
     },
     {
+        "id": "17",
+        "section": "Results",
+        "statement": "Report other analyses done, such as analyses of subgroups and interactions, and sensitivity analyses.",
+        "required_evidence_aliases": (
+            "robustness_panel",
+            "robustness_summary",
+            "multiple_testing_report",
+            "causal_audit_report",
+        ),
+    },
+    {
+        "id": "18",
+        "section": "Discussion",
+        "statement": "Summarise key results with reference to study objectives.",
+        "required_evidence_aliases": (
+            "primary_association",
+            "final_results_summary",
+            "evidence_bound_answer_to_research",
+        ),
+    },
+    {
+        "id": "19",
+        "section": "Discussion",
+        "statement": "Discuss limitations of the study, taking into account sources of potential bias or imprecision.",
+        "required_keywords": ("limitation", "residual confounding", "imprecision"),
+    },
+    {
+        "id": "20",
+        "section": "Discussion",
+        "statement": "Give a cautious overall interpretation of results considering objectives, limitations, multiplicity and other evidence.",
+        "required_keywords": ("interpretation", "in context", "considering limitations"),
+    },
+    {
+        "id": "21",
+        "section": "Discussion",
+        "statement": "Discuss the generalisability of the study results.",
+        "required_keywords": (
+            "generalisability",
+            "generalizability",
+            "external validity",
+        ),
+    },
+    {
         "id": "22",
         "section": "Other",
         "statement": "Give the source of funding and the role of the funders for the present study.",
@@ -843,6 +886,38 @@ def _keyword_hit(text: str, keyword: str) -> bool:
     return re.search(pattern, text, flags=re.IGNORECASE) is not None
 
 
+_NON_SUBSTANTIVE_KEYWORD_CONTEXT_RE = re.compile(
+    r"\b(?:no|not|none|without|unavailable|unknown|pending|placeholder)\b"
+    r"|requires?\s+(?:author|manual)\s+verification"
+    r"|(?:should|must)\s+be\s+(?:completed|verified|added)",
+    flags=re.IGNORECASE,
+)
+
+
+def _substantive_keyword_hits(text: str, keywords: Iterable[str]) -> List[str]:
+    """Return keyword hits that occur in affirmative manuscript content.
+
+    Markdown headings and negative/placeholder sentences describe missing
+    content; they are not evidence that a reporting item was addressed.
+    """
+
+    prose = "\n".join(
+        line
+        for line in str(text or "").splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    contexts = [part.strip() for part in re.split(r"(?<=[.!?。！？])|\n", prose)]
+    hits: List[str] = []
+    for keyword in keywords:
+        if any(
+            _keyword_hit(context, keyword)
+            and not _NON_SUBSTANTIVE_KEYWORD_CONTEXT_RE.search(context)
+            for context in contexts
+        ):
+            hits.append(keyword)
+    return hits
+
+
 def _alias_satisfied(required: str, available_aliases: set) -> bool:
     """A required alias is satisfied by an exact match OR by an available alias
     that is the same artefact under a more specific name.
@@ -869,15 +944,16 @@ def _autofill_item(
     item: ChecklistItem,
     available_aliases: set,
     manuscript_text: str,
+    keyword_only_is_addressed: bool = True,
 ) -> None:
     matched_evidence = [
         a
         for a in item.required_evidence_aliases
         if _alias_satisfied(a, available_aliases)
     ]
-    matched_keywords = [
-        k for k in item.required_keywords if _keyword_hit(manuscript_text, k)
-    ]
+    matched_keywords = _substantive_keyword_hits(
+        manuscript_text, item.required_keywords
+    )
     # Multi-alias rows are interpreted as alternatives (at least one of
     # these artefacts satisfies the item); that matches how reporting
     # guidelines actually read. Keyword lists are also alternatives.
@@ -894,7 +970,10 @@ def _autofill_item(
     elif item.required_evidence_aliases:
         item.status = "addressed" if has_any_evidence else "open"
     elif item.required_keywords:
-        item.status = "addressed" if has_any_keyword else "open"
+        if has_any_keyword:
+            item.status = "addressed" if keyword_only_is_addressed else "partial"
+        else:
+            item.status = "open"
     else:
         item.status = "open"
     item.evidence_ids = list(matched_evidence)
@@ -947,6 +1026,7 @@ def build_strobe_checklist(
             item=item,
             available_aliases=aliases,
             manuscript_text=bound_manuscript,
+            keyword_only_is_addressed=False,
         )
     return ChecklistReport(name="STROBE", version=version, items=items)
 

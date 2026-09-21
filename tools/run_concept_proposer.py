@@ -106,6 +106,14 @@ def make_duckdb_probe(db: Path):
             GROUP BY itemid
             """
         ).fetchall()
+        joint_stays = con.execute(
+            f"""
+            SELECT count(DISTINCT {link_col})
+            FROM read_parquet('{path}')
+            WHERE itemid IN ({ids}) AND valuenum IS NOT NULL
+            """
+        ).fetchone()[0]
+        joint_coverage = round(float(joint_stays or 0) / denom, 6)
         out: dict[int, DistributionStat] = {}
         for r in rows:
             iid, n_rows, n_link, p01, p50, p99, units = r
@@ -119,6 +127,7 @@ def make_duckdb_probe(db: Path):
                 p50=None if p50 is None else float(p50),
                 p99=None if p99 is None else float(p99),
                 units=units_t,
+                joint_coverage_fraction=joint_coverage,
             )
         return out
 

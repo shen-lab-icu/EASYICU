@@ -104,6 +104,47 @@ _RENDER_METHODS = frozenset(
 )
 
 
+def _is_structural_accounting_name(value: object) -> bool:
+    token = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    if not token:
+        return False
+    if token in _STRUCTURAL_ACCOUNTING_PRODUCTS:
+        return True
+    parts = {part for part in token.split("_") if part}
+    if "attrition" in parts or "consort" in parts:
+        return True
+    return bool(
+        parts & {"cohort", "population", "participant", "eligibility", "denominator"}
+        and parts & {"account", "accounting", "flow", "funnel", "reconciliation"}
+        or "source" in parts and "availability" in parts
+        or "universe" in parts and parts & {"count", "counts", "reconciliation"}
+    )
+
+
+def _structural_accounting_products(step: AnalysisStep) -> set[str]:
+    """Resolve accounting inputs by semantic role, not an exact product name."""
+
+    table_products = _typed_input_products(step)
+    matched = {
+        product for product in table_products if _is_structural_accounting_name(product)
+    }
+    if matched:
+        return matched
+
+    declared_roles: list[object] = [step.intent, *(step.expected_outputs or [])]
+    for panel in step.figure_panels or []:
+        declared_roles.extend(
+            [
+                getattr(panel, "panel_id", ""),
+                getattr(panel, "article_role", ""),
+                *(getattr(panel, "source_products", ()) or ()),
+            ]
+        )
+    if any(_is_structural_accounting_name(role) for role in declared_roles):
+        return table_products
+    return set()
+
+
 
 
 def _function_arbitrary_column_fallback(
@@ -396,7 +437,7 @@ def _structural_filter_findings(
 ) -> list[ValidationFinding]:
     if normalised_method_head(step.method) not in _RENDER_METHODS:
         return []
-    accounting_products = _typed_input_products(step) & _STRUCTURAL_ACCOUNTING_PRODUCTS
+    accounting_products = _structural_accounting_products(step)
     if not accounting_products:
         return []
 
@@ -586,7 +627,7 @@ def _structural_integer_findings(
 ) -> list[ValidationFinding]:
     if normalised_method_head(step.method) not in _RENDER_METHODS:
         return []
-    accounting_products = _typed_input_products(step) & _STRUCTURAL_ACCOUNTING_PRODUCTS
+    accounting_products = _structural_accounting_products(step)
     if not accounting_products or not _uses_zero_decimal_count_rendering(tree):
         return []
     if _has_integer_like_accounting_guard(tree):

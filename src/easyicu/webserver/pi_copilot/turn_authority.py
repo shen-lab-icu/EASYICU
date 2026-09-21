@@ -81,6 +81,20 @@ _DIRECT_EXTRACTION_AUTHORIZATION_MARKERS = (
     "one-time extraction authorization",
 )
 
+_NON_ACTION_EXTRACTION_PATTERNS = (
+    r"(?:什么是|请?解释|说明|如何|怎样|怎么|是否|能否).{0,48}(?:一次性\s*extraction\s*授权)",
+    r"(?:一次性\s*extraction\s*授权).{0,20}(?:是什么|如何|怎么|是否|能否|吗)",
+    r"\b(?:what is|explain|describe|how|whether|should i)\b[^.!?;]{0,80}\bone-time extraction authorization\b",
+    r"\bone-time extraction authorization\b[^.!?;]{0,40}\?",
+)
+
+_PREPARED_SOURCE_DENIAL = re.compile(
+    r"(?:先别|不要|不使用|暂不|无需|不必|do\s+not|don't|without)"
+    r".{0,32}(?:使用|复用|采用|use|reuse)"
+    r".{0,48}(?:easyicu|本地|local|已准备|已注册|完整|prepared|registered|complete)",
+    flags=re.IGNORECASE,
+)
+
 # A plan noun followed by advice *about* editing it is not a request to spend a
 # Planner turn: "对计划的样本量调整给出建议" and "对年龄的调整方式做敏感性分析"
 # both contain a revision verb as a noun. These tails keep the explicit-edit
@@ -154,7 +168,11 @@ def explicitly_confirms_easyicu_registered_source(message: str) -> bool:
     """
 
     text = _normalize(message)
-    if not text or any(marker in text for marker in _DENIAL_MARKERS):
+    if (
+        not text
+        or any(marker in text for marker in _DENIAL_MARKERS)
+        or _PREPARED_SOURCE_DENIAL.search(text)
+    ):
         return False
     action = bool(
         re.search(
@@ -197,7 +215,13 @@ def infer_explicit_turn_actions(message: str) -> frozenset[str]:
         and not any(re.search(pattern, text) for pattern in _NON_ACTION_PLAN_PATTERNS)
     ):
         return frozenset({"provider_run"})
-    if any(marker in text for marker in _DIRECT_EXTRACTION_AUTHORIZATION_MARKERS):
+    if (
+        any(marker in text for marker in _DIRECT_EXTRACTION_AUTHORIZATION_MARKERS)
+        and not any(
+            re.search(pattern, text)
+            for pattern in _NON_ACTION_EXTRACTION_PATTERNS
+        )
+    ):
         return frozenset({"extract"})
     confirmed = any(marker in text for marker in _CONFIRMATION_MARKERS)
     extraction_scoped = any(

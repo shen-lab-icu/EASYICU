@@ -73,6 +73,21 @@ _AGENT_PROJECTS_PATH = _CONFIG_DIR / "webserver_agent_project_seeds.json"
 _PRIOR_ART_ADJUDICATION_FILENAME = "idea_prior_art_adjudication.json"
 _BOUNDED_FEASIBILITY_FILENAME = "bounded_sample_feasibility.json"
 _PRIOR_ART_DECISIONS = frozenset({"already_answered", "differentiated", "uncertain"})
+_SOURCE_ORIGIN_DEFAULTS = {
+    "manual": ("user_supplied_manual", "User-supplied source"),
+    "url": ("user_supplied_url", "User-supplied article URL"),
+    "pdf": ("user_supplied_pdf", "User-supplied PDF metadata"),
+    "literature_folder": (
+        "user_selected_literature_folder",
+        "User-selected literature folder metadata",
+    ),
+    "zotero": (
+        "user_supplied_literature_metadata",
+        "User-supplied literature metadata",
+    ),
+    "frontier": ("user_supplied_frontier_topic", "User-supplied frontier topic"),
+    "pubmed": ("user_supplied_pubmed_metadata", "User-supplied PubMed metadata"),
+}
 _CONFIRMED_DEFINITION_FIELDS = (
     "research_question",
     "population",
@@ -475,9 +490,10 @@ def resolve_source(body: Dict[str, Any]) -> Dict[str, Any]:
             suggestion["doi"] = fetched["doi"]
             source["doi"] = fetched["doi"]
     elif source_type == "pdf" and body.get("source_file_sha256"):
-        adapter["status"] = "local_pdf_excerpt_ready"
+        adapter["status"] = "local_pdf_hash_claim_received"
         adapter["reason"] = (
-            "The selected local PDF has been parsed into a bounded excerpt and hash."
+            "A client-supplied PDF hash claim was received. It is not a host-verified receipt; "
+            "the bounded excerpt remains the source evidence for this request."
         )
     elif source_type == "pdf" and not suggestion.get("excerpt"):
         adapter["status"] = "blocked_pdf_excerpt_required"
@@ -723,7 +739,8 @@ def discover_literature(body: Dict[str, Any]) -> Dict[str, Any]:
                 "abstract": article.get("abstract_excerpt")
                 or article.get("evidence_sentence")
                 or "",
-            }
+            },
+            verified_origin=("pubmed_eutils", "PubMed E-utilities"),
         )
         source["design_excerpt"] = article.get("design_excerpt") or ""
         source["publication_types"] = list(article.get("publication_types") or [])
@@ -2042,7 +2059,11 @@ def get_run(body: Dict[str, Any] | None = None) -> Dict[str, Any]:
     return out
 
 
-def _source_record(body: Dict[str, Any]) -> Dict[str, Any]:
+def _source_record(
+    body: Dict[str, Any],
+    *,
+    verified_origin: Optional[Tuple[str, str]] = None,
+) -> Dict[str, Any]:
     topic = _clean(body.get("topic") or body.get("research_question") or "", 180)
     title = _clean(body.get("title") or topic or "Untitled source", 220)
     journal = _clean(body.get("journal") or "", 120)
@@ -2051,15 +2072,19 @@ def _source_record(body: Dict[str, Any]) -> Dict[str, Any]:
     doi = _clean(body.get("doi") or "", 180)
     pmid = _clean(body.get("pmid") or "", 80)
     source_type = _clean(body.get("source_type") or "manual", 40)
-    source_origin = _clean(body.get("source_origin") or "", 80)
-    if not source_origin:
-        if source_type == "zotero" and body.get("zotero_key"):
-            source_origin = "zotero_desktop"
-        elif source_type == "zotero":
-            source_origin = "pasted_literature"
-        else:
-            source_origin = source_type
-    source_origin_label = _clean(body.get("source_origin_label") or "", 120)
+    if source_type not in _SOURCE_ORIGIN_DEFAULTS:
+        raise IdeaMiningWebError(
+            {
+                "error": "unsupported_idea_source_type",
+                "source_type": source_type,
+                "allowed_source_types": sorted(_SOURCE_ORIGIN_DEFAULTS),
+            }
+        )
+    source_origin, source_origin_label = (
+        verified_origin or _SOURCE_ORIGIN_DEFAULTS[source_type]
+    )
+    claimed_source_origin = _clean(body.get("source_origin") or "", 80)
+    claimed_source_origin_label = _clean(body.get("source_origin_label") or "", 120)
     excerpt = _clean(
         body.get("excerpt") or body.get("source_quote") or "", _MAX_SOURCE_QUOTE
     )
@@ -2077,6 +2102,10 @@ def _source_record(body: Dict[str, Any]) -> Dict[str, Any]:
         "citation_key": citation_key,
         "source_type": source_type,
         "source_origin": source_origin,
+        "source_origin_label": source_origin_label,
+        "source_provenance_status": (
+            "host_verified_metadata" if verified_origin else "user_supplied_unverified"
+        ),
         "title": title,
         "year": year,
         "journal": journal or None,
@@ -2089,12 +2118,16 @@ def _source_record(body: Dict[str, Any]) -> Dict[str, Any]:
         "source_text_stored": False,
         "rights_note": "Only metadata, hash and a bounded user-supplied quote are persisted.",
     }
-    if source_origin_label:
-        record["source_origin_label"] = source_origin_label
+    if claimed_source_origin:
+        record["claimed_source_origin"] = claimed_source_origin
+    if claimed_source_origin_label:
+        record["claimed_source_origin_label"] = claimed_source_origin_label
     if body.get("source_file_name"):
         record["source_file_name"] = _clean(body.get("source_file_name"), 240)
     if body.get("source_file_sha256"):
-        record["source_file_sha256"] = _clean(body.get("source_file_sha256"), 80)
+        claimed_hash = _clean(body.get("source_file_sha256"), 80).lower()
+        if re.fullmatch(r"[0-9a-f]{64}", claimed_hash):
+            record["claimed_source_file_sha256"] = claimed_hash
     if body.get("literature_folder"):
         record["literature_folder"] = _norm_path(
             str(body.get("literature_folder") or "")
@@ -2697,6 +2730,7 @@ def _handoff_plan(
             "source_type": source.get("source_type"),
             "source_origin": source.get("source_origin"),
             "source_origin_label": source.get("source_origin_label"),
+            "status": source.get("source_provenance_status"),
             "title": source.get("title"),
             "year": source.get("year"),
             "journal": source.get("journal"),
@@ -4134,6 +4168,7 @@ def _agent_project_seed(
             "source_type": source.get("source_type"),
             "source_origin": source.get("source_origin"),
             "source_origin_label": source.get("source_origin_label"),
+            "source_provenance_status": source.get("source_provenance_status"),
             "title": source.get("title"),
             "year": source.get("year"),
             "journal": source.get("journal"),
@@ -6142,7 +6177,16 @@ def _outcome_evidence_text(text: str) -> str:
     for pattern in competing_event_patterns:
         value = re.sub(pattern, " ", value, flags=re.I)
     mortality_rejection_patterns = (
-        r"(?:不|不要|不得|不能|并非|不是)[^。；;\n]{0,32}(?:院内)?(?:死亡|病死率)",
+        # Keep the negation bound to the outcome phrase.  The former
+        # ``不...{0,32}...死亡`` form crossed commas and swallowed unrelated
+        # clauses such as ``不按性别分层，死亡为主要结局``.
+        r"(?:不要|不得|不能|不应|并非|不是|勿|避免)"
+        r"(?:把|将|默认|选择|采用|纳入|设为|作为|以)?"
+        r"(?:院内)?(?:死亡|病死率)"
+        r"(?:作为|设为|当作)?(?:主要|次要|研究)?(?:结局|终点)?",
+        r"(?:院内)?(?:死亡|病死率)"
+        r"(?:不|不要|不得|不能|不应|并非|不是)"
+        r"(?:作为|是|设为|当作)?(?:主要|次要|研究)?(?:结局|终点)?",
         r"\b(?:do not|don't|must not|should not|not)\b[^.;\n]{0,48}\b(?:death|mortality|survival)\b",
     )
     mortality_rejected = any(

@@ -351,7 +351,23 @@ def test_negative_mortality_instruction_overrides_a_generated_mortality_title() 
     assert idea_mining._pick_outcome(text, hits) is None
 
 
-def test_idea_mining_accepts_zotero_source_payload(
+@pytest.mark.parametrize(
+    "text",
+    [
+        "不按性别分层，院内死亡作为主要结局",
+        "不纳入年龄和性别调整；主要结局为院内死亡",
+        "不限制性别，评估乳酸与病死率的关联",
+    ],
+)
+def test_unrelated_chinese_negation_does_not_erase_mortality_outcome(
+    text: str,
+) -> None:
+    hits = idea_mining._match_concepts(text)
+
+    assert idea_mining._pick_outcome(text, hits)["concept_id"] == "death"
+
+
+def test_idea_mining_marks_client_zotero_provenance_as_unverified(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -365,6 +381,7 @@ def test_idea_mining_accepts_zotero_source_payload(
             "source_type": "zotero",
             "source_origin": "zotero_desktop",
             "source_origin_label": "Zotero Desktop",
+            "source_file_sha256": "a" * 64,
             "topic": "Early Vasopressors in Septic Shock",
             "title": "Early Vasopressors in Septic Shock",
             "journal": "Intensive Care Medicine",
@@ -380,8 +397,13 @@ def test_idea_mining_accepts_zotero_source_payload(
     body = response.json()
     source = body["source_evidence"][0]
     assert source["source_type"] == "zotero"
-    assert source["source_origin"] == "zotero_desktop"
-    assert source["source_origin_label"] == "Zotero Desktop"
+    assert source["source_origin"] == "user_supplied_literature_metadata"
+    assert source["source_origin_label"] == "User-supplied literature metadata"
+    assert source["source_provenance_status"] == "user_supplied_unverified"
+    assert source["claimed_source_origin"] == "zotero_desktop"
+    assert source["claimed_source_origin_label"] == "Zotero Desktop"
+    assert source["claimed_source_file_sha256"] == "a" * 64
+    assert "source_file_sha256" not in source
     assert source["citation_key"] == "smith2026vasopressors"
     assert source["zotero_key"] == "ABC123"
     assert source["source_text_stored"] is False
@@ -436,7 +458,8 @@ def test_pasted_literature_source_flows_to_agent_project_list(
     run = mined.json()
     source = run["source_evidence"][0]
     idea = run["idea_ledger"][0]
-    assert source["source_origin"] == "pasted_literature"
+    assert source["source_origin"] == "user_supplied_literature_metadata"
+    assert source["claimed_source_origin"] == "pasted_literature"
     assert source["source_type"] == "zotero"
     assert source["citation_key"] == "smith2026shock"
 
@@ -464,7 +487,8 @@ def test_pasted_literature_source_flows_to_agent_project_list(
     assert created.status_code == 200
     project = created.json()["project"]
     assert project["source_run_id"] == run["run_id"]
-    assert project["source"]["source_origin"] == "pasted_literature"
+    assert project["source"]["source_origin"] == "user_supplied_literature_metadata"
+    assert project["source"]["source_provenance_status"] == "user_supplied_unverified"
     assert project["source"]["source_type"] == "zotero"
     assert project["source"]["citation_key"] == "smith2026shock"
     assert project["source"]["title"] == "Early Vasopressors in Septic Shock"

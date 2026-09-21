@@ -56,6 +56,16 @@ def _index() -> SourceItemIndex:
                 "unitname": "bpm",
                 "table": "icu/chartevents",
             },
+            {
+                "itemid": 220046,
+                "label": "Heart Rate Alternate",
+                "category": "Routine",
+                "fluid": "",
+                "abbrev": "HR2",
+                "param_type": "Numeric",
+                "unitname": "bpm",
+                "table": "icu/chartevents",
+            },
         ]
     )
 
@@ -162,6 +172,59 @@ def test_clean_proposal_reaches_human_review_never_accepted():
     assert res.status == "needs_human_review"
     assert res.status != "accepted"
     assert res.resolved_itemids == (220045,)
+
+
+def test_joint_coverage_uses_union_not_sum_of_marginals():
+    draft = ConceptProposalDraft(
+        "hr",
+        (220045, 220046),
+        role="measurement",
+        unit="bpm",
+        min_value=0,
+        max_value=300,
+    )
+    probe = _probe_factory(
+        {
+            220045: DistributionStat(
+                220045, 60, 6, 0.006, 50, 80, 150, ("bpm",), 0.006
+            ),
+            220046: DistributionStat(
+                220046, 60, 6, 0.006, 50, 82, 150, ("bpm",), 0.006
+            ),
+        }
+    )
+
+    res = validate_concept_proposal(
+        draft,
+        source_index=_index(),
+        distribution_probe=probe,
+        min_coverage_fraction=0.01,
+    )
+
+    assert res.blocked
+    assert any(
+        finding.gate == "coverage" and "0.0060" in finding.message
+        for finding in res.findings
+    )
+
+
+def test_multi_item_probe_without_joint_coverage_fails_closed():
+    draft = ConceptProposalDraft(
+        "hr", (220045, 220046), unit="bpm", min_value=0, max_value=300
+    )
+    probe = _probe_factory(
+        {
+            220045: DistributionStat(220045, 60, 6, 0.006),
+            220046: DistributionStat(220046, 60, 6, 0.006),
+        }
+    )
+
+    res = validate_concept_proposal(
+        draft, source_index=_index(), distribution_probe=probe
+    )
+
+    assert res.blocked
+    assert any("marginal itemid coverage cannot be summed" in f.message for f in res.findings)
 
 
 def test_no_probe_cannot_be_approved():

@@ -11,7 +11,7 @@ from fastapi import HTTPException
 
 from easyicu.databases.profiles import get_database_profile, iter_database_profiles
 from easyicu.extensions import ExtensionRegistry, ExtensionRegistryError
-from easyicu.extensions.mcp_client import call_mcp_tool
+from easyicu.extensions.mcp_client import call_mcp_tool, validate_mcp_tool_call
 
 from easyicu.ai_optin import is_offline_llm_choice
 from easyicu.research_agent.reporting.result_card import (
@@ -2800,9 +2800,6 @@ def _idea_projection(payload: Mapping[str, Any]) -> Dict[str, Any]:
 def _mine_ideas(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    grant_block = _consume_action(context, "idea")
-    if grant_block is not None:
-        return grant_block
     study = _bound_context(context.session.binding) or {}
     topic = str(params.get("topic") or study.get("question") or "").strip()
     if not topic:
@@ -2829,6 +2826,9 @@ def _mine_ideas(
         "source_file_name": source_seed.get("source_file_name"),
         "source_file_sha256": source_seed.get("source_file_sha256"),
     }
+    grant_block = _consume_action(context, "idea")
+    if grant_block is not None:
+        return grant_block
     try:
         mined = idea_mining.mine_ideas(body)
     except idea_mining.IdeaMiningWebError as exc:
@@ -3233,9 +3233,6 @@ def _prior_art_adjudication_binding_projection(
 def _adjudicate_idea_literature(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    grant_block = _consume_action(context, "idea")
-    if grant_block is not None:
-        return grant_block
     body = {
         "run_id": str(params.get("run_id") or "").strip(),
         "idea_id": str(params.get("idea_id") or "").strip(),
@@ -3243,6 +3240,25 @@ def _adjudicate_idea_literature(
         "rationale": str(params.get("rationale") or "").strip()[:1200],
         "plan_fields": params.get("plan_fields") or {},
     }
+    if body["decision"] not in {"already_answered", "differentiated", "uncertain"}:
+        return _result(
+            context,
+            status="blocked",
+            code="idea_prior_art_decision_invalid",
+            summary="Choose already_answered, differentiated, or uncertain.",
+            owner="easyicu.webserver.ideas.mining",
+        )
+    if not isinstance(body["plan_fields"], Mapping):
+        return _result(
+            context,
+            status="blocked",
+            code="idea_plan_fields_invalid",
+            summary="Confirmed Idea Plan fields must be a JSON object.",
+            owner="easyicu.webserver.ideas.mining",
+        )
+    grant_block = _consume_action(context, "idea")
+    if grant_block is not None:
+        return grant_block
     try:
         idea_mining.plan_idea(body)
         adjudication = idea_mining.adjudicate_prior_art(body)
@@ -3327,9 +3343,6 @@ def _bound_registered_export(
 def _assess_idea_feasibility(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    grant_block = _consume_action(context, "idea")
-    if grant_block is not None:
-        return grant_block
     export = _bound_registered_export(context)
     if export is None:
         return _result(
@@ -3371,6 +3384,9 @@ def _assess_idea_feasibility(
         "max_records": params.get("max_records"),
         "require_adjudication": True,
     }
+    grant_block = _consume_action(context, "idea")
+    if grant_block is not None:
+        return grant_block
     try:
         feasibility = idea_mining.bounded_sample_feasibility(body, export=export)
     except idea_mining.IdeaMiningWebError as exc:
@@ -3426,9 +3442,6 @@ def _accept_idea_handoff(
 ) -> Dict[str, Any]:
     """Bind one canonical Idea Mining handoff to the current StudyContext."""
 
-    grant_block = _consume_action(context, "idea")
-    if grant_block is not None:
-        return grant_block
     current = _bound_context(context.session.binding)
     if not current or not current.get("id"):
         return _result(
@@ -3467,6 +3480,9 @@ def _accept_idea_handoff(
             owner="easyicu.webserver.ideas.mining",
             details={key: value for key, value in detail.items() if key != "reason"},
         )
+    grant_block = _consume_action(context, "idea")
+    if grant_block is not None:
+        return grant_block
     body = {
         "run_id": str(params.get("run_id") or "").strip(),
         "idea_id": str(params.get("idea_id") or "").strip(),
@@ -3544,9 +3560,6 @@ def _accept_idea_handoff(
 def _start_extraction(
     context: ToolExecutionContext, params: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    grant_block = _consume_action(context, "extract")
-    if grant_block is not None:
-        return grant_block
     study = _bound_context(context.session.binding)
     if not study or not study.get("id"):
         return _result(
@@ -3621,6 +3634,9 @@ def _start_extraction(
         resource["label"] = (
             f"Connect local {profile.display_name}{release_label}"
         )[:160]
+        grant_block = _consume_action(context, "extract")
+        if grant_block is not None:
+            return grant_block
         return _result(
             context,
             status="ok",
@@ -3677,6 +3693,16 @@ def _start_extraction(
                 ),
             },
         )
+    if registered_source is None:
+        return _result(
+            context,
+            status="blocked",
+            code="registered_source_required",
+            summary=(
+                "The selected source is not a current validated EasyICU registry entry."
+            ),
+            owner="easyicu.webserver.sources",
+        )
     export_format = str(study.get("export_format") or "parquet").strip().lower()
     if export_format not in {"csv", "parquet"}:
         return _result(
@@ -3687,6 +3713,9 @@ def _start_extraction(
             owner="easyicu.webserver.routes.jobs",
             details={"supported_formats": ["csv", "parquet"]},
         )
+    grant_block = _consume_action(context, "extract")
+    if grant_block is not None:
+        return grant_block
     try:
         from easyicu.webserver.routes.jobs import jobs_extract
 
@@ -3856,10 +3885,6 @@ def _run(
             summary="Choose either the deterministic preflight or a full Research Agent run.",
             owner="easyicu.webserver.routes.agent",
         )
-    if run_type == "preflight":
-        grant_block = _consume_action(context, "run")
-        if grant_block is not None:
-            return grant_block
     study = _bound_context(context.session.binding)
     requested_provider = str(params.get("llm_provider") or "").strip()
     if run_type == "full" and is_offline_llm_choice(requested_provider):
@@ -3898,8 +3923,19 @@ def _run(
     if run_type == "preflight":
         source = study.get("data_source")
         source = source if isinstance(source, Mapping) else {}
+        if not str(source.get("path") or "").strip():
+            return _result(
+                context,
+                status="blocked",
+                code="study_data_source_required",
+                summary="Bind a validated study data source before starting preflight.",
+                owner="easyicu.webserver.study_contexts",
+            )
         from easyicu.webserver.routes.agent import submit_agent_run
 
+        grant_block = _consume_action(context, "run")
+        if grant_block is not None:
+            return grant_block
         try:
             submitted = submit_agent_run(
                 {
@@ -4098,105 +4134,16 @@ def _resume(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[st
                 summary="Choose approved or rejected for the pending Research Agent plan.",
                 owner="easyicu.research_agent.pipeline",
             )
-        if decision == "approved":
-            study = _bound_context(context.session.binding)
-            if study and study.get("id"):
-                workflow = _workflow_snapshot(context, study_override=study)
-                if (
-                    workflow.get("next_action_code") == "planner_checkpoint_resume_available"
-                    and workflow.get("latest_attempt_failure")
-                ):
-                    # A failed package-bound attempt is not a plan to approve.
-                    # Continue planning through the existing owned checkpoint
-                    # route, which pauses at a new exact-plan review gate.
-                    return _request_replan(context, {"strategy": "resume_checkpoint"})
-                if (
-                    str(workflow.get("next_action_code") or "")
-                    == "plan_execution_upgrade_required"
-                ):
-                    return _run(
-                        context,
-                        {"run_type": "full"},
-                        planner_start_mode="fresh",
-                    )
-        grant_block = _consume_action(context, "provider_run")
-        if grant_block is not None:
-            return grant_block
-        if not context.session.external_llm_opt_in:
-            return _result(
-                context,
-                status="blocked",
-                code="external_llm_opt_in_required",
-                summary="Resuming a provider-backed Research Agent run requires explicit external-model authorization.",
-                owner="easyicu.webserver.provider_gate",
-            )
-        study = _bound_context(context.session.binding)
-        run_id = str(
-            params.get("run_id") or context.session.binding.run_id or ""
-        ).strip()
-        if not study or not study.get("id") or not run_id:
-            return _result(
-                context,
-                status="blocked",
-                code="research_pipeline_review_coordinates_required",
-                summary="The pending plan and its bound research project are required before review can resume.",
-                owner="easyicu.research_agent.pipeline",
-            )
-        account_environment, account_error = (
-            _account_environment_for_research_provider(context)
-        )
-        if account_error is not None:
-            return account_error
-        from easyicu.webserver.routes.agent import submit_agent_run_review
-
-        try:
-            submitted = submit_agent_run_review(
-                {
-                    "study_context_id": study["id"],
-                    "run_id": run_id,
-                    "decision": decision,
-                    "reviewer": params.get("reviewer") or "local_web_reviewer",
-                    "note": params.get("note") or "",
-                    "external_llm_opt_in": True,
-                },
-                account_environment=account_environment,
-            )
-        except HTTPException as exc:
-            detail = exc.detail if isinstance(exc.detail, dict) else {}
-            return _result(
-                context,
-                status="blocked",
-                code=str(
-                    detail.get("error") or "research_pipeline_review_resume_blocked"
-                ),
-                summary="The Research Agent review owner rejected this resume request.",
-                owner="easyicu.webserver.routes.agent",
-                details={
-                    key: detail.get(key)
-                    for key in ("error", "reason", "job_id")
-                    if detail.get(key) is not None
-                },
-            )
-        context.invalidate_authority("research_pipeline_review_submitted")
         return _result(
             context,
-            status="ok",
-            code="research_pipeline_review_submitted",
-            summary=f"Submitted the {decision} plan decision; EasyICU job {submitted.get('job_id')} owns the continuation.",
-            owner="easyicu.webserver.routes.agent",
-            details={
-                key: submitted.get(key)
-                for key in (
-                    "job_id",
-                    "kind",
-                    "status",
-                    "engine",
-                    "review_run_id",
-                    "study_context_id",
-                    "study_context_revision",
-                )
-                if submitted.get(key) is not None
-            },
+            status="blocked",
+            code="operator_plan_decision_host_action_required",
+            summary=(
+                "Plan approval or rejection is a human-review action. Use the "
+                "browser review control; the Copilot tool cannot write a human "
+                "decision receipt."
+            ),
+            owner="easyicu.webserver.routes.agent.jobs_agent_run_review",
         )
     job_id = str(
         params.get("job_id") or context.session.binding.active_job_id or ""
@@ -4619,9 +4566,6 @@ def _call_mcp_extension_tool(
             summary="The requested MCP server is not active in this frozen session.",
             owner="easyicu.extensions",
         )
-    grant_block = _consume_action(context, "mcp_read")
-    if grant_block is not None:
-        return grant_block
     arguments = params.get("arguments") or {}
     if not isinstance(arguments, Mapping):
         return _result(
@@ -4631,6 +4575,20 @@ def _call_mcp_extension_tool(
             summary="MCP arguments must be a bounded JSON object.",
             owner="easyicu.extensions",
         )
+    try:
+        validate_mcp_tool_call(server, str(params.get("tool") or ""), arguments)
+    except ExtensionRegistryError as exc:
+        return _result(
+            context,
+            status="blocked",
+            code=exc.code,
+            summary=exc.message,
+            owner="easyicu.extensions",
+            details=exc.details,
+        )
+    grant_block = _consume_action(context, "mcp_read")
+    if grant_block is not None:
+        return grant_block
     try:
         external = call_mcp_tool(
             server,

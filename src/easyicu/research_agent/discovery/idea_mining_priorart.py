@@ -351,7 +351,9 @@ def assess_prior_art_for_idea(
     # a failed screen produce an apparent-novelty verdict: degrade to the
     # conservative "crowded" label and mark the same-topic screen as not run so
     # the go/no-go gate holds for human confirmation instead of recommending.
-    prior_art_screen_ran = bool(getattr(broad, "search_ok", True))
+    # Both the recall query and the exact-topic query are required.  A failed
+    # exact query is not evidence of zero exact matches.
+    prior_art_screen_ran = bool(broad.search_ok and exact.search_ok)
     if not prior_art_screen_ran:
         if novelty_label in {"apparently_gap", "sparse"}:
             novelty_label = "crowded_but_differentiable"
@@ -391,6 +393,12 @@ def assess_prior_art_for_idea(
                 "; secondary-index corroboration held the apparent gap"
             )
         else:
+            novelty_label = "crowded_but_differentiable"
+            corroboration_note = (
+                " The secondary-index corroboration failed, so the apparent "
+                "gap was withheld rather than treating an unavailable search "
+                "as a genuine zero-hit result."
+            )
             same_topic_screen_status += (
                 "; secondary-index corroboration unavailable (single index only)"
             )

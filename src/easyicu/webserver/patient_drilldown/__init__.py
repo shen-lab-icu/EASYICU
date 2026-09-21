@@ -2399,6 +2399,9 @@ def _quality_from_module_profiles(
 
 def _quality_payload(path: Path, desc: Dict[str, Any]) -> List[Dict[str, Any]]:
     cohort_size = (desc.get("summary") or {}).get("stays")
+    cohort_ids = dataio._fast_stay_ids(path, desc.get("files") or [])
+    if cohort_ids is not None:
+        cohort_size = len(cohort_ids)
     out: List[Dict[str, Any]] = []
     for item in desc.get("files") or []:
         module = str(item.get("module") or "")
@@ -2406,7 +2409,7 @@ def _quality_payload(path: Path, desc: Dict[str, Any]) -> List[Dict[str, Any]]:
             continue
         columns = item.get("columns") or []
         rows = int(item.get("rows") or 0)
-        covered = _bounded_covered_entities(path, item, cohort_size)
+        covered = _bounded_covered_entities(path, item, cohort_ids)
         coverage = (
             round(covered / cohort_size * 100, 1)
             if isinstance(cohort_size, int) and cohort_size
@@ -2427,9 +2430,9 @@ def _quality_payload(path: Path, desc: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def _bounded_covered_entities(
-    path: Path, item: Dict[str, Any], cohort_size: Any
+    path: Path, item: Dict[str, Any], cohort_ids: set[str] | None
 ) -> int | None:
-    if not isinstance(cohort_size, int) or cohort_size <= 0:
+    if not cohort_ids:
         return None
     file_name = str(item.get("file") or "")
     if not file_name:
@@ -2437,7 +2440,7 @@ def _bounded_covered_entities(
     ids = dataio._read_stay_ids(path / file_name)
     if ids is None:
         return None
-    return min(len(ids), cohort_size)
+    return len(ids & cohort_ids)
 
 
 def _quality_status(module: str, coverage_pct: float | None) -> str:

@@ -1320,6 +1320,56 @@ def test_writer_recovers_producing_sidecar_after_no_execution_revalidation(
     assert projected[0]["attempt_id"] == "resume-revalidation-2"
 
 
+def test_writer_projection_preserves_robustness_axis_identity(tmp_path: Path) -> None:
+    summary = {
+        "status": "ok",
+        "analysis_family": "robustness_sensitivity",
+        "n_converged_variants": 2,
+        "primary_effect_label": "Adjusted odds ratio",
+        "primary_effect_scale": "odds_ratio",
+        "primary_estimate": 1.2,
+        "primary_ci_low": 1.0,
+        "primary_ci_high": 1.4,
+        "primary_effect_is_nonlinear_curve_summary": False,
+        "robustness_rows": [
+            {
+                "spec_id": "primary",
+                "axis": "primary",
+                "converged": True,
+                "independent_variant": True,
+            },
+            {
+                "spec_id": "complete_case",
+                "axis": "missing",
+                "converged": True,
+                "independent_variant": True,
+            },
+        ],
+    }
+    envelope = normalize_step_result_shadow(
+        step_id=_UPSTREAM_STEP,
+        step_summary=summary,
+        output_dir=tmp_path,
+        status="ok",
+    )
+    store = EvidenceStore(tmp_path / "run")
+    sidecar_id = _commit_upstream_sidecar(store, envelope)
+    record = _modern_upstream_record(sidecar_evidence_id=sidecar_id)
+    record["step_summary"] = summary
+    record["step_summary_evidence_id"] = "summary_fixture"
+
+    projected = RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
+        [record], evidence_store=store
+    )
+    rows = projected[0]["step_summary"]["robustness_rows"]
+    digest = _render_writer_evidence_digest(
+        projected, run_dir=tmp_path, evidence=store
+    )
+
+    assert [row["axis"] for row in rows] == ["primary", "missing"]
+    assert "n_independent=1" in digest
+
+
 def test_registered_output_consumer_fails_closed_on_incomplete_coordinates(
     tmp_path: Path,
 ) -> None:

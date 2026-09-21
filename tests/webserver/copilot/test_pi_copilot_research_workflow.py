@@ -5882,7 +5882,35 @@ def test_extraction_uses_bound_study_source_and_returns_no_path(
     monkeypatch.setattr(
         tool_module.sources,
         "load_registry",
-        lambda: {"active_path": None, "sources": []},
+        lambda: {
+            "active_path": None,
+            "sources": [
+                {
+                    "id": "src_project",
+                    "path": "/private/prepared/source",
+                    "database": "mimiciv",
+                    "ok": True,
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        tool_module.extraction_handoff,
+        "compile_registered_export_handoff",
+        lambda study, _source: SimpleNamespace(
+            reusable=False,
+            source_data_path="/private/prepared/source",
+            database="mimiciv",
+            modules=tuple(study["modules"]),
+            export_format=str(study.get("export_format") or "parquet"),
+            cohort=dict(study.get("cohort") or {}),
+            public_receipt=lambda: {
+                "schema_version": "easyicu.pi-extraction-handoff/1",
+                "source_id": "src_project",
+                "reusable": False,
+                "mismatch_codes": ["registered_export_contract_mismatch"],
+            },
+        ),
     )
     from easyicu.webserver.routes import jobs as jobs_route
 
@@ -6413,7 +6441,7 @@ def test_superseded_plan_replan_starts_a_fresh_candidate_plan(
     assert captured["plan_change_request"] is None
 
 
-def test_candidate_plan_approval_starts_package_bound_run_instead_of_resuming_canary(
+def test_copilot_cannot_approve_candidate_plan_or_start_package_bound_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     study = _complete_study()
@@ -6456,9 +6484,9 @@ def test_candidate_plan_approval_starts_package_bound_run_instead_of_resuming_ca
         context,
     )
 
-    assert result["code"] == "package_bound_run_submitted"
-    assert captured["params"] == {"run_type": "full"}
-    assert captured["planner_start_mode"] == "fresh"
+    assert result["status"] == "blocked"
+    assert result["code"] == "operator_plan_decision_host_action_required"
+    assert captured == {}
 
 
 @pytest.mark.parametrize(
@@ -8210,7 +8238,7 @@ def test_candidate_planner_rate_limit_preserves_resume_route() -> None:
     )
 
 
-def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
+def test_model_tool_cannot_write_human_plan_approval_receipt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     submitted: list[dict[str, Any]] = []
@@ -8276,27 +8304,11 @@ def test_plan_approval_requires_fresh_provider_grant_and_forwards_opt_in(
         context,
     )
 
-    assert result["code"] == "research_pipeline_review_submitted"
-    assert submitted == [
-        {
-            "study_context_id": "study-workflow",
-            "run_id": "pipeline-run-1",
-            "decision": "approved",
-            "reviewer": "local reviewer",
-            "note": "",
-            "external_llm_opt_in": True,
-        }
-    ]
-    assert account_environments == [
-        {
-            "CODEX_HOME": "/isolated/account",
-            "EASYICU_CODEX_MODEL": "gpt-5.6-luna",
-            "EASYICU_CODEX_ACCOUNT_SESSION_SHA256": "a" * 64,
-        }
-    ]
-    with pytest.raises(PiCopilotError) as stale:
-        context.assert_authority_fresh()
-    assert stale.value.code == "pi_session_authority_stale"
+    assert result["status"] == "blocked"
+    assert result["code"] == "operator_plan_decision_host_action_required"
+    assert submitted == []
+    assert account_environments == []
+    context.assert_authority_fresh()
 
 
 @pytest.mark.parametrize(

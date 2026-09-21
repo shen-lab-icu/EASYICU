@@ -548,6 +548,47 @@ def render(frame):
     )
 
 
+def test_mechanical_preflight_cannot_be_bypassed_by_accounting_product_rename(ra):
+    step = _figure_step(ra).model_copy(
+        update={"inputs": ["table:patient_eligibility_flow_v2", "selected_first"]}
+    )
+    code = """
+def render(frame):
+    valid_rows = frame['n'].notna()
+    return frame.loc[valid_rows].copy()
+"""
+
+    findings = audit_mechanical_code_contracts(code, step)
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "structural_accounting_filter"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_uses_declared_accounting_output_role(ra):
+    step = _figure_step(ra).model_copy(
+        update={
+            "inputs": ["table:renamed_input"],
+            "expected_outputs": ["figure:cohort_accounting"],
+        }
+    )
+    code = """
+def render(frame):
+    valid_rows = frame['n'].notna()
+    return frame.loc[valid_rows].copy()
+"""
+
+    findings = audit_mechanical_code_contracts(code, step)
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "structural_accounting_filter"
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_blocks_alias_row_filter_for_accounting(ra):
     code = """
 def render(frame):

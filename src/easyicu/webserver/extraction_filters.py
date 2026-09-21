@@ -226,6 +226,9 @@ def _resolve_registered_source(
 def _module_options(desc: Dict[str, Any]) -> List[Dict[str, Any]]:
     path = Path(str(desc.get("path") or "")).expanduser()
     cohort_size = (desc.get("summary") or {}).get("stays")
+    cohort_ids = dataio._fast_stay_ids(path, desc.get("files") or [])
+    if cohort_ids is not None:
+        cohort_size = len(cohort_ids)
     out: List[Dict[str, Any]] = []
     for item in desc.get("files") or []:
         file_name = str(item.get("file") or "")
@@ -233,7 +236,7 @@ def _module_options(desc: Dict[str, Any]) -> List[Dict[str, Any]]:
             continue
         columns = [str(c) for c in item.get("columns") or []]
         safe_columns = [c for c in columns if not _is_identifier_column(c)]
-        coverage_pct, covered = _coverage(path / file_name, cohort_size)
+        coverage_pct, covered = _coverage(path / file_name, cohort_ids)
         module = str(item.get("module") or Path(file_name).stem.split("__", 1)[0])
         out.append(
             {
@@ -253,16 +256,18 @@ def _module_options(desc: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
-def _coverage(path: Path, cohort_size: Any) -> Tuple[float | None, int | None]:
-    if not isinstance(cohort_size, int) or cohort_size <= 0:
+def _coverage(
+    path: Path, cohort_ids: set[str] | None
+) -> Tuple[float | None, int | None]:
+    if not cohort_ids:
         return None, None
     ids = dataio._read_stay_ids(
         path
     )  # reads one identifier column only, not full frames.
     if ids is None:
         return None, None
-    covered = len(ids)
-    return round(min(covered, cohort_size) / cohort_size * 100, 1), covered
+    covered = len(ids & cohort_ids)
+    return round(covered / len(cohort_ids) * 100, 1), covered
 
 
 def _quality_status(module: str, coverage_pct: float | None) -> str:

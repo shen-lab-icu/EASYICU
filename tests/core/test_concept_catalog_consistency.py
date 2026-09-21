@@ -166,8 +166,8 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     # 2026-09-01: replace 19 historical AKI/strict outputs with 35 explicit
     # public-reference, source-native, and evidence-receipt fields. 307 -> 323.
     # 2026-09-04: +eICU ICU-unit type as a typed demographics coordinate.
-    # 323 -> 324.
-    assert len(CONCEPT_DICTIONARY) == 324
+    # 323 -> 324. 2026-09-21: +RRT evidence reason receipt. 324 -> 325.
+    assert len(CONCEPT_DICTIONARY) == 325
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)
@@ -306,6 +306,7 @@ def test_composite_output_sources_are_valid() -> None:
         "creatinine_evidence_status",
         "urine_evidence_status",
         "rrt_evidence_status",
+        "rrt_evidence_reason",
     } <= {
         output
         for output, source in COMPOSITE_CONCEPT_OUTPUT_SOURCES.items()

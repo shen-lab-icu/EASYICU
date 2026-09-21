@@ -725,6 +725,7 @@ def test_pipeline_factory_accepts_owner_confirmed_explicit_sepsis_concept(
         },
         "confirmations": {
             "concept_selection_sep3_sofa2_authorized": True,
+            "concept_selection_sep3_sofa2_user_turn_verified": True,
         },
     }
     monkeypatch.setattr(
@@ -737,6 +738,24 @@ def test_pipeline_factory_accepts_owner_confirmed_explicit_sepsis_concept(
         study,
         "sep3_sofa2",
     )
+
+
+def test_pipeline_factory_rejects_unconfirmed_explicit_module_without_exposure() -> None:
+    study = {
+        **_complete_study(),
+        "question": "What is standard Sepsis-3 prevalence and mortality?",
+        "modules": ["outcome", "sepsis3_sofa2"],
+        "execution_concepts": {"outcome": "death", "covariates": []},
+        "confirmations": {
+            "concept_selection_sep3_sofa2_authorized": True,
+        },
+    }
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as exc:
+        research_launch_scientific._validate_primary_concept_selection(study, None)
+
+    assert exc.value.code == "concept_explicit_selection_required"
+    assert exc.value.details["field"] == "modules.sepsis3_sofa2"
 
 
 def test_pipeline_factory_rejects_unimplemented_cluster_variance_before_job(

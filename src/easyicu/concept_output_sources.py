@@ -35,6 +35,7 @@ COMPOSITE_CONCEPT_OUTPUT_SOURCES: dict[str, str] = {
     "creatinine_evidence_reason": "kdigo_aki",
     "urine_evidence_status": "kdigo_aki",
     "rrt_evidence_status": "kdigo_aki",
+    "rrt_evidence_reason": "kdigo_aki",
     "aki_source_native": "kdigo_aki",
     "aki_stage_source_native": "kdigo_aki",
     "aki_severe_source_native": "kdigo_aki",

@@ -854,6 +854,9 @@ def _normalized_stay_id_series(series: Any) -> Any:
 
 def _coverage_payload(path: Path, desc: Dict[str, Any]) -> List[Dict[str, Any]]:
     cohort_size = (desc.get("summary") or {}).get("stays")
+    cohort_ids = dataio._fast_stay_ids(path, desc.get("files") or [])
+    if cohort_ids is not None:
+        cohort_size = len(cohort_ids)
     out: List[Dict[str, Any]] = []
     for item in desc.get("files") or []:
         module = str(item.get("module") or "")
@@ -871,7 +874,7 @@ def _coverage_payload(path: Path, desc: Dict[str, Any]) -> List[Dict[str, Any]]:
             coverage_basis = "metadata_row_count_only"
             skipped_reason = "unique_stay_scan_skipped_large_module"
         else:
-            covered = _covered_entities(path, item, cohort_size)
+            covered = _covered_entities(path, item, cohort_ids)
         coverage = (
             round(covered / cohort_size * 100, 1)
             if isinstance(covered, int) and isinstance(cohort_size, int) and cohort_size
@@ -894,8 +897,10 @@ def _coverage_payload(path: Path, desc: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
-def _covered_entities(path: Path, item: Dict[str, Any], cohort_size: Any) -> int | None:
-    if not isinstance(cohort_size, int) or cohort_size <= 0:
+def _covered_entities(
+    path: Path, item: Dict[str, Any], cohort_ids: set[str] | None
+) -> int | None:
+    if not cohort_ids:
         return None
     file_name = str(item.get("file") or "")
     if not file_name:
@@ -914,7 +919,14 @@ def _covered_entities(path: Path, item: Dict[str, Any], cohort_size: Any) -> int
             frame = entity_id_contract.canonicalize_entity_frame(
                 frame, entity_column
             )
-            return min(int(frame["stay_id"].dropna().nunique()), cohort_size)
+            module_ids = {
+                value
+                for value in frame["stay_id"].map(
+                    entity_id_contract.normalize_entity_id
+                ).dropna().astype(str)
+                if value
+            }
+            return len(module_ids & cohort_ids)
         except Exception:
             return None
     entity_column = entity_id_contract.resolve_entity_id_column(
@@ -925,7 +937,14 @@ def _covered_entities(path: Path, item: Dict[str, Any], cohort_size: Any) -> int
     try:
         frame = _read_selected_columns(file_path, [entity_column])
         frame = entity_id_contract.canonicalize_entity_frame(frame, entity_column)
-        return min(int(frame["stay_id"].dropna().nunique()), cohort_size)
+        module_ids = {
+            value
+            for value in frame["stay_id"].map(
+                entity_id_contract.normalize_entity_id
+            ).dropna().astype(str)
+            if value
+        }
+        return len(module_ids & cohort_ids)
     except Exception:
         return None
 

@@ -703,7 +703,11 @@ def nonlinearity_wald_test(fit: RCSFitResult) -> RCSNonlinearityResult:
 
     if not isinstance(fit, RCSFitResult):
         raise TypeError("nonlinearity_wald_test requires an RCSFitResult")
-    nonlinear = [name for name in fit.coef_names if name.startswith("s")]
+    nonlinear = [
+        name
+        for name in fit.coef_names
+        if name.startswith("s") and name[1:].isdigit()
+    ]
     if not nonlinear:
         raise RCSError("fit carries no nonlinear spline terms to test")
     positions = [fit.coef_names.index(name) for name in nonlinear]

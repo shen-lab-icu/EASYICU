@@ -88,6 +88,17 @@ def test_invalid_tau_and_length_mismatch_raise():
         rmst([1, 2, 3], [True, True], tau=2)
 
 
+def test_missing_event_flag_is_not_reclassified_as_an_event():
+    result = rmst([1, 2], [np.nan, 0], tau=3)
+
+    assert result.rmst == pytest.approx(3.0)
+
+
+def test_nonbinary_event_flag_fails_closed():
+    with pytest.raises(ValueError, match="event_observed"):
+        rmst([1, 2], [0, 2], tau=3)
+
+
 # ---------------------------------------------------------------------------
 # Two-group difference.
 # ---------------------------------------------------------------------------

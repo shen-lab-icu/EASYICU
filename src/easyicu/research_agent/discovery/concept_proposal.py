@@ -65,6 +65,10 @@ class DistributionStat:
     p50: Optional[float] = None
     p99: Optional[float] = None
     units: tuple[str, ...] = ()
+    # Union of stays with any selected itemid in the same source table.  This is
+    # deliberately separate from per-item marginal coverage: marginals overlap
+    # and therefore cannot be added to recover joint coverage.
+    joint_coverage_fraction: Optional[float] = None
 
 
 # probe(itemids, table) -> {itemid: DistributionStat}. Injected so this module
@@ -392,9 +396,21 @@ def validate_concept_proposal(
     # --- Gate 5: real-data distribution & bounds -------------------------
     distribution: List[DistributionStat] = []
     if distribution_probe is not None:
-        table = rows[kept[0]].get("table", "")
-        stats = distribution_probe(kept, table)
-        total_cov = 0.0
+        table_groups: Dict[str, List[int]] = {}
+        for iid in kept:
+            table_groups.setdefault(str(rows[iid].get("table") or ""), []).append(iid)
+        if len(table_groups) > 1:
+            findings.append(
+                GateFinding(
+                    "coverage",
+                    "error",
+                    "selected itemids span multiple source tables; joint stay-level "
+                    "coverage cannot be established by a single-table probe",
+                )
+            )
+        stats: Dict[int, DistributionStat] = {}
+        for table, table_itemids in table_groups.items():
+            stats.update(distribution_probe(table_itemids, table))
         for iid in kept:
             st = stats.get(iid)
             if st is None:
@@ -407,7 +423,6 @@ def validate_concept_proposal(
                 )
                 continue
             distribution.append(st)
-            total_cov += st.coverage_fraction
             if len(st.units) > 1:
                 findings.append(
                     GateFinding(
@@ -433,12 +448,33 @@ def validate_concept_proposal(
                         "wrong item, wrong unit, or wrong bounds",
                     )
                 )
-        if total_cov < min_coverage_fraction:
+        joint_cov: Optional[float]
+        if len(kept) == 1 and distribution:
+            joint_cov = distribution[0].coverage_fraction
+        elif len(table_groups) == 1 and distribution:
+            declared_joint = {
+                st.joint_coverage_fraction
+                for st in distribution
+                if st.joint_coverage_fraction is not None
+            }
+            joint_cov = declared_joint.pop() if len(declared_joint) == 1 else None
+        else:
+            joint_cov = None
+        if len(kept) > 1 and joint_cov is None:
             findings.append(
                 GateFinding(
                     "coverage",
                     "error",
-                    f"joint coverage {total_cov:.4f} < {min_coverage_fraction} "
+                    "joint stay-level coverage was not supplied by the distribution "
+                    "probe; marginal itemid coverage cannot be summed",
+                )
+            )
+        elif joint_cov is not None and joint_cov < min_coverage_fraction:
+            findings.append(
+                GateFinding(
+                    "coverage",
+                    "error",
+                    f"joint coverage {joint_cov:.4f} < {min_coverage_fraction} "
                     "— too sparse to analyze",
                 )
             )
