@@ -1409,10 +1409,31 @@ class ConceptResolver:
             # 🚀 优化：对于单个概念也使用批量加载，因为DuckDB聚合比pandas快10倍
             # 🔧 FIX: 排除使用非默认聚合的概念（如sofa_cardio的MAP需要min而非median）
             # 这些概念需要精确控制聚合函数，必须走正常加载路径
+            def _wide_batch_callback_safe(name: str) -> bool:
+                """Keep raw string/categorical callbacks out of numeric batching."""
+
+                definition = self.dictionary.get(name)
+                if definition is None:
+                    return True
+                for candidate in definition.for_data_source(data_source.config):
+                    if candidate.table != shared_table or not candidate.callback:
+                        continue
+                    callback = candidate.callback.strip()
+                    if callback in {
+                        "community_vent_mode_control",
+                        "community_vent_mode_seq",
+                        "community_jinhua_mech_vent",
+                        "transform_fun(extract_leading_number)",
+                        "transform_fun(set_val(TRUE))",
+                    }:
+                        return False
+                return True
+
             concepts_info_filtered = [
                 (name, val_var) for name, val_var in concepts_info
                 if aggregators.get(name) in (None, False, 'auto', 'median')
                 and name not in multi_source_concepts
+                and _wide_batch_callback_safe(name)
             ]
             # ⚡ PERF: 跳过已在 _raw_concept_cache 中的概念，避免重复读取宽表
             if self._keep_cache_between_calls and concepts_info_filtered:

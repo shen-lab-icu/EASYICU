@@ -85,3 +85,20 @@ def test_canonical_pafi_room_air_assumption_requires_explicit_opt_in() -> None:
     assert result["fio2_observed"].tolist() == [False]
     assert result["fio2_imputed"].tolist() == [True]
     assert result["fio2_assessment_reason"].tolist() == ["room_air_assumption"]
+
+
+@pytest.mark.clinical_conformance
+def test_canonical_ratio_returns_empty_when_numerator_has_no_rows() -> None:
+    empty_po2 = _ratio_table("po2", [])
+    result = _callback_pafi(
+        {"po2": empty_po2, "fio2": _ratio_table("fio2", [40.0])},
+        _pafi_context(),
+        source_col_a="po2",
+        source_col_b="fio2",
+        output_col="pafi",
+    )
+
+    assert result.data.empty
+    assert result.id_columns == ["stay_id"]
+    assert result.index_column == "charttime"
+    assert result.value_column == "pafi"

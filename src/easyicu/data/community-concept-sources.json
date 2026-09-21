@@ -1,190 +1,5690 @@
 {
+  "abx": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "aztreonam|bactrim|cephalexin|chloramphenicol|cipro|flagyl|metronidazole|nitrofurantoin|tazobactam|rifamp|sulfadiazine|trimethoprim|amikacin|gentamicin|vancomycin|amoxicillin|ampicillin|dicloxacillin|nafcillin|oxacillin|penicillin|piperacillin|azithromycin|clarithromycin|erythromycin|clindamycin|streptomycin|tobramycin|cefazolin|ceftazidime|cefadroxil|cefepime|cefotetan|cefotaxime|cefpodoxime|cefuroxime|doxycycline|minocycline|tetracycline|levofloxacin|moxifloxacin|ofloxacin|meropenem|imipenem|ertapenem|ceftriaxone",
+          "sub_var": "drug_name_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "aztreonam|bactrim|cephalexin|chloramphenicol|cipro|flagyl|metronidazole|nitrofurantoin|tazobactam|rifamp|sulfadiazine|trimethoprim|amikacin|gentamicin|vancomycin|amoxicillin|ampicillin|dicloxacillin|nafcillin|oxacillin|penicillin|piperacillin|azithromycin|clarithromycin|erythromycin|clindamycin|streptomycin|tobramycin|cefazolin|ceftazidime|cefadroxil|cefepime|cefotetan|cefotaxime|cefpodoxime|cefuroxime|doxycycline|minocycline|tetracycline|levofloxacin|moxifloxacin|ofloxacin|meropenem|imipenem|ertapenem|ceftriaxone",
+          "sub_var": "drug",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "aztreonam|bactrim|cephalexin|chloramphenicol|cipro|flagyl|metronidazole|nitrofurantoin|tazobactam|rifamp|sulfadiazine|trimethoprim|amikacin|gentamicin|vancomycin|amoxicillin|ampicillin|dicloxacillin|nafcillin|oxacillin|penicillin|piperacillin|azithromycin|clarithromycin|erythromycin|clindamycin|streptomycin|tobramycin|cefazolin|ceftazidime|cefadroxil|cefepime|cefotetan|cefotaxime|cefpodoxime|cefuroxime|doxycycline|minocycline|tetracycline|levofloxacin|moxifloxacin|ofloxacin|meropenem|imipenem|ertapenem|ceftriaxone",
+          "sub_var": "Med_DESC_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "aztreonam|bactrim|cephalexin|chloramphenicol|cipro|flagyl|metronidazole|nitrofurantoin|tazobactam|rifamp|sulfadiazine|trimethoprim|amikacin|gentamicin|vancomycin|amoxicillin|ampicillin|dicloxacillin|nafcillin|oxacillin|penicillin|piperacillin|azithromycin|clarithromycin|erythromycin|clindamycin|streptomycin|tobramycin|cefazolin|ceftazidime|cefadroxil|cefepime|cefotetan|cefotaxime|cefpodoxime|cefuroxime|doxycycline|minocycline|tetracycline|levofloxacin|moxifloxacin|ofloxacin|meropenem|imipenem|ertapenem|ceftriaxone",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "adv_resp": {
+    "sources": {
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "ids": "呼吸机模式",
+          "sub_var": "NursingEvent_item",
+          "table": "nursingchart_vitalsign"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "col_itm",
+          "table": "dtnursingchart",
+          "value_var": "Breathing_pattern"
+        }
+      ]
+    }
+  },
   "age": {
     "sources": {
-      "nwicu": [{"table": "patients", "val_var": "anchor_age", "class_name": "col_itm"}],
-      "zhejiang_eicu": [{"table": "ptadmitable", "val_var": "Age_cut", "callback": "apply_map(c(`(0,18]` = 9, `(18,30]` = 24, `(30,40]` = 35, `(40,50]` = 45, `(50,60]` = 55, `(60,70]` = 65, `(70,80]` = 75, `(80,90]` = 85, `(90,150]` = 95))", "class_name": "col_itm"}],
-      "jinhua": [{"table": "medical_record_front_page", "val_var": "age", "class_name": "col_itm"}],
-      "zigong": [{"table": "dtbaseline", "val_var": "Age", "class_name": "col_itm"}]
-    }
-  },
-  "sex": {
-    "sources": {
-      "nwicu": [{"table": "patients", "val_var": "gender", "callback": "apply_map(c(M = 'Male', F = 'Female'))", "class_name": "col_itm"}],
-      "zhejiang_eicu": [{"table": "ptadmitable", "val_var": "Sex", "class_name": "col_itm"}],
-      "jinhua": [{"table": "medical_record_front_page", "val_var": "patient_gender_en", "class_name": "col_itm"}],
-      "zigong": [{"table": "dtbaseline", "val_var": "SEX", "class_name": "col_itm"}]
-    }
-  },
-  "death": {
-    "sources": {
-      "nwicu": [{"table": "nwicu_outcomes", "index_var": "dischtime", "val_var": "hospital_expire_flag", "callback": "transform_fun(comp_na(`==`, 1))", "class_name": "col_itm"}],
-      "zhejiang_eicu": [{"table": "ptadmitable", "index_var": "Discharge_DateTime", "val_var": "StatusOnDischarge", "callback": "transform_fun(comp_na(`==`, 'Dead'))", "class_name": "col_itm"}],
-      "jinhua": [{"table": "patient_expire_hospital", "val_var": "expire_flag", "callback": "transform_fun(comp_na(`==`, 1))", "class_name": "col_itm"}]
-    }
-  },
-  "hr": {
-    "sources": {
-      "nwicu": [{"ids": 320045, "table": "chartevents", "sub_var": "itemid", "index_var": "charttime"}],
-      "zhejiang_eicu": [{"ids": ["Heart Rate", "Pulse rate"], "table": "vitalsign", "sub_var": "VitalSign_DESC"}],
-      "jinhua": [{"ids": "Pulse", "table": "vital_signs", "sub_var": "subcategory_name_en"}],
-      "zigong": [{"table": "dtnursingchart", "val_var": "heart_rate", "class_name": "col_itm"}]
-    }
-  },
-  "temp": {
-    "sources": {
-      "nwicu": [{"ids": 323761, "table": "chartevents", "sub_var": "itemid", "callback": "convert_unit(fahr_to_cels, 'C', 'f')"}],
-      "zhejiang_eicu": [{"ids": "Temperature", "table": "vitalsign", "sub_var": "VitalSign_DESC"}],
-      "jinhua": [{"ids": "Temperature", "table": "vital_signs", "sub_var": "subcategory_name_en"}],
-      "zigong": [{"table": "dtnursingchart", "val_var": "temperature", "class_name": "col_itm"}]
-    }
-  },
-  "resp": {
-    "sources": {
-      "nwicu": [{"ids": 320210, "table": "chartevents", "sub_var": "itemid"}],
-      "zhejiang_eicu": [{"ids": "Respiratory rate", "table": "vitalsign", "sub_var": "VitalSign_DESC"}],
-      "jinhua": [{"ids": "Respiratory", "table": "vital_signs", "sub_var": "subcategory_name_en"}],
-      "zigong": [{"table": "dtnursingchart", "val_var": "breathing", "class_name": "col_itm"}]
-    }
-  },
-  "spo2": {
-    "sources": {
-      "nwicu": [{"ids": 320277, "table": "chartevents", "sub_var": "itemid"}],
-      "zhejiang_eicu": [{"ids": "Oxygen saturation (Pulse Oxymetry)", "table": "vitalsign", "sub_var": "VitalSign_DESC"}, {"ids": "SpO2", "table": "nursingchart_vitalsign", "sub_var": "NursingEvent_item"}],
-      "jinhua": [{"ids": "Spo2", "table": "vital_signs", "sub_var": "subcategory_name_en"}],
-      "zigong": [{"table": "dtnursingchart", "val_var": "Blood_oxygen_saturation", "class_name": "col_itm"}]
-    }
-  },
-  "sbp": {
-    "sources": {
-      "nwicu": [{"ids": [320050, 320179], "table": "chartevents", "sub_var": "itemid"}],
-      "zhejiang_eicu": [{"ids": "Systolic Blood pressure", "table": "vitalsign", "sub_var": "VitalSign_DESC"}],
-      "jinhua": [{"table": "medical_record", "val_var": "systolic_blood_pressure", "class_name": "col_itm"}],
-      "zigong": [{"table": "dtnursingchart", "val_var": "Blood_pressure_high", "class_name": "col_itm"}]
-    }
-  },
-  "dbp": {
-    "sources": {
-      "nwicu": [{"ids": [320051, 320180], "table": "chartevents", "sub_var": "itemid"}],
-      "zhejiang_eicu": [{"ids": "Diastolic Blood pressure", "table": "vitalsign", "sub_var": "VitalSign_DESC"}],
-      "jinhua": [{"table": "medical_record", "val_var": "diastolic_blood_pressure", "class_name": "col_itm"}],
-      "zigong": [{"table": "dtnursingchart", "val_var": "Blood_pressure_low", "class_name": "col_itm"}]
-    }
-  },
-  "map": {
-    "sources": {
-      "zigong": [{"table": "dtnursingchart", "val_var": "MAP", "class_name": "col_itm"}]
-    }
-  },
-  "fio2": {
-    "sources": {
-      "zigong": [{"table": "dtnursingchart", "val_var": "FIO2", "class_name": "col_itm"}]
-    }
-  },
-  "cvp": {
-    "sources": {
-      "zigong": [{"table": "dtnursingchart", "val_var": "Central_venous_pressure", "class_name": "col_itm"}]
-    }
-  },
-  "urine": {
-    "sources": {
-      "zigong": [{"table": "dtnursingchart", "val_var": "Urine_volume", "class_name": "col_itm"}]
-    }
-  },
-  "weight": {
-    "sources": {
-      "nwicu": [{"ids": 326531, "table": "chartevents", "sub_var": "itemid", "callback": "convert_unit(binary_op(`/`, 35.274), 'kg')"}],
-      "zhejiang_eicu": [{"ids": "Body weight", "table": "vitalsign", "sub_var": "VitalSign_DESC"}],
-      "jinhua": [{"ids": "Weight", "table": "vital_signs", "sub_var": "subcategory_name_en"}]
-    }
-  },
-  "height": {
-    "sources": {
-      "nwicu": [{"ids": 326707, "table": "chartevents", "sub_var": "itemid", "callback": "convert_unit(binary_op(`*`, 2.54), 'cm')"}],
-      "zhejiang_eicu": [{"ids": "Height", "table": "vitalsign", "sub_var": "VitalSign_DESC"}],
-      "jinhua": [{"ids": "Height", "table": "vital_signs", "sub_var": "subcategory_name_en"}]
-    }
-  },
-  "crea": {
-    "sources": {
-      "nwicu": [{"ids": 100002, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
-      "zigong": [{"ids": "Creatinine (enzymatic method) (CRE)", "table": "dtlab", "sub_var": "Item", "callback": "convert_unit(binary_op(`*`, 0.011309), 'mg/dL')"}]
-    }
-  },
-  "bili": {
-    "sources": {
-      "nwicu": [{"ids": 100020, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
-      "zigong": [{"ids": "Total bilirubin (TBIL)", "table": "dtlab", "sub_var": "Item", "callback": "convert_unit(binary_op(`*`, 0.058467), 'mg/dL')"}]
-    }
-  },
-  "bili_dir": {
-    "sources": {
-      "nwicu": [{"ids": 100049, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
-      "zigong": [{"ids": "Direct bilirubin (DBIL)", "table": "dtlab", "sub_var": "Item", "callback": "convert_unit(binary_op(`*`, 0.058467), 'mg/dL')"}]
-    }
-  },
-  "plt": {
-    "sources": {
-      "nwicu": [{"ids": 100014, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
-      "zigong": [{"ids": "Platelet (PLT)", "table": "dtlab", "sub_var": "Item"}]
+      "jinhua": [
+        {
+          "class_name": "col_itm",
+          "table": "medical_record_front_page",
+          "value_var": "age"
+        }
+      ],
+      "nwicu": [
+        {
+          "class_name": "col_itm",
+          "table": "patients",
+          "value_var": "anchor_age"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "apply_map(c(`(0,18]` = 9, `(18,30]` = 24, `(30,40]` = 35, `(40,50]` = 45, `(50,60]` = 55, `(60,70]` = 65, `(70,80]` = 75, `(80,90]` = 85, `(90,150]` = 95))",
+          "class_name": "col_itm",
+          "table": "ptadmitable",
+          "value_var": "Age_cut"
+        }
+      ],
+      "zigong": [
+        {
+          "class_name": "col_itm",
+          "table": "dtbaseline",
+          "value_var": "Age"
+        }
+      ]
     }
   },
   "alb": {
     "sources": {
-      "nwicu": [{"ids": 100021, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
-      "zigong": [{"ids": "Albumin (ALB)", "table": "dtlab", "sub_var": "Item", "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL')"}]
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 0.1))",
+          "ids": "Albumin (ALB)-Unknown",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100021,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL')",
+          "ids": "albumin",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL')",
+          "ids": "Albumin (ALB)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
     }
   },
-  "glu": {
+  "albumin_iv": {
     "sources": {
-      "nwicu": [{"ids": [100001, 100045], "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
-      "zigong": [{"ids": ["Glucose (Glu)", "Glucose concentration (cglu)"], "table": "dtlab", "sub_var": "Item", "callback": "convert_unit(binary_op(`*`, 18.016), 'mg/dL')"}]
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "human (serum )?albumin|albumin, human",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "human (serum )?albumin|albumin, human",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "human (serum )?albumin|albumin, human",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:human (serum )?albumin|albumin, human).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
     }
   },
-  "na": {
+  "alp": {
     "sources": {
-      "nwicu": [{"ids": [100010, 100050], "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
-      "zigong": [{"ids": ["Sodium (NA)", "Sodium ion (Na +)", "Sodium ion concentration (CNA +)"], "table": "dtlab", "sub_var": "Item"}]
+      "jinhua": [
+        {
+          "ids": "Alkaline phosphatase (ALP) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100033,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "alkaline phosphatase",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Alkaline phosphatase (ALP)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
     }
   },
-  "k": {
+  "alt": {
     "sources": {
-      "nwicu": [{"ids": [100011, 100047], "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
-      "zigong": [{"ids": ["Potassium (k)", "Potassium ion (K +)", "Potassium ion concentration (CK +)"], "table": "dtlab", "sub_var": "Item"}]
+      "jinhua": [
+        {
+          "ids": "Alanine aminotransferase (ALT) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100042,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Alanine aminotransferase",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Alanine aminotransferase (ALT)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "amiodarone": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "amiodarone|cordarone",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "amiodarone|cordarone",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "amiodarone|cordarone",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:amiodarone|cordarone).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "ammonia": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Ammonia (Amm) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100095,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ]
+    }
+  },
+  "amylase": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Amylase (Amy)-Unknown",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100137,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Total amylase",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ]
+    }
+  },
+  "anion_gap": {
+    "sources": {
+      "nwicu": [
+        {
+          "ids": [
+            100040,
+            100041
+          ],
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": [
+            "Anion gap",
+            "Anion gap (angap)"
+          ],
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "apixaban": {
+    "sources": {
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "apixaban|eliquis",
+          "sub_var": "drug",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "apixaban|eliquis",
+          "sub_var": "Med_DESC_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ]
+    }
+  },
+  "aspirin": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "aspirin|acetylsalicylic",
+          "sub_var": "drug_name_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "aspirin|acetylsalicylic",
+          "sub_var": "drug",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "aspirin|acetylsalicylic",
+          "sub_var": "Med_DESC_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "aspirin|acetylsalicylic",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "ast": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Aspartate aminotransferase (AST) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100032,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Aspartate aminotransferase",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Aspartate aminotransferase (AST)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "basos": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Basophil percentage (Baso%) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100025,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Classification of basophils",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Basophil ratio (BAS%)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "be": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": [
+            "Actual base excess (ABE) - arterial blood",
+            "Base excess (BE)-arterial blood"
+          ],
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Actual alkali residue",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Actual alkali surplus (ABE)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "bicar": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Actual bicarbonate (AB) - arterial blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100013,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": [
+            "Actual bicarbonate",
+            "Standard bicarbonate"
+          ],
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": [
+            "HCO3 - measured bicarbonate (HCO3 -)",
+            "Measured bicarbonate (hco3act)"
+          ],
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "bicarb": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Actual bicarbonate (AB) - arterial blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100013,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": [
+            "Actual bicarbonate",
+            "Standard bicarbonate"
+          ],
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": [
+            "HCO3 - measured bicarbonate (HCO3 -)",
+            "Measured bicarbonate (hco3act)"
+          ],
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "bicarbonate": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "sodium bicarbonate",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "sodium bicarbonate",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "sodium bicarbonate",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:sodium bicarbonate).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "bili": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 0.058467))",
+          "ids": "Total bilirubin (TBIL) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100020,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 0.058467), 'mg/dL')",
+          "ids": "total bilirubin",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 0.058467), 'mg/dL')",
+          "ids": "Total bilirubin (TBIL)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "bili_dir": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 0.058467))",
+          "ids": "Direct bilirubin (DBIL) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100049,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 0.058467), 'mg/dL')",
+          "ids": "Direct bilirubin",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 0.058467), 'mg/dL')",
+          "ids": "Direct bilirubin (DBIL)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "bmi": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "BMI",
+          "sub_var": "subcategory_name_en",
+          "table": "vital_signs"
+        }
+      ]
+    }
+  },
+  "bnp": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Brain natriuretic peptide (BNP) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Brain natriuretic peptide (BNP)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "bun": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 2.801))",
+          "ids": "Urea Nitrogen (BUN)-Unknown",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100004,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 2.801), 'mg/dL')",
+          "ids": "urea",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 2.801), 'mg/dL')",
+          "ids": "Urea (urea)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "ca": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 4.008))",
+          "ids": "Total calcium (Ca) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100003,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 4.008), 'mg/dL')",
+          "ids": "calcium",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 4.008), 'mg/dL')",
+          "ids": "Calcium (CA)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "cai": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": [
+            "Calcium ions (Ca2+)-arterial blood",
+            "Calcium ion (Ca2+)-unknown"
+          ],
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100044,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Standard ion calcium",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": [
+            "Calcium ion concentration (caca2 +)",
+            "Free calcium (Ca + +)"
+          ],
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "calcium_iv": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "calcium (gluconate|chloride)",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "calcium (gluconate|chloride)",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "calcium (gluconate|chloride)",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:calcium (gluconate|chloride)).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "cholesterol": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 38.67))",
+          "ids": "Total cholesterol (TC) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100088,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 38.67), 'mg/dL')",
+          "ids": "total cholesterol",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 38.67), 'mg/dL')",
+          "ids": "Total cholesterol (TCHO)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "cisatracurium": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "cisatracurium|nimbex",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "cisatracurium|nimbex",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "cisatracurium|nimbex",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:cisatracurium|nimbex).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "ck": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Creatine kinase (CK) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100085,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "creatine kinase",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Creatine kinase (CK)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "ckmb": {
+    "sources": {
+      "nwicu": [
+        {
+          "ids": 100099,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ]
     }
   },
   "cl": {
     "sources": {
-      "nwicu": [{"ids": 100012, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
-      "zigong": [{"ids": ["Chloride ion (Cl -)", "Chloride ion concentration (CCL -)"], "table": "dtlab", "sub_var": "Item"}]
+      "jinhua": [
+        {
+          "ids": [
+            "Chloride ion (Cl-)-Unknown",
+            "Chloride ion (Cl-)-arterial blood"
+          ],
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100012,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": [
+            "Chloride ion (Cl -)",
+            "Chloride ion concentration (CCL -)"
+          ],
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
     }
   },
-  "hgb": {
+  "cort": {
     "sources": {
-      "nwicu": [{"ids": 100007, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
-      "zigong": [{"ids": "Hemoglobin (Hgb)", "table": "dtlab", "sub_var": "Item", "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL')"}]
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "hydrocortisone|prednisone|prednisolone|methylprednisolone|dexamethasone",
+          "sub_var": "drug_name_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "hydrocortisone|prednisone|prednisolone|methylprednisolone|dexamethasone",
+          "sub_var": "drug",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "hydrocortisone|prednisone|prednisolone|methylprednisolone|dexamethasone",
+          "sub_var": "Med_DESC_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "hydrocortisone|prednisone|prednisolone|methylprednisolone|dexamethasone",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "cortisol": {
+    "sources": {
+      "nwicu": [
+        {
+          "ids": 100128,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ]
+    }
+  },
+  "crea": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 0.011309))",
+          "ids": "Creatinine (Crea) - unknown",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100002,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 0.011309), 'mg/dL')",
+          "ids": "creatinine",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 0.011309), 'mg/dL')",
+          "ids": "Creatinine (enzymatic method) (CRE)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "crp": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "High-sensitivity C-reactive protein (hs-CRP)-venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 10), 'mg/L', '^mg/dL$')",
+          "ids": 100053,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Hypersensitivity C-reactive protein",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": [
+            "C-reactive protein (CRP)",
+            "High sensitivity C-reactive protein (hsCRP)"
+          ],
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "cvp": {
+    "sources": {
+      "zhejiang_eicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 0.735559), 'mmHg', '^cmH2O$')",
+          "ids": "中心静脉压",
+          "sub_var": "NursingEvent_item",
+          "table": "nursingchart_vitalsign"
+        }
+      ],
+      "zigong": [
+        {
+          "class_name": "col_itm",
+          "table": "dtnursingchart",
+          "value_var": "Central_venous_pressure"
+        }
+      ]
+    }
+  },
+  "d_dimer": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "D-Dimer-venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100075,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "D-dimer quantification",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 1000.0), 'ng/mL')",
+          "ids": "D-Dimer (D2)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "dbp": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Dbp",
+          "sub_var": "subcategory_name_en",
+          "table": "vital_signs"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": [
+            320051,
+            320180
+          ],
+          "sub_var": "itemid",
+          "table": "chartevents"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Diastolic Blood pressure",
+          "sub_var": "VitalSign_DESC",
+          "table": "vitalsign"
+        }
+      ],
+      "zigong": [
+        {
+          "class_name": "col_itm",
+          "table": "dtnursingchart",
+          "value_var": "Blood_pressure_low"
+        }
+      ]
+    }
+  },
+  "death": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(comp_na(`==`, 1))",
+          "class_name": "col_itm",
+          "table": "patient_expire_hospital",
+          "value_var": "expire_flag"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(comp_na(`==`, 1))",
+          "class_name": "col_itm",
+          "index_var": "dischtime",
+          "table": "nwicu_outcomes",
+          "value_var": "hospital_expire_flag"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(comp_na(`==`, 'Dead'))",
+          "class_name": "col_itm",
+          "index_var": "Discharge_DateTime",
+          "table": "ptadmitable",
+          "value_var": "StatusOnDischarge"
+        }
+      ]
+    }
+  },
+  "dex": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "dextrose.*10|10%.*dextrose|glucose.*10",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "dextrose.*10|10%.*dextrose|glucose.*10",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "dextrose.*10|10%.*dextrose|glucose.*10",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:dextrose.*10|10%.*dextrose|glucose.*10).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "dexamethasone": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "dexamethasone",
+          "sub_var": "drug_name_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "dexamethasone",
+          "sub_var": "drug",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "dexamethasone",
+          "sub_var": "Med_DESC_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "dexamethasone",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "dexmedetomidine": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "dexmedetomidine|precedex|dexdor",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "dexmedetomidine|precedex|dexdor",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "dexmedetomidine|precedex|dexdor",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:dexmedetomidine|precedex|dexdor).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "dextrose50": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "dextrose.*50|50%.*dextrose|glucose.*50",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "dextrose.*50|50%.*dextrose|glucose.*50",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "dextrose.*50|50%.*dextrose|glucose.*50",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:dextrose.*50|50%.*dextrose|glucose.*50).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "diltiazem": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "diltiazem|cardizem",
+          "sub_var": "drug_name_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "diltiazem|cardizem",
+          "sub_var": "drug",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "diltiazem|cardizem",
+          "sub_var": "Med_DESC_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "diltiazem|cardizem",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "ecmo": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "ECMO.*(operation monitoring|installation)|Extracorporeal membrane oxygenation.*monitoring",
+          "sub_var": "order_content_en",
+          "table": "orders",
+          "value_var": "order_content_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "ids": 736876,
+          "sub_var": "itemid",
+          "table": "procedureevents",
+          "value_var": "itemid"
+        }
+      ]
+    }
+  },
+  "egcs": {
+    "sources": {
+      "zigong": [
+        {
+          "callback": "transform_fun(extract_leading_number)",
+          "class_name": "col_itm",
+          "table": "dtnursingchart",
+          "value_var": "open_one's_eyes"
+        }
+      ]
+    }
+  },
+  "enoxaparin": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "enoxaparin|nadroparin|dalteparin|tinzaparin",
+          "sub_var": "drug_name_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "enoxaparin|nadroparin|dalteparin|tinzaparin",
+          "sub_var": "drug",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "enoxaparin|nadroparin|dalteparin|tinzaparin",
+          "sub_var": "Med_DESC_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "enoxaparin|nadroparin|dalteparin|tinzaparin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "eos": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Eosinophil percentage (Eos%) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100024,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Classification of eosinophils",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Eosinophil ratio (EOS%)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "esmolol": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "esmolol|brevibloc",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "esmolol|brevibloc",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "esmolol|brevibloc",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:esmolol|brevibloc).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "esr": {
+    "sources": {
+      "zhejiang_eicu": [
+        {
+          "ids": "Erythrocyte sedimentation rate",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "ESR (SR)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "fentanyl": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "(^|[^a-z])fentanyl",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "(^|[^a-z])fentanyl",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "(^|[^a-z])fentanyl",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:(^|[^a-z])fentanyl).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "ferritin": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Ferritin (Ferr)-Unknown",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100052,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ]
+    }
+  },
+  "ffp": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "^Actual blood transfusion.*(fresh frozen plasma|frozen plasma)",
+          "sub_var": "order_content_en",
+          "table": "orders",
+          "value_var": "order_content_en"
+        }
+      ]
+    }
+  },
+  "fgn": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 100.0))",
+          "ids": "Fibrinogen (Fbg)-venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100048,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 100.0), 'mg/dL')",
+          "ids": "Fibrinogen (FIB)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "fio2": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Oxygen concentration (FiO2)-arterial blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100029,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "氧浓度",
+          "sub_var": "NursingEvent_item",
+          "table": "nursingchart_vitalsign"
+        }
+      ]
+    }
+  },
+  "ft4": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 0.07769))",
+          "ids": "Free thyroxine (FT4) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100103,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 0.1), 'ng/dL')",
+          "ids": "Free thyroxine (FT4)",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ]
+    }
+  },
+  "furosemide": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "furosemide|lasix",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "furosemide|lasix",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "furosemide|lasix",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:furosemide|lasix).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "ggt": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Gamma-glutamyl transferase (GGT)-venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100161,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Glutamyl transpeptidase",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "γ- Glutamyltransferase (GGT)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "glu": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 18.016))",
+          "ids": [
+            "Glucose (Glu)-Unknown",
+            "Glucose (Glu)-arterial blood"
+          ],
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": [
+            100001,
+            100045
+          ],
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 18.016), 'mg/dL')",
+          "ids": "glucose",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 18.016), 'mg/dL')",
+          "ids": [
+            "Glucose (Glu)",
+            "Glucose concentration (cglu)"
+          ],
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "hba1c": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Glycated hemoglobin A1c (HbA1c) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100079,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Glycated hemoglobin A1c",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ]
+    }
+  },
+  "hbco": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Carboxyhemoglobin percentage (FCOHb%) - arterial blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100150,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Carboxyhemoglobin (fcohb)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
     }
   },
   "hct": {
     "sources": {
-      "nwicu": [{"ids": 100006, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
-      "zigong": [{"ids": "Hematocrit (HCT)", "table": "dtlab", "sub_var": "Item"}]
+      "jinhua": [
+        {
+          "ids": "Hematocrit (Hct) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100006,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 100.0), '%')",
+          "ids": "Hematocrit",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": [
+            "Hematocrit (HCT)",
+            "Hct(Hct)"
+          ],
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
     }
   },
-  "wbc": {
+  "hdl": {
     "sources": {
-      "nwicu": [{"ids": 100016, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
-      "zigong": [{"ids": "White blood cell (WBC)", "table": "dtlab", "sub_var": "Item"}]
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 38.67))",
+          "ids": "High-density lipoprotein cholesterol (HDL-C)-venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100086,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 38.67), 'mg/dL')",
+          "ids": "High density lipoprotein cholesterol",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 38.67), 'mg/dL')",
+          "ids": "High density lipoprotein cholesterol (HDL)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "height": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Height",
+          "sub_var": "subcategory_name_en",
+          "table": "vital_signs"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 2.54), 'cm')",
+          "ids": 326707,
+          "sub_var": "itemid",
+          "table": "chartevents"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Height",
+          "sub_var": "VitalSign_DESC",
+          "table": "vitalsign"
+        }
+      ]
+    }
+  },
+  "heparin": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "(^|[^a-z])heparin",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "(^|[^a-z])heparin",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "(^|[^a-z])heparin",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:(^|[^a-z])heparin).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "hgb": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 0.1))",
+          "ids": "Hemoglobin (Hb) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100007,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL')",
+          "ids": "hemoglobin",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL')",
+          "ids": "Hemoglobin (Hgb)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "hr": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Pulse",
+          "sub_var": "subcategory_name_en",
+          "table": "vital_signs"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 320045,
+          "sub_var": "itemid",
+          "table": "chartevents"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": [
+            "Heart Rate",
+            "Pulse rate"
+          ],
+          "sub_var": "VitalSign_DESC",
+          "table": "vitalsign"
+        }
+      ],
+      "zigong": [
+        {
+          "class_name": "col_itm",
+          "table": "dtnursingchart",
+          "value_var": "heart_rate"
+        }
+      ]
+    }
+  },
+  "icu_unit_type": {
+    "sources": {
+      "nwicu": [
+        {
+          "class_name": "col_itm",
+          "table": "icustays",
+          "value_var": "first_careunit"
+        }
+      ]
+    }
+  },
+  "inr_pt": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Prothrombin international normalized ratio (PT-INR) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100030,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "International standardization ratio",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "International normalized ratio (INR)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "insulin": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "insulin",
+          "sub_var": "drug_name_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "insulin",
+          "sub_var": "drug",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "insulin",
+          "sub_var": "Med_DESC_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "insulin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "iron": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 5.584))",
+          "ids": "Iron (Fe)-Unknown",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100102,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ]
+    }
+  },
+  "k": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": [
+            "Potassium ion (K+)-unknown",
+            "Potassium ion (K+)-arterial blood"
+          ],
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": [
+            100011,
+            100047
+          ],
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": [
+            "Potassium (k)",
+            "Potassium ion (K +)",
+            "Potassium ion concentration (CK +)"
+          ],
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "ketamine": {
+    "sources": {
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "ketamine",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "ketamine",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:ketamine).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "labetalol": {
+    "sources": {
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "labetalol",
+          "sub_var": "drug",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "labetalol",
+          "sub_var": "Med_DESC_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ]
     }
   },
   "lact": {
     "sources": {
-      "nwicu": [{"ids": 100031, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}]
+      "jinhua": [
+        {
+          "ids": "Lactate-arterial blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100031,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "lactic acid",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": [
+            "Lactic acid (LAC)",
+            "Lactic acid concentration (CLAC)"
+          ],
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "ldh": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Lactate dehydrogenase (LDH) - unknown",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "lactate dehydrogenase",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Lactate dehydrogenase (LDH)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "ldl": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 38.67))",
+          "ids": "Low-density lipoprotein cholesterol (LDL-C) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": [
+            100090,
+            100248
+          ],
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 38.67), 'mg/dL')",
+          "ids": [
+            "Low density lipoprotein cholesterol",
+            "*Low density lipoprotein cholesterol"
+          ],
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 38.67), 'mg/dL')",
+          "ids": "Low density lipoprotein cholesterol (LDL)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "levetiracetam": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "levetiracetam|keppra",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "levetiracetam|keppra",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:levetiracetam|keppra).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "lipase": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Lipase-unknown",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100091,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ]
+    }
+  },
+  "lorazepam": {
+    "sources": {
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "lorazepam|ativan",
+          "sub_var": "drug",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "lorazepam|ativan",
+          "sub_var": "Med_DESC_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "lorazepam|ativan",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "los_hosp": {
+    "sources": {
+      "jinhua": [
+        {
+          "class_name": "col_itm",
+          "table": "medical_record_front_page",
+          "value_var": "length_stay"
+        }
+      ],
+      "nwicu": [
+        {
+          "_comment": "Native hospital admission/discharge interval.",
+          "callback": "los_callback",
+          "class_name": "fun_itm",
+          "win_type": "hadm"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "class_name": "col_itm",
+          "table": "ptadmitable",
+          "value_var": "DaysHospitalStay"
+        }
+      ]
+    }
+  },
+  "los_icu": {
+    "sources": {
+      "jinhua": [
+        {
+          "_comment": "Native/proxy semantics are recorded in community_preparation_manifest.json.",
+          "callback": "los_callback",
+          "class_name": "fun_itm",
+          "win_type": "icustay"
+        }
+      ],
+      "nwicu": [
+        {
+          "_comment": "Native/proxy semantics are recorded in community_preparation_manifest.json.",
+          "callback": "los_callback",
+          "class_name": "fun_itm",
+          "win_type": "icustay"
+        }
+      ],
+      "zigong": [
+        {
+          "_comment": "Native/proxy semantics are recorded in community_preparation_manifest.json.",
+          "callback": "los_callback",
+          "class_name": "fun_itm",
+          "win_type": "icustay"
+        }
+      ]
+    }
+  },
+  "lymph": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Lymphocyte percentage (Lymph%) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100023,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Lymphocyte classification",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Lymphocyte ratio (lym%)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "magnesium_iv": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "magnesium sulfate",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "magnesium sulfate",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "magnesium sulfate",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:magnesium sulfate).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "mannitol": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "mannitol",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "mannitol",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "mannitol",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ]
+    }
+  },
+  "map": {
+    "sources": {
+      "zigong": [
+        {
+          "class_name": "col_itm",
+          "table": "dtnursingchart",
+          "value_var": "MAP"
+        }
+      ]
+    }
+  },
+  "mch": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Mean corpuscular hemoglobin content (MCH) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100005,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Average hemoglobin level",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Mean hemoglobin (MCH)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "mchc": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 0.1))",
+          "ids": "Mean corpuscular hemoglobin concentration (MCHC) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100018,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL')",
+          "ids": "Average hemoglobin concentration",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL')",
+          "ids": "Mean hemoglobin concentration (MCHC)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "mcv": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Mean corpuscular volume (MCV) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100017,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Average red blood cell volume",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Mean corpuscular volume (MCV)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "mech_vent": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "community_jinhua_mech_vent",
+          "dur_var": "endtime_base",
+          "ids": [
+            "Ventilator mechanical ventilation (invasive)",
+            "Ventilator mechanical ventilation",
+            "Ventilator assisted breathing",
+            "Ventilator mechanical ventilation (non-invasive)",
+            "Use of non-invasive ventilator",
+            "Non-invasive assisted ventilation"
+          ],
+          "sub_var": "order_content_en",
+          "table": "orders",
+          "value_var": "order_content_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "_comment": "Point evidence only: the published NWICU rows have no endtime, so no continuous ventilation duration is inferred.",
+          "callback": "apply_map(c(`787541` = 'invasive', `792843` = 'noninvasive'), var = 'sub_var')",
+          "ids": [
+            787541,
+            792843
+          ],
+          "sub_var": "itemid",
+          "table": "procedureevents",
+          "value_var": "itemid"
+        }
+      ]
+    }
+  },
+  "meropenem": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "meropenem",
+          "sub_var": "drug_name_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "meropenem",
+          "sub_var": "drug",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "meropenem",
+          "sub_var": "Med_DESC_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "meropenem",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "methb": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Methemoglobin percentage (FMetHb%) - arterial blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100145,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Methemoglobin (fmethb)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "mg": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 2.4305))",
+          "ids": "Magnesium ion (Mg2+)-Unknown",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100009,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 2.4305), 'mg/dL')",
+          "ids": "Serum magnesium (mg)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "mgcs": {
+    "sources": {
+      "zigong": [
+        {
+          "callback": "transform_fun(extract_leading_number)",
+          "class_name": "col_itm",
+          "table": "dtnursingchart",
+          "value_var": "motion"
+        }
+      ]
+    }
+  },
+  "midazolam": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "midazolam|versed|dormicum",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "midazolam|versed|dormicum",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "midazolam|versed|dormicum",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:midazolam|versed|dormicum).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "milrinone": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "milrinone|enoximone",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "milrinone|enoximone",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "milrinone|enoximone",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:milrinone|enoximone).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "minute_vol": {
+    "sources": {
+      "zhejiang_eicu": [
+        {
+          "ids": "分钟通气量",
+          "sub_var": "NursingEvent_item",
+          "table": "nursingchart_vitalsign"
+        }
+      ]
+    }
+  },
+  "monos": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Mononuclear cell percentage (Mono%) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100026,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Monocyte classification",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Monocyte ratio (Mon%)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "morphine": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "(^|[^a-z])morphine",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "(^|[^a-z])morphine",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "(^|[^a-z])morphine",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:(^|[^a-z])morphine).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "mpv": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Mean platelet volume (MPV) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Average platelet volume",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Mean platelet volume (MPV)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "myoglobin": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Myoglobin (Mb) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Myoglobin (myo)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "na": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": [
+            "Sodium ion (Na+)-unknown",
+            "Sodium ions (Na+)-arterial blood"
+          ],
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": [
+            100010,
+            100050
+          ],
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": [
+            "Sodium (NA)",
+            "Sodium ion (Na +)",
+            "Sodium ion concentration (CNA +)"
+          ],
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "neostigmine": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "neostigmine",
+          "sub_var": "drug_name_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "neostigmine",
+          "sub_var": "drug",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "neostigmine",
+          "sub_var": "Med_DESC_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "neostigmine",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "neut": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Neutrophil percentage (Neut%) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100022,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Classification of neutrophils",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Neutrophil ratio (neu%)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "nicardipine": {
+    "sources": {
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "nicardipine|cardene",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "nicardipine|cardene",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:nicardipine|cardene).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "nitroglycerin": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "nitroglycerin",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "nitroglycerin",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "nitroglycerin",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:nitroglycerin).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "ntprobnp": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "N-terminal pro-brain natriuretic peptide (NT-ProBNP) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100071,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ]
+    }
+  },
+  "o2sat": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Spo2",
+          "sub_var": "subcategory_name_en",
+          "table": "vital_signs"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 320277,
+          "sub_var": "itemid",
+          "table": "chartevents"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Oxygen saturation (Pulse Oxymetry)",
+          "sub_var": "VitalSign_DESC",
+          "table": "vitalsign"
+        },
+        {
+          "ids": "SpO2",
+          "sub_var": "NursingEvent_item",
+          "table": "nursingchart_vitalsign"
+        }
+      ],
+      "zigong": [
+        {
+          "class_name": "col_itm",
+          "table": "dtnursingchart",
+          "value_var": "Blood_oxygen_saturation"
+        }
+      ]
+    }
+  },
+  "octreotide": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "octreotide|sandostatin",
+          "sub_var": "drug_name_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "octreotide|sandostatin",
+          "sub_var": "drug",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "octreotide|sandostatin",
+          "sub_var": "Med_DESC_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "octreotide|sandostatin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "osmolality": {
+    "sources": {
+      "nwicu": [
+        {
+          "ids": 100089,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ]
+    }
+  },
+  "packed_rbc": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "^Actual blood transfusion.*(suspended red blood cells|red blood cells)",
+          "sub_var": "order_content_en",
+          "table": "orders",
+          "value_var": "order_content_en"
+        }
+      ]
+    }
+  },
+  "pantoprazole": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "pantoprazole|protonix",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "pantoprazole|protonix",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "pantoprazole|protonix",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:pantoprazole|protonix).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "pco2": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Partial pressure of carbon dioxide (PaCO2)-arterial blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Partial pressure of carbon dioxide",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": [
+            "Arterial partial pressure of carbon dioxide (PCO2)",
+            "Carbon dioxide partial pressure (PCO2)"
+          ],
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "pct": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Procalcitonin (PCT) - unknown",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Procalcitonin",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ]
+    }
+  },
+  "peep": {
+    "sources": {
+      "nwicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 1), 'cmH2O', 'cm of H2O')",
+          "ids": 100060,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "呼吸末正压",
+          "sub_var": "NursingEvent_item",
+          "table": "nursingchart_vitalsign"
+        }
+      ]
     }
   },
   "ph": {
     "sources": {
-      "nwicu": [{"ids": 100339, "table": "labevents", "sub_var": "itemid", "index_var": "charttime", "value_var": "valuenum"}],
-      "zigong": [{"ids": "PH (PH)", "table": "dtlab", "sub_var": "Item"}]
+      "jinhua": [
+        {
+          "ids": "PH-arterial blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100339,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "PH",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "PH (PH)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "phenytoin": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "phenytoin|fosphenytoin|dilantin|cerebyx",
+          "sub_var": "drug_name_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "phenytoin|fosphenytoin|dilantin|cerebyx",
+          "sub_var": "drug",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "phenytoin|fosphenytoin|dilantin|cerebyx",
+          "sub_var": "Med_DESC_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ]
+    }
+  },
+  "phos": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 3.097))",
+          "ids": "Phosphorus (P)-Unknown",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100015,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 3.097), 'mg/dL')",
+          "ids": "phosphorus",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 3.097), 'mg/dL')",
+          "ids": "Inorganic phosphorus (P)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "pip": {
+    "sources": {
+      "zhejiang_eicu": [
+        {
+          "ids": "气道峰压",
+          "sub_var": "NursingEvent_item",
+          "table": "nursingchart_vitalsign"
+        }
+      ]
+    }
+  },
+  "platelets": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "^Actual blood transfusion.*platelet apheresis",
+          "sub_var": "order_content_en",
+          "table": "orders",
+          "value_var": "order_content_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "ids": 767372,
+          "sub_var": "itemid",
+          "table": "procedureevents",
+          "value_var": "itemid"
+        }
+      ]
+    }
+  },
+  "plt": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Platelet Count (PLT#)-Venous Blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100014,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "platelet count",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Platelet (PLT)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "po2": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Partial pressure of oxygen (PaO2)-arterial blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Blood oxygen partial pressure",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": [
+            "Arterial oxygen partial pressure (PO2)",
+            "Oxygen partial pressure (PO2)"
+          ],
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "potassium": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": [
+            "Potassium ion (K+)-unknown",
+            "Potassium ion (K+)-arterial blood"
+          ],
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": [
+            100011,
+            100047
+          ],
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": [
+            "Potassium (k)",
+            "Potassium ion (K +)",
+            "Potassium ion concentration (CK +)"
+          ],
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "potassium_iv": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "potassium chloride|potassium phosphate|(^|[^a-z])kcl([^a-z]|$)|kphos",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "potassium chloride|potassium phosphate|(^|[^a-z])kcl([^a-z]|$)|kphos",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "potassium chloride|potassium phosphate|(^|[^a-z])kcl([^a-z]|$)|kphos",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:potassium chloride|potassium phosphate|(^|[^a-z])kcl([^a-z]|$)|kphos).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "prealbumin": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 0.1))",
+          "ids": "Prealbumin (PA) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 0.1), 'mg/dL')",
+          "ids": "Prealbumin",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 0.1), 'mg/dL')",
+          "ids": "Prealbumin (PA)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "propofol": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "propofol|diprivan",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "propofol|diprivan",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "propofol|diprivan",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:propofol|diprivan).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "ps": {
+    "sources": {
+      "zhejiang_eicu": [
+        {
+          "ids": "压力支持",
+          "sub_var": "NursingEvent_item",
+          "table": "nursingchart_vitalsign"
+        }
+      ]
+    }
+  },
+  "pt": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Prothrombin time (PT) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100034,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "prothrombin time",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Prothrombin time (PT)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "ptt": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Activated partial thromboplastin time (APTT) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100046,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Partial thromboplastin time",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Activated partial thromboplastin time (APTT)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "rass": {
+    "sources": {
+      "zigong": [
+        {
+          "class_name": "col_itm",
+          "table": "dtnursingchart",
+          "value_var": "RASS_sedation_score"
+        }
+      ]
+    }
+  },
+  "rbc": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Red blood cell count (RBC#) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100019,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Red blood cell count",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Red blood cell (RBC)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "rdw": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Red blood cell volume distribution width CV (RDW-CV) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100008,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Red blood cell distribution width",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Coefficient of variation of erythrocyte distribution width (rdwcv)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "resp": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Respiratory",
+          "sub_var": "subcategory_name_en",
+          "table": "vital_signs"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 320210,
+          "sub_var": "itemid",
+          "table": "chartevents"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Respiratory rate",
+          "sub_var": "VitalSign_DESC",
+          "table": "vitalsign"
+        }
+      ],
+      "zigong": [
+        {
+          "class_name": "col_itm",
+          "table": "dtnursingchart",
+          "value_var": "breathing"
+        }
+      ]
+    }
+  },
+  "retic": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Reticulocyte percentage (RET%) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Reticulocyte ratio",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ]
+    }
+  },
+  "rocuronium": {
+    "sources": {
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "rocuronium|esmeron",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "rocuronium|esmeron",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:rocuronium|esmeron).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "rrt": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "^(Hemodialysis|Peritoneal dialysis \\(manual\\)|Peritoneal dialysis)$",
+          "sub_var": "order_content_en",
+          "table": "orders",
+          "value_var": "order_content_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "ids": [
+            704890,
+            740477,
+            772042
+          ],
+          "sub_var": "itemid",
+          "table": "procedureevents",
+          "value_var": "itemid"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "ids": "CRRT滤出液",
+          "sub_var": "NursingIO_item",
+          "table": "nursingchart_io"
+        }
+      ]
+    }
+  },
+  "samp": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "col_itm",
+          "table": "microbiology_culture",
+          "value_var": "culture_results"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "col_itm",
+          "table": "microbiologyculture",
+          "value_var": "MicrobiologyCulture_Finding"
+        }
+      ]
+    }
+  },
+  "sao2": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Oxygen saturation (SaO2)-arterial blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100109,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Blood oxygen saturation",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "Oxygen saturation (SO2)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "sbp": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Sbp",
+          "sub_var": "subcategory_name_en",
+          "table": "vital_signs"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": [
+            320050,
+            320179
+          ],
+          "sub_var": "itemid",
+          "table": "chartevents"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Systolic Blood pressure",
+          "sub_var": "VitalSign_DESC",
+          "table": "vitalsign"
+        }
+      ],
+      "zigong": [
+        {
+          "class_name": "col_itm",
+          "table": "dtnursingchart",
+          "value_var": "Blood_pressure_high"
+        }
+      ]
+    }
+  },
+  "sex": {
+    "sources": {
+      "jinhua": [
+        {
+          "class_name": "col_itm",
+          "table": "medical_record_front_page",
+          "value_var": "patient_gender_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "apply_map(c(M = 'Male', F = 'Female'))",
+          "class_name": "col_itm",
+          "table": "patients",
+          "value_var": "gender"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "class_name": "col_itm",
+          "table": "ptadmitable",
+          "value_var": "Sex"
+        }
+      ],
+      "zigong": [
+        {
+          "class_name": "col_itm",
+          "table": "dtbaseline",
+          "value_var": "SEX"
+        }
+      ]
+    }
+  },
+  "spo2": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Spo2",
+          "sub_var": "subcategory_name_en",
+          "table": "vital_signs"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 320277,
+          "sub_var": "itemid",
+          "table": "chartevents"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Oxygen saturation (Pulse Oxymetry)",
+          "sub_var": "VitalSign_DESC",
+          "table": "vitalsign"
+        },
+        {
+          "ids": "SpO2",
+          "sub_var": "NursingEvent_item",
+          "table": "nursingchart_vitalsign"
+        }
+      ],
+      "zigong": [
+        {
+          "class_name": "col_itm",
+          "table": "dtnursingchart",
+          "value_var": "Blood_oxygen_saturation"
+        }
+      ]
+    }
+  },
+  "t4": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 0.0777))",
+          "ids": "Total thyroxine (TT4) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100276,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 0.1), 'ug/dL')",
+          "ids": "Total thyroxine (TT4)",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ]
+    }
+  },
+  "tco2": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Blood carbon dioxide content ctCO2(B)-arterial blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100013,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Total carbon dioxide",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": [
+            "TCO2(P)(TCO2(P))",
+            "Total carbon dioxide (ctco2)"
+          ],
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "temp": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Temperature",
+          "sub_var": "subcategory_name_en",
+          "table": "vital_signs"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "convert_unit(fahr_to_cels, 'C', 'f')",
+          "ids": 323761,
+          "sub_var": "itemid",
+          "table": "chartevents"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Temperature",
+          "sub_var": "VitalSign_DESC",
+          "table": "vitalsign"
+        }
+      ],
+      "zigong": [
+        {
+          "class_name": "col_itm",
+          "table": "dtnursingchart",
+          "value_var": "temperature"
+        }
+      ]
+    }
+  },
+  "tibc": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 5.584))",
+          "ids": "Total Iron Binding Capacity (TIBC)-Venous Blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100116,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ]
+    }
+  },
+  "tidal_vol": {
+    "sources": {
+      "nwicu": [
+        {
+          "ids": 100077,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": [
+            "吸入潮气量",
+            "呼出潮气量"
+          ],
+          "sub_var": "NursingEvent_item",
+          "table": "nursingchart_vitalsign"
+        }
+      ],
+      "zigong": [
+        {
+          "class_name": "col_itm",
+          "table": "dtnursingchart",
+          "value_var": "Vt_Supervisor"
+        }
+      ]
+    }
+  },
+  "tidal_vol_set": {
+    "sources": {
+      "zhejiang_eicu": [
+        {
+          "ids": "潮气量(设)",
+          "sub_var": "NursingEvent_item",
+          "table": "nursingchart_vitalsign"
+        }
+      ],
+      "zigong": [
+        {
+          "class_name": "col_itm",
+          "table": "dtnursingchart",
+          "value_var": "Vt_setting"
+        }
+      ]
+    }
+  },
+  "tnt": {
+    "sources": {
+      "nwicu": [
+        {
+          "ids": 100057,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ]
+    }
+  },
+  "total_protein": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 0.1))",
+          "ids": "Total protein (TP)-unknown",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100027,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL')",
+          "ids": "Total protein",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL')",
+          "ids": "Total protein (TP)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "transferrin": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 100.0))",
+          "ids": "Transferrin (TRF)-Unknown",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100094,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ]
+    }
+  },
+  "tri": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Cardiac troponin I (cTnI) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100059,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Cardiac troponin I",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "High sensitivity troponin I (tn-i)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "trig": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 88.57))",
+          "ids": "Triglycerides (TG) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100056,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 88.57), 'mg/dL')",
+          "ids": "triglyceride",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 88.57), 'mg/dL')",
+          "ids": "Triglyceride (TG)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "tsh": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Thyroid Stimulating Hormone (TSH)-Venous Blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100092,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": [
+            "TSH",
+            "Thyroid stimulating hormone (TSH)"
+          ],
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ]
+    }
+  },
+  "uric_acid": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(binary_op(`*`, 0.016812373907195696))",
+          "ids": "Uric acid (UA) - unknown",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100069,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "convert_unit(binary_op(`*`, 0.016812373907195696), 'mg/dL')",
+          "ids": "Uric acid (UA)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "urine": {
+    "sources": {
+      "zhejiang_eicu": [
+        {
+          "ids": [
+            "小便",
+            "尿量"
+          ],
+          "sub_var": "NursingIO_item",
+          "table": "nursingchart_io"
+        }
+      ],
+      "zigong": [
+        {
+          "class_name": "col_itm",
+          "table": "dtnursingchart",
+          "value_var": "Urine_volume"
+        }
+      ]
+    }
+  },
+  "vancomycin": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "vancomycin|vancocin",
+          "sub_var": "drug_name_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "vancomycin|vancocin",
+          "sub_var": "drug",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "vancomycin|vancocin",
+          "sub_var": "Med_DESC_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "vancomycin|vancocin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "vecuronium": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous drip",
+            "Micropump injection",
+            "Slow intravenous push",
+            "Micropump intravenous drip",
+            "Intravenous injection",
+            "Intravenous infusion"
+          ],
+          "regex": "vecuronium|norcuron",
+          "sub_var": "dose_type_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Intravenous",
+            "Injection"
+          ],
+          "regex": "vecuronium|norcuron",
+          "sub_var": "route",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "ids": [
+            "Micropump injection",
+            "Intravenous drip",
+            "Static push",
+            "Pump injection",
+            "vein"
+          ],
+          "regex": "vecuronium|norcuron",
+          "sub_var": "Med_route_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "(?:vecuronium|norcuron).*(injection|for injection|human (serum )?albumin)|human (serum )?albumin",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "vent_breath_seq": {
+    "sources": {
+      "zhejiang_eicu": [
+        {
+          "callback": "community_vent_mode_seq",
+          "ids": "呼吸机模式",
+          "sub_var": "NursingEvent_item",
+          "table": "nursingchart_vitalsign",
+          "value_var": "NursingEvent_val"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "community_vent_mode_seq",
+          "class_name": "col_itm",
+          "table": "dtnursingchart",
+          "value_var": "Breathing_pattern"
+        }
+      ]
+    }
+  },
+  "vent_end": {
+    "sources": {
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "ids": 763189,
+          "sub_var": "itemid",
+          "table": "procedureevents",
+          "value_var": "itemid"
+        }
+      ]
+    }
+  },
+  "vent_mode": {
+    "sources": {
+      "zhejiang_eicu": [
+        {
+          "callback": "community_vent_mode_control",
+          "ids": "呼吸机模式",
+          "sub_var": "NursingEvent_item",
+          "table": "nursingchart_vitalsign",
+          "value_var": "NursingEvent_val"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "community_vent_mode_control",
+          "class_name": "col_itm",
+          "table": "dtnursingchart",
+          "value_var": "Breathing_pattern"
+        }
+      ]
+    }
+  },
+  "vent_rate": {
+    "sources": {
+      "zhejiang_eicu": [
+        {
+          "ids": "呼吸频率(设)",
+          "sub_var": "NursingEvent_item",
+          "table": "nursingchart_vitalsign"
+        }
+      ],
+      "zigong": [
+        {
+          "class_name": "col_itm",
+          "table": "dtnursingchart",
+          "value_var": "F"
+        }
+      ]
+    }
+  },
+  "vent_start": {
+    "sources": {
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "ids": 753461,
+          "sub_var": "itemid",
+          "table": "procedureevents",
+          "value_var": "itemid"
+        }
+      ]
+    }
+  },
+  "vgcs": {
+    "sources": {
+      "zigong": [
+        {
+          "callback": "transform_fun(extract_leading_number)",
+          "class_name": "col_itm",
+          "table": "dtnursingchart",
+          "value_var": "language"
+        }
+      ]
+    }
+  },
+  "warfarin": {
+    "sources": {
+      "jinhua": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "warfarin|coumadin|phenprocoumon|acenocoumarol",
+          "sub_var": "drug_name_en",
+          "table": "medication",
+          "value_var": "drug_name_en"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "warfarin|coumadin|phenprocoumon|acenocoumarol",
+          "sub_var": "drug",
+          "table": "prescriptions",
+          "value_var": "drug"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "warfarin|coumadin|phenprocoumon|acenocoumarol",
+          "sub_var": "Med_DESC_Eng",
+          "table": "medication",
+          "value_var": "Med_DESC_Eng"
+        }
+      ],
+      "zigong": [
+        {
+          "callback": "transform_fun(set_val(TRUE))",
+          "class_name": "rgx_itm",
+          "regex": "warfarin|coumadin|phenprocoumon|acenocoumarol",
+          "sub_var": "DrugName",
+          "table": "dtdrugs",
+          "value_var": "DrugName"
+        }
+      ]
+    }
+  },
+  "wbc": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "White blood cell count (WBC#) - venous blood",
+          "sub_var": "inspection_subproject_name_en",
+          "table": "laboratory_test"
+        }
+      ],
+      "nwicu": [
+        {
+          "ids": 100016,
+          "index_var": "charttime",
+          "sub_var": "itemid",
+          "table": "labevents",
+          "value_var": "valuenum"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "White blood cell count",
+          "sub_var": "Lab_itemName_Eng",
+          "table": "lab"
+        }
+      ],
+      "zigong": [
+        {
+          "ids": "White blood cell (WBC)",
+          "sub_var": "Item",
+          "table": "dtlab"
+        }
+      ]
+    }
+  },
+  "weight": {
+    "sources": {
+      "jinhua": [
+        {
+          "ids": "Weight",
+          "sub_var": "subcategory_name_en",
+          "table": "vital_signs"
+        }
+      ],
+      "nwicu": [
+        {
+          "callback": "convert_unit(binary_op(`/`, 35.274), 'kg')",
+          "ids": 326531,
+          "sub_var": "itemid",
+          "table": "chartevents"
+        }
+      ],
+      "zhejiang_eicu": [
+        {
+          "ids": "Body weight",
+          "sub_var": "VitalSign_DESC",
+          "table": "vitalsign"
+        }
+      ]
     }
   }
 }

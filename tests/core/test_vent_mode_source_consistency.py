@@ -85,12 +85,27 @@ def test_both_axes_use_identical_native_sources_in_all_supported_databases():
     dictionary = load_dictionary(include_sofa2=True)
     control = dictionary.get("vent_mode").sources
     sequence = dictionary.get("vent_breath_seq").sources
-    # mimic_demo is an alias, not a seventh database. eICU/SIC have no source
-    # for these canonical mode axes; this does not describe their IMV support.
-    assert set(control) == set(sequence) == {"aumc", "hirid", "miiv", "mimic", "mimic_demo"}
+    # eICU/SIC have no source for these canonical mode axes; this does not
+    # describe their IMV support. Zhejiang and Zigong use the same paired
+    # community parser because their native labels are not in the legacy map.
+    assert set(control) == set(sequence) == {
+        "aumc",
+        "hirid",
+        "miiv",
+        "mimic",
+        "mimic_demo",
+        "zhejiang_eicu",
+        "zigong",
+    }
+    callback_pairs = {
+        "vent_mode_control": "vent_mode_seq",
+        "community_vent_mode_control": "community_vent_mode_seq",
+    }
     for database in control:
-        assert all(source.callback == "vent_mode_control" for source in control[database])
-        assert all(source.callback == "vent_mode_seq" for source in sequence[database])
+        assert all(source.callback in callback_pairs for source in control[database])
+        assert [callback_pairs[source.callback] for source in control[database]] == [
+            source.callback for source in sequence[database]
+        ]
         assert [replace(source, callback=None) for source in control[database]] == [
             replace(source, callback=None) for source in sequence[database]
         ]
