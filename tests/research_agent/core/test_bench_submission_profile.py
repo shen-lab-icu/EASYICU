@@ -69,6 +69,8 @@ FROZEN_PROFILE_SNAPSHOTS = {
     "concept_e1_20260911": "389e2988a6d601974cf7dd5b303929964ec8c9d66a82c63821646e956cc1ceec",
     "concept_e1_20260917": "6c35b48f88832b0ed601fbb0913986c8d66f2eedd3e70abcbe5b0c5bc31d3aba",
     "concept_e1_20260918": "ebce6b4e8cfadbbc2a6a6c8e923e64709012a0f14aa4e3284430fa796343edbf",
+    "concept_e1_20260921": "ab4edb8a79388ccbd902001ad6b733d063042a423d7b6507ad0dd3dd3b04b720",
+    "sofa2_e1_20260921": "c53b7d1c5eda51c9e88727e75eebbd93f579d0a297a5fa6f49b646032dc4faa3",
 }
 
 
@@ -729,11 +731,13 @@ def test_e1_current_profiles_additively_bind_current_concept_dictionary() -> Non
         E1_PROGRESSIVE_PLANNER_CANARY_2026_09_11 as frozen_public_profile,
         E1_PROGRESSIVE_PLANNER_CANARY_2026_09_17 as frozen_0917_public_profile,
         E1_PROGRESSIVE_PLANNER_CANARY_2026_09_18 as public_profile,
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_21 as current_public_profile,
         E1_REVIEWED_DEMO_2026_08_19 as archival_reviewed_profile,
         E1_REVIEWED_DEMO_2026_09_03 as prior_reviewed_profile,
         E1_REVIEWED_DEMO_2026_09_11 as frozen_reviewed_profile,
         E1_REVIEWED_DEMO_2026_09_17 as frozen_0917_reviewed_profile,
         E1_REVIEWED_DEMO_2026_09_18 as reviewed_profile,
+        E1_REVIEWED_DEMO_2026_09_21 as current_reviewed_profile,
     )
     from easyicu.research_agent.orchestration.profiles import (
         CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF,
@@ -744,10 +748,12 @@ def test_e1_current_profiles_additively_bind_current_concept_dictionary() -> Non
         E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_11 as frozen_live_profile,
         E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_17 as frozen_live_0917,
         E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_18 as live_profile_0918,
+        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_21 as current_live_profile,
         E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_03 as prior_live_reviewed_profile,
         E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_11 as frozen_live_reviewed_profile,
         E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_17 as frozen_live_reviewed_0917,
         E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_18 as live_reviewed_profile_0918,
+        E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_21 as current_live_reviewed_profile,
     )
 
     # Frozen 0917 coordinates (profiles.py:636-637 crea 15 -> 25 re-lock).
@@ -764,13 +770,15 @@ def test_e1_current_profiles_additively_bind_current_concept_dictionary() -> Non
     assert frozen_0917_reviewed_profile.ref == "npj_dm_e1_demo_dev/20260917"
     assert public_profile.ref == "npj_dm_e1_canary_dev/20260918"
     assert reviewed_profile.ref == "npj_dm_e1_demo_dev/20260918"
-    assert CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF == public_profile.ref
-    assert CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF == reviewed_profile.ref
+    assert current_public_profile.ref == "npj_dm_e1_canary_dev/20260921"
+    assert current_reviewed_profile.ref == "npj_dm_e1_demo_dev/20260921"
+    assert CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF == current_public_profile.ref
+    assert CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF == current_reviewed_profile.ref
     assert CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF == (
-        live_profile_0918.ref
+        current_live_profile.ref
     )
     assert CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF == (
-        live_reviewed_profile_0918.ref
+        current_live_reviewed_profile.ref
     )
     assert prior_public_profile.expected_concept_dict_sha == (
         FROZEN_PROFILE_SNAPSHOTS["concept_e1_20260903"]
@@ -819,6 +827,18 @@ def test_e1_current_profiles_additively_bind_current_concept_dictionary() -> Non
         )
         assert profile.expected_sofa2_dict_sha == (
             FROZEN_PROFILE_SNAPSHOTS["sofa2_e1_20260905_20260911_20260917_20260918"]
+        )
+    for profile in (
+        current_public_profile,
+        current_reviewed_profile,
+        current_live_profile,
+        current_live_reviewed_profile,
+    ):
+        assert profile.expected_concept_dict_sha == (
+            FROZEN_PROFILE_SNAPSHOTS["concept_e1_20260921"]
+        )
+        assert profile.expected_sofa2_dict_sha == (
+            FROZEN_PROFILE_SNAPSHOTS["sofa2_e1_20260921"]
         )
 
 

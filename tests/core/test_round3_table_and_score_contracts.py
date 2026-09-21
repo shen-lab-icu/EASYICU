@@ -62,6 +62,27 @@ def test_table_time_facade_floors_without_mutating():
     assert frame.time.tolist() == pd.to_timedelta([0.5, 1.5], unit="h").tolist()
 
 
+def test_dataframe_change_interval_never_aggregates_across_patients():
+    from easyicu.io.ts_utils import change_interval
+
+    frame = pd.DataFrame(
+        {
+            "stay_id": [101, 202],
+            "time": pd.to_timedelta([0.2, 0.4], unit="h"),
+            "value": [10.0, 30.0],
+        }
+    )
+
+    result = change_interval(
+        frame, pd.Timedelta("1h"), time_col="time", aggregation="mean"
+    )
+
+    assert result[["stay_id", "value"]].to_dict("records") == [
+        {"stay_id": 101, "value": 10.0},
+        {"stay_id": 202, "value": 30.0},
+    ]
+
+
 def test_id_map_facade_uses_declared_granular_table(monkeypatch):
     from easyicu.table.utils import id_map_helper
     from easyicu.datasource import ICUDataSource

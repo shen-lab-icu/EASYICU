@@ -24,6 +24,7 @@ from easyicu.api.extraction import (
     _MEASURED_ONESHOT_PROFILES,
     _adapt_stream_batch_size_from_first_batch,
     _interleave_stream_patient_ids,
+    _order_stream_patient_ids,
     _next_stream_retry_batch_size,
     _extract_worker_env_setup,
     _resource_budget_execution_limits,
@@ -283,24 +284,39 @@ def test_measured_miiv_blood_gas_uses_one_shot_with_2gib_available():
     assert plan.advisory_zh is None
 
 
-def test_corrected_hirid_renal_is_one_shot_under_8gib_only_for_measured_scope():
+def test_corrected_hirid_renal_uses_current_boundary_aware_batch_profile():
     plan = plan_extraction_resources(
         "hirid", ["renal"], 33_905, available_memory_mb=8192,
     )
-    assert plan.mode == "one_shot"
-    assert plan.batch_size == 33_905
-    assert plan.reason_code == "measured_profile_fast_path"
-    assert plan.measured_peak_rss_mb == pytest.approx(3483.5)
-    assert plan.required_available_memory_mb == pytest.approx(3831.85)
-    assert set(_MEASURED_ONESHOT_PROFILES["hirid"]) == {"renal"}
+    assert plan.mode == "patient_batches"
+    assert plan.batch_size == 14_000
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.measured_peak_rss_mb == pytest.approx(1_677.7)
+    assert plan.required_available_memory_mb == pytest.approx(1_845.47)
+    assert _MEASURED_ONESHOT_PROFILES["hirid"] == {}
     larger = plan_extraction_resources(
         "hirid", ["renal"], 33_906, available_memory_mb=8192,
     )
-    assert larger.reason_code != "measured_profile_fast_path"
+    assert larger.reason_code == "unmeasured_profile_memory_guard"
     too_small = plan_extraction_resources(
-        "hirid", ["renal"], 33_905, available_memory_mb=3072,
+        "hirid", ["renal"], 33_905, available_memory_mb=1024,
     )
     assert too_small.reason_code == "measured_profile_insufficient_memory"
+
+
+def test_hirid_v6_refresh_closure_has_complete_measured_coverage():
+    modules = [
+        "demographics", "blood_gas", "chemistry", "respiratory",
+        "vasopressors", "medications", "renal", "sofa1_score",
+        "sofa2_score", "sepsis3_sofa1", "sepsis3_sofa2",
+    ]
+    plan = plan_extraction_resources(
+        "hirid", modules, 33_905, available_memory_mb=8192,
+    )
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 14_000
+    assert plan.measured_peak_rss_mb == pytest.approx(2_371.5)
+    assert plan.required_available_memory_mb == pytest.approx(2_608.65)
 
 
 def test_measured_eicu_profile_can_authorize_full_cohort_above_legacy_size_cap():
@@ -470,7 +486,7 @@ def test_measured_aumc_sofa1_uses_minimum_verified_three_batches():
     assert _n_chunks(23_106, plans["sofa1_score"].batch_size) == 3
 
 
-def test_eicu_full_request_remains_guarded_after_execution_envelope_change():
+def test_eicu_full_request_uses_complete_measured_batch_coverage():
     plan = plan_extraction_resources(
         "eicu",
         list(EXTRACT_MODULES),
@@ -478,9 +494,26 @@ def test_eicu_full_request_remains_guarded_after_execution_envelope_change():
         available_memory_mb=8 * 1024,
     )
 
-    assert plan.reason_code == "invalidated_profile_memory_guard"
-    assert plan.measured_peak_rss_mb is None
-    assert plan.advisory
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 25_000
+    assert plan.measured_peak_rss_mb == pytest.approx(7_435.9)
+    assert plan.required_available_memory_mb == pytest.approx(8_179.49)
+    assert plan.advisory is None
+
+
+def test_eicu_renal_uses_measured_isolated_five_batch_profile():
+    plan = plan_extraction_resources(
+        "eicu",
+        ["renal"],
+        200_859,
+        available_memory_mb=8 * 1024,
+    )
+
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 50_000
+    assert plan.measured_peak_rss_mb == pytest.approx(6_102.5)
+    assert plan.required_available_memory_mb == pytest.approx(6_712.75)
+    assert _n_chunks(200_859, plan.batch_size) == 5
 
 
 def test_mixed_batch_summary_includes_larger_oneshot_peak(monkeypatch):
@@ -520,6 +553,26 @@ def test_invalidated_profiles_cannot_remain_in_measured_registries():
         assert module not in _MEASURED_BATCH_PROFILES.get(database, {})
 
 
+@pytest.mark.parametrize(
+    ("database", "module", "num_patients", "expected_batch", "peak"),
+    (
+        ("eicu", "medications", 200_859, 50_000, 1_669.3),
+        ("miiv", "sofa2_score", 94_458, 30_000, 5_056.7),
+    ),
+)
+def test_current_over_8gib_full_cohort_modules_use_verified_batches(
+    database, module, num_patients, expected_batch, peak
+):
+    plan = plan_extraction_resources(
+        database, [module], num_patients, available_memory_mb=8 * 1024
+    )
+
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.mode == "patient_batches"
+    assert plan.batch_size == expected_batch
+    assert plan.measured_peak_rss_mb == pytest.approx(peak)
+
+
 def test_eicu_mixed_request_keeps_each_measured_module_strategy_at_8gib():
     plans = plan_module_extraction_resources(
         "eicu",
@@ -545,10 +598,14 @@ def test_eicu_mixed_request_keeps_each_measured_module_strategy_at_8gib():
     }
     assert plans["sepsis_shared"].mode == "one_shot"
     assert plans["sofa2_score"].reason_code == (
-        "invalidated_profile_memory_guard"
+        "measured_profile_fastest_safe_batch"
     )
     assert plans["sepsis3_sofa2"].reason_code == (
-        "invalidated_profile_memory_guard"
+        "measured_profile_fastest_safe_batch"
+    )
+    assert plans["sofa2_score"].measured_peak_rss_mb == pytest.approx(3_519.7)
+    assert plans["sofa2_score"].required_available_memory_mb == pytest.approx(
+        3_871.67
     )
     assert plans["respiratory"].reason_code == (
         "measured_profile_fastest_safe_batch"
@@ -608,7 +665,7 @@ def test_module_batch_overrides_fail_closed(overrides):
         )
 
 
-def test_measured_miiv_full_module_set_keeps_current_medications_batch_at_8gib():
+def test_miiv_full_module_set_has_current_measured_coverage():
     plan = plan_extraction_resources(
         "miiv",
         list(EXTRACT_MODULES),
@@ -619,8 +676,8 @@ def test_measured_miiv_full_module_set_keeps_current_medications_batch_at_8gib()
     assert plan.mode == "patient_batches"
     assert plan.reason_code == "measured_profile_fastest_safe_batch"
     assert plan.batch_size == 10_000
-    assert plan.measured_peak_rss_mb == pytest.approx(7_362.0)
-    assert plan.required_available_memory_mb == pytest.approx(8_098.2)
+    assert plan.measured_peak_rss_mb == pytest.approx(7_286.7)
+    assert plan.required_available_memory_mb == pytest.approx(8_015.37)
     assert plan.advisory is None
     assert plan.advisory_zh is None
 
@@ -645,20 +702,85 @@ def test_miiv_medications_scales_to_5k_for_strict_8gib_worker_budget():
     assert medication_plan.advisory_zh
 
 
-def test_measured_miiv_renal_warns_only_below_its_one_shot_threshold():
+def test_miiv_renal_uses_current_isolated_five_batch_profile():
     plan = plan_extraction_resources(
         "miiv",
         ["renal"],
         94_458,
-        available_memory_mb=8_000,
+        available_memory_mb=8 * 1024,
     )
 
     assert plan.mode == "patient_batches"
-    assert plan.reason_code == "measured_profile_insufficient_memory"
-    assert plan.measured_peak_rss_mb == pytest.approx(7_362.0)
-    assert plan.required_available_memory_mb == pytest.approx(8_098.2)
-    assert plan.advisory
-    assert plan.advisory_zh
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 20_000
+    assert plan.measured_peak_rss_mb == pytest.approx(4_900.5)
+    assert plan.required_available_memory_mb == pytest.approx(5_390.55)
+    assert _n_chunks(94_458, plan.batch_size) == 5
+    assert plan.advisory is None
+    assert plan.advisory_zh is None
+
+
+@pytest.mark.parametrize(
+    ("available_gib", "expected_batch", "expected_mode", "expected_reason"),
+    [
+        (8, 20_000, "patient_batches", "measured_profile_fastest_safe_batch"),
+        (12, 35_000, "patient_batches", "measured_profile_scaled_batch"),
+        (16, 50_000, "patient_batches", "measured_profile_scaled_batch"),
+        (32, 94_458, "one_shot", "measured_profile_scaled_one_shot"),
+        (64, 94_458, "one_shot", "measured_profile_scaled_one_shot"),
+    ],
+)
+def test_miiv_renal_scales_continuously_above_8gib_baseline(
+    available_gib, expected_batch, expected_mode, expected_reason
+):
+    plan = plan_extraction_resources(
+        "miiv",
+        ["renal"],
+        94_458,
+        available_memory_mb=available_gib * 1024,
+    )
+
+    assert plan.batch_size == expected_batch
+    assert plan.mode == expected_mode
+    assert plan.reason_code == expected_reason
+
+
+@pytest.mark.parametrize(
+    ("database", "module", "num_patients", "available_gib", "expected_batch", "expected_mode"),
+    [
+        ("eicu", "medications", 200_859, 8, 50_000, "patient_batches"),
+        ("eicu", "medications", 200_859, 12, 100_430, "patient_batches"),
+        ("eicu", "medications", 200_859, 16, 200_859, "one_shot"),
+        ("eicu", "medications", 200_859, 32, 200_859, "one_shot"),
+        ("eicu", "medications", 200_859, 64, 200_859, "one_shot"),
+        ("miiv", "sofa2_score", 94_458, 8, 30_000, "patient_batches"),
+        ("miiv", "sofa2_score", 94_458, 12, 47_229, "patient_batches"),
+        ("miiv", "sofa2_score", 94_458, 16, 94_458, "one_shot"),
+        ("miiv", "sofa2_score", 94_458, 32, 94_458, "one_shot"),
+        ("miiv", "sofa2_score", 94_458, 64, 94_458, "one_shot"),
+    ],
+)
+def test_known_one_shot_cliffs_scale_safely_with_available_memory(
+    database, module, num_patients, available_gib, expected_batch, expected_mode
+):
+    plan = plan_extraction_resources(
+        database,
+        [module],
+        num_patients,
+        available_memory_mb=available_gib * 1024,
+    )
+
+    assert plan.batch_size == expected_batch
+    assert plan.mode == expected_mode
+    assert plan.reason_code == (
+        "measured_profile_fastest_safe_batch"
+        if available_gib == 8
+        else (
+            "measured_profile_scaled_one_shot"
+            if expected_mode == "one_shot"
+            else "measured_profile_scaled_batch"
+        )
+    )
 
 
 def test_measured_mimic_vasopressors_use_one_shot_at_8gib():
@@ -693,7 +815,7 @@ def test_measured_mimic_medications_use_fastest_verified_two_batches():
     assert plan.advisory is None
 
 
-def test_mimic_full_module_request_remains_guarded_until_last_five_are_measured():
+def test_mimic_full_module_request_remains_guarded_by_unmeasured_other_scores():
     plan = plan_extraction_resources(
         "mimic",
         list(EXTRACT_MODULES),
@@ -704,6 +826,50 @@ def test_mimic_full_module_request_remains_guarded_until_last_five_are_measured(
     assert plan.mode == "patient_batches"
     assert plan.reason_code == "unmeasured_profile_memory_guard"
     assert plan.advisory_zh
+
+
+def test_mimic_renal_uses_measured_isolated_four_batch_profile():
+    plan = plan_extraction_resources(
+        "mimic", ["renal"], 61_532, available_memory_mb=8 * 1024,
+    )
+
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 20_000
+    assert plan.measured_peak_rss_mb == pytest.approx(5_287.4)
+    assert plan.required_available_memory_mb == pytest.approx(5_816.14)
+    assert _n_chunks(61_532, plan.batch_size) == 4
+
+
+def test_mimic_v6_score_closure_uses_current_measured_batch_profile():
+    modules = [
+        "sofa1_score", "sofa2_score", "sepsis3_sofa1", "sepsis3_sofa2",
+    ]
+    plan = plan_extraction_resources(
+        "mimic", modules, 61_532, available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 20_000
+    assert plan.measured_peak_rss_mb == pytest.approx(3_406.5)
+    assert plan.required_available_memory_mb == pytest.approx(3_747.15)
+
+
+def test_sic_v6_refresh_closure_has_complete_measured_coverage():
+    modules = [
+        "demographics", "blood_gas", "chemistry", "respiratory",
+        "vasopressors", "medications", "renal", "sofa1_score",
+        "sofa2_score", "sepsis3_sofa1", "sepsis3_sofa2",
+    ]
+    plan = plan_extraction_resources(
+        "sic", modules, 27_386, available_memory_mb=8 * 1024,
+    )
+
+    assert plan.mode == "patient_batches"
+    assert plan.reason_code == "measured_profile_fastest_safe_batch"
+    assert plan.batch_size == 16_000
+    assert plan.measured_peak_rss_mb == pytest.approx(5_223.0)
+    assert plan.required_available_memory_mb == pytest.approx(5_745.3)
 
 
 def test_measured_eicu_batch_shrinks_and_warns_below_verified_batch_threshold():
@@ -847,3 +1013,30 @@ def test_interleaved_stream_partition_is_noop_for_one_shot_cohort():
     ordered, planned_batches = _interleave_stream_patient_ids(patient_ids, 10)
     assert ordered == patient_ids
     assert planned_batches == 1
+
+
+def test_aumc_stream_partition_preserves_prunable_source_order():
+    patient_ids = list(range(23_106))
+    ordered, planned_batches, strategy = _order_stream_patient_ids(
+        patient_ids,
+        5_000,
+        "aumc",
+    )
+
+    assert ordered == patient_ids
+    assert planned_batches == 5
+    assert strategy == "source_order_contiguous_prunable_v1"
+
+
+def test_eicu_stream_partition_retains_density_balancing_interleave():
+    patient_ids = list(range(200_859))
+    ordered, planned_batches, strategy = _order_stream_patient_ids(
+        patient_ids,
+        67_000,
+        "eicu",
+    )
+
+    assert planned_batches == 3
+    assert strategy == "source_order_interleaved_v1"
+    assert ordered != patient_ids
+    assert set(ordered) == set(patient_ids)

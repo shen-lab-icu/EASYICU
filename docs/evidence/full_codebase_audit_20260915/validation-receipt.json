@@ -1,0 +1,92 @@
+{
+  "verified_head": "7e55a1fecd88585bed1b4c85fba4278a8dee0b50",
+  "pytest_command": [
+    ".venv/bin/python",
+    "-m",
+    "pytest",
+    "-m",
+    "not slow",
+    "-q",
+    "-rs",
+    "tests/core/test_audit_tool_truthfulness.py",
+    "tests/webserver/test_audit_frontend_regressions.py",
+    "tests/webserver/test_webserver_static_routes.py",
+    "tests/webserver/test_webserver_study_context_frontend.py",
+    "tests/webserver/test_webserver_shell_accessibility.py",
+    "tests/webserver/test_webserver_settings_contract.py",
+    "tests/webserver/test_webserver_ux_reliability.py",
+    "tests/webserver/test_webserver_onward_paths.py",
+    "tests/webserver/test_static_frontend_ownership.py",
+    "tests/webserver/copilot/test_pi_history_retirement.py",
+    "tests/webserver/copilot/test_pi_copilot_static.py",
+    "tests/webserver/copilot/test_pi_copilot_message_actions.py",
+    "tests/webserver/copilot/test_pi_copilot_plan_reentry.py",
+    "tests/webserver/copilot/test_pi_copilot_retry_run_coordinate.py",
+    "tests/research_agent/integration/test_pipeline_config_contract.py",
+    "tests/research_agent/core/test_bench_submission_profile.py",
+    "tests/research_agent/providers/test_literature_design_authority.py",
+    "tests/research_agent/authority/test_execution_identity.py",
+    "tests/research_agent/integration/test_review_resume_and_egress_authority.py",
+    "tests/research_agent/integration/test_pipeline_authority_regressions.py",
+    "tests/research_agent/execution/test_development_execution_sample.py"
+  ],
+  "pytest_result": {
+    "passed": 587,
+    "skipped": 1,
+    "warnings": 24,
+    "seconds": 49.89
+  },
+  "js_command": [
+    ".venv/bin/python",
+    "tools/run_js_contracts.py"
+  ],
+  "js_result": {
+    "harnesses": 43,
+    "failing": 0,
+    "new_audit_groups": 14
+  },
+  "browser": {
+    "fixture": "synthetic static fixture with actual owner modules",
+    "script_executed": false,
+    "injected_img_nodes": 0,
+    "controls_after_click": [
+      "all",
+      "count",
+      "renal"
+    ],
+    "remainder_findings": 3,
+    "keyboard_edit_opacity": 1,
+    "computed_aliases": 15,
+    "evidence_request": [
+      "project",
+      "original-run",
+      "summary",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "display_anchor": "Table 1",
+    "viewport_checks": [
+      {
+        "width": 1280,
+        "scroll_width": 1265
+      },
+      {
+        "width": 1440,
+        "scroll_width": 1425
+      }
+    ],
+    "page_errors_after_fixture_dependencies_fixed": 0
+  },
+  "figure": {
+    "fixture": "synthetic six databases and five BMI groups",
+    "normal_bmi_spread": 1.5,
+    "lower_in_all_three_overweight_obese_groups": 5,
+    "denominator": 6,
+    "formats": [
+      "svg",
+      "pdf",
+      "tiff",
+      "png"
+    ]
+  },
+  "progress_lint": "OK: 6 CURRENT.md, 0 warning"
+}

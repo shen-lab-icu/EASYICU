@@ -83,11 +83,12 @@ DIRECT_REFRESHABLE_MODULES = frozenset(
         "sofa2_score",
         # 2026-09-18 v6 per governance "改哪提哪": directly changed
         # chemistry (crea 15->25), blood_gas (po2 40->20), vasopressors
-        # (norepi_equiv median->sum, adh 0-0.15, phn 0-15). Additive only;
-        # existing six entries and all downstream logic unchanged.
+        # (norepi_equiv median->sum, adh 0-0.15, phn 0-15), plus medications
+        # after the shared WinTbl endpoint correction.
         "chemistry",
         "blood_gas",
         "vasopressors",
+        "medications",
     }
 )
 MODULE_DEPENDENCY_CLOSURE: dict[str, tuple[str, ...]] = {
@@ -123,6 +124,9 @@ MODULE_DEPENDENCY_CLOSURE: dict[str, tuple[str, ...]] = {
         "sepsis3_sofa1",
         "sepsis3_sofa2",
     ),
+    # The shared WinTbl endpoint correction changes numeric dexamethasone
+    # exposure windows. No score or Sepsis module consumes that medication.
+    "medications": ("medications",),
     "respiratory": (
         "respiratory",
         "sofa1_score",
@@ -147,6 +151,7 @@ LEGACY_SCHEMA_VERSION = "easyicu_full6_selected_module_refresh_v1"
 RESOURCE_PLAN_SCHEMA_VERSION = "easyicu_selected_module_resource_plan_v1"
 RESOURCE_BENCHMARK_SCHEMA_VERSION = "easyicu_selected_module_resource_benchmark_v1"
 RESOURCE_BENCHMARK_FILENAME = "resource_benchmark_provenance.json"
+BUCKET_CACHE_RECEIPT_SCHEMA = "easyicu_itemid_bucket_cache_v1"
 DEFAULT_RELEASE_MEMORY_BUDGET_MB = 8 * 1024
 FORMALLY_MEASURED_RESOURCE_REASONS = frozenset(
     {
@@ -172,6 +177,73 @@ def _read_json(path: Path, *, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ModuleRefreshError(f"{label} must be one JSON object: {path}")
     return value
+
+
+def _storage_layout_receipts(
+    data_paths: Mapping[str, str],
+) -> dict[str, list[dict[str, Any]]]:
+    """Bind validated raw-table bucket caches used by selected databases."""
+
+    result: dict[str, list[dict[str, Any]]] = {}
+    for database, raw_path in data_paths.items():
+        root = Path(raw_path).resolve()
+        records: list[dict[str, Any]] = []
+        for receipt_path in sorted(root.glob("*_bucket/_BUCKET_BUILD_RECEIPT.json")):
+            _require_regular_file(
+                receipt_path,
+                label=f"{database} bucket-cache build receipt",
+            )
+            _require_regular_file(
+                receipt_path.parent / "_COMPLETE",
+                label=f"{database} bucket-cache completion marker",
+            )
+            receipt = _read_json(
+                receipt_path,
+                label=f"{database} bucket-cache build receipt",
+            )
+            if receipt.get("schema") != BUCKET_CACHE_RECEIPT_SCHEMA:
+                raise ModuleRefreshError(
+                    f"Unsupported bucket-cache receipt schema: {receipt_path}"
+                )
+            source = Path(str(receipt.get("source", ""))).resolve()
+            expected_source = root / receipt_path.parent.name.removesuffix("_bucket")
+            if source != expected_source.resolve():
+                raise ModuleRefreshError(
+                    f"Bucket-cache source mismatch: {source} != {expected_source}"
+                )
+            inventory = receipt.get("source_inventory")
+            if not isinstance(inventory, list) or not inventory:
+                raise ModuleRefreshError(
+                    f"Bucket-cache receipt lacks source inventory: {receipt_path}"
+                )
+            for item in inventory:
+                if not isinstance(item, Mapping):
+                    raise ModuleRefreshError(
+                        f"Invalid bucket-cache source inventory: {receipt_path}"
+                    )
+                shard = source / str(item.get("path", ""))
+                if not shard.is_file() or shard.is_symlink():
+                    raise ModuleRefreshError(
+                        f"Bucket-cache source shard is missing: {shard}"
+                    )
+                stat = shard.stat()
+                if (
+                    int(item.get("size", -1)) != stat.st_size
+                    or int(item.get("mtime_ns", -1)) != stat.st_mtime_ns
+                ):
+                    raise ModuleRefreshError(
+                        f"Bucket-cache source inventory changed: {shard}"
+                    )
+            records.append(
+                {
+                    "cache_path": str(receipt_path.parent),
+                    "receipt_sha256": REPUBLICATION._sha256_file(receipt_path),
+                    "receipt": receipt,
+                }
+            )
+        if records:
+            result[database] = records
+    return result
 
 
 def _parse_data_path_overrides(values: Sequence[str]) -> dict[str, str]:
@@ -260,7 +332,7 @@ def _validate_modules(modules: Sequence[str]) -> tuple[str, ...]:
         raise ModuleRefreshError(
             "This audited refresh entry point currently allows only demographics, "
             "outcome, renal, respiratory, sofa1_score, sofa2_score, chemistry, "
-            "blood_gas and vasopressors; "
+            "blood_gas, vasopressors and medications; "
             f"got disallowed modules: {sorted(disallowed)}"
         )
     return selected
@@ -1376,6 +1448,28 @@ def _validate_publication_only_database_semantics(
     }
 
 
+def _reused_modules_for_semantic_audit(
+    *,
+    current_modules: Sequence[str],
+    cumulative_modules: Sequence[str],
+    repairing_finalized_candidate: bool,
+) -> tuple[str, ...]:
+    """Return modules that can still be compared with the sealed source.
+
+    A fresh candidate inherits earlier changes from its immediate sealed
+    source, so only the current refresh scope must be excluded. During
+    ``--repair-finalized``, the source remains the older release while the
+    candidate already contains every earlier unsealed refresh. Exclude the
+    cumulative scope then so valid earlier v6 changes are not judged against
+    v5 as publication-only mutations.
+    """
+
+    excluded = set(
+        cumulative_modules if repairing_finalized_candidate else current_modules
+    )
+    return tuple(module for module in MODULES if module not in excluded)
+
+
 def _module_files_are_detached_from_source(
     source_database_root: Path,
     candidate_database_root: Path,
@@ -1867,6 +1961,7 @@ def refresh_candidate(
     data_paths = _resolve_data_paths(
         source_run_manifest, data_path_overrides, selected_databases
     )
+    storage_layout_receipts = _storage_layout_receipts(data_paths)
     source_run_manifest_sha256 = REPUBLICATION._sha256_file(
         source / "run_manifest.json"
     )
@@ -2028,6 +2123,7 @@ def refresh_candidate(
                     resource_policy_override_reason
                 ),
                 "resource_plan": execution_resource_plan,
+                "raw_storage_layout_receipts": storage_layout_receipts,
                 "runtime": refreshed[database],
                 "output_receipts": output_receipts,
                 "formal_release_admissible": False,
@@ -2281,10 +2377,10 @@ def refresh_candidate(
         }
         reused_module_semantic_audit = {}
         for database in selected_databases:
-            reused_modules = tuple(
-                module
-                for module in MODULES
-                if module not in selected_by_database[database]
+            reused_modules = _reused_modules_for_semantic_audit(
+                current_modules=selected_by_database[database],
+                cumulative_modules=per_database_refreshed_modules[database],
+                repairing_finalized_candidate=prior_provenance is not None,
             )
             if reused_modules:
                 reused_module_semantic_audit[database] = (
@@ -2339,6 +2435,7 @@ def refresh_candidate(
                 else "database_subset_across_lineage"
             ),
             "raw_data_paths": combined_data_paths,
+            "latest_raw_storage_layout_receipts": storage_layout_receipts,
             "resource_policy": {
                 "owner": "easyicu.api.extraction.plan_module_extraction_resources",
                 "memory_budget_mb": float(resource_budget_mb),
@@ -2465,7 +2562,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help=(
             "Raw-derived module to refresh (demographics, outcome, renal, "
             "respiratory, sofa1_score/sofa2_score, chemistry, blood_gas or "
-            "vasopressors); repeatable."
+            "vasopressors or medications); repeatable."
         ),
     )
     parser.add_argument(

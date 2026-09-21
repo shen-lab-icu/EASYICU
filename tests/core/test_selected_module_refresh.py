@@ -28,10 +28,12 @@ def test_selected_module_refresh_is_limited_to_correctness_modules() -> None:
     assert refresher._validate_modules(["respiratory"]) == ("respiratory",)
     assert refresher._validate_modules(["sofa1_score"]) == ("sofa1_score",)
     assert refresher._validate_modules(["sofa2_score"]) == ("sofa2_score",)
-    # 2026-09-18 v6 additive: directly changed chemistry/blood_gas/vasopressors.
+    # v6 additive: directly changed chemistry/blood_gas/vasopressors and the
+    # medications WinTbl endpoint rule.
     assert refresher._validate_modules(["chemistry"]) == ("chemistry",)
     assert refresher._validate_modules(["blood_gas"]) == ("blood_gas",)
     assert refresher._validate_modules(["vasopressors"]) == ("vasopressors",)
+    assert refresher._validate_modules(["medications"]) == ("medications",)
     assert refresher._validate_modules(["renal", "respiratory"]) == (
         "renal",
         "respiratory",
@@ -97,6 +99,9 @@ def test_respiratory_refresh_expands_to_score_and_sepsis_dependencies() -> None:
         "sepsis3_sofa1",
         "sepsis3_sofa2",
     }
+    assert refresher._expand_module_dependency_closure(["medications"]) == (
+        "medications",
+    )
 
 
 def test_release_plan_is_database_by_module_under_fixed_8gib_contract() -> None:
@@ -129,17 +134,15 @@ def test_release_plan_is_database_by_module_under_fixed_8gib_contract() -> None:
     assert modules["respiratory"]["planned_batches"] == 5
     assert modules["sofa1_score"]["batch_size"] == 67_000
     assert modules["sofa2_score"]["reason_code"] == (
-        "invalidated_profile_memory_guard"
+        "measured_profile_fastest_safe_batch"
     )
     assert modules["sepsis3_sofa1"]["batch_size"] == 67_000
     assert modules["sepsis3_sofa2"]["reason_code"] == (
-        "invalidated_profile_memory_guard"
+        "measured_profile_fastest_safe_batch"
     )
-    assert modules["sofa2_score"]["measured_peak_rss_mb"] is None
-    assert plan["formal_release_admissible"] is False
-    assert plan["unmeasured_or_overridden_modules"] == {
-        "eicu": ["sofa2_score", "sepsis3_sofa2"]
-    }
+    assert modules["sofa2_score"]["measured_peak_rss_mb"] == pytest.approx(3_519.7)
+    assert plan["formal_release_admissible"] is True
+    assert plan["unmeasured_or_overridden_modules"] == {}
 
 
 def test_release_cli_blocks_unreviewed_fixed_batch_override() -> None:
@@ -303,10 +306,8 @@ def test_demographics_and_outcome_plan_excludes_unaffected_modules() -> None:
         "mimic": ("demographics", "outcome"),
         "miiv": ("demographics", "outcome"),
     }
-    assert plan["unmeasured_or_overridden_modules"] == {
-        "hirid": ["demographics"]
-    }
-    assert plan["formal_release_admissible"] is False
+    assert plan["unmeasured_or_overridden_modules"] == {}
+    assert plan["formal_release_admissible"] is True
 
 
 def test_per_database_release_plan_uses_each_database_closure() -> None:
@@ -337,10 +338,8 @@ def test_per_database_release_plan_uses_each_database_closure() -> None:
         "sepsis3_sofa1",
         "sepsis3_sofa2",
     }
-    assert plan["formal_release_admissible"] is False
-    assert plan["unmeasured_or_overridden_modules"] == {
-        "eicu": ["sofa2_score", "sepsis3_sofa2"]
-    }
+    assert plan["formal_release_admissible"] is True
+    assert plan["unmeasured_or_overridden_modules"] == {}
 
 
 def test_measured_miiv_score_plan_is_formally_admissible() -> None:
@@ -358,6 +357,92 @@ def test_measured_miiv_score_plan_is_formally_admissible() -> None:
         memory_budget_mb=8 * 1024,
     )
 
+    assert plan["formal_release_admissible"] is True
+    assert plan["unmeasured_or_overridden_modules"] == {}
+    assert plan["databases"]["miiv"]["modules"]["sofa2_score"][
+        "batch_size"
+    ] == 30_000
+
+
+def test_measured_miiv_v6_refresh_closure_is_formally_admissible() -> None:
+    refresher = _load_refresher()
+    manifest = {
+        "sources": {
+            "miiv": {"module_metrics": {"outcome": {"rows": 94_458}}}
+        }
+    }
+
+    plan = refresher._build_refresh_resource_plan(
+        manifest,
+        requested_modules=(
+            "demographics", "chemistry", "blood_gas", "vasopressors",
+            "medications",
+        ),
+        databases=("miiv",),
+        memory_budget_mb=8 * 1024,
+    )
+
+    modules = plan["databases"]["miiv"]["modules"]
+    assert modules["renal"]["batch_size"] == 20_000
+    assert modules["renal"]["planned_batches"] == 5
+    assert modules["renal"]["reason_code"] == (
+        "measured_profile_fastest_safe_batch"
+    )
+    assert plan["formal_release_admissible"] is True
+    assert plan["unmeasured_or_overridden_modules"] == {}
+
+
+def test_measured_mimic_score_plan_is_formally_admissible() -> None:
+    refresher = _load_refresher()
+    manifest = {
+        "sources": {
+            "mimic": {"module_metrics": {"outcome": {"rows": 61_532}}}
+        }
+    }
+
+    plan = refresher._build_refresh_resource_plan(
+        manifest,
+        requested_modules=("sofa1_score", "sofa2_score"),
+        databases=("mimic",),
+        memory_budget_mb=8 * 1024,
+    )
+
+    modules = plan["databases"]["mimic"]["modules"]
+    assert set(modules) == {
+        "sofa1_score", "sofa2_score", "sepsis3_sofa1", "sepsis3_sofa2",
+    }
+    assert all(record["batch_size"] == 20_000 for record in modules.values())
+    assert plan["formal_release_admissible"] is True
+    assert plan["unmeasured_or_overridden_modules"] == {}
+
+
+def test_measured_sic_v6_refresh_plan_is_formally_admissible() -> None:
+    refresher = _load_refresher()
+    manifest = {
+        "sources": {
+            "sic": {"module_metrics": {"outcome": {"rows": 27_386}}}
+        }
+    }
+
+    plan = refresher._build_refresh_resource_plan(
+        manifest,
+        requested_modules=(
+            "demographics", "chemistry", "blood_gas", "vasopressors",
+            "medications",
+        ),
+        databases=("sic",),
+        memory_budget_mb=8 * 1024,
+    )
+
+    assert set(plan["databases"]["sic"]["modules"]) == {
+        "demographics", "blood_gas", "chemistry", "respiratory",
+        "vasopressors", "medications", "renal", "sofa1_score",
+        "sofa2_score", "sepsis3_sofa1", "sepsis3_sofa2",
+    }
+    assert all(
+        record["batch_size"] == 16_000
+        for record in plan["databases"]["sic"]["modules"].values()
+    )
     assert plan["formal_release_admissible"] is True
     assert plan["unmeasured_or_overridden_modules"] == {}
 
@@ -433,6 +518,37 @@ def test_data_path_resolution_checks_only_selected_databases(tmp_path: Path) -> 
     assert refresher._resolve_data_paths(
         manifest, {}, ("eicu", "mimic")
     ) == {"eicu": str(eicu.resolve()), "mimic": str(mimic.resolve())}
+
+
+def test_storage_layout_receipts_bind_current_source_inventory(tmp_path: Path) -> None:
+    refresher = _load_refresher()
+    raw = tmp_path / "aumc"
+    source = raw / "numericitems"
+    cache = raw / "numericitems_bucket"
+    source.mkdir(parents=True)
+    cache.mkdir()
+    shard = source / "1.parquet"
+    shard.write_bytes(b"source")
+    stat = shard.stat()
+    receipt = {
+        "schema": refresher.BUCKET_CACHE_RECEIPT_SCHEMA,
+        "source": str(source.resolve()),
+        "source_inventory": [
+            {"path": shard.name, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+        ],
+    }
+    receipt_path = cache / "_BUCKET_BUILD_RECEIPT.json"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    (cache / "_COMPLETE").write_text("complete\n", encoding="utf-8")
+
+    result = refresher._storage_layout_receipts({"aumc": str(raw)})
+
+    assert result["aumc"][0]["receipt"] == receipt
+    assert result["aumc"][0]["receipt_sha256"]
+
+    shard.write_bytes(b"changed")
+    with pytest.raises(refresher.ModuleRefreshError, match="inventory changed"):
+        refresher._storage_layout_receipts({"aumc": str(raw)})
 
 
 def test_database_subset_resume_is_refused_without_transaction_receipt(
@@ -813,6 +929,26 @@ def test_publication_only_semantic_audit_ignores_order_but_detects_values(
         refresher._validate_publication_only_database_semantics(
             source, candidate, modules=("respiratory",)
         )
+
+
+def test_finalized_repair_audits_only_modules_unchanged_across_lineage() -> None:
+    refresher = _load_refresher()
+
+    fresh = refresher._reused_modules_for_semantic_audit(
+        current_modules=("outcome",),
+        cumulative_modules=("blood_gas", "outcome"),
+        repairing_finalized_candidate=False,
+    )
+    repair = refresher._reused_modules_for_semantic_audit(
+        current_modules=("outcome",),
+        cumulative_modules=("blood_gas", "outcome"),
+        repairing_finalized_candidate=True,
+    )
+
+    assert "blood_gas" in fresh
+    assert "blood_gas" not in repair
+    assert "outcome" not in fresh
+    assert "outcome" not in repair
 
 
 def test_publication_only_semantic_audit_accepts_only_declared_null_extensions(

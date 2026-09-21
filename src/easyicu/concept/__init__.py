@@ -228,6 +228,42 @@ def _mimic_episode_upper_by_stay(
     return keyed.groupby("stay", sort=False)["upper"].max()
 
 
+def _eicu_episode_upper_by_stay(
+    bounds: pd.DataFrame,
+    *,
+    stay_column: str,
+    post_discharge_hours: float,
+    fallback_hours: float,
+) -> pd.Series:
+    """Return each eICU stay's last plausible ICU-relative event hour.
+
+    ``bounds`` carries ``unitdischargeoffset`` minutes from the ``patient``
+    table (0 is unit admission). Preference mirrors the native-v2 publisher
+    (``outcome.los_icu`` first, 366-day sanity fallback last) so producer
+    staging and publication agree on the window.
+    """
+
+    stays = pd.to_numeric(bounds[stay_column], errors="coerce")
+    discharge_min = pd.to_numeric(
+        bounds["unitdischargeoffset"], errors="coerce"
+    )
+    valid_stay = stays.notna()
+    upper = pd.Series(np.nan, index=bounds.index, dtype="float64")
+    valid_discharge = (
+        valid_stay & discharge_min.notna() & (discharge_min >= 0)
+    )
+    upper = upper.where(
+        ~valid_discharge,
+        discharge_min / 60.0 + float(post_discharge_hours),
+    )
+    upper = upper.fillna(float(fallback_hours))
+    keyed = pd.DataFrame(
+        {"stay": stays.loc[valid_stay].astype(np.int64),
+         "upper": upper.loc[valid_stay]}
+    )
+    return keyed.groupby("stay", sort=False)["upper"].max()
+
+
 def _quarantine_rows_outside_icu_episode(
     frame: pd.DataFrame,
     *,
@@ -5896,6 +5932,97 @@ class ConceptResolver:
                 if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
                     data[col] = minutes_to_hours_series(data[col])
             _normalize_duration_to_hours(data)
+            # 2026-09-19 v6: eICU producer-layer ICU-episode bound (MIMIC
+            # bcb5032f / AUMC precedent). Raw eICU offsets carry corrupt
+            # far-out values (e.g. lab labresultoffset -52,578,464 min for
+            # stays 2385766/1699503 -> -876,308 h after /60); unclipped
+            # hourly SOFA fill_gaps then spans ~1.75M rows/stay and trips
+            # the sep3 replay bound (DerivationContextError). The native-v2
+            # publisher enforces the same [-24h, los_icu+24h] window, so
+            # pre-clipped staging stays publication-identical. Phenotype
+            # lookbacks (e.g. kdigo 168h) arrive via pre_admission_hours
+            # and are honoured. Vectorized map/filter only.
+            if index_column and index_column in data.columns:
+                from ..utils.time_units import (
+                    ICU_TIME_FALLBACK_LIMIT_HOURS,
+                    ICU_TIME_POST_DISCHARGE_HOURS,
+                    ICU_TIME_PRE_ADMISSION_HOURS,
+                )
+
+                allowed_pre_hours = (
+                    float(pre_admission_hours)
+                    if pre_admission_hours is not None
+                    else float(ICU_TIME_PRE_ADMISSION_HOURS)
+                )
+                if not np.isfinite(allowed_pre_hours) or allowed_pre_hours < 0:
+                    raise ValueError(
+                        "pre_admission_hours must be a finite non-negative number"
+                    )
+                stay_col = next(
+                    (col for col in id_columns if col in data.columns),
+                    None,
+                )
+                if stay_col is None and "patientunitstayid" in data.columns:
+                    stay_col = "patientunitstayid"
+                if stay_col is not None:
+                    try:
+                        cache = getattr(self, "_eicu_patient_cache", None)
+                        if (
+                            cache is None
+                            or stay_col not in cache.columns
+                            or "unitdischargeoffset" not in cache.columns
+                        ):
+                            patient_table = data_source.load_table(
+                                "patient",
+                                columns=[stay_col, "unitdischargeoffset"],
+                                verbose=False,
+                            )
+                            cache_df = (
+                                patient_table.data
+                                if hasattr(patient_table, "data")
+                                else patient_table
+                            )
+                            cache_df = cache_df[
+                                [stay_col, "unitdischargeoffset"]
+                            ].drop_duplicates(
+                                subset=[stay_col], keep="last"
+                            ).copy()
+                            self._eicu_patient_cache = cache_df
+                            cache = cache_df
+                        upper_by_stay = _eicu_episode_upper_by_stay(
+                            cache,
+                            stay_column=stay_col,
+                            post_discharge_hours=float(
+                                ICU_TIME_POST_DISCHARGE_HOURS
+                            ),
+                            fallback_hours=float(
+                                ICU_TIME_FALLBACK_LIMIT_HOURS
+                            ),
+                        )
+                        event_hours = pd.to_numeric(
+                            data[index_column], errors="coerce"
+                        )
+                        event_hours.index = data.index
+                        stay_keys = pd.to_numeric(
+                            data[stay_col], errors="coerce"
+                        ).astype("Int64")
+                        upper_hours = stay_keys.map(upper_by_stay).fillna(
+                            float(ICU_TIME_FALLBACK_LIMIT_HOURS)
+                        )
+                        upper_hours.index = data.index
+                        data = _quarantine_rows_outside_icu_episode(
+                            data,
+                            event_hours=event_hours,
+                            upper_hours=upper_hours,
+                            allowed_pre_hours=allowed_pre_hours,
+                            db_label="eICU",
+                        )
+                    except ValueError:
+                        raise
+                    except Exception:
+                        # Cache warmup failed; leave the frame untouched
+                        # rather than returning unaligned times.
+                        pass
             return data
 
         if db_name == 'aumc':
@@ -6154,20 +6281,78 @@ class ConceptResolver:
             if index_column and index_column in data.columns:
                 from ..utils.time_units import (
                     ICU_TIME_FALLBACK_LIMIT_HOURS,
+                    ICU_TIME_POST_DISCHARGE_HOURS,
+                    ICU_TIME_PRE_ADMISSION_HOURS,
                 )
 
                 event_hours = pd.to_numeric(
                     data[index_column], errors="coerce"
                 )
+                primary_id = next(
+                    (column for column in id_columns if column in data.columns),
+                    None,
+                )
+                if primary_id is None:
+                    raise ValueError(
+                        "SICdb episode-bound validation requires a CaseID column"
+                    )
+                if {"ICUOffset", "TimeOfStay"}.issubset(data.columns):
+                    bounds = data[[primary_id, "ICUOffset", "TimeOfStay"]].copy()
+                else:
+                    try:
+                        cases = data_source.load_table(
+                            "cases",
+                            columns=[primary_id, "ICUOffset", "TimeOfStay"],
+                            verbose=False,
+                        )
+                        cases_df = cases.data if hasattr(cases, "data") else cases
+                        bounds = cases_df[
+                            [primary_id, "ICUOffset", "TimeOfStay"]
+                        ].copy()
+                    except Exception as exc:
+                        raise ValueError(
+                            "SICdb episode-bound validation requires "
+                            "cases.ICUOffset and cases.TimeOfStay"
+                        ) from exc
+                if bounds.duplicated(subset=[primary_id], keep=False).any():
+                    conflicting = bounds.drop_duplicates().duplicated(
+                        subset=[primary_id], keep=False
+                    )
+                    if conflicting.any():
+                        raise ValueError(
+                            "SICdb cases contains conflicting ICU episode bounds"
+                        )
+                bounds = bounds.drop_duplicates(subset=[primary_id], keep="last")
+                upper = (
+                    pd.to_numeric(bounds["TimeOfStay"], errors="coerce")
+                    - pd.to_numeric(bounds["ICUOffset"], errors="coerce")
+                ) / 3600.0 + float(ICU_TIME_POST_DISCHARGE_HOURS)
+                upper_by_id = pd.Series(
+                    upper.to_numpy(), index=bounds[primary_id]
+                )
+                upper_hours = data[primary_id].map(upper_by_id).fillna(
+                    ICU_TIME_FALLBACK_LIMIT_HOURS
+                )
+                allowed_pre_hours = (
+                    float(pre_admission_hours)
+                    if pre_admission_hours is not None
+                    else float(ICU_TIME_PRE_ADMISSION_HOURS)
+                )
+                if not np.isfinite(allowed_pre_hours) or allowed_pre_hours < 0:
+                    raise ValueError(
+                        "pre_admission_hours must be a finite non-negative number"
+                    )
                 invalid_time = event_hours.notna() & (
-                    event_hours.abs() > ICU_TIME_FALLBACK_LIMIT_HOURS
+                    (event_hours < -allowed_pre_hours)
+                    | (event_hours > upper_hours)
                 )
                 excluded = int(invalid_time.sum())
                 if excluded:
                     logger.warning(
-                        "dropping %d SIC row(s) outside the 366-day "
-                        "source-time sanity bound",
+                        "dropping %d SIC row(s) outside the ICU episode "
+                        "(%gh pre-ICU history; 24h post-discharge allowance)",
                         excluded,
+                        allowed_pre_hours,
                     )
                     data = data.loc[~invalid_time].copy()
             return data
@@ -6183,16 +6368,45 @@ class ConceptResolver:
             if data.empty or not index_column or index_column not in data.columns:
                 return data
 
+            def _quarantine_hirid_time(frame: pd.DataFrame) -> pd.DataFrame:
+                from ..utils.time_units import (
+                    ICU_TIME_FALLBACK_LIMIT_HOURS,
+                    ICU_TIME_PRE_ADMISSION_HOURS,
+                )
+
+                event_hours = pd.to_numeric(frame[index_column], errors="coerce")
+                allowed_pre_hours = (
+                    float(pre_admission_hours)
+                    if pre_admission_hours is not None
+                    else float(ICU_TIME_PRE_ADMISSION_HOURS)
+                )
+                if not np.isfinite(allowed_pre_hours) or allowed_pre_hours < 0:
+                    raise ValueError(
+                        "pre_admission_hours must be a finite non-negative number"
+                    )
+                invalid_time = event_hours.notna() & (
+                    (event_hours < -allowed_pre_hours)
+                    | (event_hours > ICU_TIME_FALLBACK_LIMIT_HOURS)
+                )
+                excluded = int(invalid_time.sum())
+                if excluded:
+                    logger.warning(
+                        "dropping %d HiRID row(s) outside the declared pre-ICU "
+                        "window or 366-day source-time sanity bound",
+                        excluded,
+                    )
+                return frame.loc[~invalid_time].copy()
+
             if pd.api.types.is_timedelta64_dtype(data[index_column]):
                 data[index_column] = (
                     data[index_column].dt.total_seconds() / 3600.0
                 )
                 _normalize_duration_to_hours(data)
-                return data
+                return _quarantine_hirid_time(data)
 
             if pd.api.types.is_numeric_dtype(data[index_column]):
                 _normalize_duration_to_hours(data)
-                return data
+                return _quarantine_hirid_time(data)
 
             primary_id = next(
                 (column for column in id_columns if column in data.columns),
@@ -6272,7 +6486,7 @@ class ConceptResolver:
             if index_column != origin_col:
                 frame = frame.drop(columns=[origin_col])
             _normalize_duration_to_hours(frame)
-            return frame
+            return _quarantine_hirid_time(frame)
         
         # Early return checks (no verbose output for performance)
         if data.empty or not index_column or index_column not in data.columns:
@@ -6284,6 +6498,15 @@ class ConceptResolver:
         
         primary_id = id_columns[0]
         if primary_id not in data.columns:
+            return data
+
+        # Identity-level concepts (for example MIMIC-IV admission weight)
+        # use their identifier as ``index_column`` because ``id_tbl`` has no
+        # clinical time axis.  Treating that numeric identifier as relative
+        # hours makes the ICU-episode quarantine drop every row (for example,
+        # a large stay identifier looks like an event millions of hours after ICU
+        # admission).  There is no timestamp to align or bound on this path.
+        if index_column in id_columns:
             return data
         
         # 🔧 FIX: 确定数据库特定的 stay-level ID 列名
@@ -8723,9 +8946,9 @@ class ConceptResolver:
 
                     # 扩展窗口到时间序列 (vectorized; replaces an iterrows loop that
                     # ran ~270x slower on a 100k-row WinTbl).
-                    # 🔧 FIX 2026-03-13 semantics preserved by end_mode="floored_clamped":
-                    #   start_floored = floor(start / iv) * iv
-                    #   end           = max(floor((start_floored + dur) / iv) * iv, 0)
+                    # Match the recursive resolver path and R ricu: compute
+                    # the final endpoint from raw start + duration, then place
+                    # the window on the requested grid.
                     # 🔧 FIX 2026-03-13 also preserved: only ``concept_name`` is copied as
                     # the value column; extra WinTbl columns (stop, doseunit, …) are
                     # dropped here so value_column detection downstream is unambiguous.
@@ -8737,8 +8960,8 @@ class ConceptResolver:
                         id_cols=list(id_cols),
                         value_columns=[concept_name] if concept_name in result.data.columns else [],
                         interval_hours=interval_hours,
-                        end_mode="floored_clamped",
-                        duration_zero_single=False,
+                        end_mode="raw",
+                        duration_zero_single=True,
                     )
                     
 

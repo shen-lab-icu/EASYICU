@@ -1,0 +1,209 @@
+# Full6 v6 clean rebuild runbook (2026-09-20)
+
+## Decision
+
+Do not patch or resume
+`full6_native_v6_dictfix_aumc_miiv_fe382262_20260918`. It mixes extraction
+commits, lacks final provenance, and contains the confirmed MIMIC-IV urine
+staging failure. Keep it as diagnostic evidence.
+
+Build the replacement from the sealed v5 release using one clean EasyICU
+checkout that contains all of the following:
+
+- coherent SOFA-1 total and rolled-component publication (`147f52d3`);
+- longitudinal `rrt_criteria` handling (`abae4d1b`);
+- MIMIC identity-table/time-axis correction and renal null-output sealer gate
+  (`a3191f74`).
+
+The raw-derived refresh request for every database is:
+
+- `demographics`;
+- `chemistry`;
+- `blood_gas`;
+- `vasopressors`;
+- `medications` (the two WinTbl resolver routes now share the audited raw-start
+  endpoint rule; this directly affects the numeric `dex` window concept).
+
+The audited dependency expansion adds `respiratory`, `renal`, `sofa1_score`,
+`sofa2_score`, `sepsis3_sofa1`, and `sepsis3_sofa2`. The other eight modules
+must be republished from v5 without a logical table-content change.
+
+## Resource evidence required before the formal run
+
+The read-only 8-GiB plan and all required database/module measurements have
+completed. The registered plan is formally admissible; rerun the complete
+six-database plan after this registration and require an empty
+`unmeasured_or_overridden_modules` map before launching the formal candidate.
+
+All six databases now have measured plans for the complete closure. The
+commands below remain as reproducibility records.
+
+The first complete eICU benchmark at commit `46c71e0a` identified a pandas
+per-patient assignment bottleneck in urine-window assessment. Its resource
+receipt is diagnostic only because the implementation was subsequently
+optimized. The clean `51d88010` rerun completed at 1,799.4 seconds with a
+3,519.7-MiB peak, and its output hashes exactly matched the earlier run. The
+25,000-stay profile is now registered. See
+`v6_eicu_sofa2_performance_profile_20260920.md`.
+
+The formal v6 attempt exposed one stale eICU renal one-shot profile: the
+current KDIGO/episode-bound implementation exceeded the 8,192-MiB contract
+when all 200,859 stays were admitted at once. The replacement benchmark at
+commit `589d2e85` completed five isolated 50,000-stay partitions with deferred
+merge in 651.8 seconds. Its largest internal batch sample was 6,102.5 MiB and
+the published native table contained 10,117,644 rows. The 50,000-stay profile
+is registered; the older full-cohort profile is no longer admissible.
+
+The clean HiRID benchmark at `4f42b51e` completed the eleven-module refresh
+closure in 4,017.9 seconds. Its largest module peak was 2,371.5 MiB at a fixed
+14,000-stay batch. Both Sepsis-3 outputs remained structural zero-row tables,
+exactly matching the sealed v5 `sepsis_shared` and Sepsis outputs. The current
+HiRID profiles replace the stale renal one-shot measurement because the numeric
+source-time boundary semantics changed in v6.
+
+The clean MIMIC-III benchmark at `e0315e05` completed the four-module score
+closure in 2,345.7 seconds at a fixed 20,000-stay batch. SOFA-1 and SOFA-2
+peaked at 3,325.7 and 3,406.5 MiB, respectively; each Sepsis consumer took
+17.0 seconds and peaked at 2,068.5 MiB. The successful output receipts contain
+7,809,016 SOFA-1 rows, 7,442,649 SOFA-2 rows, 11,275 Sepsis-3/SOFA-1 rows,
+and 12,330 Sepsis-3/SOFA-2 rows.
+
+The formal v6 attempt also invalidated the old MIMIC-III renal one-shot
+profile: the current implementation exceeded 13 GiB. At commit `6ca37694`,
+four isolated 20,000-stay partitions with deferred merge completed in 993.1
+seconds with a 5,287.4-MiB peak. The published 5,559,432-row table matched the
+current one-shot oracle by bidirectional `EXCEPT ALL` (zero rows both ways).
+
+The same audit invalidated the old MIMIC-IV renal one-shot profile, whose
+current process-tree receipt exceeded 14 GiB. At commit `62b025f9`, five
+isolated 20,000-stay partitions with deferred merge completed in 1,291.2
+seconds. The largest internal batch peak was 4,900.5 MiB; all 7,959,217
+published rows had unique `(stay_id, charttime)` keys and stayed inside the
+declared -24-hour pre-ICU / +24-hour post-discharge episode allowance. The old
+7,881,178-row table was produced at `e0621aa1`, before the current episode-bound
+and null-urine corrections, and is retained as historical evidence rather than
+used as a current-code equality oracle.
+
+Measured batch profiles use their recorded size at the 8-GiB baseline. Above
+that baseline, the planner spends only additional available memory, charging
+each added stay the full measured peak-per-stay plus 10% headroom. Thus heavy
+modules grow continuously on 12/16/32/64-GiB environments and become one-shot
+when the conservatively extrapolated full cohort fits; explicit batch choices
+still take precedence.
+
+The clean SICdb benchmark at `12d8595c` completed the eleven-module refresh
+closure in 693.1 seconds at a fixed 16,000-stay batch. The largest observed
+peak was 5,223.0 MiB in SOFA-1; renal peaked at 5,038.3 MiB and SOFA-2 at
+4,765.9 MiB. Both Sepsis outputs remained structural zero-row tables, matching
+the sealed v5 `sepsis_shared` and Sepsis outputs.
+
+```bash
+SOURCE=/home/zhuhb/workspace/phd-thesis/00-data-foundation/easyicu_full6_runs/releases/full6_native_v5_hirid_aki_rate_e0621aa1_20260906
+CANDIDATES=/home/zhuhb/workspace/phd-thesis/00-data-foundation/easyicu_full6_runs/candidates
+
+python scripts/releases/EX-A03_refresh_selected_modules.py \
+  --source-run-root "$SOURCE" \
+  --output-root "$CANDIDATES/benchmark_eicu_v6_rebuild_sofa2_20260920" \
+  --database eicu --module sofa2_score --benchmark-only \
+  --batch-size 25000 --allow-resource-policy-override \
+  --resource-policy-override-reason "Measure current SOFA-2 closure before formal v6 rebuild"
+
+python scripts/releases/EX-A03_refresh_selected_modules.py \
+  --source-run-root "$SOURCE" \
+  --output-root "$CANDIDATES/benchmark_hirid_v6_rebuild_fullclosure_20260920" \
+  --database hirid --module demographics --module chemistry \
+  --module blood_gas --module vasopressors --module medications \
+  --benchmark-only \
+  --batch-size 14000 --allow-resource-policy-override \
+  --resource-policy-override-reason "Measure current HiRID closure before formal v6 rebuild"
+
+python scripts/releases/EX-A03_refresh_selected_modules.py \
+  --source-run-root "$SOURCE" \
+  --output-root "$CANDIDATES/benchmark_mimic_v6_rebuild_scores_20260920" \
+  --database mimic --module sofa1_score --module sofa2_score --benchmark-only \
+  --batch-size 20000 --allow-resource-policy-override \
+  --resource-policy-override-reason "Measure current MIMIC-III score closure before formal v6 rebuild"
+
+python scripts/releases/EX-A03_refresh_selected_modules.py \
+  --source-run-root "$SOURCE" \
+  --output-root "$CANDIDATES/benchmark_sic_v6_rebuild_fullclosure_20260920" \
+  --database sic --module demographics --module chemistry \
+  --module blood_gas --module vasopressors --module medications \
+  --benchmark-only \
+  --batch-size 16000 --allow-resource-policy-override \
+  --resource-policy-override-reason "Measure current SICdb closure before formal v6 rebuild"
+```
+
+Review each `resource_benchmark_provenance.json`, register only successful
+measured profiles in `src/easyicu/api/extraction.py`, and rerun the plan. Do not
+start the formal extraction until `formal_release_admissible` is `true` and
+`unmeasured_or_overridden_modules` is empty.
+
+## Formal replacement candidate
+
+Before the formal AUMC refresh, build the reusable itemid bucket cache once if
+it is absent. The command is memory-bounded and validates row count, schema,
+and a full order-independent row fingerprint before atomically installing the
+cache:
+
+```bash
+python scripts/build_itemid_bucket_cache.py \
+  --data-path /home/zhuhb/workspace/databases/aumc \
+  --table numericitems --key itemid --bucket-count 64 \
+  --memory-limit 2GB --threads 2 --verify-row-hash
+```
+
+The interrupted `full6_native_v6_clean_rebuild_20260920` directory is a
+diagnostic artifact and must not be resumed or sealed. From a clean checkout,
+use a fresh candidate:
+
+```bash
+python scripts/releases/EX-A03_refresh_selected_modules.py \
+  --source-run-root \
+  /home/zhuhb/workspace/phd-thesis/00-data-foundation/easyicu_full6_runs/releases/full6_native_v5_hirid_aki_rate_e0621aa1_20260906 \
+  --output-root \
+  /home/zhuhb/workspace/phd-thesis/00-data-foundation/easyicu_full6_runs/candidates/full6_native_v6_clean_rebuild_20260920_r2 \
+  --module demographics \
+  --module chemistry \
+  --module blood_gas \
+  --module vasopressors \
+  --module medications
+```
+
+The refresh command must produce one `module_refresh_provenance.json`, one
+updated `run_manifest.json`, six native manifests bound to the same clean Git
+commit, and complete receipts for all 114 Parquet files.
+
+## Acceptance before sealing
+
+Require all of the following:
+
+1. MIMIC-IV `uo_6h`, `uo_12h`, `uo_24h`, and `aki_stage_uo_reference` are
+   non-empty and their stay-level coverage is reconciled with v5 and raw urine
+   availability.
+2. SOFA totals equal the six exported rolled components. The retained 50-stay
+   R ricu comparison remains near the audited v6 agreement and no database has
+   an unexplained first-24-hour distribution shift.
+3. Creatinine 15--25 mg/dL and PaO2 20--40 mmHg recoveries trace to raw rows;
+   values outside the accepted bounds have an exclusion receipt.
+4. Vasopressin and phenylephrine tails stay within the declared bounds, and the
+   norepinephrine-equivalent formula sensitivity is retained.
+5. Demographic service categories reflect the corrected dictionary.
+6. The nine inherited modules pass the order-independent logical-content audit;
+   row counts, hashes, manifests, and runtime provenance have no stale v5/v6
+   mixture.
+7. The release sealer, targeted core/governance tests, and downstream foundation
+   status all pass without bypasses.
+
+Seal only after review:
+
+```bash
+python scripts/releases/EX-A01_seal_full6_release.py \
+  --run-root \
+  /home/zhuhb/workspace/phd-thesis/00-data-foundation/easyicu_full6_runs/candidates/full6_native_v6_clean_rebuild_20260920 \
+  --execution-profile portable-low-memory
+```
+
+After sealing, point `00-data-foundation/preprocessing` at the new immutable
+release, rebuild the derived release, and refresh only study outputs whose input
+contracts changed. Never refresh thesis results from an unsealed candidate.

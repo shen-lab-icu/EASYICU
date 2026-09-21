@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from importlib.metadata import version as distribution_version
 from pathlib import Path
 import re
 import subprocess
 
 import yaml
+
+import easyicu
 
 try:
     import tomllib
@@ -28,6 +31,29 @@ def test_pyproject_authors_do_not_use_placeholder_contact() -> None:
     assert all(
         "example.com" not in author.get("email", "") for author in authors
     ), "Project metadata should not publish placeholder email addresses."
+
+
+def test_package_exposes_installed_distribution_version() -> None:
+    assert easyicu.__version__ == distribution_version("easyicu")
+
+
+def test_static_build_metadata_does_not_require_setuptools_scm() -> None:
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert "version" in pyproject["project"]
+    assert all(
+        not requirement.startswith("setuptools-scm")
+        for requirement in pyproject["build-system"]["requires"]
+    )
+
+
+def test_canonical9_plot_uses_the_shared_projects_root() -> None:
+    source = (REPO_ROOT / "tools/plot_canonical9_scorecard.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'default=projects_root()' in source
+    assert "/Users/haibo/easyicu/projects" not in source
 
 
 def test_pyproject_requires_modern_pyarrow_for_export_compatibility() -> None:
@@ -55,10 +81,18 @@ def test_openai_json_schema_transport_has_a_consistent_sdk_floor() -> None:
     ).read_text(encoding="utf-8")
 
 
-def test_pyproject_license_uses_spdx_string() -> None:
+def test_distribution_license_covers_ricu_derived_configuration() -> None:
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
-    assert pyproject["project"]["license"] == "MIT"
+    assert pyproject["project"]["license"] == "GPL-3.0-only"
+    license_files = pyproject["project"]["license-files"]
+    assert "COPYING" in license_files
+    assert "THIRD_PARTY_NOTICES.md" in license_files
+    assert (REPO_ROOT / "COPYING").is_file()
+    notice = (REPO_ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+    assert "eth-mds/ricu" in notice
+    assert "concept-dict.json" in notice
+    assert "data-sources.json" in notice
 
 
 def test_pyproject_dev_extra_includes_build_for_release_contract() -> None:
@@ -450,6 +484,19 @@ def test_readme_image_references_exist() -> None:
     local_refs = [ref for ref in image_refs if not ref.startswith(("http://", "https://"))]
     missing = [ref for ref in local_refs if not (REPO_ROOT / ref).exists()]
     assert not missing, f"README image references are missing: {missing}"
+
+
+def test_full_codebase_audit_links_to_tracked_evidence() -> None:
+    report = REPO_ROOT / "docs/full_codebase_audit_20260915_codex_verification.md"
+    text = report.read_text(encoding="utf-8")
+    evidence_refs = re.findall(
+        r"\]\((evidence/full_codebase_audit_20260915/[^)]+)\)",
+        text,
+    )
+
+    assert len(evidence_refs) == 6
+    missing = [ref for ref in evidence_refs if not (report.parent / ref).is_file()]
+    assert not missing, f"Audit evidence references are missing: {missing}"
 
 
 def test_research_agent_readme_example_scripts_exist() -> None:

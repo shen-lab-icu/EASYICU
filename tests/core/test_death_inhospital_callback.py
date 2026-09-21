@@ -184,6 +184,7 @@ def test_sic_death_loader_requests_authoritative_disposition_column():
                     "OffsetOfDeath": [3600, 3_700_000, None],
                     "HospitalDischargeType": [2028, 2026, 2026],
                     "ICUOffset": [0, 1800, 0],
+                    "TimeOfStay": [90_000, 90_000, 90_000],
                 }
             )
             keep = list(
@@ -222,6 +223,7 @@ def test_sic_death_loader_requests_authoritative_disposition_column():
 
     assert "HospitalDischargeType" in source.requested_columns
     assert "ICUOffset" in source.requested_columns
+    assert "TimeOfStay" in source.requested_columns
     assert result.loc[result["CaseID"] == 1, "death"].eq(True).all()  # noqa: E712
     assert result.loc[result["CaseID"] == 1, "charttime"].eq(1.0).all()
     assert not result.loc[result["CaseID"] == 2, "death"].eq(True).any()  # noqa: E712

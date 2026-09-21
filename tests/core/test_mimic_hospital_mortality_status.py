@@ -97,6 +97,43 @@ def test_default_concept_routes_to_status_owner_and_preserves_untimed_death(
     assert result.data.death_time.iloc[1:].isna().all()
 
 
+@pytest.mark.parametrize(
+    "database,id_column",
+    [("miiv", "stay_id"), ("mimic", "icustay_id")],
+)
+def test_public_merged_load_preserves_death_time_companion(
+    raw, database, id_column
+):
+    from easyicu.concept import ConceptResolver
+    from easyicu.resources import load_dictionary
+
+    stays, admissions = raw
+    config = SimpleNamespace(name=database, class_prefix=[])
+    tables = {
+        "icustays": stays.rename(columns={"stay_id": id_column}),
+        "admissions": admissions,
+    }
+    source = SimpleNamespace(
+        config=config,
+        load_table=lambda name, **kwargs: SimpleNamespace(data=tables[name].copy()),
+        clear_cache=lambda: None,
+    )
+
+    result = ConceptResolver(load_dictionary()).load_concepts(
+        ["death"],
+        source,
+        merge=True,
+        r_compatible=True,
+        verbose=False,
+        concept_workers=1,
+    )
+
+    assert result[id_column].tolist() == [11, 12, 13, 14]
+    assert result.death.tolist() == [True, True, True, False]
+    assert result.death_time.iloc[:2].tolist() == [48.0, 24.0]
+    assert result.death_time.iloc[2:].isna().all()
+
+
 def test_dense_status_cohort_projection_preserves_unknown_and_clock_companion():
     from easyicu.research_agent.cohort.materializer import (
         _binary_event_column,

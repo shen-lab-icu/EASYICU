@@ -5,7 +5,7 @@
 > 面向跨公开 ICU 数据库研究的可复现基础设施：标准化临床概念提取、面向临床用户的 Web 工作流、可编程的 Python API，以及一个**证据绑定研究 Agent**——追踪已覆盖、已注册的数值声明，并把无法核验的声明在稿件边界拦下。
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 [![临床映射状态](https://img.shields.io/badge/clinical%20mappings-mapping--only-yellow.svg)](src/easyicu/data/clinical-contracts.json)
 
@@ -453,7 +453,12 @@ demo = load_demographics(
 
 ## 📄 许可证
 
-本项目采用 **MIT 许可证**，详见 [LICENSE](LICENSE) 文件。
+EasyICU 的临床配置包含由 GPL-3 许可的
+[ricu](https://github.com/eth-mds/ricu) 项目修改而来的材料，因此组合后的
+EasyICU 发行物采用 **GPL-3.0-only**。许可说明见 [LICENSE](LICENSE)，完整条款见
+[COPYING](COPYING)，来源、作者署名及修改说明见
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。EasyICU 原创部分仍保留原始
+MIT 授权，见 [LICENSES/MIT.txt](LICENSES/MIT.txt)。
 
 ---
 

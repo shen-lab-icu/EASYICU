@@ -1,28 +1,12 @@
 {
-  "finalized": false,
-  "finalized_note": "2026-09-15 待重新提取与质控：Dev9 在已发布 v5 之后以 6fd512344 引入共享住院死亡结局绑定，并以 639718e9f 补充 legacy service 的 EYE 外科映射；当前 concept-dict 因此不再等于 v5 运行所绑定的字典。v5 及其 HiRID AKI 修复保留为不可变历史发布，不能用当前字典摘要重新标记旧输出。新的 full6 发布须从当前字典重新生成受影响输出并完成既有封存门禁。",
-  "locked_for_extraction_run": "pending_dev9_foundation_refresh_6fd512344_639718e9f_20260915",
-  "concept_dict_sha256": "ebce6b4e8cfadbbc2a6a6c8e923e64709012a0f14aa4e3284430fa796343edbf",
-  "sofa2_dict_sha256": "b804b56fe4522b067b6ee499b616371e026d1452bc20f8f378c694217ef2f476",
+  "finalized": true,
+  "finalized_note": "2026-09-21 v6 数据基础已完成重建与质控：六库受影响模块均从原始数据刷新，全部 114 个 native-v2 模块由同一 clean runtime 97f508c6 重新发布。MIMIC-III/IV 住院死亡状态逐 stay 与原始 admissions 完全一致，death_time 的缺失性逐行一致，非缺失值仅有 float32 写出误差（最大分别 0.000115/0.000228 小时）。其余字典、临床合同、数据源与运行时修复均由候选包 provenance 和封存门禁绑定。",
+  "locked_for_extraction_run": "full6_native_v6_clean_rebuild_97f508c6_20260921",
+  "concept_dict_sha256": "ab4edb8a79388ccbd902001ad6b733d063042a423d7b6507ad0dd3dd3b04b720",
+  "sofa2_dict_sha256": "c53b7d1c5eda51c9e88727e75eebbd93f579d0a297a5fa6f49b646032dc4faa3",
   "total_concepts": 256,
   "new_this_round": [],
-  "pending_foundation_changes": [
-    {
-      "git_commit": "6fd51234447ddd9fafafc0d34dc7f762c2a529e2",
-      "change": "Bind MIMIC admission mortality to the shared clinical owner."
-    },
-    {
-      "git_commit": "639718e9f4584799bf162d5bb8d0c1aac52f8208",
-      "change": "Map legacy EYE service values to the surgical category."
-    },
-    {
-      "git_commit": "170b58189347c06574efde268e7d36b946febfb6",
-      "change": "Raise crea ceiling 15->25 mg/dL: the ricu-inherited cap silently dropped real severe-AKI peaks before KDIGO aggregation (cross-DB measurement: genuine (15,25] peaks in eICU/SICdb stays; unit-error tails above 25 stay excluded)."
-    },
-    {
-      "change": "v6 pending (uncommitted 2026-09-18): po2 min 40->20 (ee33539 clinically reviewed 20; v5 min exactly 40.0 all DBs proves true hypoxia discarded); adh_rate adds 0-0.15, phn_rate adds 0-15 (ee33539; v5 tails adh 190/phn 475 prove unit errors); norepi_equiv median->sum (additive potency; SOFA cardio uses norepi60 etc, unaffected)."
-    }
-  ],
+  "pending_foundation_changes": [],
   "previous_published_lock": {
     "git_commit": "f40de5266f9182b7a78b51c5d390773992e7c9fe",
     "path": "src/easyicu/data/concept-dict.LOCK.json",
@@ -52,14 +36,20 @@
     "benchmark_peak_rss_mib": 3483.5,
     "renal_rows": 1796864,
     "renal_stays": 33897,
-    "renal_expected_changed_columns": ["aki_reference", "aki_stage_reference", "aki_severe_reference", "aki_stage_uo_reference", "aki_stage_reference_smoothed_6h"],
+    "renal_expected_changed_columns": [
+      "aki_reference",
+      "aki_stage_reference",
+      "aki_severe_reference",
+      "aki_stage_uo_reference",
+      "aki_stage_reference_smoothed_6h"
+    ],
     "unexpected_changed_columns": [],
     "reference_urine_stage_vs_rate_mismatches": 0,
     "benchmark_and_formal_renal_sha256": "48754bbb2a5e7ac4db8d111676534e3bdba452a0e810e7e81238131c5d563772",
     "tests": "2185 passed, 52 skipped, 1 deselected: core plus release governance. One earlier stat-cache regression failure passed isolated and full reruns; retained as a separate intermittent observation, not patched here.",
     "evidence_directory": "00-data-foundation/easyicu_full6_runs/candidates/hirid_rate_fix_273d20df_DRifkq"
   },
-  "claim_limits": "Current foundation is not finalized and cannot be sealed. The v5 checks below apply only to the previous published lock and do not validate current Dev9 resources. Downstream risks/models require new sealed-input runs.",
+  "claim_limits": "This lock authorizes sealing only the named v6 extraction contract. The v5 release remains an immutable historical input. Downstream cohorts, models and thesis numbers must be refreshed from the sealed v6 release before scientific claims are promoted.",
   "historical_own_concepts_not_in_ricu": 131,
   "historical_new_this_round": [
     "crrt_mode_input"
@@ -75,9 +65,16 @@
     "verified": true,
     "method": "load_concepts(merge=True) on the trickiest mixed-time-axis modules (respiratory: vent_start/vent_end intervals + charttime points; medications rate concepts; circulatory) at 150 patients per DB.",
     "result_rows_per_patient": {
-      "miiv_respiratory": 91, "eicu_respiratory": 67, "hirid_respiratory": 59, "mimic_respiratory": 153,
-      "aumc_respiratory": 104, "aumc_medications": 71, "aumc_circulatory": 99,
-      "sic_respiratory": 71, "sic_medications": 19, "sic_circulatory": 68
+      "miiv_respiratory": 91,
+      "eicu_respiratory": 67,
+      "hirid_respiratory": 59,
+      "mimic_respiratory": 153,
+      "aumc_respiratory": 104,
+      "aumc_medications": 71,
+      "aumc_circulatory": 99,
+      "sic_respiratory": 71,
+      "sic_medications": 19,
+      "sic_circulatory": 68
     },
     "conclusion": "19-153 rows/patient = normal ICU time-series density, no Cartesian explosion on any of the 6 databases. Cartesian blow-up is a per-patient property, so this generalises to full cohort scale. merge=True normalises the time axis before joining; the previous OOM came from a hand-written merge on inconsistent time columns (now removed)."
   },
@@ -95,5 +92,30 @@
     "cross_db_distribution_scan": "235 concepts scanned; all our-own >=3x outliers resolved or explained (ferritin/myoglobin = true assay-selection difference, ng/mL==ug/L identity)",
     "vent_mode": "new harmonised mode concepts (MIMIC-IV/III/AUMC/HiRID); driving_pres_controlled = mode-conditioned driving pressure",
     "final_data_distribution_check": "PASSED — candidate full6_native_v3_aki_ref_native_d34ca8a5_20260901 contains 6 x 19 readable native-v2 modules. Reference AKI stage is materialized in all six databases; source-native stage is materialized for MIMIC-III/MIMIC-IV, while AUMC/SIC future-looking case endpoints are not embedded in hourly exports, eICU remains components-only, and HiRID fails closed without the required auxiliary source. MIMIC-IV reference/native differences are consistent with the intentional broad-active-RRT versus official-CRRT distinction."
-  }
+  },
+  "clinical_contracts_sha256": "9b2cb43b86a3763b32be9ab010308177d3f8b1c03da0318fd88a7af946533647",
+  "clinical_contract_validator_sha256": "a41bddae25be29f6f40150241ae29f985288243a3c09f3ded5951c4dcda63cb7",
+  "data_sources_sha256": "167bf0d6cbe01aa5a0c23b95bc5cae87c9904b6cff3c9943660fd688eccf9f0c",
+  "finalized_foundation_changes": [
+    {
+      "git_commit": "6fd51234447ddd9fafafc0d34dc7f762c2a529e2",
+      "change": "Bind MIMIC admission mortality to the shared clinical owner."
+    },
+    {
+      "git_commit": "639718e9f4584799bf162d5bb8d0c1aac52f8208",
+      "change": "Map legacy EYE service values to the surgical category."
+    },
+    {
+      "git_commit": "170b58189347c06574efde268e7d36b946febfb6",
+      "change": "Raise the creatinine ceiling from 15 to 25 mg/dL after cross-database severe-AKI review."
+    },
+    {
+      "git_commit": "7adf0b55",
+      "change": "Use PO2 minimum 20, bounded adrenaline/phenylephrine rates, and additive norepinephrine-equivalent aggregation."
+    },
+    {
+      "git_commit": "97f508c6c94751a596481efafe68b41232e6bf42",
+      "change": "Preserve the owner-issued death_time companion through the public static-concept merge."
+    }
+  ]
 }

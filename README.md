@@ -5,7 +5,7 @@
 > A reproducible infrastructure for cross-database ICU research: standardized concept extraction, clinician-friendly web workflows, scriptable Python APIs, and an **evidence-bound research agent** that traces covered registered claims and holds back claims it cannot verify.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 [![Clinical mappings](https://img.shields.io/badge/clinical%20mappings-mapping--only-yellow.svg)](src/easyicu/data/clinical-contracts.json)
 
@@ -519,7 +519,12 @@ demo = load_demographics(
 
 ## 📄 License
 
-This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.
+The combined EasyICU distribution is licensed under **GPL-3.0-only** because
+its clinical configuration includes modified material from the GPL-3-licensed
+[ricu](https://github.com/eth-mds/ricu) project. See [LICENSE](LICENSE), the
+complete terms in [COPYING](COPYING), and the attribution and change notice in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). EasyICU-authored material
+also retains its original MIT permission in [LICENSES/MIT.txt](LICENSES/MIT.txt).
 
 ---
 

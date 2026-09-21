@@ -1,17 +1,18 @@
 [build-system]
-requires = ["setuptools>=80", "setuptools-scm>=9.2", "wheel"]
+requires = ["setuptools>=80", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "easyicu"
 version = "1.0.0"
-description = "Python toolkit for working with ICU datasets inspired by the R ricu package."
+description = "Python ICU data toolkit with clinical configuration adapted from the R ricu package."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
   { name = "Haibo Zhu and EasyICU contributors" }
 ]
-license = "MIT"
+license = "GPL-3.0-only"
+license-files = ["LICENSE", "COPYING", "LICENSES/MIT.txt", "THIRD_PARTY_NOTICES.md"]
 dependencies = [
   "pandas>=1.5",
   "openpyxl>=3.1",
@@ -133,7 +134,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-easyicu = ["data/*.json", "data/research_know_how/*.json"]
+easyicu = ["data/*.json", "data/*.md", "data/research_know_how/*.json"]
 "easyicu.webserver" = [
   "static/index.html",
   "static/THIRD_PARTY_NOTICES.md",

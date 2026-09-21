@@ -12,12 +12,18 @@ from __future__ import annotations
 
 import sys
 from importlib import import_module
+from importlib.metadata import PackageNotFoundError, version
 from types import ModuleType
 from typing import Any
 
 from ._public_api import ALL_EXPORTS, PUBLIC_NAMES
 
-__all__ = list(PUBLIC_NAMES)
+try:
+    __version__ = version("easyicu")
+except PackageNotFoundError:
+    __version__ = "0+unknown"
+
+__all__ = [*PUBLIC_NAMES, "__version__"]
 
 # Kept as diagnostic state for callers that inspected the old package facade.
 # Failures are recorded only when a lazy attribute is actually requested.

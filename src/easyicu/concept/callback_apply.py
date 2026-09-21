@@ -1820,7 +1820,12 @@ def _apply_callback(
                     mask = unit_series.str.contains(old_unit, case=case_flag, na=False, regex=True)
                 except re.error:
                     mask = unit_series.str.contains(re.escape(old_unit), case=case_flag, na=False, regex=True)
-                # ⚠️ 不匹配空单位行: MIMIC-IV中单位为空时值已经正确
+                # Fahrenheit-only source item IDs remain Fahrenheit even when
+                # their unit cell is blank. DuckDB already applies this rule;
+                # keep the Python fallback semantically identical so 98.6 is
+                # converted instead of later being discarded by the 42 C cap.
+                if symbol == "fahr_to_cels":
+                    mask = mask | unit_series.str.strip().eq("")
             else:
                 # 如果old_unit为None，转换所有行（R ricu行为）
                 mask = pd.Series(True, index=frame.index)
