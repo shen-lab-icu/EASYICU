@@ -1767,7 +1767,8 @@ def _detect_id_col(df: pd.DataFrame, hint: Optional[str] = None) -> Optional[str
     # Priority order for ID columns
     id_candidates = [
         'stay_id', 'icustay_id', 'patientunitstayid', 
-        'admissionid', 'patientid', 'CaseID', 'hadm_id'
+        'admissionid', 'patientid', 'CaseID', 'hadm_id',
+        'INP_NO', 'patient_SN',
     ]
     
     for col in id_candidates:

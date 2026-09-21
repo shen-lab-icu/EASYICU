@@ -24,6 +24,12 @@ def _duckdb_path(p) -> str:
     return str(p).replace('\\', '/')
 
 
+def _duckdb_identifier(value: object) -> str:
+    """Quote an internal DuckDB identifier, including translated source labels."""
+
+    return '"' + str(value).replace('"', '""') + '"'
+
+
 def _duckdb_sql_literal(value: Any) -> str:
     """Return one safely quoted scalar for an internal DuckDB predicate."""
 
@@ -1099,7 +1105,22 @@ class ICUDataSource:
             # 只有当列存在且不是numeric类型时才转换
             # 如果已经是numeric，可能是已经对齐过的小时数
             if column in frame.columns:
-                frame[column] = _coerce_datetime(frame[column])
+                values = frame[column]
+                # Jinhua stores relative minute offsets.  A single blank token
+                # makes Arrow infer some columns (notably orders.endtime_base)
+                # as strings; parsing those strings as calendar datetimes turns
+                # every valid duration into NaT.  Preserve the documented
+                # relative-time axis when all non-blank values are numeric.
+                if self.config.name == "jinhua" and not pd.api.types.is_numeric_dtype(
+                    values
+                ):
+                    stripped = values.astype("string").str.strip()
+                    populated = stripped.notna() & stripped.ne("")
+                    numeric = pd.to_numeric(stripped.mask(~populated), errors="coerce")
+                    if populated.any() and numeric.loc[populated].notna().all():
+                        frame[column] = numeric
+                        continue
+                frame[column] = _coerce_datetime(values)
 
         # 🔧 FIX 2026-01-26: 支持 MIMIC-III 的 icustay_id
         # MIMIC-III 的 id 列是 icustay_id，需要补全
@@ -4677,8 +4698,10 @@ def load_wide_table_aggregated(
             "jinhua": 1.0 / 60.0,
             "zigong": 1.0,
         }[db_name]
+        quoted_time = _duckdb_identifier(time_col)
+        quoted_id = _duckdb_identifier(id_col)
         time_expression = (
-            f"FLOOR(((TRY_CAST(o.{time_col} AS DOUBLE) * {source_scale}) "
+            f"FLOOR(((TRY_CAST(o.{quoted_time} AS DOUBLE) * {source_scale}) "
             f"- a.intime) / {interval_hours}) * {interval_hours}"
         )
         community_where = where_clause.replace(
@@ -4686,7 +4709,8 @@ def load_wide_table_aggregated(
         )
         community_agg_parts = []
         for column in value_columns:
-            numeric_column = f"TRY_CAST(o.{column} AS DOUBLE)"
+            quoted_column = _duckdb_identifier(column)
+            numeric_column = f"TRY_CAST(o.{quoted_column} AS DOUBLE)"
             bounds = (column_bounds or {}).get(column)
             if bounds:
                 lower, upper = bounds
@@ -4698,23 +4722,23 @@ def load_wide_table_aggregated(
                 condition = " AND ".join(conditions)
                 community_agg_parts.append(
                     f"{duckdb_agg}(CASE WHEN {condition} THEN {numeric_column} END) "
-                    f"AS {column}"
+                    f"AS {quoted_column}"
                 )
             else:
                 community_agg_parts.append(
-                    f"{duckdb_agg}({numeric_column}) AS {column}"
+                    f"{duckdb_agg}({numeric_column}) AS {quoted_column}"
                 )
         community_agg_exprs = ", ".join(community_agg_parts)
         _wide_query_tpl = (
             "SELECT\n"
-            f"    o.{id_col} AS {id_col},\n"
+            f"    o.{quoted_id} AS {quoted_id},\n"
             f"    {time_expression} AS charttime,\n"
             f"    {community_agg_exprs}\n"
             "FROM {read_expr} o\n"
             f"JOIN read_parquet('{_duckdb_path(data_source.base_path / 'stays.parquet')}') a "
-            f"ON o.{id_col} = a.{id_col}\n"
+            f"ON o.{quoted_id} = a.{quoted_id}\n"
             f"{community_where}\n"
-            f"GROUP BY o.{id_col}, {time_expression}\n"
+            f"GROUP BY o.{quoted_id}, {time_expression}\n"
         )
     else:
         _wide_query_tpl = (

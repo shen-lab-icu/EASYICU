@@ -1477,6 +1477,103 @@ def _apply_callback(
         frame.loc[:, concept_name] = result
         return frame
 
+    if re.fullmatch(r"transform_fun\(extract_leading_number\)", expr):
+        frame = frame.copy()
+        val_col = (
+            concept_name
+            if concept_name in frame.columns
+            else (source.value_var or "value")
+        )
+        if val_col in frame.columns:
+            extracted = (
+                frame[val_col]
+                .astype("string")
+                .str.extract(r"^\s*(-?\d+(?:\.\d+)?)", expand=False)
+            )
+            frame[val_col] = pd.to_numeric(extracted, errors="coerce")
+        return frame
+
+    if expr in {"community_vent_mode_control", "community_vent_mode_seq"}:
+        frame = frame.copy()
+        val_col = (
+            concept_name
+            if concept_name in frame.columns
+            else (source.value_var or "value")
+        )
+        if val_col not in frame.columns:
+            return frame
+
+        native = (
+            frame[val_col]
+            .astype("string")
+            .str.strip()
+            .str.upper()
+            .str.replace("\\", "/", regex=False)
+            .str.replace("—", "-", regex=False)
+        )
+        high_flow = native.str.contains("高流|HIGH.?FLOW", regex=True, na=False)
+        standby = native.str.contains("STANDBY|STAND BY", regex=True, na=False)
+        if expr.endswith("control"):
+            mapped = pd.Series("unspecified", index=frame.index, dtype="string")
+            mapped.loc[native.str.contains("PRVC|APV|ASV", regex=True, na=False)] = (
+                "dual_adaptive"
+            )
+            mapped.loc[
+                native.str.contains(
+                    r"(?:^|[^A-Z])(?:VC|V/C|VOL|IPPV|VCV)(?:[^A-Z]|$)",
+                    regex=True,
+                    na=False,
+                )
+            ] = "volume"
+            mapped.loc[
+                native.str.contains(
+                    r"(?:^|[^A-Z])(?:PC|P/C|PCV|CPAP|BIPAP|PS|IPAP|S/T)(?:[^A-Z]|$)",
+                    regex=True,
+                    na=False,
+                )
+            ] = "pressure"
+            mapped.loc[standby] = "standby"
+        else:
+            mapped = pd.Series(pd.NA, index=frame.index, dtype="string")
+            mapped.loc[
+                native.str.contains("CMV|IPPV", regex=True, na=False)
+            ] = "controlled"
+            mapped.loc[
+                native.str.fullmatch(r"(PC|PCV|VC|VCV|V/C)", na=False)
+            ] = "controlled"
+            mapped.loc[
+                native.str.contains(
+                    r"A/C|ASSIST|(?:^|[-/])AC(?:$|[-/])", regex=True, na=False
+                )
+            ] = "assisted"
+            mapped.loc[native.str.contains("SIMV", regex=False, na=False)] = "simv"
+            mapped.loc[
+                native.str.contains("BIPAP|S/T|BILEVEL", regex=True, na=False)
+            ] = "simv"
+            mapped.loc[
+                native.str.contains(
+                    r"CPAP|SPONT|(?:^|[-/])PS(?:$|[-/])", regex=True, na=False
+                )
+            ] = "spontaneous"
+            mapped.loc[standby] = "standby"
+        mapped.loc[high_flow | native.isna()] = pd.NA
+        frame[val_col] = mapped
+        return frame
+
+    if expr == "community_jinhua_mech_vent":
+        frame = frame.copy()
+        val_col = (
+            concept_name
+            if concept_name in frame.columns
+            else (source.value_var or "value")
+        )
+        if val_col in frame.columns:
+            labels = frame[val_col].astype("string")
+            frame[val_col] = labels.str.contains(
+                "non-invasive", case=False, regex=False, na=False
+            ).map({True: "noninvasive", False: "invasive"})
+        return frame
+
     match = re.fullmatch(r"transform_fun\(set_val\((.+)\)\)", expr, flags=re.DOTALL)
     if match:
         value = _parse_literal(match.group(1))

@@ -11198,6 +11198,7 @@
       "vital_signs": {"files": "vital_signs.parquet", "defaults": {"id_var": "hadm_id", "index_var": "charttime_base", "val_var": "value", "sub_var": "subcategory_name_en", "unit_var": "subcategory_unit", "time_vars": "charttime_base"}},
       "laboratory_test": {"files": "laboratory_test.parquet", "defaults": {"id_var": "hadm_id", "index_var": "report_time_base", "val_var": "test_results_quantitative", "sub_var": "inspection_subproject_name_en", "time_vars": ["report_time_base", "test_specimen_time_base"]}},
       "medication": {"files": "medication.parquet", "defaults": {"id_var": "hadm_id", "index_var": "starttime_base", "val_var": "drug_name_en", "sub_var": "drug_name_en", "unit_var": "medication_dose_unit", "time_vars": ["starttime_base", "endtime_base"]}},
+      "orders": {"files": "orders.parquet", "defaults": {"id_var": "hadm_id", "index_var": "starttime_base", "val_var": "order_content_en", "sub_var": "order_content_en", "time_vars": ["starttime_base", "endtime_base"]}},
       "diagnosis": {"files": "diagnosis.parquet", "defaults": {"id_var": "hadm_id", "index_var": "diagnosis_time_base", "val_var": "diagnostic_code", "time_vars": "diagnosis_time_base"}},
       "patient_expire_hospital": {"files": "patient_expire_hospital.parquet", "defaults": {"id_var": "hadm_id", "val_var": "expire_flag"}},
       "transfer": {"files": "transfer.parquet", "defaults": {"id_var": "hadm_id", "index_var": "intime_base", "time_vars": ["intime_base", "outtime_base"]}},

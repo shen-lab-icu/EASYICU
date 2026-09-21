@@ -16,6 +16,7 @@ from easyicu.resources import load_dictionary
 VALID_SOURCE_KEYS = {
     "mimic", "mimic_demo", "miiv", "miiv_demo",
     "eicu", "eicu_demo", "aumc", "hirid", "sic", "sic_demo",
+    "nwicu", "zhejiang_eicu", "jinhua", "zigong",
 }
 
 SEVERITY = ["apache_iv", "apache_iv_pred_hosp_mort", "saps3"]

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
@@ -15,7 +17,13 @@ from easyicu.io.community_databases import (
     prepare_community_archives,
 )
 from easyicu.io.data_converter import ConversionStatus, DataConverter
-from easyicu.resources import load_dictionary
+from easyicu.concept import ConceptDictionary
+from easyicu.resources import load_dictionary, package_path
+from easyicu.scores.kdigo_aki import kdigo_creatinine
+
+
+COMMUNITY_DATABASES = {"nwicu", "zhejiang_eicu", "jinhua", "zigong"}
+LEGACY_DATABASES = {"miiv", "mimic", "mimic_demo", "eicu", "eicu_demo", "aumc", "hirid", "sic"}
 
 
 def test_community_concept_overlay_is_loaded_by_default() -> None:
@@ -26,6 +34,71 @@ def test_community_concept_overlay_is_loaded_by_default() -> None:
     assert dictionary["hr"].sources["nwicu"][0].ids == [320045]
     assert dictionary["crea"].sources["zigong"][0].table == "dtlab"
     assert dictionary["death"].sources["jinhua"][0].value_var == "expire_flag"
+
+
+def test_community_overlay_does_not_modify_existing_database_sources() -> None:
+    with package_path("concept-dict.json") as path:
+        base = ConceptDictionary.from_json(path)
+    merged = load_dictionary()
+
+    for concept, definition in base.items():
+        for database in LEGACY_DATABASES & definition.sources.keys():
+            before = [item.__dict__ for item in definition.sources[database]]
+            after = [item.__dict__ for item in merged[concept].sources[database]]
+            assert after == before, f"{concept}/{database} changed by community overlay"
+
+
+def test_community_coverage_audits_every_standard_concept() -> None:
+    with package_path("community-concept-coverage.json") as path:
+        coverage = json.loads(path.read_text(encoding="utf-8"))
+    dictionary = load_dictionary(include_sofa2=True)
+
+    assert coverage["concept_count"] == 274 == len(list(dictionary.keys()))
+    assert set(coverage["concepts"]) == set(dictionary.keys())
+    assert set(coverage["databases"]) == COMMUNITY_DATABASES
+    valid = {"direct", "derived", "partial", "unavailable"}
+    for concept, record in coverage["concepts"].items():
+        assert set(record["databases"]) == COMMUNITY_DATABASES
+        for database, cell in record["databases"].items():
+            assert cell["status"] in valid
+            assert (database in dictionary[concept].sources) == (
+                cell["status"] == "direct"
+            )
+
+    # The published Zigong FIO2 column contains unit tokens, not measurements.
+    assert coverage["concepts"]["fio2"]["databases"]["zigong"]["status"] == "unavailable"
+
+
+def test_generated_community_registry_is_current() -> None:
+    root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        [sys.executable, "tools/build_community_concept_registry.py", "--check"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_every_community_source_uses_a_registered_table() -> None:
+    with package_path("community-concept-sources.json") as path:
+        sources = json.loads(path.read_text(encoding="utf-8"))
+    with package_path("data-sources.json") as path:
+        configurations = json.loads(path.read_text(encoding="utf-8"))
+    tables = {
+        item["name"]: set(item["tables"])
+        for item in configurations
+        if item["name"] in COMMUNITY_DATABASES
+    }
+
+    for concept, definition in sources.items():
+        for database, entries in definition["sources"].items():
+            for entry in entries:
+                table = entry.get("table")
+                assert table is None or table in tables[database], (
+                    f"{concept}/{database} references unregistered table {table!r}"
+                )
 
 
 @pytest.mark.parametrize(
@@ -134,6 +207,8 @@ def test_zigong_stay_index_uses_transfer_bounds(tmp_path: Path) -> None:
     stays = pd.read_parquet(tmp_path / "stays.parquet")
     assert receipt is not None and receipt["stay_count"] == 1
     assert stays.loc[0, "INP_NO"] == 70
+    assert stays.loc[0, "PATIENT_ID"] == 7
+    assert stays.loc[0, "subject_id"] == 7
     assert stays.loc[0, "intime"] == 0.0
     assert stays.loc[0, "outtime"] == 72.0
 
@@ -248,3 +323,145 @@ def test_zigong_wide_table_casts_strings_and_uses_hour_offsets(
     assert result.loc[0, "charttime"] == 1.0
     assert result.loc[0, "hr"] == 88.0
     assert result.loc[0, "temp"] == pytest.approx(37.2)
+
+
+def test_zigong_gcs_components_extract_leading_scores(tmp_path: Path) -> None:
+    pd.DataFrame(
+        {
+            "subject_id": [1],
+            "hadm_id": [70],
+            "stay_id": [70],
+            "PATIENT_ID": [1],
+            "INP_NO": [70],
+            "intime": [0.0],
+            "outtime": [12.0],
+        }
+    ).to_parquet(tmp_path / "stays.parquet", index=False)
+    events = tmp_path / "dtnursingchart"
+    events.mkdir()
+    pd.DataFrame(
+        {
+            "INP_NO": [70],
+            "ChartTime": [2.0],
+            "open_one's_eyes": ["3→呼唤睁眼"],
+            "motion": ["6→遵嘱运动"],
+            "language": ["4→语言不正确"],
+            "RASS_sedation_score": ["-2"],
+        }
+    ).to_parquet(events / "part-00000.parquet", index=False)
+    (tmp_path / "community_preparation_manifest.json").write_text(
+        json.dumps({"database": "zigong"}), encoding="utf-8"
+    )
+
+    result = load_concepts(
+        ["egcs", "mgcs", "vgcs", "rass"],
+        patient_ids={"INP_NO": [70]},
+        database="zigong",
+        data_path=tmp_path,
+        interval="1h",
+        parallel_workers=1,
+        concept_workers=1,
+    )
+
+    assert result.loc[0, ["egcs", "mgcs", "vgcs", "rass"]].tolist() == [
+        3.0,
+        6.0,
+        4.0,
+        -2.0,
+    ]
+
+
+def test_zigong_encounter_id_is_accepted_by_kdigo_creatinine() -> None:
+    result = kdigo_creatinine(
+        pd.DataFrame(
+            {
+                "INP_NO": [70, 70],
+                "charttime": [0.0, 24.0],
+                "crea": [1.0, 1.6],
+            }
+        ),
+        time_unit="hours",
+    )
+
+    assert result["INP_NO"].tolist() == [70, 70]
+    assert result.loc[1, "aki_stage_creat"] == 1
+
+
+def test_jinhua_creatinine_is_converted_from_umol_l(tmp_path: Path) -> None:
+    pd.DataFrame(
+        {
+            "subject_id": [1],
+            "hadm_id": ["IP1"],
+            "stay_id": ["IP1"],
+            "intime": [0.0],
+            "outtime": [12.0],
+        }
+    ).to_parquet(tmp_path / "stays.parquet", index=False)
+    events = tmp_path / "laboratory_test"
+    events.mkdir()
+    pd.DataFrame(
+        {
+            "hadm_id": ["IP1"],
+            "report_time_base": [120],
+            "inspection_subproject_name_en": ["Creatinine (Crea) - unknown"],
+            "test_results_quantitative": [88.42],
+        }
+    ).to_parquet(events / "part-00000.parquet", index=False)
+    (tmp_path / "community_preparation_manifest.json").write_text(
+        json.dumps({"database": "jinhua"}), encoding="utf-8"
+    )
+
+    result = load_concepts(
+        "crea",
+        patient_ids={"hadm_id": ["IP1"]},
+        database="jinhua",
+        data_path=tmp_path,
+        interval="1h",
+        parallel_workers=1,
+        concept_workers=1,
+    )
+
+    assert result.loc[0, "crea"] == pytest.approx(1.0, rel=1e-3)
+
+
+def test_jinhua_string_end_offset_preserves_ventilation_duration(
+    tmp_path: Path,
+) -> None:
+    pd.DataFrame(
+        {
+            "subject_id": [1],
+            "hadm_id": ["IP1"],
+            "stay_id": ["IP1"],
+            "intime": [1.0],
+            "outtime": [12.0],
+        }
+    ).to_parquet(tmp_path / "stays.parquet", index=False)
+    events = tmp_path / "orders"
+    events.mkdir()
+    pd.DataFrame(
+        {
+            "hadm_id": ["IP1"],
+            "starttime_base": [120.0],
+            "endtime_base": ["240"],
+            "order_content_en": [
+                "Ventilator mechanical ventilation (invasive)"
+            ],
+        }
+    ).to_parquet(events / "part-00000.parquet", index=False)
+    (tmp_path / "community_preparation_manifest.json").write_text(
+        json.dumps({"database": "jinhua"}), encoding="utf-8"
+    )
+
+    result = load_concepts(
+        "mech_vent",
+        patient_ids={"hadm_id": ["IP1"]},
+        database="jinhua",
+        data_path=tmp_path,
+        interval=None,
+        parallel_workers=1,
+        concept_workers=1,
+    )
+
+    assert len(result) == 1
+    assert result.loc[0, "dur_var"] == pytest.approx(2.0)
+    assert result.loc[0, "mech_vent"] == "invasive"

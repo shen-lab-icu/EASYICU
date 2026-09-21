@@ -184,6 +184,28 @@ def test_urine_window_avg_drops_rows_without_weight():
     assert result["uo_1h"].tolist() == pytest.approx([1.0])
 
 
+def test_urine_window_avg_supports_community_encounter_ids():
+    urine = pd.DataFrame(
+        {
+            "patient_SN": ["P1", "P1"],
+            "charttime": [0.0, 1.0],
+            "urine": [50.0, 100.0],
+        }
+    )
+    weight = pd.DataFrame({"patient_SN": ["P1"], "weight": [50.0]})
+
+    result = _urine_window_avg(
+        urine=urine,
+        weight=weight,
+        window_hours=1,
+        min_hours=1,
+        interval=pd.Timedelta(hours=1),
+    )
+
+    assert result["patient_SN"].tolist() == ["P1", "P1"]
+    assert result["uo_1h"].tolist() == pytest.approx([1.0, 2.0])
+
+
 def test_callback_urine_mlkgph_emits_real_values_not_nan_placeholder():
     """Pre-fix: callback returned NaN and dropped the SOFA-2 feature.
 

@@ -4007,15 +4007,21 @@ def _match_fio2(
     fio2_tbl = tables[fio2_col]
     
     # 🔧 FIX 2025-01-31: 提前检查空数据并返回空结果
-    # 当两个输入表都为空时，没必要继续处理，直接返回空结果
     o2_empty = (not hasattr(o2_tbl, 'data') or o2_tbl.data is None or len(o2_tbl.data) == 0)
-    fio2_empty = (not hasattr(fio2_tbl, 'data') or fio2_tbl.data is None or len(fio2_tbl.data) == 0)
     
-    if o2_empty and fio2_empty:
-        # 两个输入都为空，返回空 DataFrame
-        # 从 ctx.data_source.config 获取默认的 ID 列和时间列
+    if o2_empty:
+        # A ratio cannot be calculated without its numerator.  Return an empty
+        # table with a stable schema before the as-of join; otherwise a
+        # database with FiO2 but no O2 observations raises KeyError because the
+        # empty numerator frame has no physical time column.
         default_id_col = 'stay_id'  # 通用默认值
         default_idx_col = 'charttime'
+        metadata_source = o2_tbl if isinstance(o2_tbl, ICUTable) else fio2_tbl
+        if isinstance(metadata_source, ICUTable):
+            if metadata_source.id_columns:
+                default_id_col = metadata_source.id_columns[0]
+            if metadata_source.index_column:
+                default_idx_col = metadata_source.index_column
         if ctx is not None and hasattr(ctx, 'data_source') and ctx.data_source is not None:
             cfg = ctx.data_source.config
             # 优先使用 icustay 的 ID（如 AUMC 的 admissionid）
@@ -4025,7 +4031,9 @@ def _match_fio2(
                 default_id_col = cfg.stay_id
             if hasattr(cfg, 'index_column'):
                 default_idx_col = cfg.index_column
-        empty_df = pd.DataFrame(columns=[default_id_col, default_idx_col, o2_col, fio2_col])
+        empty_df = pd.DataFrame(
+            columns=[default_id_col, default_idx_col, o2_col, fio2_col]
+        )
         return empty_df, [default_id_col], default_idx_col
     
     # Try automatic ID conversion if IDs don't match and ctx is available

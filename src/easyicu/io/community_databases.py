@@ -259,13 +259,24 @@ def _zigong_stays(data_path: Path) -> tuple[pd.DataFrame, dict[str, Any]]:
     transfers["outtime"] = pd.to_numeric(transfers["StopTime"], errors="coerce")
     transfers = transfers.dropna(subset=["INP_NO"])
     stays = transfers.groupby("INP_NO", as_index=False, dropna=False).agg(
-        subject_id=("PATIENT_ID", "first"),
+        PATIENT_ID=("PATIENT_ID", "first"),
         intime=("intime", "min"),
         outtime=("outtime", "max"),
     )
+    stays["subject_id"] = stays["PATIENT_ID"]
     stays["hadm_id"] = stays["INP_NO"]
     stays["stay_id"] = stays["INP_NO"]
-    stays = stays[["subject_id", "hadm_id", "stay_id", "INP_NO", "intime", "outtime"]]
+    stays = stays[
+        [
+            "subject_id",
+            "hadm_id",
+            "stay_id",
+            "PATIENT_ID",
+            "INP_NO",
+            "intime",
+            "outtime",
+        ]
+    ]
     return stays, {
         "stay_semantics": "one infection-cohort ICU encounter per INP_NO on the source relative-hour axis, bounded by transfer records",
         "limitations": [
