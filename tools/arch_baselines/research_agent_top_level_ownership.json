@@ -61,6 +61,10 @@
       "owner": "shared_contract",
       "reason": "Dependency-neutral literature evidence contract."
     },
+    "method_skills.py": {
+      "owner": "method_skill_registry",
+      "reason": "Reviewed research-workflow and analysis-module catalogue exposed through the Web capability owner."
+    },
     "mcp_policy.py": {
       "owner": "mcp_public_contract",
       "reason": "Transport-independent MCP disclosure and scope policy."

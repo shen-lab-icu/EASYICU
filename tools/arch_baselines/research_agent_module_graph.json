@@ -7612,6 +7612,18 @@
       "easyicu.research_agent.mcp_policy"
     ],
     [
+      "easyicu.research_agent.method_skills",
+      "easyicu.research_agent.planning.analysis_method_suite"
+    ],
+    [
+      "easyicu.research_agent.method_skills",
+      "easyicu.research_agent.planning.capability_registry"
+    ],
+    [
+      "easyicu.research_agent.method_skills",
+      "easyicu.research_agent.planning.method_adapter_catalog"
+    ],
+    [
       "easyicu.research_agent.methods.gam",
       "easyicu.research_agent.canonical_json"
     ],
@@ -11141,6 +11153,10 @@
     ],
     [
       "easyicu.research_agent.reporting.scientific_maturity",
+      "easyicu.research_agent.reporting.result_integrity"
+    ],
+    [
+      "easyicu.research_agent.reporting.scientific_maturity",
       "easyicu.research_agent.reporting.review_disclaimer"
     ],
     [
@@ -12072,11 +12088,11 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3010,
+    "edge_count": 3014,
     "largest_scc_size": 0,
-    "module_count": 722,
+    "module_count": 724,
     "package_count": 32,
-    "top_level_module_count": 36
+    "top_level_module_count": 37
   },
   "modules": {
     "easyicu.research_agent": "__init__.py",
@@ -12500,6 +12516,7 @@
     "easyicu.research_agent.mcp_policy": "mcp_policy.py",
     "easyicu.research_agent.mcp_server": "mcp_server.py",
     "easyicu.research_agent.mcp_transport": "mcp_transport.py",
+    "easyicu.research_agent.method_skills": "method_skills.py",
     "easyicu.research_agent.methods": "methods/__init__.py",
     "easyicu.research_agent.methods.competing_risks": "methods/competing_risks.py",
     "easyicu.research_agent.methods.conformal": "methods/conformal.py",
@@ -12531,6 +12548,7 @@
     "easyicu.research_agent.methods.sensitivity": "methods/sensitivity.py",
     "easyicu.research_agent.methods.shap_attribution": "methods/shap_attribution.py",
     "easyicu.research_agent.methods.source_status": "methods/source_status.py",
+    "easyicu.research_agent.methods.subtype_assignment": "methods/subtype_assignment.py",
     "easyicu.research_agent.methods.survival_inputs": "methods/survival_inputs.py",
     "easyicu.research_agent.methods.table_one": "methods/table_one.py",
     "easyicu.research_agent.methods.target_trial": "methods/target_trial.py",
