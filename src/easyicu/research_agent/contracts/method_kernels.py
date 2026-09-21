@@ -214,6 +214,27 @@ CURATED_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
         ),
     ),
     MethodKernel(
+        module="subtype_assignment",
+        requires=("numpy", "pandas", "sklearn"),
+        entrypoints=(
+            "fit_and_evaluate_early_subtype_assignment",
+            "SubtypeAssignmentEvaluation",
+            "SubtypeAssignmentError",
+        ),
+        capability=(
+            "patient-disjoint multinomial assignment of already frozen trajectory "
+            "subtypes from early clinical features, with training-only imputation "
+            "and scaling plus held-out calibration, confusion, balanced-accuracy, "
+            "macro-F1, log-loss and multiclass-Brier products"
+        ),
+        families=("phenotyping", "trajectory_clustering"),
+        fallback=(
+            "no ad-hoc fallback: fitting on unfrozen labels, mixing patients across "
+            "development and validation, or using post-trajectory features changes "
+            "the scientific question and creates leakage"
+        ),
+    ),
+    MethodKernel(
         module="conformal",
         requires=("numpy",),
         entrypoints=(
@@ -254,6 +275,28 @@ CURATED_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
         fallback=(
             "hand-rolled matching/weighting inside the analysis script, with "
             "SMD balance tables recomputed from scratch"
+        ),
+    ),
+    MethodKernel(
+        module="doubly_robust",
+        requires=("numpy", "scipy", "sklearn"),
+        entrypoints=(
+            "aiptw_ate",
+            "positivity_diagnostics",
+            "AIPTWResult",
+            "DoublyRobustError",
+        ),
+        capability=(
+            "point-treatment doubly robust AIPTW average treatment effect for "
+            "a binary outcome, with influence-function uncertainty and "
+            "fail-closed positivity diagnostics. Its scientific action also "
+            "requires survival_inputs so event-time reconciliation cannot be "
+            "evicted from the bounded Coder resource set"
+        ),
+        families=("causal_inference",),
+        fallback=(
+            "do not claim a doubly robust estimate; retain the prespecified "
+            "primary estimator and report that the AIPTW sensitivity was unavailable"
         ),
     ),
     MethodKernel(
@@ -375,7 +418,6 @@ CURATED_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
         families=("association",),
         fallback="linear exposure term plus a linearity caveat",
     ),
-
     MethodKernel(
         module="gam",
         requires=("numpy", "pandas", "statsmodels"),
@@ -472,20 +514,21 @@ class UnreachableKernel:
     pending_decision: str  # what must be decided; asserted non-empty
 
 
-# Three estimand kernels are parked here, not offered, for a measured
+# Four specialised kernels remain parked here, not offered, for a measured
 # reason -- not as "wire it later" parking.
 #
-# Measured 2026-09-18: offering ``doubly_robust`` / ``gformula`` / ``msm``
+# Measured 2026-09-18: broadly offering ``doubly_robust`` / ``gformula`` / ``msm``
 # fills all three Coder software slots of a causal landmark step
 # (``test_the_causal_landmark_step_is_offered_it_too``) and evicts
 # ``survival_inputs`` -- the event-time reconciliation primitive whose
 # absence caused the h2 ``NaN > 24 became a survivor`` defect. The ranking
 # scores estimand relevance only and has no notion of prerequisite kernels,
 # so any three well-matched estimand kernels will always evict the
-# prerequisite. Un-parking these three requires prerequisite-aware ranking
-# (or reserved prerequisite slots), which is a scheduler design decision,
-# not a wiring task. The kernels stay tested, carded and promotion-granted;
-# only the Coder offer is withheld until that decision lands.
+# prerequisite. ``doubly_robust`` is now exposed only through its exact
+# scientific action, which requires both that kernel and ``survival_inputs``;
+# the scheduler reserves both before relevance ranking. The combined
+# g-formula/MSM action is still scientifically ambiguous, so those kernels
+# remain parked until it is split into exact estimand and diagnostics actions.
 #
 # Its only entry was ``evalue``: a second E-value kernel that agreed with the
 # wired ``sensitivity.compute_e_value`` on RR and HR but disagreed on OR -> RR,
@@ -501,38 +544,27 @@ class UnreachableKernel:
 # ``test_evalue_observed_baseline.py``.
 DECLARED_UNREACHABLE_KERNELS: Tuple[UnreachableKernel, ...] = (
     UnreachableKernel(
-        module="doubly_robust",
-        reason=(
-            "offering it fills the bounded Coder software slots of causal "
-            "landmark steps and evicts the survival_inputs event-time "
-            "reconciliation primitive (measured 2026-09-18; h2 defect "
-            "class). The kernel stays tested, carded and granted."
-        ),
-        pending_decision=(
-            "prerequisite-aware Coder ranking (or reserved prerequisite "
-            "slots) so estimand kernels cannot evict reconciliation kernels"
-        ),
-    ),
-    UnreachableKernel(
         module="gformula",
         reason=(
-            "same slot-eviction collision as doubly_robust (measured "
-            "2026-09-18). The kernel stays tested; no grant filed yet."
+            "the combined g_methods entry does not distinguish a point-treatment "
+            "g-formula from longitudinal g-methods; broad family offering also "
+            "reproduces the measured survival_inputs slot eviction."
         ),
         pending_decision=(
-            "prerequisite-aware Coder ranking (or reserved prerequisite "
-            "slots) so estimand kernels cannot evict reconciliation kernels"
+            "split scientific actions by estimand and bind survival_inputs as "
+            "a host-required prerequisite for the point-treatment action"
         ),
     ),
     UnreachableKernel(
         module="msm",
         reason=(
-            "same slot-eviction collision as doubly_robust (measured "
-            "2026-09-18). The kernel stays tested; no grant filed yet."
+            "the combined g_methods entry does not distinguish MSM weight "
+            "construction from a downstream effect estimator; broad family "
+            "offering reproduces the measured survival_inputs slot eviction."
         ),
         pending_decision=(
-            "prerequisite-aware Coder ranking (or reserved prerequisite "
-            "slots) so estimand kernels cannot evict reconciliation kernels"
+            "register a weight-diagnostics action with exact longitudinal "
+            "inputs and a separate downstream effect owner"
         ),
     ),
     UnreachableKernel(

@@ -50,7 +50,7 @@ const html = activity.renderTimeline(rows, row => {
 });
 
 assert.ok(html.indexOf('data-role="user"') < html.indexOf('data-role="assistant"'));
-assert.ok(html.indexOf('data-role="assistant"') < html.indexOf('gpi-turn-trace'));
+assert.ok(html.indexOf('gpi-turn-trace') < html.indexOf('data-role="assistant"'));
 assert.match(html, /查看执行过程/);
 assert.doesNotMatch(html, /执行明细/);
 
@@ -59,8 +59,9 @@ const grouped = activity.renderTimeline([
   { ...completed, id: 'trace-2', status: 'error' },
   { id: 'assistant-2', role: 'assistant', text: '带诊断的回答' },
 ], row => row.role === 'activity' ? activity.render(row) : `<article>${row.text}</article>`);
-assert.ok(grouped.indexOf('带诊断的回答') < grouped.indexOf('gpi-turn-traces'));
-assert.match(grouped, /查看执行过程 · 2 条记录 · 1 条未完成/);
+assert.ok(grouped.indexOf('gpi-turn-trace') < grouped.indexOf('带诊断的回答'));
+assert.equal((grouped.match(/class="gpi-turn-trace"/g) || []).length, 2);
+assert.match(grouped, /执行过程需要处理/);
 
 const running = activity.renderTimeline([
   { ...completed, id: 'running', status: 'running' },

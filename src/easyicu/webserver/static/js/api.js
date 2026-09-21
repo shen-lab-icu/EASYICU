@@ -365,6 +365,9 @@
   function loadExtensionSkill(name) {
     return getJSON('/api/extensions/skills/' + encodeURIComponent(name || ''));
   }
+  function loadBuiltinSkillPackage(skillId) {
+    return getJSON('/api/capabilities/method-skills/' + encodeURIComponent(skillId || '') + '/package');
+  }
   async function installExtensionSkill(body) {
     const result = await postJSON('/api/extensions/skills/install', body || {});
     if (result && result.extensions) window.EU_EXTENSIONS = result.extensions;
@@ -486,6 +489,12 @@
     if (opts.replayCursor != null) query.set('replay_cursor', String(opts.replayCursor));
     if (opts.replayLimit != null) query.set('replay_limit', String(opts.replayLimit));
     return getJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '?' + query.toString());
+  }
+  function renamePiCopilotSession(sessionId, body) {
+    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/rename', body || {});
+  }
+  function deleteEmptyPiCopilotSession(sessionId, body) {
+    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/delete-empty', body || {});
   }
   function sendPiCopilotMessage(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/message', body || {});
@@ -740,6 +749,7 @@
   window.EU_API.loadCapabilities = loadCapabilities;
   window.EU_API.loadExtensions = loadExtensions;
   window.EU_API.loadExtensionSkill = loadExtensionSkill;
+  window.EU_API.loadBuiltinSkillPackage = loadBuiltinSkillPackage;
   window.EU_API.installExtensionSkill = installExtensionSkill;
   window.EU_API.installExtensionMcp = installExtensionMcp;
   window.EU_API.setExtensionState = setExtensionState;
@@ -775,6 +785,8 @@
   window.EU_API.loadPiCopilotLiteratureSource = loadPiCopilotLiteratureSource;
   window.EU_API.loadPiCopilotSessions = loadPiCopilotSessions;
   window.EU_API.loadPiCopilotSession = loadPiCopilotSession;
+  window.EU_API.renamePiCopilotSession = renamePiCopilotSession;
+  window.EU_API.deleteEmptyPiCopilotSession = deleteEmptyPiCopilotSession;
   window.EU_API.sendPiCopilotMessage = sendPiCopilotMessage;
   window.EU_API.confirmPiCopilotCohortEligibility = confirmPiCopilotCohortEligibility;
   window.EU_API.confirmPiCopilotPlanDecision = confirmPiCopilotPlanDecision;

@@ -52,18 +52,17 @@
     </div>`;
   }
   function controls(options) {
-    const { tr, esc, icon, disabled } = options;
+    const { tr, esc, icon, disabled, allowIdeaSources = true } = options;
     return `<div class="gpi-idea-source">
       <input type="file" accept="application/pdf,.pdf" data-gpi-idea-pdf-input hidden ${disabled ? 'disabled' : ''} />
       <details class="gpi-idea-source-menu">
-        <summary role="button" aria-haspopup="menu" aria-label="${esc(tr('Add source', '添加资料'))}" title="${esc(tr('Add source', '添加资料'))}">${icon('plus', 17)}</summary>
-        <div class="gpi-idea-source-popover" role="menu" aria-label="${esc(tr('Add research source', '添加研究资料'))}">
-          <button type="button" role="menuitem" data-gpi-idea-pdf-pick ${disabled || reading ? 'disabled' : ''}>
-            ${icon('file', 17)}<span><strong>${esc(tr('Upload PDF', '上传 PDF'))}</strong><small>${esc(tr('Mine ideas from a paper', '从文章中发掘创新方向'))}</small></span>
-          </button>
-          <button type="button" role="menuitem" data-gpi-idea-url-focus ${disabled ? 'disabled' : ''}>
-            ${icon('link', 17)}<span><strong>${esc(tr('Paste article link', '粘贴文章链接'))}</strong><small>${esc(tr('Paste it directly into the conversation', '直接粘贴到对话框中'))}</small></span>
-          </button>
+        <summary role="button" aria-haspopup="menu" aria-label="${esc(tr('Add to your question', '添加到问题'))}" title="${esc(tr('Add to your question', '添加到问题'))}">${icon('plus', 17)}</summary>
+        <div class="gpi-idea-source-popover" role="menu" aria-label="${esc(tr('Add to your question', '添加到问题'))}">
+          ${allowIdeaSources ? `<button type="button" role="menuitem" aria-label="${esc(tr('Upload PDF', '上传 PDF'))}" data-gpi-idea-pdf-pick ${disabled || reading ? 'disabled' : ''}>${icon('file', 17)}<strong>${esc(tr('Upload PDF', '上传 PDF'))}</strong></button>
+          <button type="button" role="menuitem" aria-label="${esc(tr('Paste article link', '粘贴文章链接'))}" data-gpi-idea-url-focus ${disabled ? 'disabled' : ''}>${icon('link', 17)}<strong>${esc(tr('Paste article link', '粘贴文章链接'))}</strong></button>` : ''}
+          <span class="gpi-idea-source-divider" aria-hidden="true"></span>
+          <button type="button" role="menuitem" aria-label="${esc(tr('Project resources', '项目资料'))}" data-gpi-composer-picker="materials" ${disabled ? 'disabled' : ''}>${icon('folder', 17)}<strong>${esc(tr('Project resources', '项目资料'))}</strong><span aria-hidden="true">›</span></button>
+          <button type="button" role="menuitem" aria-label="${esc(tr('Skills and methods', '技能与方法'))}" data-gpi-composer-picker="skills" ${disabled ? 'disabled' : ''}>${icon('layers', 17)}<strong>${esc(tr('Skills and methods', '技能与方法'))}</strong><span aria-hidden="true">›</span></button>
         </div>
       </details>
     </div>`;

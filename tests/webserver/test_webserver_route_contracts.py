@@ -42,6 +42,7 @@ EXPECTED_SYSTEM_ROUTES = [
     ("POST", "/api/settings"),
     ("POST", "/api/settings/reset"),
     ("GET", "/api/capabilities"),
+    ("GET", "/api/capabilities/method-skills/{skill_id}/package"),
     ("POST", "/api/capabilities/tool-check"),
     ("POST", "/api/capabilities/zotero/search"),
     ("POST", "/api/capabilities/zotero/test"),
@@ -59,6 +60,7 @@ EXPECTED_SYSTEM_OPERATION_NAMES = [
     "post_settings",
     "post_settings_reset",
     "get_capabilities",
+    "get_method_skill_package",
     "post_capability_tool_check",
     "post_capability_zotero_search",
     "post_capability_zotero_test",
@@ -197,6 +199,16 @@ EXPECTED_PI_COPILOT_ROUTES = [
     ),
     ("GET", "/api/copilot/pi/sessions", "get_pi_copilot_sessions"),
     ("GET", "/api/copilot/pi/sessions/{session_id}", "get_pi_copilot_session"),
+    (
+        "POST",
+        "/api/copilot/pi/sessions/{session_id}/rename",
+        "post_pi_copilot_session_rename",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/sessions/{session_id}/delete-empty",
+        "post_pi_copilot_session_delete_empty",
+    ),
     (
         "POST",
         "/api/copilot/pi/sessions/{session_id}/message",

@@ -94,6 +94,7 @@ CONTRACTS: dict[str, list[str]] = {
     "job_continuity_404.test.js": [],
     "manuscript_reader_navigation.test.js": ["screens-guided-pi-preview.js"],
     "method_skills_hub.test.js": ["screens-skills.js"],
+    "method_skill_package_view.test.js": ["screens-skills.js"],
     "report_progress_refresh.test.js": ["screens-guided-pi-childjob.js"],
     "patient_browse_owners.test.js": [
         "screens-viz-patient-navigation.js",

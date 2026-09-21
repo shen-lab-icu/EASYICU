@@ -43,9 +43,23 @@
     return Array.from(new Set(host.officialPaths().map(path => String(path || '').trim()).filter(Boolean)));
   }
 
+  function officialReadyCount(sourceOwner) {
+    const snapshot = sourceOwner && typeof sourceOwner.snapshot === 'function'
+      ? sourceOwner.snapshot()
+      : null;
+    const catalogReady = snapshot && snapshot.catalog && Array.isArray(snapshot.catalog.sources)
+      ? snapshot.catalog.sources.filter(source => {
+        const status = source && source.status || {};
+        return status.state === 'prepared' && status.registered;
+      }).length
+      : 0;
+    return Math.max(officialPaths().length, catalogReady);
+  }
+
   function officialSourceStatus(source, pairReady) {
     const status = source && source.status || {};
-    const active = pairReady || Boolean(status.active);
+    const active = pairReady || Boolean(status.active)
+      || (status.state === 'prepared' && status.registered);
     const labels = {
       not_downloaded: text('Not installed', '尚未安装'),
       downloaded: text('Downloaded', '已下载'),
@@ -107,7 +121,7 @@
   function renderDemo(options) {
     const sourceOwner = window.EU_OFFICIAL_DEMO_SOURCES || window.EU_PATIENT_DEMO_SOURCES;
     const syntheticHtml = String(options && options.syntheticHtml || '');
-    const count = officialPaths().length;
+    const count = officialReadyCount(sourceOwner);
     const ready = count >= 2;
     const officialHtml = compactOfficialPair(sourceOwner, ready);
     return `
@@ -206,7 +220,7 @@
         button.addEventListener('click', event => {
           event.preventDefault();
           event.stopPropagation();
-          if (button.getAttribute('aria-disabled') === 'true' || officialPaths().length < 2) return;
+          if (button.getAttribute('aria-disabled') === 'true' || officialReadyCount(sourceOwner) < 2) return;
           if (host && typeof host.runOfficial === 'function') host.runOfficial();
         });
       });

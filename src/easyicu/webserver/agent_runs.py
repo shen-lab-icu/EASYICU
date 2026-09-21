@@ -787,6 +787,13 @@ def read_run_artifact(project_dir: str, artifact_name: str) -> Dict[str, Any]:
             )
             or payload
         )
+        # Browser-only source locators are derived from the immutable evidence
+        # registry.  The gallery on disk is never rewritten.
+        from easyicu.webserver.research_evidence_preview import (
+            project_figure_source_code,
+        )
+
+        payload = project_figure_source_code(run_dir, payload)
     privacy_scan = run_artifact_disclosure.scan_artifact_payloads(
         {artifact_path.name: payload}
     )

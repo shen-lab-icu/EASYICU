@@ -15,7 +15,10 @@ import urllib.request
 from typing import Any, Dict, List
 
 from easyicu.research_agent.publication_skills import PUBLICATION_SKILLS
-from easyicu.research_agent.method_skills import method_skill_catalog
+from easyicu.research_agent.method_skills import (
+    method_skill_catalog,
+    method_skill_package,
+)
 from easyicu.webserver import state_paths
 from easyicu.webserver import settings as settings_store
 
@@ -725,3 +728,10 @@ def capability_status() -> Dict[str, Any]:
             "remote_compute": remote,
         },
     }
+
+
+def builtin_method_skill_package(skill_id: str) -> Dict[str, Any]:
+    """Return one read-only built-in package under the current master switch."""
+
+    enabled = bool(capability_settings()["science_skills_enabled"])
+    return method_skill_package(skill_id, enabled=enabled)

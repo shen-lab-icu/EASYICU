@@ -70,7 +70,7 @@ def test_language_switch_flushes_guided_slots_before_global_rerender() -> None:
 def test_agent_projects_has_no_provider_controls_or_fake_exports() -> None:
     provider = _js("screens-guided-pi-provider.js")
 
-    assert "you do not configure a second analysis model elsewhere" in provider
+    assert "Choose a connection" in provider
     assert "data-gpi-research-provider" in provider
     # The dock-opening affordance moved to the shared topbar 'Page guide'
     # button; the agent screen must not ship its own duplicate opener.

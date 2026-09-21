@@ -67,3 +67,15 @@ def test_muted_text_tokens_meet_aa_on_sunken_surface() -> None:
     background = token("surface-2")
     assert _contrast(token("ink-3"), background) >= 4.5
     assert _contrast(token("ink-4"), background) >= 4.5
+
+
+def test_guided_workspace_light_interaction_states_keep_dark_accent_text() -> None:
+    source = (STATIC_CSS / "guided-pi-workspace.css").read_text(encoding="utf-8")
+
+    assert "--accent-ink:#ffffff" not in source
+    assert source.count("--accent-ink:#174547") == 2
+    assert _contrast("#174547", "#f0efe9") >= 4.5
+    assert (
+        ".gpi-followups button:hover,.gpi-followups button:focus-visible"
+        "{background:var(--surface-2);color:var(--accent-ink)}"
+    ) in source

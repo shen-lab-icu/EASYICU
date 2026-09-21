@@ -348,6 +348,38 @@ def load_registry() -> Dict[str, Any]:
     }
 
 
+@_registry_locked
+def stored_registration_state(path: str) -> tuple[bool, bool]:
+    """Return persisted registration/active flags without rescanning exports.
+
+    This is intentionally a metadata-only fast path for callers that have
+    already validated the exact export on disk.  ``load_registry()`` rebuilds
+    every source description and performs auto-discovery, which is appropriate
+    for workspace management but unnecessarily expensive for a small status
+    badge such as the official-demo catalog.
+    """
+
+    target = _norm_path(path)
+    raw = _read_raw()
+    removed_paths = set(_raw_removed_paths(raw))
+    if target in removed_paths:
+        return False, False
+    stored = raw.get("sources") if isinstance(raw.get("sources"), list) else []
+    registered = any(
+        isinstance(item, dict)
+        and item.get("path")
+        and _norm_path(str(item.get("path"))) == target
+        for item in stored
+    )
+    active_path = raw.get("active_path")
+    active = bool(
+        registered
+        and active_path
+        and _norm_path(str(active_path)) == target
+    )
+    return registered, active
+
+
 def resolve_registered_export(
     requested_path: Any = None,
 ) -> RegisteredExportSelection:

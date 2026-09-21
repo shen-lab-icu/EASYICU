@@ -174,23 +174,10 @@ def export_ready(paths: DemoSourcePaths, source: DemoSourceSpec) -> bool:
 
 
 def registry_state(paths: DemoSourcePaths) -> tuple[bool, bool]:
-    """Read registration/active flags without leaking or trusting cache paths."""
+    """Read registration/active flags after the exact export passed validation."""
 
     try:
-        registry = source_store.load_registry()
-        target = str(paths.export.resolve())
-        registered = any(
-            bool(item.get("ok"))
-            and str(Path(str(item.get("path") or "")).expanduser().resolve()) == target
-            for item in registry.get("sources") or []
-            if isinstance(item, dict)
-        )
-        active = (
-            registered
-            and str(Path(str(registry.get("active_path") or "")).expanduser().resolve())
-            == target
-        )
-        return registered, active
+        return source_store.stored_registration_state(str(paths.export))
     except Exception:  # noqa: BLE001 - status must remain available if registry is bad.
         return False, False
 

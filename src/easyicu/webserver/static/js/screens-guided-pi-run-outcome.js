@@ -18,6 +18,7 @@
       'scientific_readiness.json': ['View scientific review', '查看科学审阅'],
     };
     let activeReviewTab = 0;
+    const dismissedFollowUps = new Set();
     let scientificReview = { key: '', payload: null, loading: false, error: '' };
     const reviewCopyZh = Object.freeze({
       'Technical executability is not evidence of novelty or publication value.': '技术上可以执行，不等于已经证明研究具有创新性或投稿价值。',
@@ -260,14 +261,25 @@
 
     function renderFollowUps(latestRun, workflow) {
       const suggestions = followUps(latestRun, workflow);
-      if (!suggestions.length) return '';
-      return `<details class="gpi-followups" open><summary>${tr('Follow-up questions', '继续追问')}<small>${tr('Select to edit before sending', '点击后可编辑再发送')}</small></summary><div>${suggestions.map((prompt, index) => `<button type="button" data-gpi-followup="${index}"><span aria-hidden="true">↳</span>${esc(prompt)}</button>`).join('')}</div></details>`;
+      const runId = String(latestRun && latestRun.run_id || 'current');
+      const visible = suggestions.map((prompt, index) => ({ prompt, index }))
+        .filter(row => !dismissedFollowUps.has(`${runId}:${row.prompt}`));
+      if (!visible.length) return '';
+      return `<details class="gpi-followups" open><summary class="gpi-followups-head">${iconHtml('help', 14)}<span>${tr('Follow-up questions', '继续追问')}</span></summary><div class="gpi-followups-list">${visible.map(({ prompt, index }) => `<div class="gpi-followup-row"><button type="button" class="gpi-followup-prompt" data-gpi-followup="${index}"><span aria-hidden="true">↳</span>${esc(prompt)}</button><div class="gpi-followup-actions"><button type="button" class="gpi-icon-action" data-gpi-followup-new="${index}" title="${esc(tr('Ask in a new task', '在新任务中追问'))}" aria-label="${esc(tr('Ask in a new task', '在新任务中追问'))}">${iconHtml('arrow', 13)}</button><button type="button" class="gpi-icon-action" data-gpi-followup-dismiss="${index}" title="${esc(tr('Dismiss suggestion', '关闭建议'))}" aria-label="${esc(tr('Dismiss suggestion', '关闭建议'))}">${iconHtml('close', 13)}</button></div></div>`).join('')}</div></details>`;
+    }
+
+    function dismissFollowUp(index, latestRun, workflow) {
+      const suggestions = followUps(latestRun, workflow);
+      const prompt = suggestions[Number(index)];
+      if (!prompt) return false;
+      dismissedFollowUps.add(`${String(latestRun && latestRun.run_id || 'current')}:${prompt}`);
+      return true;
     }
 
     function renderReviewSummary(latestRun) {
       const refs = (latestRun.artifact_refs || []).filter(row => row && row.run_id === latestRun.run_id);
       const evidence = name => refs.find(row => row.artifact === name);
-      const row = (title, description, value, resource) => `<li><div><strong>${esc(title)}</strong><p>${esc(description)}</p></div><span class="gpi-review-state${value === true ? ' is-checked' : ''}">${value === true ? tr('Recorded', '有记录') : value === false ? tr('Open', '待处理') : tr('Unreported', '未返回')}</span>${resource ? resourceButton(resource, tr('View evidence', '查看依据')) : `<small>${tr('No record available', '暂无可查看记录')}</small>`}</li>`;
+      const row = (title, description, value, resource) => `<li><div><strong>${esc(title)}</strong><p>${esc(description)}</p></div><span class="gpi-review-state${value === true ? ' is-checked' : ''}">${value === true ? tr('Recorded', '有记录') : value === false ? tr('Open', '待处理') : tr('Unreported', '未返回')}</span>${resource ? resourceButton(resource, tr('View evidence', '查看依据')) : ''}</li>`;
       let panels = [
         [tr('Approach', '方法'), row(tr('Execution', '分析执行'), tr('Whether the approved analysis finished according to the run gate.', '依据运行闸门核对已批准分析是否完成。'), latestRun.execution_complete, evidence('quality_gate.json') || evidence('evidence_ledger.json'))
           + row(tr('Validation', '分析校验'), tr('Inspect validation findings before interpreting estimates.', '解释估计前先查看分析校验发现。'), latestRun.analysis_validated, evidence('quality_report.json') || evidence('quality_gate.json'))],
@@ -285,11 +297,37 @@
         const stateNames = { passed: tr('Passed', '通过'), blocked: tr('Blocked', '阻断'),
           not_assessed: tr('Not assessed', '未评估'), warning: tr('Attention', '需关注') };
         const safe = (value, limit = 700) => esc(String(value || '').slice(0, limit));
-        const item = (title, summary, status, refsText, remedy, rawCode) => `<li class="gpi-review-record"${rawCode ? ` data-review-code="${safe(rawCode, 120)}"` : ''}><div><strong>${safe(title, 180)}</strong><p>${safe(localizedReviewText(summary))}</p>${remedy ? `<p class="gpi-review-remedy">${tr('Next step: ', '待处理：')}${safe(localizedReviewText(remedy))}</p>` : ''}${refsText ? `<small>${tr('Evidence refs: ', '证据引用：')}${safe(refsText, 300)}</small>` : ''}</div><span class="gpi-review-state${status === 'passed' ? ' is-checked' : ''}">${safe(stateNames[status] || status, 40)}</span></li>`;
+        const item = (title, summary, status, refsHtml, remedy, rawCode) => `<li class="gpi-review-record"${rawCode ? ` data-review-code="${safe(rawCode, 120)}"` : ''}><div><strong>${safe(title, 180)}</strong><p>${safe(localizedReviewText(summary))}</p>${remedy ? `<p class="gpi-review-remedy">${tr('Next step: ', '待处理：')}${safe(localizedReviewText(remedy))}</p>` : ''}${refsHtml || ''}</div><span class="gpi-review-state${status === 'passed' ? ' is-checked' : ''}">${safe(stateNames[status] || status, 40)}</span></li>`;
         const domains = payload.domains.slice(0, 12).filter(value => value && typeof value === 'object');
         const findings = payload.findings.slice(0, 16).filter(value => value && typeof value === 'object');
-        const evidenceRefs = value => Array.isArray(value.evidence_refs)
-          ? value.evidence_refs.slice(0, 3).map(ref => String(ref || '').slice(0, 120)).join(' · ') : '';
+        const reviewEvidence = Array.isArray(latestRun.review_evidence_refs)
+          ? latestRun.review_evidence_refs.filter(value => value && typeof value === 'object') : [];
+        const evidenceHost = reviewRef || evidence('evidence_ledger.json');
+        const evidenceRefs = value => {
+          if (!Array.isArray(value.evidence_refs) || !value.evidence_refs.length) return '';
+          const registered = refs.slice().sort((left, right) => String(right.artifact || '').length - String(left.artifact || '').length);
+          const chips = value.evidence_refs.slice(0, 3).map(rawRef => {
+            const label = String(rawRef || '').trim().slice(0, 120);
+            if (!label) return '';
+            const registryRef = reviewEvidence.find(ref => String(ref.reference || '') === label);
+            if (registryRef && evidenceHost) {
+              return resourceButton({
+                ...evidenceHost,
+                label,
+                evidence_id: registryRef.evidence_id,
+                evidence_sha256: registryRef.sha256,
+                evidence_kind: registryRef.kind,
+                evidence_label: registryRef.description || label,
+                evidence_pointer: registryRef.pointer || '',
+              }, label);
+            }
+            const matched = registered.find(ref => label === ref.artifact || label.startsWith(`${ref.artifact}.`));
+            return matched
+              ? resourceButton({ ...matched, label }, label)
+              : `<span class="gpi-review-evidence-missing" title="${safe(tr('This reference is recorded but no governed preview is registered.', '该引用已记录，但尚未登记可受控预览。'), 180)}">${safe(label, 120)}</span>`;
+          }).filter(Boolean).join('');
+          return chips ? `<div class="gpi-review-evidence"><small>${tr('Evidence refs', '证据引用')}</small>${chips}</div>` : '';
+        };
         const forDomains = names => {
           const found = domains.filter(value => names.includes(String(value.domain || '')));
           const issues = findings.filter(value => names.includes(String(value.domain || '')));
@@ -309,7 +347,6 @@
         ];
       }
       return `<section class="gpi-review-summary" data-gpi-review-run="${esc(latestRun.run_id)}" aria-label="${tr('Scientific review', '科学审阅')}">
-        <div class="gpi-review-intro"><span>${payload ? tr('Automatic review from this run; human review remains required.', '本次运行的自动审阅；仍需人工核对。') : scientificReview.key === expectedKey && scientificReview.loading ? tr('Loading this run’s review record…', '正在读取本次审阅记录…') : tr('Summary from this run’s gates; open the record for details.', '依据本次闸门摘要；详情请打开审阅记录。')}</span>${reviewRef ? resourceButton(reviewRef, tr('Full record', '完整记录')) : ''}</div>
         <div class="gpi-review-tabs" role="tablist" aria-label="${tr('Review dimensions', '审阅维度')}">${panels.map(([title], index) => `<button type="button" role="tab" data-gpi-review-tab="${index}" aria-selected="${index === activeReviewTab}">${esc(title)}</button>`).join('')}</div>
         ${panels.map(([, content], index) => `<div class="gpi-review-panel" role="tabpanel" data-gpi-review-panel="${index}"${index === activeReviewTab ? '' : ' hidden'}><ol>${content}</ol></div>`).join('')}
       </section>`;
@@ -396,7 +433,6 @@
       return `<section class="gpi-run-outcome" aria-label="${esc(tr('Completed analysis results', '已完成的分析结果'))}">
         <div class="gpi-run-outcome-icon" aria-hidden="true">${iconHtml(validated ? 'check' : 'shield', 17)}</div>
         <div class="gpi-run-outcome-copy">
-          <div class="gpi-outcome-byline">${tr('EasyICU · saved analysis results', 'EasyICU · 已保存的分析结果')}</div>
           <strong>${esc(validated
             ? tr('Analysis complete — results are ready for review', '分析已完成，可以审阅结果')
             : tr('Results generated — validation needs review', '结果已生成，请核对待处理事项'))}</strong>
@@ -414,12 +450,9 @@
           ))}</p>
           ${renderDeliverables(latestRun, workflow)}
           ${figureNote}
+          <div class="gpi-run-outcome-actions gpi-run-outcome-primary">${primaryActions.join('')}</div>
           ${renderFollowUps(latestRun, workflow)}
-          <details class="gpi-response-review" open><summary>${tr('Scientific review', '科学审阅')}<small>${tr('Evidence from this run', '依据本次运行记录')}</small></summary>${renderReviewSummary(latestRun)}</details>
-          <details class="gpi-run-outcome-more"><summary>${esc(tr(`Complete artifacts and audit (${detailActions.length})`, `完整产物与审计（${detailActions.length}）`))}</summary>
-            <small>${esc(tr('Analysis-only: suitable for review, not yet authorized for publication claims.', '当前为分析级结果：可以审阅，但尚未获准作为投稿结论。'))}</small>
-            <div class="gpi-run-outcome-actions">${primaryActions.join('')}${detailActions.join('')}</div>
-          </details>
+          <details class="gpi-response-review" open><summary>${tr('Scientific review', '科学审阅')}</summary>${renderReviewSummary(latestRun)}</details>
         </div>
       </section>`;
     }
@@ -461,7 +494,7 @@
     }
 
     return Object.freeze({ render, renderShelf, renderReviewAction, collection, resultsAvailable,
-      followUps, selectReviewTab, loadScientificReview, openData });
+      followUps, dismissFollowUp, selectReviewTab, loadScientificReview, openData });
   }
 
   window.EasyICU.guidedPi.declare('runOutcome', { create });

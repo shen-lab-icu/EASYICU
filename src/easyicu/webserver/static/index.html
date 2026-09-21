@@ -15,7 +15,7 @@
 <link rel="stylesheet" href="css/patient-navigation.css?v=20260710-bounded-pages" />
 <link rel="stylesheet" href="css/patient-tables.css?v=20260830-viz-final1" />
 <link rel="stylesheet" href="css/settings.css?v=20260812-extension-manager1" />
-<link rel="stylesheet" href="css/skills-hub.css?v=20260919-method-skills3" />
+<link rel="stylesheet" href="css/skills-hub.css?v=20260920-packages1" />
 <link rel="stylesheet" href="css/patient.css?v=20260830-viz-final1" />
 <link rel="stylesheet" href="css/patient-series.css?v=20260830-viz-final1" />
 <link rel="stylesheet" href="css/official-demo-sources.css?v=20260728-shared-source1" />
@@ -24,8 +24,8 @@
 <link rel="stylesheet" href="css/guided-projects.css?v=20260918-audit3" />
 <link rel="stylesheet" href="css/guided-panels.css?v=20260918-audit3" />
 <link rel="stylesheet" href="css/guided-startup.css?v=20260918-structure2" />
-<link rel="stylesheet" href="css/guided-pi.css?v=20260918-structure2" />
-<link rel="stylesheet" href="css/guided-pi-idea-source.css?v=20260902-type-scale2" />
+<link rel="stylesheet" href="css/guided-pi.css?v=20260919-connection6" />
+<link rel="stylesheet" href="css/guided-pi-idea-source.css?v=20260919-composer-picker3" />
 <link rel="stylesheet" href="css/guided-pi-cohort-eligibility.css?v=20260831-simple-choice1" />
 <link rel="stylesheet" href="css/guided-pi-demo.css?v=20260815-reviewer-demo2" />
 <link rel="stylesheet" href="css/guided-pi-preview.css?v=20260916-study-workspace3" />
@@ -35,12 +35,13 @@
 <link rel="stylesheet" href="css/guided-pi-workbench-preview.css?v=20260829-data-readiness1" />
 <link rel="stylesheet" href="css/guided-pi-data-preview.css?v=20260823-icd-preview1" />
 <link rel="stylesheet" href="css/guided-pi-run-outcome.css?v=20260916-study-workspace3" />
+<link rel="stylesheet" href="css/guided-pi-source-view.css?v=20260920-trace1" />
 <link rel="stylesheet" href="css/guided-pi-literature.css?v=20260902-type-scale2" />
 <link rel="stylesheet" href="css/guided-idea-plan.css?v=20260827-type-scale1" />
 <link rel="stylesheet" href="css/ideas.css?v=20260803-owner-migration" />
 <link rel="stylesheet" href="css/ideas-review.css?v=20260702-idea-review-handoff" />
 <link rel="stylesheet" href="css/ideas-connectors.css?v=20260702-zotero-simple" />
-<link rel="stylesheet" href="css/extraction.css?v=20260630-gate-first-ia" />
+<link rel="stylesheet" href="css/extraction.css?v=20260920-stepflow4" />
 <link rel="stylesheet" href="css/extraction-output.css?v=20260824-local-open1" />
 <link rel="stylesheet" href="css/cohort.css?v=20260830-viz-final1" />
 <link rel="stylesheet" href="css/cohort-charts.css?v=20260830-viz-final1" />
@@ -64,7 +65,8 @@
 <!-- LAST on purpose: the picker CSS used to be injected as a <style> at the
      end of <head>, after every <link>. Keep that precedence. -->
 <link rel="stylesheet" href="css/guided-pi-run-files.css?v=20260908-conversation-files1" />
-<link rel="stylesheet" href="css/guided-pi-workspace.css?v=20260919-dialogue2" />
+<link rel="stylesheet" href="css/workspace-canvas.css?v=20260921-evidence1" />
+<link rel="stylesheet" href="css/guided-pi-workspace.css?v=20260921-evidence1" />
 <link rel="stylesheet" href="css/picker.css?v=20260803-picker-owner" />
 </head>
 <body>
@@ -86,14 +88,15 @@
 <script src="js/composer-keyboard.js?v=20260823-ime-owner1"></script>
 <script src="js/i18n.js?v=20260728-demo-mode1"></script>
 <script src="js/icons.js?v=20260901-composer-plus1"></script>
+<script src="js/desktop-module-shell.js?v=20260919-data-viz-shell1"></script>
 <script src="js/data-catalog.js?v=20260727-patient-demo2"></script>
-<script src="js/api.js?v=20260919-result-export1"></script>
+<script src="js/api.js?v=20260920-skill-package1"></script>
 <script src="js/study-context.js?v=20260910-context-lookup1"></script>
 <script src="js/study-progress.js?v=20260802-stage-status"></script>
 <script src="js/gate-remedy.js?v=20260901-idea-readiness"></script>
 <script src="js/screens-extraction-sepsis.js?v=20260629-sepsis-anchor-readonly"></script>
 <script src="js/screens-entry.js?v=20260830-owner-split1"></script>
-<script src="js/screens-extraction.js?v=20260914-source-refresh1"></script>
+<script src="js/screens-extraction.js?v=20260920-stepflow4"></script>
 <script src="js/screens-extraction-embedded.js?v=20260908-study-source2"></script>
 <script src="js/screens-extraction-job-continuity.js?v=20260802-job-404"></script>
 <script src="js/screens-extraction-study-context.js?v=20260824-extraction-roundtrip1"></script>
@@ -124,11 +127,11 @@
 <script src="js/screens-viz.js?v=20260830-viz-final1"></script>
 <script src="js/screens-viz-embedded.js?v=20260823-icd-preview1"></script>
 <script src="js/screens-viz-crossdb-job-continuity.js?v=20260812-registered-jobs"></script>
-<script src="js/screens-viz-crossdb-source.js?v=20260812-crossdb-jobs"></script>
+<script src="js/screens-viz-crossdb-source.js?v=20260920-fast-demo-status"></script>
 <script src="js/screens-viz-study-context.js?v=20260710-handoff"></script>
 <script src="js/screens-ideas-zotero.js?v=20260702-zotero-origin"></script>
 <script src="js/screens-ideas.js?v=20260817-copilot-boundary1"></script>
-  <script src="js/screens-agent-render.js?v=20260919-science-review1"></script>
+  <script src="js/screens-agent-render.js?v=20260919-source1"></script>
 <script src="js/screens-agent-science.js?v=20260707-design"></script>
 <script src="js/screens-agent-study-context.js?v=20260802-gate-remedy"></script>
 <script src="js/screens-agent-run-history.js?v=20260823-run-history-owner1"></script>
@@ -136,7 +139,7 @@
 <script src="js/screens-states.js"></script>
 <script src="js/screens-settings-extensions.js?v=20260812-extension-manager1"></script>
 <script src="js/screens-settings.js?v=20260817-copilot-boundary1"></script>
-<script src="js/screens-skills.js?v=20260919-method-skills5"></script>
+<script src="js/screens-skills.js?v=20260920-packages1"></script>
 <script src="js/screens-help.js?v=20260817-copilot-boundary1"></script>
 <script src="js/screens-dict.js?v=20260830-viz-final1"></script>
 <script src="js/screens-icd.js?v=20260824-extraction-roundtrip1"></script>
@@ -159,24 +162,25 @@
 <script src="js/screens-guided-pi-next-actions.js?v=20260919-taskcanvas1"></script>
 <script src="js/screens-guided-pi-message-actions.js?v=20260829-plan-retry2"></script>
   <script src="js/screens-guided-pi-regeneration.js?v=20260830-plan-branch2"></script>
-<script src="js/screens-guided-pi-starters.js?v=20260902-zero-direction1"></script>
-<script src="js/screens-guided-pi-idea-source.js?v=20260901-composer-plus1"></script>
-<script src="js/screens-guided-pi-study-workspace.js?v=20260919-task-rail2"></script>
+<script src="js/screens-guided-pi-starters.js?v=20260919-entry2"></script>
+<script src="js/screens-guided-pi-idea-source.js?v=20260919-composer-picker3"></script>
+<script src="js/screens-guided-pi-study-workspace.js?v=20260919-composer-picker3"></script>
 <script src="js/screens-guided-pi-header.js?v=20260919-taskcanvas1"></script>
 <script src="js/screens-guided-pi-demo.js?v=20260815-real-render2"></script>
 <script src="js/screens-guided-pi-workbench-preview.js?v=20260829-data-readiness1"></script>
 <script src="js/screens-guided-pi-data-preview.js?v=20260823-native-preview1"></script>
-<script src="js/screens-guided-pi-evidence-preview.js?v=20260830-density1"></script>
+<script src="js/screens-guided-pi-evidence-preview.js?v=20260919-canvas1"></script>
+<script src="js/screens-guided-pi-source-view.js?v=20260920-trace1"></script>
 <script src="js/screens-guided-pi-result-summary.js?v=20260908-e1-review2"></script>
 <script src="js/screens-guided-pi-report-artifacts.js?v=20260901-digest-pin1"></script>
 <script src="js/screens-guided-pi-technical-report.js?v=20260904-empty-gallery1"></script>
 <script src="js/screens-guided-pi-analysis-report.js?v=20260916-study-workspace3"></script>
 <script src="js/screens-guided-pi-article-report.js?v=20260830-e2-report1"></script>
-<script src="js/screens-guided-pi-preview.js?v=20260919-taskcanvas2"></script>
+<script src="js/screens-guided-pi-preview.js?v=20260921-evidence4"></script>
 <script src="js/screens-guided-pi-replay.js?v=20260919-task-index1"></script>
-<script src="js/screens-guided-pi-resources.js?v=20260909-report-revision1"></script>
-<script src="js/screens-guided-pi-run-outcome.js?v=20260919-review-language2"></script>
-<script src="js/screens-guided-pi-activity.js?v=20260919-dialogue2"></script>
+<script src="js/screens-guided-pi-resources.js?v=20260921-evidence1"></script>
+<script src="js/screens-guided-pi-run-outcome.js?v=20260921-evidence1"></script>
+  <script src="js/screens-guided-pi-activity.js?v=20260920-trace2"></script>
   <script src="js/screens-guided-pi-confirmation.js?v=20260907-stopped-plan-retry1"></script>
   <script src="js/screens-guided-pi-plan-actions.js?v=20260914-execution-retry1"></script>
 <script src="js/screens-guided-pi-cohort-eligibility.js?v=20260904-checkpoint-owner1"></script>
@@ -184,17 +188,17 @@
 <script src="js/screens-guided-pi-childjob.js?v=20260903-agent-owned-plan1"></script>
 <script src="js/screens-guided-pi-aside.js?v=20260919-taskcanvas1"></script>
 <script src="js/screens-guided-pi-data-binding.js?v=20260908-source-conversation1"></script>
-<script src="js/screens-guided-pi-provider.js?v=20260825-api-consent1"></script>
+<script src="js/screens-guided-pi-provider.js?v=20260919-connection4"></script>
 <script src="js/screens-guided-pi-provider-control.js?v=20260830-owner-split1"></script>
-<script src="js/screens-guided-pi-events.js?v=20260919-method-skills1"></script>
+<script src="js/screens-guided-pi-events.js?v=20260921-evidence1"></script>
 <script src="js/screens-guided-pi-project.js?v=20260901-session-deeplink1"></script>
 <script src="js/screens-guided-pi-data-consent.js?v=20260919-dialogue2"></script>
   <script src="js/screens-guided-pi-error-text.js?v=20260917-error-text1"></script>
-  <script src="js/screens-guided-pi.js?v=20260919-dialogue2"></script>
+  <script src="js/screens-guided-pi.js?v=20260921-evidence4"></script>
 <script src="js/screens-guided-idea.js?v=20260817-copilot-boundary1"></script>
-<script src="js/screens-guided.js?v=20260903-session-deeplink2"></script>
+<script src="js/screens-guided.js?v=20260919-entry1"></script>
 <script src="js/screens-guided-study-context.js?v=20260710-handoff"></script>
-<script src="js/app.js?v=20260919-skill-hub1"></script>
+<script src="js/app.js?v=20260921-evidence1"></script>
 <script src="js/copilot-dock.js?v=20260827-no-fab1"></script>
 <script src="js/tweaks.js"></script>
 </body>

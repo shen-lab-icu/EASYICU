@@ -96,6 +96,21 @@ def test_dynamic_prediction_is_a_typed_coder_action_with_reviewed_primitives():
     }
 
 
+def test_trajectory_subtype_assignment_reaches_planner_with_exact_kernel():
+    catalog = scientific_actions_for_analysis_type("trajectory_clustering")
+    assignment = _action("trajectory_clustering", "early_subtype_assignment")
+
+    assert assignment.execution_mode == "coder_generated"
+    assert assignment.kernel_imports == (
+        "easyicu.research_agent.methods.subtype_assignment",
+    )
+    assert assignment.software_packages == ("sklearn",)
+    assert assignment.required_inputs
+    assert "kernel:subtype_assignment" in {
+        primitive.resource_id for primitive in catalog.reviewed_primitives
+    }
+
+
 def test_action_gap_resolution_is_typed_and_never_auto_substitutes():
     composed = resolve_scientific_action_request(
         analysis_type="dynamic_prediction",
@@ -182,21 +197,26 @@ def test_dynamic_plan_requires_the_exact_primary_action_before_execution():
     )
 
 
-def test_survival_rmst_is_reachable_but_competing_risks_remains_unavailable():
+def test_survival_rmst_and_analysis_only_competing_risk_cif_are_reachable():
     rmst = _action("survival", "rmst")
     cif = _action("survival", "competing_risks_cif")
 
     assert rmst.execution_mode == "host_owned"
     assert rmst.runner == "signed_rmst_contrast"
     assert rmst.kernel_imports == ("easyicu.research_agent.methods.rmst",)
-    assert cif.execution_mode == "not_available"
+    assert cif.execution_mode == "coder_generated"
     assert cif.runner is None
-    assert cif.kernel_imports == ()
+    assert cif.kernel_imports == (
+        "easyicu.research_agent.methods.competing_risks",
+        "easyicu.research_agent.methods.gray_test",
+    )
 
     guide = planner_scientific_action_guide("survival")
     assert "competing_risks_cif" in guide
-    assert "not_available" in guide
-    assert "never substitute" in guide
+    assert "coder_generated" in guide
+    assert "Aalen-Johansen" in guide
+    assert "Fine-Gray" in cif.notes
+    assert "cause-naive Cox" in cif.notes
 
 
 def test_family_primitives_reach_planner_as_support_not_estimand_authority():
@@ -356,9 +376,8 @@ def test_typed_plan_selection_refuses_cross_family_and_unavailable_actions():
         )
 
     unavailable = valid.model_copy(deep=True)
-    unavailable.steps[0].scientific_action_id = (
-        "time_to_event.competing_risks_cif"
-    )
+    unavailable.steps[0].method = "time_varying_hr"
+    unavailable.steps[0].scientific_action_id = "time_to_event.time_varying_hr"
     with pytest.raises(ValueError, match="recognised but not available"):
         validate_plan_scientific_action_selections(
             plan=unavailable,

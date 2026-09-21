@@ -239,6 +239,61 @@
     }
     return JSON.stringify(resource || {});
   }
+  function syncLocation(resource, evidence) {
+    if (!window.history || !window.location || window.location.protocol === 'file:') return;
+    const url = new URL(window.location.href);
+    ['pi_view', 'pi_view_kind', 'pi_view_run', 'pi_view_artifact', 'pi_view_sha',
+      'pi_view_evidence', 'pi_view_evidence_sha', 'pi_view_evidence_kind',
+      'pi_view_evidence_pointer'].forEach(key => url.searchParams.delete(key));
+    if (resource && /^[a-f0-9]{64}$/.test(String(resource.sha256 || ''))
+      && ['research_artifact', 'research_report', 'research_document', 'system_validation_document'].includes(resource.kind)) {
+      const evidenceId = String(evidence && evidence.evidenceId || '').trim();
+      const evidenceSha = String(evidence && evidence.sha256 || '').trim().toLowerCase();
+      const hasEvidence = /^[A-Za-z0-9_.-]{1,160}$/.test(evidenceId) && /^[a-f0-9]{64}$/.test(evidenceSha);
+      url.searchParams.set('pi_view', hasEvidence ? 'evidence' : 'artifact');
+      url.searchParams.set('pi_view_kind', resource.kind);
+      url.searchParams.set('pi_view_run', resource.run_id);
+      url.searchParams.set('pi_view_artifact', resource.artifact);
+      if (resource.sha256) url.searchParams.set('pi_view_sha', resource.sha256);
+      if (hasEvidence) {
+        url.searchParams.set('pi_view_evidence', evidenceId);
+        url.searchParams.set('pi_view_evidence_sha', evidenceSha);
+        url.searchParams.set('pi_view_evidence_kind', String(evidence.kind || 'artifact').slice(0, 80));
+        if (evidence.pointer) url.searchParams.set('pi_view_evidence_pointer', String(evidence.pointer).slice(0, 500));
+      }
+    }
+    window.history.replaceState(window.history.state, '', url.toString());
+  }
+  function restoreFromLocation(projectId, workflowContext) {
+    if (!window.location || window.location.protocol === 'file:') return false;
+    const params = new URLSearchParams(window.location.search || '');
+    const view = params.get('pi_view');
+    if (!['artifact', 'evidence'].includes(view)) return false;
+    if (!/^[a-f0-9]{64}$/.test(params.get('pi_view_sha') || '')) return false;
+    const resource = safeResource({
+      kind: params.get('pi_view_kind') || 'research_artifact',
+      run_id: params.get('pi_view_run') || '',
+      artifact: params.get('pi_view_artifact') || '',
+      sha256: params.get('pi_view_sha') || '',
+      label: params.get('pi_view_artifact') || '',
+    });
+    if (!resource || !String(projectId || '').trim()) return false;
+    const alreadyOpen = state.resource && state.projectId === String(projectId || '').trim()
+      && resourceKey(state.resource) === resourceKey(resource);
+    const opened = alreadyOpen || Boolean(open(resource, projectId, workflowContext));
+    if (!opened || view !== 'evidence') return opened;
+    const evidenceId = params.get('pi_view_evidence') || '';
+    const evidenceSha = (params.get('pi_view_evidence_sha') || '').toLowerCase();
+    if (!/^[A-Za-z0-9_.-]{1,160}$/.test(evidenceId) || !/^[a-f0-9]{64}$/.test(evidenceSha)) return false;
+    void openEvidence({ dataset: {
+      evidenceId,
+      evidenceSha256: evidenceSha,
+      evidenceKind: params.get('pi_view_evidence_kind') || 'artifact',
+      evidenceLabel: evidenceId,
+      evidencePointer: params.get('pi_view_evidence_pointer') || '',
+    }, closest: () => null });
+    return true;
+  }
   function safeJobContext(value) {
     const job = value && typeof value === 'object' ? value : {};
     return {
@@ -612,6 +667,9 @@
     }
     state.activeEvidenceId = evidenceId;
     state.mode = 'evidence';
+    if (typeof syncLocation === 'function') syncLocation(state.resource, {
+      evidenceId, sha256, kind, pointer: locator.pointer,
+    });
     render();
     if (item.payload || item.error || !item.loading) return;
     try {
@@ -762,6 +820,8 @@
     const safe = safeResource(resource);
     const project = String(projectId || '').trim();
     if (!safe || (!project && safe.kind !== 'demo_artifact' && safe.kind !== 'demo_document' && safe.kind !== 'literature_source')) return;
+    const sourceView = window.EasyICU.guidedPi.optional('sourceView');
+    if (sourceView && sourceView.close) sourceView.close();
     state.request += 1;
     state.loading = false;
     if (!state.resource || state.projectId !== project) state.focused = false;
@@ -781,6 +841,7 @@
     state.error = '';
     state.mode = safe.kind === 'native_workspace' ? 'native' : safe.kind === 'research_document' || safe.kind === 'system_validation_document' || safe.kind === 'demo_document' ? 'document' : (safe.kind === 'data_package_review' || safe.kind === 'data_workbench_snapshot' ? 'workbench' : (safe.kind === 'research_artifact' || safe.kind === 'research_report' || safe.kind === 'idea_plan' || safe.kind === 'demo_artifact' ? 'structured' : (safe.kind === 'literature_source' ? 'source' : (safe.kind === 'webpage' ? 'web' : 'code'))));
     state.activeClaimId = '';
+    if (typeof syncLocation === 'function') syncLocation(state.resource);
     render();
     if (state.mode !== 'web' && state.mode !== 'document') loadResource();
     return true;
@@ -788,16 +849,18 @@
   function openRunEvidence(resource, projectId, button) {
     if (open(resource, projectId)) return openEvidence(button);
   }
-  function close() {
+  function close(options) {
+    const preserveLocation = Boolean(options && options.preserveLocation);
     state.request += 1;
     state.focused = false;
     state.resource = null; state.artifact = null; state.payload = null; state.studyContext = null; state.governance = null; state.error = ''; state.loading = false;
     state.evidenceTabs = []; state.activeEvidenceId = '';
     state.activeClaimId = '';
+    if (!preserveLocation && typeof syncLocation === 'function') syncLocation(null);
     setAsideOpen(false);
     if (state.host) state.host.replaceChildren();
   }
-  function clearProject() { close(); state.projectId = ''; state.recentResources = []; state.workflowContext = {}; state.studyResources = []; state.studyProjectId = ''; state.openStudyResource = null; state.studyTitle = ''; state.referenceResource = null; }
+  function clearProject(options) { close(options); state.projectId = ''; state.recentResources = []; state.workflowContext = {}; state.studyResources = []; state.studyProjectId = ''; state.openStudyResource = null; state.studyTitle = ''; state.referenceResource = null; }
   function mount(host) {
     if (!host) return;
     state.host = host;
@@ -831,6 +894,7 @@
         if (state.activeEvidenceId === evidenceId) {
           state.activeEvidenceId = '';
           state.mode = 'structured';
+          if (typeof syncLocation === 'function') syncLocation(state.resource);
         }
         render();
         return;
@@ -839,18 +903,29 @@
       if (evidenceTab) {
         state.activeEvidenceId = String(evidenceTab.dataset.gpiEvidenceTab || '');
         state.mode = 'evidence';
+        const activeEvidence = state.evidenceTabs.find(item => item.evidenceId === state.activeEvidenceId);
+        if (typeof syncLocation === 'function' && activeEvidence) syncLocation(state.resource, activeEvidence);
         render();
         return;
       }
       const evidenceAudit = event.target.closest('[data-gpi-evidence-audit]');
       if (evidenceAudit) {
         state.mode = 'structured';
+        if (typeof syncLocation === 'function') syncLocation(state.resource);
         render();
         showClaimLineage(String(evidenceAudit.dataset.gpiEvidenceAudit || '').trim());
         return;
       }
       const evidenceButton = event.target.closest('[data-gpi-evidence-open]');
       if (evidenceButton) { openEvidence(evidenceButton); return; }
+      const sourceButton = event.target.closest('[data-gpi-source-code]');
+      if (sourceButton) {
+        const sourceView = window.EasyICU.guidedPi.require('sourceView');
+        if (sourceView && sourceView.open && state.resource && state.resource.run_id) {
+          void sourceView.open(sourceButton, state.projectId, state.resource.run_id);
+        }
+        return;
+      }
       const referenceLink = event.target.closest('[data-gpi-reference]');
       if (referenceLink) {
         // The app owns URL hashes for routing; keep article anchors local.
@@ -936,5 +1011,5 @@
     if (panel) panel.scrollIntoView({ block: 'nearest' });
   }
 
-  window.EasyICU.guidedPi.declare('preview', { mount, open, openRunEvidence, close, clearProject, setWorkflowContext, setStudyResources });
+  window.EasyICU.guidedPi.declare('preview', { mount, open, openRunEvidence, close, clearProject, restoreFromLocation, setWorkflowContext, setStudyResources });
 })();

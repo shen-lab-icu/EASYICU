@@ -68,14 +68,15 @@ process.stdout.write(JSON.stringify({candidate, executable, requiredDecision}));
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260918-structure2" in index
-    assert "css/guided-pi-idea-source.css?v=20260902-type-scale2" in index
+    assert "css/guided-pi.css?v=20260919-connection6" in index
+    assert "css/guided-pi-idea-source.css?v=20260919-composer-picker3" in index
     assert "css/guided-pi-demo.css?v=20260815-reviewer-demo2" in index
     assert "css/guided-pi-preview.css?v=20260916-study-workspace3" in index
     assert "css/guided-pi-technical-report.css?v=20260830-technical-report1" in index
     assert "css/guided-pi-analysis-report.css?v=20260916-study-workspace3" in index
     assert "css/guided-pi-article-report.css?v=20260830-e2-report1" in index
     assert "css/guided-pi-workbench-preview.css?v=20260829-data-readiness1" in index
+    assert "css/guided-pi-source-view.css?v=20260920-trace1" in index
     assert "css/guided-pi-literature.css?v=20260902-type-scale2" in index
     assert "js/screens-guided-pi-modules.js?v=20260902-module-contract1" in index
     assert "js/screens-guided-pi-literature.js?v=20260828-literature-search1" in index
@@ -83,14 +84,15 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-next-actions.js?v=20260919-taskcanvas1" in index
     assert "js/screens-guided-pi-message-actions.js?v=20260829-plan-retry2" in index
     assert "js/screens-guided-pi-regeneration.js?v=20260830-plan-branch2" in index
-    assert "js/screens-guided-pi-starters.js?v=20260902-zero-direction1" in index
-    assert "js/screens-guided-pi-idea-source.js?v=20260901-composer-plus1" in index
+    assert "js/screens-guided-pi-starters.js?v=20260919-entry2" in index
+    assert "js/screens-guided-pi-idea-source.js?v=20260919-composer-picker3" in index
     assert "js/screens-guided-pi-header.js?v=20260919-taskcanvas1" in index
-    assert "css/guided-pi-workspace.css?v=20260919-dialogue2" in index
+    assert "css/workspace-canvas.css?v=20260921-evidence1" in index
+    assert "css/guided-pi-workspace.css?v=20260921-evidence1" in index
     assert "js/screens-guided-pi-demo.js?v=20260815-real-render2" in index
     assert "js/screens-guided-pi-workbench-preview.js?v=20260829-data-readiness1" in index
     assert (
-        "js/screens-guided-pi-evidence-preview.js?v=20260830-density1" in index
+        "js/screens-guided-pi-evidence-preview.js?v=20260919-canvas1" in index
     )
     assert (
         "js/screens-guided-pi-technical-report.js?v=20260904-empty-gallery1"
@@ -98,17 +100,19 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     )
     assert "js/screens-guided-pi-analysis-report.js?v=20260916-study-workspace3" in index
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
-    assert "js/screens-guided-pi-preview.js?v=20260919-taskcanvas2" in index
+    assert "js/screens-guided-pi-source-view.js?v=20260920-trace1" in index
+    assert "js/screens-guided-pi-preview.js?v=20260921-evidence4" in index
     assert "js/screens-guided-pi-replay.js?v=20260919-task-index1" in index
-    assert "js/screens-guided-pi-resources.js?v=20260909-report-revision1" in index
-    assert "js/screens-guided-pi-run-outcome.js?v=20260919-review-language2" in index
-    assert "js/screens-guided-pi-activity.js?v=20260919-dialogue2" in index
+    assert "js/screens-guided-pi-resources.js?v=20260921-evidence1" in index
+    assert "js/screens-guided-pi-run-outcome.js?v=20260921-evidence1" in index
+    assert "js/screens-guided-pi-activity.js?v=20260920-trace2" in index
     assert (
-        "js/screens-guided-pi-provider.js?v=20260825-api-consent1"
+        "js/screens-guided-pi-provider.js?v=20260919-connection4"
         in index
     )
     assert "js/screens-guided-pi-provider-control.js?v=20260830-owner-split1" in index
-    assert "js/screens-guided-pi-events.js?v=20260919-method-skills1" in index
+    assert "js/screens-guided-pi-study-workspace.js?v=20260919-composer-picker3" in index
+    assert "js/screens-guided-pi-events.js?v=20260921-evidence1" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20260919-dialogue2" in index
     assert "js/screens-guided-pi-data-binding.js?v=20260908-source-conversation1" in index
@@ -116,13 +120,13 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-plan-actions.js?v=20260914-execution-retry1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260903-agent-owned-plan1" in index
     assert "js/screens-guided-pi-error-text.js?v=20260917-error-text1" in index
-    assert "js/screens-guided-pi.js?v=20260919-dialogue2" in index
-    assert "js/screens-guided.js?v=20260903-session-deeplink2" in index
+    assert "js/screens-guided-pi.js?v=20260921-evidence4" in index
+    assert "js/screens-guided.js?v=20260919-entry1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
     )
-    assert "js/api.js?v=20260919-result-export1" in index
+    assert "js/api.js?v=20260920-skill-package1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"
@@ -155,6 +159,9 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-evidence-preview.js"
     )
     assert index.index("js/screens-guided-pi-evidence-preview.js") < index.index(
+        "js/screens-guided-pi-source-view.js"
+    )
+    assert index.index("js/screens-guided-pi-source-view.js") < index.index(
         "js/screens-guided-pi-preview.js"
     )
     assert index.index("js/screens-guided-pi-preview.js") < index.index(
@@ -173,6 +180,183 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi.js"
     )
     assert index.index("js/screens-guided-pi.js") < index.index("js/screens-guided.js")
+
+
+def test_connection_page_keeps_primary_actions_neutral() -> None:
+    css = _read("css/guided-pi.css")
+    provider_css = css.split("/* Owner: screens-guided-pi-provider.js", 1)[1].split(
+        "/* Owner: per-session data-source consent gate.", 1
+    )[0]
+
+    assert "--provider-accent:#20211f" in provider_css
+    assert "background:var(--provider-ink);color:#fff" in provider_css
+    assert ".gpi-provider-setup .gpi-link{color:#55564f" in provider_css
+    assert ".gpi-provider-setup .gpi-account-row>.gpi-dot.waiting{background:#9b988f}" in provider_css
+    for rejected_color in ("#e6ed58", "#f4f6bd", "#c4cb37", "#dce447", "#858b20"):
+        assert rejected_color not in provider_css
+
+
+@pytest.mark.requires_node
+def test_figure_gallery_exposes_digest_pinned_view_source_action() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    renderer = _read("js/screens-agent-render.js")
+    icons = _read("js/icons.js")
+    script = f"""
+      global.window = {{
+        EU_LANG: 'zh',
+        EU_HTML: {{
+          esc: value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
+          escAttr: value => String(value ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;'),
+        }},
+        t: (en, zh) => zh,
+      }};
+      eval({icons!r});
+      eval({renderer!r});
+      const html = window.AGENT_RENDER.figureGallery({{
+        figures: [{{
+          label: '队列流程图',
+          relative_path: 'steps/cohort/outputs/cohort.png',
+          data_url: 'data:image/png;base64,AAAA',
+          source_code: {{
+            evidence_id: 'code_analysis_1', sha256: 'a'.repeat(64),
+            produced_by_step: 'cohort', producer: 'runner',
+            generation_mode: 'deterministic_standard', display_name: 'analysis.py', language: 'python',
+          }},
+        }}],
+      }});
+      process.stdout.write(JSON.stringify({{
+        hasAction: html.includes('data-gpi-source-code') && html.includes('查看源代码'),
+        pinned: html.includes('code_analysis_1') && html.includes('a'.repeat(64)),
+        context: html.includes('data-source-step="cohort"')
+          && html.includes('data-source-title="图表生成代码"')
+          && html.includes('队列流程图'),
+      }}));
+    """
+    result = subprocess.run([node, "--eval", script], check=True, capture_output=True, text=True)
+    assert json.loads(result.stdout) == {"hasAction": True, "pinned": True, "context": True}
+
+
+@pytest.mark.requires_node
+def test_source_view_preserves_conversation_layout_and_loads_registered_code(
+    tmp_path: Path,
+) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    script = r"""
+      let moduleOwner = null, html = '', sourceOpen = false, previewClosed = 0, apiArgs = null;
+      const preview = {close: () => { previewClosed += 1; }};
+      const host = {
+        hidden: true,
+        closest: () => ({classList: {toggle: (name, value) => { if (name === 'gpi-source-open') sourceOpen = value; }}}),
+        addEventListener: () => {},
+        replaceChildren: () => { html = ''; },
+        set innerHTML(value) { html = value; },
+        get innerHTML() { return html; },
+      };
+      global.window = {
+        EU_LANG: 'zh',
+        EU_HTML: {esc: value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')},
+        icon: () => '', setTimeout,
+        EU_API: {loadPiCopilotResearchEvidence: async (...args) => {
+          apiArgs = args;
+          return {payload: {renderer: 'code', previewable: true, language: 'python', display_name: 'analysis.py', producer: 'runner', generation_mode: 'deterministic_standard', text: 'value = 42\nprint(value)\n'}};
+        }},
+      };
+      global.window.EasyICU.guidedPi.declare('preview', preview);
+      global.navigator = {};
+      const sourceText = require('fs').readFileSync('src/easyicu/webserver/static/js/screens-guided-pi-source-view.js', 'utf8');
+      require('vm').runInThisContext(sourceText, {filename: 'screens-guided-pi-source-view.js'});
+      moduleOwner = global.window.EasyICU.guidedPi.require('sourceView');
+      moduleOwner.mount(host);
+      const button = {dataset: {
+        sourceEvidenceId: 'code_analysis_1', sourceSha256: 'b'.repeat(64),
+        sourceTitle: '图表生成代码', sourceOutput: '队列图', sourceStep: 'cohort_figure',
+        sourceProducer: 'runner', sourceGeneration: 'deterministic_standard',
+        sourceDisplayName: 'analysis.py', sourceLanguage: 'python',
+      }};
+      (async () => {
+        const opened = await moduleOwner.open(button, 'project_1', 'run_1');
+        const result = {
+          opened, sourceOpen, previewClosed,
+          apiArgs,
+          hasInput: html.includes('Input') && html.includes('cohort_figure'),
+          hasCode: html.includes('value = <span class="tok-number">42</span>') && html.includes('<i>2</i>'),
+          hasOutput: html.includes('Output') && html.includes('队列图'),
+          hasClose: html.includes('data-gpi-source-close'),
+        };
+        moduleOwner.close();
+        result.closed = !sourceOpen && host.hidden && html === '';
+        process.stdout.write(JSON.stringify(result));
+      })().catch(error => { console.error(error); process.exit(1); });
+    """
+    script_path = tmp_path / "source-view.test.js"
+    script_path.write_text(script, encoding="utf-8")
+    result = subprocess.run(
+        [node, str(script_path)],
+        cwd=STATIC.parents[3],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "opened": True,
+        "sourceOpen": True,
+        "previewClosed": 1,
+        "apiArgs": ["project_1", "run_1", "code_analysis_1", "b" * 64],
+        "hasInput": True,
+        "hasCode": True,
+        "hasOutput": True,
+        "hasClose": True,
+        "closed": True,
+    }
+
+
+def test_source_view_is_mounted_between_conversation_and_results_shelf() -> None:
+    guided = _read("js/screens-guided.js")
+    preview = _read("js/screens-guided-pi-preview.js")
+    css = _read("css/guided-pi-source-view.css")
+    assert 'id="gdSourceAside"' in guided
+    assert "sourceView.mount(root.querySelector('#gdSourceAside'))" in guided
+    assert "event.target.closest('[data-gpi-source-code]')" in preview
+    assert "sourceView.open(sourceButton, state.projectId, state.resource.run_id)" in preview
+    assert ".gd-main.gpi-source-open>#gdContextAside>#gdSourceAside" in css
+    assert ".gd-main.gpi-source-open>#gdContextAside>#gdStudyAside" in css
+    assert ".gd-main.gpi-source-open>.gd-conv" in css
+
+
+def test_execution_rows_open_the_public_operation_workbench() -> None:
+    activity = _read("js/screens-guided-pi-activity.js")
+    events = _read("js/screens-guided-pi-events.js")
+    source = _read("js/screens-guided-pi-source-view.js")
+    css = _read("css/guided-pi-source-view.css")
+    assert 'data-gpi-operation="${esc(operation)}"' in activity
+    assert "event.target.closest('[data-gpi-operation]')" in events
+    assert "sourceView.openOperation(operation, projectId(), runId, openResource)" in events
+    assert "function openOperation(button, projectId, runId, openResource)" in source
+    assert "data-gpi-operation-resource" in source
+    assert ".gpi-operation-results" in css
+    assert "data-gpi-trace-expand" in activity
+    assert "data-gpi-trace-expand" in events
+    assert "gpi-operation-title-icon" in source
+    assert "This step updated the run record without creating a separate file" in source
+
+
+def test_follow_up_questions_support_current_task_new_task_and_dismiss() -> None:
+    outcome = _read("js/screens-guided-pi-run-outcome.js")
+    events = _read("js/screens-guided-pi-events.js")
+    css = _read("css/workspace-canvas.css")
+    assert "data-gpi-followup=\"${index}\"" in outcome
+    assert "data-gpi-followup-new=\"${index}\"" in outcome
+    assert "data-gpi-followup-dismiss=\"${index}\"" in outcome
+    assert "function dismissFollowUp(index, latestRun, workflow)" in outcome
+    assert "function prepareNewTaskFollowUp(prompt)" in events
+    assert "RUN_OUTCOME.dismissFollowUp" in events
+    assert ".gpi-followup-actions" in css
+    assert ".gpi-followup-row:focus-within .gpi-followup-actions" in css
 
 
 def test_guided_pi_module_contract_rejects_ambiguous_or_missing_owners() -> None:
@@ -351,7 +535,7 @@ def test_confirmed_plan_choice_revises_in_place_without_a_fake_user_message() ->
         pytest.skip("Node is not installed")
     owner = _read("js/screens-guided-pi-plan-actions.js")
     script = f"""
-      global.window = {{}};
+      global.window = {{EasyICU: {{guidedPi: {{optional: () => null}}}}}};
       eval({owner!r});
       const calls = [];
       let busy = false;
@@ -885,59 +1069,74 @@ def test_new_research_session_starters_minimize_interaction_cost() -> None:
     owner = _read("js/screens-guided-pi-starters.js")
     shell = _read("js/screens-guided-pi.js")
     events = _read("js/screens-guided-pi-events.js")
+    workspace = _read("js/screens-guided-pi-study-workspace.js")
     index = _read("index.html")
     script = f"""
       global.window = {{ EU_HTML: {{ esc: value => String(value) }} }};
       eval({owner!r});
       const tr = (en, zh) => zh;
       const html = window.EU_GUIDED_PI_STARTERS.render({{ tr, disabled: false }});
-      function eventFor(kind, value, intent) {{
-        const attribute = kind === 'compose' ? 'gpiStarterCompose' : 'gpiStarterSend';
-        const marker = kind === 'compose' ? 'starter-compose' : 'starter-send';
-        const node = {{ dataset: {{}}, closest: selector => selector.includes(marker) ? node : null }};
-        node.dataset[attribute] = value;
+      function eventFor(value, intent, method) {{
+        const node = {{ dataset: {{}}, closest: selector => selector.includes('starter-compose') ? node : null }};
+        node.dataset.gpiStarterCompose = value;
         node.dataset.gpiStarterIntent = intent;
+        node.dataset.gpiStarterMethod = method;
         return {{ target: node }};
       }}
-      const compose = window.EU_GUIDED_PI_STARTERS.actionFromEvent(eventFor('compose', '我想研究：', 'idea_mining_entry'));
-      const discovery = window.EU_GUIDED_PI_STARTERS.actionFromEvent(eventFor('send', '我还没有方向', 'idea_discovery_entry'));
+      const compose = window.EU_GUIDED_PI_STARTERS.actionFromEvent(eventFor('我想研究：', 'implement_scientific_question', 'survival-time-to-event'), tr);
       const clinical = window.EU_GUIDED_PI_STARTERS.actionFromDiscoveryChoice('从临床困惑开始', tr);
       const article = window.EU_GUIDED_PI_STARTERS.actionFromDiscoveryChoice('从已有文章或 PDF 开始', tr);
       const data = window.EU_GUIDED_PI_STARTERS.actionFromDiscoveryChoice('从现有 ICU 数据开始', tr);
-      console.log(JSON.stringify({{ html, compose, discovery, clinical, article, data }}));
+      window.EU_CAPABILITIES = {{ capabilities: {{ method_skills: {{ items: Array.from({{ length: 6 }}, (_, index) => ({{
+        id: `workflow-${{index + 1}}`, title: `Workflow ${{index + 1}}`, title_zh: `工作流${{index + 1}}`,
+        category: 'Category', category_zh: '类别', description: 'Description', description_zh: '说明',
+        prompt: `Prompt ${{index + 1}}`, prompt_zh: `问题${{index + 1}}`, capability_id: `capability_${{index + 1}}`,
+        action_ids: [], claim_ceiling: 'analysis_only', enabled: true,
+      }})) }} }} }};
+      const catalogHtml = window.EU_GUIDED_PI_STARTERS.render({{ tr, disabled: false }});
+      const actions = {{ innerHTML: '', querySelector: () => null }};
+      const search = {{ value: 'table' }};
+      const empty = {{ hidden: false }};
+      const host = {{ querySelector: selector => selector.includes('starter-actions') ? actions
+        : selector.includes('starter-search') ? search : selector.includes('starter-empty') ? empty : null }};
+      const shuffled = window.EU_GUIDED_PI_STARTERS.shuffle(host, tr);
+      console.log(JSON.stringify({{ html, compose, clinical, article, data, catalogHtml, shuffled, shuffledHtml: actions.innerHTML, searchValue: search.value, emptyHidden: empty.hidden }}));
     """
     completed = subprocess.run(
         [node, "--eval", script], check=True, capture_output=True, text=True
     )
-    assert "你想从哪里开始？" in completed.stdout
-    assert "可以只说一句话" in completed.stdout
-    assert "附加 PDF 或粘贴文章链接" in completed.stdout
-    assert "我还没有方向" in completed.stdout
-    assert "先选择最容易提供的起点" in completed.stdout
-    assert "发掘一个模糊想法" in completed.stdout
-    assert "请用 Idea Mining 帮我发掘这个模糊想法：" in completed.stdout
-    assert 'class=\\"primary\\"' in completed.stdout
-    assert "评估一个已有想法" not in completed.stdout
-    assert "我已有明确研究问题" in completed.stdout
-    assert "进入研究方案与数据准备" in completed.stdout
-    assert "从现有 ICU 数据开始" in completed.stdout
-    assert "从文献寻找研究方向" not in completed.stdout
+    assert "开始一项 ICU 研究" in completed.stdout
+    assert "描述一个科学问题" in completed.stdout
+    assert "队列描述与 Table 1" in completed.stdout
+    assert "研究因素与结局分布" in completed.stdout
+    assert "生存与时间结局分析" in completed.stdout
+    assert "浏览全部技能与方法" in completed.stdout
+    assert "data-gpi-starter-search" in completed.stdout
+    assert "data-gpi-starter-shuffle" in completed.stdout
+    assert "工作流1" in completed.stdout
+    assert '"shuffled":true' in completed.stdout
+    assert "工作流4" in completed.stdout
+    assert '"searchValue":""' in completed.stdout
+    assert '"emptyHidden":true' in completed.stdout
     assert '"kind":"compose"' in completed.stdout
-    assert '"kind":"send"' in completed.stdout
-    assert '"intent":"idea_discovery_entry"' in completed.stdout
-    assert '"intent":"idea_mining_entry"' in completed.stdout
-    assert '"intent":"data_first_entry"' in completed.stdout
+    assert '"intent":"implement_scientific_question"' in completed.stdout
+    assert '"id":"survival-time-to-event"' in completed.stdout
+    assert '"capabilityId":"survival_time_to_event_v1"' in completed.stdout
     assert "请用 Idea Mining 从这个临床困惑中发掘研究方向：" in completed.stdout
     assert "请从我附加的文章或 PDF 中发掘研究方向：" in completed.stdout
-    assert "sendText(starterAction.text, [], starterAction.intent);" in events
     assert "prepareEntryCompose(starterAction);" in events
+    assert "STUDY_WORKSPACE.selectMethodTemplate" in events
+    assert "function selectMethodTemplate" in workspace
+    assert "capabilityId: String(descriptor.capabilityId" in workspace
+    assert "STARTERS.filter(state.host" in events
+    assert "STARTERS.shuffle(state.host, tr)" in events
     assert "STARTERS.actionFromDiscoveryChoice(message, tr)" in events
     assert "prepareEntryCompose(discoveryAction);" in events
     assert "sendText(discoveryAction.text, [], discoveryAction.intent);" in events
     assert "sendText(starterAction.text, []);" not in shell
     assert "IDEA_SOURCE.suggestsIdeaMining" in shell
-    assert "你想从哪里开始？" not in shell
-    assert "从文献寻找研究方向" not in shell
+    assert "composer: `<div class=\"gpi-compose gpi-entry-compose\">" in shell
+    assert "emptyResearch ? ''" in shell
     assert index.index("screens-guided-pi-starters.js") < index.index("screens-guided-pi.js")
 
 
@@ -955,7 +1154,7 @@ def test_copilot_idea_source_reuses_existing_pdf_and_url_adapters() -> None:
     assert "data-gpi-idea-url-focus" in source
     assert "IDEA_SOURCE.status" in shell
     assert "IDEA_SOURCE.controls" in shell
-    assert "描述你的想法或研究问题" in shell
+    assert "你想研究什么 ICU 科学问题？" in shell
     assert "prepareForMessage" in source
     assert "idea_source: ideaSource" in shell
     assert "IDEA_SOURCE.suggestsIdeaMining" in shell
@@ -999,11 +1198,13 @@ def test_copilot_plus_menu_keeps_article_url_entry_in_the_conversation() -> None
     )
     payload = json.loads(completed.stdout)
 
-    assert 'aria-label="添加资料"' in payload["html"]
+    assert 'aria-label="添加到问题"' in payload["html"]
     assert 'aria-haspopup="menu"' in payload["html"]
     assert 'role="menu"' in payload["html"]
     assert "上传 PDF" in payload["html"]
     assert "粘贴文章链接" in payload["html"]
+    assert 'data-gpi-composer-picker="materials"' in payload["html"]
+    assert 'data-gpi-composer-picker="skills"' in payload["html"]
     assert payload["handled"] is True
     assert payload["menuRemoved"] is True
     assert payload["input"]["focused"] is True
@@ -1107,6 +1308,13 @@ def test_new_conversation_control_clears_the_selected_session() -> None:
         STARTERS: inert,
         COHORT_ELIGIBILITY: inert,
         DATA_CONSENT: inert,
+        STUDY_WORKSPACE: {{
+          removeReference: () => {{}},
+          removeSkill: () => {{}},
+          removeMethod: () => {{}},
+        }},
+        projectId: () => 'project-1',
+        createSession: () => calls.push('create'),
         render: () => calls.push('render'),
         rememberSession: id => calls.push('remember:' + id),
       }});
@@ -1133,7 +1341,7 @@ def test_new_conversation_control_clears_the_selected_session() -> None:
         "session": None,
         "messages": [],
         "editingMessageId": "",
-        "calls": ["remember:", "render"],
+        "calls": ["remember:", "render", "create"],
     }
 
 
@@ -1527,7 +1735,8 @@ def test_local_source_picker_activates_the_sessions_bound_study_context() -> Non
         "guidedPi.optional('preview')"
     )
     assert "emptyResearchHtml" in owner
-    assert "需要读取或分析数据时" in starters
+    assert "暂不读取数据或运行分析" in starters
+    assert "Selecting a card never sends or grants data access" in starters
 
 
 def test_data_binding_owner_executes_local_picker_and_preserves_its_host_contract() -> None:
@@ -1699,6 +1908,21 @@ def test_new_session_selection_cannot_be_overwritten_by_a_stale_restore() -> Non
         "function adoptPersistedEntryIds", 1
     )[0]
     assert "state.sessions = [state.session].concat(" in refresh
+
+
+def test_digest_pinned_preview_restores_only_after_session_loading() -> None:
+    owner = _read("js/screens-guided-pi.js")
+
+    assert (
+        "if (!restoring && state.session && preview && preview.restoreFromLocation)"
+        in owner
+    )
+    assert "preview.restoreFromLocation(projectId(), previewWorkflowContext());" in owner
+    assert "preview.close({ preserveLocation: preservePreviewLocation });" in owner
+    assert "preview.clearProject({ preserveLocation: preservePreviewLocation });" in owner
+    preview = _read("js/screens-guided-pi-preview.js")
+    assert "if (!preserveLocation && typeof syncLocation === 'function')" in preview
+    assert "function clearProject(options) { close(options);" in preview
 
 
 def test_extraction_handoff_preserves_the_registered_source_identity() -> None:
@@ -2050,8 +2274,8 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert 'type="password"' in provider_owner
     assert 'name="enable_ai"' not in provider_owner
     assert 'type="checkbox"' not in provider_owner
-    assert "验证并保存连接" in provider_owner
-    assert "科研运行仍需另行确认" in provider_owner
+    assert "验证并保存" in provider_owner
+    assert "保存后，对话内容和你选择的文件可能发送至该服务" in provider_owner
     assert "savePiCopilotProviderConfig" in provider_control
     assert "savePiCopilotProviderConfig" not in pi_owner
     assert "enable_ai: true" in provider_control
@@ -2096,23 +2320,17 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "state.session.streaming !== false" in pi_owner
     assert pi_owner.count("reconcileSettledSession();") == 2
     assert "const VISIBLE_KINDS = new Set([" in activity_owner
-    for kind in (
-        "'submitted'",
-        "'agent'",
-        "'turn'",
-        "'assistant'",
-        "'tool'",
-        "'pipeline'",
-        "'retry'",
-        "'compaction'",
-    ):
-        assert kind in activity_owner
+    visible_kinds = activity_owner.split("const VISIBLE_KINDS = new Set([", 1)[1].split("]);", 1)[0]
+    for kind in ("'tool'", "'pipeline'", "'retry'"):
+        assert kind in visible_kinds
+    for internal_kind in ("'submitted'", "'agent'", "'assistant'", "'compaction'"):
+        assert internal_kind not in visible_kinds
     assert "Live progress connection stopped" in childjob_owner
     assert "private chain-of-thought" in activity_owner
     assert "loadPiCopilotProjectWorkflow" in pi_owner
     assert "gpi-workflow" in pi_owner
     assert "Research workflow" in pi_owner
-    assert "Used ${toolSteps.length} EasyICU tools" in activity_owner
+    assert "function isVisibleOperation(step)" in activity_owner
     assert "gpi-activity-live" in activity_owner
     assert "completedToolLabel" in activity_owner
     assert "initializePiCopilotProject" in pi_owner
@@ -2129,8 +2347,8 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "event.type === 'run_start'" in pi_owner
     assert "event.type === 'tool_progress'" in pi_owner
     assert "event.type === 'run_end'" in pi_owner
-    assert "workspace file contents may be sent to this service" in provider_owner
-    assert "PHI-safe summaries" in provider_owner
+    assert "conversation text and files you choose may be sent" in provider_owner
+    assert "gpi-connection-notice" in provider_owner
     assert "patient rows, credentials, or arbitrary host files" in pi_owner
     assert "data-gpi-confirm-action" in confirmation_owner
     assert "data-gpi-confirm-preview-data" in confirmation_owner
@@ -3130,15 +3348,16 @@ process.stdout.write(JSON.stringify({
     )
     rendered = json.loads(result.stdout)
     html = rendered["html"]
-    assert rendered["rows"] == 5
-    assert "5 个步骤" in html
+    assert rendered["rows"] == 4
+    assert "4 个步骤" in html
     assert "研究计划生成环境已准备" in html
     assert "已核对研究问题、数据范围与研究上下文" in html
     assert "已整理计划所需的研究依据与假设" in html
-    assert "计划合同已通过；分析已暂停，等待人工审阅" in html
+    assert "候选研究计划已生成并完成结构校验" in html
     for internal in (
-        "provider authorized", "Selecting concepts", "research_pipeline",
-        "Cohort materialised", "Scientific Readiness", "artifact-ref",
+        "EasyICU 预检任务已提交", "provider authorized", "Selecting concepts",
+        "research_pipeline", "Cohort materialised", "计划合同已通过；分析已暂停，等待人工审阅",
+        "Scientific Readiness", "artifact-ref",
     ):
         assert internal not in html
 
@@ -3667,7 +3886,8 @@ def test_agent_handoff_project_remains_visible_without_a_guided_folder() -> None
     assert ".gd-rail-restore" in project_css
     assert ".gd-rail-collapse" in project_css
     assert ".gpi-" not in project_css
-    assert ".gpi-setup-focus.gd-project-rail-collapsed" in pi_css
+    assert ".gpi-setup-focus>.gd-rail" in pi_css
+    assert ".gpi-setup-focus>.gd-rail-restore" in pi_css
     assert ".gpi-preview-open.gd-project-rail-collapsed" in preview_css
 
 
@@ -3754,7 +3974,8 @@ def test_pi_css_is_route_owned_and_does_not_pollute_catch_all_files() -> None:
     assert "gpi-avatar" not in owner
     assert ".gd-conv.pi-active" in owner
     assert ".gd-main.threecol.gpi-setup-focus" in owner
-    assert ".gd-main.threecol.gpi-setup-focus>.gd-aside{display:none}" in owner
+    assert ".gd-main.threecol.gpi-setup-focus>.gd-rail" in owner
+    assert ".gd-main.threecol.gpi-setup-focus>.gd-aside-restore{display:none}" in owner
     assert "!important" not in owner
     assert ":has(" not in owner
     for foreign in (".patient-", ".cohort-", ".crossdb-", ".settings-", ".idea-"):
@@ -3782,7 +4003,7 @@ def test_guided_shell_readability_changes_stay_with_their_css_owners() -> None:
     assert ".gpi-compose-card" in pi_css and "width:min(900px,100%)" in pi_css
     assert ".gpi-compose textarea" in pi_css and "width:100%" in pi_css
     assert ".gpi-starter-actions button.primary" in pi_css
-    assert "→" not in starters
+    assert "gpi-starter-browse" in starters
     assert ".gpi-starter-actions b{" not in pi_css
     assert ".gpi-head-overflow-menu" in pi_css
     assert ".gd-main.threecol.gpi-empty-session-focus>.gd-aside{display:none}" not in pi_css
@@ -3805,19 +4026,44 @@ def test_model_connection_setup_owns_the_temporary_focus_layout() -> None:
 
     assert "main.classList.toggle('gpi-setup-focus', setupFocused)" in owner
     assert "state.showSetup || !connectionReady()" in owner
-    assert "Finish connection setup" in provider
-    assert "完成连接设置" in provider
+    assert "Enter research workspace" in provider
+    assert "进入研究工作区" in provider
+    assert "data-gpi-connection-page" in provider
+    assert "Choose a connection" in provider
+    assert "Advanced settings" in provider
+    assert "Open EasyICU from the local service to configure this connection" in provider
+    assert "Fixed per conversation" not in provider
+    assert "Local-first research workspace" not in provider
+    assert "gpi-blocker-diagnostic" in provider
+    assert "previousConnectionTop === null ? 0 : previousConnectionTop" in owner
     assert "gpi-setup-focus" not in projects_css
 
 
 def test_empty_research_session_prioritizes_the_conversation_entry() -> None:
     owner = _read("js/screens-guided-pi.js")
     projects_css = _read("css/guided-projects.css")
+    workspace_css = _read("css/guided-pi-workspace.css")
 
     assert "const emptyResearch = !workspace && !messages" in owner
     assert "gpi-empty-session'" in owner
     assert "main.classList.toggle('gpi-empty-session-focus', emptySessionFocused)" in owner
     assert "state.messages.length === 0 && state.workflowReceipts.length === 0" in owner
+    assert "api().loadCapabilities()" in owner
+    assert "materialsInteractive: !emptySessionFocused" in owner
+    assert "!RUN_OUTCOME.resultsAvailable(state.latestRun, state.workflow)" not in owner.split(
+        "const emptySessionFocused =", 1
+    )[1].split("const main =", 1)[0]
+    start_entry = owner.split("async function startEntry()", 1)[1].split(
+        "async function stopMessage()", 1
+    )[0]
+    assert "if (preview && preview.close) preview.close();" in start_entry
+    open_session = owner.split("async function openSession(", 1)[1].split(
+        "async function switchMode(", 1
+    )[0]
+    assert "if (preview && preview.close) preview.close({ preserveLocation: preservePreviewLocation });" in open_session
+    assert "gpi-workspace.gpi-empty-session-focus" in workspace_css
+    assert "gpi-empty-session-focus:not(.gpi-preview-open):not(.gpi-source-open)>.gd-aside{display:none}" in workspace_css
+    assert "max-width:1060px" in workspace_css
     assert "gpi-empty-session-focus" not in projects_css
 
 
@@ -4710,6 +4956,8 @@ def test_pi_activity_owner_renders_safe_expanded_lifecycle_details() -> None:
       const html = activity.render({{
         status: 'complete', expanded: true, startedAt: 1000, endedAt: 3500,
         steps: [
+          {{kind: 'submitted', status: 'complete', startedAt: 900, endedAt: 950}},
+          {{kind: 'agent', status: 'complete', startedAt: 950, endedAt: 1000}},
           {{kind: 'assistant', phase: 1, status: 'complete', publicChars: 8, startedAt: 1000, endedAt: 1500}},
           {{
             kind: 'tool', toolName: 'easyicu_read_project_file', status: 'complete',
@@ -4733,6 +4981,11 @@ def test_pi_activity_owner_renders_safe_expanded_lifecycle_details() -> None:
         steps: [{{kind: 'tool', toolName: 'easyicu_inspect_context', status: 'error'}}],
       }});
       const liveHtml = activity.render(live);
+      const timelineHtml = activity.renderTimeline([
+        {{role: 'user'}},
+        {{role: 'activity', status: 'complete'}},
+        {{role: 'assistant'}},
+      ], row => '[' + row.role + ']');
       const turns = {{status: 'complete', startedAt: 1000, endedAt: 3000, steps: []}};
       activity.startTurn(turns, 1000); activity.finishTurn(turns, 1800);
       activity.startTurn(turns, 1900); activity.finishTurn(turns, 3000);
@@ -4758,14 +5011,17 @@ def test_pi_activity_owner_renders_safe_expanded_lifecycle_details() -> None:
         finishedTurnCollapses: !html.includes(' open>'),
         historicalFailureCollapses: !failedHtml.includes(' open>'),
         currentFailureCollapses: !currentFailedHtml.includes(' open>'),
-        modelPhase: html.includes('Public response phase 1 finished'),
+        internalLifecycleHidden: !html.includes('Message submitted to EasyICU Copilot')
+          && !html.includes('Copilot workflow started')
+          && !html.includes('Public response phase 1 finished'),
         readTool: html.includes('Read project file · plan.json'),
         retryLabel: html.includes('Plan contract retry') && !html.includes('undefined'),
-        stepDuration: html.includes('0.5s') && html.includes('1.0s') && html.includes('<0.1s'),
+        stepDuration: !html.includes('0.5s') && html.includes('1.0s') && html.includes('<0.1s'),
         totalDuration: html.includes('total 2.5s'),
-        publicStream: liveHtml.includes('Streaming public response phase 2')
-          && liveHtml.includes('Visible public answer chunk')
+        runningLifecycleHidden: !liveHtml.includes('Streaming public response phase 2')
+          && !liveHtml.includes('Visible public answer chunk')
           && liveHtml.includes('data-gpi-live-elapsed'),
+        traceBeforeFinalAnswer: timelineHtml === '[user]<div class="gpi-turn-trace">[activity]</div>[assistant]',
         noZeroMs: !html.includes('0 ms') && !liveHtml.includes('0 ms'),
         hiddenOverlappingTurns: !turnHtml.includes('Model turn 1 finished') && !turnHtml.includes('Model turn 2 finished'),
         englishReceiptVisibleInEnglish: html.includes('Loaded the governed project file.'),
@@ -4789,12 +5045,13 @@ def test_pi_activity_owner_renders_safe_expanded_lifecycle_details() -> None:
         "finishedTurnCollapses": True,
         "historicalFailureCollapses": True,
         "currentFailureCollapses": True,
-        "modelPhase": True,
+        "internalLifecycleHidden": True,
         "readTool": True,
         "retryLabel": True,
         "stepDuration": True,
         "totalDuration": True,
-        "publicStream": True,
+        "runningLifecycleHidden": True,
+        "traceBeforeFinalAnswer": True,
         "noZeroMs": True,
         "hiddenOverlappingTurns": True,
         "englishReceiptVisibleInEnglish": True,
@@ -6217,7 +6474,7 @@ def test_guided_analysis_outcome_stays_visible_after_refresh() -> None:
     assert "review_manuscript" in events
     assert "review_scientific_review" in events
     assert "data-gpi-run-outcome-data" in owner
-    assert "完整产物与审计" in owner
+    assert "完整产物与审计" not in owner
     assert "EasyICU 数据可视化" in owner
     assert "resource.snapshot_sha256" in owner
     assert "data-gpi-run-outcome-retry" in owner
@@ -6399,7 +6656,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20260908-writer-status1" in index
-    assert "screens-guided-pi.js?v=20260919-dialogue2" in index
+    assert "screens-guided-pi.js?v=20260921-evidence4" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

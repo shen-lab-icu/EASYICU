@@ -40,9 +40,15 @@
       const retry = role === 'assistant' && options && options.canRetry && options.retryUserEntryId
         ? action('retry', tr('Regenerate response', '重新生成回答'), 'refresh', false)
         : '';
+      const like = role === 'assistant'
+        ? `<button type="button" class="gpi-icon-action" data-gpi-like title="${tr('Good response', '好评')}" aria-label="${tr('Good response', '好评')}">${iconHtml('thumbup', 13)}</button>`
+        : '';
+      const dislike = role === 'assistant'
+        ? `<button type="button" class="gpi-icon-action" data-gpi-dislike title="${tr('Bad response', '差评')}" aria-label="${tr('Bad response', '差评')}">${iconHtml('thumbdown', 13)}</button>`
+        : '';
       return {
         editorHtml: '',
-        actionsHtml: `<div class="gpi-message-actions" role="group" aria-label="${tr('Message actions', '消息操作')}">${copy}${edit}${retry}</div>`,
+        actionsHtml: `<div class="gpi-message-actions" role="group" aria-label="${tr('Message actions', '消息操作')}">${like}${dislike}${copy}${edit}${retry}</div>`,
       };
     }
 

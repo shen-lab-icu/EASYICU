@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from easyicu.webserver import agent_pipeline_runs, agent_runs, jobs, sources
 from easyicu.webserver import study_contexts as study_context_owner
+from easyicu.webserver.research_evidence_preview import project_review_evidence_refs
 from easyicu.webserver.study_scientific_configuration import (
     ScientificConfiguration,
     SetupFacts,
@@ -1058,6 +1059,31 @@ def _enrich_plan_review(
     return snapshot
 
 
+def _scientific_review_references(review: Mapping[str, Any]) -> List[str]:
+    """Collect the bounded file labels cited by the scientific review."""
+
+    payloads = review.get("artifact_payloads")
+    payloads = payloads if isinstance(payloads, Mapping) else {}
+    readiness = payloads.get("scientific_readiness.json")
+    readiness = readiness if isinstance(readiness, Mapping) else {}
+    references: List[str] = []
+    for section in ("domains", "findings"):
+        rows = readiness.get(section)
+        if not isinstance(rows, list):
+            continue
+        for row in rows[:40]:
+            if not isinstance(row, Mapping):
+                continue
+            values = row.get("evidence_refs")
+            if not isinstance(values, list):
+                continue
+            for value in values[:8]:
+                text = str(value or "").strip()
+                if text and text not in references:
+                    references.append(text)
+    return references[:80]
+
+
 def build_project_workflow_projection(
     *,
     study_context_id: Optional[str],
@@ -1098,7 +1124,18 @@ def build_project_workflow_projection(
         agent_runs.read_run_review(str(latest_run.get("project_dir") or ""))
         if latest_run else {}
     )
-    latest_run_outcome = project_run_outcome(review)
+    review_evidence = (
+        project_review_evidence_refs(
+            str(latest_run.get("project_dir") or ""),
+            _scientific_review_references(review),
+        )
+        if latest_run
+        else []
+    )
+    latest_run_outcome = project_run_outcome(
+        review,
+        review_evidence_refs=review_evidence,
+    )
 
     snapshot = build_research_workflow_snapshot(
         study=study,

@@ -209,6 +209,7 @@ test('P2-12 document and web opens invalidate older artifact responses', async (
   for (const kind of ['webpage', 'research_document']) {
     const pending = deferred(), c = context({ state: { request: 0, projectId: '', recentResources: [] },
       safeResource: value => value, safeWorkflowContext: value => value, rememberResource() {}, render() {} });
+    c.window.EasyICU = { guidedPi: { optional: name => name === 'sourceView' ? { close() {} } : null } };
     c.loadResource = async () => { const ticket = ++c.state.request; const payload = await pending.promise; if (ticket === c.state.request) c.state.payload = payload; };
     vm.runInContext(section('screens-guided-pi-preview.js', '  function open(resource,', '  function openRunEvidence('), c);
     c.open({ kind: 'research_artifact' }, 'project');

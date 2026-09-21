@@ -179,6 +179,12 @@ class FakeService:
     def get_session(self, session_id: str, **kwargs) -> dict:
         return {"ok": True, "session_id": session_id, "received": kwargs}
 
+    def rename_session(self, session_id: str, **kwargs) -> dict:
+        return {"ok": True, "session_id": session_id, "received": kwargs}
+
+    def delete_empty_session(self, session_id: str, **kwargs) -> dict:
+        return {"ok": True, "session_id": session_id, "received": kwargs}
+
     def rebind_session(self, session_id: str, **kwargs) -> dict:
         return {"ok": True, "session_id": session_id, "received": kwargs}
 
@@ -278,6 +284,28 @@ def test_session_queries_are_scoped_to_one_research_project(monkeypatch) -> None
         "/api/copilot/pi/sessions/pi-test",
         params={"project_id": "guided-project-2"},
     )
+    assert opened.status_code == 200
+
+    renamed = client.post(
+        "/api/copilot/pi/sessions/pi-test/rename",
+        json={"project_id": "guided-project-2", "title": "Lactate review"},
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["received"] == {
+        "project_id": "guided-project-2",
+        "title": "Lactate review",
+    }
+
+    removed = client.post(
+        "/api/copilot/pi/sessions/pi-test/delete-empty",
+        json={"project_id": "guided-project-2", "confirm_empty": True},
+    )
+    assert removed.status_code == 200
+    assert removed.json()["received"] == {"project_id": "guided-project-2"}
+    assert client.post(
+        "/api/copilot/pi/sessions/pi-test/delete-empty",
+        json={"project_id": "guided-project-2", "confirm_empty": False},
+    ).status_code == 422
     assert opened.status_code == 200
     assert opened.json()["received"]["project_id"] == "guided-project-2"
 

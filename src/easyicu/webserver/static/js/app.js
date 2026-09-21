@@ -45,6 +45,7 @@
     return { id: fallback, fallback: true };
   }
   let route = resolveRoute(rawRouteFromHash(), { rewrite: true }).id;
+  let activeRouteTransition = null;
 
   /* Guided Copilot -> module handoff payload. The guided screen set()s the
      backend handoff object before navigating; the target screen take()s it
@@ -160,6 +161,8 @@
     const target = heading || main;
     if (heading) heading.setAttribute('tabindex', '-1');
     if (target && typeof target.focus === 'function') {
+      target.dataset.euRouteFocus = 'true';
+      target.addEventListener('blur', () => { delete target.dataset.euRouteFocus; }, { once: true });
       try { target.focus({ preventScroll: true }); }
       catch (_) { target.focus(); }
     }
@@ -356,6 +359,7 @@
   function render(opts = {}) {
     const resetScroll = !!opts.resetScroll;
     const priorContent = app.querySelector('.content');
+    const priorScrollOwner = priorContent || app.querySelector('.eudata-main') || app.querySelector('.eusk-main');
     const priorMain = app.querySelector('main');
     const priorActive = document.activeElement;
     const preserveRouteFocus = !!(
@@ -365,10 +369,30 @@
     const scrollState = {
       x: window.scrollX || 0,
       y: window.scrollY || 0,
-      contentTop: priorContent ? priorContent.scrollTop : 0,
+      contentTop: priorScrollOwner ? priorScrollOwner.scrollTop : 0,
     };
     const scr = screenOf(route);
-    if (scr.full) {
+    const moduleShell = window.EU_DESKTOP_MODULE_SHELL;
+    const sharedDataRoute = moduleShell && moduleShell.isDataRoute(route) && route !== 'extraction';
+    const sharedSettingsRoute = moduleShell && route === 'settings';
+    if (sharedDataRoute) {
+      app.innerHTML = moduleShell.renderData({
+        active: route,
+        wide: !!scr.wide,
+        label: t('Data workspace', '数据工作台'),
+        actions: actionHtmlOf(scr),
+        content: scr.render(),
+      });
+    } else if (sharedSettingsRoute) {
+      app.innerHTML = moduleShell.render({
+        active: 'settings',
+        shellClass: 'euh-settings-shell',
+        mainClass: 'euh-settings-main',
+        innerClass: 'euh-settings-main-inner',
+        label: t('Settings', '设置'),
+        content: `<div class="euh-settings-actions">${actionHtmlOf(scr)}</div>${scr.render()}`,
+      });
+    } else if (scr.full) {
       app.innerHTML = scr.render();
     } else {
       const m = mobileChrome();
@@ -387,7 +411,7 @@
     syncShellAccessibility(app, !!scr.full);
     const title = routeTitleOf(scr);
     document.title = routeDocumentTitle(title);
-    const c = app.querySelector('.content');
+    const c = app.querySelector('.content') || app.querySelector('.eudata-main') || app.querySelector('.eusk-main');
     if (resetScroll) {
       if (c) c.scrollTop = 0;
       window.scrollTo(0, 0);
@@ -398,6 +422,42 @@
       window.scrollTo(scrollState.x, scrollState.y);
       if (preserveRouteFocus) focusRouteContent();
     }
+  }
+
+  function routeMotionAllowed() {
+    if (typeof window.matchMedia !== 'function') return false;
+    return window.matchMedia('(min-width: 1181px)').matches
+      && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  function renderRoute(opts = {}) {
+    if (!routeMotionAllowed()) {
+      render(opts);
+      return;
+    }
+    if (activeRouteTransition && typeof activeRouteTransition.skipTransition === 'function') {
+      activeRouteTransition.skipTransition();
+    }
+    if (typeof document.startViewTransition !== 'function') {
+      render(opts);
+      const surface = app.querySelector(
+        '.gd-main.gpi-workspace .gd-conv, .eusk-main, .eudata-main, .euh-settings-main, .main .content'
+      );
+      if (surface) {
+        surface.classList.add('eu-route-enter');
+        surface.addEventListener('animationend', () => surface.classList.remove('eu-route-enter'), { once: true });
+      }
+      return;
+    }
+    document.documentElement.classList.add('eu-route-transitioning');
+    const transition = document.startViewTransition(() => render(opts));
+    activeRouteTransition = transition;
+    const finish = () => {
+      if (activeRouteTransition !== transition) return;
+      activeRouteTransition = null;
+      document.documentElement.classList.remove('eu-route-transitioning');
+    };
+    transition.finished.then(finish, finish);
   }
 
   window.__euRender = function (opts) { render(opts || {}); };
@@ -425,7 +485,7 @@
       if (window.SCREENS[id]) {
         route = id;
         location.hash = '#' + id;
-        render({ resetScroll: true });
+        renderRoute({ resetScroll: true });
         return;
       }
     }
@@ -436,12 +496,12 @@
     const resolved = resolveRoute(rawRouteFromHash(), { rewrite: true });
     let r = resolved.id;
     const alias = window.__euAlias; window.__euAlias = false;
-    if (window.SCREENS[r] && (r !== route || alias || resolved.fallback)) { route = r; render({ resetScroll: true }); }
+    if (window.SCREENS[r] && (r !== route || alias || resolved.fallback)) { route = r; renderRoute({ resetScroll: true }); }
   });
 
   /* ---- global keyboard shortcuts (advertised on Get Started) ---- */
   const SHORTCUT_SECTIONS = ['ideas', 'extraction', 'patient', 'crossdb', 'guided'];
-  function goto(id) { if (window.SCREENS[id]) { route = id; location.hash = '#' + id; render({ resetScroll: true }); } }
+  function goto(id) { if (window.SCREENS[id]) { route = id; location.hash = '#' + id; renderRoute({ resetScroll: true }); } }
   document.addEventListener('keydown', (e) => {
     const tgt = e.target;
     const typing = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable);

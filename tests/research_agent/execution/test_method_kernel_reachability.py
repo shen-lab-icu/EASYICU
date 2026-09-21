@@ -379,6 +379,35 @@ def test_a_plain_association_step_is_not_handed_the_trajectory_kernel():
     )
 
 
+def test_doubly_robust_action_keeps_event_time_reconciliation_and_aiptw_kernel():
+    """Exact action resources must outrank generic family similarity.
+
+    ``max_software`` is three.  Before the action-specific binding, generic
+    causal kernels could evict ``survival_inputs`` even though the method needs
+    its event-time checks before the point-treatment AIPTW sensitivity.
+    """
+
+    from easyicu.research_agent.resources.coder import build_coder_resource_bundle
+
+    bundle = build_coder_resource_bundle(
+        step_id="01_aiptw",
+        profile_ref="test/profile@1",
+        analysis_family="causal_inference",
+        step_role="secondary",
+        question="Estimate a doubly robust treatment effect sensitivity.",
+        intent="Reconcile event-time inputs and estimate a point-treatment AIPTW ATE.",
+        method="doubly_robust",
+        planner_inputs=("table:analysis_cohort",),
+        expected_outputs=("table:aiptw_sensitivity",),
+        resolved_input_bindings={},
+        runtime_import_names=_RUNTIME,
+        scientific_action_id="causal_emulation.doubly_robust",
+    )
+    selected = _selected_software_imports(bundle.prompt_projection)
+    assert "easyicu.research_agent.methods.survival_inputs" in selected
+    assert "easyicu.research_agent.methods.doubly_robust" in selected
+
+
 # ---------------------------------------------------------------------------
 # the offer must actually reach the Coder
 # ---------------------------------------------------------------------------

@@ -115,6 +115,23 @@ class PiSessionCreateRequest(BaseModel):
     research_model: ModelText | None = None
 
 
+class PiSessionRenameRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: ShortText
+    title: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+    ]
+
+
+class PiSessionDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: ShortText
+    confirm_empty: Literal[True]
+
+
 class CodexLoginRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -763,6 +780,35 @@ def get_pi_copilot_session(
             transcript_limit=transcript_limit,
             replay_cursor=replay_cursor,
             replay_limit=replay_limit,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/sessions/{session_id}/rename")
+def post_pi_copilot_session_rename(
+    session_id: ShortText,
+    body: PiSessionRenameRequest,
+) -> dict:
+    try:
+        return get_pi_copilot_service().rename_session(
+            session_id,
+            project_id=body.project_id,
+            title=body.title,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/sessions/{session_id}/delete-empty")
+def post_pi_copilot_session_delete_empty(
+    session_id: ShortText,
+    body: PiSessionDeleteRequest,
+) -> dict:
+    try:
+        return get_pi_copilot_service().delete_empty_session(
+            session_id,
+            project_id=body.project_id,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

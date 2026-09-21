@@ -1078,10 +1078,11 @@ AUXILIARY_DETERMINISTIC_RUNNERS: Tuple[AuxiliaryRunner, ...] = (
 
 KNOWN_UNSUPPORTED_ESTIMANDS: Tuple[Tuple[str, str], ...] = (
     (
-        "Competing-risks cumulative incidence (Fine-Gray / CIF)",
-        "No deterministic runner. A cause-naive Cox HR is NOT a CIF, so a "
-        "competing-risks question (for example, an event with death as a competing "
-        "risk) must fail closed to diagnostic_only — not be answered with a Cox HR.",
+        "Fine-Gray competing-risk regression as a primary/reportable estimand",
+        "No deterministic/reportable primary Fine-Gray owner. EasyICU exposes "
+        "analysis-only Aalen-Johansen CIF and Gray comparison as a supporting "
+        "Coder action; a cause-naive Cox HR must not substitute for Fine-Gray "
+        "regression or primary competing-risk authority.",
     ),
 )
 
@@ -1886,8 +1887,10 @@ def assess_scientific_capability(
                 issue_code="competing_risk_estimator_unavailable",
                 reason=(
                     "The endpoint declares multiple event types, but EasyICU has "
-                    "no registered CIF/Fine-Gray capability. A cause-naive Cox "
-                    "model must not stand in for a competing-risk claim."
+                    "no registered primary/reportable Fine-Gray capability. The "
+                    "supporting Aalen-Johansen/Gray action does not grant primary "
+                    "estimand authority, and a cause-naive Cox model must not stand "
+                    "in for a competing-risk claim."
                 ),
             )
 

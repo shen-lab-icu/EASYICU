@@ -69,6 +69,68 @@ def test_demo_catalog_is_fixed_safe_and_path_free(
     assert all(row["status"]["state"] == "not_downloaded" for row in payload["sources"])
 
 
+def test_demo_catalog_status_does_not_rescan_every_registered_export(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("EASYICU_DEMO_CACHE_DIR", str(tmp_path / "private-cache"))
+    monkeypatch.setattr(demo_source_storage, "archive_ready", lambda *_: True)
+    monkeypatch.setattr(demo_source_storage, "raw_ready", lambda *_: True)
+    monkeypatch.setattr(demo_source_storage, "parquet_ready", lambda *_: True)
+    monkeypatch.setattr(demo_source_storage, "export_ready", lambda *_: True)
+    seen: list[str] = []
+
+    def stored_state(path: str) -> tuple[bool, bool]:
+        seen.append(path)
+        return True, False
+
+    monkeypatch.setattr(
+        demo_source_storage.source_store,
+        "stored_registration_state",
+        stored_state,
+    )
+    monkeypatch.setattr(
+        demo_source_storage.source_store,
+        "load_registry",
+        lambda: pytest.fail("catalog status must not trigger a full registry rescan"),
+    )
+
+    payload = demo_sources.demo_sources_catalog()
+
+    assert len(seen) == 2
+    assert all(row["status"]["state"] == "prepared" for row in payload["sources"])
+    assert all(row["status"]["registered"] is True for row in payload["sources"])
+
+
+def test_stored_registration_state_is_a_metadata_only_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_store = demo_sources.source_store
+    registry_path = tmp_path / "webserver_sources.json"
+    export_path = tmp_path / "official-demo-export"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "sources": [{"path": str(export_path), "label": "Official demo"}],
+                "active_path": str(export_path),
+                "removed_paths": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", registry_path)
+    monkeypatch.setattr(
+        source_store.dataio,
+        "describe_export_source",
+        lambda *_: pytest.fail("metadata lookup must not describe export files"),
+    )
+
+    assert source_store.stored_registration_state(str(export_path)) == (True, True)
+    assert source_store.stored_registration_state(str(tmp_path / "other")) == (
+        False,
+        False,
+    )
+
+
 def test_safe_zip_extraction_rejects_traversal_and_symlink(tmp_path: Path) -> None:
     traversal = tmp_path / "traversal.zip"
     _zip(traversal, {"../escape.csv": b"not allowed"})
