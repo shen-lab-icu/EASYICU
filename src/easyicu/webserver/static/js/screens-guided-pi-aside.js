@@ -20,8 +20,13 @@
     let resultQuery = '';
     let resultProjectId = '';
     const LAYOUT_KEY = 'easyicu.pi.workspacePanels.v1';
-    const panelKeys = ['progress', 'results', 'compute', 'notes'];
-    let visiblePanels = { progress: true, results: true, compute: true, notes: true };
+    // Three panels, each backed by an EasyICU owner: the governed workflow
+    // stages, the run's artifacts, and per-project notes. A "Compute" panel
+    // was dropped: EasyICU executes locally (remote compute is a disabled
+    // capability) and has no machines, background workers, or pipelines to
+    // list; the run facts it carried live on the current to-do row.
+    const panelKeys = ['progress', 'results', 'notes'];
+    let visiblePanels = { progress: true, results: true, notes: true };
     try {
       const saved = JSON.parse(window.localStorage.getItem(LAYOUT_KEY) || '{}');
       panelKeys.forEach(key => { if (typeof saved[key] === 'boolean') visiblePanels[key] = saved[key]; });
@@ -39,33 +44,158 @@
 
     function layoutOptions() { return { ...visiblePanels }; }
 
+    // Project notes are project memory: they live as `project_notes.md` in
+    // the project's local folder (guided_sessions owns the file) so they
+    // survive browsers and machines. The browser copy remains the fallback
+    // for a project without a registered folder, and a browser-only note
+    // from before this owner is offered into the folder once.
+    const NOTES_SAVE_DELAY_MS = 800;
+    let notes = { projectId: '', text: '', available: null, loading: false, saving: false, savedAt: '', error: '', timer: null };
+    function notesKey(id) { return `easyicu.pi.projectNotes.v1.${id}`; }
+    function localNotes(id) { try { return window.localStorage.getItem(notesKey(id)) || ''; } catch (_) { return ''; } }
+    function rememberLocalNotes(id, text) { try { window.localStorage.setItem(notesKey(id), text); } catch (_) {} }
+    function notesApi() { return host.api ? host.api() : (window.EU_API || {}); }
+    function ensureNotesLoaded() {
+      const id = projectId();
+      if (!id || notes.projectId === id) return;
+      if (notes.timer) { clearTimeout(notes.timer); notes.timer = null; }
+      notes = { projectId: id, text: localNotes(id), available: null, loading: true, saving: false, savedAt: '', error: '', timer: null };
+      const client = notesApi();
+      if (typeof client.loadGuidedProjectNotes !== 'function') { notes.available = false; notes.loading = false; return; }
+      void client.loadGuidedProjectNotes(id).then(payload => {
+        if (notes.projectId !== id) return;
+        notes.loading = false;
+        notes.available = Boolean(payload && payload.available);
+        notes.savedAt = String(payload && payload.updated_at || '');
+        if (notes.available) {
+          if (payload.present) notes.text = String(payload.text || '');
+          else if (notes.text.trim()) scheduleNotesSave();
+        }
+        paintNotes();
+      }).catch(error => {
+        if (notes.projectId !== id) return;
+        notes.loading = false; notes.available = false;
+        notes.error = String((error && error.message) || tr('Could not read the project notes.', '读取项目笔记失败。')).slice(0, 200);
+        paintNotes();
+      });
+    }
+    function scheduleNotesSave() {
+      if (notes.timer) clearTimeout(notes.timer);
+      notes.timer = setTimeout(() => { notes.timer = null; void saveNotes(); }, NOTES_SAVE_DELAY_MS);
+    }
+    async function saveNotes() {
+      const id = notes.projectId;
+      const client = notesApi();
+      if (!id || notes.available !== true || typeof client.saveGuidedProjectNotes !== 'function') return;
+      const text = notes.text;
+      notes.saving = true; notes.error = ''; paintNotes();
+      try {
+        const payload = await client.saveGuidedProjectNotes(id, text);
+        if (notes.projectId !== id) return;
+        notes.savedAt = String(payload && payload.updated_at || '');
+        if (notes.text === text) try { window.localStorage.removeItem(notesKey(id)); } catch (_) {}
+      } catch (error) {
+        if (notes.projectId !== id) return;
+        notes.error = String((error && error.message) || tr('Could not save the project notes.', '保存项目笔记失败。')).slice(0, 200);
+        rememberLocalNotes(id, text);
+      } finally {
+        if (notes.projectId === id) { notes.saving = false; paintNotes(); }
+      }
+    }
+    function notesStatusText() {
+      if (notes.loading) return tr('Reading the project folder…', '正在读取项目文件夹……');
+      if (notes.error) return notes.error;
+      if (notes.available === false) return tr('This project has no local folder; notes stay in this browser.', '此项目没有本地文件夹，笔记仅保存在此浏览器。');
+      if (notes.saving) return tr('Saving to the project folder…', '正在保存到项目文件夹……');
+      if (notes.timer) return tr('Unsaved changes', '有未保存的改动');
+      const contracts = window.EU_GUIDED_CONTRACTS || {};
+      const when = notes.savedAt && typeof contracts.fmtRunTime === 'function' ? contracts.fmtRunTime(notes.savedAt) : '';
+      return when
+        ? `${tr('Saved in the project folder', '已保存到项目文件夹')} · ${when}`
+        : tr('Saved as project_notes.md in the project folder.', '保存为项目文件夹里的 project_notes.md。');
+    }
+    function paintNotes() {
+      const body = document.getElementById('gdAsideBody');
+      const status = body && body.querySelector('[data-gpi-notes-status]');
+      if (status) status.textContent = notesStatusText();
+      const area = body && body.querySelector('[data-gpi-project-notes]');
+      if (area && document.activeElement !== area && area.value !== notes.text) area.value = notes.text;
+    }
     function notesPanel() {
-      const key = `easyicu.pi.projectNotes.v1.${projectId()}`;
-      let value = '';
-      try { value = window.localStorage.getItem(key) || ''; } catch (_) {}
-      return `<div class="gpi-project-notes"><textarea data-gpi-project-notes aria-label="${tr('Project notes', '项目笔记')}" placeholder="${tr('Add notes for this project…', '记录当前项目的备忘……')}">${esc(value)}</textarea><small>${tr('Stored in this browser for this project.', '按项目保存在此浏览器。')}</small></div>`;
+      ensureNotesLoaded();
+      return `<div class="gpi-project-notes"><textarea data-gpi-project-notes aria-label="${tr('Project notes', '项目笔记')}" placeholder="${tr('Add notes for this project…', '记录当前项目的备忘……')}"${notes.loading ? ' readonly' : ''}>${esc(notes.text)}</textarea><small data-gpi-notes-status>${esc(notesStatusText())}</small></div>`;
+    }
+    function handleNotesInput(target) {
+      const id = projectId();
+      notes.projectId = notes.projectId || id;
+      notes.text = target.value;
+      if (notes.available === true) { rememberLocalNotes(id, notes.text); scheduleNotesSave(); }
+      else rememberLocalNotes(id, notes.text);
+      paintNotes();
     }
 
-    function runStatus(workflow) {
-      const active = workflow && workflow.active_job && workflow.active_job.present
+    // The two run facts the current to-do row shows under its task text:
+    // the stage sentence of the job EasyICU is running now, and — once the
+    // previous governed run stopped — the cause, named with its run id.
+    function runFacts(workflow) {
+      const job = workflow && workflow.active_job && workflow.active_job.present
         ? workflow.active_job : null;
+      const running = job && job.status === 'running';
+      const progress = running && Array.isArray(job.progress) ? job.progress.slice(-1)[0] : null;
+      // The raw lifecycle step ("planning · 1/4") reads like a progress bar
+      // but 1/4 is a validation attempt count; show the researcher-facing
+      // stage sentence instead.
+      const stage = progress && progress.step && typeof host.progressLabel === 'function'
+        ? String(host.progressLabel(progress) || '') : '';
       const last = host.latestRun && host.latestRun();
-      const row = active || (last && last.present ? last : null);
-      if (!row) return `<p class="gpi-aside-empty">${tr('No run is active for this project.', '当前项目没有正在执行的任务。')}</p>`;
-      const states = {
-        queued: tr('Queued', '排队中'), running: tr('Running', '运行中'),
-        complete: tr('Completed', '已完成'), completed: tr('Completed', '已完成'),
-        succeeded: tr('Completed', '已完成'), success: tr('Completed', '已完成'),
-        failed: tr('Failed', '未完成'), cancelled: tr('Cancelled', '已取消'),
-      };
-      const status = states[row.status] || (workflow.next_action_code === 'failed_pipeline_requires_fresh_plan'
-        ? tr('Failed · review required', '失败待处理')
-        : row.analysis_results_available === true
-          ? tr('Results saved', '成果已保存') : String(row.status || tr('Recorded', '已有记录')));
-      const progress = Array.isArray(row.progress) ? row.progress.slice(-1)[0] : null;
-      const recentRun = row.run_id ? `<code>${esc(row.run_id)}</code>` : '';
-      const problem = row.error_code ? `<p>${esc(row.error_code)}</p>` : '';
-      return `<div class="gpi-run-status" role="status"><div><strong>${active ? tr('Current task', '当前任务') : tr('Latest run', '最近运行')}</strong><span>${esc(status)}</span></div>${recentRun}${progress && progress.step ? `<p>${esc(progress.step)}${progress.total ? ` · ${Number(progress.current || 0)}/${Number(progress.total)}` : ''}</p>` : ''}${problem}</div>`;
+      const row = !running && last && last.present ? last : null;
+      // A saved run row carries its gate reason rather than an error code; the
+      // workflow projection names it `gate_reason_code` with `gate_status`.
+      const blocked = row && ['failed', 'blocked'].includes(String(row.run_status || row.status || row.gate_status || ''));
+      const gateReason = String(row && (row.gate_reason_code || row.gate_reason) || '');
+      // A blocked gate that is merely waiting for review is not a failure.
+      const failureGate = blocked && /^research_pipeline_|^data_foundation_blocked$/.test(gateReason) ? gateReason : '';
+      const failureCode = String(row && (row.error_code || failureGate) || '');
+      const failure = failureCode
+        ? String(typeof host.runFailureText === 'function' ? host.runFailureText(failureCode) || failureCode : failureCode)
+        : '';
+      return { stage, failure, failedRunId: failure ? String(row.run_id || '') : '' };
+    }
+
+    // The project's run record: every governed run bound to this study,
+    // newest first, as facts (type, outcome, time, file count, cause) — the
+    // results shelf above shows only the run that currently owns the
+    // workflow. Rows are informational; historical artifacts stay closed.
+    function runStatus(run) {
+      const status = String(run.run_status || '');
+      const gate = String(run.gate_status || '');
+      if (status === 'human_review_pending') return { key: 'review', label: tr('Awaiting review', '待审阅') };
+      if (status === 'failed') return { key: 'failed', label: tr('Failed', '失败') };
+      if (status === 'cancelled') return { key: 'cancelled', label: tr('Cancelled', '已取消') };
+      if (status === 'running') return { key: 'running', label: tr('Running', '运行中') };
+      if (status === 'blocked' || gate === 'blocked') return { key: 'blocked', label: tr('Blocked', '阻断') };
+      if (status === 'pass' || gate === 'pass') return { key: 'done', label: tr('Passed', '已通过') };
+      return { key: 'recorded', label: tr('Recorded', '已有记录') };
+    }
+    function runHistoryOpen(body, fallback) {
+      const previous = body && body.querySelector && body.querySelector('[data-gpi-run-history]');
+      return previous ? Boolean(previous.open) : Boolean(fallback);
+    }
+    function runHistoryHtml(workflow, open) {
+      const runs = Array.isArray(workflow && workflow.runs) ? workflow.runs : [];
+      if (!runs.length) return '';
+      const contracts = window.EU_GUIDED_CONTRACTS || {};
+      const when = typeof contracts.fmtRunTime === 'function' ? contracts.fmtRunTime : value => String(value || '');
+      const kind = run => run.run_type === 'full'
+        ? tr('Full analysis', '完整分析') : run.plan_available ? tr('Candidate plan', '候选计划') : tr('Run', '运行');
+      const rows = runs.map(run => {
+        const status = runStatus(run);
+        const cause = ['failed', 'blocked'].includes(status.key) && run.gate_reason_code && typeof host.runFailureText === 'function'
+          ? String(host.runFailureText(run.gate_reason_code) || '') : '';
+        const count = Number(run.artifact_count || 0);
+        return `<li class="gpi-run-row is-${status.key}${run.authoritative ? ' is-current' : ''}"><span class="gpi-run-mark" aria-hidden="true"></span><div class="gpi-run-copy"><strong>${esc(kind(run))} · ${esc(status.label)}${run.authoritative ? `<span class="gpi-run-current">${tr('current', '当前')}</span>` : ''}</strong><small>${esc(when(run.updated_at))}${count ? ` · ${count} ${tr('files', '个文件')}` : ''}</small>${cause ? `<small class="gpi-run-cause">${esc(cause)}</small>` : ''}<code>${esc(run.run_id)}</code></div></li>`;
+      }).join('');
+      return `<details class="gpi-run-history" data-gpi-run-history${open ? ' open' : ''}><summary>${tr('Run record', '运行记录')}<small class="gpi-aside-count">${runs.length}</small></summary><ol>${rows}</ol></details>`;
     }
 
     function syncProjectWorkflowAside() {
@@ -92,9 +222,7 @@
           + section('notes', tr('Notes', '笔记'), notesPanel())
           + (!panelKeys.some(key => visiblePanels[key]) ? `<p class="gpi-aside-empty gpi-panels-empty">${tr('Choose panels from Layout above.', '可从顶部「布局」重新显示面板。')}</p>` : '');
         body.oninput = event => {
-          if (event.target.matches && event.target.matches('[data-gpi-project-notes]')) {
-            try { window.localStorage.setItem(`easyicu.pi.projectNotes.v1.${projectId()}`, event.target.value); } catch (_) {}
-          }
+          if (event.target.matches && event.target.matches('[data-gpi-project-notes]')) handleNotesInput(event.target);
         };
         body.onclick = null;
         body.onchange = null;
@@ -163,7 +291,6 @@
         || tr('Waiting for the preceding governed stage', '等待前一受治理阶段完成');
       const done = Number(workflow.completed_required_stages || 0);
       const total = Math.max(1, Number(workflow.required_stage_count || 7));
-      const pct = Math.max(0, Math.min(100, Math.round(done / total * 100)));
       const current = stages.find(stage => stage.id === workflow.current_stage)
         || stages.find(stage => stage.status !== 'complete') || stages[stages.length - 1];
       const currentIndex = Math.max(0, stages.indexOf(current));
@@ -176,34 +303,47 @@
         ? host.resultsHtml(resultQuery, { sort: resultSort, view: resultView }) : '';
       const pending = !host.demoMode() && host.hasPendingReview && host.hasPendingReview();
       const reviewAction = !host.demoMode() && host.reviewActionHtml ? host.reviewActionHtml() : '';
-      // Keep the user's stage-list preference across workflow refreshes.
-      const previous = body.querySelector && body.querySelector('.gd-pipeline-disclosure');
-      const expanded = previous && previous.open;
+      // The to-do list reads like a task checklist: every stage is a row, and
+      // the current row says what is needed now in the words of the decision
+      // card the conversation is showing (or what EasyICU is doing), not in
+      // gate vocabulary. The stage reason is the fallback.
+      const activeTask = !host.demoMode() && typeof host.activeTaskTitle === 'function'
+        ? String(host.activeTaskTitle() || '') : '';
+      const decision = !host.demoMode() && typeof host.pendingDecisionTitle === 'function'
+        ? String(host.pendingDecisionTitle() || '') : '';
+      const currentText = activeTask || decision || reasonText(current);
+      const facts = host.demoMode() ? { stage: '', failure: '', failedRunId: '' } : runFacts(workflow);
+      const stageLine = activeTask && facts.stage && facts.stage !== currentText
+        ? `<div class="si-s">${esc(facts.stage)}</div>` : '';
+      const failureLine = !activeTask && facts.failure
+        ? `<div class="si-s gpi-run-failure">${facts.failedRunId ? `<code>${esc(facts.failedRunId)}</code> ` : ''}${esc(facts.failure)}</div>` : '';
+      const currentAction = pending
+        ? `<button type="button" class="btn sm gpi-study-pending" data-gpi-aside-pending>${tr('View pending decision', '查看待确认事项')}</button>`
+        : !results && reviewAction ? `<div class="gpi-study-pending">${reviewAction}</div>` : '';
       const progress = `
-      <div class="gd-pipeline-summary" data-gpi-project-workflow-aside>
-        <div class="gd-pipeline-summary-head"><div><div class="eyebrow">${tr('Current stage', '当前阶段')}</div><strong>${esc(names[current && current.id] || (current && current.label) || tr('Ready', '就绪'))}</strong><div class="gd-pipeline-value">${esc(reasonText(current))}</div></div></div>
-        ${pending ? `<button type="button" class="btn sm gpi-study-pending" data-gpi-aside-pending>${tr('View pending decision', '查看待确认事项')}</button>` : !results && reviewAction ? `<div class="gpi-study-pending">${reviewAction}</div>` : ''}
-        ${next && !results ? `<div class="gd-pipeline-next"><span>${nextCaption}</span><strong>${esc(names[next.id] || next.label || next.id)}</strong></div>` : ''}
-      </div>
-      <details class="gd-pipeline-disclosure"${expanded ? ' open' : ''}><summary><span>${tr('All research stages', '全部研究阶段')}</span><small>${done}/${total}</small></summary>
-      <div class="gd-pipeline-bar" aria-label="${tr('EasyICU project progress', 'EasyICU 项目进度')}"><span style="width:${pct}%;"></span></div>
-      <div class="gd-pipeline-meta"><span><strong>${done}/${total}</strong> ${tr('required stages complete', '个必需阶段已完成')}</span></div>
-      <div class="gd-pipeline-list" data-gpi-project-workflow-list>${stages.map(stage => {
+      <div class="gd-pipeline-summary gd-pipeline-checklist" data-gpi-project-workflow-aside>
+      <ol class="gd-pipeline-list" data-gpi-project-workflow-list aria-label="${tr('Research to-dos', '研究待办')}">${stages.map(stage => {
         const optional = stage.required_for_completion === false;
+        const isCurrent = stage === current && stage.status !== 'complete';
         const status = stage.status === 'complete' ? 'done' : stage.status === 'optional' ? 'optional' : stage.status === 'ready' || stage.status === 'running' || stage.status === 'review_required' ? 'active' : 'locked';
-        const marker = status === 'done' ? iconHtml('check', 11) : status === 'locked' ? iconHtml('lock', 10) : iconHtml('dot', 10);
-        return `<div class="study-item ${status}"><span class="si-dot">${marker}</span><div class="si-txt"><div class="si-t">${esc(names[stage.id] || stage.label || stage.id)}${optional ? tr(' · Optional', ' · 可选') : ''}</div></div></div>`;
-      }).join('')}</div></details>`;
-      body.innerHTML = section('progress', tr('To-dos', '待办'), progress)
-        + section('results', tr('Results', '成果'), results || emptyResults)
-        + section('compute', tr('Compute', '计算'), runStatus(workflow))
+        const running = isCurrent && Boolean(activeTask);
+        const marker = status === 'done' ? iconHtml('check', 11)
+          : running ? '<span class="gpi-running-spinner" aria-hidden="true"></span>'
+          : status === 'locked' ? iconHtml('lock', 10) : iconHtml('dot', 10);
+        const caption = stage === next && !results
+          ? `<span class="gd-pipeline-next">${nextCaption}</span>` : '';
+        const detail = isCurrent
+          ? `<div class="si-v">${esc(currentText)}</div>${stageLine}${failureLine}${currentAction}` : '';
+        return `<li class="study-item ${status}${isCurrent ? ' current' : ''}"${isCurrent ? ' aria-current="step"' : ''}><span class="si-dot">${marker}</span><div class="si-txt"><div class="si-t">${esc(names[stage.id] || stage.label || stage.id)}${optional ? tr(' · Optional', ' · 可选') : ''}${caption}</div>${detail}</div></li>`;
+      }).join('')}</ol>
+      <div class="gd-pipeline-meta"><span><strong>${done}/${total}</strong> ${tr('required stages complete', '个必需阶段已完成')}</span></div>
+      </div>`;
+      body.innerHTML = section('progress', `${tr('To-dos', '待办')}<small class="gpi-aside-count">${done}/${total}</small>`, progress)
+        + section('results', tr('Results', '成果'), (results || emptyResults) + runHistoryHtml(workflow, runHistoryOpen(body, !results)))
         + section('notes', tr('Notes', '笔记'), notesPanel())
         + (!panelKeys.some(key => visiblePanels[key]) ? `<p class="gpi-aside-empty gpi-panels-empty">${tr('Choose panels from Layout above.', '可从顶部「布局」重新显示面板。')}</p>` : '');
       body.oninput = event => {
-        if (event.target.matches && event.target.matches('[data-gpi-project-notes]')) {
-          try { window.localStorage.setItem(`easyicu.pi.projectNotes.v1.${projectId()}`, event.target.value); } catch (_) {}
-          return;
-        }
+        if (event.target.matches && event.target.matches('[data-gpi-project-notes]')) { handleNotesInput(event.target); return; }
         if (!event.target.matches || !event.target.matches('[data-gpi-results-search]')) return;
         resultQuery = event.target.value;
         const needle = resultQuery.trim().toLocaleLowerCase();

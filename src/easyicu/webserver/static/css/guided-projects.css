@@ -54,7 +54,7 @@
   border-color:var(--accent-border);background:var(--accent-soft);color:var(--accent-ink)
 }
 .gd-folder-menu{
-  position:absolute;z-index:70;top:calc(100% + 7px);right:0;left:auto;width:min(270px,calc(100vw - 24px));
+  position:absolute;z-index:70;top:calc(100% + 7px);left:0;right:0;width:auto;
   display:grid;gap:4px;padding:6px;border:1px solid var(--hair-2);border-radius:10px;
   background:var(--surface);box-shadow:var(--shadow-2)
 }

@@ -184,3 +184,35 @@ def test_project_adapter_passes_latest_attempt_separately_from_plan(monkeypatch)
     assert result.workflow.latest_attempt_failure.run_id == failed["run_id"]
     assert result.workflow.latest_attempt_failure.candidate_run_id == candidate["run_id"]
     assert result.workflow.next_action_code == "planner_checkpoint_resume_available"
+
+
+def test_run_record_projects_every_bound_run_without_paths():
+    """The workspace lists the project's runs, not only the authoritative one.
+
+    Each row carries the facts a researcher reads in a run record — type,
+    outcome, gate reason code, timing, file names and count — plus which row
+    owns the workflow; the run directory and every payload stay behind.
+    """
+    from easyicu.webserver.pi_copilot.workflow import project_run_history
+
+    _study, candidate, failed, _review = case()
+    rows = [dict(failed, updated_at="2026-09-21T17:40:00Z", artifact_count=1),
+            dict(candidate, updated_at="2026-09-21T17:31:00Z", artifact_count=2, plan_available=True)]
+    projected = project_run_history(rows, authoritative_run_id="run_candidate")
+    assert [row["run_id"] for row in projected] == ["run_preparation", "run_candidate"]
+    assert projected[0] == {
+        "run_id": "run_preparation", "run_type": "full", "engine": "easyicu.research_agent.pipeline",
+        "run_status": "failed", "gate_status": "blocked",
+        "gate_reason_code": "research_pipeline_planner_provider_unavailable",
+        "readiness_status": "", "artifact_count": 1, "artifact_names": ["source_run_manifest.json"],
+        "plan_available": False, "pending_review_reason_codes": [],
+        "updated_at": "2026-09-21T17:40:00Z", "authoritative": False,
+    }
+    assert projected[1]["authoritative"] is True
+    assert projected[1]["run_status"] == "human_review_pending"
+    assert projected[1]["pending_review_reason_codes"] == ["operator_plan_approval_required"]
+    assert projected[1]["plan_available"] is True
+    for row in projected:
+        assert "project_dir" not in row and "gate_checks" not in row
+    assert project_run_history([]) == []
+    assert len(project_run_history([dict(candidate, run_id=f"run_{i}") for i in range(30)])) == 10

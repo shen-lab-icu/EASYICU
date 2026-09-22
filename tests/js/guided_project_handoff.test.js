@@ -11,10 +11,7 @@ global.localStorage = {
   setItem(key, value) { localStorageValues.set(key, String(value)); },
 };
 let previousPicker = null;
-const brandButton = { title: '' };
-const brandName = { innerHTML: '', closest: () => brandButton };
-const host = { innerHTML: '', querySelector: () => previousPicker,
-  closest: () => ({ querySelector: () => brandName }) };
+const host = { innerHTML: '', querySelector: () => previousPicker };
 const removalHost = { innerHTML: '' };
 global.document = {
   getElementById(id) {
@@ -59,7 +56,9 @@ global.EU_GUIDED_PROJECTS.renderProjectRail(context({
   study_context_revision: 9,
 }));
 assert.match(host.innerHTML, /Existing E1 project/);
-assert.equal(brandButton.title, 'Existing E1 project');
+// The switcher summary is the rail's one current-project control.
+assert.match(host.innerHTML, /<summary title="Switch research project"><small>Project<\/small><span title="Existing E1 project">Existing E1 project<\/span>/);
+assert.doesNotMatch(shellRail, /gd-rail-brand/);
 assert.match(host.innerHTML, /Bound StudyContext · r9/);
 assert.doesNotMatch(host.innerHTML, /No study folders yet/);
 assert.doesNotMatch(host.innerHTML, /data-project-id="study-e1" open/);
@@ -71,7 +70,7 @@ global.EU_GUIDED_PROJECTS.renderProjectRail(context({
   id: 'idea-unbound',
   title: 'Unbound idea project',
 }));
-assert.equal(brandButton.title, 'Unbound idea project');
+assert.match(host.innerHTML, /<span title="Unbound idea project">Unbound idea project<\/span>/);
 assert.match(host.innerHTML, /Project selected · setup continues here/);
 assert.doesNotMatch(host.innerHTML, /data-project-id="idea-unbound" open/);
 previousPicker = null;

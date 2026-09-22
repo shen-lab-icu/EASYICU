@@ -74,6 +74,9 @@ EXPECTED_GUIDED_ROUTES = [
     ("POST", "/api/guided/drafts/list", "post_guided_drafts_list"),
     ("POST", "/api/guided/drafts/remove", "post_guided_draft_remove"),
     ("DELETE", "/api/guided/drafts/remove", "delete_guided_draft_remove"),
+    # Project notes live in the project's local folder (guided_sessions owner).
+    ("GET", "/api/guided/projects/{project_id}/notes", "get_guided_project_notes"),
+    ("POST", "/api/guided/projects/{project_id}/notes", "post_guided_project_notes"),
     ("POST", "/api/guided/session", "post_guided_session"),
     ("POST", "/api/guided/project/open", "post_guided_project_open"),
     ("POST", "/api/guided/message", "post_guided_message"),
@@ -213,6 +216,12 @@ EXPECTED_PI_COPILOT_ROUTES = [
         "POST",
         "/api/copilot/pi/sessions/{session_id}/rename",
         "post_pi_copilot_session_rename",
+    ),
+    # Per-session effort (thinking) level, changed between turns.
+    (
+        "POST",
+        "/api/copilot/pi/sessions/{session_id}/thinking-level",
+        "post_pi_copilot_session_thinking_level",
     ),
     (
         "POST",

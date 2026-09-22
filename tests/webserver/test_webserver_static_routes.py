@@ -120,7 +120,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20260728-demo-mode1" in index_html
-    assert "js/api.js?v=20260921-model-menu1" in index_html
+    assert "js/api.js?v=20260922-notes1" in index_html
 
 
 def test_floating_copilot_launcher_is_removed_but_shell_hooks_survive() -> None:
@@ -183,10 +183,10 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260827-no-fab1" in index_html
-    assert "js/app.js?v=20260921-evidence1" in index_html
+    assert "js/app.js?v=20260921-route-sub1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20260921-owner-split1" in index_html
-    assert "js/screens-extraction.js?v=20260921-owner-split1" in index_html
+    assert "js/screens-extraction.js?v=20260921-source-label1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20260915-product-label1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
@@ -336,7 +336,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260921-evidence1" in index_html
+    assert "js/app.js?v=20260921-route-sub1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 
 
@@ -355,13 +355,13 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
     assert "打开唯一的 EasyICU 研究助手对话" in _static_js("app.js")
     assert "Page guide" not in dock_js
     assert (
-        "js/screens-guided-projects.js?v=20260921-rail-title1" in index_html
+        "js/screens-guided-projects.js?v=20260922-state-menus1" in index_html
     )
     assert (
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20260919-entry1" in index_html
+    assert "js/screens-guided.js?v=20260922-state-menus1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
 
 
@@ -399,7 +399,7 @@ def test_native_page_guide_backend_is_retired_from_the_shell_entry() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "page-guide dock intentionally is not constructed" in dock_js
-    assert "js/api.js?v=20260921-model-menu1" in index_html
+    assert "js/api.js?v=20260922-notes1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
 
 
@@ -553,11 +553,11 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     redesign_css = _static_css("redesign.css")
 
     assert "css/guided.css?v=20260829-readability2" in index_html
-    assert "css/guided-projects.css?v=20260918-audit3" in index_html
+    assert "css/guided-projects.css?v=20260922-popover1" in index_html
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
-    assert "js/api.js?v=20260921-model-menu1" in index_html
+    assert "js/api.js?v=20260922-notes1" in index_html
     assert (
-        "js/screens-guided-projects.js?v=20260921-rail-title1" in index_html
+        "js/screens-guided-projects.js?v=20260922-state-menus1" in index_html
     )
     provider_pos = index_html.find("screens-guided-idea-provider.js")
     projects_pos = index_html.find("screens-guided-projects.js")
@@ -668,7 +668,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260919-entry1" in index_html
+    assert "js/screens-guided.js?v=20260922-state-menus1" in index_html
 
     assert "function startGuidedIdeaFlow" in idea_js
     assert "function renderGuidedIdeaApiSetupCard" in idea_js
@@ -1122,9 +1122,9 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert "连接测试" in settings_js
     assert 'body[data-reduce-motion="true"]' in tweaks_css
     assert "css/tweaks.css?v=20260625-stage96" in index_html
-    assert "css/settings.css?v=20260812-extension-manager1" in index_html
+    assert "css/settings.css?v=20260921-anchor-room1" in index_html
     assert "js/screens-settings-extensions.js?v=20260812-extension-manager1" in index_html
-    assert "js/screens-settings.js?v=20260817-copilot-boundary1" in index_html
+    assert "js/screens-settings.js?v=20260922-connectors1" in index_html
     assert ".settings-cap-panel" in settings_css
     assert ".settings-cap-tabs" in settings_css
     assert ".settings-cap-tile" in settings_css
@@ -1520,7 +1520,7 @@ def test_native_idea_mining_backend_remains_wired_without_a_second_primary_entry
     assert "css/ideas.css?v=20260803-owner-migration" in index_html
     assert "css/shell.css?v=20260812-route-a11y1" in index_html
     assert "js/icons.js?v=20260901-composer-plus1" in index_html
-    assert "js/app.js?v=20260921-evidence1" in index_html
+    assert "js/app.js?v=20260921-route-sub1" in index_html
     assert "css/ideas-review.css?v=20260702-idea-review-handoff" in index_html
     assert "css/ideas-connectors.css?v=20260702-zotero-simple" in index_html
     assert "js/screens-ideas-zotero.js?v=20260702-zotero-origin" in index_html
@@ -2337,7 +2337,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260727-patient-demo2" in index_html
-    assert "api.js?v=20260921-model-menu1" in index_html
+    assert "api.js?v=20260922-notes1" in index_html
     assert "screens-dict.js?v=20260830-viz-final1" in index_html
     assert "deepdive.css?v=20260830-viz-final1" in index_html
 
@@ -2492,7 +2492,9 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "gdFolderDialogHost" in guided_js
     assert "data-folder-menu-toggle" in projects_js
     assert "data-folder-choice" in projects_js
-    assert "guidedFolderMenuOpen && !e.target.closest('.gd-folder-picker')" in guided_js
+    # Outside presses and Escape close the folder menu through the shared
+    # popover owner (its open state stays in the guided screen).
+    assert "isOpen: () => guidedFolderMenuOpen, contains: node => Boolean(node && node.closest && node.closest('.gd-folder-picker'))," in guided_js
     assert "guidedDraftRemoval && !guidedDraftRemoval.busy" in guided_js
     assert "data-folder-dialog" in projects_js
     assert "New blank study folder" in projects_js
@@ -2577,7 +2579,11 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert 'class="gd-top"' not in guided_js
     assert 'class="gd-home-link"' not in guided_js
     assert '<button type="button" class="gpi-global-brand" data-open="entry"' in projects_js
-    assert '<button class="gd-rail-brand" type="button" data-gpi-show-projects' in projects_js
+    # The rail's one project control is the switcher itself (kicker + name +
+    # chevron); the nav Projects button toggles it from the compact rail.
+    assert 'class="gd-rail-brand"' not in projects_js
+    assert projects_js.index('<div class="gd-rail-heading">') < projects_js.index('<div class="gd-rail-list" id="gdSessions"></div>') < projects_js.index('<button class="gd-rail-collapse"')
+    assert 'data-gpi-show-projects aria-current="page"' in projects_js
     assert 'data-project-rail-toggle' in projects_js
     assert 'class="gd-rail-restore"' in projects_js
     assert 'class="gd-rail-collapse"' in projects_js
@@ -2610,7 +2616,8 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert ".gd-folder-menu" in projects_css
     assert ".gd-remove-option" in projects_css
     assert ".gd-remove-option" not in guided_css
-    assert "right:0;left:auto;width:min(270px" in projects_css
+    # The folder menu fills its button, so it never overhangs the rail's edge.
+    assert "top:calc(100% + 7px);left:0;right:0;width:auto;" in projects_css
     assert ".gd-folder-dialog" in guided_css
     assert ".gd-folder-tabs" in guided_css
     assert ".gds-known" in guided_css
@@ -2642,17 +2649,17 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20260921-model-menu1" in index_html
-    assert "screens-guided-projects.js?v=20260921-rail-title1" in index_html
+    assert "api.js?v=20260922-notes1" in index_html
+    assert "screens-guided-projects.js?v=20260922-state-menus1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20260919-entry1" in index_html
+    assert "screens-guided.js?v=20260922-state-menus1" in index_html
     assert "guided.css?v=20260829-readability2" in index_html
-    assert "guided-projects.css?v=20260918-audit3" in index_html
+    assert "guided-projects.css?v=20260922-popover1" in index_html
     assert "gd-rail-heading" in projects_js
-    assert "<small>${t('Project', '项目')}</small>${esc(activeProject)}" in projects_js
+    assert "<summary title=\"${esc(t('Switch research project', '切换研究项目'))}\"><small>${t('Project', '项目')}</small><span title=\"${esc(pickerTitle)}\">${esc(pickerTitle)}</span><i aria-hidden=\"true\">⌄</i></summary>" in projects_js
     assert "${t('New / open research project', '新建 / 打开研究项目')}" in projects_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js
@@ -3436,7 +3443,7 @@ def test_extraction_outputs_are_local_open_controls_and_sync_is_visible() -> Non
     output_css = _static_css("extraction-output.css")
 
     assert "css/extraction-output.css?v=20260824-local-open1" in index_html
-    assert "js/screens-extraction-embedded.js?v=20260908-study-source2" in index_html
+    assert "js/screens-extraction-embedded.js?v=20260921-eudata-binding1" in index_html
     assert "js/screens-guided-pi-starters.js?" in index_html
     assert "js/screens-guided-pi-header.js?" in index_html
     assert "js/screens-guided-pi.js?" in index_html

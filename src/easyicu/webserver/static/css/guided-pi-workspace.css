@@ -33,8 +33,12 @@
 .gpi-compose-card{width:min(var(--gpi-reading-width,820px),100%);padding:12px 14px;border-radius:14px;border-color:var(--hair-2);background:var(--surface);box-shadow:0 4px 16px #25332f06}
 .gpi-compose-card:focus-within{box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 12%,transparent)}
 .gpi-compose textarea{font-size:14px;min-height:52px}
-.gpi-actions{gap:8px}
-.gpi-action-trailing{display:flex;align-items:center;justify-content:flex-end;gap:6px;min-width:0}
+.gpi-actions{gap:8px;flex-wrap:wrap}
+/* A narrow conversation column (a workbench tab or reader is open) must not
+   fold the toggle labels or slide the model name under them: each control
+   keeps one line and the model/send group wraps beneath instead. */
+.gpi-action-leading .gpi-access-menu>summary{white-space:nowrap}
+.gpi-action-trailing{display:flex;align-items:center;justify-content:flex-end;gap:6px;min-width:0;margin-left:auto}
 .gpi-model-binding{max-width:180px;border-color:transparent;background:transparent;font-family:var(--font);font-size:12px;padding:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gpi-model-binding span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gpi-actions .btn{border-radius:8px;padding:7px 12px;min-height:32px;white-space:nowrap}
@@ -172,10 +176,6 @@
 
 /* Shared rhythm for the project rail, result destinations, and reading tools. */
 .gd-main.gpi-workspace .gd-rail-top{gap:16px;padding:20px 16px 16px}
-.gd-main.gpi-workspace .gd-rail-brand{gap:10px}
-.gd-rail-brand .gd-name small{display:block;font-size:11px;font-weight:400;line-height:1.6;letter-spacing:.02em;color:var(--ink-3)}
-.gd-main.gpi-workspace .gd-rail-brand .gd-name{font-size:18px;font-weight:600;line-height:1.25}
-.gd-main.gpi-workspace .gd-rail-brand .brand-mark{width:32px;height:36px;background:var(--accent);border-radius:10px}
 .gd-main.gpi-workspace .gd-newbtn{min-height:38px;border-radius:8px;box-shadow:none;font-size:13px;font-weight:500}
 .gd-main.gpi-workspace .gd-project-heading{padding-inline:6px;font-size:12px;font-weight:500}
 .gd-main.gpi-workspace .gd-manage-mini{font-size:11px;font-weight:400}
@@ -223,11 +223,7 @@
 /* Long-form text keeps a reading measure; result tables retain the full canvas. */
 .gpi-preview-body .gpi-manuscript-layout:not(.has-claim-drawer){max-width:780px;margin-inline:auto}
 @media (max-width: 520px) {
-  .gd-main.gpi-workspace .gd-rail-top{grid-template-columns:auto minmax(0,1fr);gap:14px;padding:10px 12px}
-  .gd-main.gpi-workspace .gd-rail-brand{gap:7px}
-  .gd-main.gpi-workspace .gd-rail-brand .brand-mark{width:27px;height:30px;border-radius:8px}
-  .gd-main.gpi-workspace .gd-rail-brand .gd-name{font-size:16px}
-  .gd-main.gpi-workspace .gd-name small{display:none}
+  .gd-main.gpi-workspace .gd-rail-top{gap:8px;padding:10px 12px}
   .gd-main.gpi-workspace .gd-newbtn{min-height:34px;font-size:12px}
   .gd-main.gpi-workspace .gd-rail-foot{display:flex;align-items:center;justify-content:space-between;padding:0 12px 8px;gap:12px}
   .gd-main.gpi-workspace .gd-rail-utils{display:flex;gap:4px}
@@ -261,6 +257,11 @@
 .gpi-conversations-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;color:var(--ink-3);font-size:12px}
 .gpi-conversations-heading strong{font-weight:500}
 .gpi-conversations-heading button{width:30px;height:30px;padding:0;border:0;border-radius:5px;background:transparent;color:inherit;font-size:20px;cursor:pointer}
+/* Compact rails keep the heading on one row with icon-only actions; the desktop
+   rail widens the new-task button and shows its label. */
+.gpi-conversations-heading-actions{display:inline-flex;align-items:center;gap:2px;margin-left:auto}
+.gpi-conversations-heading [data-gpi-rail-new]{display:inline-flex;align-items:center;justify-content:center}
+.gpi-conversations-heading [data-gpi-rail-new] span{display:none}
 .gpi-conversations nav>p{font-size:12px;line-height:1.7;color:var(--ink-3)}
 .gpi-conversation-item{display:block;width:100%;padding:10px;margin-bottom:4px;border:0;border-radius:6px;background:transparent;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
 .gpi-conversation-row{position:relative;display:grid;grid-template-columns:minmax(0,1fr) 28px;align-items:start;margin-bottom:4px}
@@ -456,12 +457,6 @@
 .gpi-study-results-links[data-view="details"] .gpi-study-file .gpi-resource-link{min-height:25px;white-space:normal;overflow-wrap:anywhere;font-size:12px}
 .gpi-study-results-links[data-view="details"] .gpi-study-file small{grid-column:2;grid-row:2;font-size:10px}
 .gpi-study-results-links[data-view="details"] .gpi-study-file .gpi-result-download{grid-column:3;grid-row:1/3}
-.gpi-run-status{padding:3px 0 1px;color:var(--ink-3);font-size:11px;line-height:1.6}
-.gpi-run-status>div{display:flex;align-items:center;justify-content:space-between;gap:8px}
-.gpi-run-status strong{font-size:12px;font-weight:550;color:var(--ink-2)}
-.gpi-run-status span{padding:2px 6px;border-radius:4px;background:var(--surface-2)}
-.gpi-run-status code{display:block;margin:8px 0 0;overflow-wrap:anywhere;color:var(--ink-4);font-size:10px}
-.gpi-run-status p{margin:6px 0 0;overflow-wrap:anywhere}
 @media(max-width:520px){.gpi-followups>summary small,.gpi-response-review>summary small{display:none}.gpi-response-review{padding-inline:10px}.gpi-review-tabs button{font-size:11px}}
 
 .gpi-layout-control{position:relative;flex:none}

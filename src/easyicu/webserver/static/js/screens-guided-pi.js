@@ -8,6 +8,7 @@
   const DATA_CONSENT = MODULES.require('dataConsent');
   const STARTERS = MODULES.require('starters');
   const IDEA_SOURCE = MODULES.require('ideaSource');
+  const EFFORT_MENU = MODULES.require('effortMenu');
   const HEADER = MODULES.require('header');
   const REGENERATION = MODULES.require('regeneration');
   const STUDY_WORKSPACE = MODULES.require('studyWorkspace').create({ tr, esc, iconHtml });
@@ -15,6 +16,7 @@
   const state = {
     host: null, conv: null, runtime: null, sessions: [], session: null,
     messages: [], loading: true, creating: false, busy: false, jobId: '',
+    planConfigurationError: '',
     source: null, childSource: null, childJobId: '', error: '', shell: 'pi', draft: '', setupSaving: false,
     showSetup: false, availableModels: [], project: null,
     researchProvider: 'codex', researchModel: '', codexAuth: null,
@@ -148,7 +150,7 @@
   function displaySessionTitle(value, fallback) { return window.EU_PRODUCT_LABELS?.copilotTitle?.(value, fallback) ?? String(value ?? fallback ?? '').slice(0, 200); }
   function navigationSessionTitle(row) {
     if (row && row.automatic_title) {
-      return tr('New research task', '新研究任务');
+      return tr('New conversation', '新对话');
     }
     return displaySessionTitle(row && row.title, tr('Research conversation', '研究对话'));
   }
@@ -236,7 +238,7 @@
   const ERROR_TEXT = MODULES.require('errorText').create({
     tr, staticPreview: isStaticPreview,
   });
-  const { errorText, modelErrorText, providerPreset, option } = ERROR_TEXT;
+  const { errorText, modelErrorText, providerPreset, option, runFailureText } = ERROR_TEXT;
   const RESOURCE_OWNER = MODULES.require('resources').create({ esc });
   const resourceName = RESOURCE_OWNER.name;
   const resourceKey = RESOURCE_OWNER.key;
@@ -272,12 +274,14 @@
   });
   const ACTIVITY = MODULES.require('activity').create({
     tr, esc, iconHtml, resourceName, resourceKey, resourceButton,
+    publicText: publicAssistantText,
   });
   const CONFIRMATION = MODULES.require('confirmation').create({
-    tr, esc, iconHtml, resourceButton, sessionIsStale,
+    tr, esc, iconHtml, resourceButton, sessionIsStale, runFailureText,
     workflow: () => state.workflow,
     session: () => state.session,
     busy: () => state.busy || Boolean(state.childJobId),
+    planConfigurationError: () => state.planConfigurationError,
     cohortEligibilityDecisionHtml: copies => COHORT_ELIGIBILITY.repeatedStayDecisionHtml(copies),
   });
   const workflowConfirmation = CONFIRMATION.workflowConfirmation;
@@ -288,6 +292,7 @@
     workflow: () => state.workflow,
     busy: () => state.busy || Boolean(state.childJobId),
     sessionIsStale,
+    planConfigurationError: () => state.planConfigurationError,
   });
   const { timeMs } = ACTIVITY;
   const TRANSCRIPT = MODULES.require('transcript').create({
@@ -318,7 +323,7 @@
     setChildSource: value => { state.childSource = value; },
   });
   const ASIDE = MODULES.require('aside').create({
-    tr, esc, iconHtml,
+    tr, esc, iconHtml, api,
     projectId: () => projectId(),
     displayProjectTitle: (...args) => displayProjectTitle(...args),
     demoMode: () => state.demoMode,
@@ -330,8 +335,30 @@
     resultsHtml: (query, options) => RUN_OUTCOME.renderShelf(state.latestRun, state.workflow, query, options),
     reviewActionHtml: () => RUN_OUTCOME.renderReviewAction(state.latestRun, state.workflow),
     hasPendingReview: () => Boolean(state.host && state.host.querySelector('.gpi-confirmation')),
+    // The to-do list names the decision the conversation is waiting for in
+    // the decision card's own words, or the task EasyICU is running now.
+    pendingDecisionTitle: () => {
+      if (!state.session) return '';
+      if (DATA_CONSENT.requiresConfirmation(state.session)) {
+        return tr('Confirm the data source for this conversation', '确认本次会话使用的数据来源');
+      }
+      const code = String((state.workflow && state.workflow.next_action_code) || '');
+      if (code === 'cohort_eligibility_confirmation_required') {
+        return tr('Decide how repeat ICU stays are handled', '确认同一患者多次住 ICU 的处理方式');
+      }
+      const confirmation = workflowConfirmation();
+      return confirmation && confirmation.title ? String(confirmation.title) : '';
+    },
+    activeTaskTitle: () => {
+      const running = state.messages.slice().reverse()
+        .find(row => row && row.role === 'activity' && row.childJobId && row.status === 'running');
+      if (running) return String(running.runningTitle || tr('EasyICU research task is running', 'EasyICU 科研任务正在运行'));
+      return state.busy ? tr('EasyICU is replying', 'EasyICU 正在回复') : '';
+    },
     openResource: button => EVENTS.openResourceButton(button),
     revealPendingReview: () => EVENTS.revealPendingReview(),
+    progressLabel: event => ACTIVITY.pipelineEventLabel(event),
+    runFailureText,
   });
   const syncProjectWorkflowAside = ASIDE.syncProjectWorkflowAside;
   const DATA_BINDING = MODULES.require('dataBinding').create({
@@ -354,6 +381,21 @@
   const authorizeDataSource = DATA_BINDING.authorizeDataSource;
   const notifyExtractionHandoff = DATA_BINDING.notifyExtractionHandoff;
   const confirmDataSourceBinding = DATA_BINDING.confirmDataSourceBinding;
+  const HOST_JOBS = MODULES.require('hostJobs').create({
+    tr, api, iconHtml, errorText,
+    dataConsent: DATA_CONSENT,
+    render: () => render(),
+    loadWorkflow: (...args) => loadWorkflow(...args),
+    session: () => state.session,
+    messages: () => state.messages,
+    busy: () => state.busy || Boolean(state.childJobId),
+    workflowReceipts: () => state.workflowReceipts,
+    setWorkflowReceipts: value => { state.workflowReceipts = value; },
+    setError: value => { state.error = value; },
+    rebind: () => rebind(),
+    authorizeDataSource: (...args) => authorizeDataSource(...args),
+    confirmDataSourceBinding: (...args) => confirmDataSourceBinding(...args),
+  });
   const closeChildSource = CHILDJOB.closeChildSource;
   const childActivity = CHILDJOB.childActivity;
   const handleChildJobEvent = CHILDJOB.handleChildJobEvent;
@@ -379,6 +421,11 @@
     loadWorkflow: (...args) => loadWorkflow(...args),
     setBusy: value => { state.busy = Boolean(value); },
     setError: value => { state.error = String(value || ''); },
+    // The host compiler may refuse the automatic configuration (for example
+    // an all-stay analysis without source-owned patient grouping). The
+    // confirmation and cohort owners read this to offer the researcher's
+    // decision instead of leaving a bare error banner.
+    setPlanConfigurationError: value => { state.planConfigurationError = String(value || ''); },
     setDraft: value => { state.draft = String(value || ''); },
     appendMessage: value => { state.messages.push(value); },
     truncateMessagesAt: id => {
@@ -409,7 +456,7 @@
     openSession, closeDemo, openDemo, switchMode, loadCodexResearchStatus,
     openAuthorizationPopup, startCodexLogin, cancelCodexLogin, logoutCodex,
     loadCodexModels, tr, apiResearchReady, finishProviderSetup, loadStatus,
-    setShell, openStudySetupInConversation, createSession,
+    setShell, openStudySetupInConversation, createSession, startEntry,
     previewApprovedPlanDataPackage, confirmWorkflowAction,
     retryFailedExecution,
     rejectWorkflowAction, editWorkflow, confirmCohortEligibility,
@@ -417,6 +464,7 @@
     authorizeDataSource, sendText, continueAfterDataSourceConfirmation,
     governedNextChoiceGrants, sendMessage, stopMessage, stopChildJob, rebind,
     togglePresentationPin, configureProvider, rememberSession, recordHostAction,
+    HOST_JOBS, EFFORT_MENU, api,
   });
   const dismissHeaderOverflow = EVENTS.dismissHeaderOverflow;
   const wire = EVENTS.wire;
@@ -584,7 +632,8 @@
     cohortEligibility: COHORT_ELIGIBILITY, tr, esc, iconHtml, projectId, publicAssistantText,
     assistantTextHtml, sessionIsStale, agentMode, accessModeLabel,
     projectTitle: () => displayProjectTitle(state.project && state.project.title, projectId()), navigationSessionTitle,
-    workflowConfirmationHtml,
+    workflowConfirmationHtml, hostJobs: HOST_JOBS, followUps: MODULES.require('followUps'),
+    effortMenu: EFFORT_MENU,
   });
   const { messageHtml, workflowHtml, sessionPanel, demoPanel } = SESSION_VIEW;
   function openDemo() {
@@ -635,7 +684,7 @@
         projectId: projectId(),
         projectTitle: displayProjectTitle(state.project && state.project.title, projectId()),
         sessionId: state.session && state.session.session_id,
-        sessionTitle: state.session ? navigationSessionTitle(state.session) : tr('New research task', '新研究任务'),
+        sessionTitle: state.session ? navigationSessionTitle(state.session) : tr('New conversation', '新对话'),
       });
     }
     state.host.hidden = false;
@@ -660,7 +709,7 @@
     STUDY_WORKSPACE.syncNavigation({ projectId: projectId(), sessions: state.sessions.filter(sessionMatchesUiLanguage),
       selectedId: state.session && state.session.session_id, loading: restoring, disabled: state.busy || Boolean(state.childJobId) || state.projectLoading,
       visible: state.shell !== 'legacy', title: navigationSessionTitle, status: sessionStatusLabel,
-      time: compactSessionTime, open: openSession, create: createSession,
+      time: compactSessionTime, open: openSession, create: startEntry,
       resources: RUN_OUTCOME.collection(state.latestRun, state.workflow), openResource: EVENTS.openResource,
       materialsInteractive: !emptySessionFocused, rename: renameSession, remove: removeEmptySession });
     requestAnimationFrame(() => {
@@ -753,7 +802,7 @@
         title: `${displayProjectTitle(state.project && state.project.title, tr('Research project', '研究项目'))} · ${state.agentMode === 'workspace' ? tr('Workspace', '工作区') : tr('Research', '研究')}`,
         agent_mode: state.agentMode,
         language: window.EU_LANG === 'zh' ? 'zh' : 'en',
-        thinking_level: 'off', external_llm_opt_in: true,
+        thinking_level: EFFORT_MENU.preferred(), external_llm_opt_in: true,
         research_provider: state.researchProvider,
         research_model: state.researchProvider === 'codex' ? state.researchModel : null,
       });
@@ -776,7 +825,7 @@
   async function renameSession(row) {
     if (!row || state.busy || state.childJobId || !api().renamePiCopilotSession) return;
     const current = navigationSessionTitle(row);
-    const requested = window.prompt(tr('Rename this task', '重命名任务'), current);
+    const requested = window.prompt(tr('Rename this conversation', '重命名对话'), current);
     if (requested === null) return;
     const title = String(requested || '').replace(/\s+/g, ' ').trim().slice(0, 100);
     if (!title || title === current) return;
@@ -797,7 +846,7 @@
 
   async function removeEmptySession(row) {
     if (!row || row.has_history || state.busy || state.childJobId || !api().deleteEmptyPiCopilotSession) return;
-    if (!window.confirm(tr('Remove this empty task? No conversation or result will be deleted.', '删除这个空任务吗？此操作不会删除任何对话或研究成果。'))) return;
+    if (!window.confirm(tr('Remove this empty conversation? No message or result will be deleted.', '删除这个空对话吗？此操作不会删除任何消息或研究成果。'))) return;
     const deletingSelected = Boolean(state.session && state.session.session_id === row.session_id);
     try {
       await api().deleteEmptyPiCopilotSession(row.session_id, {
@@ -840,6 +889,7 @@
       ? ++state.sessionSelectionRevision : selectionRevision;
     closeChildSource();
     state.error = '';
+    state.planConfigurationError = '';
     state.editingMessageId = '';
     state.pendingAuthorityRebind = false;
     try {
@@ -880,6 +930,7 @@
       }
       reconcileSettledSession();
       hydrateProjectedJob(state.workflow && state.workflow.active_job);
+      HOST_JOBS.sync();
       rememberSession(sessionId); setShell('pi');
       const projectOwner = MODULES.require('project');
       if (projectOwner && projectOwner.syncLocation) {
@@ -981,86 +1032,16 @@
     rememberSession('');
     await createSession();
   }
-  function handlePiEvent(event) {
-    if (!event || typeof event !== 'object') return;
-    const at = timeMs(event.at);
-    const activity = ensureActivity(event.at);
-    if (event.type === 'run_start') {
-      state.currentTurnResources = [];
-      upsertActivityStep(activity, { id: 'agent', kind: 'agent', status: 'complete', at });
-    } else if (event.type === 'turn_start') {
-      ACTIVITY.startTurn(activity, at);
-    } else if (event.type === 'assistant_start') {
-      const phase = activity.steps.filter(item => item.kind === 'assistant').length + 1;
-      upsertActivityStep(activity, { id: 'assistant-' + phase, kind: 'assistant', phase, status: 'running', at, startedAt: at });
-    } else if (event.type === 'text_delta') {
-      const delta = String(event.delta || '');
-      assistantRow().text += delta; ACTIVITY.appendPublicDelta(activity, delta);
-    } else if (event.type === 'message_end') {
-      let row = state.messages.slice().reverse().find(item => item.role === 'assistant' && !item.complete);
-      if (event.error_code) {
-        row = row || assistantRow();
-        row.errorCode = String(event.error_code);
-        if (!row.text) row.text = modelErrorText(
-          row.errorCode, activityHasCompletedAction(activity),
-        );
-      }
-      completeLatestAssistant(event.stop_reason);
-      const step = activity.steps.slice().reverse().find(item => item.kind === 'assistant' && item.status === 'running');
-      if (step) { step.status = event.error_code ? 'error' : 'complete'; step.endedAt = at; step.stopReason = event.stop_reason || ''; }
-    } else if (event.type === 'tool_start') {
-      const assistant = activity.steps.slice().reverse().find(item => item.kind === 'assistant' && item.status === 'running');
-      if (assistant) assistant.status = 'complete';
-      upsertActivityStep(activity, {
-        id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name,
-        status: 'running', at, startedAt: at, resource: event.resource || null,
-      });
-    } else if (event.type === 'tool_progress') {
-      upsertActivityStep(activity, { id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name, status: 'running', at });
-    }
-    else if (event.type === 'tool_end') {
-      const toolResources = [event.resource].concat(Array.isArray(event.resources) ? event.resources : []).filter(Boolean);
-      upsertActivityStep(activity, {
-        id: 'tool-' + event.tool_call_id, kind: 'tool', toolName: event.tool_name,
-        status: event.is_error ? 'error' : 'complete', code: event.code || '',
-        owner: event.owner || '', text: event.summary || '', at, endedAt: at,
-        jobId: event.job_id || '',
-        resource: event.resource || null,
-        resources: Array.isArray(event.resources) ? event.resources : [],
-      });
-      addAssistantResources(toolResources);
-      const localWorkspace = !event.is_error && String(event.code || '') === 'easyicu_local_source_workspace_ready'
-        ? toolResources.find(resource => resource && resource.kind === 'native_workspace')
-        : null;
-      const preview = MODULES.optional('preview');
-      if (localWorkspace && preview && preview.open) {
-        preview.open(localWorkspace, projectId());
-      }
-      if (event.host_rebind_after_turn === true || ['study_context_updated', 'easyicu_extraction_submitted', 'easyicu_run_submitted', 'easyicu_full_run_submitted', 'easyicu_report_repair_submitted'].includes(String(event.code || ''))) {
-        state.pendingAuthorityRebind = true;
-      }
-      if (/^(easyicu_(research_workflow_projected|idea_|active_export_reused|extraction_|run_|full_run_|report_repair_|result_|manuscript_))/.test(String(event.code || ''))) {
-        loadWorkflow().then(render).catch(() => {});
-      }
-      if (event.job_id && ['easyicu_extraction_submitted', 'easyicu_run_submitted', 'easyicu_full_run_submitted', 'easyicu_report_repair_submitted'].includes(String(event.code || ''))) {
-        watchChildJob(String(event.job_id), String(event.code || ''));
-      }
-    } else if (event.type === 'turn_end') {
-      ACTIVITY.finishTurn(activity, at);
-    } else if (event.type === 'retry') {
-      upsertActivityStep(activity, { id: 'retry-' + event.attempt, kind: 'retry', status: 'running', attempt: event.attempt, maxAttempts: event.max_attempts, at, startedAt: at });
-    } else if (event.type === 'compaction_start') {
-      upsertActivityStep(activity, { id: 'compaction', kind: 'compaction', status: 'running', at, startedAt: at });
-    } else if (event.type === 'compaction_end') {
-      upsertActivityStep(activity, { id: 'compaction', kind: 'compaction', status: event.aborted ? 'error' : 'complete', at, endedAt: at });
-    } else if (event.type === 'agent_cycle_end' && event.will_retry) {
-      const retry = activity.steps.slice().reverse().find(item => item.kind === 'retry' && item.status === 'running');
-      if (retry) { retry.status = 'complete'; retry.endedAt = at; }
-    } else if (event.type === 'run_end') {
-      finishActivity('complete', event.at, 'settled');
-    }
-    render();
-  }
+  const LIVE_STREAM = MODULES.require('liveStream').create({
+    state, timeMs, ensureActivity, upsertActivityStep, finishActivity,
+    assistantRow, addAssistantResources, completeLatestAssistant,
+    activityHasCompletedAction, modelErrorText, activity: ACTIVITY,
+    modules: MODULES, projectId: () => projectId(),
+    loadWorkflow: (...args) => loadWorkflow(...args), render: () => render(),
+    watchChildJob: (...args) => watchChildJob(...args), hostJobs: HOST_JOBS,
+    assistantTextHtml, publicAssistantText, followUps: MODULES.require('followUps'),
+  });
+  const handlePiEvent = LIVE_STREAM.handlePiEvent;
   function closeSource() { if (state.source) { state.source.close(); state.source = null; } }
   function reconcileSettledSession() {
     if (state.session && state.session.active_message_job_id) return;
@@ -1089,6 +1070,7 @@
       if (!preserveTimeline) state.messages = transcriptMessages(state.session);
       (Array.isArray(state.session.archived_child_jobs) ? state.session.archived_child_jobs : []).forEach(hydrateProjectedJob);
       reconcileSettledSession();
+      HOST_JOBS.sync();
     } catch (error) {
       if (projectId() !== expectedProjectId || !state.session || state.session.session_id !== expectedSessionId) return;
       state.error = tr('Conversation refresh failed. Your saved records are unchanged: ', '对话刷新失败，已保存记录未改变：') + errorText(error);
@@ -1220,6 +1202,9 @@
         state.latestRun = payload && payload.latest_run ? payload.latest_run : { present: false };
         void RUN_OUTCOME.loadScientificReview(state.latestRun, state.workflow);
         if (state.workflow) state.workflow.active_job = (payload && payload.active_job) || { present: false };
+        // The project's run record travels beside the snapshot; the aside
+        // reads it from the same workflow object as the stages.
+        if (state.workflow) state.workflow.runs = Array.isArray(payload && payload.runs) ? payload.runs : [];
         reconcileDurableWrapupActivity();
         hydrateProjectedJob(payload && payload.active_job);
         const activeJob = payload && payload.active_job;
@@ -1319,6 +1304,8 @@
     // user switches to a blank project makes the new conversation look as if
     // it inherited the previous project's data configuration.
     state.workflowReceipts = [];
+    state.planConfigurationError = '';
+    HOST_JOBS.stopAll();
     state.editingMessageId = '';
     state.busy = false;
     state.jobId = '';
@@ -1663,6 +1650,10 @@
     const projectOwner = MODULES.require('project');
     if (projectOwner && projectOwner.syncLocation) projectOwner.syncLocation(projectId(), '');
     render();
+    // Home reuses an empty draft this project already has instead of adding
+    // another one to the rail; a session is only created when none is free.
+    const emptyDraft = state.sessions.find(row => STUDY_WORKSPACE.isEmptyConversation(row));
+    if (emptyDraft) { await openSession(emptyDraft.session_id); return; }
     await createSession();
   }
   async function stopMessage() {

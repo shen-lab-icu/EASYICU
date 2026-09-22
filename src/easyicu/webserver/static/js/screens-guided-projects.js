@@ -27,6 +27,22 @@
     return projectRailCollapsed;
   }
 
+  // The global nav's Projects button: from the compact rail it first brings
+  // the project panel back; otherwise it toggles the project switcher.
+  function showProjects() {
+    const collapsedMain = document.querySelector('.gd-main.gd-project-rail-collapsed');
+    if (collapsedMain) {
+      setProjectRailCollapsed(false);
+      collapsedMain.classList.remove('gd-project-rail-collapsed');
+      return;
+    }
+    const picker = document.querySelector('#gdResearchProjectRail .gd-project-picker');
+    if (!picker) return;
+    picker.open = !picker.open;
+    const summary = picker.querySelector('summary');
+    if (summary && picker.open) summary.focus();
+  }
+
   function setProjectManagement(active) {
     projectManagementActive = !!active;
     if (!projectManagementActive) selectedProjectIds.clear();
@@ -110,9 +126,7 @@
   }
 
   function renderShellRail(ctx) {
-    const { t, icon, esc } = helpers(ctx);
-    const activeProject = projectTitle(ctx.selectedGuidedDraft && ctx.selectedGuidedDraft.title,
-      t('Choose a project', '选择研究项目'));
+    const { t, icon } = helpers(ctx);
     return `
       <button class="gd-rail-restore" type="button" data-project-rail-toggle aria-label="${t('Show research projects', '显示研究项目栏')}" title="${t('Show research projects', '显示研究项目栏')}">${icon('chevron', 14)}</button>
       <aside class="gd-rail" id="gdResearchProjectRail">
@@ -127,12 +141,11 @@
         </nav>
         <div class="gd-rail-top">
           <div class="gd-rail-heading">
-            <button class="gd-rail-brand" type="button" data-gpi-show-projects aria-label="${t('Switch research project', '切换研究项目')}" title="${esc(activeProject)}"><span class="brand-mark">${icon('spark', 18)}</span><span class="gd-name"><small>${t('Project', '项目')}</small>${esc(activeProject)}</span></button>
+            <div class="gd-rail-list" id="gdSessions"></div>
             <button class="gd-rail-collapse" type="button" data-project-rail-toggle aria-controls="gdResearchProjectRail" aria-label="${t('Hide research projects', '隐藏研究项目栏')}" title="${t('Hide research projects', '隐藏研究项目栏')}">${icon('chevron', 14)}</button>
           </div>
           <div class="gd-folder-controls" id="gdFolderControls"></div>
         </div>
-        <div class="gd-rail-list" id="gdSessions"></div>
         <section id="gdConversationRail" class="gpi-conversations" hidden></section>
         <div class="gd-rail-foot">
           <div class="gd-rail-utils" aria-label="${t('Guided Copilot utilities', '研究引导工具')}">
@@ -152,13 +165,6 @@
     const { t, icon, esc, fmtRunTime } = helpers(ctx);
     const host = document.getElementById('gdSessions');
     if (!host) return;
-    const brandName = host.closest?.('.gd-rail')?.querySelector('.gd-rail-brand .gd-name');
-    const currentTitle = projectTitle(ctx.selectedGuidedDraft && ctx.selectedGuidedDraft.title,
-      t('Choose a project', '选择研究项目'));
-    if (brandName) {
-      brandName.innerHTML = `<small>${t('Project', '项目')}</small>${esc(currentTitle)}`;
-      brandName.closest('button').title = currentTitle;
-    }
     const rows = ctx.localDraftRows();
     const activeId = ctx.selectedGuidedDraft && ctx.selectedGuidedDraft.id;
     const rowIds = new Set(rows.map(row => row && row.id).filter(Boolean));
@@ -213,11 +219,19 @@
     const pickerOpen = projectManagementActive || (!activeId && !ctx.guidedDrafts.loading)
       || !!(oldPicker && oldPicker.dataset.projectId === activeId && oldPicker.open);
     const pickerTitle = projectTitle(ctx.selectedGuidedDraft && ctx.selectedGuidedDraft.title, t('Choose a project', '选择研究项目'));
-    host.innerHTML = `<details class="gd-project-picker" data-project-id="${esc(activeId || '')}"${pickerOpen ? ' open' : ''}>
-      <summary><small>${t('Current project', '当前项目')}</small><span title="${esc(pickerTitle)}">${esc(pickerTitle)}</span><i aria-hidden="true">⌄</i></summary>
+    // One control names the project the rail is showing and switches it —
+    // the reference's "PROJECT / name" combobox. A research project is the
+    // study itself (question, data binding, plan, runs, evidence, results,
+    // one local folder); the conversations listed under it are threads
+    // about that one study, not a second kind of work item.
+    // As a switcher it is a floating menu (closes on an outside press); with
+    // no project chosen, or while managing projects, the list is the surface.
+    const pickerDismissible = !!activeId && !projectManagementActive;
+    host.innerHTML = `<details class="gd-project-picker" data-project-id="${esc(activeId || '')}"${pickerOpen ? ' open' : ''}${pickerDismissible ? ' data-popover-menu' : ''}>
+      <summary title="${esc(t('Switch research project', '切换研究项目'))}"><small>${t('Project', '项目')}</small><span title="${esc(pickerTitle)}">${esc(pickerTitle)}</span><i aria-hidden="true">⌄</i></summary>
       <div class="gd-project-picker-list">
       <div class="gd-project-heading"><span>${t('Research projects', '研究项目')}</span><span class="gd-project-heading-actions"><button class="gd-manage-mini ${projectManagementActive ? 'active' : ''}" type="button" data-project-manage>${projectManagementActive ? t('Done', '完成') : t('Manage', '管理')}</button><button class="gd-refresh-mini" type="button" data-refreshdrafts title="${t('Refresh research projects', '刷新研究项目')}" aria-label="${t('Refresh research projects', '刷新研究项目')}">${icon('refresh', 12)}</button></span></div>
-      ${rows.length ? `<label class="gd-project-search"><span class="sr-only">${t('Search research projects', '搜索研究项目')}</span><input type="search" data-project-search placeholder="${t('Search projects…', '搜索项目…')}" value="${esc(search)}" autocomplete="off"></label>` : ''}
+      ${rows.length ? `<label class="gd-project-search"><span class="shell-sr-only">${t('Search research projects', '搜索研究项目')}</span><input type="search" data-project-search placeholder="${t('Search projects…', '搜索项目…')}" value="${esc(search)}" autocomplete="off"></label>` : ''}
       <div class="gd-project-summary">${icon('folder', 14)}<div><strong>${t('Local research workspace', '本地研究工作区')}</strong><span>${t('Study setup, runs, evidence, and conversation history stay here.', '研究配置、运行、证据和对话历史都保存在这里。')}</span></div></div>
       ${draftHtml}
       ${rows.length ? `<p class="gd-project-search-empty" data-project-search-empty hidden>${t('No matching projects', '没有匹配的项目')}</p>` : ''}
@@ -452,5 +466,6 @@
     selectedProjects,
     setProjectRailCollapsed,
     isProjectRailCollapsed,
+    showProjects,
   };
 })();

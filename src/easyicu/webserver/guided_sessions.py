@@ -33,6 +33,9 @@ _VALID_DEPTHS = {"extract", "review", "full"}
 _VALID_DATA_MODES = {"demo", "real", "unbound"}
 _ROW_LEVEL_KEYS = {"tableRows", "series", "patient", "stay_id", "subject_id", "hadm_id"}
 _MAX_DRAFTS = 80
+# Free-text project notes live as one Markdown file in the project folder.
+_NOTES_FILE = "project_notes.md"
+_MAX_NOTES_CHARS = 20000
 _MAX_SESSIONS = 80
 _MAX_MESSAGES = 120
 _LOCK = threading.RLock()
@@ -1471,6 +1474,115 @@ def list_guided_drafts(limit: int = 20) -> Dict[str, Any]:
         "config_path": str(_CONFIG_PATH),
         "storage": "metadata_only",
     }
+
+
+def _draft_project_dir(project_id: str) -> Path | None:
+    """Return the existing local folder of one registered Guided draft."""
+
+    clean_project = _clean_text(project_id, max_len=160)
+    if not clean_project:
+        return None
+    with _LOCK:
+        raw = _read_raw()
+    rows = raw.get("drafts") if isinstance(raw.get("drafts"), list) else []
+    draft = next(
+        (
+            row
+            for row in rows
+            if isinstance(row, dict) and str(row.get("id") or "") == clean_project
+        ),
+        None,
+    )
+    if draft is None:
+        return None
+    project_dir = _safe_project_dir(
+        draft.get("project_dir"), allow_marked_external=True
+    )
+    if project_dir is None or not project_dir.is_dir():
+        return None
+    return project_dir
+
+
+def _notes_payload(project_id: str, project_dir: Path | None) -> Dict[str, Any]:
+    if project_dir is None:
+        return {
+            "ok": True,
+            "project_id": project_id,
+            "available": False,
+            "present": False,
+            "text": "",
+            "updated_at": None,
+        }
+    path = project_dir / _NOTES_FILE
+    if not path.is_file():
+        return {
+            "ok": True,
+            "project_id": project_id,
+            "available": True,
+            "present": False,
+            "text": "",
+            "updated_at": None,
+        }
+    text = path.read_text(encoding="utf-8", errors="replace")[:_MAX_NOTES_CHARS]
+    updated = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+    return {
+        "ok": True,
+        "project_id": project_id,
+        "available": True,
+        "present": True,
+        "text": text,
+        "updated_at": updated.isoformat().replace("+00:00", "Z"),
+    }
+
+
+def read_project_notes(project_id: str) -> Dict[str, Any]:
+    """Read the researcher's notes for one project from its local folder.
+
+    Notes are the researcher's own free text; they are project memory, not
+    model input, and never leave the folder. A project without a registered
+    local folder reports ``available: false`` so the client keeps its own
+    browser-local fallback.
+    """
+
+    clean_project = _clean_text(project_id, max_len=160)
+    return _notes_payload(clean_project, _draft_project_dir(clean_project))
+
+
+def write_project_notes(project_id: str, text: Any) -> Dict[str, Any]:
+    """Replace the project's notes file atomically and return the saved state."""
+
+    clean_project = _clean_text(project_id, max_len=160)
+    project_dir = _draft_project_dir(clean_project)
+    if project_dir is None:
+        return {
+            "ok": False,
+            "error": "project_notes_unavailable",
+            "reason": "This project has no registered local folder; notes stay in this browser.",
+            "project_id": clean_project,
+        }
+    if text is not None and not isinstance(text, str):
+        return {
+            "ok": False,
+            "error": "project_notes_invalid",
+            "reason": "Notes must be plain text.",
+            "project_id": clean_project,
+        }
+    body = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    if len(body) > _MAX_NOTES_CHARS:
+        return {
+            "ok": False,
+            "error": "project_notes_too_long",
+            "reason": f"Notes are limited to {_MAX_NOTES_CHARS} characters.",
+            "project_id": clean_project,
+        }
+    path = project_dir / _NOTES_FILE
+    with _LOCK:
+        if not body.strip() and not path.exists():
+            return _notes_payload(clean_project, project_dir)
+        temporary = path.with_name(f".{_NOTES_FILE}.tmp")
+        temporary.write_text(body, encoding="utf-8")
+        temporary.replace(path)
+    return _notes_payload(clean_project, project_dir)
 
 
 def _trash_guided_project_folder(project_dir_value: Any, draft_id: str) -> None:

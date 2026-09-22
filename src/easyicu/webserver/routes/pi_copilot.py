@@ -109,7 +109,7 @@ class PiSessionCreateRequest(BaseModel):
     title: str = "EasyICU Copilot"
     agent_mode: Literal["research", "workspace"] = "research"
     language: Literal["en", "zh"] = "en"
-    thinking_level: Literal["off", "minimal", "low", "medium", "high"] = "off"
+    thinking_level: Literal["off", "minimal", "low", "medium", "high"] = "medium"
     external_llm_opt_in: StrictBool = False
     research_provider: Literal["api", "codex"] = "api"
     research_model: ModelText | None = None
@@ -123,6 +123,13 @@ class PiSessionRenameRequest(BaseModel):
         str,
         StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
     ]
+
+
+class PiSessionThinkingLevelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: ShortText
+    thinking_level: Literal["off", "minimal", "low", "medium", "high"]
 
 
 class PiSessionDeleteRequest(BaseModel):
@@ -823,6 +830,21 @@ def post_pi_copilot_session_rename(
             session_id,
             project_id=body.project_id,
             title=body.title,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/sessions/{session_id}/thinking-level")
+def post_pi_copilot_session_thinking_level(
+    session_id: ShortText,
+    body: PiSessionThinkingLevelRequest,
+) -> dict:
+    try:
+        return get_pi_copilot_service().set_thinking_level(
+            session_id,
+            project_id=body.project_id,
+            thinking_level=body.thinking_level,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

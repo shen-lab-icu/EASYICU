@@ -498,10 +498,11 @@
     },
     render() {
       try {
-        if (window.sessionStorage.getItem('easyicu.settings.openCapabilityTab') === 'skills') {
-          settingsCapabilityTab = 'skills';
-          window.sessionStorage.removeItem('easyicu.settings.openCapabilityTab');
+        const requestedTab = window.sessionStorage.getItem('easyicu.settings.openCapabilityTab');
+        if (requestedTab && capabilityTabs().some(([id]) => id === requestedTab)) {
+          settingsCapabilityTab = requestedTab;
         }
+        if (requestedTab) window.sessionStorage.removeItem('easyicu.settings.openCapabilityTab');
       } catch (_) {}
       return `
       <div class="settings-page">

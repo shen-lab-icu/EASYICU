@@ -1,6 +1,7 @@
 /* Guided Copilot activity timeline.
-   Owner: browser-safe lifecycle/tool rendering only. It never receives model
-   reasoning, tool arguments, credentials, patient rows, or host paths. */
+   Owner: browser-safe lifecycle/tool rendering. It shows the model's own
+   reasoning summary as trace rows (bounded and sanitized upstream) and never
+   receives tool arguments, credentials, patient rows, or host paths. */
 (function () {
   'use strict';
 
@@ -8,8 +9,8 @@
   // a record of actions a researcher can understand and inspect. Transport
   // acknowledgements, agent startup, model phases, and context maintenance
   // remain in the persisted receipt, but do not become fake "work" rows.
-  const VISIBLE_KINDS = new Set(['tool', 'pipeline', 'retry']);
-  const DURATION_KINDS = new Set(['assistant', 'tool', 'pipeline', 'retry', 'compaction']);
+  const VISIBLE_KINDS = new Set(['tool', 'pipeline', 'retry', 'thinking']);
+  const DURATION_KINDS = new Set(['assistant', 'tool', 'pipeline', 'retry', 'compaction', 'thinking']);
 
   function create(host) {
     const tr = host.tr;
@@ -18,6 +19,7 @@
     const resourceName = host.resourceName;
     const resourceKey = host.resourceKey;
     const resourceButton = host.resourceButton;
+    const publicText = typeof host.publicText === 'function' ? host.publicText : value => String(value || '');
     let liveClock = 0;
     let liveClockRoot = null;
 
@@ -81,7 +83,31 @@
         .find(item => item.kind === 'turn' && item.status === 'running');
       if (turn) { turn.status = 'complete'; turn.endedAt = at; }
     }
+    /* The reasoning summary arrives as short bold headlines separated by
+       blank lines. The first headline names the row; the whole summary is
+       shown under it in the model's own words, whatever language they are in. */
+    function reasoningHeadline(text) {
+      const value = publicText(String(text || ''));
+      const bold = value.match(/\*\*([^*\n]{1,160})\*\*/);
+      if (bold) return bold[1].trim();
+      const line = value.split(/\n+/).map(item => item.trim()).find(Boolean) || '';
+      return line.replace(/[*_`#>]/g, '').trim().slice(0, 160);
+    }
+    /* The row label already carries the first headline, so the body starts
+       after it; a summary that is only a headline renders as a single line. */
+    function reasoningHtml(text) {
+      const value = publicText(String(text || '')).trim();
+      if (!value) return '';
+      const paragraphs = value.split(/\n{2,}/).map(paragraph => paragraph.trim()).filter(Boolean);
+      const headline = reasoningHeadline(text);
+      if (paragraphs.length && headline && paragraphs[0].replace(/\*\*/g, '').trim() === headline) paragraphs.shift();
+      return paragraphs.map(paragraph => {
+        const safe = esc(paragraph).replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
+        return `<p>${safe}</p>`;
+      }).join('');
+    }
     function stepDuration(step) {
+      if (step && step.durationKnown === false) return '';
       if (!DURATION_KINDS.has(String(step && step.kind || ''))) return '';
       const started = Number(step && step.startedAt);
       const ended = Number(step && step.endedAt);
@@ -111,6 +137,7 @@
       if (step.kind === 'submitted') return 'arrow';
       if (step.kind === 'turn' || step.kind === 'retry') return 'refresh';
       if (step.kind === 'assistant') return 'wand';
+      if (step.kind === 'thinking') return 'spark';
       if (step.kind === 'tool') return toolIcon(step.toolName);
       if (step.kind === 'pipeline') {
         if (/artifact|report|manuscript/.test(step.step || '')) return 'file';
@@ -257,6 +284,29 @@
       return String(fallback || tr('Research-task status updated', '研究任务状态已更新'));
     }
 
+    /* Planning events reach the browser as job progress rows whose typed
+       `planning_unit` / `retry_phase` fields may be absent (only the label
+       survives the job projection). Recover both from the label so the tally
+       and the row text do not depend on which transport carried the event. */
+    function planningEventFacts(event) {
+      const message = String(event && (event.message || event.label) || '').toLowerCase();
+      let unit = String(event && event.planning_unit || '');
+      let phase = String(event && event.retry_phase || '');
+      // Only the progressive planner's own labels are recovered here; the
+      // legacy "plan draft n/m" sentences keep their dedicated wording below.
+      if (!unit && !phase) {
+        if (message.includes('study structure')) unit = 'structure';
+        else if (message.includes('cohort and analysis rules')) unit = 'rules';
+        else if (message.includes('executable plan step')) unit = 'step';
+        if (unit) {
+          if (message.includes('passed validation')) phase = 'accepted';
+          else if (message.includes('did not satisfy') || message.includes('retrying')) phase = 'rejected';
+          else if (message.includes('validation attempt')) phase = 'started';
+        }
+      }
+      return { unit, phase };
+    }
+
     function pipelineEventLabel(event) {
       const type = String((event && event.type) || '');
       if (type === 'start') return tr('EasyICU research pipeline started', 'EasyICU 科研流程已启动');
@@ -267,8 +317,9 @@
         const total = Number(event && event.total);
         const count = Number.isFinite(current) && Number.isFinite(total)
           ? `${current}/${total}` : '';
-        const planningUnit = String(event && event.planning_unit || 'plan');
-        const retryPhase = String(event && event.retry_phase || '');
+        const facts = planningEventFacts(event);
+        const planningUnit = facts.unit || 'plan';
+        const retryPhase = facts.phase;
         const unit = {
           structure: tr('study structure', '研究结构'),
           rules: tr('cohort and analysis rules', '队列与分析规则'),
@@ -316,7 +367,25 @@
       return pipelineStageLabel(stage, String(event && event.status || 'running'));
     }
 
-    function projectPipelineSteps(steps) {
+    /* Live tally for the collapsed plan row: what the planner has already
+       validated and which validation is running now. */
+    function planningProgressText(progress) {
+      if (!progress || typeof progress !== 'object') return '';
+      const passed = [];
+      if (progress.structurePassed) passed.push(tr('study structure', '研究结构'));
+      if (progress.rulesPassed) passed.push(tr('cohort and analysis rules', '队列与分析规则'));
+      const steps = Number(progress.validatedSteps) || 0;
+      if (steps > 0) passed.push(tr(`${steps} executable-step validation${steps === 1 ? '' : 's'}`, `${steps} 次可执行步骤校验`));
+      const parts = [];
+      if (passed.length) parts.push(tr(`Validated: ${passed.join(', ')}`, `已通过校验：${passed.join('、')}`));
+      const retries = Number(progress.retries) || 0;
+      if (retries > 0) parts.push(tr(`${retries} automatic correction${retries === 1 ? '' : 's'}`, `自动修正 ${retries} 次`));
+      const current = String(progress.current || '').trim();
+      if (current) parts.push(tr(`Now: ${current}`, `当前：${current}`));
+      return parts.join(' · ');
+    }
+
+    function projectPipelineSteps(steps, running) {
       const source = Array.isArray(steps) ? steps : [];
       const hasPlanStage = source.some(step => step.kind === 'pipeline'
         && ['planning', 'plan', 'scientific_review'].includes(String(step.step || '').toLowerCase()));
@@ -328,13 +397,18 @@
         let stage = sourceStage;
         if (stage === 'terminal' && hasPlanStage) stage = 'plan';
         const fallbackAllowed = ['submitted', 'terminal', 'attention'].includes(sourceStage);
+        // Each intermediate validation reports "complete"; while the job is
+        // still running the collapsed plan row must keep its running label
+        // rather than announce a finished plan after the first passed step.
+        const stageStatus = running && stage === 'plan' && step.status === 'complete'
+          ? 'running' : String(step.status || '');
         const next = {
           ...step,
           id: `pipeline-stage-${stage}`,
           step: stage,
           label: pipelineStageLabel(
             fallbackAllowed ? sourceStage : stage,
-            String(step.status || ''),
+            stageStatus,
             fallbackAllowed ? step.label : '',
           ),
           // Artifact navigation belongs to the result/confirmation card. The
@@ -349,7 +423,23 @@
           projected.push(next);
         }
       });
-      return projected;
+      return orderPipelineStages(projected);
+    }
+    /* A reloaded page rebuilds the timeline from a bounded job snapshot and
+       then replays the full event stream, so later stages can arrive first.
+       Present lifecycle stages in pipeline order; rows that are not stages
+       (tool calls, retries) stay attached to the stage that preceded them. */
+    const STAGE_ORDER = ['submitted', 'setup', 'inputs', 'evidence', 'plan', 'analysis', 'figure', 'report', 'progress', 'attention', 'terminal'];
+    function orderPipelineStages(rows) {
+      let previous = -1;
+      const keyed = rows.map((row, index) => {
+        const isStage = row.kind === 'pipeline' && String(row.id || '').startsWith('pipeline-stage-');
+        const order = isStage ? STAGE_ORDER.indexOf(String(row.step || '')) : -1;
+        if (isStage && order >= 0) previous = order;
+        return { row, index, key: isStage && order >= 0 ? order : previous };
+      });
+      keyed.sort((a, b) => (a.key - b.key) || (a.index - b.index));
+      return keyed.map(item => item.row);
     }
 
     function isVisibleOperation(step) {
@@ -377,6 +467,11 @@
         if (step.publicChars) return tr(`Streaming public response phase ${step.phase}`, `正在流式输出公开回复阶段 ${step.phase}`);
         return tr(`Preparing the next visible action ${step.phase}`, `正在准备下一步可见操作 ${step.phase}`);
       }
+      if (step.kind === 'thinking') {
+        const headline = reasoningHeadline(step.text);
+        if (headline) return headline;
+        return done ? tr('Thought it through', '已完成思考') : tr('Thinking…', '正在思考…');
+      }
       if (step.kind === 'tool') return failed
         ? tr(`${toolLabel(step.toolName, step.resource)} returned an error`, `${toolLabel(step.toolName, step.resource)} 返回错误`)
         : done ? completedToolLabel(step.toolName, step.resource)
@@ -395,8 +490,7 @@
       if (step.kind === 'settled') return tr('This turn completed', '本轮已完成');
       return tr('Agent activity updated', 'Agent 状态已更新');
     }
-    function stepPrimary(step) {
-      const label = stepLabel(step);
+    function operationPayload(step, label) {
       const resources = [step.resource].concat(Array.isArray(step.resources) ? step.resources : []).filter(Boolean);
       const safeResources = resources.slice(0, 12).map(resource => ({
         kind: String(resource.kind || '').slice(0, 80),
@@ -407,18 +501,48 @@
         run_id: String(resource.run_id || '').slice(0, 160),
         sha256: String(resource.sha256 || '').slice(0, 64),
       }));
-      const operation = encodeURIComponent(JSON.stringify({
+      return encodeURIComponent(JSON.stringify({
         id: String(step.id || `${step.kind || 'step'}-${label}`).slice(0, 240),
         title: label,
         kind: String(step.kind || 'operation').slice(0, 80),
         icon: String(activityIcon(step) || 'play').slice(0, 40),
         status: String(step.status || 'complete').slice(0, 40),
-        detail: localizedStepText(step),
+        detail: step.kind === 'thinking' ? String(step.text || '').slice(0, 4000) : localizedStepText(step),
         duration: stepDuration(step),
         toolName: String(step.toolName || step.step || '').slice(0, 160),
         resources: safeResources,
       }));
-      return `<button type="button" class="gpi-activity-step-open" data-gpi-operation="${esc(operation)}"><strong>${esc(label)}</strong>${iconHtml('arrow', 11)}</button>`;
+    }
+    /* One trace row is one button: icon, action, elapsed time, chevron. The
+       whole row opens the operation workbench, as in the reference UI. */
+    function stepPrimary(step) {
+      const label = stepLabel(step);
+      const operation = operationPayload(step, label);
+      const thinking = step.kind === 'thinking';
+      const detail = thinking ? '' : localizedStepText(step);
+      const running = step.status === 'running';
+      const reasoning = thinking
+        ? `<span class="gpi-activity-reasoning${running ? ' is-streaming' : ''}" data-gpi-thinking-stream="${esc(step.id || '')}">${reasoningHtml(step.text)}</span>`
+        : '';
+      const publicStream = step.kind === 'assistant' && running && step.publicText
+        ? `<span class="gpi-activity-public-stream"><em>${tr('Public output', '公开输出')}</em>${esc(step.publicText)}<i aria-hidden="true"></i></span>`
+        : '';
+      const meta = stepDuration(step);
+      const started = Number(step.startedAt);
+      const duration = running && Number.isFinite(started)
+        ? `<span class="gpi-activity-step-duration" data-gpi-live-elapsed="${started}">${iconHtml('clock', 12)}${esc(durationText(started))}</span>`
+        : meta
+          ? `<span class="gpi-activity-step-duration">${iconHtml('clock', 12)}${esc(meta)}</span>`
+          : '<span class="gpi-activity-step-duration" aria-hidden="true"></span>';
+      const icon = running
+        ? '<span class="gpi-running-spinner" aria-hidden="true"></span>'
+        : iconHtml(activityIcon(step), 16);
+      return `<button type="button" class="gpi-activity-step-open" data-gpi-operation="${esc(operation)}" aria-label="${esc(label)}">
+        <span class="gpi-activity-step-icon" aria-hidden="true">${icon}</span>
+        <span class="gpi-activity-step-copy"><strong>${esc(label)}</strong>${publicStream}${detail ? `<span>${esc(detail)}</span>` : ''}${reasoning}</span>
+        ${duration}
+        <span class="gpi-disclosure" aria-hidden="true">${iconHtml('chevron', 14)}</span>
+      </button>`;
     }
     function stepResources(step) {
       const seen = new Set();
@@ -444,40 +568,60 @@
       // Raw validator codes and Python/Node owner paths are diagnostics, not
       // user-facing research progress. Keep them in persisted receipts while
       // projecting only elapsed time in the ordinary activity timeline.
-      const meta = stepDuration(step);
-      const detail = localizedStepText(step);
-      const publicStream = step.kind === 'assistant' && step.status === 'running' && step.publicText
-        ? `<span class="gpi-activity-public-stream"><em>${tr('Public output', '公开输出')}</em>${esc(step.publicText)}<i aria-hidden="true"></i></span>`
-        : '';
-      return `<li class="${esc(step.status || 'complete')} kind-${esc(step.kind || 'operation')}">
-        <span class="gpi-activity-step-icon" aria-hidden="true">${iconHtml(activityIcon(step), 15)}</span>
-        <span class="gpi-activity-step-copy">${stepPrimary(step)}${publicStream}${detail ? `<span>${esc(detail)}</span>` : ''}${stepResources(step)}</span>
-        ${meta ? `<span class="gpi-activity-step-duration">${iconHtml('clock', 12)}${esc(meta)}</span>` : '<span class="gpi-activity-step-duration" aria-hidden="true"></span>'}
-      </li>`;
+      return `<li class="${esc(step.status || 'complete')} kind-${esc(step.kind || 'operation')}">${stepPrimary(step)}${stepResources(step)}</li>`;
     }
-    function render(row) {
+    /* The model's interim narration ("I'll check the data source next") is
+       part of the trace, not a separate reply: it sits between the rows it
+       explains, after the tool call that preceded it. */
+    function narrationRow(html) {
+      return html ? `<li class="gpi-activity-narration">${html}</li>` : '';
+    }
+    function traceListHtml(steps, narration) {
+      const segments = (Array.isArray(narration) ? narration : [])
+        .filter(item => item && item.html)
+        .map(item => ({ after: Number.isFinite(Number(item.afterSteps)) ? Number(item.afterSteps) : Number.POSITIVE_INFINITY, html: item.html }))
+        .sort((left, right) => left.after - right.after);
+      const items = [];
+      let tools = 0;
+      let cursor = 0;
+      const drain = limit => {
+        while (cursor < segments.length && segments[cursor].after <= limit) {
+          items.push(narrationRow(segments[cursor].html));
+          cursor += 1;
+        }
+      };
+      drain(0);
+      steps.forEach(step => {
+        items.push(stepRow(step));
+        if (step.kind === 'tool') { tools += 1; drain(tools); }
+      });
+      while (cursor < segments.length) { items.push(narrationRow(segments[cursor].html)); cursor += 1; }
+      return items.length ? `<ol>${items.join('')}</ol>` : '';
+    }
+    function render(row, options) {
       const allSteps = Array.isArray(row && row.steps) ? row.steps : [];
-      const visibleSteps = projectPipelineSteps(allSteps.filter(isVisibleOperation));
-      const latest = visibleSteps[visibleSteps.length - 1];
       const running = row && row.status === 'running';
+      const visibleSteps = projectPipelineSteps(allSteps.filter(isVisibleOperation), running);
+      const narration = options && Array.isArray(options.narration) ? options.narration : [];
+      const latest = visibleSteps[visibleSteps.length - 1];
       const failed = row && (row.status === 'error' || row.status === 'failed' || row.status === 'cancelled');
       const kicker = tr('Show traces', '查看执行过程');
       if (running) {
         const title = row.runningTitle || (latest
           ? stepLabel(latest) : tr('EasyICU Copilot is preparing the next action', 'EasyICU 研究助手正在准备下一步'));
-        const note = tr(
+        const note = String(row.runningNote || '').trim() || tr(
           'Still running. You can wait here; EasyICU will ask when review or confirmation is needed.',
           '任务仍在进行。请在这里等待；需要审阅或确认时 EasyICU 会明确提示。',
         );
-        const liveSteps = visibleSteps.slice(-20);
         return `<div class="gpi-activity-running" role="status" aria-live="polite" aria-busy="true">
           <div class="gpi-activity-live">
             <span class="gpi-running-spinner" aria-hidden="true"></span>
             <span class="gpi-activity-kicker">${esc(tr('In progress', '正在进行'))}</span>
-            <span class="gpi-activity-title"><strong>${esc(title)}</strong><small>${esc(note)}</small></span>
+            <span class="gpi-activity-title"><strong>${esc(title)}</strong></span>
             <span class="gpi-activity-elapsed" data-gpi-live-elapsed="${Number(row.startedAt || Date.now())}">${esc(durationText(row.startedAt))}</span>
           </div>
-          ${liveSteps.length ? `<ol>${liveSteps.map(stepRow).join('')}</ol>` : ''}
+          ${traceListHtml(visibleSteps, narration)}
+          <p class="gpi-activity-note">${esc(note)}</p>
         </div>`;
       }
       // Biomni-style traces are evidence of actual work. A plain response with
@@ -486,7 +630,7 @@
       if (!visibleSteps.length && !failed) return '';
       const title = failed ? tr('Execution needs attention', '执行过程需要处理') : kicker;
       const traceMeta = `${tr(`${visibleSteps.length} steps`, `${visibleSteps.length} 个步骤`)}${row.durationKnown === false ? '' : ` · ${tr(`total ${durationText(row.startedAt, row.endedAt)}`, `总耗时 ${durationText(row.startedAt, row.endedAt)}`)}`}`;
-      const longTrace = visibleSteps.length > 6;
+      const longTrace = visibleSteps.length + narration.length > 5;
       // Finished failures expose their status in the summary but keep verbose
       // diagnostic receipts collapsed. Persisted rows from older builds may
       // still carry expanded=true, so terminal rendering must not trust it.
@@ -494,11 +638,12 @@
         <summary aria-label="${esc(`${title}. ${traceMeta}`)}">
           <span class="gpi-disclosure" aria-hidden="true">${iconHtml('chevron', 14)}</span>
           <span class="gpi-activity-kicker">${esc(title)}</span>
+          <span class="gpi-activity-meta" aria-hidden="true">${esc(traceMeta)}</span>
         </summary>
         <div class="gpi-activity-body${longTrace ? ' is-clipped' : ''}">
-          ${visibleSteps.length ? `<ol>${visibleSteps.map(stepRow).join('')}</ol>` : ''}
-          ${longTrace ? `<button type="button" class="gpi-trace-expand" data-gpi-trace-expand aria-expanded="false"><span>${esc(tr('Expand all', '展开全部'))}</span>${iconHtml('external', 12)}</button>` : ''}
-          <p class="sr-only">${tr('Lifecycle facts and EasyICU receipts only — private chain-of-thought is never displayed.', '这里只提供生命周期事实和 EasyICU 回执，不展示模型的私有思维链。')}</p>
+          ${traceListHtml(visibleSteps, narration)}
+          ${longTrace ? `<button type="button" class="gpi-trace-expand" data-gpi-trace-expand aria-expanded="false">${iconHtml('external', 12)}<span>${esc(tr('Expand all', '展开全部'))}</span></button>` : ''}
+          <p class="sr-only">${tr('Reasoning summaries, lifecycle facts, and EasyICU receipts — tool arguments, credentials, and patient rows are never displayed.', '这里展示模型的思考摘要、生命周期事实和 EasyICU 回执；工具参数、凭据和患者行级数据不会展示。')}</p>
         </div>
       </details>`;
     }
@@ -518,14 +663,24 @@
       return rows;
     }
 
-    function renderTimeline(rows, renderRow) {
+    /* One reply turn reads as the reference UI does: the model's opening
+       sentence, the traces it produced (with its interim narration between
+       the rows), then the answer. `renderSegment(row, 'intro' | 'narration')`
+       renders the text-only segments; without it every assistant row keeps
+       its full message rendering after the traces. */
+    function renderTimeline(rows, renderRow, renderSegment) {
       let pending = [];
+      let turnTexts = [];
       const output = [];
+      const segmentsSupported = typeof renderSegment === 'function';
 
-      function traceHtml() {
+      function traceHtml(narration) {
         if (!pending.length) return '';
         const rendered = pending
-          .map(row => ({ row, html: renderRow(row) }))
+          .map((row, index) => ({
+            row,
+            html: renderRow(row, index === pending.length - 1 && narration.length ? { narration } : undefined),
+          }))
           .filter(item => item.html);
         pending = [];
         if (!rendered.length) return '';
@@ -533,10 +688,11 @@
           const html = `<div class="gpi-turn-trace">${rendered[0].html}</div>`;
           return html;
         }
-        // Keep the newest terminal failure visible beside the user's next
-        // decision. Earlier attempts stay in the compact history disclosure.
+        // Keep the newest terminal failure -- or the turn still running --
+        // visible beside the user's next decision. Earlier attempts stay in
+        // the compact history disclosure.
         const latest = rendered[rendered.length - 1];
-        const latestFailed = ['failed', 'error', 'cancelled'].includes(String(latest.row.status || ''));
+        const latestFailed = ['failed', 'error', 'cancelled', 'running'].includes(String(latest.row.status || ''));
         const history = latestFailed ? rendered.slice(0, -1) : rendered.slice();
         const rowsHtml = history.map(item => item.html).join('');
         const summary = tr('Show traces', '查看执行过程');
@@ -546,13 +702,36 @@
         return `${historyHtml}${latestFailed ? `<div class="gpi-turn-trace">${latest.html}</div>` : ''}`;
       }
 
+      function tracedTurn() {
+        return pending.length > 0 && pending.some(row => Array.isArray(row.steps)
+          && row.steps.some(step => step && step.kind === 'tool'));
+      }
+
       function flush() {
-        const html = traceHtml();
+        const texts = turnTexts;
+        turnTexts = [];
+        if (!segmentsSupported || texts.length < 2 || !tracedTurn()) {
+          const html = traceHtml([]);
+          if (html) output.push(html);
+          texts.forEach(row => output.push(renderRow(row)));
+          return;
+        }
+        const final = texts[texts.length - 1];
+        const earlier = texts.slice(0, -1);
+        const intro = Number(earlier[0].afterSteps) === 0 ? earlier.shift() : null;
+        const narration = earlier.map(row => ({ afterSteps: row.afterSteps, html: renderSegment(row, 'narration') }));
+        if (intro) output.push(renderSegment(intro, 'intro'));
+        const html = traceHtml(narration);
         if (html) output.push(html);
+        output.push(renderRow(final));
       }
 
       rows.forEach(row => {
-        if (row && row.role === 'activity' && row.status !== 'running') {
+        // A running turn groups the same way, so the opening sentence, the
+        // live rows, and the streaming answer keep their places while the
+        // model works instead of re-flowing when the turn settles.
+        if (row && row.role === 'activity') {
+          if (turnTexts.length) flush();
           pending.push(row);
           return;
         }
@@ -560,8 +739,7 @@
         // before the assistant result it produced. Preserve that order so the
         // conversation reads: optional plan -> actual work -> final answer.
         if (row && row.role === 'assistant' && pending.length) {
-          flush();
-          output.push(renderRow(row));
+          turnTexts.push(row);
           return;
         }
         flush();
@@ -571,7 +749,7 @@
       return output.join('');
     }
 
-    return Object.freeze({ appendPublicDelta, durationText, finishTurn, focusLatest, pipelineEventLabel, render, renderTimeline, startTurn, stepLabel, syncLiveClock, timeMs });
+    return Object.freeze({ appendPublicDelta, durationText, finishTurn, focusLatest, pipelineEventLabel, planningEventFacts, planningProgressText, reasoningHtml, render, renderTimeline, startTurn, stepLabel, syncLiveClock, timeMs });
   }
 
   window.EasyICU.guidedPi.declare('activity', { create });

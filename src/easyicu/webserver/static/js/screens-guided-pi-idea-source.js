@@ -51,18 +51,54 @@
       ${error ? `<span class="gpi-idea-source-error" role="alert">${esc(error)}</span>` : ''}
     </div>`;
   }
+  // The reference's "Connectors ▸ Manage connectors / GitHub Not enabled"
+  // row, filled with what EasyICU actually freezes into a conversation: the
+  // MCP servers (explicit tool allowlists) and user Skills active in this
+  // session, and the literature connectors Idea Mining may use. Status only —
+  // activation changes are made in Settings and enter new conversations.
+  function extensionsHtml(options) {
+    const { tr, esc, icon } = options;
+    const ext = options.extensions;
+    if (!ext) return '';
+    const servers = Array.isArray(ext.mcpServers) ? ext.mcpServers : [];
+    const skills = Array.isArray(ext.skills) ? ext.skills : [];
+    const state = on => on ? tr('enabled', '已启用') : tr('not enabled', '未启用');
+    const mcp = !ext.mcpEnabled
+      ? tr('master switch off', '总开关已关')
+      : servers.length
+        ? servers.map(row => `${row.name} · ${row.tools} ${tr('allowlisted tools', '个白名单工具')}`).join('; ')
+        : tr('none installed for this conversation', '本对话未固化任何服务');
+    const skillLine = skills.length
+      ? skills.map(row => row.name).join(', ')
+      : tr('none installed', '未安装');
+    const rows = [
+      [tr('MCP servers', 'MCP 服务'), mcp, 'mcp'],
+      [tr('User Skills', '用户 Skill'), skillLine, 'skills'],
+      [tr('PubMed connector', 'PubMed 连接器'), `${state(ext.pubmedEnabled)} · ${tr('Idea Mining', 'Idea Mining')}`, 'connectors'],
+      [tr('Zotero connector', 'Zotero 连接器'), `${state(ext.zoteroEnabled)} · ${tr('Idea Mining', 'Idea Mining')}`, 'connectors'],
+    ];
+    return `<span class="gpi-idea-source-divider" aria-hidden="true"></span>
+          <details class="gpi-idea-source-group" data-gpi-extensions-group>
+            <summary role="menuitem" aria-haspopup="true" aria-label="${esc(tr('Connectors and tools', '连接器与工具'))}">${icon('grid', 17)}<strong>${esc(tr('Connectors and tools', '连接器与工具'))}</strong><span aria-hidden="true">›</span></summary>
+            <div class="gpi-idea-source-group-body">
+              ${rows.map(([label, value, tab]) => `<button type="button" class="gpi-extension-row" data-gpi-manage-extensions="${tab}" title="${esc(tr('Manage in Settings', '在设置中管理'))}"><span>${esc(label)}</span><small>${esc(value)}</small></button>`).join('')}
+              <p>${esc(tr('Frozen when a conversation is created; changes in Settings apply to new conversations.', '在新建对话时固化；设置里的改动对之后新建的对话生效。'))}</p>
+            </div>
+          </details>`;
+  }
   function controls(options) {
     const { tr, esc, icon, disabled, allowIdeaSources = true } = options;
     return `<div class="gpi-idea-source">
       <input type="file" accept="application/pdf,.pdf" data-gpi-idea-pdf-input hidden ${disabled ? 'disabled' : ''} />
-      <details class="gpi-idea-source-menu">
+      <details class="gpi-idea-source-menu" data-popover-menu>
         <summary role="button" aria-haspopup="menu" aria-label="${esc(tr('Add to your question', '添加到问题'))}" title="${esc(tr('Add to your question', '添加到问题'))}">${icon('plus', 17)}</summary>
         <div class="gpi-idea-source-popover" role="menu" aria-label="${esc(tr('Add to your question', '添加到问题'))}">
           ${allowIdeaSources ? `<button type="button" role="menuitem" aria-label="${esc(tr('Upload PDF', '上传 PDF'))}" data-gpi-idea-pdf-pick ${disabled || reading ? 'disabled' : ''}>${icon('file', 17)}<strong>${esc(tr('Upload PDF', '上传 PDF'))}</strong></button>
           <button type="button" role="menuitem" aria-label="${esc(tr('Paste article link', '粘贴文章链接'))}" data-gpi-idea-url-focus ${disabled ? 'disabled' : ''}>${icon('link', 17)}<strong>${esc(tr('Paste article link', '粘贴文章链接'))}</strong></button>` : ''}
           <span class="gpi-idea-source-divider" aria-hidden="true"></span>
-          <button type="button" role="menuitem" aria-label="${esc(tr('Project resources', '项目资料'))}" data-gpi-composer-picker="materials" ${disabled ? 'disabled' : ''}>${icon('folder', 17)}<strong>${esc(tr('Project resources', '项目资料'))}</strong><span aria-hidden="true">›</span></button>
-          <button type="button" role="menuitem" aria-label="${esc(tr('Skills and methods', '技能与方法'))}" data-gpi-composer-picker="skills" ${disabled ? 'disabled' : ''}>${icon('layers', 17)}<strong>${esc(tr('Skills and methods', '技能与方法'))}</strong><span aria-hidden="true">›</span></button>
+          <button type="button" role="menuitem" aria-label="${esc(tr('Project resources', '项目资料'))}" data-gpi-composer-picker="materials" ${disabled ? 'disabled' : ''}>${icon('folder', 17)}<strong>${esc(tr('Project resources', '项目资料'))}</strong><span class="gpi-menu-hint">${esc(tr('Type', '输入'))} <kbd>@</kbd></span></button>
+          <button type="button" role="menuitem" aria-label="${esc(tr('Skills and methods', '技能与方法'))}" data-gpi-composer-picker="skills" ${disabled ? 'disabled' : ''}>${icon('layers', 17)}<strong>${esc(tr('Skills and methods', '技能与方法'))}</strong><span class="gpi-menu-hint">${esc(tr('Type', '输入'))} <kbd>/</kbd></span></button>
+          ${extensionsHtml(options)}
         </div>
       </details>
     </div>`;

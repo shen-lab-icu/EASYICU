@@ -50,7 +50,9 @@
     if (current.status !== 'confirmed' || current.confirmation_mode !== 'select_local_source') return '';
     const label = sourceLabel(current);
     if (!label) return '';
-    return `<details class="gpi-data-consent" aria-label="${ctx.tr('Confirmed study data source', '本研究已确认的数据源')}">
+    // In the context strip the body floats over the conversation, so it is a
+    // popover menu: an outside press or Escape closes it.
+    return `<details class="gpi-data-consent" data-popover-menu aria-label="${ctx.tr('Confirmed study data source', '本研究已确认的数据源')}">
       <summary>${ctx.tr('Data source confirmed: ', '已确认数据源：')}${ctx.esc(label)}</summary>
       <div class="gpi-data-consent-body">
         <p>${ctx.tr('This source was selected in the local data picker and confirmed for this conversation.', '这份数据已在本地数据选择器中选定，并确认用于本次会话。')}</p>

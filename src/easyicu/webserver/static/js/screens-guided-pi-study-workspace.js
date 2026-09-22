@@ -218,11 +218,10 @@
         ['full', tr('Allow all available tools; explicit scientific confirmation gates still apply', '允许所有可用工具；明确的科学确认门禁仍然有效')],
       ];
       const currentDescription = (modes.find(([key]) => key === mode) || modes[1])[1];
-      return `<details class="gpi-access-menu">
+      return `<details class="gpi-access-menu" data-popover-menu>
         <summary aria-label="${esc(`${label(mode)}：${currentDescription}`)}" title="${esc(currentDescription)}">${iconHtml(mode === 'full' ? 'unlock' : 'shield', 15)}<span>${esc(label(mode))}</span><span class="gpi-access-chevron" aria-hidden="true">${iconHtml('chevron', 13)}</span></summary>
         <div class="gpi-access-popover" role="group" aria-label="${tr('Agent access level', 'Agent 访问级别')}">
           ${modes.map(([key, description]) => `<button type="button" data-gpi-access-mode="${key}" aria-pressed="${mode === key}"><span><strong>${esc(label(key))}</strong><small>${esc(description)}</small></span>${mode === key ? iconHtml('check', 15) : ''}</button>`).join('')}
-          <p>${tr('Access levels never reveal credentials, patient rows, or arbitrary host files.', '任何访问级别都不会开放凭据、患者行级数据或任意本机文件。')}</p>
         </div>
       </details>`;
     }
@@ -301,7 +300,7 @@
         else empty.push(index);
       });
       if (empty.length < 2) return rendered.join('');
-      const summary = `<summary class="gpi-conversation-empty-summary">${tr('Empty tasks', '空任务')}`
+      const summary = `<summary class="gpi-conversation-empty-summary">${tr('Empty conversations', '空对话')}`
         + `<span class="gpi-conversation-empty-count">${empty.length}</span></summary>`;
       return `${outside.map(index => rendered[index]).join('')}`
         + `<details class="gpi-conversation-empty-group" data-gpi-rail-empty-group>`
@@ -314,8 +313,8 @@
       const locked = ctx.loading || ctx.disabled;
       const materials = (Array.isArray(ctx.resources) ? ctx.resources : []).filter(canReference).slice(0, 12);
       const materialsInteractive = ctx.materialsInteractive !== false;
-      rail.innerHTML = `<div class="gpi-conversations-main"><div class="gpi-conversations-heading"><strong>${tr('Tasks', '任务')}</strong><span class="gpi-conversations-heading-actions"><button type="button" data-gpi-rail-task-search-toggle aria-label="${tr('Search tasks', '搜索任务')}" title="${tr('Search', '搜索')}">${iconHtml('search', 15)}</button><button type="button" data-gpi-rail-new ${locked ? 'disabled' : ''} aria-label="${tr('New conversation in this project', '在当前项目新建对话')}">${iconHtml('plus', 14)}<span>${tr('Task', '任务')}</span></button></span></div>
-        <label class="gpi-conversation-search" hidden><span class="sr-only">${tr('Search tasks', '搜索任务')}</span><input type="search" data-gpi-rail-task-search placeholder="${tr('Search tasks…', '搜索任务…')}" autocomplete="off"></label>
+      rail.innerHTML = `<div class="gpi-conversations-main"><div class="gpi-conversations-heading"><strong>${tr('Conversations', '对话')}</strong><span class="gpi-conversations-heading-actions"><button type="button" data-gpi-rail-task-search-toggle aria-label="${tr('Search conversations', '搜索对话')}" title="${tr('Search', '搜索')}">${iconHtml('search', 15)}</button><button type="button" data-gpi-rail-new ${locked ? 'disabled' : ''} aria-label="${tr('New conversation in this project', '在当前项目新建对话')}">${iconHtml('plus', 14)}<span>${tr('Conversation', '对话')}</span></button></span></div>
+        <label class="gpi-conversation-search" hidden><span class="shell-sr-only">${tr('Search conversations', '搜索对话')}</span><input type="search" data-gpi-rail-task-search placeholder="${tr('Search conversations…', '搜索对话…')}" autocomplete="off"></label>
         <nav aria-label="${tr('Conversations in this project', '当前项目中的对话')}">${ctx.loading
           ? `<p role="status">${tr('Loading conversations…', '正在读取对话…')}</p>`
           : ctx.sessions.length ? (() => {
@@ -328,13 +327,13 @@
               : row.last_turn_status === 'done' ? ' is-complete' : '';
             const title = ctx.title(row);
             const canRemove = !row.has_history && !row.active_message_job_id && !row.last_message_job_id && !row.last_turn_status;
-            return `<div class="gpi-conversation-row" data-gpi-rail-session-row data-gpi-rail-session-text="${esc(`${title} ${status}`.toLowerCase())}"><button type="button" class="gpi-conversation-item${stateClass}" data-gpi-rail-session="${esc(row.session_id)}" ${row.session_id === ctx.selectedId ? 'aria-current="page"' : ''} ${locked ? 'disabled' : ''}><span class="gpi-conversation-copy"><strong>${esc(title)}</strong><small><i aria-hidden="true"></i>${esc(status)}</small></span>${time ? `<time datetime="${esc(row.last_activity_at || row.created_at || '')}">${esc(time)}</time>` : ''}</button><details class="gpi-conversation-menu"><summary aria-label="${esc(tr('Task actions', '任务操作'))}" title="${esc(tr('Task actions', '任务操作'))}">•••</summary><div><button type="button" data-gpi-rail-rename="${esc(row.session_id)}" ${locked ? 'disabled' : ''}>${tr('Rename', '重命名')}</button>${canRemove ? `<button type="button" data-gpi-rail-remove="${esc(row.session_id)}" ${locked ? 'disabled' : ''}>${tr('Remove empty task', '删除空任务')}</button>` : ''}</div></details></div>`;
+            return `<div class="gpi-conversation-row" data-gpi-rail-session-row data-gpi-rail-session-text="${esc(`${title} ${status}`.toLowerCase())}"><button type="button" class="gpi-conversation-item${stateClass}" data-gpi-rail-session="${esc(row.session_id)}" ${row.session_id === ctx.selectedId ? 'aria-current="page"' : ''} ${locked ? 'disabled' : ''}><span class="gpi-conversation-copy"><strong>${esc(title)}</strong><small><i aria-hidden="true"></i>${esc(status)}</small></span>${time ? `<time datetime="${esc(row.last_activity_at || row.created_at || '')}">${esc(time)}</time>` : ''}</button><details class="gpi-conversation-menu" data-popover-menu><summary aria-label="${esc(tr('Conversation actions', '对话操作'))}" title="${esc(tr('Conversation actions', '对话操作'))}">•••</summary><div><button type="button" data-gpi-rail-rename="${esc(row.session_id)}" ${locked ? 'disabled' : ''}>${tr('Rename', '重命名')}</button>${canRemove ? `<button type="button" data-gpi-rail-remove="${esc(row.session_id)}" ${locked ? 'disabled' : ''}>${tr('Remove empty conversation', '删除空对话')}</button>` : ''}</div></details></div>`;
             });
             return groupEmptyTaskRows(ctx.sessions, rendered, ctx.selectedId);
           })()
             : `<p>${tr('No conversations yet. Start one in this project.', '暂无对话，可在当前项目中开始。')}</p>`}</nav></div>
         <section class="gpi-project-materials" aria-label="${tr('Drive', '资料')}"><div class="gpi-conversations-heading"><strong>${tr('Drive', '资料')}</strong><button type="button" data-gpi-rail-material-search-toggle aria-label="${tr('Search Drive', '搜索资料')}" title="${tr('Search', '搜索')}">${iconHtml('search', 15)}</button></div>
-          <label class="gpi-project-material-search" hidden><span class="sr-only">${tr('Search Drive', '搜索资料')}</span><input type="search" data-gpi-rail-material-search placeholder="${tr('Filter files…', '筛选文件…')}" autocomplete="off"></label>
+          <label class="gpi-project-material-search" hidden><span class="shell-sr-only">${tr('Search Drive', '搜索资料')}</span><input type="search" data-gpi-rail-material-search placeholder="${tr('Filter files…', '筛选文件…')}" autocomplete="off"></label>
           ${materials.length ? `<div class="gpi-project-material-list">${materials.map((row, i) => materialsInteractive
             ? `<button type="button" data-gpi-rail-material="${i}" data-gpi-rail-material-text="${esc(String(row.label || row.artifact).toLowerCase())}" title="${esc(row.label || row.artifact)}"><span aria-hidden="true">${iconHtml('file', 14)}</span>${esc(row.label || row.artifact)}</button>`
             : `<div class="gpi-project-material-row" data-gpi-rail-material-text="${esc(String(row.label || row.artifact).toLowerCase())}"><span aria-hidden="true">${iconHtml('file', 14)}</span>${esc(row.label || row.artifact)}</div>`).join('')}</div>` : `<p>${tr('No project results yet', '暂无可引用成果')}</p>`}
@@ -419,7 +418,7 @@
     function renderReference(projectId, sessionId) {
       const selected = current(projectId, sessionId);
       if (!selected) return '';
-      return `<div class="gpi-composer-reference" role="status"><div><span>${tr('Referencing', '已引用')}</span><strong>${esc(selected.resource.label)}</strong><small>${tr('This version · add your question below', '当前版本 · 在下方填写你的问题')}</small></div>
+      return `<div class="gpi-composer-reference" role="status"><div><span>${tr('Referencing', '已引用')}</span><strong>${esc(selected.resource.label)}</strong><small>${tr('Current version', '当前版本')}</small></div>
         <button type="button" data-gpi-reference-remove aria-label="${tr('Remove reference', '移除引用')}">×</button></div>`;
     }
     function decorateMessage(text, projectId, sessionId) {
@@ -457,7 +456,8 @@
     function removeReference() { reference = null; }
     return { capture, syncNavigation, messageView, openMaterials, renderMaterials, filterMaterials, setMaterialCategory, restoreMaterials, selectedMaterial, closeMaterials,
       openSkills, renderSkillPicker, filterSkills, setSkillCatalog, setSkillCategory, selectCatalog, selectSkill, selectFrozenSkill, selectMethodTemplate, applyHubIntent, hasHubIntent, closeSkills, renderSkillReference, decorateSkillMessage, consumeSkill, removeSkill, removeBuilder, removeMethod, renderAccessMode,
-      hasReference: (projectId, sessionId) => Boolean(current(projectId, sessionId)), canReference, setReference, renderReference, decorateMessage, consume, removeReference };
+      hasReference: (projectId, sessionId) => Boolean(current(projectId, sessionId)), canReference, setReference, renderReference, decorateMessage, consume, removeReference,
+      isEmptyConversation };
   }
   window.EasyICU.guidedPi.declare('studyWorkspace', { create });
 })();

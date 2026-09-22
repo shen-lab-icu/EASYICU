@@ -117,7 +117,11 @@ def test_cohort_selection_only_replaces_a_plan_stage_blocker() -> None:
     # candidate plan.  The selector appears only after the host reports the
     # exact missing authority, and it replaces rather than duplicates the
     # stale workflow card.
-    assert "COHORT_ELIGIBILITY.render() || workflowConfirmationHtml()" in shell
+    # (A refused automatic plan configuration is the one state where the
+    # plan card and the admission decision are shown together.)
+    assert "continuationCardsHtml()" in shell
+    assert "const eligibility = COHORT_ELIGIBILITY.render();" in shell
+    assert "return eligibility || confirmation;" in shell
     assert "value.blocker_code !== 'cohort_eligibility_confirmation_required'" in owner
     assert "planNeedsThisDecision" in owner
     assert "actionCode === 'cohort_eligibility_confirmation_required'" in owner

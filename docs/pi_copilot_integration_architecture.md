@@ -267,8 +267,23 @@ Its AgentSession uses a private empty logical workspace outside the repository;
 this is not an OS sandbox for the Node process. Runtime status also requires
 Node `>=22.19.0`.
 
-Raw reasoning is forced off and is neither streamed nor returned in session
-transcripts. Shell usage is separate from scientific ledgers. Before every
+The provider-returned reasoning summary (Pi `thinking` content) is streamed
+as bounded `thinking_start` / `thinking_delta` / `thinking_end` events and
+returned in session transcripts as `thinking` parts, sanitized like assistant
+text; the conversation shows it as rows of the turn's trace. The effort
+level (Pi thinking level `off` / `minimal` / `low` / `medium` / `high`) is a
+per-session choice: requested at `session.create` (default `medium`),
+changed between turns through `POST /sessions/{id}/thinking-level` →
+`session.set_thinking_level`, clamped by the bridge to what the selected
+model supports, and reopened with the session record's own value. Session
+records written before the menu (metadata store schema
+`easyicu.pi-copilot-store/1`, where every session was created at the forced
+`off`) are read at the default and persisted as such by the first write
+under `easyicu.pi-copilot-store/2`; in a `/2` store `off` is an explicit
+state and is preserved. The level
+changes how much the provider reasons, never what crosses the bridge: tool
+arguments, partial tool output, and thinking signatures never cross. Shell
+usage is separate from scientific ledgers. Before every
 provider request, the shell checks cumulative provider-reported tokens plus a
 conservative UTF-8 input-token upper bound and reserved output against
 `EASYICU_PI_SESSION_TOKEN_BUDGET` (default 1,000,000). Hidden provider retries

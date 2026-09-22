@@ -4,9 +4,9 @@
   gap: 12px;
   margin: 14px 0;
   padding: 16px;
-  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+  border: 1px solid var(--skin-border, var(--hair-2));
+  border-radius: 8px;
+  background: var(--skin-paper, var(--surface));
 }
 
 .gpi-cohort-eligibility-head {
@@ -25,8 +25,8 @@
   gap: 3px;
   margin: 0;
   padding: 10px 12px;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  border-radius: 8px;
+  background: var(--skin-primary-tint, color-mix(in srgb, var(--accent) 7%, var(--surface)));
   line-height: 1.45;
 }
 
@@ -42,8 +42,9 @@
   gap: 6px 14px;
   margin: 0;
   padding: 10px 12px 10px 28px;
-  border-radius: 10px;
-  background: var(--surface);
+  border: 1px solid var(--skin-line, var(--hair));
+  border-radius: 8px;
+  background: var(--skin-paper, var(--surface));
   font-size: 12px;
 }
 
@@ -60,12 +61,31 @@
   gap: 3px;
   justify-items: start;
   padding: 10px 12px;
+  border: 1px solid var(--skin-border, var(--hair-2));
+  border-radius: 8px;
+  background: var(--skin-paper, var(--surface));
+  color: var(--skin-ink, var(--ink));
   text-align: left;
   white-space: normal;
 }
 
+.gpi-cohort-options .btn:hover {
+  background: var(--skin-sunken, var(--surface-2));
+}
+
 .gpi-cohort-options .btn.is-recommended {
   order: -1;
+  border-width: 2px;
+  background: var(--skin-primary-soft, var(--accent-soft));
+}
+
+.gpi-cohort-options .btn.is-recommended:hover {
+  background: var(--skin-primary-soft, var(--accent-soft));
+}
+
+.gpi-cohort-evidence {
+  border-top: 1px solid rgba(42, 38, 34, 0.2);
+  padding-top: 8px;
 }
 
 .gpi-cohort-evidence summary {

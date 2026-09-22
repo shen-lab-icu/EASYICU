@@ -77,6 +77,10 @@
   let pendingGuidedGoal = null;
   let guidedFrontdoorSeedText = null;
   let guidedFolderMenuOpen = false;
+  if (window.EU_POPOVER_MENUS) window.EU_POPOVER_MENUS.register({
+    isOpen: () => guidedFolderMenuOpen, contains: node => Boolean(node && node.closest && node.closest('.gd-folder-picker')),
+    close: ({ focus } = {}) => { guidedFolderMenuOpen = false; renderGuidedFolderControls(); if (focus) document.querySelector('[data-folder-menu-toggle]')?.focus(); },
+  });
   let guidedDraftRemoval = null;
   let guidedFolderDialogMode = null;
   let guidedFolderSeedTitle = 'New local study';
@@ -3472,10 +3476,6 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           openGuidedFolderDialog(folderChoice.dataset.folderChoice, guidedFolderSeedTitle || 'New local study');
           return;
         }
-        if (guidedFolderMenuOpen && !e.target.closest('.gd-folder-picker')) {
-          guidedFolderMenuOpen = false;
-          renderGuidedFolderControls();
-        }
         if (e.target.closest('[data-folder-dialog-close]')) {
           closeGuidedFolderDialog();
           return;
@@ -3814,12 +3814,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         // sessions rail
         const projectOwner = window.EU_GUIDED_PROJECTS;
         if (e.target.closest('[data-gpi-show-projects]')) {
-          const picker = document.querySelector('#gdResearchProjectRail .gd-project-picker');
-          if (picker) {
-            picker.open = true;
-            const summary = picker.querySelector('summary');
-            if (summary) summary.focus();
-          }
+          if (projectOwner && projectOwner.showProjects) projectOwner.showProjects();
           return;
         }
         const projectRailToggle = e.target.closest('[data-project-rail-toggle]');
@@ -3999,11 +3994,6 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           closeGuidedDraftRemovalDialog();
           e.preventDefault();
           return;
-        }
-        if (guidedFolderMenuOpen) {
-          guidedFolderMenuOpen = false;
-          renderGuidedFolderControls();
-          e.preventDefault();
         }
       });
 

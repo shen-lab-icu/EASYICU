@@ -125,7 +125,61 @@
       return tr('The model service could not complete this turn. No EasyICU action should be assumed.', '模型服务未能完成本轮，不能据此认为任何 EasyICU 操作已经执行。');
     }
 
-    return Object.freeze({ errorText, modelErrorText, providerPreset, option });
+    /* A failed Research Agent run reaches the conversation as a gate/error
+       code. The code stays the contract; the researcher sees what stopped the
+       run and what to change next, never the bare identifier. Returns RAW
+       copy: callers esc() it before insertion (D-P2-2). */
+    function runFailureText(code) {
+      const value = String(code || '').trim();
+      if (!value) return '';
+      const known = {
+        research_pipeline_planning_identity_unavailable: tr(
+          'The selected database has no ICU-stay identity definition for planning. Choose a supported database family and generate the plan again.',
+          '所选数据库缺少可用于规划的 ICU 住院身份定义。请改用受支持的数据库家族后重新生成计划。',
+        ),
+        research_pipeline_progressive_compile_failed: tr(
+          'The candidate plan did not pass its compile check: one step referenced a variable level or model term that the current data definition cannot resolve. Regenerating the plan lets the Planner re-derive it; narrowing the exposure levels or covariates in the question also helps.',
+          '候选计划未通过编译校验：某一步引用了当前数据定义无法解析的变量水平或模型项。重新生成计划会让 Planner 重新推导；也可以在问题里收窄分组水平或协变量。',
+        ),
+        research_pipeline_required_concept_structurally_unavailable: tr(
+          'A variable the question requires has no supported source in this database. Change the variable or the database before planning.',
+          '问题里要求的某个变量在该数据库没有受支持的来源。请更换变量或数据库后再规划。',
+        ),
+        research_pipeline_plan_contract_exhausted: tr(
+          'Four plan drafts were rejected by the scientific contract before analysis.',
+          '系统在分析前连续否决了 4 版计划草案。',
+        ),
+        research_pipeline_planner_provider_unavailable: tr(
+          'The model service was unavailable while planning. Check the connection and generate the plan again.',
+          '规划期间模型服务不可用。请检查连接后重新生成计划。',
+        ),
+        research_pipeline_planner_efficiency_budget_exhausted: tr(
+          'The Planner reached its efficiency budget; a validated checkpoint was saved.',
+          'Planner 已达到效率预算；已保存验证检查点。',
+        ),
+        research_pipeline_execution_runtime_unavailable: tr(
+          'The container runtime that executes analysis code was not running.',
+          '执行分析代码的容器运行环境未启动。',
+        ),
+        data_foundation_blocked: tr(
+          'Data preparation did not pass, so no plan was generated.',
+          '数据准备未通过，因此没有生成计划。',
+        ),
+        agent_plan_patient_grouping_unavailable: tr(
+          'The plan analyses every ICU stay, which needs source-owned patient grouping (linking repeated stays of one patient); this data package does not provide it. Choose an admission rule below, or request a plan change.',
+          '计划按全部 ICU 住院分析，这需要数据源提供患者分组（把同一患者的多次住院归并），当前数据包没有提供。请在下方选择入住规则，或提出修改。',
+        ),
+        agent_plan_configuration_failed: tr(
+          'EasyICU could not configure the reviewed plan for execution automatically.',
+          'EasyICU 无法自动为已审阅的计划完成执行配置。',
+        ),
+      };
+      if (known[value]) return known[value];
+      const words = value.replace(/^research_pipeline_/, '').replace(/_/g, ' ');
+      return tr(`The run stopped: ${words}.`, `任务停止：${words}。`);
+    }
+
+    return Object.freeze({ errorText, modelErrorText, providerPreset, option, runFailureText });
   }
 
   window.EasyICU.guidedPi.declare('errorText', { create });

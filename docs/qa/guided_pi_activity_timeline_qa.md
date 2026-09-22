@@ -16,7 +16,7 @@ The reference and implementation were placed in one comparison image before judg
 
 - While a turn is active, one inline row names the current semantic action, for example `已读取研究配置`; a status pip carries running/success/error state.
 - After completion, the turn becomes one compact summary such as `已检查工作区状态、已读取研究配置`; elapsed time is shown separately.
-- Expanding the summary reveals individual tool receipts, stable codes, owner boundaries, and receipt details. It does not expose private chain-of-thought.
+- Expanding the summary reveals the turn's trace as reference-style rows: the model's reasoning summary (headline plus full text, as returned by the provider), tool receipts with their elapsed time, and the model's interim narration between the rows it explains. Tool arguments, credentials, host paths, and patient rows are never exposed (2026-09-21 revision: reasoning summaries were previously withheld).
 - Persisted transcripts reconstruct the same grouped activity timeline instead of falling back to independent tool cards.
 - User messages remain right-aligned bubbles; assistant responses remain unboxed prose; the composer stays at the bottom of the conversation column.
 - Assistant text supports escaped inline bold and code, preserving readable model responses without introducing HTML injection.

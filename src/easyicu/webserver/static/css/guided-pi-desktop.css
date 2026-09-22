@@ -9,7 +9,6 @@
  .gpi-global-nav .gpi-global-brand{margin-bottom:24px;min-height:38px;background:var(--ink);color:var(--surface)}
  .gpi-global-nav .gpi-global-item.active{background:var(--accent-soft);color:var(--accent-ink)}
  .gpi-global-nav .gpi-global-spacer{flex:1 1 auto}
- .gd-main.gpi-workspace .gd-rail-brand .brand-mark{display:none}
  .gd-main.gpi-workspace .gd-rail-foot{display:none}
 }
 
@@ -30,17 +29,22 @@
  .gpi-global-nav .gpi-global-brand{margin-bottom:22px;background:var(--ink);color:#fff}
  .gpi-global-nav .gpi-global-item.active{background:#246366;color:#ffffff}
  .gd-main.gpi-workspace .gd-rail-top{min-height:76px;padding:14px 15px 12px;gap:7px;border-bottom:1px solid #a7a69d}
- .gd-main.gpi-workspace .gd-rail-brand .gd-name{font-size:16px;font-weight:550;letter-spacing:-.025em;line-height:1.2}
- .gd-main.gpi-workspace .gd-rail-brand .gd-name{min-width:0;overflow:hidden;text-overflow:ellipsis}
- .gd-main.gpi-workspace .gd-rail-brand .gd-name small{font-size:11px;line-height:1.2;letter-spacing:.065em;text-transform:uppercase}
  .gd-main.gpi-workspace .gd-newbtn{height:36px;min-height:36px;padding-inline:10px;border-radius:6px;font-size:13px;background:var(--paper)}
- .gd-main.gpi-workspace .gd-rail-list{flex:0 0 auto;padding:5px 8px 0;border:0}
- .gd-main.gpi-workspace .gd-project-picker>summary{padding:5px 24px 5px 10px;border:0;border-radius:5px;background:transparent}
- .gd-main.gpi-workspace .gd-project-picker>summary small{display:none}
- .gd-main.gpi-workspace .gd-project-picker>summary span{font-size:12.5px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
- .gd-main.gpi-workspace .gd-project-picker>summary i{top:5px}
- .gd-main.gpi-workspace .gd-project-picker:not([open])>summary{max-height:27px}
- .gd-main.gpi-workspace .gd-project-picker[open]>.gd-project-picker-list{border-top:1px solid var(--hair);padding-top:6px}
+ /* The project switcher is the heading's one control (kicker + name + chevron);
+    its list opens as a popover over the rail, so conversations and materials
+    never move and the rail reads as project → conversations, not two lists. */
+ .gd-main.gpi-workspace .gd-rail-heading{align-items:flex-start}
+ .gd-main.gpi-workspace .gd-rail-heading .gd-rail-list{flex:1 1 auto;min-width:0;padding:0;border:0;overflow:visible}
+ .gd-main.gpi-workspace .gd-rail-top{position:relative}
+ .gd-main.gpi-workspace .gd-project-picker{position:static}
+ .gd-main.gpi-workspace .gd-project-picker>summary{display:block;max-height:none;padding:4px 26px 4px 8px;margin-left:-8px}
+ .gd-main.gpi-workspace .gd-project-picker>summary small{display:block;margin:0}
+ .gd-main.gpi-workspace .gd-project-picker>summary span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .gd-main.gpi-workspace .gd-project-picker>summary i{top:50%;right:8px;transform:translateY(-50%)}
+ .gd-main.gpi-workspace .gd-project-picker[open]>summary i{transform:translateY(-50%) rotate(180deg)}
+ /* Anchored under the whole top block, so "New / open research project" stays
+    reachable while the list is open. */
+ .gd-main.gpi-workspace .gd-project-picker[open]>.gd-project-picker-list{position:absolute;z-index:60;top:calc(100% + 4px);left:10px;right:10px;box-sizing:border-box;max-height:min(60vh,560px);padding:6px 8px 8px}
  .gd-main.gpi-workspace .gpi-conversations{display:flex;flex:1 1 auto;flex-direction:column;min-height:0;padding:0;border-top:1px solid #a7a69d}
  .gd-main.gpi-workspace .gpi-conversations[hidden]{display:none}
  .gpi-conversations-main{flex:1 1 auto;min-height:125px;overflow-y:auto;padding:4px 9px 12px}
@@ -105,10 +109,11 @@
  .gd-main.gpi-workspace .gd-aside-body{display:flex;flex-direction:column;min-height:0;overflow:hidden}
  .gd-main.gpi-workspace .gd-aside-collapse{top:6px;right:7px;width:27px;height:27px}
  .gpi-aside-section{display:flex;flex-direction:column;min-height:0;overflow:hidden;border-bottom:1px solid #aaa99f}
- .gpi-aside-section[data-gpi-aside-section="progress"]{flex:0 1 27%}
- .gpi-aside-section[data-gpi-aside-section="results"]{flex:1 1 31%}
- .gpi-aside-section[data-gpi-aside-section="compute"]{flex:0 1 18%}
- .gpi-aside-section[data-gpi-aside-section="notes"]{flex:0 1 24%}
+ /* The results list is the shelf's working surface: progress, compute and
+    notes size to their content within a cap, and results take the rest. */
+ .gpi-aside-section[data-gpi-aside-section="progress"]{flex:0 1 auto;max-height:30%}
+ .gpi-aside-section[data-gpi-aside-section="results"]{flex:1 1 40%;min-height:220px}
+ .gpi-aside-section[data-gpi-aside-section="notes"]{flex:0 1 auto;max-height:22%}
  .gpi-aside-section:not([open]){flex:0 0 40px}
  .gpi-aside-section>summary{flex:0 0 auto;min-height:39px;box-sizing:border-box;padding:10px 39px 9px 15px;border-bottom:2px solid #246366;color:var(--ink-2);font-size:13.5px;font-weight:520;list-style:none}
  .gpi-aside-section>summary::-webkit-details-marker{display:none}
@@ -122,7 +127,6 @@
  .gpi-study-file{border-bottom:1px solid var(--hair)}
  .gpi-study-file .gpi-resource-link{font-size:12.5px}
  .gpi-study-file small{font-size:11.5px}
- .gpi-run-status{font-size:12.5px}
  .gpi-project-notes{display:flex;flex-direction:column;height:100%;min-height:100px}
  .gpi-project-notes textarea{flex:1 1 auto;width:100%;min-height:75px;box-sizing:border-box;padding:8px 2px;border:0;background:transparent;color:var(--ink);font:400 13.5px/1.6 var(--font);resize:none}
  .gpi-project-notes textarea:focus-visible{outline:2px solid #246366;outline-offset:2px}
@@ -143,6 +147,36 @@
  .gd-main.gpi-workspace.gpi-preview-open:not(.gpi-preview-focus)>#gdContextAside>.gd-aside-collapse{display:none}
  .gd-main.gpi-workspace.gpi-preview-open:not(.gpi-preview-focus)>#gdContextAside>#gdPreviewAside{grid-column:3;grid-row:1;overflow:hidden;border-left:1px solid var(--hair)}
  .gd-main.gpi-workspace.gpi-preview-open:not(.gpi-preview-focus)>#gdContextAside>#gdStudyAside{display:flex;grid-column:4;grid-row:1;overflow:hidden;border-left:1px solid var(--hair);background:var(--surface)}
+}
+
+/* A workbench tab and the reader stay open together, so a figure and the code
+   that produced it can be read side by side. The tab keeps the center, the
+   reader keeps the right, the results shelf yields, and the project panel
+   compacts to the global navigation. Below 1600px, or in focused reading,
+   the conversation yields too. */
+@media(min-width:1181px){
+ .gd-main.gpi-workspace.gpi-preview-open.gpi-source-open>.gd-rail{display:flex;grid-column:1;grid-row:1;box-sizing:border-box;width:59px;min-width:59px;padding-left:59px;overflow:hidden;border-right:0}
+ .gd-main.gpi-workspace.gpi-preview-open.gpi-source-open>.gd-rail>:not(.gpi-global-nav){display:none}
+ .gd-main.gpi-workspace.gpi-preview-open.gpi-source-open>.gd-rail-restore{display:none}
+ .gd-main.gpi-workspace.gpi-preview-open.gpi-source-open>#gdContextAside{display:contents}
+ .gd-main.gpi-workspace.gpi-preview-open.gpi-source-open>#gdContextAside>.gd-aside-collapse,
+ .gd-main.gpi-workspace.gpi-preview-open.gpi-source-open>#gdContextAside>#gdStudyAside{display:none}
+ .gd-main.gpi-workspace.gpi-preview-open.gpi-source-open>#gdContextAside>#gdSourceAside{display:flex;grid-row:1;border-right:0}
+ .gd-main.gpi-workspace.gpi-preview-open.gpi-source-open>#gdContextAside>#gdPreviewAside{display:flex;grid-row:1;min-width:0;overflow:hidden;border-left:1px solid #8f8b82}
+ /* Both branches are spelled out so this outranks the 1400px+ reader grid in
+    guided-pi-workspace.css, which carries two :not() classes. */
+ .gd-main.threecol.gpi-workspace.gpi-preview-open.gpi-source-open:not(.gpi-preview-focus),
+ .gd-main.threecol.gpi-workspace.gpi-preview-open.gpi-source-open.gpi-preview-focus{grid-template-columns:59px minmax(460px,1fr) minmax(460px,1fr)}
+ .gd-main.gpi-workspace.gpi-preview-open.gpi-source-open>.gd-conv{display:none}
+ .gd-main.gpi-workspace.gpi-preview-open.gpi-source-open>#gdContextAside>#gdSourceAside{grid-column:2}
+ .gd-main.gpi-workspace.gpi-preview-open.gpi-source-open>#gdContextAside>#gdPreviewAside{grid-column:3}
+}
+@media(min-width:1600px){
+ .gd-main.threecol.gpi-workspace.gpi-preview-open.gpi-source-open:not(.gpi-preview-focus),
+ .gd-main.threecol.gpi-workspace.gpi-preview-open.gpi-source-open.gd-project-rail-collapsed:not(.gpi-preview-focus){grid-template-columns:59px minmax(320px,.55fr) minmax(480px,1fr) minmax(460px,.95fr)}
+ .gd-main.gpi-workspace.gpi-preview-open.gpi-source-open:not(.gpi-preview-focus)>.gd-conv{display:flex;grid-column:2;grid-row:1}
+ .gd-main.gpi-workspace.gpi-preview-open.gpi-source-open:not(.gpi-preview-focus)>#gdContextAside>#gdSourceAside{grid-column:3}
+ .gd-main.gpi-workspace.gpi-preview-open.gpi-source-open:not(.gpi-preview-focus)>#gdContextAside>#gdPreviewAside{grid-column:4}
 }
 
 /* EasyICU paper canvas desktop workspace. Keep EasyICU's data and authority model,
@@ -171,7 +205,6 @@
  .gpi-global-nav .gpi-global-item.active>svg{background:#246366;color:#ffffff}
 
  .gd-main.gpi-workspace .gd-rail-top{min-height:104px;padding:14px 16px 13px;border-bottom:1px solid #8f8b82}
- .gd-main.gpi-workspace .gd-rail-brand .gd-name{font-size:17px;line-height:1.25}
  .gd-main.gpi-workspace .gd-newbtn{height:38px;min-height:38px;font-size:14px;border-color:#bcb8af;background:#fbfaf7}
  .gd-main.gpi-workspace .gpi-conversations{border-top:0}
  .gpi-conversations-main{padding:0 10px 12px}
@@ -278,6 +311,9 @@
 .gpi-workspace .gpi-activity.complete>summary{min-height:28px;padding:2px 0;border:0;gap:7px;color:var(--ink-3)}
 .gpi-workspace .gpi-activity.complete>summary .gpi-activity-kicker{font:400 15px/22.5px inherit;color:var(--ink-3)}
 .gpi-workspace .gpi-activity.error>summary .gpi-activity-kicker{color:#9b3933}
+/* Step count and total elapsed time read on the row, not only in its accessible name. */
+.gpi-workspace .gpi-activity.complete>summary .gpi-activity-meta,
+.gpi-workspace .gpi-activity.error>summary .gpi-activity-meta{margin-left:auto;color:var(--ink-4);font:400 12px/1.4 var(--mono);white-space:nowrap}
 .gpi-workspace .gpi-activity.complete>summary .gpi-disclosure{width:15px;height:15px}
 .gpi-workspace .gpi-activity-body{position:relative;margin:8px 0 0}
 .gpi-workspace .gpi-activity-body.is-clipped>ol{max-height:252px;overflow:hidden}
@@ -316,4 +352,18 @@
  .gd-main.threecol.gpi-workspace.gpi-empty-session-focus:not(.gpi-preview-open):not(.gpi-source-open):not(.gd-project-rail-collapsed){grid-template-columns:var(--gd-project-rail-width) minmax(0,1fr)}
  .gd-main.threecol.gpi-workspace.gpi-empty-session-focus:not(.gpi-preview-open):not(.gpi-source-open).gd-project-rail-collapsed{grid-template-columns:minmax(0,1fr)}
  .gd-main.gpi-workspace.gpi-empty-session-focus:not(.gpi-preview-open):not(.gpi-source-open)>.gd-aside{display:none}
+}
+
+/* Collapsing the project panel keeps the global navigation: the rail compacts
+   to the 59px nav instead of vanishing, the floating restore chevron is not
+   needed, and the nav's Projects button restores the panel. */
+@media(min-width:1181px){
+ .gd-main.gpi-workspace.gd-project-rail-collapsed>.gd-rail{display:flex;grid-column:1;grid-row:1;box-sizing:border-box;width:59px;min-width:59px;padding-left:59px;overflow:hidden;border-right:0}
+ .gd-main.gpi-workspace.gd-project-rail-collapsed>.gd-rail>:not(.gpi-global-nav){display:none}
+ .gd-main.gpi-workspace.gd-project-rail-collapsed>.gd-rail-restore{display:none}
+ .gd-main.threecol.gpi-workspace.gd-project-rail-collapsed{grid-template-columns:59px minmax(0,1fr) var(--gd-context-aside-width)}
+ .gd-main.threecol.gpi-workspace.gd-project-rail-collapsed>.gd-conv{grid-column:2;grid-row:1}
+ .gd-main.threecol.gpi-workspace.gpi-empty-session-focus:not(.gpi-preview-open):not(.gpi-source-open).gd-project-rail-collapsed{grid-template-columns:59px minmax(0,1fr)}
+ .gd-main.threecol.gpi-workspace.gpi-preview-open.gpi-preview-focus.gd-project-rail-collapsed{grid-template-columns:59px minmax(0,1fr)}
+ .gd-main.threecol.gpi-workspace.gpi-preview-open:not(.gpi-preview-focus):not(.gpi-source-open).gd-project-rail-collapsed{grid-template-columns:59px minmax(340px,.7fr) minmax(560px,1.3fr)}
 }

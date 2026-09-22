@@ -1560,8 +1560,11 @@
       ? window.EU_SOURCES.activeSource() : null;
     const database = String(exScanResult && exScanResult.db_key || exExpectedDatabase || '').trim();
     const path = String(exPath || active && active.path || '').trim();
+    // The scan reports "Unknown" for families without a display label (demo
+    // exports); that placeholder must not become the persisted source label.
+    const scanned = String(exScanResult && exScanResult.db || '').trim();
     const label = String(
-      exScanResult && exScanResult.db
+      (scanned && !/^(unknown|未知)$/i.test(scanned) ? scanned : '')
       || active && active.label
       || database.toUpperCase()
       || t('Local ICU data', '本地 ICU 数据')

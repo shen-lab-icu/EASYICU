@@ -192,8 +192,8 @@
     const project = clean(projectId, 240);
     const run = clean(runId, 240);
     if (!descriptor || !project || !run) return false;
-    const preview = window.EasyICU.guidedPi.optional('preview');
-    if (preview && preview.close) preview.close();
+    // The reader stays open: a figure and its producing code are read side by
+    // side. The desktop layout owner decides how the two panes share width.
     if (state.projectId && state.projectId !== project) state.tabs = [];
     state.projectId = project; state.runId = run;
     const id = `code:${descriptor.evidenceId}:${descriptor.sha256}`;

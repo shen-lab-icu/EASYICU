@@ -278,6 +278,13 @@
 .gpi-confirmation-failure{margin-bottom:12px;padding-bottom:11px;border-bottom:1px solid var(--line)}
 .gpi-confirmation-failure>strong{color:var(--danger)}
 .gpi-confirmation strong,.gpi-confirmation small{display:block}
+.gpi-confirmation-reason{margin:6px 0 0;color:var(--ink-2);font-size:13.5px;line-height:1.5}
+.gpi-host-notice-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+/* Streaming: the reply grows in place with a caret; finished rows never re-animate. */
+.gpi-message.is-streaming .gpi-message-body>.gpi-text>:last-child::after{content:'';display:inline-block;width:2px;height:1em;margin-left:3px;vertical-align:-0.15em;background:currentColor;animation:gpi-caret 1s steps(2,start) infinite}
+@keyframes gpi-caret{to{visibility:hidden}}
+.gpi-activity-running ol li{transition:color .2s ease,opacity .2s ease}
+@media (prefers-reduced-motion:reduce){.gpi-message.is-streaming .gpi-message-body>.gpi-text>:last-child::after{animation:none}}
 .gpi-confirmation strong{font-size:15.5px;line-height:1.4}
 .gpi-confirmation small{margin-top:4px;color:var(--ink-4);font-size:13.5px;line-height:1.5}
 .gpi-confirmation-flow-overview{margin-top:13px;padding-top:11px;border-top:1px solid color-mix(in srgb,var(--hair-2) 84%,transparent)}
@@ -421,7 +428,7 @@
   .gpi-disclosure{transition:none}
 }
 
-.gpi-error{flex:0 0 auto;padding:9px 20px;border-top:1px solid color-mix(in srgb,#ba463d 30%,var(--line));background:color-mix(in srgb,#ba463d 6%,var(--paper));color:#8e312c;font-size:14px}
+.gpi-error{display:flex;align-items:flex-start;gap:10px;flex:0 0 auto;padding:9px 20px;border-top:1px solid color-mix(in srgb,#ba463d 30%,var(--line));background:color-mix(in srgb,#ba463d 6%,var(--paper));color:#8e312c;font-size:14px}
 .gpi-compose{flex:0 0 auto;padding:12px clamp(20px,4vw,46px) 18px;background:linear-gradient(180deg,transparent,var(--paper) 28%)}
 .gpi-compose-card{
   width:min(900px,100%);margin:0 auto;padding:10px 11px 9px;border:1px solid var(--line);border-radius:20px;
@@ -448,6 +455,14 @@
 .gpi-access-menu>summary::-webkit-details-marker{display:none}
 .gpi-access-menu>summary:focus-visible,.gpi-access-popover button:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 50%,transparent);outline-offset:2px}
 .gpi-access-chevron{display:inline-flex;color:var(--ink-4);transition:transform .14s ease}
+/* Effort menu: same anatomy as the access menu, anchored at the composer's right. */
+.gpi-effort-menu{position:relative;flex:none;color:var(--ink-3);font-size:13.5px}
+.gpi-effort-menu>summary{display:inline-flex;align-items:center;gap:6px;min-height:28px;padding:0 8px;border:1px solid transparent;border-radius:8px;list-style:none;cursor:pointer;white-space:nowrap}
+.gpi-effort-menu>summary::-webkit-details-marker{display:none}
+.gpi-effort-menu>summary:hover{background:var(--wash)}
+.gpi-effort-menu>summary[aria-disabled="true"]{opacity:.55;pointer-events:none}
+.gpi-effort-menu[open] .gpi-access-chevron{transform:rotate(90deg)}
+.gpi-effort-menu>.gpi-effort-popover{left:auto;right:0;width:min(320px,calc(100vw - 42px))}
 .gpi-access-menu[open] .gpi-access-chevron{transform:rotate(90deg)}
 .gpi-access-popover{
   position:absolute;z-index:12;left:0;bottom:calc(100% + 7px);width:min(360px,calc(100vw - 42px));padding:6px;
@@ -462,7 +477,6 @@
 .gpi-access-popover strong,.gpi-access-popover small{display:block}
 .gpi-access-popover strong{font-size:var(--type-label);line-height:1.4}
 .gpi-access-popover small{margin-top:2px;color:var(--ink-4);font-size:var(--type-meta);line-height:1.45}
-.gpi-access-popover>p{margin:5px 8px 3px;color:var(--ink-4);font-size:var(--type-caption);line-height:1.5}
 
 /* Owner: screens-guided-pi-provider.js — Copilot model/account setup only. */
 .gpi-provider-setup{
@@ -571,3 +585,6 @@
   .gpi-plan-conversation li div{display:block}.gpi-plan-conversation li em{margin-top:3px}
   .gpi-plan-exact-settings>div{grid-template-columns:1fr}
 }
+.gpi-error>span{flex:1 1 auto;min-width:0}
+.gpi-error-close{flex:0 0 auto;width:24px;height:24px;margin:-3px -6px 0 0;padding:0;border:0;border-radius:6px;background:transparent;color:inherit;font-size:17px;line-height:1;cursor:pointer}
+.gpi-error-close:hover,.gpi-error-close:focus-visible{background:color-mix(in srgb,#ba463d 12%,transparent);outline:0}

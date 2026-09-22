@@ -104,21 +104,6 @@ html.eu-route-transitioning::view-transition-new(root) {
   }
 }
 
-@keyframes feedback-thumb-mark-in {
-  0% {
-    opacity: 0;
-    transform: translateY(9px) scale(0.9);
-  }
-  60% {
-    opacity: 1;
-    transform: translateY(-2px) scale(1.15);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
 @keyframes gpi-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
@@ -419,17 +404,7 @@ html.eu-route-transitioning::view-transition-new(root) {
   color: var(--canvas-fg);
 }
 
-.gpi-icon-action.is-liked {
-  color: #10B981;
-  animation: feedback-thumb-mark-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
-}
-
-.gpi-icon-action.is-disliked {
-  color: #EF4444;
-  animation: feedback-thumb-mark-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
-}
-
-/* ===== 4. Floating Composer Card with Auto Toggle Switch ===== */
+/* ===== 4. Floating Composer Card ===== */
 .gpi-composer-card {
   position: relative;
   width: min(840px, 100%);
@@ -483,48 +458,6 @@ html.eu-route-transitioning::view-transition-new(root) {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-/* Auto Toggle Switch */
-.gpi-switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-family: var(--canvas-font);
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--canvas-muted-fg);
-  cursor: pointer;
-  user-select: none;
-}
-
-.gpi-switch-track {
-  position: relative;
-  width: 32px;
-  height: 18px;
-  border-radius: 999px;
-  background: var(--canvas-border);
-  transition: background-color 0.2s ease;
-}
-
-.gpi-switch-thumb {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: #FFFFFF;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
-  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.gpi-switch.is-active .gpi-switch-track {
-  background: var(--canvas-primary);
-}
-
-.gpi-switch.is-active .gpi-switch-thumb {
-  transform: translateX(14px);
 }
 
 .gpi-send-btn {

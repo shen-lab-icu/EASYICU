@@ -62,7 +62,11 @@
       // authority.  Showing admission choices while a provider retry is due
       // asks the researcher to solve a scientific design question that the
       // candidate Plan has not finished answering yet.
-      const planNeedsThisDecision = actionCode === 'cohort_eligibility_confirmation_required';
+      const configurationRefused = actionCode === 'agent_plan_configuration_required'
+        && typeof host.planConfigurationError === 'function'
+        && Boolean(host.planConfigurationError());
+      const planNeedsThisDecision = actionCode === 'cohort_eligibility_confirmation_required'
+        || configurationRefused;
       if (!value || value.stated || value.blocker_code !== 'cohort_eligibility_confirmation_required'
         || !options.length || !planNeedsThisDecision || host.busy() || host.sessionIsStale()) return '';
 
@@ -76,7 +80,17 @@
           ? ['no_eligibility_filter', 'first_admission_only']
           : [];
       const byId = new Map(options.map(option => [String(option.id || ''), option]));
-      const focused = preferredIds.map(id => byId.get(id)).filter(Boolean);
+      // The host compiler refused an all-stay analysis because the data
+      // package has no source-owned patient grouping: the option that keeps
+      // every stay would be refused again, so the first-admission rule is
+      // the recommendation and is listed first.
+      const groupingUnavailable = configurationRefused
+        && String(host.planConfigurationError() || '') === 'agent_plan_patient_grouping_unavailable';
+      const firstAdmissionIds = new Set(['first_admission_only', 'adults_first_admission', 'adults_first_admission_min_stay']);
+      const orderedIds = groupingUnavailable
+        ? preferredIds.slice().sort((a, b) => Number(firstAdmissionIds.has(b)) - Number(firstAdmissionIds.has(a)))
+        : preferredIds;
+      const focused = orderedIds.map(id => byId.get(id)).filter(Boolean);
       const visibleOptions = focused.length === 2 ? focused : options.slice(0, 3);
       const currentDigest = String(value.primary_cohort_contract_sha256 || '');
       const design = analysisDesign();
@@ -84,7 +98,12 @@
         && String(design.analysis_unit || '') === 'icu_stay'
         && String(design.variance_estimator || '') === 'cluster_robust'
         && String(design.cluster_unit || '') === 'patient';
-      const rationale = repeatedAdmissionsRecommended
+      const rationale = groupingUnavailable
+        ? tr(
+          'This data package does not provide patient grouping, so an analysis of every ICU stay cannot be configured. Keeping only the first ICU admission per patient is recommended; requesting a plan change is the alternative.',
+          '当前数据包没有提供患者分组，无法按全部 ICU 住院配置分析。推荐仅保留每位患者的首次 ICU 入住；也可以改为提出计划修改。',
+        )
+        : repeatedAdmissionsRecommended
         ? tr(
           'The analysis unit is an ICU stay and repeated stays are already handled with patient-clustered robust variance, so keeping every eligible stay is recommended.',
           '当前以 ICU stay 为分析单位，并已设置患者层聚类稳健方差，因此推荐保留全部符合条件的 ICU 入住。',
@@ -104,7 +123,9 @@
           const detail = option.detail || {};
           const localizedLabel = window.EU_LANG === 'zh' ? label.zh : label.en;
           const localizedDetail = window.EU_LANG === 'zh' ? detail.zh : detail.en;
-          const recommended = String(option.primary_cohort_contract_sha256 || '') === currentDigest;
+          const recommended = groupingUnavailable
+            ? firstAdmissionIds.has(String(option.id || ''))
+            : String(option.primary_cohort_contract_sha256 || '') === currentDigest;
           return `<button class="btn sm${recommended ? ' primary is-recommended' : ''}" type="button"
             data-gpi-cohort-option="${esc(option.id)}"
             data-gpi-cohort-revision="${esc(option.expected_revision)}"
