@@ -179,6 +179,9 @@ class FakeService:
     def get_session(self, session_id: str, **kwargs) -> dict:
         return {"ok": True, "session_id": session_id, "received": kwargs}
 
+    def set_thinking_level(self, session_id: str, **kwargs) -> dict:
+        return {"ok": True, "session_id": session_id, "received": kwargs}
+
     def rename_session(self, session_id: str, **kwargs) -> dict:
         return {"ok": True, "session_id": session_id, "received": kwargs}
 
@@ -219,6 +222,14 @@ def test_status_and_create_routes_preserve_strict_boolean_opt_in(monkeypatch) ->
     )
     assert created.status_code == 200
     assert created.json()["received"]["external_llm_opt_in"] is True
+    assert created.json()["received"]["thinking_level"] == "high"
+    # The effort level defaults to medium; it is the researcher's per-session choice.
+    defaulted = client.post(
+        "/api/copilot/pi/sessions",
+        json={"project_id": "guided-project-1", "external_llm_opt_in": True},
+    )
+    assert defaulted.status_code == 200
+    assert defaulted.json()["received"]["thinking_level"] == "medium"
 
     string_boolean = client.post(
         "/api/copilot/pi/sessions",
@@ -295,6 +306,24 @@ def test_session_queries_are_scoped_to_one_research_project(monkeypatch) -> None
         "project_id": "guided-project-2",
         "title": "Lactate review",
     }
+
+    effort = client.post(
+        "/api/copilot/pi/sessions/pi-test/thinking-level",
+        json={"project_id": "guided-project-2", "thinking_level": "high"},
+    )
+    assert effort.status_code == 200
+    assert effort.json()["received"] == {
+        "project_id": "guided-project-2",
+        "thinking_level": "high",
+    }
+    assert client.post(
+        "/api/copilot/pi/sessions/pi-test/thinking-level",
+        json={"project_id": "guided-project-2", "thinking_level": "max"},
+    ).status_code == 422
+    assert client.post(
+        "/api/copilot/pi/sessions/pi-test/thinking-level",
+        json={"project_id": "guided-project-2", "thinking_level": "high", "api_key": "x"},
+    ).status_code == 422
 
     removed = client.post(
         "/api/copilot/pi/sessions/pi-test/delete-empty",

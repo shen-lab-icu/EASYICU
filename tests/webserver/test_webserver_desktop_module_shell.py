@@ -68,8 +68,8 @@ def test_desktop_modules_share_rail_geometry_and_route_motion() -> None:
     ))
     app = _read("js", "app.js")
 
-    assert "css/workspace-canvas.css?v=20260921-evidence1" in index
-    assert "js/app.js?v=20260921-evidence1" in index
+    assert "css/workspace-canvas.css?v=20260921-fit1" in index
+    assert "js/app.js?v=20260921-route-sub1" in index
     assert "--workspace-global-rail-width: 59px" in canvas
     assert "--workspace-project-rail-width: clamp(330px, 15vw, 380px)" in canvas
     assert "var(--workspace-global-rail-width,59px)" in skills

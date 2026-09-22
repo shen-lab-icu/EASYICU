@@ -820,8 +820,8 @@
     const safe = safeResource(resource);
     const project = String(projectId || '').trim();
     if (!safe || (!project && safe.kind !== 'demo_artifact' && safe.kind !== 'demo_document' && safe.kind !== 'literature_source')) return;
-    const sourceView = window.EasyICU.guidedPi.optional('sourceView');
-    if (sourceView && sourceView.close) sourceView.close();
+    // An open workbench tab survives opening a file: the session owner closes
+    // the workbench only when the conversation itself changes.
     state.request += 1;
     state.loading = false;
     if (!state.resource || state.projectId !== project) state.focused = false;

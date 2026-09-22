@@ -28,7 +28,10 @@
       replaceHash('guided');
       return 'guided';
     }
-    return raw;
+    // A screen may address one of its records after '/', e.g. #skills/<id>;
+    // the screen owner reads that part itself.
+    const slash = raw.indexOf('/');
+    return slash > 0 && window.SCREENS && window.SCREENS[raw.slice(0, slash)] ? raw.slice(0, slash) : raw;
   }
   function replaceHash(id) {
     const next = `${location.pathname}${location.search}#${id}`;

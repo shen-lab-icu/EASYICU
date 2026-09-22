@@ -48,14 +48,19 @@
  .gd-main.gpi-source-open>#gdContextAside>#gdSourceAside{display:flex;grid-column:3;grid-row:1}
  .gd-main.gpi-source-open>#gdContextAside>#gdStudyAside{display:flex;grid-column:4;grid-row:1;min-width:0;overflow:hidden;border-left:0;background:#f7f6f2}
 }
+/* Below 1600px the project panel yields to the workbench, but the global
+   navigation stays: a compact 59px rail keeps Home, Projects, Skills, Data and
+   Settings reachable while a tab is open, as the task workspace reference does. */
 @media(min-width:1181px) and (max-width:1599px){
- .gd-main.threecol.gpi-workspace.gpi-source-open,.gd-main.threecol.gpi-workspace.gpi-source-open.gd-project-rail-collapsed{grid-template-columns:minmax(360px,.68fr) minmax(520px,1fr) minmax(320px,.58fr)}
- .gd-main.gpi-source-open>.gd-rail,.gd-main.gpi-source-open>.gd-rail-restore{display:none}
- .gd-main.gpi-source-open>.gd-conv{grid-column:1;grid-row:1}
+ .gd-main.threecol.gpi-workspace.gpi-source-open,.gd-main.threecol.gpi-workspace.gpi-source-open.gd-project-rail-collapsed{grid-template-columns:59px minmax(340px,.68fr) minmax(500px,1fr) minmax(300px,.58fr)}
+ .gd-main.gpi-workspace.gpi-source-open>.gd-rail{display:flex;grid-column:1;grid-row:1;box-sizing:border-box;width:59px;min-width:59px;padding-left:59px;overflow:hidden;border-right:0}
+ .gd-main.gpi-workspace.gpi-source-open>.gd-rail>:not(.gpi-global-nav){display:none}
+ .gd-main.gpi-source-open>.gd-rail-restore{display:none}
+ .gd-main.gpi-source-open>.gd-conv{grid-column:2;grid-row:1}
  .gd-main.gpi-source-open>#gdContextAside{display:contents}
  .gd-main.gpi-source-open>#gdContextAside>.gd-aside-collapse,.gd-main.gpi-source-open>#gdContextAside>#gdPreviewAside{display:none}
- .gd-main.gpi-source-open>#gdContextAside>#gdSourceAside{display:flex;grid-column:2;grid-row:1}
- .gd-main.gpi-source-open>#gdContextAside>#gdStudyAside{display:flex;grid-column:3;grid-row:1;min-width:0;overflow:hidden;border-left:0;background:#f7f6f2}
+ .gd-main.gpi-source-open>#gdContextAside>#gdSourceAside{display:flex;grid-column:3;grid-row:1}
+ .gd-main.gpi-source-open>#gdContextAside>#gdStudyAside{display:flex;grid-column:4;grid-row:1;min-width:0;overflow:hidden;border-left:0;background:#f7f6f2}
 }
 @media(max-width:1180px){
  .gd-main.gpi-source-open{grid-template-columns:minmax(0,1fr)}

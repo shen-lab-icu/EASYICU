@@ -1142,8 +1142,16 @@ def test_sidecar_contract_hides_reasoning_and_enforces_token_budget() -> None:
     assert "adult ICU population alone authorizes neither first-stay nor all-stay" in source
     assert "Every completed research reply must end with a localized standalone" in source
     assert "The host renders those bullets as clickable choices" in source
-    assert 'update.type === "thinking_delta"' not in source + projection
-    assert 'item.type === "thinking"' not in source + projection
+    # The model's reasoning summary crosses the boundary bounded (the
+    # conversation shows it as trace rows); tool arguments and partial tool
+    # output still never do.
+    assert 'update.type === "thinking_delta"' in projection
+    assert 'item.type === "thinking" && role === "assistant"' in projection
+    assert "boundedText(update.delta, MAX_REASONING_CHARS)" in projection
+    assert "boundedText(item.thinking, MAX_REASONING_CHARS)" in projection
+    assert "args: event.args" not in projection
+    assert "partialResult" not in projection
+    assert "arguments: item.arguments" not in projection
     assert "normalizePiEvent" in source
     assert "projectTranscriptMessage" in source
 
@@ -1448,8 +1456,9 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
         "tool_progress",
         "tool_end",
         "run_end",
-        None,
+        "thinking_delta",
     ]
+    assert payload["events"][7] == {"type": "thinking_delta", "at": payload["events"][7]["at"], "delta": "private"}
     assert "args" not in payload["events"][3]
     assert "partial_result" not in payload["events"][4]
     assert payload["events"][5]["code"] == "study_context_ready"
@@ -1903,6 +1912,27 @@ def test_pinned_sidecar_starts_with_only_easyicu_tools(tmp_path: Path) -> None:
                 },
                 timeout=30,
             )
+        # The effort level is per session: requested at creation, changed
+        # between turns, clamped by the model, never a forced "off".
+        assert state["thinking_level"] in {"medium", "low", "minimal", "off"}
+        assert workspace_state["thinking_level"] == "off"
+        changed = gateway.request(
+            "session.set_thinking_level",
+            {"session_id": "pi-smoke", "thinking_level": "high"},
+            timeout=10,
+        )
+        assert changed["requested_thinking_level"] == "high"
+        assert changed["thinking_level"] in {"high", "medium", "low", "minimal", "off"}
+        assert gateway.request(
+            "session.state", {"session_id": "pi-smoke"}, timeout=5
+        )["thinking_level"] == changed["thinking_level"]
+        with pytest.raises(PiCopilotError) as bad_level:
+            gateway.request(
+                "session.set_thinking_level",
+                {"session_id": "pi-smoke", "thinking_level": "max"},
+                timeout=10,
+            )
+        assert bad_level.value.code == "pi_thinking_level_invalid"
     finally:
         gateway.close()
 
@@ -1965,3 +1995,48 @@ def test_pinned_sidecar_starts_with_only_easyicu_tools(tmp_path: Path) -> None:
     assert reopened_state["session_file"] == str(session_file)
     assert reopened_state["agent_mode"] == "research"
     assert reopened_state["enabled_tools"] == state["enabled_tools"]
+
+
+def test_sidecar_projects_bounded_reasoning_summaries_for_the_trace() -> None:
+    """Reasoning summaries reach the browser bounded; tool arguments do not."""
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    projection = (APP_DIR / "src" / "event-projection.mjs").as_uri()
+    script = f"""
+      import {{ normalizePiEvent, projectTranscriptMessage }} from {json.dumps(projection)};
+      const long = 'x'.repeat(5000);
+      const events = [
+        normalizePiEvent({{ type: 'message_update', assistantMessageEvent: {{ type: 'thinking_start' }} }}),
+        normalizePiEvent({{ type: 'message_update', assistantMessageEvent: {{ type: 'thinking_delta', delta: long }} }}),
+        normalizePiEvent({{ type: 'message_update', assistantMessageEvent: {{ type: 'thinking_end' }} }}),
+        normalizePiEvent({{ type: 'message_update', assistantMessageEvent: {{ type: 'toolcall_delta', delta: 'secret-args' }} }}),
+      ];
+      const transcript = projectTranscriptMessage({{
+        role: 'assistant', timestamp: 1720000000000,
+        content: [
+          {{ type: 'thinking', thinking: '**Listing eICU data sources**\\n\\n', thinkingSignature: 'sig-must-not-leak' }},
+          {{ type: 'thinking', thinking: '   ' }},
+          {{ type: 'toolCall', id: 'call-1', name: 'easyicu_list_data_sources', arguments: {{ secret: 'must-not-leak' }} }},
+        ],
+      }});
+      console.log(JSON.stringify({{ events, transcript }}));
+    """
+    completed = subprocess.run(
+        [node, "--input-type=module", "-e", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    assert [event["type"] if event else None for event in payload["events"]] == [
+        "thinking_start",
+        "thinking_delta",
+        "thinking_end",
+        None,
+    ]
+    assert len(payload["events"][1]["delta"]) == 4000
+    assert [part["type"] for part in payload["transcript"]["content"]] == ["thinking", "tool_call"]
+    assert payload["transcript"]["content"][0] == {"type": "thinking", "text": "**Listing eICU data sources**\n\n"}
+    assert "must-not-leak" not in completed.stdout

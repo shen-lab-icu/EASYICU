@@ -8,7 +8,7 @@ owners' receipts.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Mapping, Optional
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -29,9 +29,11 @@ from .contracts import (
 from .plan_projection import project_plan_conversation_preview
 from .projections import (
     StudySetupReceipt,
+    ensure_safe_projection,
     project_job,
     project_run_outcome,
     project_study_setup_receipt,
+    stable_code,
 )
 from .run_authority import (
     list_bound_run_history,
@@ -110,6 +112,57 @@ class ProjectWorkflowProjection(BaseModel):
     workflow: ResearchWorkflowSnapshot
     active_job: Mapping[str, Any]
     latest_run: Mapping[str, Any]
+    # Newest-first, path-free rows for every governed run bound to the study
+    # (bounded), so the workspace can show the project's run record rather
+    # than only the run that currently owns the workflow.
+    runs: Sequence[Mapping[str, Any]] = ()
+
+
+RUN_HISTORY_LIMIT = 10
+RUN_HISTORY_ARTIFACT_NAMES = 40
+
+
+def project_run_history(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    authoritative_run_id: str = "",
+) -> list[Dict[str, Any]]:
+    """Project run history rows to the facts the workspace may show.
+
+    Status, type, timing, gate reason code, and artifact names cross; the
+    run directory, gate check details, and every payload stay behind.
+    """
+
+    projected: list[Dict[str, Any]] = []
+    for row in list(rows)[:RUN_HISTORY_LIMIT]:
+        run_id = str(row.get("run_id") or "").strip()
+        if not run_id:
+            continue
+        names = [
+            str(item) for item in (row.get("artifact_names") or []) if str(item)
+        ][:RUN_HISTORY_ARTIFACT_NAMES]
+        pending = [
+            stable_code(item)
+            for item in (row.get("pending_review_reason_codes") or [])
+            if stable_code(item)
+        ][:16]
+        entry: Dict[str, Any] = {
+            "run_id": run_id,
+            "run_type": str(row.get("run_type") or ""),
+            "engine": str(row.get("engine") or ""),
+            "run_status": str(row.get("run_status") or ""),
+            "gate_status": str(row.get("gate_status") or ""),
+            "gate_reason_code": stable_code(row.get("gate_reason")),
+            "readiness_status": str(row.get("readiness_status") or ""),
+            "artifact_count": int(row.get("artifact_count") or len(names)),
+            "artifact_names": names,
+            "plan_available": bool(row.get("plan_available")),
+            "pending_review_reason_codes": pending,
+            "updated_at": str(row.get("updated_at") or ""),
+            "authoritative": run_id == authoritative_run_id,
+        }
+        projected.append(entry)
+    return ensure_safe_projection(projected)
 
 
 def active_export_matches_study(
@@ -1164,11 +1217,16 @@ def build_project_workflow_projection(
         workflow=snapshot,
         active_job=project_job(active_job),
         latest_run=latest_run_outcome,
+        runs=project_run_history(
+            rows,
+            authoritative_run_id=str((latest_run or {}).get("run_id") or ""),
+        ),
     )
 
 
 __all__ = [
     "ProjectWorkflowProjection",
+    "project_run_history",
     "ResearchWorkflowSnapshot",
     "ResearchWorkflowStage",
     "StudySetupReceipt",

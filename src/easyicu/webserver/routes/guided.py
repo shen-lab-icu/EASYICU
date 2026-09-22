@@ -85,6 +85,21 @@ def delete_guided_draft_remove(body: Dict[str, Any] | None = None) -> dict:
     return _guided_draft_remove_response(body)
 
 
+@router.get("/api/guided/projects/{project_id}/notes")
+def get_guided_project_notes(project_id: str) -> dict:
+    """Read the researcher's notes stored in the project's local folder."""
+    return guided_sessions.read_project_notes(project_id)
+
+
+@router.post("/api/guided/projects/{project_id}/notes")
+def post_guided_project_notes(project_id: str, body: Dict[str, Any] | None = None) -> dict:
+    """Replace the project's notes file; the response is the saved state."""
+    result = guided_sessions.write_project_notes(project_id, (body or {}).get("text"))
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
 @router.post("/api/guided/session")
 def post_guided_session(body: Dict[str, Any]) -> dict:
     """Create a local metadata-only front-door Guided Copilot session."""

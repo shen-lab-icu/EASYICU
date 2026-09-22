@@ -1,0 +1,122 @@
+/* Owner: module-shell route visual language (reference-matched skin for the
+   Skills, Data and Settings routes that share the persistent module shell).
+   Presentational only: it remaps the shell owners' --sk-* / generic tokens to
+   the same paper, ink and accent tokens the conversation route uses
+   (declared by guided-pi-skin.css) and reshapes controls to the reference
+   language -- 1px ink borders, 8px cards, 6px controls, serif page titles,
+   40px section headers with an accent underline. It owns no layout and no
+   behaviour, and loads after skills-hub.css / extraction.css so their
+   measurements stay intact. */
+
+.euh-shell,.eusk-shell,.eudata-shell{
+  --sk-canvas:var(--skin-paper);--sk-surface:var(--skin-paper);--sk-wash:var(--skin-sunken);--sk-bg:var(--skin-paper);
+  --sk-ink:var(--skin-ink);--sk-ink-2:var(--skin-ink-2);--sk-muted:var(--skin-muted);
+  --sk-line:rgba(42,38,34,.3);--sk-line-strong:var(--skin-ink);
+  --sk-accent:var(--skin-primary);--sk-accent-soft:var(--skin-primary-tint);--sk-accent-border:var(--skin-primary);--sk-accent-ink:var(--skin-ink);
+  --bg:var(--skin-paper);--surface:var(--skin-paper);--surface-2:var(--skin-sunken);--surface-3:var(--skin-sunken);--paper:var(--skin-paper);--wash:var(--skin-sunken);
+  --ink:var(--skin-ink);--ink-1:var(--skin-ink);--ink-2:var(--skin-ink-2);--ink-3:var(--skin-muted);--ink-4:var(--skin-muted-2);
+  --hair:rgba(42,38,34,.3);--hair-2:rgba(42,38,34,.45);--hair-3:var(--skin-ink);--line:rgba(42,38,34,.3);
+  --accent:var(--skin-ink);--accent-ink:var(--skin-ink);--accent-soft:var(--skin-primary-tint);--accent-border:var(--skin-primary);
+  --font:var(--skin-font);--font-sans:var(--skin-font);
+  color:var(--skin-ink);font-family:var(--skin-font)
+}
+.eudata-main,.eusk-main,.euh-settings-main{background:var(--skin-paper)}
+
+/* —— Global rail and context aside: the conversation route's rail language —— */
+.euh-rail,.eusk-rail{border-right:1px solid var(--skin-ink)}
+.euh-rail .euh-brand,.eusk-rail .eusk-brand{border-radius:999px;background:var(--skin-ink);color:var(--skin-paper)}
+.euh-rail button,.eusk-rail button{color:var(--skin-ink);font:500 10px/15px var(--skin-font)}
+.euh-rail button svg,.eusk-rail button svg{border-radius:999px}
+.euh-rail button:hover svg,.euh-rail button:focus-visible svg,.eusk-rail button:hover svg,.eusk-rail button:focus-visible svg{background:var(--skin-primary-soft)}
+.euh-rail button.active svg,.eusk-rail button.active svg{background:var(--skin-primary);color:var(--skin-ink)}
+.euh-context{border-right:1px solid var(--skin-ink)}
+.euh-context>header{border-bottom:1px solid var(--skin-ink)}
+.euh-context>header span,.euh-context-section>span{color:var(--skin-muted);font:500 10px/15px var(--skin-font);letter-spacing:.5px}
+.euh-context-project{border:1px solid var(--skin-ink);border-radius:8px;background:var(--skin-paper)}
+.euh-context-project:hover{border-color:var(--skin-ink);background:var(--skin-sunken)}
+.euh-context-section{border-top:1px solid rgba(42,38,34,.3)}
+.euh-context-nav button,.euh-context-return{border-radius:6px;color:var(--skin-ink);font-size:14px}
+.euh-context-nav button.active{border-left:2px solid var(--skin-primary);border-radius:6px;background:var(--skin-primary-soft);color:var(--skin-ink);font-weight:500}
+.euh-context-return{border-top:1px solid rgba(42,38,34,.3)}
+
+/* —— Page heads: serif title, small uppercase eyebrow, primary as accent fill with an ink ring —— */
+.eusk-head h1,.eusk-detail-head h1,.eudata-head h1,.euh-settings-main h1{color:var(--skin-ink);font:400 30px/1.2 var(--skin-serif);letter-spacing:0}
+.eusk-head p,.eusk-detail-head p,.eudata-head p{color:var(--skin-muted);font-size:15px;line-height:22px}
+.eusk-eyebrow,.eudata-eyebrow{color:var(--skin-muted);font:500 10px/15px var(--skin-font);letter-spacing:.5px;text-transform:uppercase}
+.eusk-new,.eusk-use,.eudata-shell .btn.primary,.eudata-shell .express .btn.primary,.euh-shell .btn.primary{
+  border:1px solid var(--skin-ink);border-radius:6px;background:var(--skin-primary);color:var(--skin-ink);font-weight:500;box-shadow:0 0 0 2px transparent;transition:box-shadow .15s ease
+}
+.eusk-new:hover,.eusk-use:hover,.eudata-shell .btn.primary:hover,.eudata-shell .express .btn.primary:hover,.euh-shell .btn.primary:hover{background:var(--skin-primary);border-color:var(--skin-ink);color:var(--skin-ink);box-shadow:0 0 0 2px var(--skin-ink)}
+.euh-shell .btn,.eudata-shell .btn{border:1px solid var(--skin-ink);border-radius:6px;background:var(--skin-paper);color:var(--skin-ink);box-shadow:none}
+.euh-shell .btn:hover,.eudata-shell .btn:hover{background:var(--skin-sunken)}
+.euh-shell .btn.ghost,.eudata-shell .btn.ghost,.eudata-shell .handoff .btn{border-color:transparent;background:transparent}
+.eudata-dictionary-link,.ex-linkbtn,.eusk-back{color:var(--skin-muted);text-decoration:underline;text-decoration-color:rgba(42,38,34,.35);text-underline-offset:2px}
+.eudata-dictionary-link:hover,.ex-linkbtn:hover,.eusk-back:hover{color:var(--skin-ink);text-decoration-color:var(--skin-ink)}
+
+/* —— Search, segmented tabs, filter pills —— */
+.eusk-search{border:1px solid var(--skin-ink);border-radius:8px;background:var(--skin-paper);color:var(--skin-muted)}
+.eusk-search:focus-within{border-color:var(--skin-ink);box-shadow:0 0 0 2px var(--skin-primary-soft)}
+.eusk-mode-tabs,.eusk-tabs,.eudata-head .mode-seg,.euh-shell .mode-seg{gap:3px;padding:3px;border:1px solid var(--skin-ink);border-radius:8px;background:var(--skin-sunken)}
+.eusk-mode-tabs button,.eusk-tabs button,.eudata-head .mode-seg button,.euh-shell .mode-seg button{border:1px solid transparent;border-radius:6px;color:var(--skin-muted)}
+.eusk-mode-tabs button:hover,.eusk-tabs button:hover,.eusk-tabs button:focus-visible{background:rgba(247,246,242,.7);color:var(--skin-ink)}
+.eusk-mode-tabs button[aria-selected=true],.eusk-tabs button[aria-selected=true],.eudata-head .mode-seg button.on,.euh-shell .mode-seg button.on{border-color:var(--skin-ink);background:var(--skin-paper);color:var(--skin-ink);font-weight:500;box-shadow:none}
+.eusk-mode-tabs span{background:rgba(42,38,34,.08);color:var(--skin-muted);font:500 11px/18px var(--skin-mono)}
+.eusk-mode-tabs button[aria-selected=true] span{background:var(--skin-ink);color:var(--skin-paper)}
+.eusk-filters{border-bottom:1px solid rgba(42,38,34,.5)}
+.eusk-filter-label{color:var(--skin-muted);font:500 10px/15px var(--skin-font);letter-spacing:.5px}
+.eusk-pill,.eusk-category select,.eusk-state,.eusk-state-button,.eusk-actions-menu>summary{border:1px solid var(--skin-ink);border-radius:6px;background:var(--skin-paper);color:var(--skin-ink)}
+.eusk-pill.active,.eusk-state.on,.eusk-state-button.on{border-color:var(--skin-ink);background:var(--skin-primary-soft);color:var(--skin-ink)}
+.eusk-catalog-summary{color:var(--skin-muted)}
+
+/* —— Section headers: 40px, ink top rule, 2px accent underline (the conversation route's) —— */
+.eusk-group h2{display:flex;align-items:center;gap:8px;min-height:40px;margin:0 0 14px;padding:0 12px;border-top:1px solid var(--skin-ink);border-bottom:2px solid var(--skin-primary);background:rgba(240,239,234,.5);color:var(--skin-ink);font:500 14px/20px var(--skin-font)}
+.eusk-group h2:after{display:none}
+.eusk-group h2 small{margin-left:auto;min-width:22px;padding:0 7px;border-radius:999px;background:rgba(42,38,34,.08);color:var(--skin-muted);font:500 11px/18px var(--skin-mono);text-align:center}
+
+/* —— Cards: 1px ink, 8px, paper; the reference hover is a soft shadow, not a lift —— */
+.eusk-card{border:1px solid var(--skin-ink);border-radius:8px;background:var(--skin-paper)}
+.eusk-card:hover,.eusk-card:focus-within{border-color:var(--skin-ink);box-shadow:var(--skin-shadow);transform:none}
+.eusk-card-open{border-radius:8px 8px 0 0}
+.eusk-card-open strong{color:var(--skin-ink);font:400 19px/1.25 var(--skin-serif)}
+.eusk-card-open small{color:var(--skin-muted);font:500 10px/15px var(--skin-font);letter-spacing:.5px}
+.eusk-card-open p{color:var(--skin-ink-2);font-size:14px;line-height:20px}
+.eusk-card-foot{color:var(--skin-muted);font-size:11px}
+.eusk-contract>div,.eusk-method-summary>div,.eusk-composition,.eusk-install,.eusk-file-preview,.eusk-overview-document,.eusk-file-row,.eusk-create-menu>div,.eusk-actions-menu>div{border:1px solid var(--skin-ink);border-radius:8px;background:var(--skin-paper)}
+.eusk-method-callout,.eusk-package-note{border:1px solid var(--skin-ink);border-radius:8px;background:var(--skin-sunken)}
+.eusk-method-callout span{color:var(--skin-muted)}
+.eusk-binding{border-left:2px solid var(--skin-primary);background:var(--skin-primary-tint);color:var(--skin-ink-2)}
+.eusk-message{border:1px solid var(--skin-ink);border-radius:8px;background:var(--skin-primary-tint);color:var(--skin-ink)}
+.eusk-file-preview h2{border-bottom:1px solid var(--skin-ink);background:var(--skin-sunken)}
+.eusk-detail-head{border-bottom:1px solid rgba(42,38,34,.5)}
+.eusk-detail-body,.eusk-detail-body h2,.eusk-detail-body h3{color:var(--skin-ink)}
+.eusk-empty,.eusk-empty strong{color:var(--skin-muted)}
+
+/* —— Data route: paper main, module bar with an accent underline, ink-bordered cards —— */
+.eudata-modulebar{border-bottom:1px solid var(--skin-ink);background:rgba(247,246,242,.94)}
+.eudata-modulenav button{color:var(--skin-muted);font-size:13px}
+.eudata-modulenav button:hover{color:var(--skin-ink);background:var(--skin-sunken)}
+.eudata-modulenav button.active{color:var(--skin-ink);font-weight:500}
+.eudata-modulenav button.active::after{height:2px;border-radius:0;background:var(--skin-primary)}
+.eudata-head{border-bottom:1px solid rgba(42,38,34,.5)}
+.eudata-shell .cfg,.eudata-shell .sumcard,.eudata-shell .express,.eudata-shell .ex2-disc,.eudata-shell .modcard,.eudata-shell .ex-setup-step,.eudata-shell .cohort-preset,.eudata-shell .ex-connect-card,.euh-shell .cfg{
+  border:1px solid var(--skin-ink);border-radius:8px;background:var(--skin-paper);box-shadow:none
+}
+.eudata-shell .express{background:var(--skin-paper)}
+.eudata-shell .express::before{display:none}
+.eudata-shell .express h2{color:var(--skin-ink)}
+.eudata-shell .cfg-ico{border:1px solid var(--skin-ink);border-radius:6px;background:var(--skin-paper);color:var(--skin-ink)}
+.eudata-shell .cfg-h{color:var(--skin-ink)}
+.eudata-shell .cfg-sub,.eudata-shell .ex-connect-label,.eudata-shell .pf-hint{color:var(--skin-muted)}
+.eudata-shell .ex-connect-primary{border:1px solid var(--skin-ink);border-radius:8px;background:var(--skin-primary-tint)}
+.eudata-shell .path-field,.euh-shell .path-field,.euh-shell .field,.euh-shell input[type=text],.euh-shell select,.euh-shell textarea{border:1px solid var(--skin-ink);border-radius:6px;background:var(--skin-paper);color:var(--skin-ink)}
+.eudata-shell .path-field:focus-within,.euh-shell .field:focus-within{border-color:var(--skin-ink);box-shadow:0 0 0 2px var(--skin-primary-soft)}
+/* Composite fields carry the one border; their inner input and browse button stay bare. */
+.euh-shell .path-field input,.euh-shell .field input,.euh-shell .path-field .btn,.euh-shell .field .btn{border:0;border-radius:4px;background:transparent;box-shadow:none}
+.euh-shell .path-field .btn:hover,.euh-shell .field .btn:hover{background:var(--skin-sunken)}
+.eudata-shell .handoff .btn{color:var(--skin-ink);text-decoration:underline}
+
+/* —— Settings route: rows on paper with ink rules —— */
+.euh-shell .set-row{border-bottom:1px solid rgba(42,38,34,.3)}
+.euh-shell .sr-t{color:var(--skin-ink)}
+.euh-shell .sr-d{color:var(--skin-muted)}
+.euh-shell .set-nav button.on,.euh-shell .set-nav button.active{border-left:2px solid var(--skin-primary);background:var(--skin-primary-soft);color:var(--skin-ink)}

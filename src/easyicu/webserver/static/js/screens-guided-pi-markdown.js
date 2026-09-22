@@ -113,7 +113,26 @@
       listTag = tag;
     }
 
-    for (const line of lines) {
+    // GitHub-style tables: a header row, a |---| separator, then rows. The
+    // reference UI renders these; a reply's result summary is often one.
+    const TABLE_ROW = /^\s*\|.*\|\s*$/;
+    const TABLE_RULE = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+    const cells = row => row.trim().replace(/^\|/, '').replace(/\|$/, '')
+      .split(/(?<!\\)\|/).map(cell => inlineWithLinks(cell.replace(/\\\|/g, '|').trim()));
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      if (TABLE_ROW.test(line) && index + 1 < lines.length && TABLE_RULE.test(lines[index + 1])) {
+        flushParagraph();
+        flushList();
+        const head = cells(line);
+        const body = [];
+        index += 2;
+        while (index < lines.length && TABLE_ROW.test(lines[index])) { body.push(cells(lines[index])); index += 1; }
+        index -= 1;
+        out.push(`<table class="gpi-md-table"><thead><tr>${head.map(cell => `<th>${cell}</th>`).join('')}</tr></thead>`
+          + `<tbody>${body.map(row => `<tr>${head.map((_, column) => `<td>${row[column] || ''}</td>`).join('')}</tr>`).join('')}</tbody></table>`);
+        continue;
+      }
       const heading = line.match(HEADING);
       if (heading) {
         flushParagraph();

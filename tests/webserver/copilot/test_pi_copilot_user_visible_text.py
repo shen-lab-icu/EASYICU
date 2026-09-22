@@ -123,3 +123,27 @@ def test_transcript_projection_tolerates_unexpected_shapes() -> None:
     assert project_transcript([{"role": "assistant", "content": "raw"}]) == [
         {"role": "assistant", "content": "raw"}
     ]
+
+
+def test_reasoning_summaries_are_sanitized_like_replies_and_only_for_the_model() -> None:
+    """The conversation shows the model's reasoning summary as trace rows."""
+
+    rows = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "text": "**Checking run `run_271251946725` status**"},
+                {"type": "text", "text": "运行 `run_271251946725` 已失败。"},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "thinking", "text": "not a model thought"}, {"type": "text", "text": "好的"}],
+        },
+    ]
+
+    projected = project_transcript(rows)
+
+    assert projected[0]["content"][0] == {"type": "thinking", "text": "**Checking run status**"}
+    assert projected[0]["content"][1]["text"] == "运行已失败。"
+    assert [block["type"] for block in projected[1]["content"]] == ["text"]

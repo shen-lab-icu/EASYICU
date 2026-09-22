@@ -78,6 +78,13 @@
         latestFailedAgentJob
         && latestFailedAgentJob.error_code === 'research_pipeline_plan_contract_exhausted'
       );
+      // The card used to say only "the previous task did not complete". The
+      // archived job carries the failure code; say what stopped the run and
+      // what to change, so regeneration is a decision rather than a guess.
+      const failureReason = latestFailedAgentJob && !planContractExhausted
+        && typeof host.runFailureText === 'function'
+        ? String(host.runFailureText(latestFailedAgentJob.error_code) || '')
+        : '';
       if (code === 'extraction_ready') return {
         code, grants: ['extract'],
         message: tr('I confirm the current study setup. Start data extraction and quality review.', '我确认当前研究配置，请开始数据提取和质量审阅。'),
@@ -160,6 +167,7 @@
             '失败任务保留为不可变历史；任何分析开始前都必须重新生成计划。',
           ),
         approve: tr('Generate a fresh plan', '重新生成新计划'),
+        reason: failureReason,
         reviewMaterialsTitle: tr('Read-only outputs from the failed-closed run', '失败关闭运行的只读产物'),
         reviewResources: historicalRunId ? [
           { kind: 'research_report', run_id: historicalRunId, artifact: 'full_analysis_report.json', label: tr('Preview complete analysis report', '预览完整分析报告'), media_type: 'application/json' },
@@ -259,6 +267,43 @@
           { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'scientific_plan_review.json', label: tr('View review details', '查看审阅详情'), media_type: 'application/json' },
         ] : [],
       };
+      // The host compiler refused the automatic configuration. The plan is
+      // saved and reviewed; the researcher decides the cohort rule or asks for
+      // a change, and sees the plan while deciding.
+      const configurationError = typeof host.planConfigurationError === 'function'
+        ? String(host.planConfigurationError() || '') : '';
+      if (code === 'agent_plan_configuration_required' && !configurationError) return {
+        code, grants: [], showPlanPreview: true,
+        message: '',
+        title: tr('The candidate plan is ready and reviewed; apply its execution settings?', '候选研究计划已生成并完成审阅，是否应用执行设置？'),
+        note: tr(
+          'EasyICU applies the reviewer-attributed runtime settings from the plan itself; no provider call is made and analysis does not start. Request changes first if the plan below is not what you intended.',
+          'EasyICU 会直接套用计划中由审阅归属给运行时的设置；这一步不调用模型，也不会开始分析。如果下方的计划不是你想要的，请先提出修改。',
+        ),
+        approve: tr('Apply execution settings', '应用执行设置'),
+        reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
+        reviewResources: reviewedPlanRunId ? [
+          { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'agent_plan.json', label: tr('Open the complete plan', '打开完整计划'), media_type: 'application/json' },
+          { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'scientific_plan_review.json', label: tr('View review details', '查看审阅详情'), media_type: 'application/json' },
+        ] : [],
+      };
+      if (code === 'agent_plan_configuration_required' && configurationError) return {
+        code, grants: [], nonApprovable: true, showPlanPreview: true,
+        message: '',
+        title: tr('The candidate plan is ready; one execution setting needs your decision', '候选研究计划已生成，执行前还需要你确认一项设置'),
+        reason: typeof host.runFailureText === 'function'
+          ? String(host.runFailureText(configurationError) || '') : configurationError,
+        note: tr(
+          'The plan and its scientific review are saved; analysis has not started. Your choice below updates the study and EasyICU revises the plan accordingly.',
+          '计划及其科学审阅已保存，分析尚未开始。下方的选择会更新研究配置，EasyICU 会据此修订计划。',
+        ),
+        reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
+        reviewResources: reviewedPlanRunId ? [
+          { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'agent_plan.json', label: tr('Open the complete plan', '打开完整计划'), media_type: 'application/json' },
+          { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'scientific_plan_review.json', label: tr('View review details', '查看审阅详情'), media_type: 'application/json' },
+          { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'literature_evidence.json', label: tr('View literature evidence', '查看文献依据'), media_type: 'application/json' },
+        ] : [],
+      };
       if (code === 'plan_scientific_changes_required') return {
         code, grants: ['provider_run', 'literature'],
         nonApprovable: !(
@@ -354,6 +399,7 @@
         : '';
       const planConversation = planPreview && (
         confirmation.compactApproval
+        || confirmation.showPlanPreview
         || confirmation.code === 'plan_scientific_changes_required'
       )
         ? planConversationHtml(planPreview)
@@ -366,7 +412,7 @@
         : '';
       return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}" aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
         <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
-        <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong><small>${esc(displayedNote)}</small>${flowSteps}${dataStatus}${reviewStatus}${reviewMaterials}${compactOtherAction}</div>
+        <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}<small>${esc(displayedNote)}</small>${flowSteps}${dataStatus}${reviewStatus}${reviewMaterials}${compactOtherAction}</div>
         <div class="gpi-confirmation-actions${decisionActions ? ' has-decision-options' : ''}">
           ${confirmation.dataStatus && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-preview-data>${esc(tr('Preview analysis data', '先预览分析数据'))}</button>` : ''}
           ${decisionActions || (confirmation.hideEdit || (confirmation.code === 'plan_scientific_changes_required' && !decisionCount) ? '' : `<button class="btn ${confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>`)}
@@ -434,7 +480,7 @@
       const rowHtml = row => `<li><span>${rows.indexOf(row) + 1}</span><div><b>${esc(labels[String(row && row.key || '')] || tr('Plan item', '计划内容'))}</b><em>${esc(row && row.text || '')}</em></div></li>`;
       return `<article class="gpi-plan-conversation" aria-label="${esc(tr('Candidate research plan summary', '候选研究计划摘要'))}">
         <p><strong>${esc(tr('I have generated a candidate plan from your research question.', '我已经根据你的研究问题生成了一份候选计划。'))}</strong><span>${esc(tr('Here is the core plan for your review. No analysis has started yet.', '核心方案直接列在下面，方便你先审阅；目前还没有开始分析。'))}</span></p>
-        <details class="gpi-plan-conversation-summary"><summary>${esc(tr(`View ${rows.length} candidate plan items`, `查看 ${rows.length} 项候选计划摘要`))}</summary><ol>${rows.map(rowHtml).join('')}</ol>${designDisclosure}${counts ? `<footer>${esc(tr('Planned scope: ', '计划规模：'))}${esc(counts)} · ${esc(tr('Complete steps and evidence bindings remain available below.', '完整步骤与证据绑定可在下方继续查看。'))}</footer>` : ''}</details>
+        <details class="gpi-plan-conversation-summary" open><summary>${esc(tr(`${rows.length} candidate plan items`, `${rows.length} 项候选计划摘要`))}</summary><ol>${rows.map(rowHtml).join('')}</ol>${designDisclosure}${counts ? `<footer>${esc(tr('Planned scope: ', '计划规模：'))}${esc(counts)} · ${esc(tr('Complete steps and evidence bindings remain available below.', '完整步骤与证据绑定可在下方继续查看。'))}</footer>` : ''}</details>
       </article>`;
     }
 

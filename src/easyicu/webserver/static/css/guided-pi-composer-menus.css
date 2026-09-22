@@ -1,0 +1,23 @@
+/* Owner: Guided Copilot composer menus — where the composer's popovers land.
+   The menus themselves are owned by their scripts (idea-source, access in the
+   study workspace, effort, model) and popover-menus.js handles dismissal;
+   this file only decides placement, so a narrow panel or a short window
+   never hides one. */
+/* Composer menus anchor to the compose card, not to their own chip: every
+   popover opens above the card and stays inside its width, so a narrow
+   conversation panel (three columns at laptop widths) never clips one and a
+   chip near the card's edge never pushes its menu outside. Leading menus
+   (+, access) align with the card's left edge, trailing ones (effort, model)
+   with its right edge; a long model list scrolls inside the popover. */
+.gpi-compose-card .gpi-actions,.gpi-compose-card .gpi-idea-source-menu,.gpi-compose-card .gpi-access-menu,.gpi-compose-card .gpi-effort-menu,.gpi-compose-card .gpi-model-control{position:static}
+.gpi-compose-card .gpi-idea-source-popover,.gpi-compose-card .gpi-access-popover,.gpi-compose-card .gpi-model-popover{position:absolute;z-index:72;top:auto;bottom:calc(100% + 8px)}
+.gpi-compose-card .gpi-idea-source-popover,.gpi-compose-card .gpi-access-menu>.gpi-access-popover{left:10px;right:auto}
+.gpi-compose-card .gpi-effort-menu>.gpi-effort-popover,.gpi-compose-card .gpi-model-popover{left:auto;right:10px}
+.gpi-compose-card .gpi-idea-source-popover{width:min(240px,calc(100% - 20px))}
+.gpi-compose-card .gpi-access-menu>.gpi-access-popover{width:min(360px,calc(100% - 20px))}
+.gpi-compose-card .gpi-effort-menu>.gpi-effort-popover{width:min(320px,calc(100% - 20px))}
+.gpi-compose-card .gpi-model-popover{width:min(236px,calc(100% - 20px));max-height:min(420px,calc(100vh - 140px));overflow:auto}
+/* The entry composer sits high on an otherwise empty page: its menus open below the card. */
+.gpi-entry-compose .gpi-compose-card .gpi-idea-source-popover,.gpi-entry-compose .gpi-compose-card .gpi-access-popover,.gpi-entry-compose .gpi-compose-card .gpi-model-popover{top:calc(100% + 8px);bottom:auto}
+/* On a short window the list below the entry card would run past the bottom edge. */
+@media(max-height:760px){.gpi-entry-compose .gpi-compose-card .gpi-model-rows{max-height:150px}}

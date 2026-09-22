@@ -71,12 +71,24 @@
       state.models = rows.map(row => clean(row && row.id ? row.id : row, 256)).filter(Boolean);
     } catch (error) {
       if (request !== state.request) return;
-      state.error = clean((error && error.message)
-        || tr('Could not read the model list.', '读取模型列表失败。'), 240);
+      state.error = friendlyError(error);
     } finally {
       if (request === state.request) state.loading = false;
       paint(control);
     }
+  }
+  // A transport failure reads as a sentence with the status, never as the raw
+  // HTTP reason ("Not Found") standing alone in the menu.
+  function friendlyError(error) {
+    const status = Number(error && error.status);
+    const message = clean(error && error.message, 200);
+    const rawHttp = !message || /^(not found|internal server error|bad request|forbidden|unauthorized|service unavailable)$/i.test(message);
+    if (Number.isFinite(status) && status > 0 && rawHttp) {
+      return status === 404
+        ? tr(`Model listing is not available on this server (HTTP ${status}). Restart EasyICU after updating.`, `当前服务未提供模型列表（HTTP ${status}），更新后请重启 EasyICU。`)
+        : tr(`Could not read the model list (HTTP ${status}).`, `读取模型列表失败（HTTP ${status}）。`);
+    }
+    return clean(message || tr('Could not read the model list.', '读取模型列表失败。'), 240);
   }
 
   async function pick(control, model) {
@@ -106,8 +118,9 @@
       if (details) details.open = false;
     } catch (error) {
       if (request !== state.request) return;
-      state.error = clean((error && error.message)
-        || tr('The model service refused this change.', '模型服务拒绝了这次变更。'), 240);
+      state.error = /^(not found|internal server error|bad request|forbidden|unauthorized|service unavailable)$/i.test(clean(error && error.message, 200))
+        ? friendlyError(error)
+        : clean((error && error.message) || tr('The model service refused this change.', '模型服务拒绝了这次变更。'), 240);
     } finally {
       if (request === state.request) state.busy = false;
       paint(control);

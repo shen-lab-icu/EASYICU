@@ -79,41 +79,80 @@
     );
   }
 
+  // The native owner may wrap its page in the desktop module shell (rail +
+  // project context rail). Inside the conversation reader that chrome would
+  // nest a second navigation, so the embed keeps only the module content.
+  function unwrapModuleShell(root) {
+    const shell = root.querySelector('.euh-shell');
+    if (!shell) return;
+    const inner = shell.querySelector('.eudata-module-content')
+      || shell.querySelector('.eudata-main-inner')
+      || shell.querySelector('.euh-main-inner');
+    if (!inner) return;
+    shell.replaceWith(...Array.from(inner.childNodes));
+  }
+
+  function sourceBindingLabel(source) {
+    const placeholder = new Set(['unknown', '未知']);
+    const label = String(source.label || '').trim();
+    if (label && !placeholder.has(label.toLowerCase())) return label;
+    const active = window.EU_SOURCES && typeof window.EU_SOURCES.activeSource === 'function'
+      ? window.EU_SOURCES.activeSource() : null;
+    return String(active && active.label || source.database || '—').trim();
+  }
+
   function projectSourceBinding(root) {
     const owner = window.EU_EXTRACTION_NATIVE_OWNER;
     if (!owner || typeof owner.sourceBindingSnapshot !== 'function') return;
     const snapshot = owner.sourceBindingSnapshot();
-    const head = root.querySelector('.page-head');
+    // The owner renders its data-workspace page header (`.eudata-head`); the
+    // reader retitles it as the source-binding step and drops the dictionary
+    // link, which would navigate the whole app away from the conversation.
+    const head = root.querySelector('.eudata-head');
     if (head) {
       const title = head.querySelector('h1');
-      const lead = head.querySelector('.lead');
+      const lead = head.querySelector('p');
       if (title) title.textContent = t('Bind data source', '绑定数据来源');
       if (lead) lead.textContent = t(
         'Choose and confirm the local data for this study. EasyICU keeps your question and will propose the complete plan next; selecting data does not start analysis.',
         '选择并确认本次研究使用的本地数据。EasyICU 会保留你已提出的问题，接着拟定完整计划；选择数据不会开始分析。'
       );
-      Array.from(head.children).slice(2).forEach(node => node.remove());
+      const dictionary = head.querySelector('.eudata-dictionary-link');
+      if (dictionary) dictionary.remove();
     }
-    root.querySelectorAll('.ex-copilot-prefill,[data-ex-sample]').forEach(node => node.remove());
-    if (!snapshot.ready) return;
-    const express = root.querySelector('.express');
-    if (!express) return;
+    root.querySelectorAll('.ex-copilot-prefill,[data-ex-sample],.handoff').forEach(node => node.remove());
+    const workspace = root.querySelector('.eudata-workspace');
+    if (!workspace) return;
+    if (!snapshot.ready) {
+      // Binding needs a validated local folder. In Demo mode the owner would
+      // show its module wizard instead of the folder step, which is not a
+      // data-source choice; offer the switch here rather than the wizard.
+      if (typeof owner.isReal === 'function' && !owner.isReal()) {
+        workspace.innerHTML = `<div class="note info gpi-source-binding-mode"><div class="ico">${icon('db', 14)}</div><div class="body">
+          <div class="t">${t('This conversation needs local data', '这项研究需要本机数据')}</div>
+          <div class="d">${t('Switch to real data to choose the local ICU folder. Nothing is uploaded and no patient rows are returned.', '切换到真实数据后即可选择本机 ICU 文件夹；不会上传，也不会返回患者行。')}</div>
+          <button class="btn sm primary mt-16" type="button" data-gpi-extraction-real>${icon('db', 12)} ${t('Use real local data', '使用本地真实数据')}</button>
+        </div></div>`;
+      }
+      return;
+    }
     const source = snapshot.data_source || {};
-    express.innerHTML = `<div class="cfg-head">
-      <div class="cfg-ico">${icon('db', 17)}</div>
-      <div class="grow"><div class="cfg-h">${t('Data source identified', '已识别数据来源')}</div><div class="cfg-sub">${esc(source.label || source.database || '—')}</div></div>
-    </div>
-    <div class="cfg-body">
-      <div class="note info"><div class="ico">${icon('shield', 14)}</div><div class="body">
-        <div class="t">${t('No research settings have been chosen yet', '尚未选择任何研究配置')}</div>
-        <div class="d">${t(
-          'EasyICU will first ask for your research question, then recommend the cohort, feature modules, outcome, time window, and export format for your review.',
-          'EasyICU 会先询问你的研究问题，再推荐队列、特征模块、结局、时间窗和导出格式供你审阅。'
-        )}</div>
-      </div></div>
-      <button class="btn primary mt-16" type="button" data-gpi-source-binding-confirm>${icon('arrow', 14)} ${t('Confirm data source and continue', '确认数据来源并继续')}</button>
+    workspace.innerHTML = `<div class="cfg gpi-source-binding-confirm">
+      <div class="cfg-head">
+        <div class="cfg-ico">${icon('db', 17)}</div>
+        <div class="grow"><div class="cfg-h">${t('Data source identified', '已识别数据来源')}</div><div class="cfg-sub">${esc(sourceBindingLabel(source))}</div></div>
+      </div>
+      <div class="cfg-body">
+        <div class="note info"><div class="ico">${icon('shield', 14)}</div><div class="body">
+          <div class="t">${t('No research settings have been chosen yet', '尚未选择任何研究配置')}</div>
+          <div class="d">${t(
+            'EasyICU will first ask for your research question, then recommend the cohort, feature modules, outcome, time window, and export format for your review.',
+            'EasyICU 会先询问你的研究问题，再推荐队列、特征模块、结局、时间窗和导出格式供你审阅。'
+          )}</div>
+        </div></div>
+        <button class="btn primary mt-16" type="button" data-gpi-source-binding-confirm>${icon('arrow', 14)} ${t('Confirm data source and continue', '确认数据来源并继续')}</button>
+      </div>
     </div>`;
-    root.querySelectorAll('.ex2-divider,.ex2-custom,.handoff').forEach(node => node.remove());
   }
 
   function paint() {
@@ -151,6 +190,7 @@
       ${jobSummary(options.jobSnapshot)}
       <div class="gpi-extraction-native">${owner.render()}</div>
     </div>`;
+    unwrapModuleShell(host);
     if (sourceBinding) projectSourceBinding(host);
     else projectCopilotSetup(host);
     owner.bind(host);

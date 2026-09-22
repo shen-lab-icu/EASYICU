@@ -122,15 +122,25 @@
     return { kind: 'compose', text: String(compose.dataset.gpiStarterCompose || ''), intent: String(compose.dataset.gpiStarterIntent || ''), method };
   }
 
-  function filter(host, value) {
+  const SEARCH_LIMIT = 6;
+  function defaultTr(en, zh) { return window.EU_LANG === 'zh' ? zh : en; }
+  function cardSearchText(row) { return `${row.category} ${row.title} ${row.description}`.toLowerCase(); }
+
+  // Search covers the whole reviewed catalogue, not only the three cards on
+  // screen: a query re-renders the matching workflows (up to SEARCH_LIMIT) and
+  // an empty query restores the current shuffle set.
+  function filter(host, value, tr) {
+    const translate = typeof tr === 'function' ? tr : defaultTr;
     const query = String(value || '').trim().toLowerCase();
-    let visible = 0;
-    host.querySelectorAll('[data-gpi-starter-card]').forEach(row => {
-      row.hidden = Boolean(query && !String(row.dataset.gpiStarterSearchText || '').includes(query));
-      if (!row.hidden) visible += 1;
-    });
+    const actions = host && host.querySelector('.gpi-entry-home .gpi-starter-actions');
+    if (!actions) return;
+    const disabled = Boolean(actions.querySelector('[data-gpi-starter-card][disabled]')) ? 'disabled' : '';
+    const rows = query
+      ? methodCards(translate).filter(row => cardSearchText(row).includes(query)).slice(0, SEARCH_LIMIT)
+      : visibleCards(translate);
+    actions.innerHTML = rows.map(row => card(row, disabled, translate)).join('');
     const empty = host.querySelector('[data-gpi-starter-empty]');
-    if (empty) empty.hidden = visible > 0;
+    if (empty) empty.hidden = rows.length > 0;
   }
 
   function shuffle(host, tr) {

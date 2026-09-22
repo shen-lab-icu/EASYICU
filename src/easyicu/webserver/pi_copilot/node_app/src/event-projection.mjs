@@ -1,8 +1,12 @@
 /* Safe, dependency-neutral projection from Pi SDK events/session messages to
-   EasyICU's browser contract. Raw reasoning, tool arguments, and partial tool
-   output intentionally never cross this boundary. */
+   EasyICU's browser contract. Tool arguments and partial tool output never
+   cross this boundary. The model's own reasoning text (the provider-returned
+   thinking / reasoning summary) crosses it bounded, so the conversation can
+   show the chain of work the way the reference research UIs do; the
+   transcript projection sanitizes it like any other assistant text. */
 
 const MAX_TEXT_CHARS = 12000;
+const MAX_REASONING_CHARS = 4000;
 const WORKSPACE_FILE_TOOLS = new Set([
   "easyicu_read_project_file",
   "easyicu_write_project_file",
@@ -405,6 +409,11 @@ export function normalizePiEvent(event) {
     if (update.type === "text_delta") {
       return { type: "text_delta", at, delta: boundedText(update.delta, 8000) };
     }
+    if (update.type === "thinking_start") return { type: "thinking_start", at };
+    if (update.type === "thinking_delta") {
+      return { type: "thinking_delta", at, delta: boundedText(update.delta, MAX_REASONING_CHARS) };
+    }
+    if (update.type === "thinking_end") return { type: "thinking_end", at };
     return undefined;
   }
   if (event.type === "tool_execution_start") {
@@ -507,6 +516,9 @@ export function projectTranscriptMessage(message) {
     if (!item || typeof item !== "object") continue;
     if (item.type === "text") {
       parts.push({ type: "text", text: boundedText(item.text, MAX_TEXT_CHARS) });
+    } else if (item.type === "thinking" && role === "assistant") {
+      const thinking = boundedText(item.thinking, MAX_REASONING_CHARS);
+      if (thinking.trim()) parts.push({ type: "thinking", text: thinking });
     } else if (item.type === "toolCall") {
       const resource = toolResource(item.name, item.arguments);
       parts.push({

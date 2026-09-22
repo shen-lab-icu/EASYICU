@@ -154,11 +154,16 @@ def pytest_collection_modifyitems(config, items):
     corpus_ready = corpus_root().exists()
     node_ready = shutil.which("node") is not None
     docker_ready = shutil.which("docker") is not None
+    web_audit_base = os.environ.get("EASYICU_WEB_AUDIT_BASE", "")
+    web_audit_ready = bool(web_audit_base) and find_spec("playwright") is not None
     skip_no_corpus = pytest.mark.skip(
         reason=f"Recorded run corpus is not mounted at {corpus_root()}"
     )
     skip_no_node = pytest.mark.skip(reason="Node.js is unavailable")
     skip_no_docker = pytest.mark.skip(reason="Docker is unavailable")
+    skip_no_web_server = pytest.mark.skip(
+        reason="Set EASYICU_WEB_AUDIT_BASE to a running EasyICU server (and install Playwright)"
+    )
 
     for item in items:
         if "needs_real_data" in item.keywords and not (run_real and real_data_ready):
@@ -169,6 +174,8 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_no_node)
         if "requires_docker" in item.keywords and not docker_ready:
             item.add_marker(skip_no_docker)
+        if "requires_web_server" in item.keywords and not web_audit_ready:
+            item.add_marker(skip_no_web_server)
 
 
 def corpus_root() -> Path:

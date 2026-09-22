@@ -157,7 +157,7 @@
         </article>`).join('')}</div></section>`;
     }).join('');
     return `<div class="eusk-head"><div><span class="eusk-eyebrow">SKILL HUB</span><h1>${tr('Skills', '技能')}</h1></div>
-      <details class="eusk-create-menu"><summary class="eusk-new">${icon('plus', 15)} ${tr('New skill', '新建技能')}</summary><div role="menu">
+      <details class="eusk-create-menu" data-popover-menu><summary class="eusk-new">${icon('plus', 15)} ${tr('New skill', '新建技能')}</summary><div role="menu">
         <button type="button" role="menuitem" data-sk-upload aria-label="${tr('Upload SKILL.md', '上传 SKILL.md')}"><span>${icon('file', 16)}</span><span><strong>${tr('Upload SKILL.md', '上传 SKILL.md')}</strong><small>${tr('Review and install a local instruction file', '审阅并安装本地指令文件')}</small></span></button>
         <button type="button" role="menuitem" data-sk-create-with aria-label="${tr('Create with EasyICU', '使用 EasyICU 开发')}"><span>${icon('spark', 16)}</span><span><strong>${tr('Create with EasyICU', '使用 EasyICU 开发')}</strong><small>${tr('Open a new task with a Skill Builder draft', '在新任务中打开技能开发草稿')}</small></span></button>
       </div></details></div>
@@ -194,7 +194,7 @@
         ? `<span class="eusk-state-button ${skill.enabled ? 'on' : ''}" aria-label="${skill.enabled ? tr('Available', '可用') : tr('Unavailable', '不可用')}">${skill.enabled ? '✓ ' + tr('Available', '可用') : tr('Unavailable', '不可用')}</span>`
         : `<button type="button" class="eusk-state-button ${skill.enabled ? 'on' : ''}" data-sk-toggle="${esc(skill.id)}" ${ui.busy || masterOff ? 'disabled' : ''}>${skill.enabled ? '✓ ' + tr('Enabled', '已启用') : tr('Enable', '启用')}</button>`}
       <button type="button" class="eusk-use" data-sk-use="${esc(skill.id)}" ${skill.enabled ? '' : 'disabled'}>${workflow ? tr('Start workflow', '启动工作流') : method || (user && skill.enabled && skill.stages.includes('conversation')) ? tr('Use in new task', '在新任务中使用') : tr('Ask in new task', '在新任务中询问')} ↗</button>
-      ${user ? `<details class="eusk-actions-menu"><summary aria-label="${tr('Skill actions', '技能操作')}">···</summary><div><button type="button" data-sk-edit-with aria-label="${tr('Edit with EasyICU', '使用 EasyICU 修订')}">${tr('Edit with EasyICU', '使用 EasyICU 修订')}</button><button type="button" data-sk-edit aria-label="${tr('Edit SKILL.md directly', '直接编辑 SKILL.md')}">${tr('Edit SKILL.md', '直接编辑 SKILL.md')}</button><button type="button" data-sk-download aria-label="${tr('Download SKILL.md', '下载 SKILL.md')}">${tr('Download SKILL.md', '下载 SKILL.md')}</button><button type="button" data-sk-remove aria-label="${tr('Remove skill', '移除技能')}">${tr('Remove skill', '移除技能')}</button></div></details>` : ''}</div></div>
+      ${user ? `<details class="eusk-actions-menu" data-popover-menu><summary aria-label="${tr('Skill actions', '技能操作')}">···</summary><div><button type="button" data-sk-edit-with aria-label="${tr('Edit with EasyICU', '使用 EasyICU 修订')}">${tr('Edit with EasyICU', '使用 EasyICU 修订')}</button><button type="button" data-sk-edit aria-label="${tr('Edit SKILL.md directly', '直接编辑 SKILL.md')}">${tr('Edit SKILL.md', '直接编辑 SKILL.md')}</button><button type="button" data-sk-download aria-label="${tr('Download SKILL.md', '下载 SKILL.md')}">${tr('Download SKILL.md', '下载 SKILL.md')}</button><button type="button" data-sk-remove aria-label="${tr('Remove skill', '移除技能')}">${tr('Remove skill', '移除技能')}</button></div></details>` : ''}</div></div>
       <div class="eusk-tabs" role="tablist"><button type="button" role="tab" aria-selected="${ui.tab === 'overview'}" data-sk-tab="overview">${tr('Overview', '概览')}</button><button type="button" role="tab" aria-selected="${ui.tab === 'files'}" data-sk-tab="files">${tr('Files', '文件')}</button></div>
       ${ui.tab === 'files' ? `<div class="eusk-detail-body">${method ? methodPackage(skill, component) : user ? `<div class="eusk-file-row">${icon('file', 15)} SKILL.md <small>${skill.size_bytes || 0} B</small></div>
         ${ui.loadingDetail ? `<p>${tr('Loading the reviewed file…', '正在读取已审阅文件…')}</p>` : detail
@@ -278,6 +278,7 @@
     const failed = settled.find(result => result.status === 'rejected');
     if (failed) ui.error = String(failed.reason && failed.reason.message || failed.reason);
     rerender();
+    syncSelectionFromHash();
   }
   function rerender(focusSearch) {
     if (window.__euRender) window.__euRender();
@@ -286,7 +287,27 @@
       if (input) { input.focus(); input.setSelectionRange(ui.query.length, ui.query.length); }
     });
   }
-  async function openSkill(id) {
+  // Each skill is addressable: #skills/<encoded id> opens it, Back returns to
+  // the catalogue, and a pasted link lands on the detail.
+  function skillIdFromHash() {
+    const match = /^#skills\/(.+)$/.exec(String(location.hash || ''));
+    if (!match) return '';
+    try { return decodeURIComponent(match[1]); } catch (_) { return ''; }
+  }
+  function writeSkillHash(id) {
+    const next = `${location.pathname}${location.search}#skills${id ? `/${encodeURIComponent(id)}` : ''}`;
+    if (`${location.pathname}${location.search}${location.hash}` !== next) history.pushState(null, '', next);
+  }
+  function syncSelectionFromHash() {
+    if (!/^#skills(\/|$)/.test(String(location.hash || ''))) return;
+    const id = skillIdFromHash();
+    // Defer past the render that called us; the catalogue may not be loaded yet.
+    if (id && id !== ui.selected && allSkills().some(item => item.id === id)) { setTimeout(() => { void openSkill(id, { fromHash: true }); }, 0); return; }
+    if (!id && ui.selected) { ui.selected = ''; ui.detail = null; ui.packageDetail = null; setTimeout(rerender, 0); }
+  }
+  window.addEventListener('popstate', syncSelectionFromHash);
+  async function openSkill(id, options) {
+    if (!(options && options.fromHash)) writeSkillHash(id);
     ui.selected = id; ui.tab = 'overview'; ui.detail = null; ui.packageDetail = null;
     ui.packageFile = 'SKILL.md'; ui.loadingPackage = false; ui.error = ''; rerender();
     const skill = selectedSkill();
@@ -380,7 +401,7 @@
       if (target.dataset.skSource) { ui.source = target.dataset.skSource; rerender(); return; }
       if (target.dataset.skOpen) { void openSkill(target.dataset.skOpen); return; }
       if (target.dataset.skBack !== undefined || target.dataset.skCancel !== undefined) {
-        ui.selected = ''; ui.install = false; ui.editing = ''; ui.error = ''; rerender(); return;
+        ui.selected = ''; ui.install = false; ui.editing = ''; ui.error = ''; writeSkillHash(''); rerender(); return;
       }
       if (target.dataset.skTab) {
         ui.tab = target.dataset.skTab; rerender();
@@ -500,7 +521,7 @@
     finally { ui.busy = false; rerender(); }
   }
   S.skills = { section: 'skills', full: true, get crumbs() { return [tr('Skills', '技能')]; },
-    render: renderContent, afterRender(root) { bind(root); void hydrateIfStale(); } };
+    render: renderContent, afterRender(root) { bind(root); void hydrateIfStale(); syncSelectionFromHash(); } };
   let hydratedAt = 0;
   function hydrateIfStale() {
     if (Date.now() - hydratedAt < 10_000) return;

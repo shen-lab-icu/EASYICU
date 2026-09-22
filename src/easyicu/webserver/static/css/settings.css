@@ -346,3 +346,7 @@
 .settings-skill-card-body ul{margin:8px 0 0;padding-left:18px;color:var(--ink-3);font-size:12px;line-height:1.65}
 .settings-skill-card-body>small{grid-column:1/-1;color:var(--ink-4);font-size:11px}
 @media(max-width:720px){.settings-skill-catalog-head{display:grid}.settings-skill-card-body{grid-template-columns:minmax(0,1fr)}}
+
+/* The settings section rail jumps by anchor; the page keeps enough room below
+   the last section so every anchor, not only the first two, can reach the top. */
+.settings-page{padding-bottom:min(60vh,640px)}

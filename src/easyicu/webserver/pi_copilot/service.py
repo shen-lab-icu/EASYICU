@@ -113,6 +113,41 @@ ALLOWED_TURN_ACTIONS = frozenset(
 PRIVILEGED_ONE_SHOT_TURN_ACTIONS = frozenset(
     {"provider_run", "extract", "report_revision"}
 )
+# Effort ("thinking") levels a researcher may choose per session. The bridge
+# clamps them to the selected model; whatever the level, only the bounded,
+# sanitized reasoning summary is projected, so raw provider reasoning never
+# reaches the host UI or the transcript store.
+THINKING_LEVELS = frozenset({"off", "minimal", "low", "medium", "high"})
+DEFAULT_THINKING_LEVEL = "medium"
+
+
+def resolve_thinking_level(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return text if text in THINKING_LEVELS else DEFAULT_THINKING_LEVEL
+
+
+# Store schema /1 predates the composer effort menu: every session was created
+# at the forced "off" level, so "off" there records the absence of a choice.
+# A /2 store carries an explicit level per session; "off" in it is a real
+# state (a model clamp or an explicit request) and is preserved.
+STORE_SCHEMA_VERSION = "easyicu.pi-copilot-store/2"
+_PRE_EFFORT_MENU_STORE_SCHEMA_VERSION = "easyicu.pi-copilot-store/1"
+
+
+def _with_menu_era_thinking_level(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Read a pre-effort-menu session at the menu's default level.
+
+    Conversations from before the menu otherwise surface as "unspecified" and
+    have to be switched by hand; reading them at the default lets them go on
+    at the level a new conversation starts at. The first write persists the
+    result under the current store schema, so this runs once per store.
+    """
+
+    if str(row.get("thinking_level") or "off") == "off":
+        return {**row, "thinking_level": DEFAULT_THINKING_LEVEL}
+    return row
+
+
 HOST_ACTION_JOB_KINDS = {
     "auto_generate_plan": frozenset({"agent-run"}),
     "generate_plan": frozenset({"agent-run"}),
@@ -384,6 +419,10 @@ class PiCopilotService:
                 "The Copilot metadata store has an invalid shape.",
                 status_code=500,
             )
+        pre_effort_menu_store = (
+            str(raw.get("schema_version") or _PRE_EFFORT_MENU_STORE_SCHEMA_VERSION)
+            != STORE_SCHEMA_VERSION
+        )
         records = []
         for row in rows[:MAX_SESSIONS]:
             if isinstance(row, Mapping) and row.get("canonical_task_id"):
@@ -401,6 +440,8 @@ class PiCopilotService:
                     if isinstance(row, Mapping)
                     else row
                 )
+                if pre_effort_menu_store and isinstance(migrated, dict):
+                    migrated = _with_menu_era_thinking_level(migrated)
                 records.append(PiSessionRecord.model_validate(migrated))
             except Exception as exc:
                 raise PiCopilotError(
@@ -413,7 +454,7 @@ class PiCopilotService:
     def _write_records(self, records: Iterable[PiSessionRecord]) -> None:
         self.store_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         payload = {
-            "schema_version": "easyicu.pi-copilot-store/1",
+            "schema_version": STORE_SCHEMA_VERSION,
             "updated_at": utc_now(),
             "sessions": [
                 row.model_dump(mode="json") for row in list(records)[:MAX_SESSIONS]
@@ -1357,7 +1398,7 @@ class PiCopilotService:
         title: str = "EasyICU Copilot",
         agent_mode: str = "research",
         language: str = "en",
-        thinking_level: str = "off",
+        thinking_level: str = DEFAULT_THINKING_LEVEL,
         study_context_id: Optional[str] = None,
         external_llm_opt_in: bool = False,
         research_provider: Optional[ResearchProviderBinding] = None,
@@ -1401,10 +1442,10 @@ class PiCopilotService:
             confirm_initialization=True,
         )
         resolved_language = "zh" if language == "zh" else "en"
-        # Raw provider reasoning is neither streamed nor persisted by the
-        # governed product shell. Historical values remain readable only for
-        # metadata compatibility; all newly opened sessions run with it off.
-        resolved_thinking = "off"
+        # The effort level is the researcher's per-session choice (default
+        # medium). Raw provider reasoning still never crosses the bridge: the
+        # sidecar projects only a bounded, sanitized reasoning summary.
+        resolved_thinking = resolve_thinking_level(thinking_level)
         session_id = f"pi_{secrets.token_hex(10)}"
         binding = self._binding_for_context(
             context,
@@ -1511,7 +1552,7 @@ class PiCopilotService:
             {
                 "session_id": record.session_id,
                 "session_file": record.pi_session_file,
-                "thinking_level": "off",
+                "thinking_level": resolve_thinking_level(record.thinking_level),
                 "agent_mode": record.agent_mode,
                 "language": record.language,
                 "extension_snapshot": record.extension_activation.model_dump(
@@ -2796,6 +2837,49 @@ class PiCopilotService:
         self._save_record(record)
         return {
             "ok": True,
+            "session": self._public_session(record, include_replay=False),
+        }
+
+    def set_thinking_level(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        thinking_level: str,
+    ) -> Dict[str, Any]:
+        """Change one conversation's effort level between turns."""
+
+        record = self._scoped_record(session_id, project_id=project_id)
+        requested = str(thinking_level or "").strip().lower()
+        if requested not in THINKING_LEVELS:
+            raise PiCopilotError(
+                "pi_thinking_level_invalid",
+                "Choose one of the offered effort levels.",
+                status_code=422,
+            )
+        with self._lock:
+            if session_id in self._busy_sessions:
+                raise PiCopilotError(
+                    "pi_session_busy",
+                    "Wait for the current reply to finish before changing the effort level.",
+                    status_code=409,
+                )
+        self._ensure_open(record)
+        gateway = self._conversation_gateway(record)
+        applied = gateway.request(
+            "session.set_thinking_level",
+            {"session_id": record.session_id, "thinking_level": requested},
+            timeout=10,
+        )
+        # The bridge reports the level the model actually supports.
+        record.thinking_level = resolve_thinking_level(
+            applied.get("thinking_level") or requested
+        )
+        self._save_record(record)
+        return {
+            "ok": True,
+            "thinking_level": record.thinking_level,
+            "requested_thinking_level": requested,
             "session": self._public_session(record, include_replay=False),
         }
 

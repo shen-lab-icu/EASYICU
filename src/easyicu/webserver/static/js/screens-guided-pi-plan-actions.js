@@ -324,6 +324,7 @@
       ) return false;
       startedTransitions.add(guardKey);
       setPending(true);
+      if (typeof host.setPlanConfigurationError === 'function') host.setPlanConfigurationError('');
       try {
         const payload = await api.applyPiCopilotAgentPlanConfiguration(
           session.session_id,
@@ -346,7 +347,13 @@
       } catch (error) {
         startedTransitions.delete(guardKey);
         host.setBusy(false);
-        host.setError(host.errorText(error));
+        // A refused configuration is a researcher decision, not a banner:
+        // keep the code so the confirmation card can explain and offer it.
+        if (typeof host.setPlanConfigurationError === 'function') {
+          host.setPlanConfigurationError(String(error && error.code || 'agent_plan_configuration_failed'));
+        } else {
+          host.setError(host.errorText(error));
+        }
         host.render();
         return false;
       }
@@ -619,6 +626,12 @@
       }
       if (confirmation.code === 'failed_pipeline_execution_retry_available') {
         await retryFailedExecution();
+        return;
+      }
+      if (confirmation.code === 'agent_plan_configuration_required') {
+        // Explicit researcher authority for the deterministic host compile;
+        // a passive page open never applies it by itself.
+        await compileAgentPlanConfiguration();
         return;
       }
       if (FRESH_PLAN_CODES.has(confirmation.code)) {

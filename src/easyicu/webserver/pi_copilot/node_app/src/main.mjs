@@ -55,6 +55,15 @@ const TOOL_CATALOG_FIELDS = new Set([
   "host_mutating", "data_source_required", "arguments",
 ]);
 const TOOL_ARGUMENT_FIELDS = new Set(["model", "host", "required"]);
+// Effort ("thinking") levels the researcher may pick per session. Pi clamps
+// them to what the selected model supports; whatever the level, only the
+// bounded, sanitized reasoning summary from event-projection crosses the bridge.
+const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high"]);
+const DEFAULT_THINKING_LEVEL = "medium";
+function thinkingLevelParam(value) {
+  const text = boundedText(value, 16).trim();
+  return THINKING_LEVELS.has(text) ? text : DEFAULT_THINKING_LEVEL;
+}
 const TOOL_CATALOG = (() => {
   let payload;
   try {
@@ -669,8 +678,10 @@ function resourceLoader(agentMode, extensionSnapshot, language) {
       "A Copilot session is UX history only. EasyICU study revision, run id, plan receipts, and evidence artefacts remain authoritative.",
       responseLanguageInstruction(language),
       "Answer the current request first and stay brief. Unless the user asks for a report or explanation, use at most two short sentences around tool calls and let the UI timeline carry job ids, owners, status codes, and execution detail.",
+      "Trace narration rule: when a reply needs tools, spend the first of those sentences before the first tool call saying, in the user's language, what you are about to check or do and why (for example 我先核对当前计划和数据源，再回答). When a tool result changes what you will do next, say so in one sentence before the next call. These sentences are shown inside the visible execution trace next to the tool rows; keep each to one short sentence and never restate tool output in them.",
       "At a governed confirmation gate, ask one direct question and stop. Do not repeat the full workflow, handoff report, or permission inventory unless the user asks for it. Never hide a blocker or weaken its exact stable code.",
-      "Every completed research reply must end with a localized standalone 'Next step:' or '下一步：' block that tells the user exactly what happens next, except when the workflow is provider_ready_to_generate_plan and the host-owned plan confirmation card already supplies the next actions. In that one case, stop after the short acknowledgement: do not write a Next step block, bullet choices, continue action, or duplicate plan controls. Otherwise, when the user must choose, put one concise prompt after that heading followed by 2 to 4 Markdown bullet choices; each bullet must be a complete, safe reply the user could send verbatim, and nothing may follow the choices. The host renders those bullets as clickable choices. When no choice is required, state one concrete action the user can take or one governed action EasyICU will perform next; never imply that a gated action will run automatically.",
+      "Every completed research reply must end with a localized standalone 'Next step:' or '下一步：' block that tells the user exactly what happens next, except when the workflow is provider_ready_to_generate_plan and the host-owned plan confirmation card already supplies the next actions. In that one case, stop after the short acknowledgement: do not write a Next step block, bullet choices, continue action, or duplicate plan controls. Otherwise, when the user must choose, put one concise prompt after that heading followed by 2 to 4 Markdown bullet choices; each bullet must be a complete, safe reply the user could send verbatim, and nothing may follow the choices except the follow-up block described next. The host renders those bullets as clickable choices. When no choice is required, state one concrete action the user can take or one governed action EasyICU will perform next; never imply that a gated action will run automatically.",
+      "Follow-up questions rule: when a reply completes a research answer (not a governed confirmation gate, not the provider_ready_to_generate_plan case, and not a reply whose Next step block already offers bullet choices), end with one final localized block headed '**可以继续问：**' (or '**Follow-up questions:**') followed by exactly 2 or 3 hyphen-prefixed questions the researcher could ask next about this study. Each must be a question, answerable with the registered tools and the evidence already in this project, written the way the user would send it, and must not restate the Next step. The host removes this block from the reply text and renders the questions as clickable suggestions; nothing may follow it.",
       "After an ordinary easyicu_update_study_context success, make no further tool call for that user message and continue from its returned workflow. Never expose session rebind, authority invalidation, host lifecycle, or internal lifecycle details; never ask for a generic 'continue'. When the update leaves a confirmed question and data package ready for planning, acknowledge that state briefly and stop so the host can show the formal-plan generation confirmation; do not generate a candidate brief or ask another setup question.",
       "Simple-decision fast path: when the user's message explicitly adds or edits one scientific requirement before plan generation, inspect the workflow and context only as needed and save that one human decision with one minimal easyicu_update_study_context call. Then return to the same formal-plan generation confirmation rather than opening a questionnaire. A repeated selection of the already-bound source is not a new setup decision. Do not re-list data sources, query source concepts, add modules, or resolve execution_concepts unless the user's choice itself selected a new source or exact catalog-backed concept. A semantic choice must not be expanded into an execution-readiness search. Target no more than one workflow read, one context read when necessary, and one update before the public reply.",
       "Keep shared guidance case-neutral. Ask for unresolved user-owned scientific choices; use only owner-issued locked implementation defaults for EasyICU-owned technical slots.",
@@ -1199,7 +1210,7 @@ async function createSession(params) {
     manager = persisted.manager;
     createdSessionFile = persisted.sessionFile;
   }
-  const thinkingLevel = "off";
+  const thinkingLevel = thinkingLevelParam(params.thinking_level);
   const settingsManager = SettingsManager.inMemory({
     compaction: { enabled: true },
     // Hidden provider retries bypass host call accounting. EasyICU therefore
@@ -1506,6 +1517,22 @@ async function handleRequest(request) {
         transcriptCursor: params.transcript_cursor,
         transcriptLimit,
       });
+    }
+    case "session.set_thinking_level": {
+      assertExactKeys(params, new Set(["session_id", "thinking_level"]), "pi_session_thinking_level_invalid");
+      const record = sessions.get(boundedText(params.session_id, 160).trim());
+      if (!record) throw Object.assign(new Error("Copilot session is not open"), { code: "pi_session_not_open" });
+      const requested = boundedText(params.thinking_level, 16).trim();
+      if (!THINKING_LEVELS.has(requested)) {
+        throw Object.assign(new Error("invalid thinking level"), { code: "pi_thinking_level_invalid" });
+      }
+      if (activeRequestBySession.has(record.externalId) || record.session.isStreaming) {
+        throw Object.assign(new Error("Copilot session already has an active prompt"), { code: "pi_session_busy" });
+      }
+      sessionLifecycle.touch(record.externalId);
+      record.session.setThinkingLevel(requested);
+      // The effective level may be clamped below the request by the model.
+      return { thinking_level: record.session.thinkingLevel, requested_thinking_level: requested };
     }
     case "session.abort": {
       assertExactKeys(params, new Set(["session_id"]), "pi_session_abort_invalid");

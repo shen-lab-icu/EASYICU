@@ -200,9 +200,9 @@
         <div class="gpi-results-toolbar" role="group" aria-label="${tr('Result file display', '成果文件显示方式')}">
           <button type="button" data-gpi-results-view="list" aria-pressed="${view === 'list'}" title="${tr('Compact list', '简洁列表')}">${iconHtml('rows', 14)}<span>${tr('List', '列表')}</span></button>
           <button type="button" data-gpi-results-view="details" aria-pressed="${view === 'details'}" title="${tr('File details', '文件详情')}">${iconHtml('layers', 14)}<span>${tr('Details', '详情')}</span></button>
-          <label><span class="sr-only">${tr('Sort files', '文件排序')}</span><select data-gpi-results-sort><option value="recommended"${sort === 'recommended' ? ' selected' : ''}>${tr('Recommended', '推荐')}</option><option value="name"${sort === 'name' ? ' selected' : ''}>${tr('Name', '名称')}</option><option value="size"${sort === 'size' ? ' selected' : ''}>${tr('Size', '大小')}</option></select></label>
+          <label><span class="shell-sr-only">${tr('Sort files', '文件排序')}</span><select data-gpi-results-sort><option value="recommended"${sort === 'recommended' ? ' selected' : ''}>${tr('Recommended', '推荐')}</option><option value="name"${sort === 'name' ? ' selected' : ''}>${tr('Name', '名称')}</option><option value="size"${sort === 'size' ? ' selected' : ''}>${tr('Size', '大小')}</option></select></label>
         </div>
-        <label class="gpi-results-search"><span class="sr-only">${tr('Filter result files', '筛选成果文件')}</span><input type="search" data-gpi-results-search placeholder="${tr('Filter files…', '搜索文件…')}" value="${esc(query)}"></label>
+        <label class="gpi-results-search"><span class="shell-sr-only">${tr('Filter result files', '筛选成果文件')}</span><input type="search" data-gpi-results-search placeholder="${tr('Filter files…', '搜索文件…')}" value="${esc(query)}"></label>
         <div class="gpi-study-results-links" data-gpi-results-list data-view="${view}">${files.map(row => `<div class="gpi-study-file" data-gpi-result-file="${esc(row.artifact)}"${needle && !String(row.artifact).toLocaleLowerCase().includes(needle) ? ' hidden' : ''}><span aria-hidden="true">${iconHtml(resourceIcon(row), 15)}</span>${resourceButton(row, row.artifact)}${size(row.size) ? `<small>${esc(size(row.size))}</small>` : ''}${download(row)}</div>`).join('')}</div>
         <p class="gpi-aside-empty" data-gpi-results-empty${filtered.length ? ' hidden' : ''}>${tr('No matching files', '没有匹配的文件')}</p>
         <small>${esc(tr('Files from the current run · publication review pending', '当前运行文件 · 投稿审阅尚未完成'))}</small>
@@ -265,7 +265,7 @@
       const visible = suggestions.map((prompt, index) => ({ prompt, index }))
         .filter(row => !dismissedFollowUps.has(`${runId}:${row.prompt}`));
       if (!visible.length) return '';
-      return `<details class="gpi-followups" open><summary class="gpi-followups-head">${iconHtml('help', 14)}<span>${tr('Follow-up questions', '继续追问')}</span></summary><div class="gpi-followups-list">${visible.map(({ prompt, index }) => `<div class="gpi-followup-row"><button type="button" class="gpi-followup-prompt" data-gpi-followup="${index}"><span aria-hidden="true">↳</span>${esc(prompt)}</button><div class="gpi-followup-actions"><button type="button" class="gpi-icon-action" data-gpi-followup-new="${index}" title="${esc(tr('Ask in a new task', '在新任务中追问'))}" aria-label="${esc(tr('Ask in a new task', '在新任务中追问'))}">${iconHtml('arrow', 13)}</button><button type="button" class="gpi-icon-action" data-gpi-followup-dismiss="${index}" title="${esc(tr('Dismiss suggestion', '关闭建议'))}" aria-label="${esc(tr('Dismiss suggestion', '关闭建议'))}">${iconHtml('close', 13)}</button></div></div>`).join('')}</div></details>`;
+      return `<details class="gpi-followups" open><summary class="gpi-followups-head">${iconHtml('help', 14)}<span>${tr('Follow-up questions', '继续追问')}</span></summary><div class="gpi-followups-list">${visible.map(({ prompt, index }) => `<div class="gpi-followup-row"><button type="button" class="gpi-followup-prompt" data-gpi-followup="${index}"><span aria-hidden="true">↳</span>${esc(prompt)}</button><div class="gpi-followup-actions"><button type="button" class="gpi-icon-action" data-gpi-followup-new="${index}" title="${esc(tr('Ask in a new conversation', '在新对话中追问'))}" aria-label="${esc(tr('Ask in a new conversation', '在新对话中追问'))}">${iconHtml('arrow', 13)}</button><button type="button" class="gpi-icon-action" data-gpi-followup-dismiss="${index}" title="${esc(tr('Dismiss suggestion', '关闭建议'))}" aria-label="${esc(tr('Dismiss suggestion', '关闭建议'))}">${iconHtml('close', 13)}</button></div></div>`).join('')}</div></details>`;
     }
 
     function dismissFollowUp(index, latestRun, workflow) {
@@ -484,7 +484,7 @@
         );
       } catch (error) {
         if (projectId() !== expectedProjectId) return;
-        onError(errorText(error));
+        onError(`${tr('Could not open the data visualization for this run', '无法打开本次运行的数据可视化')}: ${errorText(error)}`);
       } finally {
         if (button && button.isConnected) {
           button.disabled = false;

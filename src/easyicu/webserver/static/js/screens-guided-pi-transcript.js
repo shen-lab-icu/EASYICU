@@ -397,6 +397,23 @@
           upsertActivityStep(activity, { id: 'submitted', kind: 'submitted', status: 'complete', at: rowAt });
           messages.push(activity);
         }
+        // An assistant row's text precedes its own tool calls, so the segment
+        // follows only the tool calls recorded before this row.
+        const toolsBeforeRow = activity ? activity.steps.filter(step => step.kind === 'tool').length : 0;
+        // The model's reasoning summary opens the row: it is the thought that
+        // led to this row's tool calls or answer.
+        if (activity && row.role === 'assistant') {
+          // One assistant row is one model phase; the phase's lifecycle
+          // timing (below) gives the persisted reasoning row its duration.
+          activity.assistantRows = Number(activity.assistantRows || 0) + 1;
+          const phase = activity.assistantRows;
+          parts.filter(p => p && p.type === 'thinking' && String(p.text || '').trim()).forEach((thought, partIndex) => {
+            upsertActivityStep(activity, {
+              id: `history-thinking-${index}-${partIndex}`, kind: 'thinking', status: 'complete',
+              text: String(thought.text || ''), phase, at: rowAt, startedAt: rowAt, endedAt: rowAt, durationKnown: false,
+            });
+          });
+        }
         parts.filter(p => p && p.type === 'tool_call').forEach((tool, partIndex) => {
           const id = tool.tool_call_id || `history-tool-${index}-${partIndex}`;
           const toolStep = {
@@ -439,6 +456,7 @@
             id: 'history-' + index, role: row.role || 'assistant', text, complete: true,
             errorCode: row.error_code || '',
             resources: row.role === 'assistant' ? turnResources.slice(0, 24) : [],
+            afterSteps: toolsBeforeRow,
             timelineAt: rowAt, timelineOrder: index * 10 + 2,
           };
           messages.push(message);
@@ -466,7 +484,23 @@
       const replayTurns = lifecycleTurns.filter(turn => turn && turn.kind !== 'host_action');
       const hostTurns = lifecycleTurns.filter(turn => turn && turn.kind === 'host_action');
       const historyActivities = messages.filter(row => row.role === 'activity' && !row.childJobId);
-      const replayOffset = Math.max(0, historyActivities.length - replayTurns.length);
+      // A lifecycle turn belongs to the user message it answered: the job
+      // starts within moments of that message. Host-advanced model turns
+      // have no user row and must not take the next user's trace, so turns
+      // are matched by time rather than by position in the list.
+      const REPLAY_MATCH_WINDOW_MS = 15000;
+      const claimedActivities = new Set();
+      function historyActivityFor(replayStarted) {
+        let best = null;
+        let bestDistance = Number.POSITIVE_INFINITY;
+        historyActivities.forEach(candidate => {
+          if (claimedActivities.has(candidate)) return;
+          const distance = Math.abs(Number(candidate.startedAt || 0) - replayStarted);
+          if (distance <= REPLAY_MATCH_WINDOW_MS && distance < bestDistance) { best = candidate; bestDistance = distance; }
+        });
+        if (best) claimedActivities.add(best);
+        return best;
+      }
       replayTurns.forEach((turn, turnIndex) => {
         const replay = Array.isArray(turn && turn.events) ? turn.events : [];
         if (!replay.length) return;
@@ -475,7 +509,7 @@
         // wall clock so the total reconciles with the exclusive phase durations.
         const replayStarted = timeMs((replay[0] && replay[0].at) || (turn && turn.started_at));
         const replayEnded = timeMs((replay[replay.length - 1] && replay[replay.length - 1].at) || (turn && turn.ended_at));
-        let replayActivity = historyActivities[replayOffset + turnIndex];
+        let replayActivity = historyActivityFor(replayStarted);
         const isNewReplayActivity = !replayActivity;
         if (!replayActivity) replayActivity = { id: 'saved-activity-' + String((turn && turn.job_id) || replayStarted), role: 'activity', steps: [], expanded: false, timelineAt: replayStarted, timelineOrder: turnIndex * 10 + 1 };
         const turnStatus = String((turn && turn.status) || session.last_turn_status || 'done');
@@ -522,6 +556,19 @@
           } else if (event.type === 'retry') upsertActivityStep(replayActivity, { id: 'retry-' + event.attempt, kind: 'retry', status: 'complete', attempt: event.attempt, maxAttempts: event.max_attempts, at, startedAt: at, endedAt: at });
           else if (event.type === 'compaction_start') upsertActivityStep(replayActivity, { id: 'compaction', kind: 'compaction', status: 'running', at, startedAt: at });
           else if (event.type === 'compaction_end') upsertActivityStep(replayActivity, { id: 'compaction', kind: 'compaction', status: event.aborted ? 'error' : 'complete', at, endedAt: at });
+        });
+        // A persisted reasoning row spans its model phase: from the phase's
+        // start to its first tool call, or to the end of the phase.
+        replayActivity.steps.filter(step => step.kind === 'thinking' && step.phase).forEach(step => {
+          const phase = replayActivity.steps.find(item => item.id === `assistant-${step.phase}`);
+          if (!phase || !Number.isFinite(Number(phase.startedAt))) return;
+          const started = Number(phase.startedAt);
+          const firstTool = replayActivity.steps
+            .filter(item => item.kind === 'tool' && Number(item.startedAt) >= started)
+            .sort((left, right) => Number(left.startedAt) - Number(right.startedAt))[0];
+          const ended = firstTool ? Number(firstTool.startedAt) : Number(phase.endedAt);
+          if (!Number.isFinite(ended) || ended < started) return;
+          Object.assign(step, { at: started, startedAt: started, endedAt: ended, durationKnown: true });
         });
         replayActivity.steps.sort((left, right) => Number(left.at || 0) - Number(right.at || 0));
         replayActivity.steps.forEach(step => {

@@ -890,9 +890,11 @@ def project_transcript(
 ) -> list[Dict[str, Any]]:
     """Bound the transcript and strip machine-facing identifiers from replies.
 
-    Assistant turns have machine-facing identifiers removed. User turns remain
-    verbatim except for exact, known host-generated legacy action text that was
-    previously persisted under the user role.
+    Assistant turns have machine-facing identifiers removed from their text
+    and from the model's reasoning summary, which the conversation shows as
+    part of the turn's trace. User turns remain verbatim except for exact,
+    known host-generated legacy action text that was previously persisted
+    under the user role.
     """
 
     if not isinstance(rows, list):
@@ -925,6 +927,17 @@ def project_transcript(
                             else project_user_turn_text(block["text"])
                         ),
                     }
+                )
+                continue
+            if (
+                isinstance(block, Mapping)
+                and block.get("type") == "thinking"
+                and isinstance(block.get("text"), str)
+            ):
+                if role != "assistant":
+                    continue
+                blocks.append(
+                    {**block, "text": sanitize_user_visible_text(block["text"])}
                 )
                 continue
             blocks.append(block)

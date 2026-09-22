@@ -409,7 +409,7 @@ def test_copilot_message_owner_wires_only_latest_next_step_to_send_or_focus() ->
 
 
 def test_successful_local_source_action_opens_native_workspace_immediately() -> None:
-    owner = _read("js/screens-guided-pi.js")
+    owner = _read("js/screens-guided-pi-live-stream.js")
     events = _read("js/screens-guided-pi-events.js")
 
     assert "event.code || '') === 'easyicu_local_source_workspace_ready'" in owner

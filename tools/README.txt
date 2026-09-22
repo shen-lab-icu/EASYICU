@@ -86,3 +86,25 @@ the tracked repository (see the manuscript/submission entries in `.gitignore`
 and `tools/legacy/`). They remain available locally for provenance but are not
 part of the clean GitHub surface. Manuscript source-data, figures, and the
 draft itself live in a separate private writing workspace, not in this package.
+
+## Native web UI fit audits
+
+`audit_web_popovers.py` presses every menu and disclosure of the running web
+UI (three viewport sizes) and fails when a floating menu lands outside the
+viewport, is clipped or covered, or does not close on Escape / an outside
+press / its own opener. `audit_web_fit.py` checks each route at rest for
+covered controls, floating elements outside the viewport, silently clipped
+text, controls under 24 px, and horizontal overflow. Both need a running
+server and Playwright with a Chrome channel; pass `--session
+"pi_project=…&pi_session=…"` so the Guided conversation and entry composers
+are covered, and `--out` to keep the JSON report. Both read their routes from
+`web_ui_audit_routes.py`; `tests/webserver/test_web_ui_audits.py` fails when a
+screen registered on `window.SCREENS` is neither audited nor listed as an
+exclusion, and runs both tools live (marker `requires_web_server`) when
+`EASYICU_WEB_AUDIT_BASE` names a running server (plus
+`EASYICU_WEB_AUDIT_SESSION` for the Guided composers).
+
+```bash
+python tools/audit_web_popovers.py --base http://127.0.0.1:8765 --session "pi_project=<id>&pi_session=<id>"
+python tools/audit_web_fit.py --base http://127.0.0.1:8765 --session "pi_project=<id>&pi_session=<id>"
+```

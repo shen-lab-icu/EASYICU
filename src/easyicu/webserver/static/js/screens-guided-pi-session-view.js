@@ -10,12 +10,14 @@
       cohortEligibility: COHORT_ELIGIBILITY, tr, esc, iconHtml, projectId,
       publicAssistantText, assistantTextHtml, sessionIsStale, agentMode,
       accessModeLabel, projectTitle, navigationSessionTitle,
-      workflowConfirmationHtml,
+      workflowConfirmationHtml, hostJobs: HOST_JOBS, followUps: FOLLOW_UPS,
+      effortMenu: EFFORT_MENU,
     } = deps;
 
     function messageHtml(row, options) {
       if (row.childJobHandoff) return '';
-      if (row.role === 'activity') return ACTIVITY.render(row) + RUN_FILES.render(row);
+      if (row.role === 'activity') return ACTIVITY.render(row, options && options.trace) + RUN_FILES.render(row);
+      if (row.role === 'host_notice') return HOST_JOBS && typeof HOST_JOBS.renderNotice === 'function' ? HOST_JOBS.renderNotice(row) : '';
       if (row.role === 'saved_run') return `<article class="gpi-message assistant gpi-saved-run"><div class="gpi-message-body"><p>${tr('Saved run synchronized from this research project.', '已从本研究同步保存的运行记录。')}</p>${RUN_FILES.render(row)}</div></article>`;
       if (row.role === 'workflow_receipt') {
         const rows = row.total_rows == null ? Number.NaN : Number(row.total_rows);
@@ -50,7 +52,12 @@
         && DATA_CONSENT && typeof DATA_CONSENT.renderPast === 'function'
         ? DATA_CONSENT.renderPast(state.session, { tr, esc, icon: iconHtml })
         : '';
-      const publicRow = row.role === 'assistant' ? { ...row, text: publicAssistantText(row.text) } : row;
+      // The model's follow-up suggestions are lifted out of the reply text;
+      // only the latest reply offers them, as clickable questions.
+      const lifted = row.role === 'assistant' && FOLLOW_UPS && row.complete !== false
+        ? FOLLOW_UPS.split(publicAssistantText(row.text)) : null;
+      const publicRow = row.role === 'assistant'
+        ? { ...row, text: lifted ? lifted.text : publicAssistantText(row.text) } : row;
       const nextOwner = MODULES.require('nextActions');
       const nextStep = row.role === 'assistant' && row.complete !== false
         && !['auto_generate_plan', 'auto_revise_plan', 'generate_plan']
@@ -81,7 +88,10 @@
       });
       const contentHtml = messageActions.editorHtml
         || (visibleText ? `<div class="gpi-text${row.errorCode ? ' gpi-model-error' : ''}">${row.role === 'assistant' ? assistantTextHtml(visibleText) : esc(visibleText)}</div>` : `<div class="gpi-streaming"><i></i><i></i><i></i></div>`);
-      return `<article class="gpi-message ${cls}${messageActions.actionsHtml ? ' has-actions' : ''}" data-gpi-message-id="${esc(row.id || '')}">
+      const streaming = row.role === 'assistant' && row.complete === false && !messageActions.editorHtml;
+      const followUpsHtml = interactive && lifted && lifted.questions.length
+        ? FOLLOW_UPS.render(lifted.questions, { tr, iconHtml, disabled: state.busy || sessionIsStale() }) : '';
+      return `<article class="gpi-message ${cls}${messageActions.actionsHtml ? ' has-actions' : ''}${streaming ? ' is-streaming' : ''}" data-gpi-message-id="${esc(row.id || '')}"${streaming ? ' data-gpi-streaming-message' : ''}>
         <div class="gpi-message-body">
           ${messageSkillHtml}${contentHtml}
           ${messageResourcesHtml}
@@ -89,8 +99,21 @@
           ${historicalDataConsentHtml}
           ${nextStepHtml}
           ${messageActions.actionsHtml}
+          ${followUpsHtml}
         </div>
       </article>`;
+    }
+
+    // A refused automatic plan configuration shows the plan card and the
+    // cohort decision together; otherwise the cohort decision, when the plan
+    // needs one, replaces the confirmation card.
+    function continuationCardsHtml() {
+      const eligibility = COHORT_ELIGIBILITY.render();
+      const confirmation = workflowConfirmationHtml();
+      const refused = String((state.workflow && state.workflow.next_action_code) || '') === 'agent_plan_configuration_required'
+        && Boolean(state.planConfigurationError);
+      if (refused && eligibility && confirmation) return confirmation + eligibility;
+      return eligibility || confirmation;
     }
 
     function workflowHtml(workflowOverride) {
@@ -112,6 +135,23 @@
       </nav>`;
     }
 
+    // What this conversation can reach beyond EasyICU's own tools: the MCP
+    // servers and user Skills frozen into it, plus the settings switches the
+    // literature connectors depend on. Read from the session record and the
+    // page-level settings; no extra request.
+    function composerExtensions(session) {
+      const settings = window.EU_SETTINGS || {};
+      const frozen = (session && session.extension_activation) || {};
+      const servers = Array.isArray(frozen.mcp_servers) ? frozen.mcp_servers : [];
+      const skills = Array.isArray(frozen.skills) ? frozen.skills : [];
+      return {
+        mcpEnabled: settings.mcp_tools_enabled === true,
+        pubmedEnabled: settings.connector_pubmed_enabled !== false,
+        zoteroEnabled: settings.connector_zotero_enabled === true,
+        mcpServers: servers.map(row => ({ name: String(row.name || ''), tools: Array.isArray(row.allowed_tools) ? row.allowed_tools.length : 0 })),
+        skills: skills.map(row => ({ name: String(row.name || '') })),
+      };
+    }
     function sessionPanel() {
       const session = state.session || {};
       const model = session.model || {};
@@ -131,7 +171,11 @@
         : fullTimeline;
       const activeChild = timeline.slice().reverse().find(row => row.role === 'activity' && row.childJobId && row.status === 'running');
       const interactionLocked = state.busy || Boolean(activeChild) || state.projectLoading;
-      const latestAssistant = timeline.slice().reverse().find(row => ['assistant', 'activity'].includes(row.role));
+      // The latest reply keeps its suggestions and choices even when a
+      // finished host receipt (a review click, a plan job) was recorded
+      // after it; only a reply or a still-running turn supersedes it.
+      const latestAssistant = timeline.slice().reverse().find(row => row.role === 'assistant'
+        || (row.role === 'activity' && row.status === 'running'));
       const answeredAssistantIds = new Set();
       let pendingAssistantId = '';
       timeline.forEach(row => {
@@ -146,9 +190,23 @@
       let precedingUserText = '';
       let precedingUserEntryId = '';
       let historicalDataConsentProjected = false;
-      const messages = ACTIVITY.renderTimeline(timeline, row => {
-        const displayRow = state.regenerating && REGENERATION
-          ? REGENERATION.project(row, state.regeneration) : row;
+      const projectRow = row => (state.regenerating && REGENERATION
+        ? REGENERATION.project(row, state.regeneration) : row);
+      // Text-only segments of a traced turn: the opening sentence above the
+      // traces and the interim narration between trace rows. Actions, next
+      // steps, and run files stay on the turn's final answer.
+      const renderSegment = (row, kind) => {
+        const displayRow = projectRow(row);
+        if (!displayRow || displayRow.childJobHandoff) return '';
+        const text = publicAssistantText(String(displayRow.text || ''));
+        if (!text) return '';
+        if (kind === 'intro') {
+          return `<article class="gpi-message assistant gpi-turn-intro" data-gpi-message-id="${esc(displayRow.id || '')}"><div class="gpi-message-body"><div class="gpi-text">${assistantTextHtml(text)}</div></div></article>`;
+        }
+        return `<div class="gpi-activity-narration-text" data-gpi-message-id="${esc(displayRow.id || '')}">${assistantTextHtml(text)}</div>`;
+      };
+      const messages = ACTIVITY.renderTimeline(timeline, (row, trace) => {
+        const displayRow = projectRow(row);
         const historicalDataConsent = !historicalDataConsentProjected
           && row.role === 'assistant'
           && DATA_CONSENT && typeof DATA_CONSENT.matchesSourceSelection === 'function'
@@ -163,6 +221,7 @@
           historicalDataConsent,
           historicalChoiceAnswered: row.role === 'assistant'
             && answeredAssistantIds.has(String(row.id || '')),
+          trace,
         });
         if (historicalDataConsent) historicalDataConsentProjected = true;
         if (row.role === 'user') {
@@ -170,7 +229,7 @@
           precedingUserEntryId = String(row.entryId || '');
         }
         return html;
-      });
+      }, renderSegment);
       const outcome = showProjectContinuationCards ? RUN_OUTCOME.render(state.latestRun, state.workflow) : '';
       const emptyResearch = !workspace && !messages && !outcome;
       const resultsView = Boolean(outcome) && !dataConsentRequired;
@@ -201,8 +260,8 @@
           <button class="btn danger sm" type="button" data-gpi-cancel-child-job="${esc(activeChild.childJobId)}" ${activeChild.cancelRequested ? 'disabled' : ''}>${activeChild.cancelRequested ? tr('Stopping…', '正在停止…') : tr('Stop generation', '停止生成')}</button>
         </div>` : `${!workspace && IDEA_SOURCE ? IDEA_SOURCE.status({ tr, esc }) : ''}${STUDY_WORKSPACE.renderReference(projectId(), session.session_id)}${STUDY_WORKSPACE.renderSkillReference(projectId(), session)}<textarea data-gpi-input rows="2" maxlength="12000" placeholder="${state.projectLoading ? tr('Research status is syncing. Continue when it finishes…', '正在同步研究状态，完成后可继续提问……') : workspace ? tr('Ask EasyICU Copilot to create or edit a project artifact — do not paste patient rows or identifiers.', '让 EasyICU 研究助手创建或编辑当前项目产物——请勿粘贴患者行级数据或标识符。') : tr('What ICU research question would you like to study?', '你想研究什么 ICU 科学问题？')}" ${interactionLocked || stale ? 'disabled' : ''}>${esc(state.draft)}</textarea>
           <div class="gpi-actions">
-            <div class="gpi-action-leading">${IDEA_SOURCE ? IDEA_SOURCE.controls({ tr, esc, icon: iconHtml, disabled: interactionLocked || stale, allowIdeaSources: !workspace }) : ''}${STUDY_WORKSPACE.renderMaterials(RUN_OUTCOME.collection(state.latestRun, state.workflow), projectId(), session.session_id, interactionLocked || stale || Boolean(state.workflowError))}${STUDY_WORKSPACE.renderSkillPicker(projectId(), session, interactionLocked || stale)}${STUDY_WORKSPACE.renderAccessMode(state.accessMode, accessModeLabel, iconHtml)}<label class="gpi-switch ${state.autoMode ? 'is-active' : ''}" data-gpi-auto-toggle title="${tr('Automatically continue routine workflow confirmations; scientific and data authority gates still stop for review.', '自动继续常规流程确认；科学与数据授权闸门仍会停下等待审阅。')}"><span class="gpi-switch-track"><span class="gpi-switch-thumb"></span></span><span>${tr('Auto advance', '自动推进')}</span></label></div>
-            <div class="gpi-action-trailing">${HEADER.renderModelControl(headerOptions)}
+            <div class="gpi-action-leading">${IDEA_SOURCE ? IDEA_SOURCE.controls({ tr, esc, icon: iconHtml, disabled: interactionLocked || stale, allowIdeaSources: !workspace, extensions: composerExtensions(session) }) : ''}${STUDY_WORKSPACE.renderMaterials(RUN_OUTCOME.collection(state.latestRun, state.workflow), projectId(), session.session_id, interactionLocked || stale || Boolean(state.workflowError))}${STUDY_WORKSPACE.renderSkillPicker(projectId(), session, interactionLocked || stale)}${STUDY_WORKSPACE.renderAccessMode(state.accessMode, accessModeLabel, iconHtml)}</div>
+            <div class="gpi-action-trailing">${EFFORT_MENU ? EFFORT_MENU.render({ iconHtml, level: session.thinking_level, disabled: interactionLocked || stale }) : ''}${HEADER.renderModelControl(headerOptions)}
             ${state.busy ? `<button class="btn danger" type="button" data-gpi-stop>${tr('Stop', '停止')}</button>` : `<button class="btn primary" type="button" data-gpi-send aria-label="${tr('Send', '发送')}" title="${tr('Send', '发送')}" ${interactionLocked || stale ? 'disabled' : ''}>${iconHtml('arrow', 15)}</button>`}</div>
           </div>`}
       </div>`;
@@ -226,9 +285,9 @@
                 : emptyResearchHtml)}
             ${outcome}
             ${showProjectContinuationCards ? dataConsentHtml : ''}
-            ${showProjectContinuationCards && !dataConsentRequired ? (COHORT_ELIGIBILITY.render() || workflowConfirmationHtml()) : ''}
+            ${showProjectContinuationCards && !dataConsentRequired ? continuationCardsHtml() : ''}
           </div>
-          ${state.error ? `<div class="gpi-error">${esc(state.error)}</div>` : ''}
+          ${state.error ? `<div class="gpi-error" role="alert"><span>${esc(state.error)}</span><button type="button" class="gpi-error-close" data-gpi-dismiss-error aria-label="${tr('Dismiss', '关闭提示')}">×</button></div>` : ''}
           ${emptyResearch ? '' : `<div class="gpi-compose">${composerCardHtml}</div>`}
       </div>`;
     }
