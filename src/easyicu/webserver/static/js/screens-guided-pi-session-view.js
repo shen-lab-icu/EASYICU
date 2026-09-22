@@ -65,7 +65,7 @@
         && nextOwner && typeof nextOwner.project === 'function'
         ? nextOwner.project(publicRow.text) : null;
       const interactive = Boolean(options && options.interactive);
-      const visibleText = nextStep ? nextOwner.bodyText(nextStep) : row.role === 'user' ? messageView.text : publicRow.text;
+      const visibleText = nextStep ? nextOwner.bodyText(nextStep, { live: interactive }) : row.role === 'user' ? messageView.text : publicRow.text;
       const historicalChoiceAnswered = Boolean(options && options.historicalChoiceAnswered);
       const nextStepHtml = !nextStep
         ? ''
@@ -235,7 +235,7 @@
       const resultsView = Boolean(outcome) && !dataConsentRequired;
       const conversation = messages;
       const dataConsentHtml = dataConsentRequired
-        ? DATA_CONSENT.render(session, { tr, esc, icon: iconHtml })
+        ? DATA_CONSENT.render(session, { tr, esc, icon: iconHtml, namedDemo: HOST_JOBS && typeof HOST_JOBS.namedDemo === 'function' ? HOST_JOBS.namedDemo() : null })
         : '';
       const headerOptions = {
         tr, esc, icon: iconHtml,

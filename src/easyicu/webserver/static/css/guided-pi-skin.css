@@ -452,6 +452,15 @@
 /* —— Error banner: bordered notice instead of a tinted strip —— */
 .gpi-error{margin:0 clamp(24px,2.4vw,32px) 8px;border:1px solid #b45309;border-radius:8px;background:#fdf6e6;color:#7c3d12}
 
+/* —— Phone: the composer's trailing group (effort, model, send) takes its own
+   line instead of overflowing onto the leading one; the model chip truncates.
+   The skin's max-width:none on the chip overrode the workspace phone rule. —— */
+@media(max-width:520px){
+ .gpi-compose-card .gpi-action-trailing{flex:1 1 100%;justify-content:flex-end}
+ .gpi-compose-card .gpi-model-binding{max-width:min(150px,40vw)}
+ .gpi-compose-card .gpi-model-binding>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+}
+
 /* —— Entry canvas: serif greeting, ink-bordered cards, accent details —— */
 .gpi-entry-home .gpi-entry-title h2{font-family:var(--skin-serif);font-size:30px;font-weight:700;letter-spacing:0}
 .gpi-entry-home .gpi-entry-intro p{color:var(--skin-muted);font-size:16px;line-height:24px}

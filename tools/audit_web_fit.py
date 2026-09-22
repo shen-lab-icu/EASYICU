@@ -40,6 +40,19 @@ JS = r"""
   const cls = el => el.tagName.toLowerCase() + '.' + String(el.className && el.className.baseVal !== undefined ? el.className.baseVal : el.className || '').split(/\s+/).filter(Boolean).slice(0, 2).join('.');
   const label = el => (el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40);
   const vis = el => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none' && Number(cs.opacity) > 0 && !inClosedDetails(el) && inScrollBox(el); };
+  // Content under a fixed bar (the phone bottom nav) is a scroll position, not a
+  // defect, while its scroll container can still move it clear of the bar.
+  const fixedAncestor = node => { for (let a = node; a && a !== document.body; a = a.parentElement) { if (getComputedStyle(a).position === 'fixed') return a; } return null; };
+  const scrollsClearOfFixedBar = (el, hit) => {
+    const bar = fixedAncestor(hit);
+    if (!bar || bar.contains(el)) return false;
+    const r = el.getBoundingClientRect(), br = bar.getBoundingClientRect();
+    let box = null;
+    for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) { const acs = getComputedStyle(a); if (/(auto|scroll)/.test(acs.overflowY) && a.scrollHeight > a.clientHeight) { box = a; break; } }
+    box = box || document.scrollingElement || document.documentElement;
+    const below = box.scrollHeight - box.clientHeight - box.scrollTop, above = box.scrollTop;
+    return br.top >= r.top ? below >= r.bottom - br.top : above >= br.bottom - r.top;
+  };
   const vw = innerWidth, vh = innerHeight;
   const out = { pageOverflowX: document.documentElement.scrollWidth - document.documentElement.clientWidth, covered: [], floatingOutside: [], clippedText: [], tiny: [] };
   document.querySelectorAll('button, summary, a[href], input, select, textarea, [role="button"], [role="tab"]').forEach(el => {
@@ -48,7 +61,7 @@ JS = r"""
     if (r.top < 0 || r.bottom > vh || r.left < 0 || r.right > vw || !fullyInScrollBox(el)) return;
     const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
     const hit = document.elementFromPoint(cx, cy);
-    if (hit && hit !== el && !el.contains(hit) && !hit.contains(el)) out.covered.push({ el: cls(el), label: label(el), rect: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)], by: cls(hit) });
+    if (hit && hit !== el && !el.contains(hit) && !hit.contains(el) && !scrollsClearOfFixedBar(el, hit)) out.covered.push({ el: cls(el), label: label(el), rect: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)], by: cls(hit) });
     if ((r.width < minHit || r.height < minHit) && el.tagName !== 'INPUT' && el.tagName !== 'A') out.tiny.push({ el: cls(el), label: label(el), rect: [Math.round(r.width), Math.round(r.height)] });
   });
   document.querySelectorAll('body *').forEach(el => {

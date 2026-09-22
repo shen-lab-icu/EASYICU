@@ -8,6 +8,11 @@ const ZERO_USAGE = Object.freeze({
   totalTokens: 0,
   cost: Object.freeze({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }),
 });
+// main.mjs appends host sections to the researcher's text in this order:
+// the language requirement, then the current-turn owner receipts.
+export const OWNER_CONTEXT_MARKER = "\n\n[EASYICU_CURRENT_TURN_OWNER_CONTEXT_V1]\n";
+const HOST_SECTION_PREFIX = "\n\n[EASYICU_";
+const DEMO_WORD = "(?:demo|演示|示例)";
 
 function latestStudyContextUpdate(context) {
   const messages = Array.isArray(context?.messages) ? context.messages : [];
@@ -39,6 +44,29 @@ function confirmedDataSource(workflow) {
   return Boolean(source && typeof source === "object" && (source.database || source.label));
 }
 
+// The researcher's own words: the prompt up to the first host section.
+function researcherText(context) {
+  const prompt = latestUserPrompt(context);
+  const at = prompt.indexOf(HOST_SECTION_PREFIX);
+  return at >= 0 ? prompt.slice(0, at) : prompt;
+}
+
+// Receipts the host preloaded for this turn; the owner-context rule tells the
+// model to treat them exactly as the corresponding tool results.
+function ownerContextReceipts(context) {
+  const prompt = latestUserPrompt(context);
+  const at = prompt.indexOf(OWNER_CONTEXT_MARKER);
+  if (at < 0) return [];
+  const tail = prompt.slice(at + OWNER_CONTEXT_MARKER.length);
+  const end = tail.indexOf(HOST_SECTION_PREFIX);
+  try {
+    const receipts = JSON.parse(end >= 0 ? tail.slice(0, end) : tail);
+    return Array.isArray(receipts) ? receipts : [];
+  } catch {
+    return [];
+  }
+}
+
 function latestDataSourceCatalog(context) {
   const messages = Array.isArray(context?.messages) ? context.messages : [];
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -57,7 +85,34 @@ function latestDataSourceCatalog(context) {
         : {};
     }
   }
-  return {};
+  const preloaded = ownerContextReceipts(context).find((receipt) => (
+    receipt?.status === "ok" && receipt.code === "easyicu_data_sources_listed"
+  ));
+  return preloaded?.details && typeof preloaded.details === "object" ? preloaded.details : {};
+}
+
+// The one official demo the researcher's own text names: the demo title's
+// product token ("eICU", "MIMIC-IV") next to a demo word. The browser's
+// data-source card applies the same rule to offer that demo directly.
+function namedOfficialDemo(text, catalog) {
+  const value = String(text || "").normalize("NFKC").toLowerCase();
+  const demos = Array.isArray(catalog?.official_demos) ? catalog.official_demos : [];
+  if (!value || !demos.length) return null;
+  const hits = demos.filter((demo) => {
+    const head = String(demo?.label || "").trim().split(/\s+/)[0] || "";
+    const name = head.toLowerCase().replace(/[^a-z0-9]+/g, "[\\s-]*");
+    if (!name) return false;
+    const pattern = new RegExp(`${name}[^。.!！?？;；\\n]{0,16}${DEMO_WORD}|${DEMO_WORD}[^。.!！?？;；\\n]{0,8}${name}`);
+    return pattern.test(value);
+  });
+  return hits.length === 1 ? hits[0] : null;
+}
+
+function namedDemoText(language, demo) {
+  const label = [boundedLabel(demo.label), demo.version ? `v${boundedLabel(demo.version)}` : ""].filter(Boolean).join(" ");
+  return language === "zh"
+    ? `研究问题已保存。你的问题指定了 ${label}（仅官方 Demo 数据）；在确认具体数据源前，EasyICU 不会继续定义研究设计或生成正式研究计划。确认数据源不等于批准分析。\n\n**下一步：**在下方数据源卡片点击「用于本次会话」，EasyICU 会注册并确认这份数据，然后拟定研究计划。`
+    : `The research question is saved. Your question names ${label} (official demo data only); EasyICU will not continue defining the study design or generate the formal research plan until a specific source is confirmed. Confirming a source does not approve analysis.\n\n**Next step:** Click "Use it for this conversation" on the data-source card below; EasyICU registers and confirms this data, then proposes the research plan.`;
 }
 
 function initialQuestionSaveNeedsDataSourceSelection(update) {
@@ -192,7 +247,9 @@ function boundedLabel(value) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, 120);
 }
 
-function dataSourceSelectionText(language, catalog) {
+function dataSourceSelectionText(language, catalog, text = "") {
+  const demo = namedOfficialDemo(text, catalog);
+  if (demo) return namedDemoText(language, demo);
   const rows = Array.isArray(catalog?.supported_databases)
     ? catalog.supported_databases.filter((row) => row && typeof row === "object")
     : [];
@@ -239,7 +296,7 @@ export function hostPostToolFinalization(model, context, language) {
   if (initialQuestionSaveNeedsDataSourceSelection(update)) {
     return completedStream(finalizedMessage(
       model,
-      dataSourceSelectionText(language, latestDataSourceCatalog(context)),
+      dataSourceSelectionText(language, latestDataSourceCatalog(context), researcherText(context)),
     ));
   }
   if (!studyUpdateIsReadyForPlanning(update)) return null;

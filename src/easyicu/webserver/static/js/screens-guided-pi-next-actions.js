@@ -290,9 +290,12 @@
      narrating what EasyICU will do next ("EasyICU 将继续执行规划，并在审核闸门
      处暂停"). Labelling that "下一步" put a third meaning on a word that already
      meant two things on the same screen, so fold it back into ordinary prose. */
-  function bodyText(step) {
+  function bodyText(step, options) {
     if (!step) return '';
     if (step.choices.length) return step.body;
+    // On the newest turn render() shows an explicit block's note itself, so
+    // folding it into the prose as well printed the same sentence twice.
+    if (options && options.live && step.explicit) return step.body;
     return [step.body, step.prompt].filter(Boolean).join('\n\n');
   }
 

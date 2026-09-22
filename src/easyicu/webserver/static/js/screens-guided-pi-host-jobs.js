@@ -5,7 +5,11 @@
    researcher when the data are ready, and offers the one confirmation that
    lets the conversation continue: bind the registered export to the study
    and confirm it as this session's data source. It never sends model text
-   and never grants analysis; source confirmation stays a host decision. */
+   and never grants analysis; source confirmation stays a host decision.
+   When the opening question itself names one official demo ("eICU demo"),
+   the data-source card offers that demo directly: one click prepares (or
+   re-registers) it, then binds and confirms it -- the researcher's click is
+   the source decision, so the model never has to ask which database. */
 (function () {
   'use strict';
 
@@ -15,12 +19,25 @@
   const DEMO_PREP_CODE = 'easyicu_demo_source_preparation_submitted';
   const DEMO_PREP_JOB_KIND = 'demo-source-prepare';
   const POLL_MS = 3000;
+  const DEMO_WORD = '(?:demo|演示|示例)';
+
+  // A catalog demo is named when its title's product token ("eICU",
+  // "MIMIC-IV") sits next to a demo word in the researcher's own text.
+  function demoNamePattern(demo) {
+    const head = String(demo && demo.title || '').trim().split(/\s+/)[0] || '';
+    const name = head.toLowerCase().replace(/[^a-z0-9]+/g, '[\\s-]*');
+    if (!name) return null;
+    return new RegExp(`${name}[^。.!！?？;；\\n]{0,16}${DEMO_WORD}|${DEMO_WORD}[^。.!！?？;；\\n]{0,8}${name}`);
+  }
 
   function create(host) {
     const tr = host.tr;
     const api = host.api;
     const DATA_CONSENT = host.dataConsent;
     const watched = new Map();
+    const autoUse = new Set();
+    const catalog = { rows: null, loading: false };
+    let offerPending = false;
 
     function sessionId() {
       return String(host.session() && host.session().session_id || '');
@@ -103,12 +120,19 @@
         const status = String(snapshot && snapshot.status || '');
         if (status === 'done') {
           stop(id);
-          await announceReady(id);
+          const announced = await announceReady(id);
+          // A demo the researcher chose from the question card is used as
+          // soon as it is registered; the card click was the source decision.
+          const row = autoUse.delete(id) && announced ? notices().find(item => item.id === noticeId(expectedSession)) : null;
+          offerPending = false;
+          if (row) await useDemoSource(row);
           Promise.resolve(host.loadWorkflow()).then(() => host.render()).catch(() => null);
           return;
         }
         if (status === 'failed' || status === 'cancelled') {
           stop(id);
+          autoUse.delete(id);
+          offerPending = false;
           host.setError(tr('Official demo preparation did not complete: ', '官方 Demo 数据准备未完成：')
             + String(snapshot && snapshot.error || status));
           host.render();
@@ -216,6 +240,60 @@
       }
     }
 
+    async function loadCatalog() {
+      const caller = api().loadOfficialDemoSources;
+      if (catalog.rows || catalog.loading || typeof caller !== 'function') return;
+      catalog.loading = true;
+      try {
+        const payload = await caller();
+        catalog.rows = Array.isArray(payload && payload.sources) ? payload.sources : [];
+      } catch (_) {
+        catalog.rows = [];
+      } finally {
+        catalog.loading = false;
+      }
+      host.render();
+    }
+
+    /* The one official demo the opening question names, while this
+       conversation still needs a data source; otherwise null. */
+    function namedDemo() {
+      if (!host.session() || !requiresConfirmation()) return null;
+      if (!catalog.rows) { void loadCatalog(); return null; }
+      const first = host.messages().find(row => row && row.role === 'user' && String(row.text || '').trim());
+      const text = first ? String(first.text).normalize('NFKC').toLowerCase() : '';
+      const hits = text ? catalog.rows.filter(demo => { const pattern = demoNamePattern(demo); return pattern && pattern.test(text); }) : [];
+      if (hits.length !== 1) return null;
+      const demo = hits[0];
+      const status = demo.status && typeof demo.status === 'object' ? demo.status : {};
+      return {
+        id: String(demo.id || ''), label: [demo.title, demo.version ? `v${demo.version}` : ''].filter(Boolean).join(' '),
+        prepared: status.export_ready === true, pending: offerPending,
+      };
+    }
+
+    async function useNamedDemo(sourceId) {
+      const offer = namedDemo();
+      const caller = api().startOfficialDemoSourcePrepare;
+      if (!offer || offer.id !== sourceId || offerPending || host.busy() || typeof caller !== 'function') return false;
+      offerPending = true;
+      host.setError('');
+      host.render();
+      try {
+        const payload = await caller(sourceId);
+        const jobId = String(payload && payload.job_id || '');
+        if (!jobId) throw new Error(tr('The official demo preparation did not start.', '官方 Demo 数据准备未能启动。'));
+        autoUse.add(jobId);
+        watchDemoSourceJob(jobId);
+        return true;
+      } catch (error) {
+        offerPending = false;
+        host.setError(host.errorText(error));
+        host.render();
+        return false;
+      }
+    }
+
     async function handleAction(action, id) {
       const row = notices().find(item => item.id === id);
       if (!row) return false;
@@ -253,7 +331,7 @@
       </article>`;
     }
 
-    return Object.freeze({ handleAction, noteToolResult, renderNotice, stopAll, sync, watchDemoSourceJob });
+    return Object.freeze({ handleAction, namedDemo, noteToolResult, renderNotice, stopAll, sync, useNamedDemo, watchDemoSourceJob });
   }
 
   window.EasyICU.guidedPi.declare('hostJobs', { create });

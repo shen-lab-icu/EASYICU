@@ -27,7 +27,8 @@ EXCLUDED_ROUTES = {
     "entry": "redirects to #guided",
     "states": "design reference catalogue of global states, not a product route",
 }
-DEFAULT_VIEWPORTS = ("1542x1000", "1280x760", "1180x680")
+# Desktop and laptop sizes, then the tablet and phone widths the shell supports.
+DEFAULT_VIEWPORTS = ("1542x1000", "1280x760", "1180x680", "768x1024", "390x844")
 
 
 def settle(page) -> None:
