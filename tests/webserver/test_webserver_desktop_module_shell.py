@@ -41,11 +41,32 @@ def test_data_and_skills_share_the_same_persistent_desktop_shell() -> None:
     assert "active: 'skills'" in skills
 
 
+def test_module_shell_stacks_its_context_above_the_main_column_on_phones() -> None:
+    """At phone width the three-child shell must not squeeze the main pane.
+
+    Skills, settings and the four data routes share one shell: rail, context
+    aside, main. The phone rule gave it two columns, so the main pane wrapped
+    into a new row inside the 50px rail column. The rail now spans both rows,
+    the context sits above the main column (bounded and scrollable), and the
+    main fills the second column.
+    """
+
+    css = (STATIC / "css" / "skills-hub.css").read_text(encoding="utf-8")
+    phone = css[css.index("@media(max-width:700px){"):]
+    phone = phone[: phone.index("\n")]
+    assert ".euh-shell,.eusk-shell{grid-template-columns:50px minmax(0,1fr);grid-template-rows:auto minmax(0,1fr)}" in phone
+    assert ".euh-shell>.euh-rail,.eusk-shell>.eusk-rail,.euh-shell>.eusk-rail{grid-column:1;grid-row:1/span 2}" in phone
+    assert ".euh-shell>.euh-context{grid-column:2;grid-row:1;max-height:38dvh;overflow:auto;" in phone
+    assert ".euh-shell>main,.eusk-shell>main{grid-column:2;grid-row:2;min-width:0;min-height:0}" in phone
+    # The create menu stays right-aligned to its button but fits the column.
+    assert ".eusk-create-menu>div{width:min(290px,calc(100vw - 82px))}" in phone
+
+
 def test_skills_use_the_research_workspace_palette() -> None:
     index = _read("index.html")
     css = _read("css", "skills-hub.css")
 
-    assert "css/skills-hub.css?v=20260920-packages1" in index
+    assert "css/skills-hub.css?v=20260922-phone3" in index
     for token in (
         "--sk-canvas:#f7f6f2",
         "--sk-surface:#fbfaf7",

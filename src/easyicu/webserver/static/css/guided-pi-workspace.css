@@ -381,6 +381,8 @@
 }
 @media(max-width:920px){
  .gd-main.gpi-workspace .gd-rail{max-height:55vh;overflow:auto}
+ /* The scrolling rail would clip a floating folder menu: open it in place. */
+ .gd-main.gpi-workspace .gd-folder-menu{position:static;margin-top:7px;box-shadow:none}
  .gd-main.gpi-workspace .gd-rail-top{padding:10px 12px;gap:8px}
  .gd-main.gpi-workspace .gd-rail-list{display:block;padding:0 12px 10px;flex:none}
  .gd-main.gpi-workspace .gd-project-picker>summary{padding:8px 30px 8px 10px}

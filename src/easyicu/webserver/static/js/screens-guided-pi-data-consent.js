@@ -107,6 +107,22 @@
         </div>
       </section>`;
     }
+    const named = current.status === 'pending' && ctx.namedDemo && ctx.namedDemo.id ? ctx.namedDemo : null;
+    if (named) {
+      // The question already names this official demo: offer it directly.
+      const verb = named.pending ? ctx.tr('Preparing…', '正在准备…')
+        : named.prepared ? ctx.tr('Use it for this conversation', '用于本次会话')
+          : ctx.tr('Prepare it and use it here', '准备并用于本次会话');
+      return `<section class="gpi-data-consent" aria-label="${ctx.tr('Bind data source', '绑定数据源')}"><div class="gpi-data-consent-body">
+        <strong>${ctx.tr('Your question names this data', '你的问题指定了这份数据')}</strong>
+        <p>${ctx.esc(named.label)}${named.prepared ? ctx.esc(ctx.tr(' · already prepared on this computer', ' · 本机已准备')) : ''}</p>
+        <div class="gpi-data-consent-actions">
+          <button class="btn primary" type="button" data-gpi-named-demo="${ctx.esc(named.id)}" ${named.pending ? 'disabled' : ''}>${verb}</button>
+          <button class="btn" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Choose another source', '选择其他数据源')}</button>
+        </div>
+        <small>${ctx.tr('Official demo data only; EasyICU registers it and confirms it as this conversation’s source, then proposes the plan. Confirming a source does not approve analysis.', '仅官方 Demo 数据；EasyICU 注册后将其确认为本次会话的数据源，再拟定研究计划。确认数据源不等于批准分析。')}</small>
+      </div></section>`;
+    }
     if (current.status === 'pending') {
       return `<section class="gpi-data-consent" aria-label="${ctx.tr('Bind data source', '绑定数据源')}"><div class="gpi-data-consent-body">
         <strong>${ctx.tr('Next, choose the data for this question', '接下来，请为这个问题选择数据源')}</strong>

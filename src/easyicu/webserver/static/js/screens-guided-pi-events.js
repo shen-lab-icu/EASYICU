@@ -384,6 +384,8 @@
           });
           return;
         }
+        const namedDemo = event.target.closest('[data-gpi-named-demo]');
+        if (namedDemo && HOST_JOBS && typeof HOST_JOBS.useNamedDemo === 'function') { void HOST_JOBS.useNamedDemo(namedDemo.dataset.gpiNamedDemo); return; }
         const dataSourceAction = DATA_CONSENT && DATA_CONSENT.actionFromEvent(event);
         if (dataSourceAction) { authorizeDataSource(dataSourceAction); return; }
         if (MESSAGE_ACTIONS.handleClick(event)) return;

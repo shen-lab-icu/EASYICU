@@ -769,6 +769,80 @@ final result: passed
   under the new `requires_web_server` marker (declared in `pytest.ini`,
   skipped and counted by `tests/conftest.py` without
   `EASYICU_WEB_AUDIT_BASE`, like the corpus / node / docker gates).
+- Fix batch 19 (user: 「请帮我全部完成」 — the remaining conversational
+  items): (a) First turn. 「在 eICU demo 数据里…」 still ended with 「请先选择
+  数据库」 and two generic chips. That text is not a model reply: the host
+  finalizes the initial question save without a second provider call
+  (`post-tool-finalization.mjs`), and its catalog lookup only read tool-result
+  messages, while a real first turn carries the data-source catalog as
+  preloaded owner context appended to the researcher's text — so it always
+  fell back to the generic chips and never saw the named demo. The
+  finalization now reads the preloaded receipt (a question naming no demo
+  lists all six databases), and when the researcher's own words name exactly
+  one official demo (title product token next to demo/演示/示例) it names that
+  demo and points to the card instead of listing databases. The card: the
+  host-jobs owner applies the same rule to the first user message against
+  `/api/demo-sources`, and the data-consent card's pending state becomes
+  「你的问题指定了这份数据 · eICU … Demo v2.0.1 · 本机已准备 ·［用于本次会话］
+  ［选择其他数据源］」. The click is the source decision: the owner submits the
+  allowlisted prepare job and, once registered, binds and confirms through the
+  ready-notice path; naming a database still binds nothing. A prompt rule
+  (「Named-demo rule」) keeps model-written replies from re-listing databases.
+  Live on :8517 (scratch projects under the scratchpad, not
+  `~/easyicu/projects`): question → card at once → one click → 「已确认数据源：
+  eICU … v2.0.1」 in ~8 s → plan generation started (stopped after 1 min 15 s
+  to spend no more provider calls). Round 6 needed 11 interactions for the
+  same point. (b) The 下一步 owner printed a no-choice step twice on the
+  newest turn: `bodyText()` folded it into the prose and `render()` drew it
+  as its own note; `bodyText(step, { live })` now leaves it to the note.
+  (c) `_DB_LABELS`: a demo export's manifest declares `eicu_demo`, which the
+  Web label map lacked (scan said 数据库 Unknown); `_database_label()` falls
+  back to the packaged profile's display name (eICU Demo). (d) Completion
+  receipts need no change: all five job-submitting codes report back
+  (extraction, run, full run and report repair through the child-job event
+  stream, demo preparation through the host-jobs poll and notice). (e) Typed
+  authorizations: `turn_authority.infer_explicit_turn_actions` already mints
+  a one-turn grant from typed text that states both a confirmation and the
+  scope; an uncommitted review fix from another (ended) session narrows
+  model-authored option clicks. Loosening which sentences count as
+  authorization is a governance decision left there; the demo path no longer
+  needs a typed authorization at all. Contracts:
+  `test_a_question_that_names_an_official_demo_is_offered_that_demo`,
+  `test_initial_question_naming_an_official_demo_points_to_its_card`,
+  `test_initial_question_reads_the_preloaded_catalog_for_database_choices`,
+  `test_owner_context_marker_is_shared_with_the_prompt_builder`,
+  `test_every_assistant_turn_projects_its_next_step_block` (live body),
+  `test_webserver_database_labels.py`. Capture: `first-turn-named-demo.png`.
+- Fix batch 20 (user: 「全部完成」 includes the narrow screens I asked about):
+  the audits now default to five sizes (1542×1000, 1280×760, 1180×680,
+  768×1024, 390×844). At phone width: the composer's trailing group
+  overflowed onto the leading one (the skin's `max-width:none` on the model
+  chip had overridden the workspace phone cap) — it now takes its own line
+  and the chip truncates; the shared module shell (skills, settings,
+  extraction, patient, cohort, crossdb) gave three children two columns, so
+  the main pane wrapped into the 50 px rail cell — the rail now spans both
+  rows and the context sits above the main column, bounded and scrollable;
+  the skills 新建技能 menu is capped to the column. Below 921 px the project
+  rail scrolls, which clipped the folder menu — it opens in place there (rule
+  kept with the workspace owner that makes the rail scroll). The fit audit
+  treats content under a fixed bar (the phone bottom nav) as a scroll
+  position while its container can still move it clear. Final runs on
+  :8517: fit audit nothing flagged across 5 sizes × 10 routes; popover audit
+  55 route×viewport runs, 179 openers pressed, 82 floating menus, all pass.
+  Captures: `phone-390-composer.png`, `phone-390-module-shell.png`; reports
+  `audit-web-fit-5-viewports.json`, `audit-web-popovers-5-viewports.json`.
+- Fix batch 21 (test organization): `test_large_test_modules_only_shrink`
+  already failed at b81c04ad6 for other modules, so comparing failing test
+  names hid that checkpoint 97346f426 grew `test_pi_copilot_static.py` from
+  6950 to 8186 lines (baseline 6952), `test_pi_copilot_contract.py` by 152,
+  and pushed `test_pi_copilot_gateway.py` past 2000. This session's tests
+  moved, unchanged, into focused modules: `test_pi_copilot_reference_ui.py`,
+  `test_pi_copilot_first_turn_source.py`, `test_pi_copilot_sidecar_turns.py`,
+  `test_pi_copilot_session_effort.py`; `study_state` moved into
+  `pi_copilot_contract_fixtures.py` so no test module imports another. Now
+  static 6909 ≤ 6952 and gateway 1893 < 2000; the modules still over their
+  baselines are other sessions' (contract's pre-existing +44 and an ended
+  review session's +52, research_agent and workspace-summary tests).
 - Open (owner decisions): typed authorizations bounce to a model turn,
   first-turn database question repeats the question's own facts, planner
   latency (≥ 11 serial provider calls), compile failure on the lactate

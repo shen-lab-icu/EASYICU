@@ -63,6 +63,25 @@ _DB_LABELS = {
     "miii": "MIMIC-III",
 }
 
+
+def _database_label(db_key: str) -> str:
+    """Surface label for a detected database; other keys use their profile.
+
+    Detection can return keys the table above does not carry (a demo export's
+    manifest declares ``eicu_demo``); those read as the packaged profile's
+    display name instead of "Unknown".
+    """
+
+    label = _DB_LABELS.get(db_key)
+    if label:
+        return label
+    from easyicu.databases.profiles import get_database_profile
+
+    try:
+        return get_database_profile(db_key).display_name
+    except KeyError:
+        return "Unknown"
+
 _MODULE_MANIFESTS = ("easyicu_export_manifest.json", "_manifest.json")
 _EXPORT_METADATA_FILES = {
     "feature_definitions.csv",
@@ -358,7 +377,7 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
                 "patient_identifiers_returned": False,
             },
         }
-    db_label = _DB_LABELS.get(db_key, "Unknown")
+    db_label = _database_label(db_key)
 
     status = _check_data_status(path, db_key)
     parquet_count = status["parquet_count"]

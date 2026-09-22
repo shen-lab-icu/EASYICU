@@ -6,7 +6,10 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from easyicu.webserver import research_run_submission
+import pytest
+
+from easyicu.webserver import research_run_submission, settings
+from easyicu.webserver.pi_copilot import service as service_module
 from easyicu.webserver.pi_copilot.contracts import (
     PiSessionDataSourceAuthorization,
     ToolExecutionContext,
@@ -134,3 +137,42 @@ class FakeGateway:
     def apply_provider_config(self, config: PiProviderConfig) -> None:
         self.applied_config = config
         self.environ.update(config.as_environment())
+
+
+@pytest.fixture
+def study_state(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    current = {
+        "id": "study-test",
+        "revision": 3,
+        "title": "Aggregate ICU study",
+        "question": "Is aggregate lactate associated with mortality?",
+        "data_source": {"database": "mimiciv", "path": "/private/export"},
+        "cohort": {"cohort_size": 140},
+        "modules": ["lactate"],
+        "outcome": "mortality",
+        "time_window": {"hours": 24},
+        "confirmations": {"cohort": True},
+        "active_job_id": None,
+    }
+    monkeypatch.setattr(
+        settings, "load_settings", lambda: {"ai_enabled": True, "language": "en"}
+    )
+    monkeypatch.setattr(
+        service_module.study_contexts, "get_active_context", lambda: dict(current)
+    )
+    monkeypatch.setattr(
+        service_module.study_contexts,
+        "get_context",
+        lambda context_id: dict(current) if context_id == current["id"] else None,
+    )
+    monkeypatch.setattr(
+        service_module.study_contexts,
+        "upsert_context",
+        lambda raw, **kwargs: dict(current),
+    )
+    monkeypatch.setattr(
+        service_module.agent_runs,
+        "list_run_history",
+        lambda **kwargs: {"runs": []},
+    )
+    return current
