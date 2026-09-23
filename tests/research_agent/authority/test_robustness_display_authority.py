@@ -8,6 +8,7 @@ from easyicu.research_agent.figures.robustness import (
     ROBUSTNESS_EFFECT_COMPARABLE,
     assess_robustness_effect_comparability,
     prepare_robustness_coverage,
+    robustness_matrix_to_coverage,
 )
 
 
@@ -170,3 +171,62 @@ def test_coverage_rejects_counts_outside_the_registered_total() -> None:
                 }
             )
         )
+
+
+def _written_matrix(tmp_path, independent: list) -> pd.DataFrame:
+    """A robustness matrix as the runner writes it and a renderer reads it back."""
+
+    path = tmp_path / "robustness_matrix.csv"
+    pd.DataFrame(
+        {
+            "spec_id": ["primary", "complete_case_primary_covariates", "outcome_any"][
+                : len(independent)
+            ],
+            "axis": ["primary", "missing", "outcome"][: len(independent)],
+            "converged": [True, True, False][: len(independent)],
+            "independent_variant": independent,
+        }
+    ).to_csv(path, index=False)
+    return pd.read_csv(path)
+
+
+def test_matrix_status_reads_independence_as_the_runner_writes_it(tmp_path) -> None:
+    # Only the outcome audit decides independence: the primary row and a
+    # missing-data variant stay blank, a duplicate outcome is an explicit False.
+    coverage = robustness_matrix_to_coverage(
+        _written_matrix(tmp_path, [None, None, False])
+    )
+
+    assert coverage["non_independent_specs"].tolist() == [0, 0, 1]
+    assert coverage["converged_specs"].tolist() == [1, 1, 0]
+    # Two blank rows alone are a valid matrix, not a malformed one.
+    blank = robustness_matrix_to_coverage(_written_matrix(tmp_path, [None, None]))
+    assert blank["non_independent_specs"].tolist() == [0, 0]
+    assert prepare_robustness_coverage(blank)["independent_specs"].tolist() == [1, 1]
+
+
+def test_a_non_boolean_independence_flag_is_still_refused(tmp_path) -> None:
+    with pytest.raises(ValueError, match="independent_variant"):
+        robustness_matrix_to_coverage(_written_matrix(tmp_path, [None, "maybe"]))
+
+
+def test_a_blank_independence_flag_does_not_authorize_an_effect_axis() -> None:
+    rows = pd.DataFrame(
+        {
+            "point_estimate": [1.9, 1.8],
+            "ci_low": [1.7, 1.6],
+            "ci_high": [2.1, 2.0],
+            "effect_scale": ["OR", "OR"],
+            "estimand_id": ["mortality_association", "mortality_association"],
+            "contrast_id": ["5_vs_2_1", "5_vs_2_1"],
+            "effect_unit": ["mmol/L", "mmol/L"],
+            "converged": [True, True],
+            "independent_variant": [pd.NA, True],
+        }
+    )
+
+    assessment = assess_robustness_effect_comparability(rows)
+
+    assert assessment.authorized is False
+    assert assessment.reason_code == ROBUSTNESS_EFFECT_COMPARABILITY_UNRESOLVED
+    assert "not an independent estimate" in assessment.message
