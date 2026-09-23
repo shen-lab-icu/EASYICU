@@ -93,6 +93,24 @@ def bound_cohort_input(step: AnalysisStep) -> Optional[str]:
     return typed[0]
 
 
+def association_binary_sensitivity_consumed_input_keys(
+    step: AnalysisStep,
+) -> tuple[str, ...]:
+    """The typed inputs the refit reads: its bound cohort and the parent table.
+
+    The host seals a receipt for exactly these keys.  The generic sole-cohort
+    rule answers "none" for a step that declares two typed inputs, which left
+    the cohort without a receipt and the integrity gate refusing every
+    host-owned refit whose plan bound it to a typed cohort.
+    """
+
+    cohort = bound_cohort_input(step)
+    return (
+        *((cohort,) if cohort is not None else ()),
+        ASSOCIATION_BINARY_SENSITIVITY_PARENT_PRODUCT,
+    )
+
+
 def _parent_step(step: AnalysisStep, plan: AnalysisPlan) -> Optional[AnalysisStep]:
     producers = [
         candidate
@@ -618,6 +636,7 @@ __all__ = [
     "ASSOCIATION_BINARY_SENSITIVITY_ANALYSIS_KIND",
     "AssociationBinarySensitivityError",
     "BinarySensitivityVariant",
+    "association_binary_sensitivity_consumed_input_keys",
     "association_binary_sensitivity_executor_code",
     "association_binary_sensitivity_executor_owns_step",
     "bound_cohort_input",

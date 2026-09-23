@@ -103,6 +103,7 @@ from .deterministic_missingness import (
 )
 from .association_binary_sensitivity_executor import (
     ASSOCIATION_BINARY_SENSITIVITY_ANALYSIS_KIND,
+    association_binary_sensitivity_consumed_input_keys,
     association_binary_sensitivity_executor_code,
     association_binary_sensitivity_executor_owns_step,
 )
@@ -1012,8 +1013,7 @@ def _build_registry() -> StepExecutorRegistry:
                 "(first-stay restriction or covariate functional form)"
             ),
             consumed_input_keys=lambda c: (
-                *c.typed_cohort_inputs(),
-                "table:adjusted_association_estimates",
+                association_binary_sensitivity_consumed_input_keys(c.step)
             ),
         ),
         StepExecutor(

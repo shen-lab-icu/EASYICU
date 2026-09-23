@@ -15,6 +15,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.audits import StepSummaryIntegrityValidator
+from easyicu.research_agent.authority.typed_binding import (
+    _write_host_input_binding_receipts,
+)
 from easyicu.research_agent.contracts.association_execution import (
     association_binary_sensitivity_result_issues,
 )
@@ -234,6 +238,78 @@ def test_owns_only_derivable_first_stay_and_functional_form_variants() -> None:
                 "aki_stage_strict", "death", "age", "sex", "first_icu_stay", "artifact:analysis_cohort",
             ]
         )
+
+
+def test_the_host_seals_both_typed_inputs_of_an_owned_refit(tmp_path) -> None:
+    """The bound cohort and the parent table each get a host receipt.
+
+    A refit declares two typed inputs, so the generic sole-cohort rule answers
+    "none" for it; sealing the parent table alone left the integrity gate
+    refusing every owned refit bound to a typed cohort.
+    """
+
+    form = _plan(
+        method="restricted_cubic_spline_sensitivity",
+        functional_form=FUNCTIONAL_FORM,
+        sensitivity_inputs=[
+            "age",
+            "aki_stage_strict",
+            "death",
+            "sex",
+            "patient_stay_id",
+            "artifact:analysis_cohort",
+            "table:adjusted_association_estimates",
+        ],
+    )
+    both = ("artifact:analysis_cohort", "table:adjusted_association_estimates")
+    for plan in (_plan(), form):
+        selection = select_standard_executor(plan.steps[2], plan=plan)
+        assert selection is not None
+        assert selection.consumed_input_keys == both
+
+    cohort_path = tmp_path / "analysis_cohort.parquet"
+    _frame().to_parquet(cohort_path, index=False)
+    parent_path = tmp_path / "adjusted_association_estimates.csv"
+    pd.DataFrame({"requirement_id": ["primary"], "estimate": [1.2]}).to_csv(
+        parent_path, index=False
+    )
+    bindings = {
+        "artifact:analysis_cohort": {
+            "absolute_path": str(cohort_path),
+            "evidence_id": "cohort",
+            "sha256": "a" * 64,
+        },
+        "table:adjusted_association_estimates": {
+            "absolute_path": str(parent_path),
+            "evidence_id": "parent",
+            "sha256": "b" * 64,
+        },
+    }
+
+    def coverage_findings(consumed: tuple[str, ...]) -> list:
+        out_dir = tmp_path / ("out_" + str(len(consumed)))
+        out_dir.mkdir()
+        summary = _write_host_input_binding_receipts(
+            out_dir=out_dir,
+            step_summary={"status": "ok"},
+            resolved_input_bindings=bindings,
+            consumed_input_keys=consumed,
+        )
+        return [
+            finding
+            for finding in StepSummaryIntegrityValidator().audit(
+                step=form.steps[2],
+                step_summary=summary,
+                resolved_input_bindings=bindings,
+                cohort_path=cohort_path,
+            )
+            if finding.detail.get("issue") == "input_binding_coverage_incomplete"
+        ]
+
+    assert coverage_findings(both) == []
+    # The parent table alone is what the host sealed before.
+    (missing,) = coverage_findings(("table:adjusted_association_estimates",))
+    assert missing.detail["missing_input_keys"] == ["artifact:analysis_cohort"]
 
 
 def _bind_parent(tmp_path, monkeypatch, plan: AnalysisPlan):
