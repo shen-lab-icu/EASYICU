@@ -6,9 +6,10 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
+from easyicu.research_agent.acquisition.first_icu_stay import FirstIcuStayBinding
 from easyicu.research_agent.acquisition.patient_grouping import PatientGroupingBinding
 from easyicu.research_agent.icu_rules import VariableKind, classify_variable
-from easyicu.webserver import dataio, source_identity_authority
+from easyicu.webserver import dataio, primary_cohort, source_identity_authority
 from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
 from easyicu.webserver.study_intent import explicit_outcome_concepts
@@ -198,6 +199,67 @@ def _patient_grouping_for_analysis_design(
         ) from exc
 
 
+def _first_icu_stay_for_cohort(
+    study: Mapping[str, Any],
+) -> Optional[FirstIcuStayBinding]:
+    """Resolve the verified coordinate a first-stay cohort requires, or refuse.
+
+    An ICU-readmission indicator is not this authority: only a coordinate the
+    host derived from the bound official stay table says which stay came
+    first for each patient.
+    """
+
+    if not primary_cohort.first_icu_stay_only(study.get("cohort")):
+        return None
+    source = study.get("data_source")
+    source = source if isinstance(source, Mapping) else {}
+    export_path = _clean_text(source.get("path"), 2_000)
+    database = _clean_text(source.get("database"), 80)
+    binding: Optional[FirstIcuStayBinding] = None
+    reason_code = "first_icu_stay_authority_unavailable"
+    cause: Dict[str, Any] = {}
+    if export_path and database:
+        try:
+            binding = source_identity_authority.resolve_study_first_icu_stay(
+                export_path=export_path,
+                database=database,
+            )
+        except source_identity_authority.PatientGroupingAuthorityError as exc:
+            reason_code = exc.code
+            cause = {
+                key: value
+                for key, value in exc.details.items()
+                if key in {"database", "cause_code"}
+            }
+    if binding is not None:
+        return binding
+    raise ResearchPipelineRunError(
+        "research_pipeline_first_stay_restriction_unverified",
+        (
+            "The selected source cannot prove which ICU stay came first for each "
+            "patient, so the first-stay restriction cannot be applied."
+        ),
+        details={
+            "field": "cohort.exclude_readmissions",
+            "first_stay_restriction_status": "unverified_in_selected_export",
+            "first_icu_stay_reason_code": reason_code,
+            **cause,
+            "icu_readmission_is_first_patient_stay_authority": False,
+            "safe_alternatives": [
+                {
+                    "id": "patient_clustered_all_stays",
+                    "requires": "verified_patient_grouping",
+                    "changes_scientific_question": False,
+                },
+                {
+                    "id": "descriptive_only_without_independence_sensitive_inference",
+                    "changes_scientific_question": True,
+                },
+            ],
+        },
+    )
+
+
 def resolve_study_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
     """Resolve legacy descriptive scope identically for planning and launch.
 
@@ -296,33 +358,7 @@ def _validate_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
             "The typed analysis design is missing its analysis unit or variance estimator.",
             details={"field": "analysis_design"},
         )
-    raw_cohort = study.get("cohort")
-    cohort = raw_cohort if isinstance(raw_cohort, Mapping) else {}
-    if cohort.get("exclude_readmissions") is True:
-        raise ResearchPipelineRunError(
-            "research_pipeline_first_stay_restriction_unverified",
-            (
-                "The selected export has an ICU-readmission indicator but no "
-                "owner-verified first ICU stay per patient coordinate. The two "
-                "are not interchangeable."
-            ),
-            details={
-                "field": "cohort.exclude_readmissions",
-                "first_stay_restriction_status": "unverified_in_selected_export",
-                "icu_readmission_is_first_patient_stay_authority": False,
-                "safe_alternatives": [
-                    {
-                        "id": "patient_clustered_all_stays",
-                        "requires": "verified_patient_grouping",
-                        "changes_scientific_question": False,
-                    },
-                    {
-                        "id": "descriptive_only_without_independence_sensitive_inference",
-                        "changes_scientific_question": True,
-                    },
-                ],
-            },
-        )
+    _first_icu_stay_for_cohort(study)
     dependence_finding = study_context_owner.analysis_dependence_finding(dict(study))
     if dependence_finding is not None:
         raise ResearchPipelineRunError(
@@ -811,8 +847,6 @@ def _data_foundation_profile(
     outcome_concepts: List[str] = []
     required_feature_concepts: List[str] = []
     require_outcome = False
-    raw_cohort = study.get("cohort")
-    cohort = raw_cohort if isinstance(raw_cohort, Mapping) else {}
     # Keep the owner-issued readmission indicator in a Planner-selectable
     # universe when available. It is a dependence-safety coordinate, not an
     # inferred exclusion: the plan may propose a first-stay analysis, while
@@ -830,28 +864,8 @@ def _data_foundation_profile(
             static_concepts.append("icu_readmission")
         else:
             required_feature_concepts.append("icu_readmission")
-    if cohort.get("exclude_readmissions") is True:
-        if readmission_meta is None:
-            raise ResearchPipelineRunError(
-                "research_pipeline_readmission_indicator_unavailable",
-                (
-                    "The user-authorized first-stay restriction cannot run "
-                    "because the selected modules expose no owner-issued "
-                    "ICU-readmission indicator."
-                ),
-                details={
-                    "field": "cohort.exclude_readmissions",
-                    "required_concept": "icu_readmission",
-                },
-            )
-        readmission_module = Path(readmission_meta.file_name).stem.lower()
-        if readmission_module in {"demographics", "outcome"} and (
-            not readmission_meta.typed_metadata
-            or readmission_meta.column_role == "value"
-        ):
-            static_concepts.append("icu_readmission")
-        else:
-            required_feature_concepts.append("icu_readmission")
+    # A first-stay cohort needs no readmission column: the host restricts the
+    # universe with its verified first-ICU-stay coordinate before planning.
     requested_outcomes = tuple(
         dict.fromkeys(
             value
@@ -947,6 +961,7 @@ def _data_foundation_profile(
         else:
             required_feature_concepts.append(source_concept)
 
+    first_icu_stay = _first_icu_stay_for_cohort(study)
     return {
         "allowed_modules": modules,
         "available_concepts": tuple(by_id),
@@ -955,4 +970,7 @@ def _data_foundation_profile(
         "required_feature_concepts": tuple(required_feature_concepts),
         "require_outcome": require_outcome,
         "primary_exposure_source_concept": primary_exposure_source_concept,
+        # The host restricts the universe itself to each patient's first ICU
+        # stay; a cohort that keeps every stay carries no such coordinate.
+        **({"first_icu_stay": first_icu_stay} if first_icu_stay is not None else {}),
     }

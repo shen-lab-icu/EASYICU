@@ -312,8 +312,16 @@
       "easyicu.research_agent.intake.export_package"
     ],
     [
+      "easyicu.research_agent.acquisition.first_icu_stay",
+      "easyicu.research_agent.acquisition.patient_grouping"
+    ],
+    [
       "easyicu.research_agent.acquisition.foundation",
       "easyicu.research_agent.acquisition.catalog"
+    ],
+    [
+      "easyicu.research_agent.acquisition.foundation",
+      "easyicu.research_agent.acquisition.first_icu_stay"
     ],
     [
       "easyicu.research_agent.acquisition.foundation",
@@ -2634,6 +2642,10 @@
     [
       "easyicu.research_agent.cohort.host_derivations",
       "easyicu.research_agent.contracts.host_derivations"
+    ],
+    [
+      "easyicu.research_agent.cohort.materializer",
+      "easyicu.research_agent.acquisition.first_icu_stay"
     ],
     [
       "easyicu.research_agent.cohort.materializer",
@@ -12716,9 +12728,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3171,
+    "edge_count": 3174,
     "largest_scc_size": 0,
-    "module_count": 754,
+    "module_count": 755,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -12726,6 +12738,7 @@
     "easyicu.research_agent": "__init__.py",
     "easyicu.research_agent.acquisition": "acquisition/__init__.py",
     "easyicu.research_agent.acquisition.catalog": "acquisition/catalog.py",
+    "easyicu.research_agent.acquisition.first_icu_stay": "acquisition/first_icu_stay.py",
     "easyicu.research_agent.acquisition.foundation": "acquisition/foundation.py",
     "easyicu.research_agent.acquisition.hospital_followup_materialization": "acquisition/hospital_followup_materialization.py",
     "easyicu.research_agent.acquisition.hospital_mortality_followup": "acquisition/hospital_mortality_followup.py",

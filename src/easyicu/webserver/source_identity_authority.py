@@ -26,14 +26,17 @@ import os
 import re
 import stat
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Any, Mapping, Optional
 
 import pyarrow.parquet as pq
 
+from easyicu.research_agent.acquisition.first_icu_stay import FirstIcuStayBinding
 from easyicu.research_agent.acquisition.patient_grouping import (
     DERIVED_PATIENT_COLUMN,
     DERIVED_STAY_COLUMN,
     PatientGroupingBinding,
+    PatientGroupingError,
+    load_verified_patient_grouping,
 )
 from easyicu.webserver import state_paths
 
@@ -397,9 +400,135 @@ def resolve_study_patient_grouping(
     )
 
 
+def _private_first_icu_stay_root() -> Path:
+    root = state_paths.state_root() / "private" / "first-icu-stay"
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return root
+
+
+def _grouping_consistent_with(
+    binding: Any,
+    grouping: Optional[PatientGroupingBinding],
+    *,
+    identity_table_sha256: str,
+) -> Optional[str]:
+    """Return the grouping digest once it provably names the same patients.
+
+    A derived bridge was read from the same verified table.  An owner-approved
+    bridge must induce the same partition of the stays both cover; otherwise a
+    first-stay study and a clustered analysis would disagree about who a
+    patient is.
+    """
+
+    if grouping is None:
+        return None
+    if (
+        grouping.authority_coordinates.get("identity_table_sha256")
+        == identity_table_sha256
+    ):
+        return grouping.mapping_sha256
+    from easyicu.webserver import raw_source_authority
+
+    try:
+        approved = load_verified_patient_grouping(grouping).frame
+        official = binding.materialize_patient_grouping().frame
+    except (PatientGroupingError, raw_source_authority.RawSourceAuthorityError) as exc:
+        raise PatientGroupingAuthorityError(
+            "first_icu_stay_patient_identity_unverifiable",
+            "The approved patient grouping cannot be compared with the official stay table.",
+        ) from exc
+    approved = approved.set_axis([DERIVED_STAY_COLUMN, "approved_patient"], axis=1)
+    joined = approved.merge(official, on=DERIVED_STAY_COLUMN, how="inner")
+    split = joined.groupby("approved_patient")[DERIVED_PATIENT_COLUMN].nunique()
+    merged = joined.groupby(DERIVED_PATIENT_COLUMN)["approved_patient"].nunique()
+    if joined.empty or bool(split.gt(1).any()) or bool(merged.gt(1).any()):
+        raise PatientGroupingAuthorityError(
+            "first_icu_stay_patient_identity_conflict",
+            "The approved patient grouping and the official stay table disagree on "
+            "which stays share a patient.",
+            details={
+                "shared_stays": int(len(joined)),
+                "approved_groups_split": int(split.gt(1).sum()),
+                "official_patients_merged": int(merged.gt(1).sum()),
+            },
+        )
+    return grouping.mapping_sha256
+
+
+def resolve_study_first_icu_stay(
+    *,
+    export_path: str | Path,
+    database: str,
+) -> Optional[FirstIcuStayBinding]:
+    """Bind the verified first-ICU-stay coordinate a first-stay study may use.
+
+    ``None`` means the export's bound raw source cannot order a patient's
+    stays, so a first-stay restriction stays unverified.  Launch, readiness
+    review and plan compilation must all ask here.  The coordinate is derived
+    from every stay of the digest-verified official table and written as
+    private host state; readers see counts and digests only.
+    """
+
+    from easyicu.webserver import raw_source_authority
+
+    try:
+        binding = raw_source_authority.resolve_raw_hospital_source_binding(
+            export_path=export_path, database=database
+        )
+    except raw_source_authority.RawSourceAuthorityError as exc:
+        raise PatientGroupingAuthorityError(
+            exc.code, str(exc), details=exc.details
+        ) from exc
+    if binding is None or not getattr(binding, "first_icu_stay_available", False):
+        return None
+    try:
+        derived = binding.materialize_first_icu_stay()
+    except raw_source_authority.RawSourceAuthorityError as exc:
+        raise PatientGroupingAuthorityError(
+            exc.code, str(exc), details=exc.details
+        ) from exc
+    receipt = binding.first_icu_stay_receipt()
+    grouping_sha256 = _grouping_consistent_with(
+        binding,
+        resolve_study_patient_grouping(export_path=export_path, database=database),
+        identity_table_sha256=receipt["identity_table_sha256"],
+    )
+    target = _private_first_icu_stay_root() / (
+        f"{_database(database)}.{receipt['identity_table_sha256']}.v1.parquet"
+    )
+    coordinate_sha256 = _materialize_private_mapping(
+        _serialize_grouping(derived.frame), target=target
+    )
+    return FirstIcuStayBinding(
+        coordinate_path=target,
+        coordinate_sha256=coordinate_sha256,
+        authority_coordinates={
+            "schema_version": "easyicu.first_icu_stay_runtime_authority/1",
+            "authority_ref": f"{binding.authority_ref}/first_icu_stay",
+            "database": _database(database),
+            "scope": derived.receipt["scope"],
+            "export_manifest_file": binding.export_manifest_file,
+            "export_manifest_sha256": binding.export_manifest_sha256,
+            "identity_table": receipt["identity_table"],
+            "identity_table_sha256": receipt["identity_table_sha256"],
+            "order_column": receipt["order_column"],
+            "order_rule": derived.receipt["order_rule"],
+            "tie_policy": derived.receipt["tie_policy"],
+            "missing_order_policy": derived.receipt["missing_order_policy"],
+            "patient_grouping_mapping_sha256": grouping_sha256,
+            "coordinate_sha256": coordinate_sha256,
+            "stays": derived.receipt["stays"],
+            "patients": derived.receipt["patients"],
+            "non_first_icu_stays": derived.receipt["non_first_icu_stays"],
+            "provider_visible_values": False,
+        },
+    )
+
+
 __all__ = [
     "PatientGroupingAuthorityError",
     "resolve_derived_patient_grouping",
     "resolve_patient_grouping_authority",
+    "resolve_study_first_icu_stay",
     "resolve_study_patient_grouping",
 ]

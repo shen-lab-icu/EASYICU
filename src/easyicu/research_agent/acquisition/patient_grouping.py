@@ -15,7 +15,7 @@ import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping
+from typing import Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -83,26 +83,27 @@ def _exact_int_series(values: pd.Series, *, label: str) -> pd.Series:
     )
 
 
-def load_verified_patient_grouping(
-    binding: "PatientGroupingBinding",
-) -> VerifiedPatientGrouping:
-    """Read one digest-bound mapping through a stable local file descriptor.
+def read_digest_bound_parquet(
+    path: Path,
+    *,
+    expected_sha256: str,
+    columns: Sequence[str],
+    label: str,
+    error: type[ValueError],
+) -> tuple[pd.DataFrame, int]:
+    """Read columns of one private Parquet file through a stable descriptor.
 
-    The returned frame is intentionally private: it contains a raw patient
-    grouping key and is for in-process host computation only.  It has no
-    serialization helper and must never be projected into provider context or
-    public receipts.
+    The digest and the parse come from the same non-symlink descriptor, and a
+    file that changes while it is read is refused.  Errors are raised as
+    ``error`` so each owner keeps its own failure type.
     """
 
-    path = binding.mapping_path
     if (
         not path.is_absolute()
         or path.is_symlink()
         or path.suffix.lower() != ".parquet"
     ):
-        raise PatientGroupingError(
-            "patient grouping mapping must be an absolute regular Parquet file"
-        )
+        raise error(f"{label} must be an absolute regular Parquet file")
 
     descriptor: int | None = None
     try:
@@ -112,24 +113,15 @@ def load_verified_patient_grouping(
         )
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode):
-            raise PatientGroupingError(
-                "patient grouping mapping must be a regular file"
-            )
+            raise error(f"{label} must be a regular file")
         with os.fdopen(descriptor, "rb", closefd=False) as handle:
             digest = hashlib.sha256()
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
-            if digest.hexdigest() != binding.mapping_sha256:
-                raise PatientGroupingError("patient grouping mapping digest mismatch")
+            if digest.hexdigest() != expected_sha256:
+                raise error(f"{label} digest mismatch")
             handle.seek(0)
-            table = pd.read_parquet(
-                handle,
-                columns=[
-                    binding.mapping_stay_column,
-                    binding.mapping_patient_column,
-                ],
-                engine="pyarrow",
-            )
+            table = pd.read_parquet(handle, columns=list(columns), engine="pyarrow")
             after = os.fstat(descriptor)
         if (
             before.st_dev,
@@ -142,14 +134,35 @@ def load_verified_patient_grouping(
             after.st_size,
             after.st_mtime_ns,
         ):
-            raise PatientGroupingError("patient grouping mapping changed while being read")
-    except PatientGroupingError:
+            raise error(f"{label} changed while being read")
+    except error:
         raise
     except (OSError, ValueError) as exc:
-        raise PatientGroupingError("cannot read patient grouping mapping") from exc
+        raise error(f"cannot read {label}") from exc
     finally:
         if descriptor is not None:
             os.close(descriptor)
+    return table, int(before.st_size)
+
+
+def load_verified_patient_grouping(
+    binding: "PatientGroupingBinding",
+) -> VerifiedPatientGrouping:
+    """Read one digest-bound mapping through a stable local file descriptor.
+
+    The returned frame is intentionally private: it contains a raw patient
+    grouping key and is for in-process host computation only.  It has no
+    serialization helper and must never be projected into provider context or
+    public receipts.
+    """
+
+    table, file_size = read_digest_bound_parquet(
+        binding.mapping_path,
+        expected_sha256=binding.mapping_sha256,
+        columns=[binding.mapping_stay_column, binding.mapping_patient_column],
+        label="patient grouping mapping",
+        error=PatientGroupingError,
+    )
 
     mapping = table.rename(
         columns={
@@ -169,8 +182,12 @@ def load_verified_patient_grouping(
         )
     return VerifiedPatientGrouping(
         frame=mapping.loc[:, [_STAY_COLUMN, _PRIVATE_GROUP_COLUMN]].copy(),
-        file_size=int(before.st_size),
+        file_size=file_size,
     )
+
+
+#: Exact integer identifier decoding, shared with the first-ICU-stay owner.
+exact_integer_series = _exact_int_series
 
 
 #: The stay and patient columns a derived bridge publishes.
@@ -321,5 +338,7 @@ __all__ = [
     "PatientGroupingError",
     "VerifiedPatientGrouping",
     "derive_patient_grouping",
+    "exact_integer_series",
     "load_verified_patient_grouping",
+    "read_digest_bound_parquet",
 ]

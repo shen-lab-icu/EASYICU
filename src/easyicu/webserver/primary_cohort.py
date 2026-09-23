@@ -375,6 +375,34 @@ def normalize_primary_cohort_scope(
     )
 
 
+def first_icu_stay_only(cohort: Any) -> bool:
+    """Whether the cohort keeps only each patient's first ICU stay.
+
+    A legacy ``adult_first`` preset implies it when the field is absent, so
+    callers ask here instead of reading the raw field.
+    """
+
+    raw = dict(cohort) if isinstance(cohort, Mapping) else {}
+    try:
+        return bool(normalize_execution_cohort(raw)["exclude_readmissions"])
+    except PrimaryCohortContractError:
+        return raw.get("exclude_readmissions") is True
+
+
+def planner_selectable_cohort(cohort: Any) -> Dict[str, Any]:
+    """The cohort a Planner still selects rows from, after host restrictions.
+
+    The host applies a first-ICU-stay restriction to the universe itself with
+    its verified coordinate, so no row predicate can or should express it.
+    Every other population, admission and diagnosis field stays.
+    """
+
+    raw = dict(cohort) if isinstance(cohort, Mapping) else {}
+    # Explicit, because a legacy ``adult_first`` preset implies it when absent.
+    raw["exclude_readmissions"] = False
+    return raw
+
+
 def planning_selection_mode(cohort: Any) -> Optional[str]:
     """Return only a stated population constraint for a zero-row proposal.
 
@@ -406,5 +434,7 @@ __all__ = [
     "normalize_execution_cohort",
     "normalize_preset",
     "normalize_primary_cohort_scope",
+    "first_icu_stay_only",
+    "planner_selectable_cohort",
     "planning_selection_mode",
 ]

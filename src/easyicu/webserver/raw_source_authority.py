@@ -40,6 +40,9 @@ from easyicu.research_agent.authority.filesystem import (
 from easyicu.webserver import state_paths
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from easyicu.research_agent.acquisition.first_icu_stay import (
+        DerivedFirstIcuStay,
+    )
     from easyicu.research_agent.acquisition.patient_grouping import (
         DerivedPatientGrouping,
     )
@@ -104,6 +107,18 @@ _PATIENT_GROUPING_PROFILES = {
         "table": "icustays",
         "stay_column": "stay_id",
         "patient_column": "subject_id",
+    },
+}
+# Which official table orders each family's ICU stays within a patient, and by
+# which column.  eICU is absent on purpose: ``unitvisitnumber`` orders stays only
+# within one hospitalization, and a discharge year cannot order two
+# hospitalizations of the same year.
+_FIRST_ICU_STAY_PROFILES = {
+    "mimic_iv": {
+        "table": "icustays",
+        "stay_column": "stay_id",
+        "patient_column": "subject_id",
+        "order_column": "intime",
     },
 }
 # Which raw tables each database family needs for hospital-mortality follow-up
@@ -349,6 +364,36 @@ class RawMimicIVSourceBinding:
         )
         return _derive_patient_grouping(icustays, profile, database=self.database)
 
+    @property
+    def first_icu_stay_profile(self) -> Mapping[str, str]:
+        return _FIRST_ICU_STAY_PROFILES["mimic_iv"]
+
+    @property
+    def first_icu_stay_available(self) -> bool:
+        """Whether the bound ``icustays`` table can order a patient's stays."""
+
+        profile = self.first_icu_stay_profile
+        return {profile["patient_column"], profile["order_column"]} <= self.icustays_columns
+
+    def first_icu_stay_receipt(self) -> dict[str, Any]:
+        return _first_icu_stay_receipt(
+            self.first_icu_stay_profile, table_sha256=self.icustays_sha256
+        )
+
+    def materialize_first_icu_stay(self) -> "DerivedFirstIcuStay":
+        """Derive the private first-stay coordinate from the bound table."""
+
+        profile = self.first_icu_stay_profile
+        if not self.first_icu_stay_available:
+            raise _first_icu_stay_unavailable(self.database)
+        icustays = _read_verified_table(
+            self.icustays_path,
+            self.icustays_sha256,
+            table="icustays",
+            columns=_first_icu_stay_columns(profile),
+        )
+        return _derive_first_icu_stay(icustays, profile, database=self.database)
+
 
 def _patient_grouping_receipt(
     profile: Mapping[str, str], *, table_sha256: str
@@ -390,6 +435,55 @@ def _derive_patient_grouping(
             "raw_source_authority_patient_grouping_invalid",
             "The official patient identity table cannot support a grouping.",
             details={"database": database, "cause": str(exc)},
+        ) from exc
+
+
+def _first_icu_stay_columns(profile: Mapping[str, str]) -> list[str]:
+    return [profile["stay_column"], profile["patient_column"], profile["order_column"]]
+
+
+def _first_icu_stay_receipt(
+    profile: Mapping[str, str], *, table_sha256: str
+) -> dict[str, Any]:
+    return {
+        "scope": "source_global",
+        "identity_table": profile["table"],
+        "identity_table_sha256": table_sha256,
+        "patient_identifier_column": profile["patient_column"],
+        "order_column": profile["order_column"],
+        "identifier_values_returned": False,
+    }
+
+
+def _first_icu_stay_unavailable(database: str) -> RawSourceAuthorityError:
+    return RawSourceAuthorityError(
+        "raw_source_authority_first_icu_stay_unavailable",
+        "The bound raw source cannot order a patient's ICU stays.",
+        details={"database": database},
+    )
+
+
+def _derive_first_icu_stay(
+    identity_table: pd.DataFrame, profile: Mapping[str, str], *, database: str
+) -> "DerivedFirstIcuStay":
+    from easyicu.research_agent.acquisition.first_icu_stay import (
+        FirstIcuStayError,
+        derive_first_icu_stay,
+    )
+
+    try:
+        return derive_first_icu_stay(
+            identity_table,
+            stay_column=profile["stay_column"],
+            patient_column=profile["patient_column"],
+            order_column=profile["order_column"],
+            identity_table_name=profile["table"],
+        )
+    except FirstIcuStayError as exc:
+        raise RawSourceAuthorityError(
+            "raw_source_authority_first_icu_stay_invalid",
+            "The official stay table cannot prove each patient's first ICU stay.",
+            details={"database": database, "cause_code": exc.code, "cause": str(exc)},
         ) from exc
 
 
@@ -509,6 +603,46 @@ class RawHospitalSourceBinding:
             raise _patient_grouping_unavailable(self.database)
         return _derive_patient_grouping(
             self._table(profile["table"]), profile, database=self.database
+        )
+
+    @property
+    def first_icu_stay_profile(self) -> Optional[Mapping[str, str]]:
+        return _FIRST_ICU_STAY_PROFILES.get(self.family)
+
+    @property
+    def first_icu_stay_available(self) -> bool:
+        """Whether this bound source can order each patient's ICU stays."""
+
+        profile = self.first_icu_stay_profile
+        if profile is None:
+            return False
+        columns = set(self.table_columns.get(profile["table"], ()))
+        return {profile["patient_column"], profile["order_column"]} <= columns
+
+    def first_icu_stay_receipt(self) -> dict[str, Any]:
+        profile = self.first_icu_stay_profile
+        if profile is None:  # pragma: no cover - guarded by the caller
+            raise _first_icu_stay_unavailable(self.database)
+        return _first_icu_stay_receipt(
+            profile, table_sha256=self.table_sha256[profile["table"]]
+        )
+
+    def materialize_first_icu_stay(self) -> "DerivedFirstIcuStay":
+        """Derive the private first-stay coordinate from the bound table."""
+
+        profile = self.first_icu_stay_profile
+        if profile is None or not self.first_icu_stay_available:
+            raise _first_icu_stay_unavailable(self.database)
+        table = profile["table"]
+        return _derive_first_icu_stay(
+            _read_verified_table(
+                self.table_paths[table],
+                self.table_sha256[table],
+                table=table,
+                columns=_first_icu_stay_columns(profile),
+            ),
+            profile,
+            database=self.database,
         )
 
     def _table(self, name: str) -> pd.DataFrame:

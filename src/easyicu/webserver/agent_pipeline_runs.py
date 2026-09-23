@@ -2158,13 +2158,41 @@ def _exclusion_criteria(study: Mapping[str, Any]) -> List[str]:
     if stated:
         rows.append(stated)
     if cohort.get("exclude_readmissions") is True:
-        rows.append("readmissions after the first eligible ICU stay per patient")
+        rows.append(
+            "each patient's later ICU stays: the host keeps only the first ICU stay "
+            "per patient across the bound source, before planning"
+        )
     rows.extend(
         _diagnosis_criteria(
             cohort, ("icd_exclude", "exclude_diagnoses"), "exclude diagnoses"
         )
     )
     return rows[:32]
+
+
+def _require_first_icu_stay_materialized(acquisition: Any, binding: Any) -> None:
+    """Refuse a universe whose provenance does not carry the bound restriction."""
+
+    try:
+        provenance = json.loads(
+            Path(acquisition.provenance_path).read_text(encoding="utf-8")
+        )
+    except (TypeError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        provenance = {}
+    restriction = (
+        provenance.get("first_icu_stay_restriction")
+        if isinstance(provenance, Mapping)
+        else None
+    )
+    if (
+        not isinstance(restriction, Mapping)
+        or restriction.get("coordinate_sha256") != binding.coordinate_sha256
+    ):
+        raise ResearchPipelineRunError(
+            "research_pipeline_first_stay_restriction_not_materialized",
+            "The prepared universe does not carry the verified first ICU stay restriction.",
+            details={"field": "cohort.exclude_readmissions"},
+        )
 
 
 def _primary_cohort_selection_mode(study: Mapping[str, Any]) -> str:
@@ -2179,6 +2207,18 @@ def _primary_cohort_selection_mode(study: Mapping[str, Any]) -> str:
     """
 
     return study_context_owner.primary_cohort_selection_mode(study)
+
+
+def _planner_cohort_selection_mode(study: Mapping[str, Any]) -> str:
+    """The same owner's mode for the rows a Planner still selects.
+
+    A first-ICU-stay restriction is applied by the host to the universe with
+    its verified coordinate, so it is not a predicate the Planner writes.
+    """
+
+    return study_context_owner.primary_cohort_selection_mode(
+        {**study, "cohort": primary_cohort.planner_selectable_cohort(study.get("cohort"))}
+    )
 
 
 #: Public name for the same policy. Copilot's eligibility question has to say
@@ -4100,7 +4140,9 @@ def _load_candidate_plan_materialization_authority(
             candidate_cohort
         ):
             raise ValueError("The candidate has no explicit population selection.")
-        stated_mode = primary_cohort.planning_selection_mode(study.get("cohort"))
+        stated_mode = primary_cohort.planning_selection_mode(
+            primary_cohort.planner_selectable_cohort(study.get("cohort"))
+        )
         if stated_mode is not None and candidate_cohort.selection_mode != stated_mode:
             raise ValueError("The candidate contradicts the stated population mode.")
     except (TypeError, ValueError) as exc:
@@ -5024,7 +5066,15 @@ def make_research_pipeline_run_runner(
                         foundation_profile.get("primary_exposure_source_concept"),
                         target,
                     ),
+                    first_icu_stay=foundation_profile.get("first_icu_stay"),
                 )
+                if (
+                    foundation_profile.get("first_icu_stay") is not None
+                    and not acquisition.blocked
+                ):
+                    _require_first_icu_stay_materialized(
+                        acquisition, foundation_profile["first_icu_stay"]
+                    )
                 if not acquisition.blocked and any(spec.strategy == "time_varying" for spec in sensitivity_specs):
                     from easyicu.webserver.time_varying_runtime_projection import materialize_web_time_varying_input
 
@@ -5390,9 +5440,11 @@ def make_research_pipeline_run_runner(
             elif candidate_authority is not None:
                 required_cohort_mode = candidate_authority.primary_cohort_selection_mode
             elif metadata_only_planning:
-                required_cohort_mode = primary_cohort.planning_selection_mode(study.get("cohort"))
+                required_cohort_mode = primary_cohort.planning_selection_mode(
+                    primary_cohort.planner_selectable_cohort(study.get("cohort"))
+                )
             else:
-                required_cohort_mode = _primary_cohort_selection_mode(study)
+                required_cohort_mode = _planner_cohort_selection_mode(study)
             config = PipelineConfig(
                 workdir=wrapper_dir / "pipeline",
                 enable_publication_figure_skill=publication_skill_flags[

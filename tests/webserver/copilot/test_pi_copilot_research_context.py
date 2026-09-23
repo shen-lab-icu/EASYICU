@@ -364,53 +364,7 @@ def test_web_data_foundation_keeps_available_readmission_safety_coordinate(
     assert profile["static_concepts"] == ("age", "icu_readmission")
 
 
-def test_web_data_foundation_materializes_owner_readmission_indicator_for_first_stay(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from easyicu.research_agent.acquisition import catalog as catalog_module
-
-    monkeypatch.setattr(
-        catalog_module,
-        "build_available_catalog",
-        lambda _path: AvailableCatalog(
-            source="typed-demo",
-            concepts=[
-                CatalogConcept(
-                    concept_id="age",
-                    file_name="demographics.parquet",
-                    typed_metadata=True,
-                    column_role="value",
-                ),
-                CatalogConcept(
-                    concept_id="death",
-                    file_name="outcome.parquet",
-                    typed_metadata=True,
-                    column_role="event_status",
-                ),
-                CatalogConcept(
-                    concept_id="icu_readmission",
-                    file_name="outcome.parquet",
-                    typed_metadata=False,
-                    column_role="event_status",
-                ),
-            ],
-        ),
-    )
-
-    profile = research_launch_scientific._data_foundation_profile(
-        export_path="/typed/demo",
-        study={
-            "modules": ["demographics", "outcome"],
-            "cohort": {"exclude_readmissions": True},
-        },
-        target="death",
-    )
-
-    assert profile["static_concepts"] == ("age", "icu_readmission")
-    assert profile["required_feature_concepts"] == ()
-
-
-def test_web_data_foundation_rejects_first_stay_without_owner_indicator(
+def test_web_data_foundation_rejects_first_stay_without_verified_coordinate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from easyicu.research_agent.acquisition import catalog as catalog_module
@@ -447,7 +401,65 @@ def test_web_data_foundation_rejects_first_stay_without_owner_indicator(
             target="death",
         )
 
-    assert exc.value.code == "research_pipeline_readmission_indicator_unavailable"
+    # A readmission indicator is not the authority; the source cannot prove
+    # which stay came first, so the restriction stays unverified.
+    assert exc.value.code == "research_pipeline_first_stay_restriction_unverified"
+    assert exc.value.details["icu_readmission_is_first_patient_stay_authority"] is False
+
+
+def test_web_data_foundation_carries_the_verified_first_stay_coordinate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+    from easyicu.research_agent.acquisition.first_icu_stay import FirstIcuStayBinding
+    from easyicu.webserver import source_identity_authority
+
+    monkeypatch.setattr(
+        catalog_module,
+        "build_available_catalog",
+        lambda _path: AvailableCatalog(
+            source="typed-demo",
+            concepts=[
+                CatalogConcept(
+                    concept_id="age",
+                    file_name="demographics.parquet",
+                    typed_metadata=True,
+                    column_role="value",
+                ),
+                CatalogConcept(
+                    concept_id="death",
+                    file_name="outcome.parquet",
+                    typed_metadata=True,
+                    column_role="event_status",
+                ),
+            ],
+        ),
+    )
+    binding = FirstIcuStayBinding(
+        coordinate_path=tmp_path / "first.parquet", coordinate_sha256="a" * 64
+    )
+    seen: dict = {}
+
+    def resolve(**kwargs):
+        seen.update(kwargs)
+        return binding
+
+    monkeypatch.setattr(source_identity_authority, "resolve_study_first_icu_stay", resolve)
+    profile = research_launch_scientific._data_foundation_profile(
+        export_path="/typed/demo",
+        study={
+            "modules": ["demographics", "outcome"],
+            "cohort": {"exclude_readmissions": True},
+            "data_source": {"path": "/typed/demo", "database": "miiv"},
+        },
+        target="death",
+    )
+
+    assert profile["first_icu_stay"] is binding
+    assert seen == {"export_path": "/typed/demo", "database": "miiv"}
+    # No readmission column is requested for the restriction.
+    assert "icu_readmission" not in profile["static_concepts"]
+    assert "icu_readmission" not in profile["required_feature_concepts"]
 
 
 def test_web_study_context_compiles_typed_sensitivity_authority() -> None:

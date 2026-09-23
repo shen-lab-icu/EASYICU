@@ -672,11 +672,11 @@ def test_keep_sensitivities_without_a_confirmed_timing_spec_fails_closed() -> No
 
 
 def test_agent_plan_first_stay_restriction_answers_repeated_stay_finding() -> None:
-    """A bound first-stay cohort closes the repeated-stay finding without grouping.
+    """A verified first-stay cohort closes the repeated-stay finding without grouping.
 
-    This is the official-demo path: eICU exports carry no patient grouping, the
-    researcher keeps one first ICU stay per patient, and the remaining runtime
-    findings (landmark timing, primary population) must still compile.
+    The researcher keeps one first ICU stay per patient on a source that can
+    prove which stay came first, and the remaining runtime findings (landmark
+    timing, primary population) must still compile.
     """
 
     plan = _aki_landmark_plan()
@@ -705,6 +705,7 @@ def test_agent_plan_first_stay_restriction_answers_repeated_stay_finding() -> No
             "REPEATED_STAY_IDENTITY_UNAVAILABLE",
         ),
         patient_cluster_available=False,
+        first_stay_coordinate_available=True,
     )
 
     assert compiled.runtime_finding_codes == (
@@ -735,7 +736,28 @@ def test_agent_plan_first_stay_restriction_answers_repeated_stay_finding() -> No
     )
 
 
+def test_agent_plan_first_stay_without_a_verified_coordinate_fails_at_compile() -> None:
+    """eICU cannot order stays across hospitalizations: refuse before launch."""
+
+    plan = _aki_landmark_plan()
+    study = _aki_study()
+    study["cohort"] = {**dict(study.get("cohort") or {}), "exclude_readmissions": True}
+
+    with pytest.raises(PlanDecisionError) as exc:
+        compile_agent_plan_configuration(
+            study=study,
+            agent_plan=plan,
+            runtime_finding_codes=("REPEATED_STAY_IDENTITY_UNAVAILABLE",),
+            patient_cluster_available=False,
+            first_stay_coordinate_available=False,
+        )
+
+    assert exc.value.code == "agent_plan_first_stay_coordinate_unavailable"
+
+
 @pytest.mark.parametrize("exposure_source", ["aki_stage_strict", "aki_stage_strict_max"])
+
+
 def test_a_host_derived_strict_stage_is_compiled_without_an_aggregation(
     exposure_source: str,
 ) -> None:
