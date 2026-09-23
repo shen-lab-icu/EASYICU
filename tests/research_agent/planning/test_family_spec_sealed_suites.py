@@ -780,3 +780,34 @@ def test_sealed_suite_recommendations_follow_a_chinese_question() -> None:
         assert [step.method for step in english.steps] == [step.method for step in chinese.steps]
         cohort_name = context.cohort.cohort_name
         assert all(cohort_name not in item for item in [*english_items, *chinese_items])
+
+
+def test_only_the_sealed_survival_suite_binds_survival_method_cards() -> None:
+    survival_sources = {"grambsch_therneau_ph_1994", "royston_parmar_rmst_2011"}
+    _projection, authority = _h1_authority()
+    authorities = ScientificRuntimeAuthorities(trajectory=None, current_case=authority)
+    context = _h1_context(authority)
+    planning_context = authorities.planning_contract_context()
+    allowed = [*ALLOWED, *sorted(survival_sources)]
+    request = build_family_spec_request(
+        context,
+        analysis_types=candidate_analysis_types(context),
+        variable_roster=select_progressive_variables(context),
+        allowed_literature_citation_keys=allowed,
+        required_primary_cohort_selection_mode="all_input_rows",
+        planning_contract_context=planning_context,
+    )
+    llm = ScriptedMockLLMClient([json.dumps(_labels_payload(request, H1_LABELS))])
+    result = ProgressivePlannerAgent(llm).run_attempt(
+        context, planner_strategy=FAMILY_SPEC_STRATEGY,
+        allowed_literature_citation_keys=allowed, direct_comparator_literature_keys=[],
+        enforce_article_contract=True, article_contract_context=context,
+        planning_contract_context=planning_context,
+        required_primary_cohort_selection_mode="all_input_rows",
+    )
+    cited = {
+        key for step in result.facts.outline.steps for key in step.literature_citation_keys
+    }
+    # The Cox suite audits proportional hazards and falls back to a
+    # restricted-mean contrast: both survival cards govern what it runs.
+    assert survival_sources <= cited

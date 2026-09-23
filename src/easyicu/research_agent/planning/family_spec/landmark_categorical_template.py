@@ -111,20 +111,38 @@ def _label(spec: FamilyPlanSpec, key: str) -> str:
     return spec.labels.get(key) or key
 
 
-def _method_card_elements(citation_key: str) -> set[str]:
-    return {
-        element
+#: Method-card layers that govern a time-to-event estimator.  Only a template
+#: that fits one (the sealed survival suite) binds them: attaching the
+#: proportional-hazards diagnostics or a restricted-mean contrast to a
+#: logistic, descriptive or prediction plan cites a method the plan never
+#: applies, however well the card's generic design elements match.
+_TIME_TO_EVENT_LAYER_PREFIX = "survival_"
+
+
+def _applicable_method_cards(citation_key: str, *, time_to_event: bool) -> list:
+    return [
+        card
         for card in METHOD_CARDS
         if card.source_key == citation_key
+        and (time_to_event or not card.layer.startswith(_TIME_TO_EVENT_LAYER_PREFIX))
+    ]
+
+
+def _method_card_elements(citation_key: str, *, time_to_event: bool = False) -> set[str]:
+    return {
+        element
+        for card in _applicable_method_cards(citation_key, time_to_event=time_to_event)
         for element in card.design_elements
     }
 
 
-def _method_card_ids(citation_key: str, elements: set[str]) -> str:
+def _method_card_ids(
+    citation_key: str, elements: set[str], *, time_to_event: bool = False
+) -> str:
     return ", ".join(
         card.id
-        for card in METHOD_CARDS
-        if card.source_key == citation_key and elements & set(card.design_elements)
+        for card in _applicable_method_cards(citation_key, time_to_event=time_to_event)
+        if elements & set(card.design_elements)
     )
 
 
@@ -281,6 +299,15 @@ def _design_selection(
         if request.secondary_continuous_outcome
         else ""
     )
+    duration_label = _label(spec, request.observation_duration_column)
+    duration_unit = str(request.observation_duration_unit or "").strip()
+    # A reader label usually carries its own unit ("... duration (hours)");
+    # repeating it reads "(hours) (hours)".
+    duration_text = (
+        f"{duration_label} ({duration_unit})"
+        if duration_unit and duration_unit.casefold() not in duration_label.casefold()
+        else duration_label
+    )
     adjustment_text_zh = (
         "调整 " + listing([_label(spec, name) for name in covariates], language)
         if covariates
@@ -322,8 +349,8 @@ def _design_selection(
             f"available in the 0–{hours} h window."
         ),
         observation_window=(
-            f"From the {hours} h landmark until the end of {_label(spec, request.observation_duration_column)} "
-            f"({request.observation_duration_unit}); rows with {_label(spec, request.event_time_column)} at or "
+            f"From the {hours} h landmark until the end of {duration_text}; rows with "
+            f"{_label(spec, request.event_time_column)} at or "
             f"before the landmark or negative event times are counted in the cohort flow, not analysed"
             f"{secondary_text}."
         ),
