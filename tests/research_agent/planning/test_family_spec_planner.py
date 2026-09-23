@@ -1851,6 +1851,77 @@ def test_prediction_family_compiles_the_host_owned_reference_layout() -> None:
     assert caught.value.reason_code == "family_spec_adjustment_not_applicable"
 
 
+def _with_routine_measurements(context: ResearchContext, count: int) -> ResearchContext:
+    extra = [
+        ConceptDescriptor(
+            name=f"lab_{index:02d}_max", description=f"routine laboratory value {index}",
+            role=VariableRole.LAB, dtype="float64", source_concept=f"lab_{index:02d}",
+            analysis_window="icu_admission[0,24]h",
+        )
+        for index in range(count)
+    ]
+    return context.model_copy(update={"variables": [*context.variables, *extra]})
+
+
+def test_a_first_day_roster_at_the_design_bound_compiles_with_a_bounded_estimand() -> None:
+    """A realistic first-day roster reaches the design, and the estimand stays one sentence.
+
+    The design names at most its own bound of variables and the estimand once
+    listed every label, so a first-day model with a realistic roster failed
+    after the Planner had already been paid for its spec.
+    """
+
+    from easyicu.research_agent.planning.family_spec.contract import (
+        MAX_FIT_FEATURES,
+        design_field_max_length,
+    )
+
+    context = _with_routine_measurements(_prediction_context(), 30)
+    request = _request(context, cohort_mode=None)
+    features = [
+        "age", "sex", "hr_max", "lactate_max", "map_min", *[f"lab_{i:02d}_max" for i in range(30)]
+    ][:MAX_FIT_FEATURES]
+    _llm, result = _run(
+        context,
+        [json.dumps(_prediction_payload(request, features=features))],
+        required_primary_cohort_selection_mode=None,
+    )
+
+    selected = next(
+        item for item in result.output.design_selection.candidates if item.disposition == "selected"
+    )
+    assert set(features) <= set(selected.required_variables)
+    assert len(selected.estimand) <= design_field_max_length("estimand")
+    assert f"{MAX_FIT_FEATURES} prespecified predictors" in selected.estimand
+    assert "named in the plan" in selected.estimand
+
+
+def test_a_roster_the_design_cannot_name_is_refused_before_it_compiles() -> None:
+    """The bound is part of the spec contract, so the Planner is told before it answers."""
+
+    from easyicu.research_agent.planning.family_spec.contract import MAX_FIT_FEATURES
+
+    prediction = _with_routine_measurements(_prediction_context(), 30)
+    request = _request(prediction, cohort_mode=None)
+    too_many = [f"lab_{i:02d}_max" for i in range(MAX_FIT_FEATURES + 1)]
+    # A schema violation is a ValueError the structured retry returns to the Planner.
+    with pytest.raises(ValueError, match="at most 22 items"):
+        parse_family_plan_spec(json.dumps(_prediction_payload(request, features=too_many)), request)
+
+    phenotyping = _with_routine_measurements(_phenotyping_context(), 30)
+    request = _request(phenotyping, cohort_mode=None)
+    features = [f"lab_{i:02d}_max" for i in range(18)]
+    baseline = ["age", "sex", "hr_max", "map_min"]
+    with pytest.raises(FamilySpecError) as caught:
+        parse_family_plan_spec(
+            json.dumps(_phenotyping_payload(
+                request, features=features, baseline=baseline, membership="phenotype_flag",
+            )),
+            request,
+        )
+    assert caught.value.reason_code == "family_spec_roster_exceeds_design"
+
+
 def test_prediction_template_robustness_is_the_owner_executed_refit_and_decision_curve() -> None:
     """Two playbook axes, both executed by the host prediction owner.
 

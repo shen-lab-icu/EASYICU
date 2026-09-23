@@ -42,14 +42,20 @@ from ..progressive_contract import (
     ProgressiveStepMaterialization,
     ProgressiveTableOneVariable,
 )
-from .contract import PHENOTYPING_FAMILY_ID, FamilyPlanSpec, FamilySpecError, FamilySpecRequest
+from .contract import (
+    PHENOTYPING_FAMILY_ID,
+    FamilyPlanSpec,
+    FamilySpecError,
+    FamilySpecRequest,
+    design_field_max_length,
+)
 from .landmark_categorical_template import (
     FamilySkeletonDraft,
     _label,
     _method_card_elements,
     _method_card_ids,
 )
-from .plan_language import listing, plan_language, sentence
+from .plan_language import bounded_roster, listing, plan_language, sentence
 
 CLUSTER_SOLUTION_ACTION = "phenotyping.cluster_solution"
 K_SELECTION_ACTION = "phenotyping.k_selection"
@@ -166,6 +172,15 @@ def _cohort_intent(request: FamilySpecRequest, spec: FamilyPlanSpec) -> Progress
     )
 
 
+def _estimand(head: str, labels: list[str], tail: str) -> str:
+    """Name the features in the estimand while they fit; the plan lists them in full."""
+
+    roster = bounded_roster(
+        labels, budget=design_field_max_length("estimand") - len(head) - len(tail) - len(" ()")
+    )
+    return f"{head} ({roster}){tail}" if roster else f"{head}, named in the plan{tail}"
+
+
 def _design_selection(
     request: FamilySpecRequest,
     spec: FamilyPlanSpec,
@@ -204,10 +219,11 @@ def _design_selection(
     selected = ResearchDesignCandidate(
         design_id="earlyfeature_cluster_phenotyping",
         analysis_type="trajectory_clustering",
-        estimand=(
+        estimand=_estimand(
             f"The descriptive structure of candidate phenotypes among {population}, formed from "
-            f"{len(features)} prespecified features measured in {hours} ({feature_text}), with each "
-            f"cluster's size, feature profile, and {outcome} distribution."
+            f"{len(features)} prespecified features measured in {hours}",
+            [_label(spec, name) for name in features],
+            f", with each cluster's size, feature profile, and {outcome} distribution.",
         ),
         time_zero="ICU admission for every analysis row; features use only the sealed window.",
         observation_window=(
@@ -374,7 +390,7 @@ def build_phenotyping_skeleton(
     characterization_variables = list(dict.fromkeys([identity, outcome, *baseline, *features]))
     required_variables = list(
         dict.fromkeys([identity, *([membership] if membership else []), outcome, *baseline, *features])
-    )[:64]
+    )
     design = _design_selection(
         request,
         spec,

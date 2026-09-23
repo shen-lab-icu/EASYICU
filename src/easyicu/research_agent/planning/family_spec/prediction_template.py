@@ -43,7 +43,13 @@ from ..progressive_contract import (
     ProgressiveStepMaterialization,
     ProgressiveTableOneVariable,
 )
-from .contract import PREDICTION_FAMILY_ID, FamilyPlanSpec, FamilySpecError, FamilySpecRequest
+from .contract import (
+    PREDICTION_FAMILY_ID,
+    FamilyPlanSpec,
+    FamilySpecError,
+    FamilySpecRequest,
+    design_field_max_length,
+)
 from .landmark_categorical_template import (
     FamilySkeletonDraft,
     _cohort_intent,
@@ -51,7 +57,7 @@ from .landmark_categorical_template import (
     _method_card_elements,
     _method_card_ids,
 )
-from .plan_language import listing, plan_language, sentence
+from .plan_language import bounded_roster, listing, plan_language, sentence
 
 PRIMARY_ACTION = "prediction.discrimination_calibration"
 CALIBRATION_ACTION = "prediction.calibration_metrics"
@@ -126,6 +132,15 @@ def _summary_for(request: FamilySpecRequest, name: str) -> str:
     return "count_percent" if coding in {"binary", "categorical"} else "median_iqr"
 
 
+def _estimand(head: str, labels: list[str], tail: str) -> str:
+    """Name the roster in the estimand while it fits; the plan lists it in full."""
+
+    roster = bounded_roster(
+        labels, budget=design_field_max_length("estimand") - len(head) - len(tail) - len(" ()")
+    )
+    return f"{head} ({roster}){tail}" if roster else f"{head}, named in the plan{tail}"
+
+
 def _design_selection(
     request: FamilySpecRequest,
     spec: FamilyPlanSpec,
@@ -164,10 +179,12 @@ def _design_selection(
     selected = ResearchDesignCandidate(
         design_id="static_window_prediction",
         analysis_type="prediction_model",
-        estimand=(
+        estimand=_estimand(
             f"The predicted probability of {outcome} for each analysis row from {len(predictors)} "
-            f"prespecified predictors measured in {hours} ({predictor_text}), evaluated by "
-            "discrimination, calibration, internal validation, and decision-curve utility."
+            f"prespecified predictors measured in {hours}",
+            [_label(spec, name) for name in predictors],
+            ", evaluated by discrimination, calibration, internal validation, and decision-curve "
+            "utility.",
         ),
         time_zero=f"ICU admission; predictors use only information available in {hours}.",
         observation_window=(
@@ -331,7 +348,7 @@ def build_prediction_skeleton(
 
     primary_keys = keys_for("primary", comparators=True)
     secondary_keys = keys_for("secondary")
-    required_variables = list(dict.fromkeys([identity, outcome, *predictors]))[:64]
+    required_variables = list(dict.fromkeys([identity, outcome, *predictors]))
     design = _design_selection(
         request,
         spec,
