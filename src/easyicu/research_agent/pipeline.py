@@ -532,6 +532,21 @@ from .orchestration.finalize import (
 _ensure_audit_panel_step_in_plan = _figure_plan.ensure_data_quality_figure_step
 
 
+def typed_cohort_source_resolution_chain(
+    database: str, class_prefixes: Sequence[str]
+) -> tuple[str, ...]:
+    """The resolution order a source class policy denotes.
+
+    Column metadata records the database followed by its class prefixes with
+    repeats removed, and a typed cohort recovers its prefixes as that chain
+    minus its head.  A source listed among its own prefixes (``eicu_demo`` ->
+    ``eicu_demo, eicu``) therefore comes back as ``eicu`` alone, so a class
+    policy is compared as the chain it denotes, not as the list that wrote it.
+    """
+
+    return tuple(dict.fromkeys((database, *class_prefixes)))
+
+
 def _one_capability_job(method: Callable[..., Any]) -> Callable[..., Any]:
     """Bind a public entry point to one runtime-capability publication scope.
 
@@ -4512,9 +4527,11 @@ class ResearchAgentPipeline:
                 for value in load_src_cfg(normalized_database).class_prefix
                 if str(value).strip()
             )
-            if (
-                verified_source_authority.sidecar.source_database_class_prefixes
-                != expected_prefixes
+            if typed_cohort_source_resolution_chain(
+                normalized_database,
+                verified_source_authority.sidecar.source_database_class_prefixes,
+            ) != typed_cohort_source_resolution_chain(
+                normalized_database, expected_prefixes
             ):
                 raise MaterializedMetadataError(
                     "typed cohort source class policy does not match host registry"
