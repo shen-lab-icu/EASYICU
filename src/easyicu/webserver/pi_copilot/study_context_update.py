@@ -1063,6 +1063,30 @@ def update_study_context(
             }
         )
         patch["confirmations"] = confirmations
+    if "sensitivity_specs" not in params:
+        # Same principle for timing: a question that states "24 小时 landmark"
+        # has chosen its timing design.  Persist it in the host's executable
+        # shape so the first candidate is planned on it, instead of being
+        # reviewed as post-baseline and replanned after the host compiles the
+        # same landmark from that plan.
+        from .plan_decisions import question_landmark_configuration
+
+        stated = question_landmark_configuration(
+            study={**dict(current or {}), **patch},
+            user_message=context.user_message,
+        )
+        if stated is not None:
+            patch["sensitivity_specs"] = stated["sensitivity_specs"]
+            confirmations = dict(((current or {}).get("confirmations") or {}))
+            confirmations.update(dict(patch.get("confirmations") or {}))
+            confirmations.update(
+                {
+                    key: value
+                    for key, value in stated["confirmations"].items()
+                    if key.startswith("plan_timing_")
+                }
+            )
+            patch["confirmations"] = confirmations
     proposed_covariates = list(params.get("covariates") or [])
     explicitly_clears_covariates = (
         "covariates" in params

@@ -3886,6 +3886,7 @@ def _load_candidate_plan_materialization_authority(
     source_run_id: str,
     database: str,
     covariates: Sequence[str],
+    export_path: Optional[str] = None,
 ) -> Optional[_CandidatePlanMaterializationAuthority]:
     """Validate an approvable metadata-only Plan before reading patient rows.
 
@@ -3979,6 +3980,7 @@ def _load_candidate_plan_materialization_authority(
     proposed = _metadata_only_planning_coordinates(
         question=_clean_text(study.get("question"), 1_200),
         database=database,
+        export_path=export_path,
     )
     primary_exposure = _clean_text(identity.get("primary_exposure"), 160)
     target_outcome = _clean_text(identity.get("target_outcome"), 160)
@@ -4795,6 +4797,7 @@ def make_research_pipeline_run_runner(
                 source_run_id=source_run_id,
                 database=database,
                 covariates=covariates,
+                export_path=export_path,
             )
             if candidate_authority is not None:
                 # The visible acceptance granted data preparation for the exact

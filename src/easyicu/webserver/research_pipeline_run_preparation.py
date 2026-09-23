@@ -209,6 +209,7 @@ def _prepare_scientific_launch(
     planning_coordinates = _metadata_only_planning_coordinates(
         question=question,
         database=database,
+        export_path=request.export_path,
     )
     target = configured_target or planning_coordinates.get("target_outcome")
     primary_exposure = configured_primary_exposure or planning_coordinates.get(

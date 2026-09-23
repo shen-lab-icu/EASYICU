@@ -669,3 +669,47 @@ def test_agent_plan_first_stay_restriction_answers_repeated_stay_finding() -> No
     assert ScientificConfiguration.inspect(merged).decision_is_resolved(
         "REPEATED_STAY_IDENTITY_UNAVAILABLE"
     )
+
+
+@pytest.mark.parametrize("exposure_source", ["aki_stage_strict", "aki_stage_strict_max"])
+def test_a_host_derived_strict_stage_is_compiled_without_an_aggregation(
+    exposure_source: str,
+) -> None:
+    """The strict stage is already one window reading per stay.
+
+    The ordinal owner default (``max``) would name ``aki_stage_strict_max`` --
+    a column nothing materializes -- and the landmark compile would then bind
+    the runtime and the upgrade check to it.
+    """
+
+    plan = _aki_landmark_plan()
+    requirement = plan["steps"][0]["model_requirements"][0]
+    requirement.update(
+        {
+            "exposure_source": exposure_source,
+            "covariate_rationales": {
+                "age": "Baseline age precedes the exposure window.",
+                "sex": "Baseline sex precedes the exposure window.",
+            },
+            "covariate_temporal_roles": {
+                "age": "baseline_static",
+                "sex": "baseline_static",
+            },
+        }
+    )
+    study = _aki_study()
+    study["question"] = "评估入 ICU 后24小时内最高的严格 KDIGO 分期与院内死亡的关联。"
+    study["execution_concepts"] = {"outcome": "death"}
+
+    compiled = compile_agent_plan_configuration(
+        study=study,
+        agent_plan=plan,
+        runtime_finding_codes=("POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",),
+        patient_cluster_available=True,
+    )
+
+    execution = compiled.patch["execution_concepts"]
+    assert execution["primary_exposure"] == "aki_stage_strict"
+    assert "primary_exposure_aggregation" not in execution
+    timing = [spec for spec in compiled.patch["sensitivity_specs"] if spec["axis"] == "timing"]
+    assert [spec["spec_id"] for spec in timing] == ["agent_plan_landmark_24h"]

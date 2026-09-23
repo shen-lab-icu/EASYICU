@@ -43,6 +43,7 @@ __all__ = [
     "deterministic_intent",
     "explicit_outcome_concepts",
     "explicit_exposure_aggregation",
+    "explicit_landmark_hours",
     "SLOTS",
 ]
 
@@ -389,6 +390,45 @@ _MEASUREMENT_OPERATIONS = (
     ("last", r"\b(?:last|final)\b|末次|最后一次"),
     ("sum", r"\b(?:cumulative|total|sum)\b|累计|累积|总量"),
 )
+
+
+_LANDMARK_HOURS = re.compile(
+    r"(\d{1,3}(?:\.\d+)?)\s*-?\s*(?:h\b|hrs?\b|hours?\b|小时|小時)\s*(?:的|为|作为)?\s*landmark"
+    r"|landmark\s*(?:at|of|=|:|：|为|设在|定在|于)?\s*(?:第\s*)?"
+    r"(\d{1,3}(?:\.\d+)?)\s*-?\s*(?:h\b|hrs?\b|hours?\b|小时|小時)",
+    re.IGNORECASE,
+)
+
+
+# "不采用 24 小时 landmark" refuses a design rather than naming one; the general
+# negation vocabulary is about slots and does not cover design verbs.
+_LANDMARK_REFUSAL = re.compile(
+    r"(?:不采用|不使用|不用|不做|无需|不需要|避免|\bwithout\b|\bno\b|\bnot\b)[^，,。；;.]{0,12}$",
+    re.IGNORECASE,
+)
+
+
+def explicit_landmark_hours(question: str) -> Optional[float]:
+    """Read a landmark time the researcher stated, in hours after ICU admission.
+
+    Only an explicit, non-negated statement of one landmark is a reading
+    ("24 小时 landmark", "landmark at 24 h").  "不采用 landmark" names no time
+    and is never a landmark; two different stated times are left unread for the
+    plan to resolve rather than picking one.
+    """
+
+    # A reading aid, not an intake gate: an empty or over-long question simply
+    # states no landmark here; ``_clean_question`` owns rejecting it.
+    text = str(question or "").strip()[:_MAX_QUESTION_CHARS]
+    stated = set()
+    for match in _LANDMARK_HOURS.finditer(text):
+        before = text[max(0, match.start() - _NEGATION_LOOKBACK):match.start()]
+        if _negated(text, match.start()) or _LANDMARK_REFUSAL.search(before):
+            continue
+        hours = float(match.group(1) or match.group(2))
+        if 0 < hours <= 720:
+            stated.add(hours)
+    return next(iter(stated)) if len(stated) == 1 else None
 
 
 def explicit_exposure_aggregation(

@@ -105,11 +105,20 @@ def _agent_primary_source_coordinate(
     must never substitute for a requested maximum measurement.
     """
 
+    from easyicu.research_agent.contracts.host_derivations import (
+        host_derivation_producing,
+    )
     from easyicu.webserver.study_intent import explicit_exposure_aggregation
 
     concept, aggregation = _source_coordinate(
         materialized, field="primary exposure"
     )
+    if host_derivation_producing(concept) is not None:
+        # A declared host derivation already publishes one window reading per
+        # stay (for the strict KDIGO stage: "any positive wins, stage 0 needs an
+        # observed complete negative").  No per-concept aggregation applies, and
+        # ``<column>_max`` would name a column nothing materializes.
+        return concept, None
     configuration = ScientificConfiguration.inspect(study)
     existing = (
         configuration.primary_exposure_aggregation()
@@ -227,13 +236,9 @@ def pending_authorization_questions(
     return result
 
 
-def _timing_coordinates(plan: Mapping[str, Any]) -> Dict[str, str]:
-    requirement = _primary_requirement(plan)
-    _selected_design(plan)
-    exposure_materialized = str(requirement.get("exposure_source") or "").strip()
-    outcome_materialized = str(requirement.get("outcome") or "").strip()
-    exposure = _source_concept(exposure_materialized, field="primary exposure")
-    outcome = _source_concept(outcome_materialized, field="outcome")
+def _landmark_axis_columns(outcome: str) -> Dict[str, str]:
+    """The host follow-up columns a landmark on ``outcome`` is analysed on."""
+
     event_time = "death_time_hours" if outcome == "death" else f"{outcome}_time"
     # ``los_icu`` ends at ICU discharge.  It cannot stand in for the hospital
     # follow-up axis of an in-hospital mortality analysis: a stay may leave the
@@ -246,13 +251,130 @@ def _timing_coordinates(plan: Mapping[str, Any]) -> Dict[str, str]:
         else f"{outcome}_followup_time_hours"
     )
     return {
+        "event_time": event_time,
+        "observation_duration": observation_duration,
+        "observation_duration_unit": "hours",
+    }
+
+
+def landmark_timing_specification(
+    *, outcome: str, landmark_hours: float, spec_id: str
+) -> Dict[str, Any]:
+    """The executable landmark timing sensitivity, with host-owned columns.
+
+    Both routes that close a post-baseline timing gap -- an Agent-selected
+    landmark after review and a landmark the researcher stated in the question
+    -- compile to this one shape, so neither invents a follow-up column name.
+    """
+
+    columns = _landmark_axis_columns(outcome)
+    return {
+        "spec_id": spec_id,
+        "axis": "timing",
+        "strategy": "landmark",
+        "execution_variables": [
+            columns["event_time"],
+            columns["observation_duration"],
+        ],
+        "landmark_hours": landmark_hours,
+        "require_alive_at_landmark": True,
+        "exclude_negative_event_times": True,
+        "event_time_variable": columns["event_time"],
+        "observation_duration_variable": columns["observation_duration"],
+        "observation_duration_unit": columns["observation_duration_unit"],
+    }
+
+
+#: The one question-stated landmark this owner compiles; it matches the
+#: Agent-selected route (``plan_timing_landmark_24h``) and its runtime owner.
+QUESTION_LANDMARK_HOURS = 24.0
+
+
+def question_landmark_configuration(
+    *, study: Mapping[str, Any], user_message: str
+) -> Dict[str, Any] | None:
+    """Persist a landmark the researcher stated in their own words.
+
+    A question that says "24 小时 landmark" has already chosen the timing
+    design.  Without this the first candidate is planned with no timing, the
+    review reports ``POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED``, the host then
+    compiles this same landmark from the plan, and a second planning round
+    starts.  Compiling it up front changes no decision: it is the design the
+    researcher wrote, in the shape the Agent route would produce.
+
+    It compiles nothing it would have to guess: only the 24-hour landmark on
+    in-hospital death (the host follow-up contract), never over an existing
+    timing choice, a descriptive design, or an exposure window that outlasts
+    the landmark.  Returns the StudyContext patch, or ``None``.
+    """
+
+    from easyicu.webserver.study_intent import (
+        explicit_landmark_hours,
+        explicit_outcome_concepts,
+    )
+
+    if explicit_landmark_hours(user_message) != QUESTION_LANDMARK_HOURS:
+        return None
+    configuration = ScientificConfiguration.inspect(study)
+    specs = study.get("sensitivity_specs")
+    if isinstance(specs, Sequence) and not isinstance(specs, (str, bytes)) and any(
+        isinstance(spec, Mapping) and str(spec.get("axis") or "").strip() == "timing"
+        for spec in specs
+    ):
+        return None
+    design = study.get("analysis_design")
+    if isinstance(design, Mapping) and (
+        str(design.get("analysis_family") or "") == "descriptive_epidemiology"
+    ):
+        return None
+    execution = study.get("execution_concepts")
+    configured_outcome = (
+        str(execution.get("outcome") or "").strip()
+        if isinstance(execution, Mapping)
+        else ""
+    )
+    if configured_outcome:
+        if configured_outcome != "death":
+            return None
+    elif "death" not in explicit_outcome_concepts(user_message):
+        return None
+    window = study.get("time_window")
+    if isinstance(window, Mapping) and window.get("hours") not in (None, ""):
+        try:
+            if float(window.get("hours")) > QUESTION_LANDMARK_HOURS:
+                return None
+        except (TypeError, ValueError):
+            return None
+    specification = landmark_timing_specification(
+        outcome="death",
+        landmark_hours=QUESTION_LANDMARK_HOURS,
+        spec_id="question_landmark_24h",
+    )
+    return {
+        "sensitivity_specs": configuration.replace_sensitivity(
+            axis="timing", replacement=specification
+        ),
+        "confirmations": configuration.merge_confirmations(
+            plan_timing_landmark_24h=True,
+            plan_timing_descriptive_only=False,
+            plan_timing_time_varying=False,
+        ),
+    }
+
+
+def _timing_coordinates(plan: Mapping[str, Any]) -> Dict[str, str]:
+    requirement = _primary_requirement(plan)
+    _selected_design(plan)
+    exposure_materialized = str(requirement.get("exposure_source") or "").strip()
+    outcome_materialized = str(requirement.get("outcome") or "").strip()
+    exposure = _source_concept(exposure_materialized, field="primary exposure")
+    outcome = _source_concept(outcome_materialized, field="outcome")
+    return {
         "exposure": exposure,
         "outcome": outcome,
         "exposure_materialized": exposure_materialized,
         "outcome_materialized": outcome_materialized,
-        "event_time": event_time,
-        "observation_duration": observation_duration,
-        "observation_duration_unit": "hours",
+        **_landmark_axis_columns(outcome),
     }
 
 
@@ -476,21 +598,11 @@ def compile_agent_plan_configuration(
                     ),
                 },
             )
-        sensitivity = {
-            "spec_id": "agent_plan_landmark_24h",
-            "axis": "timing",
-            "strategy": "landmark",
-            "execution_variables": [
-                coordinates["event_time"],
-                coordinates["observation_duration"],
-            ],
-            "landmark_hours": 24,
-            "require_alive_at_landmark": True,
-            "exclude_negative_event_times": True,
-            "event_time_variable": coordinates["event_time"],
-            "observation_duration_variable": coordinates["observation_duration"],
-            "observation_duration_unit": coordinates["observation_duration_unit"],
-        }
+        sensitivity = landmark_timing_specification(
+            outcome=coordinates["outcome"],
+            landmark_hours=24,
+            spec_id="agent_plan_landmark_24h",
+        )
         patch["sensitivity_specs"] = configuration.replace_sensitivity(
             axis="timing", replacement=sensitivity
         )
@@ -977,4 +1089,6 @@ __all__ = [
     "pending_authorization_questions",
     "plan_decision_context",
     "proposed_adjustment_set",
+    "landmark_timing_specification",
+    "question_landmark_configuration",
 ]
