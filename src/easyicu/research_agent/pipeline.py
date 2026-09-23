@@ -206,6 +206,7 @@ from .planning.scientific_review import (
     render_plan_scientific_guardrails,
 )
 from .orchestration.config import (
+    PROGRESSIVE_PLANNER_STRATEGIES,
     PipelineConfig,
     assert_step_provider_budget_funds_its_repairs,
 )
@@ -2422,6 +2423,9 @@ class ResearchAgentPipeline:
             )
 
         if reused_prior_plan:
+            # Seal a plan-bound roster from the saved signed primary first; the
+            # same digest then governs migration, validation, and execution.
+            self._scientific_runtime_authorities = self._scientific_runtime_authorities.seal_for_plan(plan)
             plan, migrated_plan_path, plan_generation_mode = (
                 _apply_resume_plan_migrations(
                     plan=plan,
@@ -2462,7 +2466,7 @@ class ResearchAgentPipeline:
                 )
             plan = skill_obj.plan(context)
         else:
-            progressive = self._planner_strategy == "progressive_v2"
+            progressive = self._planner_strategy in PROGRESSIVE_PLANNER_STRATEGIES
             plan_generation_mode = "llm_progressive_v2" if progressive else "llm"
             planner_class = ProgressivePlannerAgent if progressive else PlannerAgent
             planner = planner_class(
@@ -2503,6 +2507,8 @@ class ResearchAgentPipeline:
                     ),
                 )
                 if progressive:
+                    # Family-spec fast path per attempt; falls back to the outline.
+                    planner_run_kwargs["planner_strategy"] = self._planner_strategy
                     progressive_result = _progressive_planning.run_pipeline_progressive_planner(
                         planner=planner,
                         context=agent_context,
@@ -2758,6 +2764,13 @@ class ResearchAgentPipeline:
         # ensure_* could rename or reorder step_ids and break the resume skip
         # set. A freshly generated plan still gets the full treatment.
         if not reused_prior_plan:
+            # Seal a plan-bound adjustment roster before shaping: the
+            # prespecified-sensitivity coverage check reads the runtime
+            # contract's roster, and an unsealed contract would make it project
+            # a duplicate landmark step that the signed owner then refuses.
+            self._scientific_runtime_authorities = (
+                self._scientific_runtime_authorities.seal_for_plan(plan)
+            )
             plan = _shape_fresh_plan(
                 pipeline=self,
                 plan=plan,
@@ -2781,6 +2794,13 @@ class ResearchAgentPipeline:
                 "a previously executed plan in memory"
             )
         plan = bound_dependence_plan
+        # The runtime contract may defer its adjustment roster to the reviewed
+        # plan. Seal it here, once, for every plan source, and keep the sealed
+        # authorities on the pipeline so validation, execution, review, and
+        # finalization all hold the digest the bound plan references.
+        self._scientific_runtime_authorities = (
+            self._scientific_runtime_authorities.seal_for_plan(plan)
+        )
         if not reused_prior_plan:
             # The signed runtime owner is the final public-input compiler. Run
             # it after generic input closure so measurement companions or other
@@ -3154,6 +3174,17 @@ class ResearchAgentPipeline:
                 build_naive_research_context
                 if self._disable_icu_context
                 else build_research_context
+            )
+            # The run identity keeps the caller's declaration; the context
+            # binds what the sealed authorities declare on top of it (a
+            # survival suite's time-to-event endpoint and exposure status
+            # column, a feasibility decision's formal result scope).
+            endpoint, primary_exposure, user_preferences = (
+                self._scientific_runtime_authorities.bind_run_inputs(
+                    endpoint=endpoint,
+                    primary_exposure=primary_exposure,
+                    user_preferences=user_preferences,
+                )
             )
             context_kwargs = dict(
                 research_question=question,

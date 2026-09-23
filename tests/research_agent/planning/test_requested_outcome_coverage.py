@@ -6,7 +6,12 @@ from easyicu.research_agent.planning.scientific_review import (
     build_plan_scientific_review,
     planned_model_outcomes,
 )
-from easyicu.research_agent.schema import AnalysisPlan, ConceptDescriptor, VariableRole
+from easyicu.research_agent.schema import (
+    AnalysisPlan,
+    AnalysisStep,
+    ConceptDescriptor,
+    VariableRole,
+)
 
 from .scientific_review_fixtures import _absolute_risk_distribution_step, _context
 
@@ -92,3 +97,66 @@ def test_a_descriptive_table_does_not_replace_the_requested_association_model():
     assert "REQUESTED_OUTCOME_COVERAGE_INCOMPLETE" in {
         finding.code for finding in review.findings
     }
+
+
+def _static_prediction_primary(**updates):
+    step = AnalysisStep(
+        step_id="primary_performance",
+        planned_analysis_role="primary",
+        intent="Fit the prespecified static model and report held-out performance.",
+        inputs=["death", "age", "exposure", "artifact:analysis_cohort"],
+        expected_outputs=["table:prediction_scores", "table:model_performance"],
+        method="prespecified_prediction_model_discrimination_calibration",
+        scientific_action_id="prediction.discrimination_calibration",
+    )
+    return step.model_copy(update=updates) if updates else step
+
+
+def test_claimed_static_prediction_primary_covers_its_declared_outcome():
+    context = _context()
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="prediction_model",
+        steps=[_static_prediction_primary()],
+    )
+
+    assert planned_model_outcomes(plan, context) == ("death",)
+    review = build_plan_scientific_review(context=context, plan=plan)
+    assert review.facts["missing_model_outcomes"] == []
+    assert "REQUESTED_OUTCOME_COVERAGE_INCOMPLETE" not in {
+        finding.code for finding in review.findings
+    }
+
+
+@pytest.mark.parametrize("updates", [
+    # The outcome is not part of the declared model-column prefix.
+    {"inputs": ["age", "exposure", "artifact:analysis_cohort"]},
+    # Supporting columns after the cohort input are not model columns.
+    {"inputs": ["age", "exposure", "artifact:analysis_cohort", "death"]},
+    # Without the static prediction action the step is not a claimed owner.
+    {"scientific_action_id": None},
+    {"planned_analysis_role": "secondary"},
+])
+def test_unclaimed_or_outcome_free_prediction_step_covers_nothing(updates):
+    context = _context()
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="prediction_model",
+        steps=[_static_prediction_primary(**updates)],
+    )
+
+    assert planned_model_outcomes(plan, context) == ()
+
+
+def test_static_prediction_primary_does_not_cover_a_second_requested_endpoint():
+    context = _multi_outcome_context()
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="prediction_model",
+        steps=[_static_prediction_primary()],
+    )
+
+    review = build_plan_scientific_review(context=context, plan=plan)
+
+    assert review.facts["model_covered_outcomes"] == ["death"]
+    assert review.facts["missing_model_outcomes"] == ["los_icu"]

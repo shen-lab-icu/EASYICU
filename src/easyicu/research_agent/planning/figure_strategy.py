@@ -16,6 +16,9 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Set
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..contracts.research_display import RESEARCH_DISPLAY_RULES
+from ..contracts.source_feasibility_validation import (
+    context_declares_source_feasibility_scope,
+)
 from ..contracts.figure_plan import (
     MEASUREMENT_PROCESS_AUDIT_INPUT,
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
@@ -361,13 +364,34 @@ _FAMILY_STRATEGIES: Dict[StudyDesignFamily, Dict[str, Any]] = {
             _role(
                 "data_quality",
                 "Feature availability and scaling affect cluster geometry.",
-                ("feature_missingness_matrix", "scaling_summary", "availability_panel"),
+                (
+                    "feature_missingness_matrix",
+                    "scaling_summary",
+                    "availability_panel",
+                    # The other families' data-quality roles already accept a
+                    # coverage heatmap, and the renderer alias below maps an
+                    # ``availability_heatmap`` onto it. Phenotyping omitted the
+                    # spelling, so a correctly roled availability matrix read
+                    # as an uncovered role.
+                    "coverage_heatmap",
+                ),
                 search_terms=("feature missingness", "scaling", "availability"),
                 placement="supplementary",
+            ),
+            # A criterion-versus-k curve reports how the cluster count was
+            # chosen. It is a selection diagnostic, not evidence that the
+            # groups are separable, so it never satisfies phenotype_structure.
+            _role(
+                "cluster_selection",
+                "Show how the reported cluster count was selected and whether the optimum was interior.",
+                ("criterion_curve", "information_criterion_curve", "elbow_plot"),
+                search_terms=("bic", "criterion", "cluster number", "elbow"),
+                required=False,
             ),
         ],
         "anti_patterns": [
             "A cluster heatmap without stability or clinical profile panels.",
+            "A criterion-versus-k curve presented as evidence of phenotype structure.",
             "Outcome association used as proof that clusters are causal entities.",
         ],
         "prompt_rules": [
@@ -495,6 +519,23 @@ def build_article_figure_strategy(
     analysis_family: StudyDesignFamily | None = None,
 ) -> ArticleFigureStrategy:
     family = analysis_family or infer_study_design_family(context)
+    if context_declares_source_feasibility_scope(context):
+        # The sealed feasibility decision renders no figure: the reviewed
+        # protocol forbids the contrast every causal panel would display.
+        return ArticleFigureStrategy(
+            analysis_family=family,
+            archetype="no_figure_fail_closed_decision",
+            hero_role="feasibility_decision",
+            minimum_distinct_chart_types=0,
+            role_strategies=[],
+            anti_patterns=[
+                "Any balance, positivity, contrast, or sensitivity panel: the "
+                "reviewed protocol declares the contrast non-identifiable.",
+            ],
+            prompt_rules=[
+                "Do not plan a figure; the signed feasibility table is the result.",
+            ],
+        )
     template = _FAMILY_STRATEGIES[family]
     roles = [role.model_copy(deep=True) for role in template["roles"]]
     if _data_quality_is_the_scientific_question(context):

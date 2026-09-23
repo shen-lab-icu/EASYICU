@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
 from ..authority.current_case_scientific_runtime import (
+    CurrentCaseScientificAuthorityError,
     CurrentCaseScientificRuntimeAuthority,
     load_current_case_scientific_runtime_authority,
 )
+from ..contracts.endpoint import EndpointSpec
 from ..schema import AnalysisPlan, ValidationFinding
 from ..trajectory.scientific_runtime_authority import (
     TrajectoryScientificRuntimeAuthority,
@@ -169,11 +171,27 @@ def _compilation_finding(
     authority: CurrentCaseScientificRuntimeAuthority,
     plan: AnalysisPlan,
     spec: _RuntimePlanCompilerSpec,
+    *,
+    sealed_from: CurrentCaseScientificRuntimeAuthority | None = None,
 ) -> ValidationFinding:
     detail: dict[str, Any] = {
         "reason_code": spec.reason_code,
         "execution_contract_sha256": authority.execution_contract_sha256,
     }
+    roster = getattr(authority, "plan_bound_adjustment_roster", None)
+    if roster is not None:
+        # The roster was Planner-selected and sealed by the host at bind
+        # time. Record it, and when this call performed the sealing, the
+        # unsealed digest too, so run lineage joins the Web projection to the
+        # executed contract.
+        detail["adjustment_roster_authority"] = roster.authority
+        detail["adjustment_roster"] = list(
+            getattr(authority, "required_adjustment_columns", ())
+        )
+        if sealed_from is not None:
+            detail["unsealed_execution_contract_sha256"] = (
+                sealed_from.execution_contract_sha256
+            )
     if spec.analysis_only:
         detail["analysis_only"] = True
     for detail_key, method_name in spec.governed_steps:
@@ -225,12 +243,91 @@ class ScientificRuntimeAuthorities:
         if self.current_case is not None:
             self.current_case.validate_plan(plan)
 
-    def planning_contract_context(self) -> str:
-        """Let the authority owner disclose otherwise hidden planner choices."""
+    def bind_run_inputs(
+        self,
+        *,
+        endpoint: EndpointSpec | None,
+        primary_exposure: str | None,
+        user_preferences: Mapping[str, Any] | None,
+    ) -> tuple[EndpointSpec | None, str | None, dict[str, Any] | None]:
+        """Project a sealed authority's declarations onto the run inputs.
+
+        A survival suite declares the event/time endpoint and the exposure
+        status column that the caller may otherwise only know as a binary
+        event-status outcome. The caller's coordinates are kept when they
+        agree; an absent coordinate takes the sealed value; a binary endpoint
+        on the sealed event column is the same event without its time axis
+        and is upgraded; anything else conflicts and fails closed here rather
+        than at execution. A source-feasibility authority declares the run's
+        formal result scope instead, so every planning contract narrows to
+        the fail-closed decision the reviewed protocol allows.
+        """
 
         authority = self.current_case
-        context_builder = getattr(authority, "planning_contract_context", None)
-        return context_builder() if callable(context_builder) else ""
+        scope = getattr(authority, "formal_result_scope", None)
+        preferences = dict(user_preferences) if user_preferences is not None else None
+        if isinstance(scope, str) and scope:
+            declared = str((preferences or {}).get("formal_result_scope") or "")
+            if declared and declared != scope:
+                raise CurrentCaseScientificAuthorityError(
+                    "run formal result scope conflicts with the sealed authority: "
+                    f"{declared} versus {scope}"
+                )
+            preferences = {**(preferences or {}), "formal_result_scope": scope}
+        projector = getattr(authority, "research_context_endpoint", None)
+        if authority is None or not callable(projector):
+            return endpoint, primary_exposure, preferences
+        sealed_endpoint = projector()
+        sealed_exposure = str(getattr(authority, "exposure_status_column", "") or "")
+        if endpoint is not None and endpoint != sealed_endpoint:
+            same_event_without_time_axis = (
+                endpoint.kind == "binary"
+                and endpoint.name == sealed_endpoint.event_column
+                and list(endpoint.levels or []) == list(sealed_endpoint.levels or [])
+            )
+            if not same_event_without_time_axis:
+                raise CurrentCaseScientificAuthorityError(
+                    "run endpoint conflicts with the sealed survival authority: "
+                    f"{endpoint.name} ({endpoint.kind}) versus "
+                    f"{sealed_endpoint.event_column} (time_to_event)"
+                )
+        if primary_exposure and sealed_exposure and primary_exposure != sealed_exposure:
+            raise CurrentCaseScientificAuthorityError(
+                "run primary exposure conflicts with the sealed survival authority: "
+                f"{primary_exposure} versus {sealed_exposure}"
+            )
+        return sealed_endpoint, (sealed_exposure or primary_exposure), preferences
+
+    def planning_contract_context(self) -> str:
+        """Let each sealed authority disclose otherwise hidden planner choices."""
+
+        disclosures: list[str] = []
+        for authority in (self.trajectory, self.current_case):
+            context_builder = getattr(authority, "planning_contract_context", None)
+            text = context_builder() if callable(context_builder) else ""
+            if text:
+                disclosures.append(text)
+        return "\n\n".join(disclosures)
+
+    def seal_for_plan(self, plan: AnalysisPlan) -> "ScientificRuntimeAuthorities":
+        """Return the authorities with any plan-bound coordinate sealed.
+
+        A contract that defers its adjustment roster to the reviewed plan
+        (``plan_bound_adjustment_roster``) is re-signed here from the primary
+        model's covariates. The pipeline keeps the returned value for
+        validation, execution, review, and finalization so every phase holds
+        the same digest the bound plan references. Exact contracts return
+        ``self`` unchanged; sealing is deterministic and idempotent.
+        """
+
+        authority = self.current_case
+        sealer = getattr(authority, "seal_adjustment_roster", None)
+        if authority is None or not callable(sealer):
+            return self
+        sealed = sealer(plan)
+        if sealed is authority:
+            return self
+        return replace(self, current_case=sealed)
 
     def bind_plan(
         self,
@@ -240,14 +337,20 @@ class ScientificRuntimeAuthorities:
 
         Each authority owns its scientific coordinates and any mechanical
         product/input wiring. Binding does not authorize the Planner to change
-        a sealed scientific coordinate.
+        a sealed scientific coordinate. A plan-bound roster is sealed first so
+        the bound plan references the executed digest; callers persist that
+        sealed value through :meth:`seal_for_plan`.
         """
 
         trajectory_authority = self.trajectory
-        if (
-            trajectory_authority is not None
-            and trajectory_authority.is_development_execution_only_plan(plan)
+        if trajectory_authority is not None and (
+            trajectory_authority.is_development_execution_only_plan(plan)
+            or trajectory_authority.names_signed_owners(plan)
         ):
+            # A Planner draft that names the signed owners is compiled the
+            # same way as the development projection: every scientific
+            # coordinate comes from the digest-bound authority, never from
+            # the draft's inputs, outputs or prose.
             bound = trajectory_authority.development_execution_only_plan(
                 research_question=plan.research_question
             )
@@ -274,10 +377,19 @@ class ScientificRuntimeAuthorities:
         authority = self.current_case
         if authority is None:
             return plan, []
-        compiled = _compile_current_case_plan(authority, plan)
+        sealed = self.seal_for_plan(plan).current_case
+        assert sealed is not None
+        compiled = _compile_current_case_plan(sealed, plan)
         assert compiled is not None
         bound, spec = compiled
-        return bound, [_compilation_finding(authority, bound, spec)]
+        return bound, [
+            _compilation_finding(
+                sealed,
+                bound,
+                spec,
+                sealed_from=authority if sealed is not authority else None,
+            )
+        ]
 
     def development_execution_only_plan(
         self,

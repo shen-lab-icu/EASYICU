@@ -347,6 +347,9 @@ _ANALYSIS_PLAN_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
         "evalue_conversion_spec",
         "subgroup_analysis_spec",
         "design_selection",
+        # The reviewed adjustment roster a signed owner retained plan-wide is
+        # scientific scope: changing it changes the primary model.
+        "adjustment_proposal",
     }
 )
 _ANALYSIS_PLAN_STEP_AUTHORITY_FIELDS = frozenset({"steps"})

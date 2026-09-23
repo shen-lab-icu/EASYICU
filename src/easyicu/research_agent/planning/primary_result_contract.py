@@ -11,8 +11,16 @@ from ..schema import (
     ResearchContext,
 )
 from ..contracts.survival import SURVIVAL_PH_DIAGNOSTIC_PRODUCT
+
+#: Plan method of the host-sealed fixed-landmark survival suite
+#: (``authority/current_case_scientific_runtime.LandmarkSurvivalRuntimeAuthority``).
+SEALED_LANDMARK_SURVIVAL_SUITE_METHOD = "signed_landmark_survival_suite"
 from ..contracts.survival_execution import survival_execution_verdict
 from ..contracts.capability_ids import LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID
+from ..contracts.source_feasibility_validation import (
+    context_declares_source_feasibility_scope,
+    plan_names_sealed_feasibility_owner,
+)
 from ..contracts.time_units import canonical_time_unit
 from .analysis_types import infer_analysis_type
 from .capability_registry import resolve_primary_capability
@@ -120,6 +128,17 @@ def validate_required_primary_result(
     family_result_required = declared_family in {"causal_inference", "survival"}
     if not association_required and not family_result_required:
         return
+    if context_declares_source_feasibility_scope(context):
+        # The sealed authority declared the contrast non-identifiable: the
+        # protocol's formal result is the signed fail-closed decision, so the
+        # plan must name that owner and must not draft a primary effect step.
+        if not plan_names_sealed_feasibility_owner(plan):
+            raise ValueError(
+                "A fail-closed source-feasibility scope requires the signed "
+                "feasibility owner as the only analysis step and forbids a "
+                "primary effect step"
+            )
+        return
     exposure = str(context.primary_exposure or "").strip()
     outcome = str(context.target_outcome or "").strip()
     if not exposure or not outcome:
@@ -137,6 +156,17 @@ def validate_required_primary_result(
         )
 
     primary = primary_steps[0]
+    if (
+        declared_family == "survival"
+        and str(primary.method or "").strip() == SEALED_LANDMARK_SURVIVAL_SUITE_METHOD
+    ):
+        # The sealed landmark survival suite is a host owner whose exposure,
+        # endpoint, horizon, adjustment set and PH policy are signed in the
+        # runtime authority, not written by the Planner. Its step can only
+        # execute under that authority (executor ownership and the effect
+        # gate both require the digest-bound rule ref), so a plan naming it
+        # without the authority fails closed at execution rather than here.
+        return
     if family_result_required:
         requirement = primary.family_primary_result_requirement
         if requirement is None:

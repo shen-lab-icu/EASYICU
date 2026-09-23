@@ -750,6 +750,51 @@ _PRIMARY_RESULT_ROLES_BY_ANALYSIS_TYPE: Dict[str, frozenset[str]] = {
 }
 
 
+#: The one display a fail-closed source-feasibility result owns.  A reviewed
+#: protocol that found the requested contrast non-identifiable produces no
+#: effect estimate, balance or contrast display; the article states the source
+#: capture boundary, what could not be verified, and the signed decision.
+SOURCE_FEASIBILITY_DISPLAY_MODULES: List[DisplayModuleSpec] = [
+    _module(
+        "source_feasibility_decision",
+        "feasibility_decision",
+        "core",
+        (
+            "A fail-closed feasibility result must state the source capture "
+            "boundary, the unverifiable evidence, and the decision with its "
+            "reason code."
+        ),
+        (
+            "source feasibility table",
+            "capture contract audit",
+            "fail-closed decision table",
+        ),
+    ),
+]
+
+SOURCE_FEASIBILITY_FAMILY_TEMPLATE: Dict[str, object] = {
+    "reporting_guidelines": [
+        "Target-trial emulation / causal-inference reporting (feasibility scope)"
+    ],
+    "required_methods": [
+        "target trial specification stating the contrast that was requested",
+        "signed source-capture audit of what the source can and cannot verify",
+        "fail-closed decision with its reason code; no effect estimation",
+    ],
+    "main_text_displays": ["source feasibility decision table"],
+    "supplementary_displays": ["future unblock requirements"],
+    "sensitivity_requirements": [],
+    "covariate_strategy": (
+        "No adjustment is performed: the reviewed protocol declares the "
+        "treatment contrast non-identifiable from the current source."
+    ),
+}
+
+
+def source_feasibility_display_modules() -> List[DisplayModuleSpec]:
+    return [module.model_copy(deep=True) for module in SOURCE_FEASIBILITY_DISPLAY_MODULES]
+
+
 def primary_result_roles_for_analysis_type(
     analysis_type: str,
 ) -> frozenset[str]:
@@ -1121,6 +1166,8 @@ def role_check_terms(role: str) -> Sequence[str]:
 
 
 __all__ = [
+    "SOURCE_FEASIBILITY_DISPLAY_MODULES",
+    "SOURCE_FEASIBILITY_FAMILY_TEMPLATE",
     "DisplayModuleSpec",
     "DisplayTier",
     "StudyDesignFamily",
@@ -1131,5 +1178,6 @@ __all__ = [
     "family_template",
     "primary_result_roles_for_analysis_type",
     "role_check_terms",
+    "source_feasibility_display_modules",
     "triggered_generic_modules",
 ]

@@ -259,8 +259,11 @@ def test_signed_trajectory_authority_projects_and_rebinds_execution_only_plan() 
     ]
     assert "manifest:trajectory_window_manifest" in plan.steps[0].expected_outputs
     assert "table:trajectory_candidate_selection" in plan.steps[1].expected_outputs
+    # The signed figure owner exports two surfaces: the selection diagnostic
+    # and the class characterization the stability owner's tables support.
     assert plan.steps[-1].expected_outputs == [
-        "figure:trajectory_selection_diagnostics"
+        "figure:trajectory_selection_diagnostics",
+        "figure:trajectory_phenotype_characterization",
     ]
     assert trajectory_step_roles(plan.steps[2]) == frozenset(
         {"stability_freeze", "characterization"}

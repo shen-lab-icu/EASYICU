@@ -101,6 +101,11 @@ from .deterministic_missingness import (
     missingness_measurement_audit_code,
     source_availability_audit_executor_owns_step,
 )
+from .association_binary_sensitivity_executor import (
+    ASSOCIATION_BINARY_SENSITIVITY_ANALYSIS_KIND,
+    association_binary_sensitivity_executor_code,
+    association_binary_sensitivity_executor_owns_step,
+)
 from .deterministic_robustness import (
     ROBUSTNESS_REPLAY_ANALYSIS_KIND,
     robustness_replay_declaration_verdict,
@@ -990,6 +995,25 @@ def _build_registry() -> StepExecutorRegistry:
             progress_message="Using planner-declared primary Cox executor",
             consumed_input_keys=lambda c: (
                 str(c.step.family_primary_result_requirement.input_product),
+            ),
+        ),
+        StepExecutor(
+            key=ASSOCIATION_BINARY_SENSITIVITY_ANALYSIS_KIND,
+            owns=lambda c: association_binary_sensitivity_executor_owns_step(
+                c.step, plan=c.plan
+            ),
+            render=lambda c: association_binary_sensitivity_executor_code(
+                c.step, plan=c.plan, plausibility_scope=c.plausibility_scope
+            ),
+            analysis_kind=ASSOCIATION_BINARY_SENSITIVITY_ANALYSIS_KIND,
+            selection_reason="association_binary_sensitivity_contract_preflight",
+            progress_message=(
+                "Using the host-owned binary sensitivity refit "
+                "(first-stay restriction or covariate functional form)"
+            ),
+            consumed_input_keys=lambda c: (
+                *c.typed_cohort_inputs(),
+                "table:adjusted_association_estimates",
             ),
         ),
         StepExecutor(

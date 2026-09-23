@@ -35,6 +35,9 @@ from ..authority.planned_role import (
 )
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
 from ..contracts.declared_product import typed_product
+from ..contracts.source_feasibility_validation import (
+    context_declares_source_feasibility_scope,
+)
 from ..planning.study_design import (
     StudyDesignBrief,
     _declaration_matches_term,
@@ -61,6 +64,24 @@ _AMBIGUOUS_ARTIFACT_ROLE_TERMS: Dict[str, Set[str]] = {
     # far too broad for artifact prose (for example, "model specification" in
     # a review-risk sentence is not a completed sensitivity analysis).
     "robustness": {"variant", "alternative", "specification"},
+}
+
+#: Article content roles a sealed host suite evidences inside one step.  The
+#: method names are closed host owners (``signed_*``): a plan can name them, but
+#: only the digest-bound runtime authority can execute them, and their
+#: registered products are case-specific (``table:h1_landmark_km_curve``) so
+#: the name matcher below cannot see the roles by itself.
+_SEALED_HOST_SUITE_ROLES: Dict[str, frozenset] = {
+    "signed_landmark_survival_suite": frozenset(
+        {
+            "baseline_context",
+            "cohort_accounting",
+            "temporal_absolute_risk",
+            "survival_effect",
+            "diagnostics",
+        }
+    ),
+    "signed_source_feasibility_fail_closed": frozenset({"feasibility_decision"}),
 }
 
 _ROLE_ALIASES: Dict[str, Sequence[str]] = {
@@ -146,6 +167,13 @@ _ROLE_ALIASES: Dict[str, Sequence[str]] = {
     ),
     "stability": ("stability", "bootstrap", "consensus"),
     "causal_protocol": ("target trial", "time zero", "estimand"),
+    "feasibility_decision": (
+        "source feasibility",
+        "source_feasibility",
+        "capture contract",
+        "fail-closed decision",
+        "fail_closed",
+    ),
     "balance_positivity": ("balance", "positivity", "weight distribution"),
     "causal_contrast": ("causal contrast", "iptw", "g-computation"),
     "distribution": (
@@ -300,7 +328,11 @@ def build_article_analysis_contract(
         analysis_family=resolved_brief.analysis_family,
         source_analysis_type=source_analysis_type,
         planner_owned_result_roles=sorted(
-            primary_result_roles_for_analysis_type(source_analysis_type)
+            # A fail-closed feasibility scope has no Planner-owned effect
+            # result: the sealed host owner carries the article's one role.
+            ()
+            if context_declares_source_feasibility_scope(context)
+            else primary_result_roles_for_analysis_type(source_analysis_type)
         ),
         reporting_guidelines=list(resolved_brief.reporting_guidelines),
         requirements=requirements,
@@ -593,6 +625,11 @@ def roles_covered_by_plan(
         # more precise run-specific name.
         if step.measurement_audit_spec is not None:
             typed_roles_by_step.setdefault(step.step_id, set()).add("data_quality")
+        sealed_roles = _SEALED_HOST_SUITE_ROLES.get(
+            str(step.method or "").strip().casefold().split(" with ", 1)[0]
+        )
+        if sealed_roles:
+            typed_roles_by_step.setdefault(step.step_id, set()).update(sealed_roles)
         if step.scientific_action_id is None:
             continue
         try:

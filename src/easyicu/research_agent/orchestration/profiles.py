@@ -82,7 +82,9 @@ class SubmissionProfile:
     # Planner strategy changes both the provider contract and the planning
     # authority chain. Historical profiles omit it to preserve their replay
     # bytes; additive profiles may pin the progressive strategy explicitly.
-    planner_strategy: Optional[Literal["monolithic_v1", "progressive_v2"]] = None
+    planner_strategy: Optional[
+        Literal["monolithic_v1", "progressive_v2", "family_spec_v1"]
+    ] = None
     # Live bibliographic retrieval changes the run-bound evidence set and must
     # therefore be a frozen coordinate for profiled runs. Historical profiles
     # omit it to preserve their serialized replay contracts.
@@ -698,10 +700,29 @@ E1_REVIEWED_DEMO_2026_09_21 = replace(
     ),
 )
 
-CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF = (
-    E1_PROGRESSIVE_PLANNER_CANARY_2026_09_21.ref
+E1_PROGRESSIVE_PLANNER_CANARY_2026_09_22 = replace(
+    E1_PROGRESSIVE_PLANNER_CANARY_2026_09_21,
+    version="20260922",
+    locked_at="2026-09-22T00:00:00+08:00",
+    # Additive re-lock for the family-spec Planner strategy: for a method family
+    # with a host template the Planner returns one typed spec and the host
+    # projects the Progressive skeleton; every other family keeps the exact
+    # Progressive v2 path.  Foundation digests are unchanged; 20260921 stays
+    # byte-frozen for historical replay.
+    planner_strategy="family_spec_v1",
 )
-CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF = E1_REVIEWED_DEMO_2026_09_21.ref
+
+E1_REVIEWED_DEMO_2026_09_22 = replace(
+    E1_REVIEWED_DEMO_2026_09_21,
+    version="20260922",
+    locked_at=E1_PROGRESSIVE_PLANNER_CANARY_2026_09_22.locked_at,
+    planner_strategy="family_spec_v1",
+)
+
+CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF = (
+    E1_PROGRESSIVE_PLANNER_CANARY_2026_09_22.ref
+)
+CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF = E1_REVIEWED_DEMO_2026_09_22.ref
 
 # Web Copilot may request live prior-art retrieval only after an explicit turn
 # grant. Keep that evidence-changing option out of the default E1 profiles and
@@ -910,11 +931,25 @@ E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_21 = replace(
     ),
 )
 
+E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_22 = replace(
+    E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_21,
+    version="20260922",
+    locked_at=E1_PROGRESSIVE_PLANNER_CANARY_2026_09_22.locked_at,
+    planner_strategy="family_spec_v1",
+)
+
+E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_22 = replace(
+    E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_21,
+    version="20260922",
+    locked_at=E1_REVIEWED_DEMO_2026_09_22.locked_at,
+    planner_strategy="family_spec_v1",
+)
+
 CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF = (
-    E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_21.ref
+    E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_22.ref
 )
 CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF = (
-    E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_21.ref
+    E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_22.ref
 )
 
 DEV9_AI_REVIEWED_DEMO_2026_08_22 = SubmissionProfile(
@@ -1166,6 +1201,9 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     E1_PROGRESSIVE_PLANNER_CANARY_2026_09_21.ref: (
         E1_PROGRESSIVE_PLANNER_CANARY_2026_09_21
     ),
+    E1_PROGRESSIVE_PLANNER_CANARY_2026_09_22.ref: (
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_22
+    ),
     E1_REVIEWED_DEMO_2026_08_15.ref: E1_REVIEWED_DEMO_2026_08_15,
     E1_REVIEWED_DEMO_2026_08_17.ref: E1_REVIEWED_DEMO_2026_08_17,
     E1_REVIEWED_DEMO_2026_08_19.ref: E1_REVIEWED_DEMO_2026_08_19,
@@ -1177,6 +1215,7 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     E1_REVIEWED_DEMO_2026_09_17.ref: E1_REVIEWED_DEMO_2026_09_17,
     E1_REVIEWED_DEMO_2026_09_18.ref: E1_REVIEWED_DEMO_2026_09_18,
     E1_REVIEWED_DEMO_2026_09_21.ref: E1_REVIEWED_DEMO_2026_09_21,
+    E1_REVIEWED_DEMO_2026_09_22.ref: E1_REVIEWED_DEMO_2026_09_22,
     E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24.ref: (
         E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24
     ),
@@ -1219,6 +1258,9 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_21.ref: (
         E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_21
     ),
+    E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_22.ref: (
+        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_22
+    ),
     E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_11.ref: (
         E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_11
     ),
@@ -1230,6 +1272,9 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     ),
     E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_21.ref: (
         E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_21
+    ),
+    E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_22.ref: (
+        E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_22
     ),
     DEV9_AI_REVIEWED_DEMO_2026_08_22.ref: DEV9_AI_REVIEWED_DEMO_2026_08_22,
     DEV9_AI_REVIEWED_DEMO_2026_08_24.ref: DEV9_AI_REVIEWED_DEMO_2026_08_24,
@@ -1483,6 +1528,7 @@ __all__ = [
     "E1_PROGRESSIVE_PLANNER_CANARY_2026_09_17",
     "E1_PROGRESSIVE_PLANNER_CANARY_2026_09_18",
     "E1_PROGRESSIVE_PLANNER_CANARY_2026_09_21",
+    "E1_PROGRESSIVE_PLANNER_CANARY_2026_09_22",
     "E1_REVIEWED_DEMO_2026_08_15",
     "E1_REVIEWED_DEMO_2026_08_17",
     "E1_REVIEWED_DEMO_2026_08_19",
@@ -1494,6 +1540,7 @@ __all__ = [
     "E1_REVIEWED_DEMO_2026_09_17",
     "E1_REVIEWED_DEMO_2026_09_18",
     "E1_REVIEWED_DEMO_2026_09_21",
+    "E1_REVIEWED_DEMO_2026_09_22",
     "CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF",
     "CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF",
     "E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_08_24",
@@ -1510,10 +1557,12 @@ __all__ = [
     "E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_17",
     "E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_18",
     "E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_21",
+    "E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_22",
     "E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_11",
     "E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_17",
     "E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_18",
     "E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_21",
+    "E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_22",
     "CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF",
     "CURRENT_E1_REVIEWED_DEMO_LIVE_PUBMED_DEV_PROFILE_REF",
     "DEV9_AI_REVIEWED_DEMO_2026_08_22",

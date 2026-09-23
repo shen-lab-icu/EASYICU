@@ -1168,6 +1168,56 @@ Owner values omitted.
     )
     assert "landmark_rmst_summary.csv" in violation_contract["source_data"]
 
+    # The plan-time panel promise on the signed figure owner binds to both
+    # rendered surfaces: the headline hazard-ratio forest and the sealed
+    # PH-policy substitute are the only grammars panel b may take.
+    from easyicu.research_agent.execution.figure_plan_binding import (
+        validate_step_planned_figure_contract_binding,
+    )
+
+    figure_owner = bound.steps[2]
+    assert [panel.article_role for panel in figure_owner.figure_panels] == [
+        "temporal_absolute_risk",
+        "survival_effect",
+        "cohort_accounting",
+        "diagnostics",
+    ]
+    assert figure_owner.figure_panels[1].policy_alternative_chart_types == [
+        "time_varying_hazard_ratio_forest",
+        "rmst_difference_forest",
+    ]
+    for surface_dir in (figure_dir, violation_dir):
+        assert (
+            validate_step_planned_figure_contract_binding(
+                step=figure_owner,
+                out_dir=surface_dir,
+                step_summary={
+                    "output_files": {
+                        authority.figure_product: "landmark_survival_suite.svg"
+                    }
+                },
+            )
+            == []
+        )
+    forged = figure_owner.model_copy(
+        update={
+            "figure_panels": [
+                panel.model_copy(update={"policy_alternative_chart_types": []})
+                for panel in figure_owner.figure_panels
+            ]
+        }
+    )
+    forged_findings = validate_step_planned_figure_contract_binding(
+        step=forged,
+        out_dir=violation_dir,
+        step_summary={
+            "output_files": {authority.figure_product: "landmark_survival_suite.svg"}
+        },
+    )
+    assert [item.detail["reason"] for item in forged_findings] == [
+        "runtime_panel_contract_mismatch"
+    ]
+
     invalid_ph = pd.read_csv(tmp_path / "landmark_ph_diagnostics.csv")
     invalid_ph.loc[0, "p_value"] = float("nan")
     with pytest.raises(ValueError, match="finite p values"):

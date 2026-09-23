@@ -29,7 +29,11 @@ CONTRACT_FILE = "data_quality.figure_contract.json"
 SOURCE_PRODUCT = "table:measurement_process_audit"
 
 
-def _plan(*, chart_type: str = "coverage_heatmap") -> AnalysisPlan:
+def _plan(
+    *,
+    chart_type: str = "coverage_heatmap",
+    policy_alternative_chart_types: Sequence[str] = (),
+) -> AnalysisPlan:
     return AnalysisPlan(
         research_question="Audit source coverage.",
         steps=[
@@ -47,6 +51,9 @@ def _plan(*, chart_type: str = "coverage_heatmap") -> AnalysisPlan:
                         article_role="data_quality",
                         chart_type=chart_type,
                         source_products=[SOURCE_PRODUCT],
+                        policy_alternative_chart_types=list(
+                            policy_alternative_chart_types
+                        ),
                     )
                 ],
             )
@@ -199,6 +206,55 @@ def test_planned_coverage_heatmap_rejects_runtime_horizontal_bar(
     assert finding.detail["runtime_panel_signatures"][0]["chart_type"] == (
         "horizontal_bar"
     )
+
+
+def test_a_declared_policy_alternative_chart_binds_but_an_undeclared_one_does_not(
+    tmp_path: Path,
+) -> None:
+    run_dir, records = _runtime(tmp_path, chart_type="missingness_matrix")
+
+    accepted = validate_planned_figure_contract_bindings(
+        plan=_plan(
+            chart_type="coverage_heatmap",
+            policy_alternative_chart_types=["missingness_matrix"],
+        ),
+        run_dir=run_dir,
+        per_step_records=records,
+    )
+    assert accepted == []
+
+    rejected = validate_planned_figure_contract_bindings(
+        plan=_plan(
+            chart_type="coverage_heatmap",
+            policy_alternative_chart_types=["leakage_audit"],
+        ),
+        run_dir=run_dir,
+        per_step_records=records,
+    )
+    assert [item.detail["reason"] for item in rejected] == [
+        "runtime_panel_contract_mismatch"
+    ]
+
+
+def test_policy_alternatives_must_be_distinct_chart_grammars() -> None:
+    with pytest.raises(ValueError, match="must not repeat chart_type"):
+        PlannedFigurePanelSpec(
+            panel_id="a",
+            figure_output=FIGURE_OUTPUT,
+            article_role="data_quality",
+            chart_type="coverage_heatmap",
+            source_products=[SOURCE_PRODUCT],
+            policy_alternative_chart_types=["coverage_heatmap"],
+        )
+    with pytest.raises(ValueError, match="must be unique"):
+        PlannedFigurePanelSpec(
+            panel_id="a",
+            figure_output=FIGURE_OUTPUT,
+            article_role="data_quality",
+            chart_type="coverage_heatmap",
+            source_products=[SOURCE_PRODUCT],
+            policy_alternative_chart_types=["missingness_matrix", "missingness_matrix"],
+        )
 
 
 def test_runtime_panel_cannot_borrow_a_different_typed_source_product(

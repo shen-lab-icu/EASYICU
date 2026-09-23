@@ -36,6 +36,10 @@ from ..contracts.figure_plan import (
     MISSINGNESS_MEASUREMENT_AUDIT_INPUT,
     ROBUSTNESS_FIGURE_INPUT,
     ROBUSTNESS_FIGURE_KNOWN_INPUTS,
+    STATIC_PREDICTION_FIGURE_INPUTS,
+    STATIC_PREDICTION_FIGURE_PANELS,
+    STATIC_PREDICTION_VALIDATION_FIGURE_PANELS,
+    STATIC_PREDICTION_VALIDATION_FIGURE_SUFFIX,
     association_sensitivity_composite_panels,
     association_summary_composite_panels,
     absolute_risk_association_composite_panels,
@@ -1200,6 +1204,18 @@ def bind_deterministic_figure_panels(
         frozenset(ASSOCIATION_SUMMARY_COMPOSITE_INPUTS): (
             association_summary_composite_panels(ASSOCIATION_SUMMARY_COMPOSITE_INPUTS)
         ),
+        frozenset(STATIC_PREDICTION_FIGURE_INPUTS): STATIC_PREDICTION_FIGURE_PANELS,
+    }
+    # A renderer that exports a second physical surface declares it as its
+    # own product slot. Panels are bound per figure output, so the plan can
+    # promise that surface's roles without pretending they share one image.
+    secondary_surfaces_by_inputs = {
+        frozenset(STATIC_PREDICTION_FIGURE_INPUTS): (
+            (
+                STATIC_PREDICTION_VALIDATION_FIGURE_SUFFIX,
+                STATIC_PREDICTION_VALIDATION_FIGURE_PANELS,
+            ),
+        ),
     }
     data_quality_sources, _candidates, _missing, _ambiguous = (
         _closed_data_quality_sources(plan.steps)
@@ -1232,12 +1248,25 @@ def bind_deterministic_figure_panels(
             for output in step.expected_outputs
             if str(output).startswith("figure:")
         ]
+        # A renderer that exports more than one surface names each extra one by
+        # extending its primary product slot. Recognising that structurally --
+        # rather than by counting outputs -- keeps every single-surface step
+        # binding exactly as before while a declared extra surface stays
+        # attributable to the step that owns it.
+        primary_outputs = [
+            output
+            for output in figure_outputs
+            if not any(
+                other != output and output.startswith(other)
+                for other in figure_outputs
+            )
+        ]
         input_set = frozenset(str(value) for value in step.inputs)
         if (
             _method_head(str(step.method or "")) == "visualization"
             and step.planned_analysis_role == "auxiliary"
             and input_set == _PREDICTION_FIGURE_CORE_INPUTS
-            and len(figure_outputs) == 1
+            and len(primary_outputs) == 1
             and len(clinical_utility_owners) == 1
         ):
             changed = True
@@ -1277,7 +1306,7 @@ def bind_deterministic_figure_panels(
             _method_head(str(step.method or "")) == "visualization"
             and step.planned_analysis_role == "auxiliary"
             and input_set == _ASSOCIATION_FIGURE_CORE_INPUTS
-            and len(figure_outputs) == 1
+            and len(primary_outputs) == 1
             and len(sensitivity_outputs) == 1
             and len(completeness_owners) == 1
         ):
@@ -1376,10 +1405,12 @@ def bind_deterministic_figure_panels(
                 ]
                 if len(producers) == 1:
                     templates = measurement_availability_figure_panels(input_key)
+        secondary_surfaces = secondary_surfaces_by_inputs.get(input_set, ())
         if (
             _method_head(str(step.method or "")) != "visualization"
             or step.planned_analysis_role != "auxiliary"
-            or len(figure_outputs) != 1
+            or len(primary_outputs) != 1
+            or len(figure_outputs) > 1 + len(secondary_surfaces)
             or templates is None
         ):
             steps.append(step)
@@ -1398,8 +1429,16 @@ def bind_deterministic_figure_panels(
         if all_row_inputs != tabular_inputs:
             steps.append(step)
             continue
-        figure_output = figure_outputs[0]
+        figure_output = primary_outputs[0]
         bound = [panel.bind(figure_output=figure_output) for panel in templates]
+        for suffix, surface_templates in secondary_surfaces:
+            surface = f"{figure_output}{suffix}"
+            # Only a step that actually declared the surface gets its promise;
+            # this owner never adds a product slot the plan did not ask for.
+            if surface in figure_outputs:
+                bound.extend(
+                    panel.bind(figure_output=surface) for panel in surface_templates
+                )
         scientific_signatures = {
             (
                 panel.article_role,
@@ -1773,6 +1812,8 @@ def close_empty_deterministic_figure_contracts(
             templates = absolute_risk_association_composite_panels(inputs)
         elif input_set == frozenset(CROSS_SECTIONAL_PHENOTYPING_FIGURE_INPUTS):
             templates = CROSS_SECTIONAL_PHENOTYPING_FIGURE_PANELS
+        elif input_set == frozenset(STATIC_PREDICTION_FIGURE_INPUTS):
+            templates = STATIC_PREDICTION_FIGURE_PANELS
         if (
             templates is None
             or (eligible is not None and step_id not in eligible)

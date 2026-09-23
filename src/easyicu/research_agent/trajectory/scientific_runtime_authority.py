@@ -14,12 +14,62 @@ from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..contracts.figure_plan import DeterministicFigurePanelTemplate
 from ..schema import AnalysisPlan, TrajectoryStabilitySpec
 from .plan_contract import (
     OBSERVED_DATA_DIAG_GMM_METHOD,
     STABILITY_CHARACTERIZATION_EXECUTOR_OUTPUTS,
     TRAJECTORY_STABILITY_CHARACTERIZATION_METHOD_HEAD,
     trajectory_step_roles,
+)
+
+#: Exact panels of the signed selection-diagnostics renderer
+#: (``execution/runners/trajectory_selection_figure_executor.py``): the
+#: candidate-grid criterion curve and observed coordinate availability. The
+#: suite renders no phenotype profile or stability figure by design, because a
+#: candidate grid decision is not a validated phenotype.
+TRAJECTORY_SELECTION_FIGURE_PANELS = (
+    DeterministicFigurePanelTemplate(
+        panel_id="a",
+        # The criterion curve reports how k was chosen; its own claim says it
+        # establishes neither stability nor clinical phenotypes, so it must not
+        # be promised as a phenotype-structure panel.
+        article_role="cluster_selection",
+        chart_type="criterion_curve",
+        source_products=("table:trajectory_candidate_selection",),
+    ),
+    DeterministicFigurePanelTemplate(
+        panel_id="b",
+        article_role="data_quality",
+        chart_type="availability_heatmap",
+        source_products=("table:feature_availability",),
+    ),
+)
+
+#: Exact panels of the same renderer's second surface. The characterization
+#: tables are produced by the signed stability owner and are empty by design
+#: when the prespecified reportability rule returns no stable solution; the
+#: renderer then states that outcome rather than drawing a phenotype, so the
+#: promise below holds under both results.
+TRAJECTORY_CHARACTERIZATION_FIGURE_PANELS = (
+    DeterministicFigurePanelTemplate(
+        panel_id="a",
+        article_role="phenotype_profile",
+        chart_type="profile_heatmap",
+        source_products=("table:trajectory_profiles",),
+    ),
+    DeterministicFigurePanelTemplate(
+        panel_id="b",
+        article_role="phenotype_structure",
+        chart_type="cluster_heatmap",
+        source_products=("table:trajectory_profiles", "table:cluster_sizes"),
+    ),
+    DeterministicFigurePanelTemplate(
+        panel_id="c",
+        article_role="stability",
+        chart_type="subsampling_ari",
+        source_products=("table:cluster_stability",),
+    ),
 )
 
 
@@ -248,16 +298,83 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
                         "inputs": [
                             "table:trajectory_candidate_selection",
                             "table:feature_availability",
+                            "table:trajectory_profiles",
+                            "table:cluster_sizes",
+                            "table:cluster_stability",
                         ],
-                        "expected_outputs": ["figure:trajectory_selection_diagnostics"],
+                        "expected_outputs": [
+                            "figure:trajectory_selection_diagnostics",
+                            "figure:trajectory_phenotype_characterization",
+                        ],
                         "method": "signed_trajectory_selection_diagnostic_figure",
                         "icu_rule_refs": [self.plan_rule_ref],
+                        "figure_panels": [
+                            *(
+                                panel.bind(
+                                    figure_output=(
+                                        "figure:trajectory_selection_diagnostics"
+                                    )
+                                ).model_dump(mode="json")
+                                for panel in TRAJECTORY_SELECTION_FIGURE_PANELS
+                            ),
+                            *(
+                                panel.bind(
+                                    figure_output=(
+                                        "figure:trajectory_phenotype_characterization"
+                                    )
+                                ).model_dump(mode="json")
+                                for panel in TRAJECTORY_CHARACTERIZATION_FIGURE_PANELS
+                            ),
+                        ],
                     },
                 ],
             }
         )
         self.validate_plan(plan)
         return plan
+
+    def names_signed_owners(self, plan: AnalysisPlan) -> bool:
+        """Whether a Planner draft names the signed representation and candidate owners.
+
+        A draft cannot carry this authority's digest before the host binds it,
+        so the rule ref is not required here; the closed ``signed_*`` and
+        observed-data GMM method names are only executable through this
+        sealed authority, and ``bind_plan`` replaces the draft with the four
+        signed owners rather than trusting any of its other coordinates.
+        """
+
+        methods = [str(step.method or "").strip() for step in plan.steps]
+        return (
+            str(plan.analysis_type or "") == "trajectory_clustering"
+            and methods.count(self.representation_plan_method) == 1
+            and methods.count(OBSERVED_DATA_DIAG_GMM_METHOD) == 1
+            and methods.index(self.representation_plan_method)
+            < methods.index(OBSERVED_DATA_DIAG_GMM_METHOD)
+        )
+
+    def planning_contract_context(self) -> str:
+        """Disclose the sealed suite so a planner can name its owners, not re-derive them."""
+
+        coordinates = {
+            "sealed_representation_owner": self.representation_plan_method,
+            "sealed_candidate_owner": OBSERVED_DATA_DIAG_GMM_METHOD,
+            "coordinate_concepts": list(self.coordinate_concepts),
+            "descriptive_only_concepts": list(self.descriptive_only_concepts),
+            "window_hours": [self.window_start_hours, self.window_end_hours],
+            "grid_width_hours": self.grid_width_hours,
+            "candidate_cluster_counts": list(self.candidate_cluster_counts),
+            "representation_outputs": list(self.representation_required_outputs),
+        }
+        return (
+            "CALLER-BOUND FIXED-WINDOW TRAJECTORY SUITE: the representation step "
+            "and the primary candidate-selection step are owned by the sealed "
+            "host owners named here; the host compiles the fixed-grid "
+            "representation, every signed candidate fit, the stability design "
+            "and the selection diagnostics figure from this contract. Name the "
+            "owners; do not choose features, a model family, a cluster count or "
+            "an eligibility threshold.\n"
+            + json.dumps(coordinates, ensure_ascii=False, sort_keys=True)
+        )
 
     def is_development_execution_only_plan(self, plan: AnalysisPlan) -> bool:
         # Generic article shaping and the step cap run before this final owner
@@ -359,9 +476,15 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
                 != (
                     "table:trajectory_candidate_selection",
                     "table:feature_availability",
+                    "table:trajectory_profiles",
+                    "table:cluster_sizes",
+                    "table:cluster_stability",
                 )
                 or tuple(figure.expected_outputs)
-                != ("figure:trajectory_selection_diagnostics",)
+                != (
+                    "figure:trajectory_selection_diagnostics",
+                    "figure:trajectory_phenotype_characterization",
+                )
                 or order[figure.step_id] <= order[stability.step_id]
             ):
                 raise TrajectoryScientificAuthorityError(
@@ -502,6 +625,7 @@ __all__ = [
     "CoordinateScalingAuthority",
     "EvidenceStateAuthority",
     "TrajectoryScientificAuthorityError",
+    "TRAJECTORY_CHARACTERIZATION_FIGURE_PANELS",
     "TrajectoryScientificRuntimeAuthority",
     "build_trajectory_scientific_runtime_authority",
     "load_trajectory_scientific_runtime_authority",

@@ -245,9 +245,33 @@ def resolve_study_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
     return design
 
 
+def _validate_trajectory_design(study: Mapping[str, Any]) -> None:
+    """Surface a contradictory trajectory declaration before spending anything.
+
+    The trajectory projection owns this policy; calling it here only moves the
+    same refusal earlier, to the point where the user can still fix the study
+    without having paid for a materialization.
+    """
+
+    from easyicu.webserver.scientific_runtime_projection import (
+        WebScientificRuntimeProjectionError,
+    )
+    from easyicu.webserver.trajectory_runtime_projection import (
+        validate_trajectory_design_declaration,
+    )
+
+    try:
+        validate_trajectory_design_declaration(study)
+    except WebScientificRuntimeProjectionError as exc:
+        raise ResearchPipelineRunError(
+            exc.code, str(exc), details=exc.details
+        ) from exc
+
+
 def _validate_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
     """Fail closed without substituting a different inferential design."""
 
+    _validate_trajectory_design(study)
     raw = resolve_study_analysis_design(study)
     if not raw:
         if _primary_exposure(study) and _target_outcome(study):

@@ -21,8 +21,16 @@ from easyicu.research_agent.execution.runners.prediction_model_executor import (
     run_prediction_robustness_specs,
     run_prediction_score_analysis,
 )
+from easyicu.research_agent.contracts.figure_plan import (
+    STATIC_PREDICTION_FIGURE_PANELS,
+    STATIC_PREDICTION_VALIDATION_FIGURE_PANELS,
+    STATIC_PREDICTION_VALIDATION_FIGURE_SUFFIX,
+)
 from easyicu.research_agent.contracts.prediction_execution import (
     static_prediction_model_columns,
+)
+from easyicu.research_agent.execution.figure_plan_binding import (
+    validate_step_planned_figure_contract_binding,
 )
 from easyicu.research_agent.execution.runners.selection import select_standard_executor
 from easyicu.research_agent.execution.final_validation import (
@@ -295,7 +303,10 @@ def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
             "table:validation",
             "table:clinical_utility",
         ],
-        expected_outputs=["figure:prediction_figure"],
+        expected_outputs=[
+            "figure:prediction_figure",
+            "figure:prediction_figure_validation_stability",
+        ],
         method="visualization",
         input_consumption_contracts=[
             {"input_key": key, "mode": "all_rows"}
@@ -389,6 +400,44 @@ def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
     assert "calibration" in contract["statistics_note"].lower()
     assert "clinical benefit" in contract["statistics_note"].lower()
 
+    # The plan-time panel promise projected by shaping for this exact input
+    # set must be what the host renderer implements, or the end-of-execute
+    # join fails closed.
+    shaped, panel_findings = bind_deterministic_figure_panels(
+        plan=AnalysisPlan(research_question="Predict mortality.", steps=[figure_step])
+    )
+    planned = shaped.steps[0]
+    assert [
+        (panel.panel_id, panel.article_role, panel.chart_type)
+        for panel in planned.figure_panels
+    ] == [
+        (template.panel_id, template.article_role, template.chart_type)
+        for template in (
+            *STATIC_PREDICTION_FIGURE_PANELS,
+            *STATIC_PREDICTION_VALIDATION_FIGURE_PANELS,
+        )
+    ]
+    # One exported image is one surface, so the repeated-split validation
+    # panels carry their own product slot instead of joining the composite.
+    assert {panel.figure_output for panel in planned.figure_panels} == {
+        "figure:prediction_figure",
+        "figure:prediction_figure_validation_stability",
+    }
+    assert {
+        panel.article_role
+        for panel in planned.figure_panels
+        if panel.figure_output.endswith(STATIC_PREDICTION_VALIDATION_FIGURE_SUFFIX)
+    } == {"validation_design", "validation"}
+    assert [finding.detail["reason"] for finding in panel_findings] == [
+        "deterministic_figure_panels_bound"
+    ]
+    assert (
+        validate_step_planned_figure_contract_binding(
+            step=planned, out_dir=figure_dir, step_summary=summary
+        )
+        == []
+    )
+
 
 def test_prediction_figure_shape_binds_registered_clinical_utility() -> None:
     core_inputs = [
@@ -478,3 +527,66 @@ def test_prediction_owner_executes_exact_complete_case_robustness_spec(
     assert rows[0]["ci_low"] <= rows[0]["point_estimate"] <= rows[0]["ci_high"]
     assert results[0]["analysis"] == "complete_case_refit_same_patient_split"
     assert results[0]["authority_scope"] == "analysis_only"
+
+    # The run-level panel reads the owner's rows from its step summary, so the
+    # locked spec is executed -- not a blank row the finaliser must refuse.
+    from easyicu.research_agent.robustness.panel import (
+        build_robustness_panel_from_records,
+        unexecuted_locked_spec_ids,
+    )
+
+    spec = RobustnessSpec(
+        spec_id="complete_case_declared_model",
+        axis="missing",
+        description="Complete-case refit of the exact model roster.",
+        missing_override={
+            "strategy": "complete_case",
+            "variables": ["age", "sex", "marker", "death"],
+        },
+    )
+    panel = build_robustness_panel_from_records(
+        specs=[spec],
+        per_step_records=[
+            {
+                "step_id": "primary_model",
+                "status": "ok",
+                "step_summary": {"robustness_rows": rows},
+                "step_summary_evidence_id": "primary_model_summary",
+            }
+        ],
+    )
+    assert unexecuted_locked_spec_ids(panel) == []
+    executed = [row for row in panel.rows if row.spec_id == spec.spec_id]
+    assert len(executed) == 1 and executed[0].converged
+    assert executed[0].evidence_id == "primary_model_summary"
+
+    # A narrower complete-case set is another analysis: the owner leaves it
+    # unexecuted and the panel keeps it visible as a blank locked row.
+    narrower = RobustnessSpec(
+        spec_id="complete_case_narrower",
+        axis="missing",
+        description="Complete-case refit on a subset of the roster.",
+        missing_override={"strategy": "complete_case", "variables": ["age", "death"]},
+    )
+    narrower_rows, _ = run_prediction_robustness_specs(
+        frame=frame,
+        outcome=frame["death"],
+        groups=groups,
+        unit_ids=scores["unit_id"],
+        split=scores["split"].to_numpy(),
+        features=("age", "sex", "marker"),
+        specs=[narrower],
+    )
+    assert narrower_rows == []
+    blank = build_robustness_panel_from_records(
+        specs=[narrower],
+        per_step_records=[
+            {
+                "step_id": "primary_model",
+                "status": "ok",
+                "step_summary": {"robustness_rows": narrower_rows},
+                "step_summary_evidence_id": "primary_model_summary",
+            }
+        ],
+    )
+    assert unexecuted_locked_spec_ids(blank) == ["complete_case_narrower"]

@@ -52,6 +52,7 @@ from .contracts.figure_plan import PlannedFigurePanelSpec
 from .contracts.model_terms import (  # noqa: F401 - compatibility identities
     ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES,
     ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES,
+    AdjustmentProposal,
     ModelTermSpec,
     PlannedModelRequirement,
     validate_model_term_roster,
@@ -652,6 +653,15 @@ class UserPreferences(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     inferred_analysis_family: Optional[str] = None
+    # A sealed runtime authority can declare that the run's only formal result
+    # is a fail-closed feasibility decision (the reviewed protocol found the
+    # requested contrast non-identifiable from the source).  The article,
+    # figure, robustness and primary-result contracts then narrow to that
+    # result instead of demanding the effect-estimation roles the protocol
+    # forbids.  Projected by the runtime authorities bus, never by prose.
+    formal_result_scope: Optional[Literal["source_feasibility_fail_closed"]] = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     starter_template_key: Optional[str] = None
     preferred_methods: Optional[str] = None
     evaluation_focus: Optional[str] = None
@@ -2079,13 +2089,28 @@ class AnalysisStep(BaseModel):
                 )
         if self.figure_panels:
             method_head = str(self.method or "").strip().lower().split(" with ", 1)[0]
-            if method_head != "visualization":
+            # A sealed host renderer (``signed_<suite>_figure``) is a figure
+            # step whose panels the signing authority declares; the Planner's
+            # own figure steps still use ``visualization``.
+            if method_head != "visualization" and not re.fullmatch(
+                r"signed_[a-z0-9_]+_figure", method_head
+            ):
                 raise ValueError(
-                    "figure_panels are valid only on method='visualization' steps"
+                    "figure_panels are valid only on method='visualization' "
+                    "steps or sealed host figure renderers"
                 )
-            panel_ids = [panel.panel_id for panel in self.figure_panels]
+            # A panel id identifies a panel inside its own exported surface.
+            # A renderer that declares more than one figure product therefore
+            # repeats a/b/c across surfaces, and the end-of-execute join reads
+            # the ids per output, so uniqueness is per figure output.
+            panel_ids = [
+                (str(panel.figure_output), panel.panel_id)
+                for panel in self.figure_panels
+            ]
             if len(panel_ids) != len(set(panel_ids)):
-                raise ValueError("figure_panels panel_id values must be unique per step")
+                raise ValueError(
+                    "figure_panels panel_id values must be unique per figure output"
+                )
             declared_outputs = set(self.expected_outputs)
             declared_inputs = set(self.inputs)
             undeclared_outputs = sorted(
@@ -2305,6 +2330,15 @@ class AnalysisPlan(BaseModel):
         ),
     )
     design_selection: Optional[ResearchDesignSelection] = Field(default=None, exclude_if=lambda value: value is None)
+    adjustment_proposal: Optional[AdjustmentProposal] = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Host-retained copy of the reviewed primary model's adjustment roster, "
+            "rationales, and temporal roles, written when a signed runtime owner "
+            "replaces the generic primary model; never Planner-authored directly."
+        ),
+    )
     rationale: Optional[str] = None
     revision: int = 1
 

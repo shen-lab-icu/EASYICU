@@ -421,6 +421,17 @@ def _planner_transport_schema(
         # the optional public field but must not repeat this high-entropy
         # authority inside its already budget-constrained transport schema.
         schema["properties"].pop("design_selection", None)
+        # The adjustment proposal is written by a signed runtime owner at bind
+        # time from the Planner's own model requirement; it is never a Planner
+        # transport field.
+        schema["properties"].pop("adjustment_proposal", None)
+        definitions.pop("AdjustmentProposal", None)
+        # Policy-dependent chart alternatives are declared only by a sealed
+        # runtime authority for its own renderer; the Planner never writes
+        # them, so they stay out of its budget-constrained transport schema.
+        panel_properties = definitions.get("PlannedFigurePanelSpec", {}).get("properties")
+        if isinstance(panel_properties, dict):
+            panel_properties.pop("policy_alternative_chart_types", None)
         definitions.pop("ResearchDesignSelection", None)
         definitions.pop("ResearchDesignCandidate", None)
         definitions.pop("CandidateLiteratureDesignDecision", None)

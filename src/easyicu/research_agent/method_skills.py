@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+from pathlib import Path
 from typing import Any, Literal, Tuple
 
 from .planning.capability_registry import CAPABILITY_REGISTRY
@@ -22,6 +23,16 @@ from .planning.method_adapter_catalog import HIGH_FREQUENCY_METHOD_ADAPTERS
 
 METHOD_SKILL_REGISTRY_VERSION = "easyicu.method-skills/3"
 METHOD_SKILL_PACKAGE_VERSION = "easyicu.method-skill-package/3"
+
+#: Workflows whose package ships an executable reference implementation from
+#: ``research_agent/skill_packages/<package>``: real ``scripts/`` that run the
+#: standard workflow through the host kernels, plus the package's own SKILL.md
+#: and method notes. Every other workflow is documentation only.
+REFERENCE_SCRIPT_PACKAGES: dict[str, str] = {
+    "fixed-landmark-association-study": "landmark_categorical_association",
+}
+DOCUMENTATION_ONLY_BOUNDARY = "documentation_only_host_execution_required"
+REFERENCE_SCRIPTS_BOUNDARY = "host_reference_scripts_executable"
 
 ClaimCeiling = Literal["reportable", "analysis_only"]
 ExecutionMode = Literal["deterministic_host", "agent_coded_with_host_gates"]
@@ -797,6 +808,39 @@ def _package_skill_markdown(kind: str, row: dict[str, Any]) -> str:
                     "additional primary questions unless the reviewed plan says so.",
                 ]
             )
+        if row["id"] in REFERENCE_SCRIPT_PACKAGES:
+            package = REFERENCE_SCRIPT_PACKAGES[row["id"]]
+            lines.extend(
+                [
+                    "",
+                    "### Reference scripts (executable)",
+                    "",
+                    "This workflow ships a tested reference implementation under "
+                    f"`scripts/` (Python package `easyicu.research_agent.skill_packages.{package}`). "
+                    "Run it as written instead of writing inline analysis code:",
+                    "",
+                    "```python",
+                    f"from easyicu.research_agent.skill_packages.{package} import (",
+                    "    LandmarkCategoricalSpec, load_cohort, run_analysis, generate_all_plots, export_all,",
+                    ")",
+                    "cohort = load_cohort(cohort_path, spec)        # ✓ Cohort loaded ...",
+                    "result = run_analysis(cohort, work_dir=out)    # ✓ Analysis completed successfully!",
+                    "figures = generate_all_plots(result, out)      # ✓ All plots generated successfully!",
+                    "export_all(result, out, figures=figures)       # === Export Complete ===",
+                    "```",
+                    "",
+                    "Each step prints a verification token; `export_all` prints its token "
+                    "only after the export consistency gate passes. Every number in a "
+                    "downstream report is copied from `key_metrics.csv`. The package's own "
+                    "`references/reference_scripts.md` (its SKILL.md), `references/methods.md`, "
+                    "`references/caveat_flags.md`, `references/reporting_checklist.md` and "
+                    "`references/comparators_kdigo_mortality.md` are included in this package.",
+                    "",
+                    "Running the scripts does not replace the host's plan review, evidence "
+                    "binding or human approval; the output stays analysis-only until the "
+                    "host gates say otherwise.",
+                ]
+            )
         if row["id"] == "trajectory-phenotyping":
             lines.extend(
                 [
@@ -1063,6 +1107,41 @@ def run(
 '''
 
 
+def _reference_script_sources(package: str) -> dict[str, str]:
+    """Read one executable skill package's SKILL.md, references and scripts.
+
+    Files are read from disk rather than imported so that projecting the
+    catalogue never imports statsmodels/matplotlib; the package's own tests
+    prove the scripts run.
+    """
+
+    root = Path(__file__).resolve().parent / "skill_packages" / package
+    if not root.is_dir():
+        raise MethodSkillPackageNotFound(
+            f"reference script package {package!r} is missing from the checkout"
+        )
+    sources: dict[str, str] = {}
+    skill_markdown = root / "SKILL.md"
+    if skill_markdown.is_file():
+        sources["references/reference_scripts.md"] = skill_markdown.read_text(
+            encoding="utf-8"
+        )
+    for path in sorted((root / "references").glob("*.md")):
+        sources[f"references/{path.name}"] = path.read_text(encoding="utf-8")
+    spec_module = root / "spec.py"
+    if spec_module.is_file():
+        sources["scripts/spec.py"] = spec_module.read_text(encoding="utf-8")
+    for path in sorted((root / "scripts").glob("*.py")):
+        if path.name == "__init__.py":
+            continue
+        sources[f"scripts/{path.name}"] = path.read_text(encoding="utf-8")
+    if not any(name.startswith("scripts/") for name in sources):
+        raise MethodSkillPackageNotFound(
+            f"reference script package {package!r} ships no scripts"
+        )
+    return sources
+
+
 def method_skill_package(skill_id: str, *, enabled: bool) -> dict[str, Any]:
     """Return one digest-bound, read-only package grouped by purpose."""
 
@@ -1084,6 +1163,10 @@ def method_skill_package(skill_id: str, *, enabled: bool) -> dict[str, Any]:
     if row["id"] == "trajectory-phenotyping":
         sources["references/trajectory_assignment.md"] = _trajectory_assignment_markdown()
         sources["scripts/early_subtype_assignment.py"] = _trajectory_assignment_python()
+    execution_boundary = DOCUMENTATION_ONLY_BOUNDARY
+    if row["id"] in REFERENCE_SCRIPT_PACKAGES:
+        sources.update(_reference_script_sources(REFERENCE_SCRIPT_PACKAGES[row["id"]]))
+        execution_boundary = REFERENCE_SCRIPTS_BOUNDARY
     files = []
     for path, content in sources.items():
         encoded = content.encode("utf-8")
@@ -1111,15 +1194,18 @@ def method_skill_package(skill_id: str, *, enabled: bool) -> dict[str, Any]:
         "catalog_sha256": catalog_sha256,
         "package_sha256": hashlib.sha256(package_canonical).hexdigest(),
         "read_only": True,
-        "execution_boundary": "documentation_only_host_execution_required",
+        "execution_boundary": execution_boundary,
         "files": files,
     }
 
 
 __all__ = [
+    "DOCUMENTATION_ONLY_BOUNDARY",
     "METHOD_SKILL_PACKAGE_VERSION",
     "METHOD_SKILL_REGISTRY_VERSION",
     "METHOD_SKILLS",
+    "REFERENCE_SCRIPTS_BOUNDARY",
+    "REFERENCE_SCRIPT_PACKAGES",
     "MethodSkillPackageNotFound",
     "MethodSkillSpec",
     "method_skill_catalog",

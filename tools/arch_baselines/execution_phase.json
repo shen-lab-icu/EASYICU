@@ -22,8 +22,8 @@
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 7364,
-      "sha256": "fb5cab1a9deef907b396bfb6c5a697ca98ac9a527b892d647a8b78ee9e6314bf",
+      "loc": 7395,
+      "sha256": "8e2ed5ad7dc0305136f74ecfbbf5a974d7b205bfbc75991999fc355e3035bbc6",
       "intra_package_import_edges": 132,
       "shim_bypass_violations": []
     },
@@ -250,8 +250,8 @@
       "shim_bypass_violations": []
     },
     "schema.py": {
-      "loc": 3131,
-      "sha256": "38a068da38b77a498ad90a38d2dec1d1e71e512f8f72a1ee51069041e4917b8b",
+      "loc": 3165,
+      "sha256": "6f4dac943f6b0baa40c60ab713286b380719a72597054819a9b173174a423c77",
       "intra_package_import_edges": 22,
       "shim_bypass_violations": []
     },
@@ -322,9 +322,9 @@
       "shim_bypass_violations": []
     },
     "agents/progressive_planner.py": {
-      "loc": 4867,
-      "sha256": "78d569db04a202acadf2fa5bdaf661f747cac5fab34ccf6e2447384331aa6e75",
-      "intra_package_import_edges": 42,
+      "loc": 5060,
+      "sha256": "84c07a4c5f02948265b98ccb92c0a9df216b0ae65d5799536e2d80164df2ebd5",
+      "intra_package_import_edges": 44,
       "shim_bypass_violations": []
     }
   },
@@ -383,7 +383,7 @@
     },
     "pipeline.py::run": {
       "lines": 806,
-      "line_start": 4306,
+      "line_start": 4337,
       "direct_nested_funcs": 13,
       "total_nested_funcs": 13,
       "own_bound_names": 110,
@@ -392,8 +392,8 @@
       "callable_closure_captured_names": 44
     },
     "pipeline.py::_generate_or_resume_plan": {
-      "lines": 444,
-      "line_start": 2266,
+      "lines": 449,
+      "line_start": 2267,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 0,
       "own_bound_names": 55,
@@ -402,8 +402,8 @@
       "callable_closure_captured_names": 0
     },
     "pipeline.py::_run_plan_phase": {
-      "lines": 634,
-      "line_start": 3086,
+      "lines": 645,
+      "line_start": 3106,
       "direct_nested_funcs": 0,
       "total_nested_funcs": 5,
       "own_bound_names": 85,
@@ -412,11 +412,19 @@
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Reviewed SimpleImputer alias-to-Pipeline preflight guard adds 56 lines to gates/preflight.py; bare alias use remains blocked",
+  "baseline_reason": "Method-family closure 2026-09-22 (family_spec_v1 lane), reviewed growth: pipeline.py +31 (planner-strategy dispatch and sealed trajectory/survival/feasibility authority hooks; _run_plan_phase +11 stays under its 900-line hard gate, _generate_or_resume_plan +5); schema.py +34 (figure panels scoped and unique per figure output); agents/progressive_planner.py +193 (the family-spec attempt is delegated to agents/family_spec_planner.py while Planner-private binders stay in-module; +2 intra-package import edges). Targeted move of these three files only: the four regressions already present at HEAD b81c04ad6 (gates/preflight.py, audits/cross_step.py, numeric_scalars.py, discovery/idea_mining.py) are not absorbed here and remain for their owners.",
   "baseline_accepted_growth": {
-    "gates/preflight.py": {
-      "loc_was": 6386,
-      "loc_now": 6442
+    "pipeline.py": {
+      "loc_was": 7364,
+      "loc_now": 7395
+    },
+    "schema.py": {
+      "loc_was": 3131,
+      "loc_now": 3165
+    },
+    "agents/progressive_planner.py": {
+      "loc_was": 4867,
+      "loc_now": 5060
     }
   },
   "baseline_history": [
@@ -1251,6 +1259,24 @@
           "loc_now": 6442
         }
       }
+    },
+    {
+      "reason": "Method-family closure 2026-09-22 (family_spec_v1 lane), reviewed growth: pipeline.py +31 (planner-strategy dispatch and sealed trajectory/survival/feasibility authority hooks; _run_plan_phase +11 stays under its 900-line hard gate, _generate_or_resume_plan +5); schema.py +34 (figure panels scoped and unique per figure output); agents/progressive_planner.py +193 (the family-spec attempt is delegated to agents/family_spec_planner.py while Planner-private binders stay in-module; +2 intra-package import edges). Targeted move of these three files only: the four regressions already present at HEAD b81c04ad6 (gates/preflight.py, audits/cross_step.py, numeric_scalars.py, discovery/idea_mining.py) are not absorbed here and remain for their owners.",
+      "accepted_growth": {
+        "pipeline.py": {
+          "loc_was": 7364,
+          "loc_now": 7395
+        },
+        "schema.py": {
+          "loc_was": 3131,
+          "loc_now": 3165
+        },
+        "agents/progressive_planner.py": {
+          "loc_was": 4867,
+          "loc_now": 5060
+        }
+      },
+      "scope": "targeted:pipeline.py,schema.py,agents/progressive_planner.py"
     }
   ]
 }

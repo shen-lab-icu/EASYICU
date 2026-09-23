@@ -30,7 +30,18 @@ from ...contracts.phenotyping_validation import (
     PhenotypingCompleteCaseReceipt,
     PhenotypingRuntimeReceipt,
 )
-from ...contracts.phenotyping_features import require_phenotyping_features
+from ...contracts.phenotyping_execution import (
+    CLUSTER_SELECTION_PRODUCT,
+    CLUSTER_STABILITY_PRODUCT,
+    PHENOTYPE_ASSIGNMENTS_PRODUCT,
+    PHENOTYPE_PROFILES_PRODUCT,
+    cross_sectional_phenotyping_owns_step,
+    phenotyping_raw_input_columns as _raw_columns,
+)
+from ...contracts.phenotyping_features import (
+    PHENOTYPING_PRIMARY_ACTION as _PRIMARY_ACTION,
+    require_phenotyping_features,
+)
 from ...research_context.typed import parse_research_context_json
 from ...robustness.panel import load_locked_robustness_specs
 from ...schema import AnalysisStep
@@ -40,54 +51,13 @@ from .typed_input_binding import (
     sole_typed_cohort_input,
 )
 
-PHENOTYPE_PROFILES_PRODUCT = "table:phenotype_profiles"
-PHENOTYPE_ASSIGNMENTS_PRODUCT = "table:phenotype_assignments"
-CLUSTER_SELECTION_PRODUCT = "table:cluster_selection"
-CLUSTER_STABILITY_PRODUCT = "table:cluster_stability"
-
-_PRIMARY_ACTION = "phenotyping.cluster_solution"
-_ACTION_OUTPUTS = {
-    _PRIMARY_ACTION: (PHENOTYPE_PROFILES_PRODUCT, PHENOTYPE_ASSIGNMENTS_PRODUCT),
-    "phenotyping.k_selection": (CLUSTER_SELECTION_PRODUCT,),
-    "phenotyping.cluster_stability": (CLUSTER_STABILITY_PRODUCT,),
-}
 _FEATURE_PREFIX = "feature__"
 
 
-def _raw_columns(step: AnalysisStep) -> tuple[str, ...]:
-    return tuple(
-        value
-        for item in step.inputs
-        if (value := str(item or "").strip()) and ":" not in value
-    )
-
-
 def cross_sectional_phenotyping_executor_owns_step(step: AnalysisStep) -> bool:
-    action = str(step.scientific_action_id or "")
-    expected = _ACTION_OUTPUTS.get(action)
-    if expected is None or tuple(step.expected_outputs) != expected:
-        return False
-    typed = tuple(value for value in step.inputs if ":" in value)
-    if action == _PRIMARY_ACTION:
-        if (
-            step.planned_analysis_role != "primary"
-            or not sole_typed_cohort_input(step)
-            or len(_raw_columns(step)) < 2
-        ):
-            return False
-    elif (
-        step.planned_analysis_role not in {"secondary", "sensitivity", "auxiliary"}
-        or typed != (PHENOTYPE_ASSIGNMENTS_PRODUCT,)
-    ):
-        return False
-    return bool(
-        step.table_one_spec is None
-        and step.cohort_definition_spec is None
-        and step.measurement_audit_spec is None
-        and step.robustness_replay_spec is None
-        and step.trajectory_stability_spec is None
-        and not step.model_requirements
-    )
+    # The claim boundary is a dependency-neutral contract so the plan reviewer
+    # asks the same question the executor answers.
+    return cross_sectional_phenotyping_owns_step(step)
 
 
 def cross_sectional_phenotyping_consumed_input_keys(

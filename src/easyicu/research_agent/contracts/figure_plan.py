@@ -8,9 +8,10 @@ or reporting owners.
 
 from __future__ import annotations
 
+import re
 from typing import Any, List, Literal, Sequence, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .product_identity import is_canonical_typed_product_token
 
@@ -49,6 +50,20 @@ class PlannedFigurePanelSpec(BaseModel):
     chart_type: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
     placement: Literal["main", "supplementary"] = "main"
     source_products: List[str] = Field(min_length=1, max_length=16)
+    policy_alternative_chart_types: List[str] = Field(
+        default_factory=list,
+        max_length=4,
+        # Absent from dumps when empty so every existing plan keeps its exact
+        # bytes and digest; only a sealed policy-dependent panel carries it.
+        exclude_if=lambda value: not value,
+        description=(
+            "Chart grammars a sealed runtime policy may substitute for chart_type "
+            "at execution time (for example a PH-free contrast when the "
+            "proportional-hazards policy withholds the constant hazard ratio). "
+            "Plan-time role coverage still reads chart_type; the end-of-execute "
+            "join accepts exactly chart_type or one listed alternative."
+        ),
+    )
     presentation: FigurePresentationSpec | None = Field(
         default=None,
         description="Optional display parameters shared by all panels of this output. Only renderers declaring support may consume these settings; they never change data or scientific coordinates.",
@@ -65,6 +80,33 @@ class PlannedFigurePanelSpec(BaseModel):
         if len(cleaned) != len(set(cleaned)):
             raise ValueError("source_products must be unique")
         return cleaned
+
+    @field_validator("policy_alternative_chart_types")
+    @classmethod
+    def _alternatives_are_distinct_chart_grammars(cls, values: List[str]) -> List[str]:
+        return _validate_alternative_chart_types(values)
+
+    @model_validator(mode="after")
+    def _alternatives_differ_from_chart_type(self) -> "PlannedFigurePanelSpec":
+        if self.chart_type in self.policy_alternative_chart_types:
+            raise ValueError(
+                "policy_alternative_chart_types must not repeat chart_type"
+            )
+        return self
+
+
+_CHART_TYPE_TOKEN = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
+
+
+def _validate_alternative_chart_types(values: Sequence[str]) -> List[str]:
+    cleaned = [str(value or "").strip() for value in values]
+    if any(_CHART_TYPE_TOKEN.fullmatch(value) is None for value in cleaned):
+        raise ValueError(
+            "policy_alternative_chart_types must be canonical chart-type tokens"
+        )
+    if len(cleaned) != len(set(cleaned)):
+        raise ValueError("policy_alternative_chart_types must be unique")
+    return cleaned
 
 
 class DeterministicFigurePanelTemplate(BaseModel):
@@ -85,6 +127,9 @@ class DeterministicFigurePanelTemplate(BaseModel):
     placement: Literal["main", "supplementary"] = "main"
     separable_display: bool = False
     source_products: Tuple[str, ...] = Field(min_length=1, max_length=16)
+    policy_alternative_chart_types: Tuple[str, ...] = Field(
+        default=(), max_length=4, exclude_if=lambda value: not value
+    )
 
     @field_validator("source_products")
     @classmethod
@@ -100,6 +145,23 @@ class DeterministicFigurePanelTemplate(BaseModel):
             raise ValueError("source_products must be unique")
         return cleaned
 
+    @field_validator("policy_alternative_chart_types")
+    @classmethod
+    def _template_alternatives_are_distinct(
+        cls, values: Tuple[str, ...]
+    ) -> Tuple[str, ...]:
+        return tuple(_validate_alternative_chart_types(values))
+
+    @model_validator(mode="after")
+    def _template_alternatives_differ_from_chart_type(
+        self,
+    ) -> "DeterministicFigurePanelTemplate":
+        if self.chart_type in self.policy_alternative_chart_types:
+            raise ValueError(
+                "policy_alternative_chart_types must not repeat chart_type"
+            )
+        return self
+
     def bind(self, *, figure_output: str) -> PlannedFigurePanelSpec:
         return PlannedFigurePanelSpec(
             panel_id=self.panel_id,
@@ -108,6 +170,7 @@ class DeterministicFigurePanelTemplate(BaseModel):
             chart_type=self.chart_type,
             placement=self.placement,
             source_products=list(self.source_products),
+            policy_alternative_chart_types=list(self.policy_alternative_chart_types),
         )
 
 
@@ -129,6 +192,51 @@ CROSS_SECTIONAL_PHENOTYPING_FIGURE_PANELS = (
     DeterministicFigurePanelTemplate(
         panel_id="c", article_role="stability", chart_type="subsampling_ari",
         source_products=("table:cluster_stability",),
+    ),
+)
+STATIC_PREDICTION_FIGURE_INPUTS = (
+    "table:prediction_scores",
+    "table:model_performance",
+    "table:validation",
+    "table:calibration",
+    "table:clinical_utility",
+)
+# Exact main-surface panels of the host static-prediction composite renderer
+# (``execution/runners/prediction_figure_executor.py``).  The renderer also
+# exports a repeated-split validation surface, which the step declares as its
+# own product slot (see ``STATIC_PREDICTION_VALIDATION_FIGURE_SUFFIX``); its
+# decision-curve surface stays a supplementary export with no plan-time panel
+# promise.
+STATIC_PREDICTION_FIGURE_PANELS = (
+    DeterministicFigurePanelTemplate(
+        panel_id="a", article_role="calibration", chart_type="calibration_curve",
+        source_products=("table:calibration",),
+    ),
+    DeterministicFigurePanelTemplate(
+        panel_id="b", article_role="model_performance", chart_type="roc_curve",
+        source_products=("table:prediction_scores", "table:model_performance"),
+    ),
+    DeterministicFigurePanelTemplate(
+        panel_id="c", article_role="model_performance",
+        chart_type="precision_recall_curve",
+        source_products=("table:prediction_scores", "table:model_performance"),
+    ),
+)
+#: The same renderer's second physical surface. It is a product slot of its
+#: own rather than more panels on the composite, because one exported image is
+#: one surface and the end-of-execute join resolves a runtime contract per
+#: declared figure output.
+STATIC_PREDICTION_VALIDATION_FIGURE_SUFFIX = "_validation_stability"
+STATIC_PREDICTION_VALIDATION_FIGURE_PANELS = (
+    DeterministicFigurePanelTemplate(
+        panel_id="a", article_role="validation_design",
+        chart_type="cohort_split_diagram",
+        source_products=("table:model_performance", "table:validation"),
+    ),
+    DeterministicFigurePanelTemplate(
+        panel_id="b", article_role="validation",
+        chart_type="metric_dot_interval",
+        source_products=("table:model_performance", "table:validation"),
     ),
 )
 GROUPED_DESCRIPTIVE_DISTRIBUTION_INPUT = "table:distribution_prevalence"
@@ -782,6 +890,10 @@ __all__ = [
     "ROBUSTNESS_FIGURE_KNOWN_INPUTS",
     "ROBUSTNESS_PRIMARY_EFFECT_INPUT",
     "ROBUSTNESS_PRIMARY_ESTIMATE_INPUT",
+    "STATIC_PREDICTION_FIGURE_INPUTS",
+    "STATIC_PREDICTION_FIGURE_PANELS",
+    "STATIC_PREDICTION_VALIDATION_FIGURE_PANELS",
+    "STATIC_PREDICTION_VALIDATION_FIGURE_SUFFIX",
     "PlannedFigurePanelSpec",
     "absolute_risk_association_composite_panels",
     "balance_association_composite_panels",

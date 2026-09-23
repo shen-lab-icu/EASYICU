@@ -17,6 +17,7 @@ from ...figures.publication import (
     make_figure_contract,
     save_publication_figure,
 )
+from ...contracts.figure_plan import STATIC_PREDICTION_VALIDATION_FIGURE_SUFFIX
 from ...schema import AnalysisStep
 from .figure_input_capability import TypedInputCapability
 from .prediction_model_executor import (
@@ -98,6 +99,26 @@ _REQUIRED_COLUMNS = {
 }
 
 
+def _contract_panel_ids(contract: Any) -> list[str]:
+    """Panel identifiers of one rendered surface, in contract order."""
+
+    panels = getattr(contract, "panels", None)
+    if panels is None and isinstance(contract, Mapping):
+        panels = contract.get("panels")
+    if not isinstance(panels, (list, tuple)):
+        return []
+    identifiers: list[str] = []
+    for panel in panels:
+        panel_id = (
+            panel.get("panel_id")
+            if isinstance(panel, Mapping)
+            else getattr(panel, "panel_id", None)
+        )
+        if panel_id:
+            identifiers.append(str(panel_id))
+    return identifiers
+
+
 def _binding_has_columns(binding: Any, key: str) -> bool:
     if not isinstance(binding, Mapping):
         return False
@@ -110,12 +131,39 @@ def _binding_has_columns(binding: Any, key: str) -> bool:
     )
 
 
+def declared_prediction_figure_product(step: AnalysisStep) -> str | None:
+    """The composite product slot, or None if the declaration is not ours.
+
+    This renderer exports two main surfaces. A step may therefore declare the
+    composite alone, or the composite plus exactly its own repeated-split
+    surface -- named by extending the composite's product. Any other set of
+    figure products belongs to a different step, not to a looser reading of
+    this one.
+    """
+
+    products = [_figure_product(value) for value in step.expected_outputs]
+    if not products or any(product is None for product in products):
+        return None
+    named = [str(product) for product in products]
+    primaries = [
+        product
+        for product in named
+        if not any(other != product and product.startswith(other) for other in named)
+    ]
+    if len(primaries) != 1:
+        return None
+    primary = primaries[0]
+    allowed = {primary, f"{primary}{STATIC_PREDICTION_VALIDATION_FIGURE_SUFFIX}"}
+    if set(named) - allowed or len(set(named)) != len(named):
+        return None
+    return primary
+
+
 def prediction_figure_executor_owns_step(
     step: AnalysisStep,
     *,
     resolved_bindings: Mapping[str, Any] | None = None,
 ) -> bool:
-    products = [_figure_product(value) for value in step.expected_outputs]
     return bool(
         step.planned_analysis_role == "auxiliary"
         and str(step.method or "").strip().casefold().split(" with ", 1)[0]
@@ -123,8 +171,7 @@ def prediction_figure_executor_owns_step(
         and len(step.inputs) == len(PREDICTION_COMPOSITE_FIGURE_INPUTS)
         and set(step.inputs) == set(PREDICTION_COMPOSITE_FIGURE_INPUTS)
         and _CAPABILITY.admits_step(step)
-        and len(products) == 1
-        and products[0] is not None
+        and declared_prediction_figure_product(step) is not None
         and isinstance(resolved_bindings, Mapping)
         and set(resolved_bindings) == set(PREDICTION_COMPOSITE_FIGURE_INPUTS)
         and all(
@@ -135,9 +182,7 @@ def prediction_figure_executor_owns_step(
 
 
 def prediction_figure_executor_code(step: AnalysisStep) -> str:
-    product = (
-        _figure_product(step.expected_outputs[0]) if step.expected_outputs else None
-    )
+    product = declared_prediction_figure_product(step)
     if product is None:
         raise ValueError("prediction figure has no safe figure product")
     return textwrap.dedent(
@@ -770,7 +815,26 @@ def run_prediction_figure(
             f"{validation_product}.png",
         ],
         "supplementary_figure_path": f"{supplementary_product}.png",
-        "output_files": {f"figure:{figure_product}": f"{figure_product}.png"},
+        # Both main surfaces are declared product slots: the plan promises
+        # panels per figure output, and the end-of-execute join resolves one
+        # runtime contract per declared output. The decision curve stays a
+        # supplementary export with no declared slot.
+        "output_files": {
+            f"figure:{figure_product}": f"{figure_product}.png",
+            f"figure:{validation_product}": f"{validation_product}.png",
+        },
+        # With more than one declared output the join refuses to guess which
+        # rendered panels answer which slot, so each surface names its own.
+        "planner_product_slot_bindings": {
+            f"figure:{figure_product}": {
+                "slot": "composite_performance",
+                "panel_ids": _contract_panel_ids(contract),
+            },
+            f"figure:{validation_product}": {
+                "slot": "repeated_split_validation",
+                "panel_ids": _contract_panel_ids(validation_contract),
+            },
+        },
     }
     (out_dir / "step_summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
@@ -781,6 +845,7 @@ def run_prediction_figure(
 
 __all__ = [
     "PREDICTION_COMPOSITE_FIGURE_INPUTS",
+    "declared_prediction_figure_product",
     "PREDICTION_FIGURE_ANALYSIS_KIND",
     "prediction_figure_executor_code",
     "prediction_figure_executor_owns_step",

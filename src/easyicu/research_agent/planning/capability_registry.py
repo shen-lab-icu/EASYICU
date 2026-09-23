@@ -416,7 +416,9 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
         notes=(
             "The caller-reviewed authority owns temporal eligibility and exact model "
             "coordinates; the host wrapper builds the landmark cohort and delegates "
-            "the sealed model fit to the adjusted-association adapter."
+            "the sealed model fit to the adjusted-association adapter. A "
+            "Planner-selectable roster is sealed into the same signed contract from "
+            "the reviewed primary model before validation and execution."
         ),
         capability_id=LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID,
         result_contract=(

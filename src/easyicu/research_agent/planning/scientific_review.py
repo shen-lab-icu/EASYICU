@@ -26,9 +26,12 @@ from ..canonical_json import canonical_sha256
 from ..authority.current_case_scientific_runtime import (
     CurrentCaseScientificRuntimeAuthority,
     LandmarkCategoricalAssociationRuntimeAuthority,
+    LandmarkSplineRuntimeAuthority,
 )
 from ..concept_availability import normalize_database_name
 from ..gates.plan_declared_inputs import declared_raw_input_plan_findings
+from ..contracts.host_action_robustness import host_action_prespecified_axes
+from ..contracts.sealed_suite_robustness import sealed_suite_prespecified_axes
 from ..contracts.cohort_product_keys import (
     is_closed_cohort_product_key,
     sole_typed_cohort_input,
@@ -43,10 +46,21 @@ from ..contracts.descriptive_execution import (
 from ..contracts.ordered_stratified import is_ordered_stratified_analysis_step
 from ..contracts.functional_form import functional_form_products
 from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
+from ..contracts.prediction_execution import (
+    PREDICTION_PRIMARY_ACTION,
+    static_prediction_execution_verdict,
+    static_prediction_executes_robustness_spec,
+    static_prediction_features,
+    static_prediction_model_columns,
+    static_prediction_owns_step,
+)
 from ..contracts.phenotype_comparison import (
     COMPARISON_ACTION, comparison_cohort_input, validate_comparison_step,
 )
 from ..contracts.scientific_runtime_ownership import declared_runtime_outcomes
+from ..contracts.source_feasibility_validation import (
+    context_declares_source_feasibility_scope,
+)
 from ..literature import LiteratureBundle, manuscript_citable_records
 from ..research_context.temporal_semantics import (
     normalise_time_anchor,
@@ -183,6 +197,10 @@ def model_covariates(plan: Optional[AnalysisPlan]) -> tuple[str, ...]:
                 text = str(value).strip()
                 if text and text not in values:
                     values.append(text)
+    if not values and plan.adjustment_proposal is not None:
+        # A signed runtime owner replaced the primary's model requirement and
+        # retained the reviewed roster plan-wide.
+        values = [str(value).strip() for value in plan.adjustment_proposal.covariates]
     return tuple(values)
 
 
@@ -232,6 +250,18 @@ def planned_model_outcomes(
                     continue
                 if descriptor.name not in values:
                     values.append(descriptor.name)
+        if context is not None and static_prediction_execution_verdict(step).claimed:
+            # The host static prediction owner fits exactly the context target
+            # outcome from the declared model-column prefix and, by contract,
+            # carries no conventional model requirement. Count that declared
+            # endpoint like the ordered-stratified owner's typed inputs.
+            outcome = str(context.target_outcome or "").strip()
+            if (
+                outcome
+                and outcome in static_prediction_model_columns(step)
+                and outcome not in values
+            ):
+                values.append(outcome)
         if context is not None:
             for outcome in declared_runtime_outcomes(step):
                 descriptor = context.variable(outcome)
@@ -274,6 +304,9 @@ def model_covariate_plan_authority(
         for requirement in step.model_requirements or ():
             rationales.update(requirement.covariate_rationales)
             temporal_roles.update(requirement.covariate_temporal_roles)
+    if not rationales and not temporal_roles and plan.adjustment_proposal is not None:
+        rationales.update(plan.adjustment_proposal.covariate_rationales)
+        temporal_roles.update(plan.adjustment_proposal.covariate_temporal_roles)
     return rationales, temporal_roles
 
 
@@ -584,6 +617,13 @@ def _repeated_stay_step_declared(step: Any, context: Any) -> bool:
     if context is None:
         return False
     patient_group = context_patient_group_authority(context)
+    if patient_group is not None and static_prediction_execution_verdict(step).claimed:
+        # The host static prediction owner splits development and validation
+        # rows by the verified patient group, reports the repeated-subject
+        # structure of the evaluation partition, and fails closed without
+        # that authority; its repeat-stay rule is therefore executable, not
+        # prose.
+        return True
     return bool(
         _method_head(step)
         in {"signed_landmark_restricted_cubic_spline", "time_varying_exposure_model"}
@@ -1211,17 +1251,32 @@ def _sensitivity_facts(
                 # plan ids must agree exactly; prose or a method label alone is
                 # never enough to credit execution.
                 executed_spec_ids.add(spec_id)
-    plan_spec_axes = {
-        {"missing": "missing", "cohort": "cohort", "outcome": "outcome_definition"}[
-            spec.axis
-        ]
+    plan_axis_names = {
+        "missing": "missing",
+        "cohort": "cohort",
+        "outcome": "outcome_definition",
+    }
+    # A plan-locked spec that a host owner executes inside its own step is not
+    # waiting for a replay step: the static prediction owner refits the exact
+    # model roster on complete cases beside its primary imputation.
+    owner_executed_spec_ids = _owner_executed_plan_spec_ids(context, plan)
+    owner_executed_axes = {
+        plan_axis_names[spec.axis]
         for spec in plan.robustness_specs
+        if spec.spec_id in owner_executed_spec_ids
+    }
+    plan_spec_axes = {
+        plan_axis_names[spec.axis]
+        for spec in plan.robustness_specs
+        if spec.spec_id not in owner_executed_spec_ids
     }
     if len(replay_steps) == 1:
         executable.update(plan_spec_axes)
         typed_executable.update(plan_spec_axes)
     else:
         protocol_only.update(plan_spec_axes)
+    executable.update(owner_executed_axes)
+    typed_executable.update(owner_executed_axes)
     # A temporal phrase in a generic generated-code step is not proof that the
     # estimator closes immortal-time/exposure-opportunity bias.
     if "timing" in executable and not timing_design_closed(plan):
@@ -1243,8 +1298,33 @@ def _sensitivity_facts(
     }
     executable.update(typed_axes)
     typed_executable.update(typed_axes)
+    # A sealed suite prespecifies its own sensitivity design under a contract
+    # digest its executors require. That is typed, executable authority the
+    # reviewer can read in the plan, so it counts -- but only for a step the
+    # host actually sealed, never for a draft that spells the same method.
+    # Every step of the plan, not only the Planner-role ones: a sealed suite
+    # assigns its own step roles, and its stability owner is auxiliary by the
+    # authority's design rather than by a Planner choice.
+    sealed_axes = {
+        axis
+        for step in plan.steps
+        for axis in sealed_suite_prespecified_axes(
+            method=str(step.method or ""), rule_refs=step.icu_rule_refs
+        )
+    }
+    executable.update(sealed_axes)
+    typed_executable.update(sealed_axes)
+    # A host action whose owner runs a published robustness design -- the
+    # phenotyping candidate-k grid and its resampling stability -- is
+    # prespecified the same way: the plan may include the step but cannot
+    # choose its settings. Only a step the owning executor would claim counts.
+    host_action_axes = set(host_action_prespecified_axes(plan.steps))
+    executable.update(host_action_axes)
+    typed_executable.update(host_action_axes)
     return {
         "requested": sorted(requested),
+        "sealed_suite_axes": sorted(sealed_axes),
+        "host_action_axes": sorted(host_action_axes),
         "executable": sorted(executable),
         "typed_executable": sorted(typed_executable),
         "protocol_only": sorted(protocol_only - executable),
@@ -1267,6 +1347,41 @@ def _sensitivity_facts(
         "plan_robustness_replay_step_ids": sorted(
             step.step_id for step in replay_steps
         ),
+        "owner_executed_plan_spec_ids": sorted(owner_executed_spec_ids),
+    }
+
+
+def _owner_executed_plan_spec_ids(
+    context: ResearchContext, plan: AnalysisPlan
+) -> set[str]:
+    """Plan-locked specs the host static prediction owner executes itself.
+
+    Asked through the owner's own contract: exactly one host-owned primary,
+    its declared roster minus the outcome and patient group, and only the
+    complete-case variant of that exact roster.
+    """
+
+    primaries = [
+        step
+        for step in plan.steps
+        if step.scientific_action_id == PREDICTION_PRIMARY_ACTION
+        and static_prediction_owns_step(step)
+    ]
+    outcome = str(context.target_outcome or "").strip()
+    if len(primaries) != 1 or not outcome:
+        return set()
+    group = context_patient_group_authority(context)
+    features = static_prediction_features(
+        static_prediction_model_columns(primaries[0]),
+        outcome=outcome,
+        group_source=group.group_source if group is not None else None,
+    )
+    return {
+        spec.spec_id
+        for spec in plan.robustness_specs
+        if static_prediction_executes_robustness_spec(
+            spec, features=features, outcome=outcome
+        )
     }
 
 
@@ -1830,8 +1945,17 @@ def build_plan_scientific_review(
         # This method can appear only after the digest-bound runtime owner has
         # replaced the generic primary step. Its exact adjustment columns are
         # therefore the operational projection of the sealed StudyContext,
-        # not an inference from plan inputs or available data.
+        # not an inference from plan inputs or available data. A plan-bound
+        # roster lives in the sealed runtime contract instead, sealed from the
+        # reviewed primary model before the owner replaced it.
         covariates = adjustment_authority.operational_covariates
+        if (
+            not covariates
+            and isinstance(runtime_authority, LandmarkSplineRuntimeAuthority)
+            and runtime_authority.plan_bound_adjustment_roster is not None
+            and runtime_authority.adjustment_roster_sealed
+        ):
+            covariates = tuple(runtime_authority.required_adjustment_columns)
     covariate_selection = (
         preferences.covariate_selection if preferences is not None else "planner_selectable"
     )
@@ -2067,7 +2191,11 @@ def build_plan_scientific_review(
                 ),
             )
         )
-    if not _endpoint_resolved(context):
+    if not _endpoint_resolved(context) and not context_declares_source_feasibility_scope(
+        context
+    ):
+        # A fail-closed feasibility scope analyses no outcome: the reviewed
+        # protocol declared the contrast non-identifiable before any endpoint.
         findings.append(
             PlanScientificFinding(
                 code="OUTCOME_DEFINITION_UNRESOLVED",

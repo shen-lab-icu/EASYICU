@@ -731,13 +731,15 @@ def test_e1_current_profiles_additively_bind_current_concept_dictionary() -> Non
         E1_PROGRESSIVE_PLANNER_CANARY_2026_09_11 as frozen_public_profile,
         E1_PROGRESSIVE_PLANNER_CANARY_2026_09_17 as frozen_0917_public_profile,
         E1_PROGRESSIVE_PLANNER_CANARY_2026_09_18 as public_profile,
-        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_21 as current_public_profile,
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_21 as frozen_0921_public_profile,
+        E1_PROGRESSIVE_PLANNER_CANARY_2026_09_22 as current_public_profile,
         E1_REVIEWED_DEMO_2026_08_19 as archival_reviewed_profile,
         E1_REVIEWED_DEMO_2026_09_03 as prior_reviewed_profile,
         E1_REVIEWED_DEMO_2026_09_11 as frozen_reviewed_profile,
         E1_REVIEWED_DEMO_2026_09_17 as frozen_0917_reviewed_profile,
         E1_REVIEWED_DEMO_2026_09_18 as reviewed_profile,
-        E1_REVIEWED_DEMO_2026_09_21 as current_reviewed_profile,
+        E1_REVIEWED_DEMO_2026_09_21 as frozen_0921_reviewed_profile,
+        E1_REVIEWED_DEMO_2026_09_22 as current_reviewed_profile,
     )
     from easyicu.research_agent.orchestration.profiles import (
         CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF,
@@ -748,12 +750,14 @@ def test_e1_current_profiles_additively_bind_current_concept_dictionary() -> Non
         E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_11 as frozen_live_profile,
         E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_17 as frozen_live_0917,
         E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_18 as live_profile_0918,
-        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_21 as current_live_profile,
+        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_21 as frozen_live_0921,
+        E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_09_22 as current_live_profile,
         E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_03 as prior_live_reviewed_profile,
         E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_11 as frozen_live_reviewed_profile,
         E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_17 as frozen_live_reviewed_0917,
         E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_18 as live_reviewed_profile_0918,
-        E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_21 as current_live_reviewed_profile,
+        E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_21 as frozen_live_reviewed_0921,
+        E1_REVIEWED_DEMO_LIVE_PUBMED_2026_09_22 as current_live_reviewed_profile,
     )
 
     # Frozen 0917 coordinates (profiles.py:636-637 crea 15 -> 25 re-lock).
@@ -770,8 +774,23 @@ def test_e1_current_profiles_additively_bind_current_concept_dictionary() -> Non
     assert frozen_0917_reviewed_profile.ref == "npj_dm_e1_demo_dev/20260917"
     assert public_profile.ref == "npj_dm_e1_canary_dev/20260918"
     assert reviewed_profile.ref == "npj_dm_e1_demo_dev/20260918"
-    assert current_public_profile.ref == "npj_dm_e1_canary_dev/20260921"
-    assert current_reviewed_profile.ref == "npj_dm_e1_demo_dev/20260921"
+    assert frozen_0921_public_profile.ref == "npj_dm_e1_canary_dev/20260921"
+    assert frozen_0921_reviewed_profile.ref == "npj_dm_e1_demo_dev/20260921"
+    assert frozen_0921_public_profile.planner_strategy == "progressive_v2"
+    assert current_public_profile.ref == "npj_dm_e1_canary_dev/20260922"
+    assert current_reviewed_profile.ref == "npj_dm_e1_demo_dev/20260922"
+    # 20260922 is an additive re-lock for the family-spec Planner strategy on
+    # the unchanged v6 foundation digests; 20260921 stays byte-frozen.
+    for profile in (
+        current_public_profile,
+        current_reviewed_profile,
+        current_live_profile,
+        current_live_reviewed_profile,
+    ):
+        assert profile.planner_strategy == "family_spec_v1"
+        assert profile.pipeline_options()["planner_strategy"] == "family_spec_v1"
+    assert current_public_profile.planner_only is True
+    assert current_reviewed_profile.planner_only is False
     assert CURRENT_E1_PLANNER_CANARY_DEV_PROFILE_REF == current_public_profile.ref
     assert CURRENT_E1_REVIEWED_DEMO_DEV_PROFILE_REF == current_reviewed_profile.ref
     assert CURRENT_E1_PLANNER_CANARY_LIVE_PUBMED_DEV_PROFILE_REF == (
@@ -829,6 +848,10 @@ def test_e1_current_profiles_additively_bind_current_concept_dictionary() -> Non
             FROZEN_PROFILE_SNAPSHOTS["sofa2_e1_20260905_20260911_20260917_20260918"]
         )
     for profile in (
+        frozen_0921_public_profile,
+        frozen_0921_reviewed_profile,
+        frozen_live_0921,
+        frozen_live_reviewed_0921,
         current_public_profile,
         current_reviewed_profile,
         current_live_profile,
