@@ -331,3 +331,126 @@ def test_typed_acquisition_is_extended_not_rewritten(tmp_path: Path) -> None:
         materialize_hospital_followup_acquisition(
             acquisition, followup=followup, raw_source_receipt=_RAW_SOURCE_RECEIPT
         )
+
+
+def test_a_patient_grouped_typed_cohort_is_extended_on_its_grouped_identity(
+    tmp_path: Path,
+) -> None:
+    """The deriver keys follow-up by stay; a grouped parent keys p<patient>:s<stay>."""
+
+    import hashlib
+
+    from easyicu.research_agent.acquisition.patient_grouping import (
+        PatientGroupingBinding,
+    )
+
+    source = typed_export(
+        tmp_path / "export",
+        labs=pd.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 3],
+                "charttime": [1.0, 1.0, 1.0, 2.0],
+                "age": [50, 60, 70, 70],
+                "lact": [1.0, 2.0, 3.0, 4.0],
+                "mech_vent": [False, True, False, True],
+            }
+        ),
+        outcomes=pd.DataFrame(
+            {"stay_id": [1, 2, 3], "death": [False, True, False]}
+        ),
+    )
+    mapping = tmp_path / "grouping.parquet"
+    pd.DataFrame({"stay_id": [1, 2, 3], "patient_key": [7, 8, 8]}).to_parquet(
+        mapping, index=False
+    )
+    grouping = PatientGroupingBinding(
+        mapping_path=mapping,
+        mapping_sha256=hashlib.sha256(mapping.read_bytes()).hexdigest(),
+        mapping_stay_column="stay_id",
+        mapping_patient_column="patient_key",
+        authority_coordinates={"authority_ref": "test/patient_grouping"},
+    )
+    paths = cohort_materializer.materialize_to_parquet(
+        tmp_path / "materialized",
+        stem="universe",
+        data_path=source,
+        database="miiv",
+        static_concepts=("age",),
+        feature_concepts=("lact",),
+        outcome_concepts=("death",),
+        **grouping.materializer_kwargs(),
+    )
+    parent = load_verified_materialized_cohort_authority(paths["parquet"])
+    assert parent is not None
+    assert parent.authority.identity_column == "patient_stay_id"
+    acquisition = AcquisitionResult(
+        universe_path=paths["parquet"],
+        provenance_path=paths["provenance"],
+        selection=None,
+        coverage=None,
+        materialized_concepts=["age", "lact", "death"],
+        cohort_authority_path=paths["parquet"].parent / parent.reference.file,
+        cohort_authority_ref=parent.reference,
+        materialized_columns=tuple(parent.authority.cohort_columns),
+    )
+    icustays = pd.DataFrame(
+        {
+            # Stay 4 belongs to the source but not to this cohort.
+            "stay_id": [1, 2, 3, 4],
+            "hadm_id": [10, 20, 30, 40],
+            "intime": pd.to_datetime(
+                ["2020-01-01", "2020-01-02", "2020-01-03", "2020-01-04"]
+            ),
+        }
+    )
+    admissions = pd.DataFrame(
+        {
+            "hadm_id": [10, 20, 30, 40],
+            "dischtime": pd.to_datetime(
+                ["2020-01-02", "2020-01-03", "2020-01-04", "2020-01-05"]
+            ),
+            "deathtime": [pd.NaT, pd.Timestamp("2020-01-03"), pd.NaT, pd.NaT],
+            "hospital_expire_flag": [0, 1, pd.NA, 0],
+        }
+    )
+    followup = derive_mimic_iv_hospital_mortality_followup(icustays, admissions)
+
+    extended = materialize_hospital_followup_acquisition(
+        acquisition, followup=followup, raw_source_receipt=_RAW_SOURCE_RECEIPT
+    )
+
+    verified = load_verified_materialized_cohort_authority(
+        extended.universe_path, expected_authority=extended.cohort_authority_ref
+    )
+    assert verified is not None
+    assert verified.authority.identity_column == "patient_stay_id"
+    frame = pd.read_parquet(extended.universe_path)
+    assert frame["patient_stay_id"].tolist() == ["p7:s1", "p8:s2"]
+    assert frame["death"].tolist() == [False, True]
+    # The grouping travels with the rows, restated for the retained subset, so
+    # the Planner still sees patient identity on the follow-up cohort.
+    parent_identity = parent.authority.producer_parameters["replacement_row_identity"]
+    carried = verified.provenance["replacement_row_identity"]
+    assert carried["mapped_cohort_rows"] == 2
+    assert {key: value for key, value in carried.items() if key != "mapped_cohort_rows"} == {
+        key: value for key, value in parent_identity.items() if key != "mapped_cohort_rows"
+    }
+    from easyicu.research_agent.planning.dependence_authority import (
+        context_patient_group_authority,
+    )
+    from easyicu.research_agent.research_context.builder import (
+        build_research_context,
+    )
+
+    for cohort_path in (paths["parquet"], extended.universe_path):
+        context = build_research_context(
+            research_question="Is lactate associated with in-hospital death?",
+            cohort=cohort_path,
+            cohort_name="grouped",
+            database="miiv",
+            target_outcome="death",
+        )
+        dependence = context_patient_group_authority(context)
+        assert dependence is not None
+        assert dependence.group_source == "patient_stay_id"
+        assert context.cohort.provenance["patient_identity_available"] is True

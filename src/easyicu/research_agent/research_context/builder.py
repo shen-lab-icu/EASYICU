@@ -48,6 +48,7 @@ from ..intake.materialized_metadata import (
     VerifiedMaterializedCohortAuthority,
     load_verified_materialized_cohort_authority,
     read_verified_materialized_cohort_table,
+    verified_cohort_replacement_row_identity,
 )
 from ..intake.materialized_trajectory import (
     MaterializedTrajectoryError,
@@ -644,6 +645,7 @@ def build_research_context(
     verified_cohort: Optional[VerifiedMaterializedCohortAuthority] = None
     verified_trajectory: Optional[VerifiedMaterializedTrajectoryAuthority] = None
     legacy_materialization_provenance: Optional[Dict[str, Any]] = None
+    typed_row_identity: Optional[Dict[str, Any]] = None
     if isinstance(cohort, (str, Path)):
         cohort_path_obj = Path(cohort).resolve()
         cohort_path = str(cohort_path_obj)
@@ -674,6 +676,12 @@ def build_research_context(
                 cohort_path_obj,
                 verified=verified_cohort,
             ).to_pandas()
+            # A typed cohort keyed by a verified patient grouping carries that
+            # authority in its sealed receipts, not in a sidecar file; without
+            # it the Planner would plan as if the source had no patient identity.
+            typed_row_identity = verified_cohort_replacement_row_identity(
+                verified_cohort
+            )
         else:
             df = pd.read_parquet(cohort_path)
             legacy_materialization_provenance = (
@@ -715,6 +723,8 @@ def build_research_context(
     replacement_row_identity = (
         legacy_materialization_provenance.get("replacement_row_identity")
         if legacy_materialization_provenance is not None
+        else typed_row_identity
+        if typed_row_identity is not None
         else planning_catalog_provenance.get("replacement_row_identity")
     )
     granularity = resolve_cohort_granularity(
@@ -743,6 +753,11 @@ def build_research_context(
             **episode.provenance,
             **granularity.provenance(),
             **planning_catalog_provenance,
+            **(
+                {"replacement_row_identity": dict(typed_row_identity)}
+                if typed_row_identity is not None
+                else {}
+            ),
             "inclusion_criteria": list(inclusion_criteria or []),
             "exclusion_criteria": list(exclusion_criteria or []),
             **(
