@@ -63,6 +63,7 @@ from .contract import (
     FamilySpecRequest,
     SpecCovariateDecision,
 )
+from .plan_language import listing, plan_language, sentence
 
 FUNCTIONAL_FORM_METHOD = "restricted_cubic_spline_sensitivity"
 FUNCTIONAL_FORM_KNOT_QUANTILES = (0.1, 0.5, 0.9)
@@ -244,9 +245,11 @@ def _design_selection(
     spec: FamilyPlanSpec,
     *,
     covariates: list[str],
+    spline_covariates: list[str],
     required_variables: list[str],
     method_keys: list[str],
 ) -> ResearchDesignSelection:
+    language = plan_language(request.research_question)
     exposure = _label(spec, request.primary_exposure)
     outcome = _label(spec, request.outcome)
     continuous_exposure = request.exposure_kind == "continuous"
@@ -263,16 +266,40 @@ def _design_selection(
         if request.cluster_unit == "patient"
         else "treating each analysis row as independent"
     )
+    cluster_text_zh = (
+        "对重复 ICU 入住按患者做聚类稳健推断"
+        if request.cluster_unit == "patient"
+        else "各分析行视为相互独立"
+    )
     secondary_text = (
         f"; {_label(spec, request.secondary_continuous_outcome)} is described by level as a secondary outcome"
         if request.secondary_continuous_outcome
         else ""
     )
+    secondary_text_zh = (
+        f"；{_label(spec, request.secondary_continuous_outcome)} 按暴露水平描述，作为次要结局"
+        if request.secondary_continuous_outcome
+        else ""
+    )
+    adjustment_text_zh = (
+        "调整 " + listing([_label(spec, name) for name in covariates], language)
+        if covariates
+        else "不调整（未授权任何协变量）"
+    )
+    # Only the covariates that really get a functional-form step: a spline
+    # promised for a binary or categorical covariate would be a check the
+    # plan never runs (and could not run).
     sensitivity_bits = [
         *(f"alternate exposure definition {_label(spec, item.execution_variables[0])}" for item in request.alternate_exposures),
         *(["first-ICU-stay restriction"] if request.first_stay else []),
         "complete-case reanalysis",
-        *(f"restricted cubic spline for {_label(spec, name)}" for name in covariates if name in request.functional_form_spec_ids or True),
+        *(f"restricted cubic spline for {_label(spec, name)}" for name in spline_covariates),
+    ]
+    sensitivity_bits_zh = [
+        *(f"替代暴露定义 {_label(spec, item.execution_variables[0])}" for item in request.alternate_exposures),
+        *(["仅限首次 ICU 入住"] if request.first_stay else []),
+        "完整病例重分析",
+        *(f"{_label(spec, name)} 的限制性立方样条" for name in spline_covariates),
     ]
     comparator_keys = [
         key for key in request.comparison_literature_keys if key in request.allowed_literature_citation_keys
@@ -339,41 +366,77 @@ def _design_selection(
             "No causal effect, no transportability beyond the source population, no recoding of an "
             "unevaluable exposure as the reference level, and no re-derivation of phenotypes from raw data."
         ),
-        reviewable_plan=[
-            (
-                f"Population and unit: analysis rows of cohort {request.cohort_name} that meet the typed "
-                f"eligibility bound and survive under observation to the {hours} h landmark; "
-                f"row identity {request.identity_column}; {cluster_text}."
-            ),
-            (
-                f"Exposure and timing: {exposure} measured in the 0–{hours} h window; rows without a "
-                "measurement stay a separate unmeasured state described in the audit and are never imputed "
-                "as a value."
-                if continuous_exposure
-                else f"Exposure and timing: {exposure} classified from the 0–{hours} h window with levels "
-                f"{', '.join(request.exposure_levels)}; unevaluable rows stay a separate unknown state and are "
-                "never recoded to the reference level."
-            ),
-            (
-                f"Outcome and follow-up: {outcome} from the landmark to the end of "
-                f"{_label(spec, request.observation_duration_column)}{secondary_text}."
-            ),
-            (
-                f"Adjustment and model: logistic model with {exposure} as a restricted cubic spline "
-                f"(10/50/90 knots, median reference) and a per-unit linear sensitivity, {adjustment_text}."
-                if continuous_exposure
-                else f"Adjustment and model: logistic model with treatment contrasts ({contrast} vs {reference}), "
-                f"{adjustment_text}; an ordinal-linear trend term is reported per level increment."
-            ),
-            (
-                "Missing data: unknown exposure rows are described but not modelled; covariate-missing rows "
-                "are excluded from the primary model and reported; a complete-case refit is prespecified."
-            ),
-            (
-                "Sensitivity and feasibility: " + "; ".join(dict.fromkeys(sensitivity_bits)) + "; every refit "
-                "reuses the primary kernel and denominators are audited before interpretation."
-            ),
-        ],
+        reviewable_plan=(
+            [
+                (
+                    f"研究队列中满足类型化纳入界限、且在 {hours} h landmark 时仍在观察中的分析行；"
+                    f"每行为一次 ICU 入住，{cluster_text_zh}。"
+                ),
+                (
+                    f"{exposure} 取 0–{hours} h 窗口内的测量值；无测量的行作为单独的未测量状态在审计中"
+                    "描述，不做数值插补。"
+                    if continuous_exposure
+                    else f"{exposure} 按 0–{hours} h 窗口分级，水平为 "
+                    f"{listing(request.exposure_levels, language)}；无法评估的行保留为单独的未知状态，"
+                    "不重编码为参照水平。"
+                ),
+                (
+                    f"{outcome}，自 landmark 起至 {_label(spec, request.observation_duration_column)} "
+                    f"结束{secondary_text_zh}。"
+                ),
+                (
+                    f"logistic 模型，{exposure} 以限制性立方样条表示（节点位于第 10/50/90 百分位，以中位数"
+                    f"为参照），另做每单位线性敏感性分析；{adjustment_text_zh}。"
+                    if continuous_exposure
+                    else f"logistic 模型，采用处理对比（{contrast} vs {reference}），{adjustment_text_zh}；"
+                    "另按每级增量报告有序线性趋势项。"
+                ),
+                (
+                    "暴露未知的行只做描述、不进入模型；协变量缺失的行从主模型中排除并报告；预先设定完整"
+                    "病例重拟合。"
+                ),
+                (
+                    "；".join(dict.fromkeys(sensitivity_bits_zh))
+                    + "；每次重拟合都复用主分析内核，解读前先审计分母。"
+                ),
+            ]
+            if language == "zh"
+            else [
+                (
+                    "Analysis rows of the study cohort that meet the typed eligibility bound and survive "
+                    f"under observation to the {hours} h landmark; each analysis row is one ICU stay, "
+                    f"{cluster_text}."
+                ),
+                sentence(
+                    f"{exposure} measured in the 0–{hours} h window; rows without a measurement stay a "
+                    "separate unmeasured state described in the audit and are never imputed as a value."
+                    if continuous_exposure
+                    else f"{exposure} classified from the 0–{hours} h window with levels "
+                    f"{', '.join(request.exposure_levels)}; unevaluable rows stay a separate unknown state "
+                    "and are never recoded to the reference level."
+                ),
+                sentence(
+                    f"{outcome} from the landmark to the end of "
+                    f"{_label(spec, request.observation_duration_column)}{secondary_text}."
+                ),
+                (
+                    f"Logistic model with {exposure} as a restricted cubic spline (10/50/90 knots, median "
+                    f"reference) and a per-unit linear sensitivity, {adjustment_text}."
+                    if continuous_exposure
+                    else f"Logistic model with treatment contrasts ({contrast} vs {reference}), "
+                    f"{adjustment_text}; an ordinal-linear trend term is reported per level increment."
+                ),
+                (
+                    "Unknown exposure rows are described but not modelled; covariate-missing rows are "
+                    "excluded from the primary model and reported; a complete-case refit is prespecified."
+                ),
+                sentence(
+                    "; ".join(dict.fromkeys(sensitivity_bits))
+                    + "; every refit reuses the primary kernel and denominators are audited before "
+                    "interpretation."
+                ),
+            ]
+        ),
         disposition="selected",
         decision_reason=(
             "The landmark aligns exposure ascertainment with the start of follow-up so the measurement "
@@ -622,6 +685,7 @@ def build_landmark_categorical_skeleton(
         request,
         spec,
         covariates=covariates,
+        spline_covariates=continuous,
         required_variables=required_variables,
         method_keys=[k for k in method_keys if k in set(primary_keys)][:6],
     )
@@ -788,11 +852,11 @@ def build_landmark_categorical_skeleton(
         analysis_type="association_study",
         cohort_objective=(
             f"Estimate the adjusted observational dose–response between {exposure_label} "
-            f"(0–{hours} h) and {outcome_label} after the {hours} h landmark in cohort {request.cohort_name}, "
+            f"(0–{hours} h) and {outcome_label} after the {hours} h landmark in the study cohort, "
             "keeping unmeasured exposure, repeated stays, missingness, and measurement limits visible for review."
             if continuous_exposure
             else f"Estimate the observational association and ordered gradient between {exposure_label} "
-            f"(0–{hours} h) and {outcome_label} after the {hours} h landmark in cohort {request.cohort_name}, "
+            f"(0–{hours} h) and {outcome_label} after the {hours} h landmark in the study cohort, "
             "keeping unknown exposure, repeated stays, missingness, and measurement limits visible for review."
         ),
         design_selection=design,

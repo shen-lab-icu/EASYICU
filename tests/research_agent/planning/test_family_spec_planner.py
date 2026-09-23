@@ -836,6 +836,112 @@ def test_retry_shows_the_rejected_answer_beside_the_reason_and_the_shape() -> No
     assert family_spec_response_shape(request) in retry[-1].content
 
 
+def _reviewable_plan(plan) -> list[str]:
+    return list(plan.design_selection.selected.reviewable_plan)
+
+
+def test_spline_recommendation_names_only_the_covariates_that_get_a_spline() -> None:
+    # A live eICU demo summary promised a restricted cubic spline for sex and
+    # admission type; the plan itself only checks continuous covariates.
+    context = _context(exact=False)
+    request = _request(context)
+    _llm, result = _run(
+        context, [json.dumps(_spec_payload(request, adjustment_set=PLANNER_ROSTER))]
+    )
+    plan = result.output
+    spline_steps = sorted(
+        step.step_id for step in plan.steps if step.step_id.endswith("_functional_form")
+    )
+    assert spline_steps == ["age_functional_form", "severity_score_24h_functional_form"]
+    sensitivity = _reviewable_plan(plan)[5]
+    assert f"restricted cubic spline for {LABELS['age']}" in sensitivity
+    assert f"restricted cubic spline for {LABELS['severity_score_24h']}" in sensitivity
+    assert LABELS["sex"] not in sensitivity
+
+
+def test_recommendation_follows_the_question_language_without_internal_identifiers() -> None:
+    context = _context(exact=False)
+    request = _request(context)
+    payload = [json.dumps(_spec_payload(request, adjustment_set=PLANNER_ROSTER))]
+    english_result = _run(context, payload)[1]
+    english = english_result.output
+    chinese_context = context.model_copy(
+        update={"research_question": "24 小时 landmark 时的损伤分期与院内死亡有什么关联？"}
+    )
+    chinese_request = _request(chinese_context)
+    chinese_result = _run(
+        chinese_context,
+        [json.dumps(_spec_payload(chinese_request, adjustment_set=PLANNER_ROSTER))],
+    )[1]
+    chinese = chinese_result.output
+    han = re.compile(r"[一-鿿]")
+    assert len(_reviewable_plan(english)) == len(_reviewable_plan(chinese)) == 6
+    assert all(not han.search(item) for item in _reviewable_plan(english))
+    assert all(han.search(item) for item in _reviewable_plan(chinese))
+    # No label prefix in either language: every reader labels the six
+    # positions itself, so a prefix would only repeat it in one language.
+    assert _reviewable_plan(chinese)[0].startswith("研究队列")
+    assert _reviewable_plan(english)[0].startswith("Analysis rows of the study cohort")
+    for item in [*_reviewable_plan(english), *_reviewable_plan(chinese)]:
+        assert not re.match(r"^[A-Za-z /-]{3,40}:\s", item), item
+        assert not re.match(r"^[\u4e00-\u9fff]{2,12}：", item), item
+    assert f"{LABELS['sex']} 的限制性立方样条" not in _reviewable_plan(chinese)[5]
+    assert f"{LABELS['age']} 的限制性立方样条" in _reviewable_plan(chinese)[5]
+    # Only the recommendation follows the question: the executable plan is
+    # the same science, so the step roster does not change.
+    assert [step.step_id for step in english.steps] == [step.step_id for step in chinese.steps]
+    for plan, result in ((english, english_result), (chinese, chinese_result)):
+        prose = [*_reviewable_plan(plan), *(step.objective for step in result.facts.outline.steps)]
+        for text in prose:
+            assert request.cohort_name not in text
+            assert f"row identity {request.identity_column}" not in text
+
+
+def test_every_family_recommendation_keeps_internal_identifiers_out() -> None:
+    from easyicu.research_agent.planning.family_spec import (
+        build_descriptive_skeleton,
+        build_phenotyping_skeleton,
+        build_prediction_skeleton,
+    )
+
+    cases = [
+        (
+            _request(_descriptive_context(), cohort_mode="all_input_rows"),
+            build_descriptive_skeleton,
+            lambda request: _descriptive_payload(
+                request, baseline_variables=["age", "sex"]
+            ),
+        ),
+        (
+            _request(_phenotyping_context(), cohort_mode=None),
+            build_phenotyping_skeleton,
+            lambda request: _phenotyping_payload(
+                request,
+                features=["hr_max", "lactate_max", "map_min"],
+                baseline=["age"],
+                membership=None,
+            ),
+        ),
+        (
+            _request(_prediction_context(), cohort_mode=None),
+            build_prediction_skeleton,
+            lambda request: _prediction_payload(
+                request, features=["age", "sex", "hr_max", "lactate_max", "map_min"]
+            ),
+        ),
+    ]
+    for request, builder, payload in cases:
+        spec = parse_family_plan_spec(json.dumps(payload(request)), request)
+        outline = builder(request, spec).outline
+        texts = [
+            *outline.design_selection.selected.reviewable_plan,
+            *(step.objective for step in outline.steps),
+        ]
+        for text in texts:
+            assert request.cohort_name not in text, (request.family_id, text)
+            assert f"row identity {request.identity_column}" not in text, request.family_id
+
+
 def test_same_spec_compiles_to_the_same_plan_digest() -> None:
     context = _context(exact=True)
     request = _request(context)

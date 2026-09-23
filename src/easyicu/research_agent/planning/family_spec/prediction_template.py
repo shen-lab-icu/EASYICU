@@ -51,6 +51,7 @@ from .landmark_categorical_template import (
     _method_card_elements,
     _method_card_ids,
 )
+from .plan_language import listing, plan_language, sentence
 
 PRIMARY_ACTION = "prediction.discrimination_calibration"
 CALIBRATION_ACTION = "prediction.calibration_metrics"
@@ -146,6 +147,17 @@ def _design_selection(
         if request.cluster_unit == "patient"
         else "each analysis row is one ICU stay and rows are not assumed to be distinct patients"
     )
+    language = plan_language(request.research_question)
+    unit_text_zh = (
+        "每行为一次 ICU 入住；已声明患者层面的相关性，数据切分时同一患者的入住保持在同一侧"
+        if request.cluster_unit == "patient"
+        else "每行为一次 ICU 入住，不假定各行来自不同患者"
+    )
+    hours_zh = (
+        f"ICU 入院后 0–{request.observation_window_hours:g} h"
+        if request.observation_window_hours is not None
+        else "宿主物化的观察窗口"
+    )
     comparator_keys = [
         key for key in request.comparison_literature_keys if key in request.allowed_literature_citation_keys
     ]
@@ -190,18 +202,30 @@ def _design_selection(
             "No causal effect, no external transportability, no clinical benefit of acting on the "
             "score, and no independence of repeated ICU stays beyond the declared grouping."
         ),
-        reviewable_plan=[
-            f"Population and unit: all input rows of cohort {request.cohort_name}; {unit_text}.",
-            f"Predictors: {predictor_text}; each is measured inside {hours} and aggregated per row.",
-            f"Outcome: {outcome}, taken after the observation window.",
-            "Model: prespecified static model with host-owned preprocessing fitted on the training "
-            "split only; discrimination and calibration on held-out rows.",
-            "Missing data: predictor availability and missingness are audited; imputation is fitted "
-            "on the training split only and reported.",
-            "Robustness: optimism-corrected internal validation, calibration metrics, and a decision "
-            "curve are prespecified; leakage, repeated-stay structure, and outcome coding are checked "
-            "before fitting.",
-        ],
+        reviewable_plan=(
+            [
+                f"研究队列的全部输入行；{unit_text_zh}。",
+                f"预测变量为 {listing([_label(spec, name) for name in predictors], language)}，"
+                f"每项均在 {hours_zh} 内测量，并按行汇总。",
+                f"{outcome}，取自观察窗口之后。",
+                "预先设定的静态模型，由宿主负责的预处理只在训练集上拟合；在留出行上评估区分度与校准。",
+                "审计预测变量的可得性与缺失情况；插补只在训练集上拟合并报告。",
+                "预先设定乐观校正的内部验证、校准指标和决策曲线；拟合前检查信息泄漏、重复入住结构和结局编码。",
+            ]
+            if language == "zh"
+            else [
+                f"All input rows of the study cohort; {unit_text}.",
+                f"Predictors {predictor_text}, each measured inside {hours} and aggregated per row.",
+                sentence(f"{outcome}, taken after the observation window."),
+                "Prespecified static model with host-owned preprocessing fitted on the training split "
+                "only; discrimination and calibration on held-out rows.",
+                "Predictor availability and missingness are audited; imputation is fitted on the "
+                "training split only and reported.",
+                "Optimism-corrected internal validation, calibration metrics, and a decision curve are "
+                "prespecified; leakage, repeated-stay structure, and outcome coding are checked before "
+                "fitting.",
+            ]
+        ),
         disposition="selected",
         decision_reason=(
             "The question asks for a prognostic model from window-bound information; a static "
@@ -403,7 +427,7 @@ def build_prediction_skeleton(
         analysis_type="prediction_model",
         cohort_objective=(
             f"Develop and internally validate a prespecified static {outcome_label} prediction model "
-            f"on cohort {request.cohort_name} from window-bound predictors, keeping missingness, "
+            "on the study cohort from window-bound predictors, keeping missingness, "
             "leakage checks, and repeated stays visible for review."
         ),
         design_selection=design,

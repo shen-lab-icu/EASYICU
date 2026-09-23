@@ -47,6 +47,7 @@ from .landmark_categorical_template import (
     _method_card_elements,
     _method_card_ids,
 )
+from .plan_language import listing, plan_language
 
 _DECISION_DESIGN_ELEMENTS = ("estimand", "exposure", "time_zero", "reporting")
 
@@ -114,6 +115,7 @@ def _design_selection(
     sealed = request.sealed_feasibility
     assert sealed is not None
     window = f"ICU hours {sealed.audited_window_hours[0]}–{sealed.audited_window_hours[1]}"
+    language = plan_language(request.research_question)
     design_variables = _design_variables(request)
     comparator_keys = [
         key for key in request.comparison_literature_keys if key in request.allowed_literature_citation_keys
@@ -154,21 +156,33 @@ def _design_selection(
             "Any treatment effect, absence of effect, balance, or positivity; absence of a "
             "record is not verified non-use."
         ),
-        reviewable_plan=[
-            f"Population and unit: cohort {request.cohort_name}; every audited source row "
-            "is one ICU stay.",
-            f"Exposure and timing: recorded administration in {sealed.source} over {window}; "
-            "verified non-use is unavailable, so no comparator arm is formed.",
-            "Outcome and follow-up: no outcome is analysed; the reviewed protocol declares "
-            "the treatment contrast non-identifiable.",
-            f"Adjustment and model: none; the sealed audit emits the decision {sealed.decision} "
-            f"with reason code {sealed.reason_code} and forbids "
-            + ", ".join(sealed.forbidden_plan_tokens) + ".",
-            "Missing data: absence of an administration record is not verified non-use and "
-            "is never imputed as a control arm.",
-            "Sensitivity and feasibility: not applicable; the future unblock design is not "
-            "authorized in this run and the products are the signed table and receipt.",
-        ],
+        reviewable_plan=(
+            [
+                "研究队列；每个被审计的来源行为一次 ICU 入住。",
+                f"{sealed.source} 中 ICU 第 {sealed.audited_window_hours[0]}–"
+                f"{sealed.audited_window_hours[1]} 小时内的给药记录；无法核实未使用，因此不构建对照组。",
+                "不分析任何结局；经审阅的方案已声明该治疗对比不可识别。",
+                f"无；封印的审计给出决定 {sealed.decision}（原因码 {sealed.reason_code}），并禁止 "
+                + listing(sealed.forbidden_plan_tokens, language)
+                + "。",
+                "缺少给药记录不等于已核实未使用，绝不作为对照组插补。",
+                "不适用；未来解除阻塞的设计不在本次运行授权范围内，产物是签名的表格与回执。",
+            ]
+            if language == "zh"
+            else [
+                "The study cohort; every audited source row is one ICU stay.",
+                f"Recorded administration in {sealed.source} over {window}; verified non-use is "
+                "unavailable, so no comparator arm is formed.",
+                "No outcome is analysed; the reviewed protocol declares the treatment contrast "
+                "non-identifiable.",
+                f"None; the sealed audit emits the decision {sealed.decision} with reason code "
+                f"{sealed.reason_code} and forbids " + ", ".join(sealed.forbidden_plan_tokens) + ".",
+                "Absence of an administration record is not verified non-use and is never imputed as a "
+                "control arm.",
+                "Not applicable; the future unblock design is not authorized in this run and the products "
+                "are the signed table and receipt.",
+            ]
+        ),
         disposition="selected",
         decision_reason=(
             "The reviewed protocol declares the contrast non-identifiable; the sealed "
@@ -301,7 +315,7 @@ def build_source_feasibility_skeleton(
     outline = ProgressivePlanOutline(
         analysis_type="causal_inference",
         cohort_objective=(
-            f"State the sealed source-feasibility decision for cohort {request.cohort_name}: "
+            "State the sealed source-feasibility decision for the study cohort: "
             "the requested treatment contrast is not identifiable from the current source "
             "capture, so no effect is estimated."
         ),

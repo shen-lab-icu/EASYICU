@@ -56,6 +56,7 @@ from .landmark_categorical_template import (
     _method_card_elements,
     _method_card_ids,
 )
+from .plan_language import listing, plan_language, sentence
 
 #: Products the signed candidate owner registers (``trajectory/plan_contract``).
 CANDIDATE_OUTPUTS = (
@@ -133,6 +134,13 @@ def _design_selection(
         if request.cluster_unit == "patient"
         else "each analysis row is one ICU stay and rows are not assumed to be distinct patients"
     )
+    language = plan_language(request.research_question)
+    unit_text_zh = (
+        "每行为一次 ICU 入住；已声明患者层面的相关性"
+        if request.cluster_unit == "patient"
+        else "每行为一次 ICU 入住，不假定各行来自不同患者"
+    )
+    window_zh = f"ICU 入院后 {sealed.window_hours[0]}–{sealed.window_hours[1]} h"
     comparator_keys = [
         key for key in request.comparison_literature_keys if key in request.allowed_literature_citation_keys
     ]
@@ -176,16 +184,34 @@ def _design_selection(
             "No causal effect of a class, no external reproducibility, and no clinical phenotype "
             "beyond a stable candidate partition."
         ),
-        reviewable_plan=[
-            f"Population and unit: cohort {request.cohort_name}; {unit_text}.",
-            f"Representation: {concept_text} aggregated per {grid} window over {window}.",
-            f"Candidates: diagonal Gaussian mixtures with {candidates} classes; minimum BIC selects.",
-            "Missing data: the sealed availability rule admits rows with enough observed windows; "
-            "availability is audited per coordinate and window.",
-            "Robustness: the signed resampling stability design must hold before any class is "
-            "frozen; a boundary or unstable solution is a formal no-solution result.",
-            f"Outcome: {outcome} is described by class only after the partition is frozen.",
-        ],
+        # In the design contract's item order (population, exposure/timing,
+        # outcome, model, missing data, sensitivity): readers label each
+        # position themselves, so the representation takes the exposure slot
+        # and the candidate grid the model slot.
+        reviewable_plan=(
+            [
+                f"研究队列；{unit_text_zh}。",
+                f"{listing([_label(spec, name) for name in sealed.coordinate_concepts], language)} "
+                f"在 {window_zh} 内按 {grid} 窗口汇总。",
+                f"分区冻结后才按类别描述 {outcome}。",
+                f"{listing([str(value) for value in sealed.candidate_cluster_counts], language)} "
+                "类的对角高斯混合模型；以最小 BIC 选择；不设调整变量。",
+                "按封印的可得性规则纳入观测窗口数足够的行；逐坐标、逐窗口审计可得性。",
+                "任何类别冻结前，签名的重抽样稳定性设计必须成立；边界解或不稳定解按正式的无解结果报告。",
+            ]
+            if language == "zh"
+            else [
+                f"The study cohort; {unit_text}.",
+                sentence(f"{concept_text} aggregated per {grid} window over {window}."),
+                sentence(f"{outcome} is described by class only after the partition is frozen."),
+                f"Diagonal Gaussian mixtures with {candidates} classes; minimum BIC selects; no "
+                "adjustment set.",
+                "The sealed availability rule admits rows with enough observed windows; availability is "
+                "audited per coordinate and window.",
+                "The signed resampling stability design must hold before any class is frozen; a boundary "
+                "or unstable solution is a formal no-solution result.",
+            ]
+        ),
         disposition="selected",
         decision_reason=(
             "The question asks for aligned longitudinal trajectory classes with explicit handling "
@@ -356,7 +382,7 @@ def build_fixed_window_trajectory_skeleton(
     outline = ProgressivePlanOutline(
         analysis_type="trajectory_clustering",
         cohort_objective=(
-            f"Derive candidate trajectory classes on cohort {request.cohort_name} with the sealed "
+            "Derive candidate trajectory classes on the study cohort with the sealed "
             "fixed-window suite, keeping availability, missingness, and repeated stays visible."
         ),
         design_selection=design,

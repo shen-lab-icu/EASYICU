@@ -49,6 +49,7 @@ from .landmark_categorical_template import (
     _method_card_elements,
     _method_card_ids,
 )
+from .plan_language import listing, plan_language, sentence
 
 CLUSTER_SOLUTION_ACTION = "phenotyping.cluster_solution"
 K_SELECTION_ACTION = "phenotyping.k_selection"
@@ -178,9 +179,18 @@ def _design_selection(
         _label(spec, spec.cohort_membership_column) if spec.cohort_membership_column else None
     )
     population = (
-        f"analysis rows of cohort {request.cohort_name} with {membership} present in the window"
+        f"analysis rows of the study cohort with {membership} present in the window"
         if membership
-        else f"all analysis rows of cohort {request.cohort_name}"
+        else "all analysis rows of the study cohort"
+    )
+    language = plan_language(request.research_question)
+    population_zh = (
+        f"研究队列中窗口内存在 {membership} 的分析行" if membership else "研究队列的全部分析行"
+    )
+    hours_zh = (
+        f"ICU 入院后 0–{request.observation_window_hours:g} h"
+        if request.observation_window_hours is not None
+        else "宿主物化的观察窗口"
     )
     hours = (
         f"0–{request.observation_window_hours:g} h after ICU admission"
@@ -232,17 +242,29 @@ def _design_selection(
             "No causal role, prognostic advantage, or treatment effect of any cluster; no established "
             "clinical subtype; no independence of repeated ICU stays; no transportability."
         ),
-        reviewable_plan=[
-            f"Population and unit: {population}; row identity {request.identity_column}.",
-            f"Features: {feature_text}; each is a prespecified numeric measurement inside {hours}.",
-            f"Outcome: {outcome}, described by cluster as a downstream non-causal distribution.",
-            "Primary analysis: prespecified unsupervised clustering with candidate-k comparison, "
-            "feature-profile description, and resampling stability; no causal adjustment set.",
-            "Missing data: feature availability and missingness are audited; the imputation rule is "
-            "fixed before clustering and reported.",
-            "Feasibility: feature availability, scale, and extremes are checked before clustering; "
-            "alternate k and resampling stability address robustness.",
-        ],
+        reviewable_plan=(
+            [
+                f"{population_zh}；每行为一次 ICU 入住。",
+                f"聚类特征为 {listing([_label(spec, name) for name in features], language)}，"
+                f"每项均为 {hours_zh} 内预先设定的数值测量。",
+                f"{outcome}，按聚类描述，作为下游的非因果分布。",
+                "预先设定的无监督聚类，比较候选 k 值，描述特征谱，并评估重抽样稳定性；不设因果调整集。",
+                "审计特征的可得性与缺失情况；插补规则在聚类前固定并报告。",
+                "聚类前检查特征的可得性、量纲与极端值；以不同 k 值和重抽样稳定性检验稳健性。",
+            ]
+            if language == "zh"
+            else [
+                sentence(f"{population}; each analysis row is one ICU stay."),
+                f"Clustering features {feature_text}, each a prespecified numeric measurement inside {hours}.",
+                sentence(f"{outcome}, described by cluster as a downstream non-causal distribution."),
+                "Prespecified unsupervised clustering with candidate-k comparison, feature-profile "
+                "description, and resampling stability; no causal adjustment set.",
+                "Feature availability and missingness are audited; the imputation rule is fixed before "
+                "clustering and reported.",
+                "Feature availability, scale, and extremes are checked before clustering; alternate k and "
+                "resampling stability address robustness.",
+            ]
+        ),
         disposition="selected",
         decision_reason=(
             "The question asks for candidate phenotypes from early multivariate measurements and "
@@ -432,7 +454,7 @@ def build_phenotyping_skeleton(
     outline = ProgressivePlanOutline(
         analysis_type="trajectory_clustering",
         cohort_objective=(
-            f"Describe candidate phenotypes of cohort {request.cohort_name} from prespecified "
+            "Describe candidate phenotypes of the study cohort from prespecified "
             f"window-bound features and their {outcome_label} distribution, keeping feature "
             "availability, stability, and repeated stays visible for review."
         ),
