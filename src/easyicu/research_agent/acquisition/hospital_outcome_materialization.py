@@ -110,6 +110,46 @@ def _source_cohort(acquisition: AcquisitionResult):
     return path, frame, provenance, source_ids, payload
 
 
+def _typed_parent_stay_axis(path: Path, identity: str) -> pd.Series | None:
+    """Map the deriver's stay ids onto a patient-grouped parent's identities.
+
+    A patient-grouped cohort keys its rows by ``p<patient>:s<stay>`` (the same
+    reading the legacy path applies above), so renaming ``stay_id`` alone would
+    leave every follow-up row unmatched.  ``None`` means the parent is keyed by
+    the stay itself and the rename is the whole mapping.
+    """
+
+    if identity != "patient_stay_id":
+        return None
+    with AnchoredDirectory.open(path.parent) as directory:
+        payload = directory.read_bytes(path.name, max_bytes=128 * 1024 * 1024)
+    values = pd.read_parquet(io.BytesIO(payload), columns=[identity])[
+        identity
+    ].astype("string")
+    parsed = values.str.extract(r"^p[0-9]+:s([0-9]+)$", expand=False)
+    if parsed.isna().any():
+        raise ValueError("hospital_followup_source_identity_invalid")
+    stays = pd.to_numeric(parsed, errors="raise").astype("int64")
+    if stays.duplicated().any():
+        raise ValueError("hospital_followup_source_identity_invalid")
+    return pd.Series(values.to_numpy(dtype=object), index=stays.to_numpy())
+
+
+def _onto_parent_identity(
+    frame: pd.DataFrame, *, identity: str, stay_axis: pd.Series | None
+) -> pd.DataFrame:
+    mapped = frame.rename(columns={"stay_id": identity})
+    if stay_axis is None:
+        return mapped
+    # Rows for stays outside this cohort have no grouped identity to carry;
+    # the owner still checks that every parent row is covered.
+    stays = pd.to_numeric(mapped[identity], errors="raise").astype("int64")
+    kept = stays.isin(stay_axis.index)
+    mapped = mapped.loc[kept].copy()
+    mapped[identity] = stays[kept].map(stay_axis).to_numpy(dtype=object)
+    return mapped
+
+
 def _materialize_typed_hospital_followup(
     acquisition: AcquisitionResult,
     *,
@@ -136,11 +176,14 @@ def _materialize_typed_hospital_followup(
     if verified is None:
         raise ValueError("hospital_followup_source_cohort_required")
     identity = verified.authority.identity_column
-    followup_frame = followup.frame.rename(columns={"stay_id": identity})[
-        [identity, "hospital_death", "death_time_hours", "hospital_followup_time_hours"]
-    ]
-    exclusions = followup.exclusions.rename(
-        columns={"stay_id": identity, "reason_code": "reason"}
+    stay_axis = _typed_parent_stay_axis(path, identity)
+    followup_frame = _onto_parent_identity(
+        followup.frame, identity=identity, stay_axis=stay_axis
+    )[[identity, "hospital_death", "death_time_hours", "hospital_followup_time_hours"]]
+    exclusions = _onto_parent_identity(
+        followup.exclusions.rename(columns={"reason_code": "reason"}),
+        identity=identity,
+        stay_axis=stay_axis,
     )[[identity, "reason"]]
     target = path.parent / "hospital_followup_cohort.parquet"
     if target.exists() or (path.parent / "hospital_followup_cohort_provenance.json").exists():

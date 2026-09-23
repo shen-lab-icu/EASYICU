@@ -2448,6 +2448,56 @@ def _validate_hospital_followup_bindings(
     return expected_columns
 
 
+def verified_cohort_replacement_row_identity(
+    verified: VerifiedMaterializedCohortAuthority,
+) -> Optional[dict]:
+    """The verified patient grouping a typed cohort's rows are keyed by, if any.
+
+    An initial materialization seals it in its producer parameters; a
+    hospital follow-up child restates it for its row subset in its semantic
+    provenance.  A binding that does not describe exactly this cohort's rows
+    and identity column is not returned, so no consumer can cluster a
+    different row space.
+    """
+
+    identity = _thaw_json(verified.provenance).get("replacement_row_identity")
+    if identity is None:
+        identity = _thaw_json(verified.authority.producer_parameters).get(
+            "replacement_row_identity"
+        )
+    if (
+        not isinstance(identity, Mapping)
+        or identity.get("output_identity_column")
+        != verified.authority.identity_column
+        or identity.get("mapped_cohort_rows") != verified.authority.cohort_rows
+        or identity.get("patient_group_derivation")
+        != {"algorithm": "prefix_before_:s", "delimiter": ":s"}
+    ):
+        return None
+    return dict(identity)
+
+
+def _hospital_followup_row_identity(
+    parent: VerifiedMaterializedCohortAuthority, *, selected_rows: int
+) -> Optional[dict]:
+    """The parent's verified patient grouping, restated for its row subset.
+
+    A follow-up child keeps the parent's identity column and an ordered subset
+    of its rows, so the same stay-to-patient mapping resolves every retained
+    row; only the mapped row count follows the subset.  Without it the child
+    would reach the Planner as if the source had no patient identity.
+    """
+
+    identity = _thaw_json(parent.provenance).get("replacement_row_identity")
+    if identity is None:
+        identity = _thaw_json(parent.authority.producer_parameters).get(
+            "replacement_row_identity"
+        )
+    if not isinstance(identity, Mapping):
+        return None
+    return {**dict(identity), "mapped_cohort_rows": int(selected_rows)}
+
+
 def _validate_hospital_followup_parent_receipts(
     authority: MaterializedCohortAuthority,
     *,
@@ -2519,6 +2569,13 @@ def _validate_hospital_followup_parent_receipts(
     _verify_hospital_followup_axis(child_table)
     parameters = _thaw_json(authority.producer_parameters)
     provenance = _thaw_json(authority.semantic_provenance)
+    carried_identity = provenance.get("replacement_row_identity")
+    if carried_identity is not None and carried_identity != (
+        _hospital_followup_row_identity(parent, selected_rows=len(selected_positions))
+    ):
+        raise MaterializedMetadataError(
+            "hospital follow-up extension row-identity receipt mismatch"
+        )
     if (
         parameters.get("selected_row_count") != len(selected_positions)
         or parameters.get("selected_row_positions_sha256")
@@ -3824,6 +3881,11 @@ def _publish_hospital_followup_at(
             "hospital_followup_materialization": receipt,
             "extended_from_authority_sha256": verified.reference.sha256,
         }
+        row_identity = _hospital_followup_row_identity(
+            verified, selected_rows=len(positions)
+        )
+        if row_identity is not None:
+            semantic_provenance["replacement_row_identity"] = row_identity
         authority = MaterializedCohortAuthority(
             cohort_file=target_name,
             cohort_sha256=cohort_sha,
@@ -3896,4 +3958,5 @@ __all__ = [
     "publish_ordered_subset_materialized_cohort",
     "read_verified_materialized_cohort_table",
     "stage_materialized_cohort_authority",
+    "verified_cohort_replacement_row_identity",
 ]
