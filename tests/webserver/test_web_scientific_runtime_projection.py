@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 
 import numpy as np
 import pandas as pd
@@ -22,6 +23,7 @@ from easyicu.research_agent.planning.sensitivity_authority import (
     PrespecifiedSensitivitySpec,
 )
 from easyicu.webserver.scientific_runtime_projection import (
+    export_kdigo_strict_derivation_available,
     WebScientificRuntimeProjectionError,
     compile_web_scientific_runtime_projection,
     compile_landmark_spline_runtime_projection,
@@ -117,6 +119,201 @@ def test_web_rejects_legacy_kdigo_landmark_without_observability_authority(
         )
 
     assert caught.value.code == "web_kdigo_observability_authority_missing"
+
+
+def _renal_export(root, *, with_receipts: bool):
+    """A minimal EasyICU export whose renal module may carry evidence receipts."""
+
+    root.mkdir(parents=True, exist_ok=True)
+    columns = {
+        "stay_id": [1, 2],
+        "charttime": [1.0, 2.0],
+        "aki_stage": [0, 1],
+        "aki_stage_creat_reference": [0, 1],
+        "aki_stage_uo_reference": [0, None],
+        "aki_stage_rrt_reference": [None, None],
+    }
+    if with_receipts:
+        columns.update(
+            {
+                "creatinine_evidence_status": ["negative", "positive"],
+                "urine_evidence_status": ["negative", "indeterminate"],
+                "rrt_evidence_status": ["negative", "negative"],
+            }
+        )
+    frame = pd.DataFrame(columns)
+    frame.to_parquet(root / "renal.parquet", index=False)
+    (root / "_manifest.json").write_text(
+        json.dumps(
+            {
+                "database": "eicu_demo",
+                "format": "parquet",
+                "concept_selection": {
+                    "mode": "explicit",
+                    "modules": {
+                        "renal": sorted(
+                            column
+                            for column in frame.columns
+                            if column not in {"stay_id", "charttime"}
+                        )
+                    },
+                },
+                "files": [
+                    {
+                        "file": "renal.parquet",
+                        "module": "renal",
+                        "rows": len(frame),
+                        "concepts": len(frame.columns) - 2,
+                        "concept_ids": sorted(
+                            column
+                            for column in frame.columns
+                            if column not in {"stay_id", "charttime"}
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return root
+
+
+def test_an_export_without_receipts_cannot_support_a_strict_kdigo_stage(
+    tmp_path,
+) -> None:
+    """The receipts are read from the export, never from the wide cohort.
+
+    A cohort summarizer reduces a categorical evidence status to a numeric
+    presence indicator, so the cohort can no longer distinguish an observed
+    negative from an absent measurement.
+    """
+
+    assert (
+        export_kdigo_strict_derivation_available(
+            str(_renal_export(tmp_path / "with", with_receipts=True))
+        )
+        is True
+    )
+    assert (
+        export_kdigo_strict_derivation_available(
+            str(_renal_export(tmp_path / "without", with_receipts=False))
+        )
+        is False
+    )
+    assert export_kdigo_strict_derivation_available(str(tmp_path / "absent")) is False
+
+
+def test_web_refuses_a_reference_kdigo_exposure_even_beside_its_receipts(
+    tmp_path,
+) -> None:
+    """Receipts make the strict exposure derivable; they do not make this one safe.
+
+    A cohort can carry every per-component KDIGO evidence receipt and still be
+    modelling the collapsed reference stage.  The refusal stands, and the
+    details say which remedy applies so the caller is not sent to a retired
+    profile name.
+    """
+
+    universe = tmp_path / "kdigo_with_receipts.parquet"
+    pd.DataFrame(
+        {
+            "aki_stage_max": pd.Series([0, 1], dtype="int64"),
+            "aki_stage_creat_reference": pd.Series([0, 1], dtype="Int64"),
+            "aki_stage_uo_reference": pd.Series([0, None], dtype="Int64"),
+            "aki_stage_rrt_reference": pd.Series([None, None], dtype="Int64"),
+            "creatinine_evidence_status": ["negative", "positive"],
+            "urine_evidence_status": ["negative", "indeterminate"],
+            "rrt_evidence_status": ["negative", "negative"],
+            "death": pd.Series([0, 1], dtype="int64"),
+            "death_time_hours": [float("nan"), 72.0],
+            "hospital_followup_time_hours": [96.0, 72.0],
+            "age": [50.0, 70.0],
+            "sex": ["F", "M"],
+        }
+    ).to_parquet(universe, index=False)
+    landmark = PrespecifiedSensitivitySpec.model_validate(
+        {
+            "spec_id": "landmark_24h",
+            "axis": "timing",
+            "strategy": "landmark",
+            "landmark_hours": 24,
+            "require_alive_at_landmark": True,
+            "exclude_negative_event_times": True,
+            "event_time_variable": "death_time_hours",
+            "observation_duration_variable": "hospital_followup_time_hours",
+            "observation_duration_unit": "hours",
+        }
+    )
+
+    export = _renal_export(tmp_path / "export", with_receipts=True)
+
+    with pytest.raises(WebScientificRuntimeProjectionError) as caught:
+        compile_web_scientific_runtime_projection(
+            study={
+                "covariate_selection": "exact",
+                "data_source": {"path": str(export), "database": "eicu_demo"},
+            },
+            sensitivity_specs=(landmark,),
+            primary_exposure="aki_stage_max",
+            primary_exposure_source="aki_stage",
+            target_outcome="death",
+            declared_covariates=("age", "sex"),
+            covariate_operationalizations={},
+            target_is_event_status=True,
+            universe_path=universe,
+            scientific_configuration_sha256="f" * 64,
+        )
+
+    assert caught.value.code == "web_kdigo_observability_authority_missing"
+    assert caught.value.details["strict_derivation_available"] is True
+    assert "select aki_stage_strict" in caught.value.details["remedy"]
+
+
+def test_web_reports_a_missing_receipt_export_as_needing_re_extraction(
+    tmp_path,
+) -> None:
+    universe = tmp_path / "kdigo_no_receipts.parquet"
+    pd.DataFrame(
+        {
+            "aki_stage_max": pd.Series([0, 1], dtype="int64"),
+            "death": pd.Series([0, 1], dtype="int64"),
+            "death_time_hours": [float("nan"), 72.0],
+            "hospital_followup_time_hours": [96.0, 72.0],
+            "age": [50.0, 70.0],
+            "sex": ["F", "M"],
+        }
+    ).to_parquet(universe, index=False)
+    landmark = PrespecifiedSensitivitySpec.model_validate(
+        {
+            "spec_id": "landmark_24h",
+            "axis": "timing",
+            "strategy": "landmark",
+            "landmark_hours": 24,
+            "require_alive_at_landmark": True,
+            "exclude_negative_event_times": True,
+            "event_time_variable": "death_time_hours",
+            "observation_duration_variable": "hospital_followup_time_hours",
+            "observation_duration_unit": "hours",
+        }
+    )
+
+    with pytest.raises(WebScientificRuntimeProjectionError) as caught:
+        compile_web_scientific_runtime_projection(
+            study={"covariate_selection": "exact"},
+            sensitivity_specs=(landmark,),
+            primary_exposure="aki_stage_max",
+            primary_exposure_source="aki_stage",
+            target_outcome="death",
+            declared_covariates=("age", "sex"),
+            covariate_operationalizations={},
+            target_is_event_status=True,
+            universe_path=universe,
+            scientific_configuration_sha256="f" * 64,
+        )
+
+    assert caught.value.details["strict_derivation_available"] is False
+    assert "re-extract the renal module" in caught.value.details["remedy"]
+    assert caught.value.details["required_binding"] == "aki_stage_strict"
 
 
 def test_web_routes_strict_kdigo_landmark_to_categorical_runtime(tmp_path) -> None:
@@ -600,3 +797,43 @@ def test_legacy_cluster_authority_is_readable_but_requires_new_execution_review(
             out_dir=tmp_path / "legacy",
         )
     assert not (tmp_path / "legacy").exists()
+
+
+def test_the_kdigo_refusal_follows_the_semantics_not_one_releases_column_names():
+    """Every stage binding that coalesces missing evidence to zero is refused.
+
+    The retired ``aki_stage`` phenotype, the current public-reference port and
+    the source-native profiles share the upstream rule that an unobserved
+    component contributes zero.  Binding the refusal to the retired spelling
+    alone made it a no-op for exactly the columns the current contract
+    publishes, in both concept and materialized ``_max`` form.
+    """
+
+    from easyicu.webserver.scientific_runtime_projection import (
+        kdigo_observability_authority_missing,
+    )
+
+    for refused in (
+        "aki_stage",
+        "aki_stage_max",
+        "kdigo_stage",
+        "aki_stage_reference",
+        "aki_stage_reference_max",
+        "aki_stage_creat_reference",
+        "aki_severe_reference",
+        "aki_stage_source_native",
+        "aki_stage_source_native_max",
+    ):
+        assert kdigo_observability_authority_missing(refused) is True, refused
+    for allowed in (
+        # Observability-preserving by construction.
+        "aki_stage_strict",
+        "aki_stage_strict_max",
+        # The receipts are the remedy, not the defect.
+        "creatinine_evidence_status",
+        "aki_ascertainment",
+        # Unrelated exposures must not be caught by the stem rule.
+        "lact_max",
+        "aki_stage_strict_like_nothing",
+    ):
+        assert kdigo_observability_authority_missing(allowed) is False, allowed

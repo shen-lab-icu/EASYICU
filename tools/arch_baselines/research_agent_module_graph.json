@@ -333,6 +333,10 @@
     ],
     [
       "easyicu.research_agent.acquisition.foundation",
+      "easyicu.research_agent.contracts.host_derivations"
+    ],
+    [
+      "easyicu.research_agent.acquisition.foundation",
       "easyicu.research_agent.intake.materialized_metadata"
     ],
     [
@@ -2628,6 +2632,10 @@
       "easyicu.research_agent.providers.mocks"
     ],
     [
+      "easyicu.research_agent.cohort.host_derivations",
+      "easyicu.research_agent.contracts.host_derivations"
+    ],
+    [
       "easyicu.research_agent.cohort.materializer",
       "easyicu.research_agent.acquisition.patient_grouping"
     ],
@@ -2637,11 +2645,19 @@
     ],
     [
       "easyicu.research_agent.cohort.materializer",
+      "easyicu.research_agent.cohort.host_derivations"
+    ],
+    [
+      "easyicu.research_agent.cohort.materializer",
       "easyicu.research_agent.cohort.primitives"
     ],
     [
       "easyicu.research_agent.cohort.materializer",
       "easyicu.research_agent.cohort.schema"
+    ],
+    [
+      "easyicu.research_agent.cohort.materializer",
+      "easyicu.research_agent.contracts.host_derivations"
     ],
     [
       "easyicu.research_agent.cohort.materializer",
@@ -7590,6 +7606,10 @@
     [
       "easyicu.research_agent.intake.materialized_metadata",
       "easyicu.research_agent.canonical_json"
+    ],
+    [
+      "easyicu.research_agent.intake.materialized_metadata",
+      "easyicu.research_agent.contracts.host_derivations"
     ],
     [
       "easyicu.research_agent.intake.materialized_metadata",
@@ -12696,9 +12716,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3166,
+    "edge_count": 3171,
     "largest_scc_size": 0,
-    "module_count": 752,
+    "module_count": 754,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -12830,6 +12850,7 @@
     "easyicu.research_agent.cli": "cli.py",
     "easyicu.research_agent.cohort": "cohort/__init__.py",
     "easyicu.research_agent.cohort.artifact_facts": "cohort/artifact_facts.py",
+    "easyicu.research_agent.cohort.host_derivations": "cohort/host_derivations.py",
     "easyicu.research_agent.cohort.materializer": "cohort/materializer.py",
     "easyicu.research_agent.cohort.primitives": "cohort/primitives.py",
     "easyicu.research_agent.cohort.repair": "cohort/repair.py",
@@ -12865,6 +12886,7 @@
     "easyicu.research_agent.contracts.functional_form_effects": "contracts/functional_form_effects.py",
     "easyicu.research_agent.contracts.functional_form_projection": "contracts/functional_form_projection.py",
     "easyicu.research_agent.contracts.host_action_robustness": "contracts/host_action_robustness.py",
+    "easyicu.research_agent.contracts.host_derivations": "contracts/host_derivations.py",
     "easyicu.research_agent.contracts.host_scaffold": "contracts/host_scaffold.py",
     "easyicu.research_agent.contracts.landmark_spline_validation": "contracts/landmark_spline_validation.py",
     "easyicu.research_agent.contracts.manuscript_result_structure": "contracts/manuscript_result_structure.py",

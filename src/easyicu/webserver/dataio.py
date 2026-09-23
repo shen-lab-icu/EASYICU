@@ -40,6 +40,7 @@ from easyicu.concept_output_sources import (
 )
 from easyicu.databases import normalize_database_key
 from easyicu.outcome_availability import structural_outcome_unavailability
+from easyicu.scores.aki_profiles import renal_bundle_column_unavailability
 from easyicu.webserver import entity_ids as entity_id_contract
 from easyicu.webserver import primary_cohort
 
@@ -1346,8 +1347,13 @@ def _classify_structurally_unavailable_concepts(
     concepts: Sequence[str],
     concept_plan: Dict[str, List[str]],
     database: str,
+    published_columns: Sequence[str] = (),
 ) -> tuple[List[Dict[str, Any]], List[str]]:
-    """Separate owner-confirmed cross-database gaps from unexplained outputs."""
+    """Separate owner-confirmed cross-database gaps from unexplained outputs.
+
+    ``published_columns`` are the columns the export wrote; the AKI owner reads
+    them to tell which adapter branch ran.
+    """
 
     module_by_concept = {
         concept: module
@@ -1357,20 +1363,43 @@ def _classify_structurally_unavailable_concepts(
     unavailable: List[Dict[str, Any]] = []
     unexplained: List[str] = []
     for concept in concepts:
-        receipt = structural_outcome_unavailability(concept, database)
-        if receipt is None:
-            unexplained.append(concept)
+        # Two owners can explain a structural gap: the outcome authority for
+        # fixed-horizon endpoints, and the AKI profile registry for the renal
+        # bundle's source-native layer, whose shape follows each database's
+        # pinned upstream implementation.  Neither may explain the other's
+        # concepts, and an unexplained gap stays a loud export failure.
+        outcome = structural_outcome_unavailability(concept, database)
+        if outcome is not None:
+            unavailable.append(
+                {
+                    "concept_id": outcome.concept_id,
+                    "module": module_by_concept.get(outcome.concept_id),
+                    "database": outcome.database,
+                    "status": "structurally_unavailable",
+                    "reason_code": outcome.reason_code,
+                    "supported_databases": list(outcome.supported_databases),
+                }
+            )
             continue
-        unavailable.append(
-            {
-                "concept_id": receipt.concept_id,
-                "module": module_by_concept.get(receipt.concept_id),
-                "database": receipt.database,
-                "status": "structurally_unavailable",
-                "reason_code": receipt.reason_code,
-                "supported_databases": list(receipt.supported_databases),
-            }
+        renal = renal_bundle_column_unavailability(
+            concept, database, published_columns=published_columns
         )
+        if renal is not None:
+            receipt = {
+                "concept_id": renal.concept_id,
+                "module": module_by_concept.get(renal.concept_id),
+                "database": renal.database,
+                "status": "structurally_unavailable",
+                "reason_code": renal.reason_code,
+                "supported_databases": list(renal.supported_databases),
+                "source_native_profile": renal.profile_id,
+                "source_native_output_kind": renal.output_kind,
+            }
+            if renal.source_native_mode is not None:
+                receipt["source_native_mode"] = renal.source_native_mode
+            unavailable.append(receipt)
+            continue
+        unexplained.append(concept)
     return unavailable, unexplained
 
 
@@ -2409,6 +2438,11 @@ def make_export_runner(
                 concepts=missing_primary_metadata,
                 concept_plan={module: concept_plan[module] for module in sel},
                 database=database,
+                published_columns=[
+                    column
+                    for binding in metadata_file_bindings
+                    for column in binding.columns
+                ],
             )
         )
         if unexplained_missing:

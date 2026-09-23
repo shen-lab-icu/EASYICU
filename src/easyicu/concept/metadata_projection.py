@@ -52,6 +52,30 @@ class ConceptColumnRole(str, Enum):
     EVENT_TIME = "event_time"
 
 
+#: The concept dictionary's unit string for a categorical code space.  It is a
+#: declaration that the concept has no physical unit, not a unit itself.
+CATEGORICAL_UNIT = "category"
+
+
+def declares_physical_numeric_domain(metadata: "ConceptColumnMetadata") -> bool:
+    """Whether sealed metadata describes a measured numeric quantity.
+
+    A consumer that coerces a column to numbers must ask this first.  A
+    categorical concept carries ``canonical_unit == "category"`` -- the
+    dictionary owner saying the values are codes -- and coercing it would turn
+    every observed code into a lossy-conversion failure, which is how a
+    categorical evidence receipt becomes unreadable to a typed cohort.
+    """
+
+    if metadata.canonical_unit == CATEGORICAL_UNIT:
+        return False
+    return (
+        metadata.canonical_unit is not None
+        or metadata.extraction_bounds is not None
+        or metadata.analysis_plausibility_range is not None
+    )
+
+
 def is_range_preserving_projection(
     role: ConceptColumnRole,
     aggregation: Optional[str],
@@ -141,7 +165,15 @@ class NumericBounds:
 
 @dataclass(frozen=True, slots=True)
 class ColumnProjectionSpec:
-    """Explicit binding from one physical column to one source concept role."""
+    """Explicit binding from one physical column to one source concept role.
+
+    ``additional_source_concepts`` names the further concepts a host derivation
+    read to produce this column.  The declared ``source_concept`` stays the
+    projection's authority -- unit, bounds and lineage are inherited from it --
+    so a caller must choose as primary a source in the same quantity space as
+    the output.  The extra names are recorded in ``derived_from_concepts`` so a
+    reader can see every input the column depends on.
+    """
 
     column_name: str
     source_concept: str
@@ -149,10 +181,27 @@ class ColumnProjectionSpec:
     aggregation: Optional[str] = None
     time_origin: Optional[str] = None
     time_unit: Optional[str] = None
+    additional_source_concepts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.role, ConceptColumnRole):
             raise MetadataProjectionError("role must be a ConceptColumnRole")
+        if isinstance(self.additional_source_concepts, str) or not isinstance(
+            self.additional_source_concepts, (tuple, list)
+        ):
+            raise MetadataProjectionError(
+                "additional_source_concepts must be a sequence of concept names"
+            )
+        extra: list[str] = []
+        for name in self.additional_source_concepts:
+            if not isinstance(name, str) or not name.strip():
+                raise MetadataProjectionError(
+                    "additional_source_concepts entries must be non-empty strings"
+                )
+            cleaned = name.strip()
+            if cleaned != self.source_concept and cleaned not in extra:
+                extra.append(cleaned)
+        object.__setattr__(self, "additional_source_concepts", tuple(extra))
         if not isinstance(self.column_name, str) or not isinstance(
             self.source_concept, str
         ):
@@ -1131,7 +1180,9 @@ def derive_concept_column_metadata(
         ),
         category=source.category,
         class_name=source.class_name,
-        derived_from_concepts=source.derived_from_concepts,
+        derived_from_concepts=tuple(
+            sorted({*source.derived_from_concepts, *spec.additional_source_concepts})
+        ),
     )
     # Exercise the strict parser here as a defense against future additions to
     # ConceptColumnMetadata that this explicit authority-preserving copy must

@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from easyicu.concept.selection_policy import evaluate_concept_selection
+from easyicu.concept.selection_policy import (
+    EXPLICIT_ONLY,
+    OBSERVABILITY_COLLAPSING_KDIGO_CONCEPTS,
+    PREFER_ALTERNATIVE,
+    concept_selection_policy,
+    evaluate_concept_selection,
+)
 
 
 def test_generic_sepsis_does_not_authorize_experimental_sofa2_variant() -> None:
@@ -54,3 +60,53 @@ def test_ordinary_concept_does_not_require_special_authorization() -> None:
 
     assert decision.allowed is True
     assert decision.selection_mode == "ordinary"
+
+
+def test_a_cautioned_definition_is_advised_never_withheld() -> None:
+    """The reference KDIGO stage is a real phenotype; refusing it would remove
+    the published cross-database definition from every legitimate
+    reproduction.  What it needs is the caution, delivered while the design is
+    being written rather than as a refusal after the plan exists.
+    """
+
+    decision = evaluate_concept_selection(
+        "aki_stage_reference",
+        user_intent="KDIGO stage in the first 24 hours and hospital mortality",
+    )
+
+    assert decision.allowed is True
+    assert decision.reason_code == "concept_selection_advisory"
+    assert decision.selection_mode == PREFER_ALTERNATIVE
+    assert decision.canonical_alternative == "aki_stage_strict"
+
+
+def test_every_collapsing_kdigo_binding_carries_the_same_caution() -> None:
+    assert "aki_stage_reference" in OBSERVABILITY_COLLAPSING_KDIGO_CONCEPTS
+    # The observability-preserving reading and the receipts that make it
+    # possible are deliberately absent: they are the remedy, not the defect.
+    for remedy in (
+        "aki_stage_strict",
+        "aki_ascertainment",
+        "creatinine_evidence_status",
+        "urine_evidence_status",
+        "rrt_evidence_status",
+    ):
+        assert remedy not in OBSERVABILITY_COLLAPSING_KDIGO_CONCEPTS
+        assert concept_selection_policy(remedy) is None
+    for concept in OBSERVABILITY_COLLAPSING_KDIGO_CONCEPTS:
+        policy = concept_selection_policy(concept)
+        assert policy is not None, concept
+        assert policy.selection_mode == PREFER_ALTERNATIVE
+        assert policy.canonical_alternative == "aki_stage_strict"
+        assert "aki_stage_strict" in policy.rationale
+
+
+def test_the_experimental_variant_is_still_withheld() -> None:
+    """An advisory mode must not weaken the explicit-only contract."""
+
+    decision = evaluate_concept_selection(
+        "sep3_sofa2", user_intent="Sepsis-3 prevalence and mortality"
+    )
+
+    assert decision.allowed is False
+    assert decision.selection_mode == EXPLICIT_ONLY

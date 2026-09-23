@@ -4526,6 +4526,178 @@ def test_export_runner_records_owner_confirmed_structural_unavailability(
     )
 
 
+def test_export_runner_explains_a_source_native_renal_column_its_profile_lacks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The renal bundle's shape follows each database's pinned AKI profile.
+
+    eICU's official tree publishes urine components and no AKI stage, so the
+    per-component stage columns cannot exist there.  Without the profile
+    owner's receipt this export fails as an unexplained gap and the renal
+    module cannot be extracted for eICU at all.
+    """
+
+    import easyicu.api as api_module
+
+    loaded: list[dict[str, object]] = []
+    _patch_export_api(monkeypatch, loaded)
+
+    def urine_components_only(concepts, **kwargs):
+        loaded.append({"concepts": list(concepts), "kwargs": kwargs})
+        ids = (kwargs.get("patient_ids") or {}).get("stay_id", [])
+        return pd.DataFrame(
+            {"stay_id": ids, "aki_stage_source_native": [0] * len(ids)}
+        )
+
+    monkeypatch.setattr(api_module, "load_concepts", urine_components_only)
+    monkeypatch.setattr(
+        api_module, "get_all_patient_ids", lambda *_, **__: ([1, 2], "stay_id")
+    )
+    out = tmp_path / "out"
+    runner = dataio.make_export_runner(
+        data_path=str(tmp_path),
+        database="eicu",
+        modules=["renal"],
+        concepts={
+            "renal": ["aki_stage_source_native", "aki_stage_creat_source_native"]
+        },
+        export_format="csv",
+        out_dir=str(out),
+        include_feature_definitions=False,
+    )
+
+    result = runner(_ExportJob())
+    manifest = json.loads((out / "_manifest.json").read_text(encoding="utf-8"))
+
+    assert result["file_count"] == 1
+    assert manifest["concept_availability"] == {
+        "structurally_unavailable_count": 1,
+        "structurally_unavailable": [
+            {
+                "concept_id": "aki_stage_creat_source_native",
+                "module": "renal",
+                "database": "eicu",
+                "status": "structurally_unavailable",
+                "reason_code": "source_native_profile_publishes_no_such_component",
+                "supported_databases": ["miiv", "mimic"],
+                "source_native_profile": "EICU_OFFICIAL_RENAL_COMPONENTS_34CECE8C",
+                "source_native_output_kind": (
+                    "URINE_COMPONENT_ONLY_NO_OFFICIAL_AKI_STAGE"
+                ),
+            }
+        ],
+    }
+
+
+def test_export_runner_explains_the_renal_column_of_the_adapter_branch_not_taken(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MIMIC-IV publishes its components or, lacking a CRRT source, a reason.
+
+    A source with the CRRT table (the official demo included) takes the
+    component branch, so the reason column cannot exist; before the profile
+    declared its modes every current MIMIC-IV renal export failed on it.
+    """
+
+    import easyicu.api as api_module
+
+    loaded: list[dict[str, object]] = []
+    _patch_export_api(monkeypatch, loaded)
+
+    def component_branch(concepts, **kwargs):
+        loaded.append({"concepts": list(concepts), "kwargs": kwargs})
+        ids = (kwargs.get("patient_ids") or {}).get("stay_id", [])
+        return pd.DataFrame(
+            {
+                "stay_id": ids,
+                "aki_stage_source_native": [0] * len(ids),
+                "aki_stage_crrt_source_native": [0] * len(ids),
+            }
+        )
+
+    monkeypatch.setattr(api_module, "load_concepts", component_branch)
+    monkeypatch.setattr(
+        api_module, "get_all_patient_ids", lambda *_, **__: ([1, 2], "stay_id")
+    )
+    out = tmp_path / "out"
+    runner = dataio.make_export_runner(
+        data_path=str(tmp_path),
+        database="miiv",
+        modules=["renal"],
+        concepts={
+            "renal": [
+                "aki_stage_source_native",
+                "aki_stage_crrt_source_native",
+                "aki_source_native_reason",
+            ]
+        },
+        export_format="csv",
+        out_dir=str(out),
+        include_feature_definitions=False,
+    )
+
+    runner(_ExportJob())
+    manifest = json.loads((out / "_manifest.json").read_text(encoding="utf-8"))
+
+    assert manifest["concept_availability"]["structurally_unavailable"] == [
+        {
+            "concept_id": "aki_source_native_reason",
+            "module": "renal",
+            "database": "miiv",
+            "status": "structurally_unavailable",
+            "reason_code": "source_native_profile_mode_emits_no_such_column",
+            "supported_databases": ["aumc", "hirid", "miiv", "sic"],
+            "source_native_profile": "MIMIC_IV_MIT_LCP_KDIGO_D20B49A7",
+            "source_native_output_kind": "DYNAMIC_KDIGO_STAGE_0_TO_3",
+            "source_native_mode": "components",
+        }
+    ]
+
+
+def test_export_runner_still_fails_on_a_renal_column_the_profile_publishes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MIMIC-IV does publish the CRRT component, so its absence stays loud."""
+
+    import easyicu.api as api_module
+
+    loaded: list[dict[str, object]] = []
+    _patch_export_api(monkeypatch, loaded)
+
+    def missing_crrt_component(concepts, **kwargs):
+        loaded.append({"concepts": list(concepts), "kwargs": kwargs})
+        ids = (kwargs.get("patient_ids") or {}).get("stay_id", [])
+        return pd.DataFrame(
+            {"stay_id": ids, "aki_stage_source_native": [0] * len(ids)}
+        )
+
+    monkeypatch.setattr(api_module, "load_concepts", missing_crrt_component)
+    monkeypatch.setattr(
+        api_module, "get_all_patient_ids", lambda *_, **__: ([1, 2], "stay_id")
+    )
+    out = tmp_path / "out"
+    runner = dataio.make_export_runner(
+        data_path=str(tmp_path),
+        database="miiv",
+        modules=["renal"],
+        concepts={
+            "renal": ["aki_stage_source_native", "aki_stage_crrt_source_native"]
+        },
+        export_format="csv",
+        out_dir=str(out),
+        include_feature_definitions=False,
+    )
+
+    with pytest.raises(dataio.ExportCohortError) as exc_info:
+        runner(_ExportJob())
+
+    assert exc_info.value.detail["error"] == "column_metadata_primary_binding_missing"
+    assert exc_info.value.detail["concepts"] == ["aki_stage_crrt_source_native"]
+
+
 def test_export_runner_rejects_unknown_selected_concepts(
     tmp_path: Path,
 ) -> None:
