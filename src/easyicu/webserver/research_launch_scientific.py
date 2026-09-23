@@ -920,8 +920,32 @@ def _data_foundation_profile(
             if value and value != target
         )
     )
+    from easyicu.webserver.scientific_runtime_projection import (
+        host_derived_design_sources,
+    )
+
     primary_exposure_source_concept: Optional[str] = None
     for concept_id in scientific_inputs:
+        derived_sources = host_derived_design_sources(concept_id)
+        if concept_id == primary_exposure and derived_sources is not None:
+            # A declared cross-concept exposure (the strict KDIGO stage) has no
+            # single exported source.  The acquisition owner materializes it
+            # from the concepts its declaration reads, so it is available
+            # exactly when every one of them is in the selected modules.
+            missing_sources = [
+                source for source in derived_sources if source not in by_id
+            ]
+            if not missing_sources or not require_primary_exposure:
+                continue
+            raise ResearchPipelineRunError(
+                "research_pipeline_primary_exposure_outside_configured_modules",
+                "The configured primary exposure is derived from source concepts the selected feature modules do not provide.",
+                details={
+                    "field": "execution_concepts.primary_exposure",
+                    "concept_id": concept_id,
+                    "missing_source_concepts": missing_sources,
+                },
+            )
         source_concept = _source_concept_for_operational_column(
             concept_id,
             by_id=by_id,
