@@ -700,6 +700,73 @@ def test_selected_temporal_design_routes_missing_execution_to_runtime_owner() ->
     ]
 
 
+def _outer_window_context(*, exposure: ConceptDescriptor) -> "ResearchContext":
+    return _context().model_copy(
+        update={
+            "variables": [
+                exposure,
+                *[item for item in _context().variables if item.name != "exposure"],
+            ],
+            "user_preferences": UserPreferences(
+                covariates=["age"],
+                data_constraints=json.dumps(
+                    {
+                        "confirmations": {"feature_time_window": True},
+                        "materialization_window": {
+                            "role": "outer_observation_window",
+                            "anchor": "icu_admission",
+                            "hours": 24,
+                        },
+                    }
+                ),
+            ),
+        }
+    )
+
+
+def test_owner_declared_baseline_exposure_is_not_post_baseline_under_an_outer_window() -> None:
+    """A baseline admission attribute keeps its time-zero classification.
+
+    The outer feature window bounds measurement opportunity inside the stay.
+    It cannot move an owner-declared demographic (age, sex, admission type)
+    after time zero -- the same declaration the host already uses to prove a
+    baseline covariate's timing -- so a baseline-exposure association plan must
+    not be held for a landmark it does not need.
+    """
+
+    context = _outer_window_context(
+        exposure=ConceptDescriptor(
+            name="exposure", role=VariableRole.DEMOGRAPHIC, dtype="int64"
+        )
+    )
+
+    assert post_baseline_exposure(context) == (False, None)
+    review = build_plan_scientific_review(context=context, plan=_plan())
+    assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" not in {
+        item.code for item in review.findings
+    }
+
+
+def test_baseline_role_never_overrides_a_post_baseline_exposure_window() -> None:
+    """Physical window evidence still wins over the owner's role declaration."""
+
+    context = _outer_window_context(
+        exposure=ConceptDescriptor(
+            name="exposure",
+            role=VariableRole.DEMOGRAPHIC,
+            dtype="int64",
+            analysis_window="icu_admission[0,24]h",
+            analysis_window_role="exposure_definition",
+        )
+    )
+
+    assert post_baseline_exposure(context) == (True, "icu_admission[0,24]h")
+    review = build_plan_scientific_review(context=context, plan=_plan())
+    assert "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" in {
+        item.code for item in review.findings
+    }
+
+
 @pytest.mark.parametrize("hours", [True, False, 0, -1, "NaN", "Infinity", None])
 def test_invalid_outer_feature_window_is_not_a_temporal_coordinate(hours) -> None:
     context = _context().model_copy(update={

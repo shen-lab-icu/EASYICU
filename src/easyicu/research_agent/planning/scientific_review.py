@@ -70,7 +70,7 @@ from ..research_context.temporal_semantics import (
 from ..research_context.typed import declared_domain_for_variable
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
 from .figure_strategy import ArticleFigureStrategy
-from .adjustment_authority import AdjustmentSetAuthority
+from .adjustment_authority import AdjustmentSetAuthority, owner_declared_baseline_static
 from .analysis_types import canonical_analysis_family
 from .population_requirements import context_population_requirements
 from .baseline_requirements import (
@@ -329,6 +329,14 @@ def post_baseline_exposure(context: ResearchContext) -> tuple[bool, Optional[str
     window = str(getattr(descriptor, "analysis_window", "") or "").strip()
     if window:
         return window_extends_after_anchor(window), window
+    if descriptor is not None and owner_declared_baseline_static(descriptor):
+        # The outer window bounds *measurement* opportunity inside the stay.
+        # It cannot move an owner-declared baseline attribute (age, sex,
+        # admission type) after time zero, and the host already relies on that
+        # same declaration for baseline covariate timing.  A concept whose own
+        # window is post-baseline was returned above, so this never overrides
+        # physical window evidence.
+        return False, None
 
     preferences = context.user_preferences
     raw_constraints = getattr(preferences, "data_constraints", None)
