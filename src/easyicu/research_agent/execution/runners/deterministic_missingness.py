@@ -671,6 +671,11 @@ requested_inputs = []
 requested_outputs = []
 observation_semantics_by_column = {}
 declared_primary_exposure = ""
+# The host types the row identity; a patient-grouped cohort renames it
+# (``patient_stay_id``), so a fixed list of familiar id names cannot be the
+# authority.  An identity column is never an audit variable: it is complete
+# by construction and its label is host guidance, not a clinical description.
+declared_identity_columns = set()
 context_path = run_dir / "research_context.json"
 if context_path.is_file():
     ctx = json.loads(context_path.read_text("utf-8"))
@@ -682,6 +687,8 @@ if context_path.is_file():
         if not isinstance(variable, dict):
             continue
         variable_name = str(variable.get("name") or "").strip()
+        if variable_name and str(variable.get("role") or "").strip().lower() == "id":
+            declared_identity_columns.add(variable_name.lower())
         semantics = variable.get("observation_semantics")
         if variable_name and isinstance(semantics, dict):
             observation_semantics_by_column[variable_name] = dict(semantics)
@@ -818,6 +825,7 @@ def _add(base, *, declared=False):
     if (
         not b
         or b.lower() in _IDENTIFIER_COLUMNS
+        or b.lower() in declared_identity_columns
         or (not declared and b.lower() in _NON_CONCEPT)
         or b in seen
     ):

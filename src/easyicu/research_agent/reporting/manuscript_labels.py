@@ -16,6 +16,14 @@ def _recorded_term(variable):
     return term if term and not re.search(r"[\u3400-\u9fff]", term) else None
 
 
+def _is_row_identity(variable) -> bool:
+    # A row identity is never a reader-facing variable, and the host writes its
+    # description for the agent (how to derive the patient cluster), not for a
+    # reader.  Its description must not become a display label.
+    role = getattr(variable, "role", None)
+    return str(getattr(role, "value", role) or "").strip().lower() == "id"
+
+
 def source_bound_manuscript_labels(context, labels: Mapping[str, str], *, language="en", include_unlabeled=False):
     """Use existing English source metadata when the UI label is Chinese.
 
@@ -30,6 +38,8 @@ def source_bound_manuscript_labels(context, labels: Mapping[str, str], *, langua
     variables = {variable.name: variable for variable in context.variables}
     for name, variable in (variables.items() if include_unlabeled else ()):
         if name in result and result[name] != name:
+            continue
+        if _is_row_identity(variable):
             continue
         description = str(variable.description or "").strip()
         if description and not re.search(r"[\u3400-\u9fff]", description):
@@ -49,7 +59,7 @@ def source_bound_manuscript_labels(context, labels: Mapping[str, str], *, langua
             continue
         name, separator, level = key.partition("=")
         variable = variables.get(name)
-        if variable is None:
+        if variable is None or _is_row_identity(variable):
             continue
         description = str(variable.description or "").strip()
         if not separator:
