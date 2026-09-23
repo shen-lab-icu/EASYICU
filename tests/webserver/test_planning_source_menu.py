@@ -119,3 +119,57 @@ def test_optional_unsupported_column_is_not_reintroduced(source_menu, tmp_path):
     assert pq.read_metadata(result.universe_path).num_rows == 0
     receipt = json.loads(result.provenance_path.read_text())
     assert receipt["unavailable_model_concepts"] == ["icu_readmission"]
+
+
+
+def test_listed_but_unresolvable_optional_pick_is_dropped_not_fatal(tmp_path, monkeypatch):
+    """A registry concept the source cannot provide leaves the menu quietly.
+
+    The merged planning menu lists registry concepts next to the export's
+    typed columns.  Once typed owners exist, an untyped registry-only entry
+    can never resolve, so the model may pick something coverage will call
+    missing.  Measured 2026-09-22 on the official eICU demo: one optional
+    pick (``icu_unit_type``) blocked the whole run.  An optional pick is
+    dropped and recorded; only an empty selection fails closed, with a code.
+    """
+    import pyarrow.parquet as pq
+
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+
+    typed_death = CatalogConcept(
+        "death", file_name="outcome.parquet", typed_metadata=True, column_role="event_status",
+    )
+    registry_only = CatalogConcept("icu_unit_type", description="ICU unit type", category="demographics")
+    monkeypatch.setattr(
+        catalog_module, "build_database_capability_catalog",
+        lambda _: AvailableCatalog(source="canonical", concepts=[registry_only, CatalogConcept("death")]),
+    )
+    monkeypatch.setattr(
+        catalog_module, "build_available_catalog",
+        lambda _: AvailableCatalog(source="export", concepts=[typed_death]),
+    )
+    llm = ScriptedMockLLMClient([json.dumps({
+        "selected_concepts": ["death", "icu_unit_type"],
+        "rationale": "Mortality with an optional unit-type covariate.", "inclusion_exclusion": [],
+    })])
+    result = owner._metadata_only_planning_acquisition(
+        database="eicu", export_path="/metadata", question="Describe death by unit.",
+        llm=llm, output_dir=tmp_path / "catalog",
+    )
+    assert not result.blocked
+    assert result.blocked_reason_code == ""
+    assert pq.read_schema(result.universe_path).names == ["patientunitstayid", "death"]
+    receipt = json.loads(result.provenance_path.read_text())
+    assert receipt["unavailable_model_concepts"] == ["icu_unit_type"]
+
+    only_unavailable = ScriptedMockLLMClient([json.dumps({
+        "selected_concepts": ["icu_unit_type"],
+        "rationale": "Unit type only.", "inclusion_exclusion": [],
+    })])
+    blocked = owner._metadata_only_planning_acquisition(
+        database="eicu", export_path="/metadata", question="Describe unit type.",
+        llm=only_unavailable, output_dir=tmp_path / "blocked",
+    )
+    assert blocked.blocked
+    assert blocked.blocked_reason_code == "no_available_concepts"
+    assert not (tmp_path / "blocked").exists()

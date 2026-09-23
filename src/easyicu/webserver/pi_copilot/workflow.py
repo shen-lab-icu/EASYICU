@@ -161,8 +161,30 @@ def project_run_history(
             "updated_at": str(row.get("updated_at") or ""),
             "authoritative": run_id == authoritative_run_id,
         }
+        entry.update(gate_detail_projection(row.get("gate_detail")))
         projected.append(entry)
     return ensure_safe_projection(projected)
+
+
+def gate_detail_projection(detail: Any) -> Dict[str, Any]:
+    """Project a blocked gate's lower-layer cause as codes, or nothing.
+
+    ``detail`` is the acquisition owner's ``{reason_code, missing_concepts}``.
+    Only its reason code and concept ids cross; a gate without a detail adds no
+    keys, so ordinary rows keep their shape.
+    """
+
+    if not isinstance(detail, Mapping):
+        return {}
+    code = stable_code(detail.get("reason_code"))
+    if not code:
+        return {}
+    missing = [
+        concept
+        for concept in (stable_code(item) for item in (detail.get("missing_concepts") or []))
+        if concept
+    ][:16]
+    return {"gate_detail_code": code, "gate_missing_concepts": missing}
 
 
 def active_export_matches_study(

@@ -1277,6 +1277,27 @@ def _metadata_only_planning_acquisition(
         and value.strip()
         and assess_coverage([value.strip()], catalog).sufficient
     ]
+    # A concept the registry lists but this source cannot provide (a receipt
+    # marks it unavailable for the database or export) is an optional model
+    # pick like a hallucinated name: it leaves the menu and is recorded, it
+    # does not block the Planner. Only a *required* concept -- the configured
+    # outcome, exposure, covariates or an amendment's source requirement --
+    # or an empty selection fails closed. Measured 2026-09-22 on the official
+    # eICU demo: one unavailable optional pick (``icu_unit_type``) blocked the
+    # whole run with a reason the browser could not name.
+    unavailable_source_concepts = [
+        concept
+        for concept in selection.selected_concepts
+        if concept not in resolvable_required
+        and not assess_coverage([concept], catalog).sufficient
+    ]
+    if unavailable_source_concepts:
+        unavailable_model_concepts.extend(unavailable_source_concepts)
+        selection.selected_concepts = [
+            concept
+            for concept in selection.selected_concepts
+            if concept not in unavailable_source_concepts
+        ]
     selection.selected_concepts = list(
         dict.fromkeys(
             [
@@ -1291,10 +1312,25 @@ def _metadata_only_planning_acquisition(
         catalog,
     )
     selected = list(dict.fromkeys(coverage.available))
-    blocked = bool(
-        not selection.selection_succeeded or not selected or not coverage.sufficient
+    required_missing = [
+        value.strip()
+        for value in planning_required_concepts
+        if isinstance(value, str)
+        and value.strip()
+        and value.strip() != "icu_readmission"
+        and value.strip() not in resolvable_required
+    ]
+    # Unresolvable required concepts keep their historical handling here (the
+    # scientific configuration owner validates them before this call); they are
+    # named in the receipt so a block is diagnosable, not silently absorbed.
+    blocked_reason_code = (
+        "concept_selection_failed"
+        if not selection.selection_succeeded
+        else "no_available_concepts"
+        if not selected or not coverage.sufficient
+        else ""
     )
-    if blocked:
+    if blocked_reason_code:
         return AcquisitionResult(
             universe_path=None,
             provenance_path=None,
@@ -1302,9 +1338,18 @@ def _metadata_only_planning_acquisition(
             materialized_concepts=[],
             coverage=coverage,
             blocked=True,
+            blocked_reason_code=blocked_reason_code,
+            missing_concepts=tuple(
+                dict.fromkeys([*required_missing, *coverage.missing])
+            ),
             note=(
                 "Metadata-only concept selection failed before Planner launch; "
                 "no patient data were read."
+                + (
+                    f" Missing required concepts: {required_missing}."
+                    if required_missing
+                    else ""
+                )
             ),
         )
 
@@ -3001,6 +3046,24 @@ def _write_projection(
     selection = getattr(acquisition, "selection", None)
     selected_concepts = list(getattr(selection, "selected_concepts", []) or [])
     coverage = getattr(acquisition, "coverage", None)
+    # A blocked data foundation names its lower-layer cause as codes: the
+    # acquisition owner's reason and the concept ids it could not source.
+    # Concept ids are dictionary vocabulary, never patient values or paths;
+    # the owner's prose ``note`` stays in the host log.
+    if blocked_reason == "data_foundation_blocked":
+        gate["detail"] = {
+            "reason_code": _clean_text(
+                getattr(acquisition, "blocked_reason_code", "")
+                or "data_foundation_blocked",
+                80,
+            ),
+            "missing_concepts": [
+                _clean_text(concept, 80)
+                for concept in list(
+                    getattr(acquisition, "missing_concepts", ()) or ()
+                )[:16]
+            ],
+        }
     run_context = {
         "run_id": run_id,
         "study_id": _clean_text(study.get("id"), 160),

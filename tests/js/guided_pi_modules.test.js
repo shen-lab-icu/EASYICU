@@ -58,6 +58,16 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   // Static-preview Failed-to-fetch branch (terminology preserved).
   assert.match(preview({ message: 'Failed to fetch' }), /static preview/);
 
+  // A blocked data foundation names its lower-layer cause from codes only:
+  // the gate detail code and the concept ids the data lacked, never free text.
+  const runFailure = guided.require('errorText').create({ tr, staticPreview: () => false }).runFailureText;
+  assert.match(runFailure('data_foundation_blocked'), /Data preparation did not pass/);
+  const detailed = runFailure('data_foundation_blocked', { code: 'required_concepts_unavailable', missing: ['icu_unit_type', 'charlson'] });
+  assert.match(detailed, /Data preparation did not pass/);
+  assert.match(detailed, /icu_unit_type, charlson/);
+  assert.match(runFailure('data_foundation_blocked', { code: 'outcome_concept_undeclared' }), /No executable outcome variable/);
+  assert.equal(runFailure('data_foundation_blocked', { code: 'unknown_detail_code' }), runFailure('data_foundation_blocked'));
+
   // Fallback branch: raw transport text verbatim.
   assert.equal(live({ message: 'Failed to fetch' }), 'Failed to fetch');
   assert.equal(live({ message: 'boom' }), 'boom');

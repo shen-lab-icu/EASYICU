@@ -221,6 +221,12 @@ class AcquisitionResult:
     coverage: CoverageReport
     blocked: bool = False
     note: str = ""
+    #: Stable machine reason for ``blocked`` (empty when not blocked).  The
+    #: prose in ``note`` is for the host log; a browser projection carries only
+    #: this code and ``missing_concepts`` so the user learns *which* concept the
+    #: export lacks without the projection widening to free text.
+    blocked_reason_code: str = ""
+    missing_concepts: Tuple[str, ...] = ()
     # Token usage + estimated USD of the concept-SELECTION LLM call. The
     # selection runs as a pre-sandbox data-foundation stage (like extraction,
     # it needs data access), so its cost is recorded here rather than in the
@@ -413,6 +419,7 @@ def acquire_universe_for_question(
             materialized_concepts=[],
             coverage=coverage,
             blocked=True,
+            blocked_reason_code="concept_selection_failed",
             note=(
                 "Concept selection failed before data materialization: "
                 f"{selection.selection_error}"
@@ -443,6 +450,8 @@ def acquire_universe_for_question(
             materialized_concepts=[],
             coverage=coverage,
             blocked=True,
+            blocked_reason_code="required_concepts_unavailable",
+            missing_concepts=tuple(required_feature_coverage.missing),
             note=(
                 "Required analysis concepts are not available in the prepared "
                 f"export: {list(required_feature_coverage.missing)}"
@@ -504,6 +513,16 @@ def acquire_universe_for_question(
             materialized_concepts=[],
             coverage=coverage,
             blocked=True,
+            blocked_reason_code=(
+                "outcome_concept_undeclared"
+                if not outcome_concepts
+                else "outcome_concept_unavailable"
+            ),
+            missing_concepts=tuple(
+                assess_coverage(list(outcome_concepts), catalog).missing
+                if outcome_concepts
+                else ()
+            ),
             note=(
                 "This study requires an outcome but named no outcome concept; "
                 "cannot build the cohort."
