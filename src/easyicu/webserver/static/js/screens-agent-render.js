@@ -133,6 +133,7 @@
       'agent_plan.json': t('Agent plan', 'Agent 计划'),
       'literature_evidence.json': t('Literature evidence', '文献证据'),
       'scientific_plan_review.json': t('Scientific plan review', '科学计划审阅'),
+      'scientific_readiness.json': t('Scientific readiness', '科学就绪情况'),
       'manuscript_draft.json': t('Locked manuscript draft', '锁定论文草稿'),
       'manuscript_provenance.json': t('Evidence-bound manuscript reader', '证据绑定论文阅读器'),
       'benchmark_scorecard.json': t('Evaluation scorecard', '评估记分卡'),
@@ -164,9 +165,13 @@
     if (n.includes('manifest')) return t('Provenance', '溯源');
     return t('Artifact', '产物');
   }
-  function artifactSummary(name) {
+  function artifactSummary(name, fallback = true) {
     const n = String(name || '').toLowerCase();
     const labels = {
+      'manuscript_revision.pdf': t('The current report, typeset from locked, evidence-bound results.', '由已锁定、证据绑定的结果排版的当前报告。'),
+      'manuscript_scaffold.pdf': t('The report as this run first produced it; kept for provenance.', '本次运行最初生成的报告，留作溯源。'),
+      'system_validation_report.html': t('Engineering validation dossier; not a clinical manuscript.', '工程验证报告；不是临床论文。'),
+      'scientific_readiness.json': t('Which scientific checks passed and which remain open for this run.', '本次运行哪些科学核查已通过、哪些仍未关闭。'),
       'figure_gallery.json': t('Task-specific figures rendered from this completed run.', '这道问题已渲染出的任务特异图件。'),
       'result_tables.json': t('Bounded aggregate table previews from registered Research Agent evidence.', '来自 Research Agent 已登记证据的有界聚合表格预览。'),
       'system_validation_report.json': t('Source-bound engineering validation; explicitly not a clinical manuscript.', '源绑定的工程验证报告；明确不是临床论文。'),
@@ -184,7 +189,7 @@
       'cohort_summary.json': t('Denominator, cohort basis, and outcome availability.', '分母、队列依据与结局可用性。'),
       'source_run_manifest.json': t('Original completed run provenance and import manifest.', '原始完成运行的溯源与导入清单。'),
     };
-    return labels[n] || t('Whitelisted local artifact opened from the run folder.', '从运行文件夹读取的白名单本地产物。');
+    return labels[n] || (fallback ? t('Whitelisted local artifact opened from the run folder.', '从运行文件夹读取的白名单本地产物。') : '');
   }
   function artifactRank(name) {
     const order = [
@@ -303,46 +308,22 @@
     if (typeof value === 'number') return artifactNumber(value, key);
     if (Array.isArray(value)) return `${value.length.toLocaleString()} ${t('items', '项')}`;
     if (typeof value === 'object') return `${Object.keys(value).length.toLocaleString()} ${t('fields', '字段')}`;
+    // Result tables arrive as CSV strings; a plain number is displayed at the
+    // same reading precision as a JSON number.  Codes and identifiers stay text.
+    if (/^-?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?$/i.test(String(value).trim())
+      && !/(?:^|_)(?:id|code|icd|itemid|version|year|sha256|digest|hash)$/i.test(String(key || ''))) {
+      return artifactNumber(Number(value), key);
+    }
     const text = readableArtifactText(String(value));
     if (/sha(?:256)?|digest|hash/i.test(String(key || '')) && /^[a-f0-9]{32,}$/i.test(text)) {
       return `${text.slice(0, 10)}…${text.slice(-6)}`;
     }
     return text;
   }
+  // Key and column names are reader vocabulary; one owner keeps them.
   function artifactKeyLabel(key) {
-    const labels = {
-      run_id: t('Run ID', '运行 ID'),
-      run_type: t('Run type', '运行类型'),
-      study_id: t('Study ID', '研究 ID'),
-      status: t('Status', '状态'),
-      mode: t('Mode', '模式'),
-      question: t('Question', '问题'),
-      local_first: t('Local-first', '本地优先'),
-      cohort_size: t('Cohort size', '队列规模'),
-      evidence_count: t('Evidence items', '证据项'),
-      missing_evidence: t('Missing evidence', '缺失证据'),
-      signed: t('Signed', '已签署'),
-      provider: t('Provider', 'Provider'),
-      database_scope: t('Database scope', '数据库范围'),
-      stage: t('Stage', '阶段'),
-      population_rule: t('Population rule', '人群规则'),
-      excluded_from_previous: t('Excluded', '上一步排除'),
-      exposure_value: t('Exposure', '暴露值'),
-      reference_exposure_value: t('Reference', '参考值'),
-      adjusted_absolute_risk: t('Adjusted risk', '校正后风险'),
-      adjusted_odds_ratio: t('Adjusted OR', '校正后 OR'),
-      ci_low: t('95% CI low', '95% CI 下限'),
-      ci_high: t('95% CI high', '95% CI 上限'),
-      standardization_n: t('Standardized N', '标准化样本量'),
-      standardization_method: t('Standardization', '标准化方法'),
-      estimate_type: t('Estimate', '估计类型'),
-      point_estimate: t('Estimate', '估计值'),
-      effect_scale: t('Scale', '效应尺度'),
-      converged: t('Converged', '已收敛'),
-      model_id: t('Model', '模型'),
-      spec_id: t('Specification', '规格'),
-    };
-    return labels[key] || String(key || '').replace(/_/g, ' ');
+    return (window.AGENT_READER_VOCAB && window.AGENT_READER_VOCAB.column(key))
+      || String(key || '').replace(/_/g, ' ');
   }
   function artifactSummaryRows(payload, preferred) {
     const source = payload && typeof payload === 'object' ? payload : {};
@@ -622,6 +603,8 @@
       ],
     };
     const copy = known[code];
+    const vocab = !copy && window.AGENT_READER_VOCAB ? window.AGENT_READER_VOCAB.finding(code) : null;
+    if (vocab) return vocab;
     return {
       title: copy ? t(copy[0], copy[1]) : String(row && (row.message || row.code) || t('Unresolved review item', '待处理审阅项')),
       detail: copy ? t(copy[2], copy[3]) : String(row && (row.remediation || '') || ''),
@@ -680,16 +663,24 @@
       });
     });
     const citations = Array.from(citationMap.values()).slice(0, 6);
-    const citationCards = citations.map(row => `<article><strong>${esc(row.title || row.citation_key || '')}</strong><span>${esc(row.year || '')}</span><p>${esc(row.application || '')}</p></article>`).join('');
+    const citationUse = row => (window.AGENT_READER_VOCAB && window.AGENT_READER_VOCAB.citationUse(row)) || row.application || '';
+    const citationCards = citations.map(row => `<article><strong>${esc(row.title || row.citation_key || '')}</strong><span>${esc(row.year || '')}</span><p>${esc(citationUse(row))}</p></article>`).join('');
     const approvalAllowed = p.approval_allowed === true;
     const waiting = !approvalAllowed && decisions.length > 0;
+    // What approving grants, from the review's claim ceiling; raw scores
+    // stay in the JSON audit view.
+    const ceiling = {
+      analysis_only: t('Analysis only: approval runs the analysis and grants no publication authority.', '仅分析级：批准后执行分析，不授予发表权限。'),
+      reportable: t('Reportable: approval runs the analysis under the reportable-result checks.', '可报告级：批准后按可报告结果的核验执行分析。'),
+    }[String(p.status || '')];
+    const reviewMeta = approvalAllowed && ceiling ? `<p class="ag-science-review-meta">${esc(ceiling)}</p>` : '';
     return `<div class="ag-artifact-readable ag-science-review">
       <header class="ag-science-review-hero">
         <div><div class="eyebrow">${esc(t('Plan review', '计划审阅'))}</div><h2>${esc(waiting
           ? t(`${decisions.length} decisions remain before analysis`, `计划还差 ${decisions.length} 个决定`)
           : approvalAllowed ? t('The plan is ready for approval', '计划已可进入批准') : t('EasyICU needs to revise this candidate plan', 'EasyICU 需要修订这份候选计划'))}</h2><p>${esc(waiting
           ? t('Answer one question at a time. EasyICU will handle the plan repair and evidence work.', '一次只回答一个问题。计划修订和补充证据由 EasyICU 处理。')
-          : t('Endpoint, sensitivity design, plan structure, and evidence follow-up are system-owned proposal work. Review the revised complete plan instead of designing them here.', '结局定义、敏感性分析、计划结构和补证都属于系统的方案工作；你应审阅修订后的完整计划，不必在这里替系统设计。'))}</p></div>
+          : t('Endpoint, sensitivity design, plan structure, and evidence follow-up are system-owned proposal work. Review the revised complete plan instead of designing them here.', '结局定义、敏感性分析、计划结构和补证都属于系统的方案工作；你应审阅修订后的完整计划，不必在这里替系统设计。'))}</p>${reviewMeta}</div>
         <span class="ag-science-review-state ${approvalAllowed ? 'is-ready' : 'is-waiting'}">${esc(approvalAllowed ? t('Ready', '可批准') : t('Analysis paused', '分析已暂停'))}</span>
       </header>
       ${firstDecision ? `<section class="ag-science-review-section is-current"><div class="ag-science-review-heading"><div><span>${esc(t('Do this now', '现在只做这一步'))}</span><strong>${esc(firstDecisionCopy.title)}</strong></div><em>1</em></div><div class="ag-science-current-question"><p>${esc(scientificDecisionQuestion(firstDecision))}</p><span>${esc(t('Use “Answer decision 1” in the conversation to reply.', '在左侧对话中点击「回答第 1 项」。'))}</span></div>${laterDecisions.length ? `<div class="ag-science-later"><span>${esc(t('Later', '稍后'))}</span><strong>${esc(scientificFindingCopy(laterDecisions[0]).title)}</strong><small>${esc(t('EasyICU will ask after the first answer is saved.', '第 1 项保存后，EasyICU 再询问这一项。'))}</small></div>` : ''}</section>` : ''}
@@ -811,7 +802,9 @@
     if (!agentPlanIntentNeedsTranslation(value)) return `${open}${esc(value)}</p>`;
     const gloss = agentPlanDesignGloss(kind, value, analysisType, analysisFamily);
     if (!gloss) return `${open}${esc(value)}</p>`;
-    return `${open}${esc(gloss)}</p><p class="ag-plan-field-source"><small>${esc(t('Plan wording', '计划原文'))}</small>${esc(value)}</p>`;
+    // The reader's-language gloss leads; the plan's own wording stays one
+    // click away instead of competing with it.
+    return `${open}${esc(gloss)}</p><details class="ag-plan-field-source"><summary><small>${esc(t('Plan wording', '计划原文'))}</small></summary>${esc(value)}</details>`;
   }
   function agentPlanStepIntent(step) {
     if (String(step && step.method || '') === 'visualization') {
@@ -1048,7 +1041,24 @@
     const analysisOnlyPlan = String(designSelection.claim_ceiling || '') === 'analysis_only';
     const endpoint = p.endpoint && typeof p.endpoint === 'object' ? p.endpoint : null;
     const required = Array.isArray(selected.required_variables) ? selected.required_variables : [];
-    const visibleVariables = required.filter(value => !/(?:^|_)id$/i.test(String(value || ''))).slice(0, 10);
+    // A row identity is how records are keyed, not a study ingredient; the
+    // cohort step names it, whatever the source database calls it.
+    const identityColumns = new Set(steps.map(step => String(step && step.cohort_definition_spec
+      && step.cohort_definition_spec.identity_column || '')).filter(Boolean));
+    const visibleVariables = required.filter(value => !identityColumns.has(String(value || ''))
+      && !/(?:^|_)id$/i.test(String(value || ''))).slice(0, 10);
+    // The primary model's closed exposure levels are typed; saying which enter
+    // the model answers "what happens to the other values" without prose.
+    const primaryRequirement = steps
+      .flatMap(step => Array.isArray(step && step.model_requirements) ? step.model_requirements : [])
+      .find(row => row && Array.isArray(row.exposure_levels) && row.exposure_levels.length
+        && String(row.analysis_role || 'primary') === 'primary');
+    const levelsNote = primaryRequirement ? `<p class="ag-plan-note"><strong>${esc(t('Exposure levels in the primary model: ', '主模型中的暴露水平：'))}</strong>${esc(primaryRequirement.exposure_levels.map(String).join(t(', ', '、')))}${
+      primaryRequirement.exposure_reference_level != null && primaryRequirement.exposure_reference_level !== ''
+        ? esc(t(` (reference ${primaryRequirement.exposure_reference_level})`, `（参照 ${primaryRequirement.exposure_reference_level}）`)) : ''}${
+      primaryRequirement.primary_contrast_level != null && primaryRequirement.primary_contrast_level !== ''
+        ? esc(t(`; primary comparison ${primaryRequirement.primary_contrast_level} vs ${primaryRequirement.exposure_reference_level}`, `；主要对比 ${primaryRequirement.primary_contrast_level} vs ${primaryRequirement.exposure_reference_level}`)) : ''}${
+      esc(t('. Other values do not enter the primary model.', '。其他取值不进入主模型。'))}</p>` : '';
     const citations = Array.from(new Set([
       ...(Array.isArray(selected.literature_citation_keys) ? selected.literature_citation_keys : []),
       ...steps.flatMap(step => Array.isArray(step && step.literature_citation_keys) ? step.literature_citation_keys : []),
@@ -1071,7 +1081,7 @@
       const note = agentPlanStepIntent(step);
       const title = agentPlanStepTitle(step, labels);
       const source = agentPlanStepStatedSource(step);
-      return `<li><span>${index + 1}</span><div><strong>${esc(title)}</strong>${note && note !== title ? `<p>${esc(note)}</p>` : ''}${source ? `<p class="ag-plan-step-source"><small>${esc(t('Plan wording', '计划原文'))}</small>${esc(source)}</p>` : ''}${outputs.length ? `<div class="ag-plan-step-outputs"><small>${esc(t('Planned output', '计划产物'))}</small>${shown.map(value => `<span>${esc(agentPlanOutputLabel(value))}</span>`).join('')}${hidden > 0 ? `<span class="is-more">+${hidden}</span>` : ''}</div>` : ''}</div></li>`;
+      return `<li><span>${index + 1}</span><div><strong>${esc(title)}</strong>${note && note !== title ? `<p>${esc(note)}</p>` : ''}${source ? `<details class="ag-plan-step-source"><summary><small>${esc(t('Plan wording', '计划原文'))}</small></summary>${esc(source)}</details>` : ''}${outputs.length ? `<div class="ag-plan-step-outputs"><small>${esc(t('Planned output', '计划产物'))}</small>${shown.map(value => `<span>${esc(agentPlanOutputLabel(value))}</span>`).join('')}${hidden > 0 ? `<span class="is-more">+${hidden}</span>` : ''}</div>` : ''}</div></li>`;
     }).join('');
     const variableChips = visibleVariables.map(value => `<span>${esc(agentPlanVariableLabel(value, labels))}</span>`).join('');
     const literatureSummary = citations.length
@@ -1094,7 +1104,7 @@
       ${gaps.length ? `<section class="ag-plan-section is-gap"><div class="ag-plan-section-head"><span>!</span><div><small>${esc(t('EasyICU must revise', 'EasyICU 需要修订'))}</small><h3>${esc(t('Why this version is not ready for approval', '为什么这一版还不能批准'))}</h3></div></div><ul>${gaps.map(value => `<li>${esc(value)}</li>`).join('')}</ul><p>${esc(t('These are Planner responsibilities. The researcher reviews the revised complete plan instead of filling these implementation details one by one.', '这些属于 Planner 的职责。研究者应审阅修订后的完整计划，而不是逐项替系统填写实现细节。'))}</p></section>` : ''}
       <section class="ag-plan-section"><div class="ag-plan-section-head"><span>01</span><div><small>${esc(t('Chosen design · plan at a glance', '设计选择 · 先看核心设定'))}</small><h3>${esc(agentPlanAnalysisLabel(selected.analysis_type || p.analysis_type))}</h3></div></div><p class="ag-plan-lead">${esc(t('Start with the target quantity, study start, follow-up, and primary method. The full rationale remains available below.', '先看要估计什么、研究从哪里开始、随访到哪里以及主要方法；完整设计理由保留在下方。'))}</p><div class="ag-plan-design-grid"><article><small>${esc(t('Target quantity', '要估计什么'))}</small>${planField('estimand', selected.estimand)}</article><article><small>${esc(t('Study start', '研究起点'))}</small>${planField('time_zero', selected.time_zero)}</article><article><small>${esc(t('Observation window', '观察范围'))}</small>${planField('observation_window', selected.observation_window)}</article><article><small>${esc(t('Primary method', '主要方法'))}</small>${planField('primary_method', selected.primary_method)}</article></div><div class="ag-plan-boundaries"><article><strong>${esc(t('What this design can answer', '这套设计能回答'))}</strong>${planField('supports', selected.supports)}</article><article><strong>${esc(t('What it cannot prove', '这套设计不能证明'))}</strong>${planField('cannot_prove', selected.cannot_prove)}</article></div></section>
       <section class="ag-plan-section"><div class="ag-plan-section-head"><span>02</span><div><small>${esc(t('Analysis path · workflow', '分析路径 · 分析流程'))}</small><h3>${esc(t(`${steps.length} planned steps in ${flowStages.length} stages`, `共 ${steps.length} 个步骤 · ${flowStages.length} 个阶段`))}</h3></div></div><p class="ag-plan-lead">${esc(t('Read the map first: each stage says what the run finishes before it moves on. Open the detail list only when you need the exact wording of a step.', '先看流程图：每个阶段说明这一段要做完什么，再进入下一段；需要逐条核对时再展开详细说明。'))}</p>${agentPlanFlowMap(steps, labels)}${stepCards ? `<details class="ag-plan-step-detail"><summary>${esc(t(`Step-by-step detail · ${steps.length} steps`, `逐步说明 · 共 ${steps.length} 步`))}</summary><ol class="ag-plan-steps">${stepCards}</ol></details>` : `<ol class="ag-plan-steps"><li><span>—</span><div><strong>${esc(t('No analysis steps are present.', '尚未形成分析步骤。'))}</strong></div></li></ol>`}</section>
-      <section class="ag-plan-section"><div class="ag-plan-section-head"><span>03</span><div><small>${esc(t('Study ingredients', '研究要素'))}</small><h3>${esc(t('Variables named in the candidate plan', '候选计划涉及的变量'))}</h3></div></div><div class="ag-plan-chips">${variableChips || `<span>${esc(t('Not yet specified', '尚未明确'))}</span>`}</div>${endpoint ? `<p class="ag-plan-note"><strong>${esc(t('Primary outcome', '主要结局'))}：</strong>${esc(agentPlanVariableLabel(endpoint.name, labels))}</p>` : ''}</section>
+      <section class="ag-plan-section"><div class="ag-plan-section-head"><span>03</span><div><small>${esc(t('Study ingredients', '研究要素'))}</small><h3>${esc(t('Variables named in the candidate plan', '候选计划涉及的变量'))}</h3></div></div><div class="ag-plan-chips">${variableChips || `<span>${esc(t('Not yet specified', '尚未明确'))}</span>`}</div>${levelsNote}${endpoint ? `<p class="ag-plan-note"><strong>${esc(t('Primary outcome', '主要结局'))}：</strong>${esc(agentPlanVariableLabel(endpoint.name, labels))}</p>` : ''}</section>
       ${recommendation ? `<details class="ag-plan-recommendations"><summary><span>${esc(t('Planner recommendation for review · 6 exact settings', 'Planner 推荐方案（待审阅）· 6 项具体设定'))}</span><small>${esc(t('Open when you need to inspect or change the exact definitions.', '需要逐项核对或修改时再展开。'))}</small></summary><p class="ag-plan-lead">${esc(t('EasyICU proposes these choices first; modify or approve them after review. They are not yet treated as researcher-confirmed.', '先给方案，再由你修改或批准。以下内容由 EasyICU 先行推荐，尚未视为研究者确认。'))}</p><div class="ag-plan-design-grid">${recommendationCards}</div></details>` : ''}
       <details class="ag-plan-details"><summary>${esc(t('Why this design was chosen', '查看完整设计理由'))}</summary>${planField('decision_reason', p.rationale || selected.decision_reason)}</details>
       ${literatureSummary ? `<section class="ag-plan-literature"><div><strong>${esc(t('Literature used by this plan', '本计划使用的文献依据'))}</strong><small>${esc(t('Open “Literature evidence” for source, screening, and exact step bindings.', '具体来源、筛选理由及步骤绑定请打开「文献依据」。'))}</small></div><div>${literatureSummary}</div></section>` : ''}
@@ -1110,6 +1120,8 @@
   }
   function resultTableTitle(table, index) {
     const rawToken = resultTableToken(table, index);
+    const named = window.AGENT_READER_VOCAB && window.AGENT_READER_VOCAB.tableTitle(rawToken, table && table.name);
+    if (named) return named;
     const token = rawToken.toLowerCase();
     const labels = [
       [/exposure_outcome_distribution/, t('Exposure prevalence and observed outcome', '暴露比例与观察结局')],

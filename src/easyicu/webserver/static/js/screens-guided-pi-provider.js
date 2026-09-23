@@ -101,7 +101,7 @@
             ${state.researchProvider === 'api' ? apiConnectionForm(options) : ''}
             ${state.error ? `<div class="gpi-error inline">${esc(state.error)}</div>` : ''}
             <div class="gpi-setup-actions">
-              ${canCancel ? `<button class="btn primary" type="button" data-gpi-provider-done>${tr('Enter research workspace', '进入研究工作区')}</button>` : `<button class="gpi-link" type="button" data-gpi-legacy>${tr('Continue with the local guided workflow', '暂不连接，使用本地研究引导')}</button>`}
+              ${canCancel ? `<button class="btn primary" type="button" data-gpi-provider-done>${tr('Enter research workspace', '进入研究工作区')}</button>` : `<button class="gpi-link" type="button" data-gpi-demo>${tr('View the workflow demo first (no connection needed)', '先看流程演示（无需连接）')}</button>`}
             </div>
           </div>
         </section>

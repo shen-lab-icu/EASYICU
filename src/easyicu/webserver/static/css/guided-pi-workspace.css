@@ -349,6 +349,9 @@
 .gpi-capability-tools>button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .gpi-capability-tools>button:disabled{cursor:default;opacity:.35}
 .gpi-entry-home .gpi-starter-actions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0}
+/* The official-demo question sits alone above the workflow cards. */
+.gpi-entry-home .gpi-starter-demo{display:grid;margin:22px 0 0}
+.gpi-entry-home .gpi-starter-demo .gpi-starter-card{min-height:0}
 .gpi-entry-home .gpi-starter-card{display:flex;flex-direction:column;min-height:154px;box-sizing:border-box;padding:14px 15px 12px;border:1px solid #8f8b82;border-radius:8px;background:#fbfaf7;color:var(--ink-2);text-align:left;cursor:pointer}
 .gpi-entry-home .gpi-starter-card:hover{border-color:#3e3a35;background:#f1f0eb;color:var(--ink)}
 .gpi-entry-home .gpi-starter-card:focus-visible{outline:2px solid var(--accent);outline-offset:2px}

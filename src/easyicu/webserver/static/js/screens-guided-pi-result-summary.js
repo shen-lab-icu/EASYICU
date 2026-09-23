@@ -48,6 +48,73 @@
     };
   }
 
+  // The adjusted-association producer's typed estimate table.  Only its own
+  // columns identify a row as an effect estimate; a table that merely has an
+  // "estimate" column is not one.
+  const ESTIMATE_COLUMNS = ['fit_status', 'estimate', 'ci_low', 'ci_high', 'effect_scale', 'is_primary_contrast'];
+  const FITTED = new Set(['fitted', 'ok', 'converged', 'success']);
+  const MEASURES = {
+    odds_ratio: 'OR', hazard_ratio: 'HR', risk_ratio: 'RR', relative_risk: 'RR', risk_difference: 'RD',
+  };
+
+  function isTrue(value) {
+    return ['true', '1', 'yes'].includes(String(value == null ? '' : value).trim().toLowerCase());
+  }
+
+  function ratioDisplay(value, measure) {
+    const number = finite(value);
+    if (number == null) return '';
+    return measure === 'RD' ? number.toFixed(3) : number.toFixed(2);
+  }
+
+  // One registered primary model's contrasts, primary contrast first.  Any
+  // doubt -- no primary table, two of them, an unknown effect scale -- returns
+  // nothing rather than a guessed headline.
+  function estimates(records, plan) {
+    const byTable = new Map();
+    records.filter(item => ESTIMATE_COLUMNS.every(header => item.headers.includes(header))).forEach(item => {
+      if (!byTable.has(item.table)) byTable.set(item.table, []);
+      byTable.get(item.table).push(item);
+    });
+    const primaryRows = items => items.filter(item => !item.headers.includes('analysis_role')
+      || String(item.record.analysis_role || '').trim().toLowerCase() === 'primary');
+    const candidates = [...byTable.values()]
+      .map(primaryRows)
+      .filter(items => items.some(item => isTrue(item.record.is_primary_contrast)));
+    if (candidates.length !== 1) return [];
+    const fitted = candidates[0].filter(item => FITTED.has(String(item.record.fit_status || '').trim().toLowerCase())
+      && finite(item.record.estimate) != null);
+    const scales = new Set(fitted.map(item => String(item.record.effect_scale || '').trim().toLowerCase()));
+    const measure = scales.size === 1 ? MEASURES[[...scales][0]] : null;
+    if (!measure || !fitted.some(item => isTrue(item.record.is_primary_contrast))) return [];
+    const labels = plan && plan.display_labels || {};
+    const levelLabel = (exposure, level) => {
+      const key = `${exposure}=${JSON.stringify(level)}`;
+      const numeric = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(level) ? `${exposure}=${JSON.stringify(Number(level))}` : '';
+      return typeof labels[key] === 'string' ? labels[key] : (numeric && typeof labels[numeric] === 'string' ? labels[numeric] : level);
+    };
+    return fitted
+      .sort((a, b) => Number(isTrue(b.record.is_primary_contrast)) - Number(isTrue(a.record.is_primary_contrast)))
+      .map(item => {
+        const record = item.record;
+        const exposure = String(record.exposure || '');
+        const level = String(record.exposure_level == null ? '' : record.exposure_level).trim();
+        const reference = String(record.reference_level == null ? '' : record.reference_level).trim();
+        const contrast = String(record.contrast || '').trim() || (level && reference ? `${level} vs ${reference}` : level);
+        const label = level && reference
+          ? `${levelLabel(exposure, level)} vs ${levelLabel(exposure, reference)}`
+          : contrast || (typeof labels[exposure] === 'string' ? labels[exposure] : exposure);
+        const value = finite(record.estimate);
+        const low = finite(record.ci_low);
+        const high = finite(record.ci_high);
+        return {
+          label, contrast, measure, value, low, high, n: finite(record.n),
+          primary: isTrue(record.is_primary_contrast),
+          display: { value: ratioDisplay(value, measure), low: ratioDisplay(low, measure), high: ratioDisplay(high, measure) },
+        };
+      });
+  }
+
   function summarize(payload, plan) {
     const records = rows(payload);
     const candidates = records.filter(item => [
@@ -119,6 +186,7 @@
         )),
       ].filter(Boolean),
       exposureLevels,
+      estimates: estimates(records, plan),
       outcomeLabel: spec && typeof labels[spec.outcome] === 'string' ? labels[spec.outcome] : '',
     };
   }

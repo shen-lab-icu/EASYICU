@@ -14,8 +14,8 @@
         category: tr('Descriptive epidemiology', '描述性流行病学'),
         description: tr('Build a grouped baseline table from one typed, source-bound cohort.', '基于来源绑定的队列生成分组基线特征表。'),
         prompt: tr(
-          'In an adult ICU cohort, describe baseline characteristics by a clinically meaningful grouping variable and generate a complete Table 1. Please first ask me to confirm the cohort, grouping levels, variables, units, and summary rules; do not read data or run analysis yet.',
-          '在成人 ICU 队列中，按一个具有临床意义的分组变量描述基线特征，并生成完整的 Table 1。请先让我确认队列、分组水平、变量、单位和汇总规则；暂不读取数据或运行分析。',
+          'Use the Cohort characterization and Table 1 method. The research plan proposes the grouping levels, summarized variables, units, and summary rules; I review them together in the plan, and nothing runs before that review. My research question: ',
+          '请使用“队列描述与 Table 1”方法。分组水平、汇总变量、单位与汇总规则由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：',
         ),
         capabilityId: 'descriptive_measurement_v1', actionIds: ['descriptive.table_one'], claimCeiling: 'analysis_only',
       },
@@ -25,8 +25,8 @@
         category: tr('Descriptive epidemiology', '描述性流行病学'),
         description: tr('Estimate typed absolute risks and denominators without causal language.', '计算类型明确的绝对风险与分母，并保持描述性解释。'),
         prompt: tr(
-          'In an adult ICU cohort, describe the distribution of a clinically defined exposure and outcome and estimate absolute risks with transparent denominators. Please first ask me to confirm the cohort, exposure levels, outcome definition, interval method, and dependence structure; do not imply causality.',
-          '在成人 ICU 队列中，描述一个临床定义明确的研究因素与结局分布，并以透明分母计算绝对风险。请先让我确认队列、研究因素水平、结局定义、区间方法和相关性结构；不要作因果推断。',
+          'Use the Exposure and outcome distribution method. The research plan proposes the exposure levels, outcome definition, denominators, and interval method; I review them together in the plan, and nothing runs before that review. Interpretation stays descriptive. My research question: ',
+          '请使用“研究因素与结局分布”方法。研究因素水平、结局定义、分母与区间方法由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。解释保持描述性，不作因果推断。我的研究问题是：',
         ),
         capabilityId: 'descriptive_exposure_outcome_distribution_v1', actionIds: [], claimCeiling: 'reportable',
       },
@@ -36,8 +36,8 @@
         category: tr('Survival analysis', '生存分析'),
         description: tr('Run a contract-bound Cox analysis with KM, log-rank, and PH diagnostics.', '运行契约绑定的 Cox 分析，并提供 KM、log-rank 与 PH 诊断。'),
         prompt: tr(
-          'In an adult ICU cohort, study the association between a clinically defined exposure and a time-to-event outcome. Please first ask me to confirm time origin and unit, event and censoring rules, exposure and reference, covariates, horizon, complete-case policy, and proportional-hazards policy; do not run analysis yet.',
-          '在成人 ICU 队列中，研究一个临床定义明确的研究因素与时间结局之间的关系。请先让我确认时间起点与单位、事件与删失规则、研究因素及参考水平、协变量、观察期限、完整案例策略和比例风险策略；暂不运行分析。',
+          'Use the Survival and time-to-event analysis method. The research plan proposes the time origin, event and censoring rules, reference level, covariates, follow-up horizon, and proportional-hazards check; I review them together in the plan, and nothing runs before that review. My research question: ',
+          '请使用“生存与时间结局分析”方法。时间起点、事件与删失规则、参照水平、协变量、观察期限与比例风险检验由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：',
         ),
         capabilityId: 'survival_time_to_event_v1',
         actionIds: ['time_to_event.cox_hr', 'time_to_event.km_logrank', 'time_to_event.ph_check'],
@@ -92,6 +92,22 @@
     </button>`;
   }
 
+  // One runnable question on official demo data.  Naming the demo lets the
+  // conversation offer that exact source, so a first look needs no setup; the
+  // text only fills the composer and nothing is sent or run by the click.
+  function demoCard(disabled, tr) {
+    const prompt = tr(
+      'Using the official eICU demo (eICU Collaborative Research Database Demo v2.0.1): how is ICU admission type (medical, surgical, other) associated with in-hospital mortality? Admission type is a baseline characteristic at ICU entry; the research plan decides and explains missing-value handling and the adjustment set.',
+      '用 eICU 官方 Demo 数据（eICU Collaborative Research Database Demo v2.0.1）研究：ICU 入院类型（内科、外科、其他）与住院死亡有什么关联？入院类型是入 ICU 时的基线特征；缺失值怎么处理、调整哪些协变量由研究计划决定并说明。',
+    );
+    return `<div class="gpi-starter-demo"><button type="button" class="gpi-starter-card" data-gpi-starter-card data-gpi-starter-method="" data-gpi-starter-intent="implement_scientific_question" data-gpi-starter-compose="${esc(prompt)}" ${disabled}>
+      <span class="gpi-starter-category">${esc(tr('Official demo · eICU', '官方 Demo · eICU'))}</span>
+      <strong>${esc(tr('Try one question on official demo data', '用官方 Demo 数据试一个问题'))}</strong>
+      <small>${esc(tr('Admission type and in-hospital mortality in 2,520 ICU stays. The data are prepared in one click; nothing runs until you approve the plan.', '2,520 次 ICU 住院中，入院类型与住院死亡的关联。数据一键准备；计划经你批准后才会运行。'))}</small>
+      <span class="gpi-starter-card-foot"><span>${esc(tr('Start', '开始'))}</span><span class="gpi-starter-badge">Demo</span></span>
+    </button></div>`;
+  }
+
   function render(options) {
     const tr = options.tr;
     const disabled = options.disabled ? 'disabled' : '';
@@ -103,6 +119,7 @@
         <p>${esc(tr('Describe a scientific question, or choose a reviewed workflow below.', '描述一个科学问题，或从下方选择经过审阅的研究工作流。'))}</p>
       </header>
       ${options.composer || ''}
+      ${demoCard(disabled, tr)}
       <div class="gpi-capability-head">
         <strong>${esc(tr('Explore EasyICU workflows', '探索 EasyICU 研究工作流'))}</strong>
         <div class="gpi-capability-tools"><label><span class="shell-sr-only">${esc(tr('Search workflows', '搜索研究工作流'))}</span><input type="search" data-gpi-starter-search placeholder="${esc(tr('Search…', '搜索…'))}" autocomplete="off"></label>

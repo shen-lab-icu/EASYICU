@@ -348,7 +348,6 @@
         if (event.target.closest('[data-gpi-setup]')) { state.showSetup = true; setShell('pi'); return; }
         if (event.target.closest('[data-gpi-open]')) { setShell('pi'); return; }
         if (event.target.closest('[data-gpi-study-setup]')) { openStudySetupInConversation(); return; }
-        if (event.target.closest('[data-gpi-legacy]')) { setShell('legacy'); return; }
         if (event.target.closest('[data-gpi-create]')) { createSession(); return; }
         if (event.target.closest('[data-gpi-dismiss-error]')) { state.error = ''; render(); return; }
       const hostNoticeAction = event.target.closest('[data-gpi-host-notice-action]');
