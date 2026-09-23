@@ -50,6 +50,30 @@ def _boolean_series(frame: pd.DataFrame, column: str) -> pd.Series:
     return normalized.eq("true")
 
 
+def _independence_flags(frame: pd.DataFrame) -> pd.Series:
+    """Read ``independent_variant`` as the matrix writes it: tri-state.
+
+    The robustness runner leaves the flag blank on rows no independence audit
+    covers (the primary row, a cohort or missing-data variant) and writes an
+    explicit ``False`` only for a documentation row that is not an independent
+    refit; its own summary counts exactly those as non-independent.  Any other
+    non-blank value is still refused.
+    """
+
+    values = frame["independent_variant"]
+    present = values.notna()
+    tokens = values[present].map(
+        lambda value: ("true" if value else "false")
+        if isinstance(value, (bool, np.bool_))
+        else _token(value)
+    )
+    if not tokens.isin({"true", "false"}).all():
+        raise ValueError("'independent_variant' must contain only booleans or blanks")
+    flags = pd.Series(pd.NA, index=frame.index, dtype="boolean")
+    flags[present] = tokens.eq("true").to_numpy()
+    return flags
+
+
 def assess_robustness_effect_comparability(
     frame: pd.DataFrame,
 ) -> RobustnessEffectComparability:
@@ -115,7 +139,7 @@ def assess_robustness_effect_comparability(
             reason_code=ROBUSTNESS_EFFECT_COMPARABILITY_UNRESOLVED,
             message="A common robustness effect axis is not authorized because at least one specification did not converge.",
         )
-    if not _boolean_series(frame, "independent_variant").all():
+    if not _independence_flags(frame).eq(True).fillna(False).all():
         return RobustnessEffectComparability(
             authorized=False,
             reason_code=ROBUSTNESS_EFFECT_COMPARABILITY_UNRESOLVED,
@@ -228,8 +252,8 @@ def robustness_matrix_to_coverage(frame: pd.DataFrame) -> pd.DataFrame:
         "converged_specs": converged.astype("int64"),
     }
     if "independent_variant" in frame.columns:
-        independent = _boolean_series(frame, "independent_variant")
-        data["non_independent_specs"] = (~independent).astype("int64")
+        not_independent = _independence_flags(frame).eq(False).fillna(False)
+        data["non_independent_specs"] = not_independent.astype("int64")
     return pd.DataFrame(data)
 
 
