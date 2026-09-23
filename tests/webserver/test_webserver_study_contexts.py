@@ -894,6 +894,100 @@ def test_public_study_context_api_cannot_forge_concept_selection_authority() -> 
     )
 
 
+def _store_host_verified_concept_selection(context_id: str) -> dict:
+    return context_store.upsert_context(
+        {
+            "id": context_id,
+            "question": "基于 SOFA-2 的脓毒症与院内死亡的关系",
+            "modules": ["demographics", "sepsis3_sofa2"],
+            "confirmations": {
+                "concept_selection_sep3_sofa2_authorized": True,
+                "concept_selection_sep3_sofa2_user_turn_verified": True,
+            },
+        },
+        lifecycle_write=False,
+        _server_concept_selection_authority_write=True,
+    )
+
+
+def test_host_verified_concept_selection_receipt_survives_store_reads() -> None:
+    saved = _store_host_verified_concept_selection("study_verified_sofa2")
+
+    loaded = context_store.get_context("study_verified_sofa2")
+    unrelated = context_store.upsert_context(
+        {"id": "study_unrelated", "question": "Unrelated question"},
+        lifecycle_write=False,
+    )
+    listed = context_store.list_contexts()
+    response = TestClient(app).get("/api/study-contexts/study_verified_sofa2")
+
+    assert saved["confirmations"]["concept_selection_sep3_sofa2_user_turn_verified"] is True
+    assert {row["id"] for row in listed["contexts"]} >= {
+        "study_verified_sofa2",
+        "study_unrelated",
+    }
+    assert loaded["confirmations"] == saved["confirmations"]
+    assert unrelated["id"] == "study_unrelated"
+    assert response.status_code == 200
+    assert response.json()["context"]["confirmations"] == saved["confirmations"]
+
+
+def test_browser_echo_of_host_verified_concept_selection_is_carried_forward() -> None:
+    saved = _store_host_verified_concept_selection("study_verified_echo")
+    client = TestClient(app)
+
+    # study-context.js persist() round-trips the complete confirmations map.
+    echoed = client.post(
+        "/api/study-contexts",
+        json={
+            "id": "study_verified_echo",
+            "question": saved["question"],
+            "modules": saved["modules"],
+            "confirmations": {**saved["confirmations"], "extraction_completed": True},
+            "expected_revision": saved["revision"],
+        },
+    )
+    assert echoed.status_code == 200
+    echoed_context = echoed.json()["context"]
+    assert echoed_context["confirmations"] == {
+        **saved["confirmations"],
+        "extraction_completed": True,
+    }
+
+    # A client patch that omits the host receipt cannot drop it either; the
+    # ordinary model-writable confirmation follows normal replace semantics.
+    omitted = client.post(
+        "/api/study-contexts",
+        json={
+            "id": "study_verified_echo",
+            "confirmations": {"guided_configuration_collected": True},
+            "expected_revision": echoed_context["revision"],
+        },
+    )
+    assert omitted.status_code == 200
+    assert omitted.json()["context"]["confirmations"] == {
+        "guided_configuration_collected": True,
+        "concept_selection_sep3_sofa2_user_turn_verified": True,
+    }
+
+    # Flipping the receipt is still a server-owned write.
+    flipped = client.post(
+        "/api/study-contexts",
+        json={
+            "id": "study_verified_echo",
+            "confirmations": {
+                **saved["confirmations"],
+                "concept_selection_sep3_sofa2_user_turn_verified": False,
+            },
+            "expected_revision": omitted.json()["context"]["revision"],
+        },
+    )
+    assert flipped.status_code == 400
+    assert flipped.json()["detail"]["error"] == (
+        "study_concept_selection_authority_server_owned"
+    )
+
+
 def test_patient_review_scope_metadata_survives_backend_normalization() -> None:
     response = TestClient(app).post(
         "/api/study-contexts",

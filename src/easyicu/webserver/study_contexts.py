@@ -818,13 +818,13 @@ def _confirmations(
                 "max_items": _MAX_COLLECTION_ITEMS,
             }
         )
+    from easyicu.concept.selection_policy import (
+        is_concept_selection_authority_key,
+    )
+
     result: Dict[str, bool] = {}
     for raw_key, raw_value in value.items():
         key = _identifier(raw_key, field="confirmations.key")
-        from easyicu.concept.selection_policy import (
-            is_concept_selection_authority_key,
-        )
-
         if (
             is_concept_selection_authority_key(key)
             and not allow_concept_selection_authority
@@ -1581,6 +1581,8 @@ def _contexts_from_raw(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
             continue
         _enforce_context_budget(row)
         _reject_row_level_metadata(row)
+        # Stored rows already carry every server-owned receipt; re-reading
+        # them must not re-apply the client-write restrictions.
         patch = _sanitize_patch(
             {
                 field: row[field]
@@ -1589,6 +1591,7 @@ def _contexts_from_raw(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
             },
             allow_literature_authority=True,
             allow_cohort_eligibility_authority=True,
+            allow_concept_selection_authority=True,
         )
         if "analysis_design" in row:
             # Historical contradictions must stay inspectable, not break the
@@ -1806,6 +1809,66 @@ def get_active_context() -> Optional[Dict[str, Any]]:
         )
 
 
+def _split_client_concept_selection_authority(
+    raw_context: Dict[str, Any],
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Separate echoed server-owned concept-selection receipts from a client patch.
+
+    Browser owners persist the complete ``confirmations`` map they loaded, so
+    a receipt the host wrote earlier legitimately comes back unchanged. Those
+    keys are validated against the stored row inside the write lock instead
+    of being rejected up front; only the remaining keys go through the
+    ordinary client sanitizer.
+    """
+
+    from easyicu.concept.selection_policy import is_concept_selection_authority_key
+
+    confirmations = raw_context.get("confirmations")
+    if not isinstance(confirmations, dict):
+        return raw_context, {}
+    client_authority: Dict[str, Any] = {}
+    remaining: Dict[str, Any] = {}
+    for key, value in confirmations.items():
+        if is_concept_selection_authority_key(str(key)):
+            client_authority[str(key)] = value
+        else:
+            remaining[key] = value
+    if not client_authority:
+        return raw_context, {}
+    return {**raw_context, "confirmations": remaining}, client_authority
+
+
+def _carry_forward_concept_selection_authority(
+    patch: Dict[str, Any],
+    current: Optional[Mapping[str, Any]],
+    client_authority: Mapping[str, Any],
+) -> None:
+    """Keep host-written concept-selection receipts across client writes.
+
+    A client may echo a stored receipt verbatim, but it can neither create,
+    flip, nor drop one: any differing echo fails closed, and a client patch
+    that omits the receipt still carries the stored value forward.
+    """
+
+    from easyicu.concept.selection_policy import is_concept_selection_authority_key
+
+    stored = {
+        key: value
+        for key, value in (((current or {}).get("confirmations")) or {}).items()
+        if is_concept_selection_authority_key(str(key))
+    }
+    for key, value in client_authority.items():
+        if key not in stored or stored[key] is not value:
+            raise StudyContextError(
+                {
+                    "error": "study_concept_selection_authority_server_owned",
+                    "field": f"confirmations.{key}",
+                }
+            )
+    if stored and "confirmations" in patch:
+        patch["confirmations"] = {**patch["confirmations"], **stored}
+
+
 def upsert_context(
     raw_context: Dict[str, Any],
     *,
@@ -1817,6 +1880,11 @@ def upsert_context(
     _server_cohort_eligibility_authority_write: bool = False,
     _server_concept_selection_authority_write: bool = False,
 ) -> Dict[str, Any]:
+    client_concept_selection_authority: Dict[str, Any] = {}
+    if not _server_concept_selection_authority_write and isinstance(raw_context, dict):
+        raw_context, client_concept_selection_authority = (
+            _split_client_concept_selection_authority(raw_context)
+        )
     patch = _sanitize_patch(
         raw_context,
         allow_literature_authority=_server_literature_authority_write,
@@ -1883,6 +1951,10 @@ def upsert_context(
                     "error": "study_context_lifecycle_field_forbidden",
                     "field": "active_job_id",
                 }
+            )
+        if not _server_concept_selection_authority_write:
+            _carry_forward_concept_selection_authority(
+                patch, current, client_concept_selection_authority
             )
         proposed_context = {**dict(current or {}), **patch}
         proposed_authority = patch.get("cohort_eligibility_authority")

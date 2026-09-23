@@ -200,7 +200,7 @@ CONCEPT_DICTIONARY = {
     # Sepsis 诊断
     'sep3_sofa1': ('Sepsis-3 (SOFA-1 based)', 'Sepsis-3诊断 (基于传统SOFA)', 'boolean'),
     'sep3_sofa2': ('Experimental Sepsis sensitivity (SOFA-2 based)', '实验性脓毒症敏感性定义（基于SOFA-2）', 'boolean'),
-    'susp_inf': ('Suspected Infection (ICD or Abx+Culture timing)', '疑似感染 (ICD诊断码或抗生素+培养时间窗)', 'boolean'),
+    'susp_inf': ('Suspected Infection (diagnosis-text keywords or Abx+Culture timing)', '疑似感染 (诊断文本关键词或抗生素+培养时间窗)', 'boolean'),
     'infection_icd': ('Diagnosis-string infection keyword match (eICU only)', '诊断文本感染关键词匹配（仅 eICU）', 'boolean'),
 
     # 呼吸系统 (扩展)
@@ -413,7 +413,7 @@ CONCEPT_DESCRIPTIONS = {
     # Sepsis
     'sep3_sofa2': ('Experimental sensitivity phenotype: suspected infection + SOFA-2 ≥2 point increase; not canonical Sepsis-3', '实验性敏感性定义：疑似感染 + SOFA-2较基线升高≥2分；并非标准Sepsis-3定义'),
     'sep3_sofa1': ('Sepsis-3 diagnosis: suspected infection + traditional SOFA ≥2 point increase', '基于传统SOFA的Sepsis-3诊断：疑似感染 + SOFA较基线升高≥2分'),
-    'susp_inf': ('Suspected infection: (1) ICD infection diagnosis codes (eICU only) OR (2) antibiotics started within 72h of culture OR culture within 24h of antibiotics. Combines infection_icd, abx, and samp concepts.', '疑似感染：(1) ICD感染诊断码（仅eICU可用）或 (2) 培养后72小时内开始抗生素 或 抗生素后24小时内进行培养。由infection_icd、abx和samp概念组合而成'),
+    'susp_inf': ('Suspected infection: (1) eICU diagnosis-string infection keyword match (infection_icd; not an ICD code list) OR (2) antibiotics started within 72h of culture OR culture within 24h of antibiotics. Combines infection_icd, abx, and samp concepts.', '疑似感染：(1) eICU 诊断文本感染关键词匹配（infection_icd，并非 ICD 码表）或 (2) 培养后72小时内开始抗生素 或 抗生素后24小时内进行培养。由infection_icd、abx和samp概念组合而成'),
     'infection_icd': ('Case-insensitive keyword match over eICU diagnosisstring text; this is not the Angus 2001 ICD-9 code list. ONLY available in eICU.', '对 eICU diagnosisstring 诊断文本进行不区分大小写的关键词匹配；这不是 Angus 2001 ICD-9 码表。仅 eICU 可用'),
     'samp': ('Body fluid sampling (blood, urine, sputum, etc.) for culture-based infection workup. Used as a marker for suspected infection when combined with antibiotic timing.', '体液采样（血液、尿液、痰液等）用于培养检查。与抗生素时间窗结合作为疑似感染的标志'),
 

@@ -164,15 +164,17 @@ def _explicit_term_present(text: str, term: str) -> bool:
     """Match an explicit alias without accepting numeric continuations.
 
     ``sofa 2`` is an authorization phrase; the ``2`` in ``SOFA 28-day`` or
-    ``SOFA 2.5`` is not.  ASCII identifier boundaries also prevent aliases
-    such as ``sofa2`` from matching longer tokens while retaining the Chinese
-    forms whose adjacent characters are meaningful parts of the issued alias.
+    ``SOFA 2.5`` is not.  ``SOFA 2.0`` is the same alias spelled as a version
+    number and stays explicit.  ASCII identifier boundaries also prevent
+    aliases such as ``sofa2`` from matching longer tokens while retaining the
+    Chinese forms whose adjacent characters are meaningful parts of the
+    issued alias.
     """
 
     escaped = re.escape(term.casefold()).replace(r"\ ", r"\s+")
     return bool(
         re.search(
-            rf"(?<![a-z0-9_]){escaped}(?![a-z0-9_]|\s*[.\uff0e]\s*\d)",
+            rf"(?<![a-z0-9_]){escaped}(?![a-z0-9_]|\s*[.\uff0e]\s*(?!0(?![0-9]))\d)",
             text,
         )
     )

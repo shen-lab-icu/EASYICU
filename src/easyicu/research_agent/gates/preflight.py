@@ -121,8 +121,24 @@ def _is_structural_accounting_name(value: object) -> bool:
     )
 
 
+def _typed_table_products(tokens: object) -> set[str]:
+    products: set[str] = set()
+    for raw in tokens or ():
+        kind, separator, name = str(raw or "").strip().lower().partition(":")
+        if separator and kind == "table" and name:
+            products.add(name)
+    return products
+
+
 def _structural_accounting_products(step: AnalysisStep) -> set[str]:
-    """Resolve accounting inputs by semantic role, not an exact product name."""
+    """Resolve accounting inputs by semantic role, not an exact product name.
+
+    Resolution order keeps the guard bound to the tables it protects: an
+    accounting-named product wins; otherwise an accounting-role panel binds
+    only its own declared ``source_products``; only a step whose own
+    intent/outputs are accounting-shaped, with no panel-level binding to
+    consult, treats every table input as an accounting table.
+    """
 
     table_products = _typed_input_products(step)
     matched = {
@@ -131,16 +147,29 @@ def _structural_accounting_products(step: AnalysisStep) -> set[str]:
     if matched:
         return matched
 
-    declared_roles: list[object] = [step.intent, *(step.expected_outputs or [])]
-    for panel in step.figure_panels or []:
-        declared_roles.extend(
-            [
-                getattr(panel, "panel_id", ""),
-                getattr(panel, "article_role", ""),
-                *(getattr(panel, "source_products", ()) or ()),
-            ]
+    panels = list(step.figure_panels or [])
+    panel_matched: set[str] = set()
+    for panel in panels:
+        panel_roles = (
+            getattr(panel, "panel_id", ""),
+            getattr(panel, "article_role", ""),
+            getattr(panel, "figure_output", ""),
         )
-    if any(_is_structural_accounting_name(role) for role in declared_roles):
+        if not any(_is_structural_accounting_name(role) for role in panel_roles):
+            continue
+        sources = _typed_table_products(getattr(panel, "source_products", ()))
+        panel_matched |= (sources & table_products) if sources else table_products
+    if panel_matched:
+        return panel_matched
+    if panels and all(
+        _typed_table_products(getattr(panel, "source_products", ())) for panel in panels
+    ):
+        # Every panel binds explicit sources and none of them is an
+        # accounting panel; the step-level label cannot widen that binding.
+        return set()
+
+    step_roles: list[object] = [step.intent, *(step.expected_outputs or [])]
+    if any(_is_structural_accounting_name(role) for role in step_roles):
         return table_products
     return set()
 

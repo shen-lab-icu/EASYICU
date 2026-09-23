@@ -695,6 +695,58 @@ def test_bound_project_source_requires_explicit_confirmation(
     assert confirmed["extraction_scope"] == "study_required"
 
 
+def _await_turn_job(submitted: dict[str, Any]) -> None:
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        job = service_module.jobs.MANAGER.get(submitted["job_id"])
+        if job and job.status != "running":
+            break
+        time.sleep(0.01)
+    assert job is not None and job.status == "done"
+
+
+def test_model_authored_option_click_cannot_mint_privileged_grant(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+) -> None:
+    """A clicked option the model wrote is conversation input, not authorship.
+
+    The same authorization sentence mints ``extract`` when the user typed it,
+    and mints nothing when the host marks it as a model-authored option click.
+    """
+
+    gateway = FakeGateway()
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
+    session_id = service.create_session(
+        project_id="project-option-origin",
+        external_llm_opt_in=True,
+    )["session"]["session_id"]
+    sentence = "选择方向 2：我确认一次性 extraction 授权，开始数据提取"
+
+    typed = service.send_message(
+        session_id,
+        project_id="project-option-origin",
+        message=sentence,
+        allowed_actions=["extract"],
+    )
+    _await_turn_job(typed)
+    typed_context = gateway.tool_contexts[-1]
+    assert "extract" in typed_context.allowed_actions
+
+    clicked = service.send_message(
+        session_id,
+        project_id="project-option-origin",
+        message=sentence,
+        allowed_actions=["extract"],
+        message_origin="model_option",
+    )
+    _await_turn_job(clicked)
+    clicked_context = gateway.tool_contexts[-1]
+    assert clicked_context is not typed_context
+    assert "extract" not in clicked_context.allowed_actions
+    assert clicked_context.grant.consume_once("extract") != "granted"
+
+
 def test_reading_legacy_pending_project_source_does_not_create_consent(
     tmp_path: Path,
     study_state: dict[str, Any],

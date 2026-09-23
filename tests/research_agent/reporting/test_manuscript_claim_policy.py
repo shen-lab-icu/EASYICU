@@ -225,6 +225,24 @@ def test_unrelated_registered_evidence_cannot_launder_numeric_methods_sentence()
     assert result.removed_result_sentences == (sentence,)
 
 
+def test_registered_evidence_keeps_non_numeric_methods_prose() -> None:
+    outcome = "In-hospital mortality was the primary outcome {evidence:outcome_definition}."
+    missingness = "Missingness was addressed with multiple imputation {evidence:imputation_step}."
+    numeric = "The primary model used 20 imputations {evidence:imputation_step}."
+    scaffold = f"## Methods\n\n### Outcomes\n\n{outcome}\n{missingness}\n{numeric}"
+
+    result = filter_evidence_bound_scaffold(
+        scaffold,
+        resolve_claim=_resolver,
+        resolve_evidence=lambda ref: ref in {"outcome_definition", "imputation_step"},
+    )
+
+    assert outcome in result.scaffold
+    assert missingness in result.scaffold
+    assert numeric not in result.scaffold
+    assert result.removed_result_sentences == (numeric,)
+
+
 def test_registered_evidence_does_not_bypass_qualitative_claim_authority() -> None:
     sentence = "Patients had higher mortality {evidence:outcome_rate}."
 

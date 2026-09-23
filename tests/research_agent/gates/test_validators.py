@@ -903,6 +903,29 @@ def test_cross_step_reconciliation_trace_requires_upstream_path_registration(
     assert findings[0].detail["issue"] == "parent_table_path_not_in_upstream_record"
 
 
+def test_cross_step_reconciliation_trace_accepts_non_canonical_parent_path_spelling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``./parent.csv`` and ``parent.csv`` name the same registered table."""
+
+    out_dir = tmp_path / "run" / "steps" / "04_reconciliation" / "outputs"
+    out_dir.mkdir(parents=True)
+    summary, _ = _write_reconciliation_trace_fixture(out_dir, correct=True)
+    monkeypatch.chdir(out_dir)
+    summary["registered_upstream_output"]["selected_path"] = "./parent.csv"
+    completed = [_prior_registered_table_record()]
+    completed[0]["step_summary"]["output_files"] = {"parent": "parent.csv"}
+
+    findings = CrossStepReconciliationTraceValidator().audit(
+        step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile parent."),
+        step_summary=summary,
+        out_dir=out_dir,
+        completed_step_records=completed,
+    )
+
+    assert findings == []
+
+
 def test_cross_step_reconciliation_trace_normalises_semantic_row_schema(
     tmp_path: Path,
 ) -> None:

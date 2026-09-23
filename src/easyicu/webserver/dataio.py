@@ -3308,7 +3308,14 @@ def _fast_stay_count(path: Path, files: List[Dict[str, Any]]) -> Optional[int]:
 def _fast_stay_ids(path: Path, files: List[Dict[str, Any]]) -> Optional[set[str]]:
     hit = next((f for f in files if f.get("module") == "demographics"), None)
     if hit is None:
-        hit = next((f for f in files if "stay_id" in (f.get("columns") or [])), None)
+        hit = next(
+            (
+                f
+                for f in files
+                if entity_id_contract.resolve_entity_id_column(f.get("columns") or [])
+            ),
+            None,
+        )
     if hit is None:
         return None
     return _read_stay_ids(path / str(hit["file"]))
@@ -3336,11 +3343,31 @@ def _read_stay_id_frame(
     *,
     stay_ids: Optional[set[str]] = None,
 ) -> Any:
-    return _read_export_projection(
-        path,
-        columns=["stay_id"],
-        stay_ids=stay_ids,
+    """Read one export file's stay key under the canonical ``stay_id`` name.
+
+    Exports retain the source database's stay key (``patientunitstayid``,
+    ``icustay_id``, ``admissionid``, ``caseid``); the entity-id contract owns
+    which column that is, so every stay-level reader sees one column name.
+    """
+
+    entity_column = (
+        entity_id_contract.resolve_entity_id_column(_read_columns(path))
+        or entity_id_contract.CANONICAL_ENTITY_ID
     )
+    frame = _read_export_projection(
+        path,
+        columns=[entity_column],
+        stay_ids=stay_ids,
+        entity_column=entity_column,
+    )
+    if (
+        entity_column != entity_id_contract.CANONICAL_ENTITY_ID
+        and entity_column in frame.columns
+    ):
+        frame = frame.rename(
+            columns={entity_column: entity_id_contract.CANONICAL_ENTITY_ID}
+        )
+    return frame
 
 
 def _read_export_projection(

@@ -589,6 +589,68 @@ def render(frame):
     )
 
 
+def _planned_panel(ra, panel_id, figure_output, article_role, source_products, chart_type="bar"):
+    from easyicu.research_agent.contracts.figure_plan import PlannedFigurePanelSpec
+
+    return PlannedFigurePanelSpec(
+        panel_id=panel_id,
+        figure_output=figure_output,
+        article_role=article_role,
+        chart_type=chart_type,
+        source_products=source_products,
+    )
+
+
+def test_accounting_role_panel_binds_only_its_own_source_tables(ra):
+    from easyicu.research_agent.gates.preflight import _structural_accounting_products
+
+    mixed = _figure_step(ra).model_copy(
+        update={
+            "intent": "Render panels.",
+            "inputs": ["table:effect_estimates", "table:renamed_flow"],
+            "expected_outputs": ["figure:cohort_accounting", "figure:forest"],
+            "figure_panels": [
+                _planned_panel(
+                    ra, "acc", "figure:cohort_accounting", "cohort_accounting",
+                    ["table:renamed_flow"],
+                ),
+                _planned_panel(
+                    ra, "eff", "figure:forest", "primary_effect",
+                    ["table:effect_estimates"], chart_type="forest",
+                ),
+            ],
+        }
+    )
+    assert _structural_accounting_products(mixed) == {"renamed_flow"}
+
+    # A step-level accounting label cannot widen explicit non-accounting
+    # panel bindings into accounting tables.
+    labelled = _figure_step(ra).model_copy(
+        update={
+            "intent": "Render cohort accounting summary.",
+            "inputs": ["table:effect_estimates"],
+            "expected_outputs": ["figure:forest"],
+            "figure_panels": [
+                _planned_panel(
+                    ra, "eff", "figure:forest", "primary_effect",
+                    ["table:effect_estimates"], chart_type="forest",
+                ),
+            ],
+        }
+    )
+    assert _structural_accounting_products(labelled) == set()
+    code = """
+def render(frame):
+    valid_rows = frame['term'].notna()
+    return frame.loc[valid_rows].copy()
+"""
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "structural_accounting_filter"
+        for finding in audit_mechanical_code_contracts(code, labelled)
+    )
+
+
 def test_mechanical_preflight_blocks_alias_row_filter_for_accounting(ra):
     code = """
 def render(frame):

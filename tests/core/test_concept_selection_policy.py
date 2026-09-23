@@ -43,13 +43,26 @@ def test_numeric_sofa_references_do_not_authorize_sofa2_variant() -> None:
     for message in (
         "SOFA 28-day mortality in sepsis",
         "评估乳酸清除率与 SOFA 2.5 分界的关系",
-        "SOFA 2016 定义下的脃毒症诊断准确性",
+        "SOFA 2016 定义下的脓毒症诊断准确性",
+        "SOFA 2.05 threshold",
     ):
         decision = evaluate_concept_selection(
             "sep3_sofa2",
             user_intent=message,
         )
         assert decision.allowed is False, message
+
+
+def test_version_spelled_sofa2_alias_still_authorizes_variant() -> None:
+    for message in (
+        "please use the SOFA-2.0 definition of sepsis",
+        "基于 SOFA 2.0 的脓毒症与院内死亡",
+    ):
+        decision = evaluate_concept_selection(
+            "sep3_sofa2",
+            user_intent=message,
+        )
+        assert decision.allowed is True, message
 
 
 def test_ordinary_concept_does_not_require_special_authorization() -> None:

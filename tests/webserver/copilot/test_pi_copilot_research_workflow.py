@@ -6478,14 +6478,18 @@ def test_copilot_cannot_approve_candidate_plan_or_start_package_bound_run(
         allowed_actions={"provider_run", "configure", "extract"},
     )
 
-    result = tool_module.execute_tool(
-        "easyicu_resume",
-        {"run_id": "run-preview-only", "decision": "approved"},
-        context,
-    )
+    # ``decision`` is not a catalogued model argument: the host rejects it
+    # before dispatch, so no approval can be smuggled into a package-bound
+    # run through the resume tool.
+    with pytest.raises(PiCopilotError) as rejected:
+        tool_module.execute_tool(
+            "easyicu_resume",
+            {"run_id": "run-preview-only", "decision": "approved"},
+            context,
+        )
 
-    assert result["status"] == "blocked"
-    assert result["code"] == "operator_plan_decision_host_action_required"
+    assert rejected.value.code == "pi_tool_unknown_arguments"
+    assert rejected.value.details["fields"] == ["decision"]
     assert captured == {}
 
 
@@ -8364,14 +8368,15 @@ def test_model_tool_cannot_write_human_plan_approval_receipt(
         allowed_actions={"provider_run"},
     )
 
-    result = tool_module.execute_tool(
-        "easyicu_resume",
-        {"decision": "approved", "reviewer": "local reviewer"},
-        context,
-    )
+    with pytest.raises(PiCopilotError) as rejected:
+        tool_module.execute_tool(
+            "easyicu_resume",
+            {"decision": "approved", "reviewer": "local reviewer"},
+            context,
+        )
 
-    assert result["status"] == "blocked"
-    assert result["code"] == "operator_plan_decision_host_action_required"
+    assert rejected.value.code == "pi_tool_unknown_arguments"
+    assert rejected.value.details["fields"] == ["decision", "reviewer"]
     assert submitted == []
     assert account_environments == []
     context.assert_authority_fresh()

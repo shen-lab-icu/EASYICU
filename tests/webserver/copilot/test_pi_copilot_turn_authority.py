@@ -145,10 +145,42 @@ def test_ambiguous_unrelated_or_negated_text_stays_fail_closed(
         "请解释什么是一次性 extraction 授权？",
         "选择方向 1：请解释一次性 extraction 授权是什么？",
         "What is one-time extraction authorization?",
+        "一次性 extraction 授权是否已生效？",
+        "如果我给一次性 extraction 授权会发生什么？",
+        "What if I give one-time extraction authorization?",
     ],
 )
 def test_extraction_authorization_questions_do_not_grant(message: str) -> None:
     assert infer_explicit_turn_actions(message) == frozenset()
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "不要一次性 extraction 授权",
+        "我不想给一次性 extraction 授权",
+        "先别一次性 extraction 授权",
+        "选择方向 2：不同意一次性 extraction 授权",
+        "I do not want one-time extraction authorization",
+        "Never use one-time extraction authorization here",
+    ],
+)
+def test_extraction_authorization_denials_do_not_grant(message: str) -> None:
+    assert infer_explicit_turn_actions(message) == frozenset()
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "不要问了，我确认一次性 extraction 授权",
+        "It is not clear yet, but I grant one-time extraction authorization",
+        "I grant one-time extraction authorization. What is next?",
+    ],
+)
+def test_extraction_authorization_survives_unrelated_clause_negation(
+    message: str,
+) -> None:
+    assert infer_explicit_turn_actions(message) == frozenset({"extract"})
 
 
 @pytest.mark.parametrize(
@@ -218,10 +250,27 @@ def test_database_mention_or_local_choice_does_not_confirm_prepared_source(
         "先别使用本地完整数据。",
         "不要复用 EasyICU 已准备的数据源。",
         "Do not use the complete local registered source.",
+        "不使用本地已注册数据源",
+        "不使用 EasyICU 已准备的完整数据",
+        "不需要使用本地已注册数据源",
+        "without using the registered local source",
     ],
 )
 def test_prepared_source_denials_do_not_confirm(message: str) -> None:
     assert explicitly_confirms_easyicu_registered_source(message) is False
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "不要问了，使用 EasyICU 已准备的完整数据",
+        "别担心，复用本地已注册数据源",
+    ],
+)
+def test_prepared_source_confirmation_survives_unrelated_clause_negation(
+    message: str,
+) -> None:
+    assert explicitly_confirms_easyicu_registered_source(message) is True
 
 
 @pytest.mark.parametrize(

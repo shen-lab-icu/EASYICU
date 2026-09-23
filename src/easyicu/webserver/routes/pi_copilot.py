@@ -234,6 +234,11 @@ class PiMessageRequest(BaseModel):
         ]
         | None
     ) = None
+    # Host-set provenance of the message text. A clicked option whose text
+    # the model authored is `model_option`; it can continue the conversation
+    # but never mints a privileged one-turn grant, which only typed user text
+    # or host-authored controls may do.
+    message_origin: Literal["typed", "model_option"] | None = None
 
 
 class PiRegenerateRequest(PiMessageRequest):
@@ -874,6 +879,7 @@ def post_pi_copilot_message(session_id: ShortText, body: PiMessageRequest) -> di
             allowed_actions=body.allowed_actions,
             message_intent=body.turn_intent,
             idea_source=(body.idea_source.model_dump() if body.idea_source else None),
+            message_origin=body.message_origin,
         )
     except PiCopilotError as exc:
         _raise_http(exc)
@@ -946,6 +952,7 @@ def post_pi_copilot_regenerate(
             regeneration_intent=body.regeneration_intent,
             message_intent=body.turn_intent,
             idea_source=(body.idea_source.model_dump() if body.idea_source else None),
+            message_origin=body.message_origin,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

@@ -28,7 +28,7 @@ _PEDIATRIC_POPULATION = re.compile(
 _ADULT_POPULATION = re.compile(r"\b(?:adult|adults)\b", re.IGNORECASE)
 
 
-def _population_matches_age_group(
+def population_matches_age_group(
     population: str,
     analytic_population_age_group: Literal["adult", "pediatric", "mixed"] | None,
 ) -> bool:
@@ -139,7 +139,7 @@ def select_actionable_prior_art_screen(
         idea = idea_by_id.get(str(candidate.literature_idea_id))
         if signal is None or idea is None:
             continue
-        if not _population_matches_age_group(
+        if not population_matches_age_group(
             idea.population,
             analytic_population_age_group,
         ):
@@ -168,4 +168,4 @@ def select_actionable_prior_art_screen(
     )
 
 
-__all__ = ["select_actionable_prior_art_screen"]
+__all__ = ["population_matches_age_group", "select_actionable_prior_art_screen"]

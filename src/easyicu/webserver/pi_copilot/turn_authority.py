@@ -81,17 +81,27 @@ _DIRECT_EXTRACTION_AUTHORIZATION_MARKERS = (
     "one-time extraction authorization",
 )
 
+# The direct marker phrase is a grant only when the clause that carries it is
+# an affirmative statement. Questions, hypotheticals, and denials in the same
+# clause keep the grant ungranted; a clause boundary (comma, sentence end)
+# ends the guard so "不要问了，我确认一次性 extraction 授权" still grants.
+_EXTRACTION_MARKER = r"(?:一次性\s*extraction\s*授权|one-time extraction authorization)"
 _NON_ACTION_EXTRACTION_PATTERNS = (
-    r"(?:什么是|请?解释|说明|如何|怎样|怎么|是否|能否).{0,48}(?:一次性\s*extraction\s*授权)",
-    r"(?:一次性\s*extraction\s*授权).{0,20}(?:是什么|如何|怎么|是否|能否|吗)",
-    r"\b(?:what is|explain|describe|how|whether|should i)\b[^.!?;]{0,80}\bone-time extraction authorization\b",
-    r"\bone-time extraction authorization\b[^.!?;]{0,40}\?",
+    r"(?:什么是|请?解释|说明|如何|怎样|怎么|是否|能否|如果|假如|若|万一)"
+    r"[^。.!！?？;；,，]{0,48}" + _EXTRACTION_MARKER,
+    r"(?:不要|不想|不愿|不必|不能|不需要|无需|不用|暂不|先别|禁止|拒绝|不给|不授予|不同意|不批准|别)"
+    r"[^。.!！?？;；,，]{0,24}" + _EXTRACTION_MARKER,
+    _EXTRACTION_MARKER + r"[^。.!！?？;；,，]{0,20}(?:是什么|如何|怎么|是否|能否|吗|么)",
+    _EXTRACTION_MARKER + r"[^。.!！?？;；]{0,40}[?？]",
+    r"\b(?:what is|explain|describe|how|whether|should i|if i|what if|do not|don't|never|won't|will not|refuse to|not)\b"
+    r"[^.!?;,]{0,80}" + _EXTRACTION_MARKER,
 )
 
 _PREPARED_SOURCE_DENIAL = re.compile(
-    r"(?:先别|不要|不使用|暂不|无需|不必|do\s+not|don't|without)"
-    r".{0,32}(?:使用|复用|采用|use|reuse)"
-    r".{0,48}(?:easyicu|本地|local|已准备|已注册|完整|prepared|registered|complete)",
+    r"(?:先别|不要|不用|不使用|不需要|不想|别|暂不|无需|不必|"
+    r"do\s+not|don't|never|without|no\s+longer)"
+    r"(?:[^。.!！?？;；,，]{0,32}?(?:使用|复用|采用|use|reuse|using|reusing))?"
+    r"[^。.!！?？;；,，]{0,48}?(?:easyicu|本地|local|已准备|已注册|完整|prepared|registered|complete)",
     flags=re.IGNORECASE,
 )
 

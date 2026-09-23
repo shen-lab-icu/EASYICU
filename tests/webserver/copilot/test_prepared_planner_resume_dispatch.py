@@ -56,9 +56,19 @@ def test_explicit_fresh_planning_never_silently_reuses_checkpoint(dispatch):
     assert calls[0]["run_intent"] == "candidate_plan"
 
 
-def test_approval_tool_at_prepared_checkpoint_routes_to_planning_not_analysis(dispatch):
+def test_resume_tool_never_routes_a_decision_into_planning_or_analysis(dispatch):
+    """Plan approval is a browser review control; the resume tool only reattaches.
+
+    Even a stale ``decision`` argument that bypassed the catalog check must not
+    start a Planner continuation or an analysis run through this tool.
+    """
+
     context, _, calls = dispatch
+    context.session.binding = SimpleNamespace(
+        active_job_id=None,
+        run_id=None,
+        model_dump=lambda mode="json": {},
+    )
     result = owner._resume(context, {"decision": "approved"})
-    assert result["code"] == "submitted"
-    assert calls[0]["planner_start_mode"] == "resume_checkpoint"
-    assert calls[0]["run_intent"] == "candidate_plan"
+    assert result["code"] == "easyicu_resume_target_not_found"
+    assert calls == []

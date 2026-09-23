@@ -498,7 +498,7 @@ def test_new_research_conversation_keeps_chat_open_until_data_is_needed() -> Non
         shell.index("function sessionPanel()") : shell.index("function demoPanel()")
     ]
     send_text = shell[
-        shell.index("async function sendText(text, grantsOverride, turnIntent, visibleUserMessage = true)") : shell.index(
+        shell.index("async function sendText(text, grantsOverride, turnIntent, visibleUserMessage = true, messageOrigin = '')") : shell.index(
             "async function sendMessage()"
         )
     ]

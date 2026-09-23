@@ -3693,16 +3693,10 @@ def _start_extraction(
                 ),
             },
         )
-    if registered_source is None:
-        return _result(
-            context,
-            status="blocked",
-            code="registered_source_required",
-            summary=(
-                "The selected source is not a current validated EasyICU registry entry."
-            ),
-            owner="easyicu.webserver.sources",
-        )
+    # ``registered_source`` may legitimately be ``None``: a study bound to a
+    # host-scanned raw database folder is extracted from that path, and
+    # extraction_handoff.submit_study_extraction owns both that flow and the
+    # registered-export migration. The jobs route re-validates the path.
     export_format = str(study.get("export_format") or "parquet").strip().lower()
     if export_format not in {"csv", "parquet"}:
         return _result(
@@ -4124,27 +4118,11 @@ def _repair_report(context: ToolExecutionContext, params: Mapping[str, Any]) -> 
 
 
 def _resume(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[str, Any]:
-    decision = str(params.get("decision") or "").strip().lower()
-    if decision:
-        if decision not in {"approved", "rejected"}:
-            return _result(
-                context,
-                status="blocked",
-                code="research_pipeline_review_decision_invalid",
-                summary="Choose approved or rejected for the pending Research Agent plan.",
-                owner="easyicu.research_agent.pipeline",
-            )
-        return _result(
-            context,
-            status="blocked",
-            code="operator_plan_decision_host_action_required",
-            summary=(
-                "Plan approval or rejection is a human-review action. Use the "
-                "browser review control; the Copilot tool cannot write a human "
-                "decision receipt."
-            ),
-            owner="easyicu.webserver.routes.agent.jobs_agent_run_review",
-        )
+    # Human plan approval or rejection is a browser review control
+    # (jobs_agent_run_review). Neither the sidecar schema in
+    # node_app/src/main.mjs nor tool_catalog.json exposes a ``decision``
+    # argument, and _require_catalog_args rejects one before dispatch, so
+    # this tool can only reattach to a live job.
     job_id = str(
         params.get("job_id") or context.session.binding.active_job_id or ""
     ).strip()
