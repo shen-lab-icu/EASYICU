@@ -7,13 +7,15 @@ path or its values.
 
 The first is an environment-configured bridge a data owner approved separately
 (:func:`resolve_patient_grouping_authority`).  The second applies when the
-export already names its sealed raw root and that source carries an official
+export's raw source is already bound and that source carries an official
 patient identifier (:func:`resolve_derived_patient_grouping`): eICU's
-``patient`` table is bound and digest-verified for hospital-mortality
-follow-up, and the same verified bytes carry ``uniquepid``.  Requiring a second
-manual approval for a column inside an already-bound table would be ceremony
-without a privacy gain, so the host derives the bridge, materializes it into
-private state, and binds it by digest.
+``patient`` table and MIMIC-IV's ``icustays`` table are bound and
+digest-verified for hospital-mortality follow-up -- through the export's own
+``data_path`` or, for a legacy MIMIC-IV export, the private raw-source
+authority -- and the same verified bytes carry ``uniquepid`` or ``subject_id``.
+Requiring a second manual approval for a column inside an already-bound table
+would be ceremony without a privacy gain, so the host derives the bridge,
+materializes it into private state, and binds it by digest.
 """
 
 from __future__ import annotations

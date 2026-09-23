@@ -83,11 +83,13 @@ _REQUIRED_TABLE_COLUMNS = {
     ),
 }
 # Columns read when present; they inform receipts but never gate a binding.
-# ``uniquepid`` is eICU's official patient identifier.  It is optional here on
-# purpose: hospital-mortality follow-up never needs it, so a source without it
-# must still bind.  The patient-grouping resolver below fails closed instead.
+# ``uniquepid`` (eICU) and ``subject_id`` (MIMIC-IV) are the official patient
+# identifiers.  They are optional here on purpose: hospital-mortality follow-up
+# never needs them, so a source without one must still bind.  The
+# patient-grouping resolver below fails closed instead.
 _OPTIONAL_TABLE_COLUMNS = {
-    "patient": frozenset({"unitdischargeoffset", "uniquepid"})
+    "patient": frozenset({"unitdischargeoffset", "uniquepid"}),
+    "icustays": frozenset({"subject_id"}),
 }
 # Which official table carries each family's stay-to-patient identity, and the
 # exact columns the bridge is derived from.  A family absent here has no
@@ -97,6 +99,11 @@ _PATIENT_GROUPING_PROFILES = {
         "table": "patient",
         "stay_column": "patientunitstayid",
         "patient_column": "uniquepid",
+    },
+    "mimic_iv": {
+        "table": "icustays",
+        "stay_column": "stay_id",
+        "patient_column": "subject_id",
     },
 }
 # Which raw tables each database family needs for hospital-mortality follow-up
@@ -267,7 +274,11 @@ class RawMimicIVSourceBinding:
     authority_ref: str
     export_manifest_file: str
     export_manifest_sha256: str
+    icustays_columns: frozenset[str] = frozenset()
 
+    # The public receipt keeps its version-1 shape.  A patient grouping this
+    # binding derives reaches readers through the grouping authority's own
+    # coordinates, so runs already bound to this receipt keep their identity.
     def public_receipt(self) -> dict[str, Any]:
         return {
             "schema_version": "easyicu.registered_export_raw_source_authority/1",
@@ -308,6 +319,78 @@ class RawMimicIVSourceBinding:
             _read_verified_table(self.icustays_path, self.icustays_sha256, table="icustays"),
             _read_verified_table(self.admissions_path, self.admissions_sha256, table="admissions"),
         )
+
+    @property
+    def patient_grouping_profile(self) -> Mapping[str, str]:
+        return _PATIENT_GROUPING_PROFILES["mimic_iv"]
+
+    @property
+    def patient_grouping_available(self) -> bool:
+        """Whether the bound ``icustays`` table carries ``subject_id``."""
+
+        return self.patient_grouping_profile["patient_column"] in self.icustays_columns
+
+    def patient_grouping_receipt(self) -> dict[str, Any]:
+        return _patient_grouping_receipt(
+            self.patient_grouping_profile, table_sha256=self.icustays_sha256
+        )
+
+    def materialize_patient_grouping(self) -> "DerivedPatientGrouping":
+        """Derive the private stay-to-patient bridge from the bound table."""
+
+        profile = self.patient_grouping_profile
+        if not self.patient_grouping_available:
+            raise _patient_grouping_unavailable(self.database)
+        icustays = _read_verified_table(
+            self.icustays_path,
+            self.icustays_sha256,
+            table="icustays",
+            columns=[profile["stay_column"], profile["patient_column"]],
+        )
+        return _derive_patient_grouping(icustays, profile, database=self.database)
+
+
+def _patient_grouping_receipt(
+    profile: Mapping[str, str], *, table_sha256: str
+) -> dict[str, Any]:
+    return {
+        "cluster_unit": "patient",
+        "identity_table": profile["table"],
+        "identity_table_sha256": table_sha256,
+        "patient_identifier_column": profile["patient_column"],
+        "identifier_values_returned": False,
+    }
+
+
+def _patient_grouping_unavailable(database: str) -> RawSourceAuthorityError:
+    return RawSourceAuthorityError(
+        "raw_source_authority_patient_grouping_unavailable",
+        "The bound raw source carries no official patient identifier.",
+        details={"database": database},
+    )
+
+
+def _derive_patient_grouping(
+    identity_table: pd.DataFrame, profile: Mapping[str, str], *, database: str
+) -> "DerivedPatientGrouping":
+    from easyicu.research_agent.acquisition.patient_grouping import (
+        PatientGroupingError,
+        derive_patient_grouping,
+    )
+
+    try:
+        return derive_patient_grouping(
+            identity_table,
+            stay_column=profile["stay_column"],
+            patient_column=profile["patient_column"],
+            identity_table_name=profile["table"],
+        )
+    except PatientGroupingError as exc:
+        raise RawSourceAuthorityError(
+            "raw_source_authority_patient_grouping_invalid",
+            "The official patient identity table cannot support a grouping.",
+            details={"database": database, "cause": str(exc)},
+        ) from exc
 
 
 def _read_verified_table(
@@ -414,43 +497,19 @@ class RawHospitalSourceBinding:
                 "This database has no official patient identity table.",
                 details={"database": self.database},
             )
-        return {
-            "cluster_unit": "patient",
-            "identity_table": profile["table"],
-            "identity_table_sha256": self.table_sha256[profile["table"]],
-            "patient_identifier_column": profile["patient_column"],
-            "identifier_values_returned": False,
-        }
+        return _patient_grouping_receipt(
+            profile, table_sha256=self.table_sha256[profile["table"]]
+        )
 
     def materialize_patient_grouping(self) -> "DerivedPatientGrouping":
         """Derive the private stay-to-patient bridge from the bound table."""
 
-        from easyicu.research_agent.acquisition.patient_grouping import (
-            PatientGroupingError,
-            derive_patient_grouping,
-        )
-
         profile = self.patient_grouping_profile
         if profile is None or not self.patient_grouping_available:
-            raise RawSourceAuthorityError(
-                "raw_source_authority_patient_grouping_unavailable",
-                "The bound raw source carries no official patient identifier.",
-                details={"database": self.database},
-            )
-        table = profile["table"]
-        try:
-            return derive_patient_grouping(
-                self._table(table),
-                stay_column=profile["stay_column"],
-                patient_column=profile["patient_column"],
-                identity_table_name=table,
-            )
-        except PatientGroupingError as exc:
-            raise RawSourceAuthorityError(
-                "raw_source_authority_patient_grouping_invalid",
-                "The official patient identity table cannot support a grouping.",
-                details={"database": self.database, "cause": str(exc)},
-            ) from exc
+            raise _patient_grouping_unavailable(self.database)
+        return _derive_patient_grouping(
+            self._table(profile["table"]), profile, database=self.database
+        )
 
     def _table(self, name: str) -> pd.DataFrame:
         return _read_verified_table(
@@ -678,6 +737,7 @@ def resolve_raw_mimic_iv_source_binding(
     source_root = _regular_directory(Path(values["SOURCE_ROOT"]), label="raw source root")
     paths: dict[str, Path] = {}
     digests: dict[str, str] = {}
+    columns: dict[str, frozenset[str]] = {}
     for name, key in (("icustays", "ICUSTAYS"), ("admissions", "ADMISSIONS")):
         expected = values[f"{key}_SHA256"]
         if _SHA256.fullmatch(expected) is None:
@@ -702,7 +762,7 @@ def resolve_raw_mimic_iv_source_binding(
                 "A raw table no longer matches its source authority digest.",
                 details={"object": name, "database": selected_database},
             )
-        _verify_table_schema(path, table=name)
+        columns[name] = frozenset(_verify_table_schema(path, table=name))
         paths[name] = path
         digests[name] = expected
 
@@ -716,6 +776,7 @@ def resolve_raw_mimic_iv_source_binding(
         authority_ref=values["AUTHORITY_REF"],
         export_manifest_file=manifest_name,
         export_manifest_sha256=expected_manifest_sha,
+        icustays_columns=columns["icustays"],
     )
 
 

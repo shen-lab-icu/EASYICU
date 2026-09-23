@@ -2,11 +2,11 @@
 
 A cluster-robust estimate needs to know which ICU stays belong to the same
 patient.  Prepared exports deliberately carry no patient identifier, so the
-host has always needed an owner-approved private bridge.  For a source that
-already names its sealed raw root -- eICU's ``patient`` table is bound and
-digest-verified for hospital-mortality follow-up -- the same verified bytes
-carry ``uniquepid``, and the host derives the bridge instead of asking for a
-second approval of a column it already reads.
+host has always needed an owner-approved private bridge.  For a source whose
+raw tables are already bound -- eICU's ``patient`` and MIMIC-IV's ``icustays``
+are digest-verified for hospital-mortality follow-up -- the same verified bytes
+carry ``uniquepid`` or ``subject_id``, and the host derives the bridge instead
+of asking for a second approval of a column it already reads.
 
 These tests fix that boundary: derived only from a verified binding, private on
 disk, never inferred, and never preferred over an owner's own bridge.
@@ -62,6 +62,64 @@ def _eicu_source(
         json.dumps({"database": "eicu", "data_path": str(raw), "files": []}),
         encoding="utf-8",
     )
+    return export
+
+
+def _mimic_iv_raw_tables(raw: Path, *, with_identifier: bool = True) -> tuple[Path, Path]:
+    """MIMIC-IV ``icustays``/``admissions``; stays 11 and 12 share a patient."""
+
+    raw.mkdir(parents=True, exist_ok=True)
+    icustays_columns: dict[str, list] = {
+        "stay_id": [11, 12, 13],
+        "hadm_id": [101, 102, 103],
+        "intime": ["2026-01-01", "2026-02-01", "2026-03-01"],
+    }
+    if with_identifier:
+        icustays_columns["subject_id"] = [5, 5, 7]
+    icustays = raw / "icustays.parquet"
+    admissions = raw / "admissions.parquet"
+    pd.DataFrame(icustays_columns).to_parquet(icustays, index=False)
+    pd.DataFrame(
+        {
+            "hadm_id": [101, 102, 103],
+            "dischtime": ["2026-01-03", "2026-02-04", "2026-03-05"],
+            "deathtime": [None, None, "2026-03-02"],
+            "hospital_expire_flag": [0, 0, 1],
+        }
+    ).to_parquet(admissions, index=False)
+    return icustays, admissions
+
+
+def _legacy_mimic_iv_export(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, with_identifier: bool = True
+) -> Path:
+    """A legacy export (no ``data_path``) bound by the private raw-source authority."""
+
+    from easyicu.webserver import raw_source_authority
+
+    monkeypatch.setattr(
+        raw_source_authority, "_DEFAULT_CONFIG_PATH", tmp_path / "absent.env"
+    )
+    icustays, admissions = _mimic_iv_raw_tables(
+        tmp_path / "raw", with_identifier=with_identifier
+    )
+    export = tmp_path / "export"
+    export.mkdir()
+    manifest = export / "easyicu_export_manifest.json"
+    manifest.write_text('{"database":"miiv"}', encoding="utf-8")
+    for key, value in {
+        "EXPORT_ROOT": str(export),
+        "EXPORT_MANIFEST": manifest.name,
+        "EXPORT_MANIFEST_SHA256": _sha256(manifest),
+        "DATABASE": "miiv",
+        "SOURCE_ROOT": str(tmp_path / "raw"),
+        "ICUSTAYS_FILE": icustays.name,
+        "ICUSTAYS_SHA256": _sha256(icustays),
+        "ADMISSIONS_FILE": admissions.name,
+        "ADMISSIONS_SHA256": _sha256(admissions),
+        "AUTHORITY_REF": "owner/raw-mimiciv/v1",
+    }.items():
+        monkeypatch.setenv(f"EASYICU_RAW_SOURCE_{key}", value)
     return export
 
 
@@ -204,6 +262,91 @@ def test_a_source_without_an_official_identifier_is_not_inferred(
     assert (
         source_identity_authority.resolve_derived_patient_grouping(
             export_path=bare, database="eicu"
+        )
+        is None
+    )
+
+
+def test_a_modern_mimic_iv_export_groups_stays_by_subject_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from easyicu.webserver.raw_source_authority import (
+        resolve_manifest_raw_source_binding,
+    )
+
+    monkeypatch.setattr(
+        source_identity_authority.state_paths, "state_root", lambda: tmp_path / "state"
+    )
+    _mimic_iv_raw_tables(tmp_path / "raw")
+    export = tmp_path / "export"
+    export.mkdir()
+    (export / "_manifest.json").write_text(
+        json.dumps({"database": "miiv", "data_path": str(tmp_path / "raw"), "files": []}),
+        encoding="utf-8",
+    )
+
+    binding = source_identity_authority.resolve_derived_patient_grouping(
+        export_path=export, database="miiv"
+    )
+
+    assert binding is not None
+    coordinates = dict(binding.authority_coordinates)
+    assert coordinates["identity_table"] == "icustays"
+    assert coordinates["patient_identifier_column"] == "subject_id"
+    assert coordinates["patients"] == 2
+    assert coordinates["patients_with_repeated_stays"] == 1
+    grouped = load_verified_patient_grouping(binding).frame
+    assert len(grouped) == 3
+    # The export's own sealed raw root advertises the grouping it can derive.
+    raw = resolve_manifest_raw_source_binding(export_path=export, database="miiv")
+    assert raw is not None
+    assert raw.public_receipt()["patient_grouping"]["identity_table"] == "icustays"
+
+
+def test_a_legacy_mimic_iv_export_derives_grouping_from_its_private_raw_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The private authority already binds ``icustays``; its ``subject_id`` suffices."""
+
+    from easyicu.webserver.raw_source_authority import (
+        resolve_raw_hospital_source_binding,
+    )
+
+    monkeypatch.setattr(
+        source_identity_authority.state_paths, "state_root", lambda: tmp_path / "state"
+    )
+    export = _legacy_mimic_iv_export(tmp_path, monkeypatch)
+
+    binding = source_identity_authority.resolve_derived_patient_grouping(
+        export_path=export, database="miiv"
+    )
+
+    assert binding is not None
+    coordinates = dict(binding.authority_coordinates)
+    assert coordinates["authority_ref"] == "owner/raw-mimiciv/v1/patient_grouping"
+    assert coordinates["patient_identifier_column"] == "subject_id"
+    assert coordinates["patients"] == 2
+    assert stat.S_IMODE(os.stat(binding.mapping_path).st_mode) == 0o600
+    assert len(load_verified_patient_grouping(binding).frame) == 3
+    # The legacy public receipt keeps its version-1 shape, so runs already
+    # bound to it keep their identity.
+    legacy = resolve_raw_hospital_source_binding(export_path=export, database="miiv")
+    receipt = legacy.public_receipt()
+    assert receipt["schema_version"] == "easyicu.registered_export_raw_source_authority/1"
+    assert "patient_grouping" not in receipt
+
+
+def test_a_mimic_iv_source_without_subject_id_is_not_inferred(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        source_identity_authority.state_paths, "state_root", lambda: tmp_path / "state"
+    )
+    export = _legacy_mimic_iv_export(tmp_path, monkeypatch, with_identifier=False)
+
+    assert (
+        source_identity_authority.resolve_derived_patient_grouping(
+            export_path=export, database="miiv"
         )
         is None
     )
