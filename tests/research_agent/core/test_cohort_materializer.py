@@ -188,6 +188,111 @@ def test_replacement_patient_identity_rejects_digest_mismatch(tmp_path):
         )
 
 
+def _first_stay_coordinate(tmp_path, flags):
+    path = tmp_path / "first_icu_stay.parquet"
+    pd.DataFrame(
+        {"stay_id": list(flags), "first_icu_stay": list(flags.values())}
+    ).to_parquet(path, index=False)
+    return path.absolute(), _sha256(path)
+
+
+def test_first_icu_stay_restriction_keeps_each_patients_first_stay(tmp_path):
+    cohort = pd.DataFrame({"stay_id": [11, 12, 13], "age": [60, 61, 70]})
+    path, digest = _first_stay_coordinate(tmp_path, {11: True, 12: False, 13: True, 99: False})
+
+    restricted, receipt = M._restrict_to_first_icu_stays(
+        cohort,
+        coordinate_path=path,
+        coordinate_sha256=digest,
+        authority_coordinates={"authority_ref": "test/first_icu_stay"},
+    )
+
+    assert restricted["stay_id"].tolist() == [11, 13]
+    # The flag decides membership; it is not left behind as a design column.
+    assert restricted.columns.tolist() == ["stay_id", "age"]
+    assert receipt["stays_before"] == 3
+    assert receipt["stays_after"] == 2
+    assert receipt["non_first_icu_stays_removed"] == 1
+    assert receipt["coordinate_sha256"] == digest
+    assert receipt["authority_coordinates"] == {"authority_ref": "test/first_icu_stay"}
+
+
+def test_first_icu_stay_restriction_never_promotes_an_uncovered_stay(tmp_path):
+    cohort = pd.DataFrame({"stay_id": [11, 12], "age": [60, 61]})
+    path, digest = _first_stay_coordinate(tmp_path, {11: True})
+
+    with pytest.raises(M.MaterializedMetadataError, match="does not cover 1 cohort stays"):
+        M._restrict_to_first_icu_stays(
+            cohort, coordinate_path=path, coordinate_sha256=digest, authority_coordinates=None
+        )
+    with pytest.raises(M.MaterializedMetadataError, match="digest mismatch"):
+        M._restrict_to_first_icu_stays(
+            cohort, coordinate_path=path, coordinate_sha256="0" * 64, authority_coordinates=None
+        )
+
+
+def test_materialized_universe_records_the_first_icu_stay_restriction(tmp_path, monkeypatch):
+    """The restriction reaches the sealed universe and its provenance counts."""
+
+    wide = pd.DataFrame({"stay_id": [11, 12, 13], "age": [60.0, 61.0, 70.0]})
+    provenance = {
+        "schema_version": "easyicu.cohort_materializer/1",
+        "source_mode": "test",
+        "export_authority": None,
+        "database": "miiv",
+        "cohort_window_hours": [0.0, 24.0],
+        "feature_concepts": [],
+        "outcome_concepts": [],
+        "static_concepts": ["age"],
+        "cohort_definition": None,
+        "n_stays_extracted": 3,
+        "n_stays_after_inclusion_exclusion": 3,
+        "unavailable_concepts": [],
+        "event_indicator_columns_normalized": [],
+        "declared_positive_only_event_concepts": [],
+        "host_derivations": [],
+        "source_bounds_violation_policy": "reject",
+        "source_bounds_exclusions": {},
+        "columns": ["stay_id", "age"],
+        "cohort_sha256": "unused",
+    }
+    no_metadata = SimpleNamespace(
+        enabled=False, seal_existing_cohort=lambda **_kwargs: None
+    )
+    monkeypatch.setattr(
+        M,
+        "_materialize_cohort_with_metadata",
+        lambda **_kwargs: (wide.copy(), dict(provenance), no_metadata),
+    )
+    path, digest = _first_stay_coordinate(tmp_path, {11: True, 12: False, 13: True})
+
+    paths = M.materialize_to_parquet(
+        tmp_path / "out",
+        stem="universe",
+        feature_concepts=[],
+        database="miiv",
+        data_path=str(tmp_path),
+        static_concepts=["age"],
+        first_icu_stay_path=path,
+        first_icu_stay_sha256=digest,
+        first_icu_stay_authority_coordinates={"coordinate_sha256": digest},
+    )
+
+    assert pd.read_parquet(paths["parquet"])["stay_id"].tolist() == [11, 13]
+    written = json.loads(paths["provenance"].read_text(encoding="utf-8"))
+    assert written["n_stays_extracted"] == 3
+    assert written["n_stays_after_inclusion_exclusion"] == 2
+    assert written["first_icu_stay_restriction"]["coordinate_sha256"] == digest
+    with pytest.raises(M.MaterializedMetadataError, match="declared together"):
+        M.materialize_to_parquet(
+            tmp_path / "out2",
+            feature_concepts=[],
+            database="miiv",
+            data_path=str(tmp_path),
+            first_icu_stay_path=path,
+        )
+
+
 def test_load_concept_uses_public_easyicu_api_after_package_move(monkeypatch, tmp_path):
     from easyicu import api as easyicu_api
 

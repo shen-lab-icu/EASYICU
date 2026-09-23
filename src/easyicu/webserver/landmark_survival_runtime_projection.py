@@ -43,6 +43,7 @@ from easyicu.research_agent.planning.sensitivity_authority import (
     PrespecifiedSensitivitySpec,
 )
 
+from . import primary_cohort
 from .scientific_runtime_projection import (
     WebScientificRuntimeProjection,
     WebScientificRuntimeProjectionError,
@@ -61,6 +62,8 @@ _SUPPORTED_VARIANCE_ESTIMATOR = "model_based"
 #: Producer-owned first-observation companion of a materialized concept.
 _ONSET_SUFFIX = "_first_time"
 _ANALYSIS_UNIT_LABELS = {"icu_stay": "ICU stays"}
+#: One row per patient once the host keeps each patient's first ICU stay.
+_FIRST_STAY_UNIT_LABEL = "First ICU stays (one per patient)"
 _TIME_ORIGIN_LABELS = {"icu_admission": "ICU admission"}
 
 
@@ -312,7 +315,11 @@ def compile_landmark_survival_runtime_projection(
         "comparator_group_label": (
             f"No incident {exposure_name} by {landmark_token} h"
         ),
-        "analysis_unit_label": _ANALYSIS_UNIT_LABELS[analysis_unit],
+        "analysis_unit_label": (
+            _FIRST_STAY_UNIT_LABEL
+            if primary_cohort.first_icu_stay_only(study.get("cohort"))
+            else _ANALYSIS_UNIT_LABELS[analysis_unit]
+        ),
         "derived_exposure_column": (
             f"incident_{primary_exposure_source}_by_{landmark_token}h"
         ),

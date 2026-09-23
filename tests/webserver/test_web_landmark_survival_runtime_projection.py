@@ -141,6 +141,22 @@ def test_survival_family_landmark_compiles_the_sealed_suite_and_executes(tmp_pat
     assert set(summary["output_files"]) == set(authority.analysis_plan_outputs)
 
 
+def test_a_first_stay_cohort_names_its_unit_one_stay_per_patient(tmp_path):
+    universe, _frame = _universe(tmp_path)
+
+    first_stay = compile_web_scientific_runtime_projection(
+        **_coordinates(universe, study=_study(cohort={"exclude_readmissions": True}))
+    )
+    every_stay = compile_web_scientific_runtime_projection(**_coordinates(universe))
+
+    assert first_stay is not None and every_stay is not None
+    label = lambda projection: load_current_case_scientific_runtime_authority(  # noqa: E731
+        projection.authority
+    ).analysis_unit_label
+    assert label(first_stay) == "First ICU stays (one per patient)"
+    assert label(every_stay) == "ICU stays"
+
+
 def test_sealed_survival_endpoint_and_exposure_bind_the_run_coordinates(tmp_path):
     universe, _frame = _universe(tmp_path)
     projection = compile_landmark_survival_runtime_projection(**_coordinates(universe))

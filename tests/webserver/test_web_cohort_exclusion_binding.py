@@ -55,7 +55,7 @@ def test_an_exclusion_is_compiled_as_an_exclusion() -> None:
 
     # who is removed -- and none of it is still filed as inclusion
     assert "exclude diagnoses: condition-b, condition-c" in exclusion
-    assert any("readmissions after the first" in row for row in exclusion)
+    assert any("keeps only the first ICU stay per patient" in row for row in exclusion)
     joined_inclusion = " | ".join(inclusion)
     assert "exclude" not in joined_inclusion
     assert "readmission" not in joined_inclusion

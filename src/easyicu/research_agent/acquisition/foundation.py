@@ -35,6 +35,7 @@ from .catalog import (
     assess_coverage,
     build_available_catalog,
 )
+from .first_icu_stay import FirstIcuStayBinding
 from .patient_grouping import PatientGroupingBinding
 from ..canonical_json import extract_json_object as _extract_json_object
 from ..providers.protocol import LLMClient, LLMMessage
@@ -349,6 +350,7 @@ def acquire_universe_for_question(
     trajectory_window: Optional[tuple] = None,
     patient_grouping: Optional[PatientGroupingBinding] = None,
     host_derivations: Sequence[str] = (),
+    first_icu_stay: Optional[FirstIcuStayBinding] = None,
 ) -> AcquisitionResult:
     """Agent selects concepts, we check coverage, then materialise the universe.
 
@@ -572,6 +574,10 @@ def acquire_universe_for_question(
         if patient_grouping is not None
         else {}
     )
+    # A host-verified first-stay restriction applies to the universe itself, so
+    # the analysis cohort and any trajectory cut from it inherit it.
+    if first_icu_stay is not None:
+        identity_kwargs = {**identity_kwargs, **first_icu_stay.materializer_kwargs()}
     # A longitudinal artifact must not silently widen the user-reviewed
     # materialization window.  Callers that need a different trajectory span
     # must declare it explicitly.

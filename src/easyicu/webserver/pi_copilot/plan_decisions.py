@@ -13,6 +13,7 @@ from typing import Any, Dict, Mapping, Sequence
 
 from easyicu.research_agent.icu_rules import classify_variable
 from easyicu.research_agent.schema import AggregationRule
+from easyicu.webserver import primary_cohort
 from easyicu.webserver.study_scientific_configuration import ScientificConfiguration
 
 
@@ -452,8 +453,7 @@ def plan_decision_context(
 def _first_stay_restriction_bound(study: Mapping[str, Any]) -> bool:
     """Return whether the StudyContext keeps one first ICU stay per patient."""
 
-    cohort = study.get("cohort")
-    return isinstance(cohort, Mapping) and cohort.get("exclude_readmissions") is True
+    return primary_cohort.first_icu_stay_only(study.get("cohort"))
 
 
 #: The design the repeated-stay route compiles: every stay, clustered by patient.
@@ -495,6 +495,7 @@ def compile_agent_plan_configuration(
     agent_plan: Mapping[str, Any],
     runtime_finding_codes: Sequence[str],
     patient_cluster_available: bool,
+    first_stay_coordinate_available: bool | None = None,
 ) -> CompiledAgentPlanConfiguration:
     """Compile structured Agent decisions into executable study coordinates.
 
@@ -531,9 +532,15 @@ def compile_agent_plan_configuration(
     # researcher (or the cohort-eligibility owner on their behalf) closed it by
     # keeping one stay per patient.  Compiling the all-stay clustered route on
     # top of that choice would contradict it, and demanding patient grouping
-    # for it would block the remaining runtime findings for no reason.  The
-    # launch still verifies the first-stay coordinate before execution.
+    # for it would block the remaining runtime findings for no reason.  It is
+    # an answer only when the source can prove each patient's first stay:
+    # otherwise the compiled plan would be refused at launch.
     first_stay_restricted = _first_stay_restriction_bound(study)
+    if first_stay_restricted and first_stay_coordinate_available is not True:
+        raise PlanDecisionError(
+            "agent_plan_first_stay_coordinate_unavailable",
+            "The study keeps each patient's first ICU stay, but the selected source cannot prove which stay came first.",
+        )
     if "REPEATED_STAY_IDENTITY_UNAVAILABLE" in codes and first_stay_restricted:
         codes = tuple(
             code for code in codes if code != "REPEATED_STAY_IDENTITY_UNAVAILABLE"

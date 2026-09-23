@@ -1,8 +1,9 @@
 """Aggregate, path-free execution readiness for a registered data package.
 
 This owner proves only pre-analysis capabilities: a typed eligibility
-denominator, source-bound patient grouping, and the time/duration coordinates
-required by prespecified sensitivities.  It never returns patient rows, private
+denominator, source-bound patient grouping, a verified first-ICU-stay
+coordinate for a first-stay cohort, and the time/duration coordinates required
+by prespecified sensitivities.  It never returns patient rows, private
 mapping paths, event counts, rates, comparisons, or effect estimates.
 """
 
@@ -17,7 +18,11 @@ from easyicu.research_agent.intake.export_package import (
     ExportPackageError,
     read_exported_concept,
 )
-from easyicu.webserver import raw_source_authority, source_identity_authority
+from easyicu.webserver import (
+    primary_cohort,
+    raw_source_authority,
+    source_identity_authority,
+)
 
 
 def _read_review_concept(source_path: str, concept_id: str) -> Optional[pd.DataFrame]:
@@ -28,6 +33,81 @@ def _read_review_concept(source_path: str, concept_id: str) -> Optional[pd.DataF
 
 
 def _cohort_eligibility_review(
+    study: Mapping[str, Any],
+    *,
+    source_path: str,
+    registered_denominator: int,
+) -> dict[str, Any]:
+    review = _age_eligibility_review(
+        study, source_path=source_path, registered_denominator=registered_denominator
+    )
+    if review["status"] != "ready" or not primary_cohort.first_icu_stay_only(
+        study.get("cohort")
+    ):
+        return review
+    # The host keeps each patient's first ICU stay; count exactly those.
+    first = _first_icu_stay_flags(study, source_path=source_path)
+    stays = _read_review_concept(source_path, "age")
+    if first is None or stays is None or "stay_id" not in stays.columns:
+        return {
+            "status": "unavailable",
+            "count": None,
+            "basis": "first_icu_stay_eligibility",
+            "reason_code": "cohort_first_icu_stay_eligibility_unavailable",
+        }
+    one = stays.drop_duplicates(subset=["stay_id"]).copy()
+    flags = one["stay_id"].map(first)
+    if len(one) != registered_denominator or bool(flags.isna().any()):
+        return {
+            "status": "unavailable",
+            "count": None,
+            "basis": "first_icu_stay_eligibility",
+            "reason_code": "cohort_first_icu_stay_coverage_incomplete",
+        }
+    eligible = flags.astype(bool)
+    if review["basis"] == "typed_age_eligibility":
+        values = pd.to_numeric(one["age"], errors="coerce")
+        in_range = values.notna()
+        if review["age_min"] is not None:
+            in_range &= values >= float(review["age_min"])
+        if review["age_max"] is not None:
+            in_range &= values <= float(review["age_max"])
+        eligible &= in_range
+    return {
+        **review,
+        "count": int(eligible.sum()),
+        "basis": f"{review['basis']}+first_icu_stay",
+        "excluded_non_first_icu_stay_count": int((~flags.astype(bool)).sum()),
+    }
+
+
+def _first_icu_stay_flags(
+    study: Mapping[str, Any], *, source_path: str
+) -> Optional[pd.Series]:
+    from easyicu.research_agent.acquisition.first_icu_stay import (
+        COORDINATE_FLAG_COLUMN,
+        COORDINATE_STAY_COLUMN,
+        FirstIcuStayError,
+        load_verified_first_icu_stay,
+    )
+
+    source = study.get("data_source")
+    source = source if isinstance(source, Mapping) else {}
+    try:
+        binding = source_identity_authority.resolve_study_first_icu_stay(
+            export_path=source_path, database=str(source.get("database") or "")
+        )
+        if binding is None:
+            return None
+        coordinate = load_verified_first_icu_stay(
+            binding.coordinate_path, expected_sha256=binding.coordinate_sha256
+        )
+    except (source_identity_authority.PatientGroupingAuthorityError, FirstIcuStayError):
+        return None
+    return coordinate.set_index(COORDINATE_STAY_COLUMN)[COORDINATE_FLAG_COLUMN]
+
+
+def _age_eligibility_review(
     study: Mapping[str, Any],
     *,
     source_path: str,
@@ -109,6 +189,46 @@ def _patient_grouping_review(
             coordinates.get("export_manifest_sha256") or ""
         ),
         "mapping_sha256": binding.mapping_sha256,
+        "provider_visible_values": False,
+    }
+
+
+def _first_icu_stay_review(
+    study: Mapping[str, Any], *, source_path: str
+) -> Optional[dict[str, Any]]:
+    if not primary_cohort.first_icu_stay_only(study.get("cohort")):
+        return None
+    source = study.get("data_source")
+    source = source if isinstance(source, Mapping) else {}
+    try:
+        binding = source_identity_authority.resolve_study_first_icu_stay(
+            export_path=source_path,
+            database=str(source.get("database") or ""),
+        )
+    except source_identity_authority.PatientGroupingAuthorityError as exc:
+        return {
+            "status": "invalid",
+            "reason_code": exc.code,
+            "details": {
+                key: value
+                for key, value in exc.details.items()
+                if key in {"database", "cause_code"}
+            },
+        }
+    if binding is None:
+        return {
+            "status": "unavailable",
+            "reason_code": "first_icu_stay_authority_unavailable",
+        }
+    coordinates = dict(binding.authority_coordinates)
+    return {
+        "status": "ready",
+        "authority_ref": str(coordinates.get("authority_ref") or ""),
+        "order_rule": str(coordinates.get("order_rule") or ""),
+        "coordinate_sha256": binding.coordinate_sha256,
+        "stays": coordinates.get("stays"),
+        "patients": coordinates.get("patients"),
+        "non_first_icu_stays": coordinates.get("non_first_icu_stays"),
         "provider_visible_values": False,
     }
 
@@ -229,6 +349,7 @@ def _runtime_readiness_review(
     }
 
     grouping = _patient_grouping_review(study, source_path=source_path)
+    first_icu_stay = _first_icu_stay_review(study, source_path=source_path)
     time_varying_requested = "time_varying" in strategies
     timing_sensitive_survival_requested = bool(
         {"landmark", "time_varying"}.intersection(strategies)
@@ -352,6 +473,8 @@ def _runtime_readiness_review(
             required_findings.append(time_varying_followup_reason)
     if "non_readmission_restriction" in strategies and not readmission_ready:
         required_findings.append("non_readmission_indicator_unavailable")
+    if first_icu_stay is not None and first_icu_stay["status"] != "ready":
+        required_findings.append(str(first_icu_stay["reason_code"]))
 
     outcome_event_time = dict(event_time)
     if (
@@ -378,6 +501,8 @@ def _runtime_readiness_review(
         },
         "required_findings": required_findings,
     }
+    if first_icu_stay is not None:
+        result["first_icu_stay"] = first_icu_stay
     if hospital_mortality_followup is not None:
         result["hospital_mortality_followup"] = hospital_mortality_followup
     return result

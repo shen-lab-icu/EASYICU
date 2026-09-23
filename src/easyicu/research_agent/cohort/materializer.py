@@ -2138,6 +2138,55 @@ def _replace_row_identity_from_mapping(
     }
 
 
+def _restrict_to_first_icu_stays(
+    cohort: pd.DataFrame,
+    *,
+    coordinate_path: Path,
+    coordinate_sha256: str,
+    authority_coordinates: Optional[Mapping[str, object]],
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    """Keep each patient's first ICU stay, as the verified coordinate says.
+
+    The coordinate covers every stay of the bound source; a cohort stay it does
+    not list is a different source, never an implicit first stay.
+    """
+
+    from ..acquisition.first_icu_stay import (
+        COORDINATE_FLAG_COLUMN,
+        FirstIcuStayError,
+        load_verified_first_icu_stay,
+    )
+
+    try:
+        coordinate = load_verified_first_icu_stay(
+            coordinate_path, expected_sha256=coordinate_sha256
+        )
+    except FirstIcuStayError as exc:
+        raise MaterializedMetadataError(str(exc)) from exc
+    if COORDINATE_FLAG_COLUMN in cohort.columns:
+        raise MaterializedMetadataError(
+            "the first ICU stay flag would overwrite an existing cohort column"
+        )
+    joined = cohort.merge(
+        coordinate, on=ID_COL, how="left", validate="one_to_one", sort=False
+    )
+    uncovered = int(joined[COORDINATE_FLAG_COLUMN].isna().sum())
+    if uncovered:
+        raise MaterializedMetadataError(
+            f"the first ICU stay coordinate does not cover {uncovered} cohort stays"
+        )
+    keep = joined[COORDINATE_FLAG_COLUMN].astype(bool).to_numpy()
+    restricted = cohort.loc[keep].reset_index(drop=True)
+    return restricted, {
+        "schema_version": "easyicu.first_icu_stay_restriction/1",
+        "coordinate_sha256": coordinate_sha256,
+        "stays_before": int(len(cohort)),
+        "stays_after": int(len(restricted)),
+        "non_first_icu_stays_removed": int(len(cohort) - len(restricted)),
+        "authority_coordinates": dict(authority_coordinates or {}),
+    }
+
+
 def materialize_to_parquet(
     output_dir: Union[str, Path],
     *,
@@ -2153,6 +2202,9 @@ def materialize_to_parquet(
     replacement_identity_patient_column: Optional[str] = None,
     output_identity_column: Optional[str] = None,
     identity_authority_coordinates: Optional[Mapping[str, object]] = None,
+    first_icu_stay_path: Optional[Union[str, Path]] = None,
+    first_icu_stay_sha256: Optional[str] = None,
+    first_icu_stay_authority_coordinates: Optional[Mapping[str, object]] = None,
     **kwargs: Any,
 ) -> Dict[str, Path]:
     """Materialize and write ``<stem>.parquet`` + ``<stem>_provenance.json``.
@@ -2198,6 +2250,24 @@ def materialize_to_parquet(
             source_package,
             materialize_args=materialize_args,
         )
+    if (first_icu_stay_path is None) != (first_icu_stay_sha256 is None):
+        raise MaterializedMetadataError(
+            "first ICU stay coordinate path and digest must be declared together"
+        )
+    first_icu_stay_restriction: Optional[dict[str, object]] = None
+    if first_icu_stay_path is not None:
+        # Before identity replacement, the panel and the trajectory: all of them
+        # are cut to this universe, so the restriction reaches every consumer.
+        cohort, first_icu_stay_restriction = _restrict_to_first_icu_stays(
+            cohort,
+            coordinate_path=Path(first_icu_stay_path).expanduser(),
+            coordinate_sha256=str(first_icu_stay_sha256),
+            authority_coordinates=first_icu_stay_authority_coordinates,
+        )
+        provenance["n_stays_after_inclusion_exclusion"] = int(len(cohort))
+        provenance["columns"] = list(cohort.columns)
+        provenance["cohort_sha256"] = _hash_df(cohort.reset_index(drop=True))
+        provenance["first_icu_stay_restriction"] = first_icu_stay_restriction
     identity_options = (
         replacement_identity_path,
         replacement_identity_sha256,
@@ -2260,6 +2330,8 @@ def materialize_to_parquet(
         "identity_column": identity_column,
         "replacement_row_identity": identity_binding,
     }
+    if first_icu_stay_restriction is not None:
+        producer_parameters["first_icu_stay_restriction"] = first_icu_stay_restriction
     trajectory_concepts_resolved: Optional[List[str]] = None
     _trajectory_long_once: List[Any] = []
 

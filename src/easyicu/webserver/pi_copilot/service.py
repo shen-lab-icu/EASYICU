@@ -3400,6 +3400,15 @@ class PiCopilotService:
             )
         except source_identity_authority.PatientGroupingAuthorityError:
             grouping = None
+        first_stay = None
+        if primary_cohort.first_icu_stay_only(context.get("cohort")):
+            try:
+                first_stay = source_identity_authority.resolve_study_first_icu_stay(
+                    export_path=str(source.get("path") or ""),
+                    database=str(source.get("database") or ""),
+                )
+            except source_identity_authority.PatientGroupingAuthorityError:
+                first_stay = None
         try:
             plan_review_progress.validate_choice_source(context, row)
             compiled = plan_decisions.compile_agent_plan_configuration(
@@ -3407,6 +3416,7 @@ class PiCopilotService:
                 agent_plan=agent_plan,
                 runtime_finding_codes=runtime_codes,
                 patient_cluster_available=grouping is not None,
+                first_stay_coordinate_available=first_stay is not None,
             )
             updated = study_contexts.upsert_context(
                 {"id": context_id, **compiled.patch},
