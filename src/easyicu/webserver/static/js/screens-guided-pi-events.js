@@ -424,7 +424,8 @@
             sendText(discoveryAction.text, [], discoveryAction.intent);
             return;
           }
-          sendText(message, governedNextChoiceGrants(nextChoice, message));
+          const messageOrigin = nextChoice.dataset.gpiNextOrigin === 'model' ? 'model_option' : '';
+          sendText(message, governedNextChoiceGrants(nextChoice, message), undefined, true, messageOrigin);
           return;
         }
         if (event.target.closest('[data-gpi-next-focus]')) {

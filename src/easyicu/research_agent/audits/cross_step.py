@@ -3097,7 +3097,10 @@ class CrossStepReconciliationTraceValidator:
     def _registered_parent_step(
         cls, summary: Dict[str, Any], parent_path: Path
     ) -> Optional[str]:
-        selected = str(parent_path)
+        # ``_registered_parent_path`` returns ``Path(candidate).expanduser()``;
+        # compare the same normalised form so ``./x.csv`` or ``~/x.csv``
+        # spellings resolve to their registered upstream step.
+        selected = Path(parent_path).expanduser()
 
         def visit(value: Any) -> Optional[str]:
             if isinstance(value, dict):
@@ -3107,7 +3110,12 @@ class CrossStepReconciliationTraceValidator:
                 if isinstance(upstream_step, str):
                     for key, raw_path in value.items():
                         key_text = cls._normalise(key)
-                        if "path" in key_text and str(raw_path or "") == selected:
+                        if (
+                            "path" in key_text
+                            and isinstance(raw_path, str)
+                            and raw_path.strip()
+                            and Path(raw_path).expanduser() == selected
+                        ):
                             return upstream_step
                 for child in value.values():
                     found = visit(child)

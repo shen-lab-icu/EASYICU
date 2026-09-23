@@ -148,6 +148,10 @@ def _with_menu_era_thinking_level(row: Dict[str, Any]) -> Dict[str, Any]:
     return row
 
 
+# Message provenance the host attaches when the user clicked an option whose
+# text the model authored (screens-guided-pi-next-actions.js marks verbatim
+# model choices). Such text is conversation input, never grant authorship.
+MODEL_OPTION_MESSAGE_ORIGIN = "model_option"
 HOST_ACTION_JOB_KINDS = {
     "auto_generate_plan": frozenset({"agent-run"}),
     "generate_plan": frozenset({"agent-run"}),
@@ -2114,6 +2118,7 @@ class PiCopilotService:
         regeneration_intent: Optional[str] = None,
         message_intent: Optional[str] = None,
         idea_source: Optional[Mapping[str, Any]] = None,
+        message_origin: Optional[str] = None,
     ) -> Dict[str, Any]:
         record = self._scoped_record(session_id, project_id=project_id)
         self._provider_gate(
@@ -2172,6 +2177,12 @@ class PiCopilotService:
             str(item).strip() for item in allowed_actions if str(item).strip()
         )
         inferred_actions = infer_explicit_turn_actions(provider_text)
+        if message_origin == MODEL_OPTION_MESSAGE_ORIGIN:
+            # The host marked this text as a clicked option the model wrote.
+            # Text inference only proves what the model composed, not what
+            # the user authored, so it cannot mint a privileged one-use grant;
+            # the user types the authorization or uses a host-owned control.
+            inferred_actions = inferred_actions - PRIVILEGED_ONE_SHOT_TURN_ACTIONS
         # D-P1-1: privileged one-use actions require backend text inference.
         # Ordinary actions keep union compatibility; privileged actions are
         # granted only from the backend inference so a tampered `full`-mode

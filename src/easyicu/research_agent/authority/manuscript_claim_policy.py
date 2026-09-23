@@ -340,6 +340,21 @@ def _looks_result_like_sentence(sentence: str) -> bool:
     return bool(_RESULT_TOKEN_RE.search(prose))
 
 
+_NUMERIC_VALUE_TOKEN_RE = re.compile(r"\d|%")
+
+
+def _carries_numeric_value(sentence: str) -> bool:
+    """Whether a sentence states a number outside its literature citation keys.
+
+    ``_looks_result_like_sentence`` also fires on interpretive vocabulary
+    (mortality, mean, missingness); this narrower test isolates the numeric
+    method details that only an exact ``ManuscriptMethodFact`` may admit.
+    """
+
+    prose = _LITERATURE_CITATION_MARKER_RE.sub("", sentence)
+    return bool(_NUMERIC_VALUE_TOKEN_RE.search(prose))
+
+
 def _evidence_refs(sentence: str) -> tuple[str, ...]:
     refs: list[str] = []
     for match in _VALID_EVIDENCE_TOKEN_RE.finditer(sentence):
@@ -735,11 +750,13 @@ def filter_evidence_bound_scaffold(
                 filtered_claims.append(rejected)
                 continue
             if _looks_result_like_sentence(sentence):
-                if section == "## Methods":
+                if section == "## Methods" and _carries_numeric_value(sentence):
                     # Numeric method details are admitted only through an exact
                     # host-registered ManuscriptMethodFact (handled above).
                     # A generic evidence id proves that an artifact exists; it
                     # does not prove that this sentence describes that artifact.
+                    # Non-numeric method prose (outcome definitions, missing-
+                    # data handling) keeps the registered-evidence route below.
                     rejected = sentence.strip()
                     removed.append(rejected)
                     filtered_claims.append(rejected)

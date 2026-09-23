@@ -115,6 +115,37 @@ def test_pi_packages_and_upstream_commit_are_exactly_pinned() -> None:
     assert 'executionMode: "sequential"' not in entrypoint
 
 
+def test_resume_tool_keeps_plan_decision_host_owned() -> None:
+    """Neither the sidecar schema nor the catalog exposes a plan decision.
+
+    ``test_pi_copilot_tool_catalog`` owns catalog/main.mjs parity; this pins
+    the resume tool's narrowed contract and that the host never regains a
+    review-submission path through it.
+    """
+
+    entrypoint = (APP_DIR / "src" / "main.mjs").read_text(encoding="utf-8")
+    resume_line = next(
+        line for line in entrypoint.splitlines()
+        if 'name: "easyicu_resume"' in line
+    )
+    schema = resume_line.split("parameters:", 1)[1]
+    assert "job_id:" in schema and "run_id:" in schema
+    for forbidden in ("decision", "reviewer", "note", "approved", "rejected"):
+        assert forbidden not in schema, forbidden
+    assert "human plan approval or rejection must use the browser review control" in resume_line
+
+    catalog_entry = {entry.name: entry for entry in TOOL_CATALOG}["easyicu_resume"]
+    assert catalog_entry.host_mutating is False
+    assert set(catalog_entry.arguments.model) == {"job_id", "run_id"}
+    tools_source = (
+        Path(__file__).resolve().parents[3]
+        / "src" / "easyicu" / "webserver" / "pi_copilot" / "tools.py"
+    ).read_text(encoding="utf-8")
+    resume_source = tools_source.split("def _resume(", 1)[1].split("\ndef ", 1)[0]
+    assert "decision" not in resume_source.split("\n    job_id = str(", 1)[1]
+    assert "submit_agent_run_review" not in resume_source
+
+
 def test_private_runtime_integrity_is_verified_once_per_gateway_lifetime(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

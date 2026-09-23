@@ -95,21 +95,22 @@
           : 'Confirm and prepare data',
         message: choice,
         grants: [],
+        origin: 'model',
       };
     }
     // A registered EasyICU export is selected through the source catalog and
     // bound by source_id. It is not a raw folder-selection/extraction action.
     if (isPreparedRegisteredExportChoice(choice)) {
-      return { label: choice, message: choice, grants: ['configure'] };
+      return { label: choice, message: choice, grants: ['configure'], origin: 'model' };
     }
     const localDatabase = localSourceDatabase(choice);
     if (localDatabase) {
-      return { label: choice, message: choice, grants: [], localDatabase };
+      return { label: choice, message: choice, grants: [], localDatabase, origin: 'model' };
     }
     const subject = demoSubject(choice);
-    if (!subject) return { label: choice, message: choice, grants: [] };
+    if (!subject) return { label: choice, message: choice, grants: [], origin: 'model' };
     const declined = /(?:暂不|不要|不下载|无需|跳过|without|do not|don't|skip)/i.test(choice);
-    if (declined) return { label: choice, message: choice, grants: [] };
+    if (declined) return { label: choice, message: choice, grants: [], origin: 'model' };
     const localCopy = /(?:已经|已|本地).{0,8}(?:下载|准备|保存)|(?:选择|使用).{0,8}本地|already[\s-]+(?:downloaded|prepared)|local[\s-]+(?:copy|folder)/i.test(choice);
     if (localCopy) {
       return language === 'zh'
@@ -117,11 +118,13 @@
             label: `使用已经下载好的 ${subject}`,
             message: `确认并授权本轮打开本地数据选择与扫描流程，使用已经下载好的 ${subject}；请直接打开目录选择，不要再次下载。`,
             grants: ['extract'],
+            origin: 'host',
           }
         : {
             label: `Use an already downloaded ${subject}`,
             message: `I confirm and authorize opening local data selection and scanning for the already downloaded ${subject} in this turn. Open the folder chooser and do not download it again.`,
             grants: ['extract'],
+            origin: 'host',
           };
     }
     return language === 'zh'
@@ -129,11 +132,13 @@
           label: `下载并准备 ${subject}`,
           message: `确认并授权本轮准备并注册 ${subject}。`,
           grants: ['extract'],
+          origin: 'host',
         }
       : {
           label: `Download and prepare ${subject}`,
           message: `I confirm and authorize preparing and registering ${subject} for this turn.`,
           grants: ['extract'],
+          origin: 'host',
         };
   }
 
@@ -373,7 +378,11 @@
           const localSource = action.localDatabase
             ? ` data-gpi-next-local-database="${esc(action.localDatabase)}"`
             : '';
-          return `<button type="button" data-gpi-next-choice="${esc(action.message)}"${grants}${localSource} ${disabled ? 'disabled' : ''}><span>${esc(action.label)}</span><b aria-hidden="true">→</b></button>`;
+          // Verbatim model text is marked so the host never mints a
+          // privileged one-turn grant from it; only host-authored rewrites
+          // omit the marker.
+          const origin = action.origin === 'host' ? '' : ' data-gpi-next-origin="model"';
+          return `<button type="button" data-gpi-next-choice="${esc(action.message)}"${grants}${localSource}${origin} ${disabled ? 'disabled' : ''}><span>${esc(action.label)}</span><b aria-hidden="true">→</b></button>`;
         }).join('') + customChoice
       : step.asking
         ? `<button type="button" data-gpi-next-focus ${disabled ? 'disabled' : ''}>${language === 'zh' ? '回答这个问题' : 'Answer this question'} <b aria-hidden="true">→</b></button>`

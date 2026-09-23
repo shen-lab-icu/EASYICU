@@ -105,6 +105,12 @@ def test_copilot_next_step_owner_projects_clickable_choices_and_safe_fallback() 
     assert '"explicit":false' in completed.stdout
     assert '"asking":false' in completed.stdout
     assert 'data-gpi-next-choice="所有符合条件的 ICU stays"' in completed.stdout
+    # Verbatim model text carries the origin marker; the host-authored demo
+    # authorization rewrite is the only button that omits it.
+    assert 'data-gpi-next-choice="所有符合条件的 ICU stays" data-gpi-next-origin="model"' in completed.stdout
+    assert 'data-gpi-next-choice="继续无数据规划" data-gpi-next-origin="model"' in completed.stdout
+    assert 'data-gpi-next-choice="确认并授权本轮准备并注册 MIMIC-IV Demo。" data-gpi-next-grants="extract" disabled' not in completed.stdout
+    assert 'data-gpi-next-choice="确认并授权本轮准备并注册 MIMIC-IV Demo。" data-gpi-next-grants="extract" ><span>' in completed.stdout
     assert '"choices":["选择 MIMIC-IV Demo","选择 eICU Demo","继续无数据规划"]' in completed.stdout
     assert 'data-gpi-next-choice="确认并授权本轮准备并注册 MIMIC-IV Demo。"' in completed.stdout
     assert "下载并准备 MIMIC-IV Demo" in completed.stdout
@@ -369,7 +375,11 @@ def test_copilot_message_owner_wires_only_latest_next_step_to_send_or_focus() ->
     assert "MODULES.require('nextActions')" in owner
     assert "row.complete !== false" in owner
     assert "row === latestAssistant && !interactionLocked && !stale" in owner
-    assert "sendText(message, governedNextChoiceGrants(nextChoice, message))" in events
+    # A clicked option carries its host-set text origin so the backend never
+    # mints a privileged one-turn grant from verbatim model text.
+    assert "const messageOrigin = nextChoice.dataset.gpiNextOrigin === 'model' ? 'model_option' : '';" in events
+    assert "sendText(message, governedNextChoiceGrants(nextChoice, message), undefined, true, messageOrigin)" in events
+    assert "...(messageOrigin ? { message_origin: messageOrigin } : {})" in owner
     assert "function governedNextChoiceGrants(element, message)" in plan_actions
     assert "nextActions.governedPlanGrants(message, workflowCode())" in plan_actions
     assert "event.target.closest('[data-gpi-next-focus]')" in events

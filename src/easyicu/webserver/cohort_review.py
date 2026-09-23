@@ -853,12 +853,22 @@ def _normalized_stay_id_series(series: Any) -> Any:
 
 
 def _coverage_payload(path: Path, desc: Dict[str, Any]) -> List[Dict[str, Any]]:
-    cohort_size = (desc.get("summary") or {}).get("stays")
-    cohort_ids = dataio._fast_stay_ids(path, desc.get("files") or [])
-    if cohort_ids is not None:
-        cohort_size = len(cohort_ids)
+    files = desc.get("files") or []
+    cohort_ids: set[str] | None = None
+    cohort_ids_resolved = False
+
+    def resolve_cohort_ids() -> set[str] | None:
+        # The cohort id set costs one stay-key column read. Resolve it only
+        # when a module is actually scanned so the large-module metadata path
+        # keeps its no-scan contract.
+        nonlocal cohort_ids, cohort_ids_resolved
+        if not cohort_ids_resolved:
+            cohort_ids = dataio._fast_stay_ids(path, files)
+            cohort_ids_resolved = True
+        return cohort_ids
+
     out: List[Dict[str, Any]] = []
-    for item in desc.get("files") or []:
+    for item in files:
         module = str(item.get("module") or "")
         if not module:
             continue
@@ -874,7 +884,10 @@ def _coverage_payload(path: Path, desc: Dict[str, Any]) -> List[Dict[str, Any]]:
             coverage_basis = "metadata_row_count_only"
             skipped_reason = "unique_stay_scan_skipped_large_module"
         else:
-            covered = _covered_entities(path, item, cohort_ids)
+            covered = _covered_entities(path, item, resolve_cohort_ids())
+        # ``covered`` is an intersection with the resolved cohort id set, so
+        # that set is the only consistent denominator.
+        cohort_size = len(cohort_ids) if cohort_ids else None
         coverage = (
             round(covered / cohort_size * 100, 1)
             if isinstance(covered, int) and isinstance(cohort_size, int) and cohort_size

@@ -151,7 +151,7 @@ from .idea_mining_feasibility_tier import (  # noqa: F401  (re-exported)
     classify_feasibility_tier,
 )
 from .idea_mining_selection import (
-    _population_matches_age_group,
+    population_matches_age_group,
     select_actionable_prior_art_screen,
 )
 
@@ -1963,7 +1963,7 @@ def run_idea_mining_dry_run(
         executable_candidates = [
             (
                 candidate
-                if _population_matches_age_group(
+                if population_matches_age_group(
                     candidate.population,
                     analytic_population_age_group,
                 )

@@ -1399,7 +1399,7 @@
     };
     state.source.onerror = () => { if (!state.busy) closeSource(); };
   }
-  async function sendText(text, grantsOverride, turnIntent, visibleUserMessage = true) {
+  async function sendText(text, grantsOverride, turnIntent, visibleUserMessage = true, messageOrigin = '') {
     if (!state.session || state.projectLoading || state.busy || state.childJobId || sessionIsStale()) return;
     if (!sessionMatchesUiLanguage(state.session)) {
       handleLanguageChange();
@@ -1436,6 +1436,7 @@
         project_id: projectId(), message: text, allowed_actions: grants,
         ...(turnIntent ? { turn_intent: turnIntent } : {}),
         ...(ideaSource ? { idea_source: ideaSource } : {}),
+        ...(messageOrigin ? { message_origin: messageOrigin } : {}),
       });
       if (!isCurrent()) return;
       if (ideaSource && IDEA_SOURCE) IDEA_SOURCE.consume();

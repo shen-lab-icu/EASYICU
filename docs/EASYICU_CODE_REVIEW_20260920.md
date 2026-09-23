@@ -2,8 +2,9 @@
 
 - 日期：2026-09-20（UTC+8 会话）
 - 分支：`codex/dev9-expansion-20260917`
-- HEAD：`2835cbbd1`
-- 工作树：审阅期间脏项由 51 增至 **65**（含 `src/easyicu` 下 41 项），经 mtime 会话基线比对与多个独立子代理交叉确认，**全部归属同机并行的另一任务**；本次审阅与复验对仓库**零写入**，所有探针落在 `/tmp/easyicu_review/`。
+- HEAD：**`e5e7e4059`**（Wave 3 复核时的实时坐标）。本报告初稿与 Wave 1/2 的坐标基线为 `2835cbbd1`；期间同机并行任务把它的 73 个脏文件整体提交为 `e5e7e4059`，工作树脏项由 **65→73→0**。**本报告自身（283 行）也被那次提交带入 git 历史**，非本次审阅主动提交。
+- 逐文件复核：`selection_policy.py`、`study_context_update.py`、`turn_authority.py`、`concept/callbacks.py`、`research_launch_scientific.py`、`tool_catalog.json`、`reporting_checklist.py`、`writer_evidence.py`、`node_app/src/main.mjs` 在两 HEAD 间**零差异**；`webserver/pi_copilot/service.py`（+86）与 `projections.py`（+35）有改动 ⇒ 其中引用行号已在 Wave 3 重新定位（`service.py:2084/2091-2092`、`projections.py:285` 现值均已逐字复读）。
+
 - 范围：仅 `src/easyicu/` 生产代码（用户选定的风险分层口径）。**未含** `tests/`、`tools/`、`scripts/`、`docs/`、`webserver/static` 前端全量（`main.mjs`、`next-actions.js` 等为追 P0 链路顺带读取）。
 - 方法：83 个只读审阅批次（48 深读批 + 35 扫描批）逐文件读到末行，无抽样；每条上报 P0/P1 由独立 `gap-claim-verifier` 代理以证伪优先复验；两条 P0 由主审亲跑探针复核。
 - 结论口径：**P0** = 静默破坏科学结论/证据等级，或可达性已确认的可利用授权缺陷；**P1** = 可达的真实缺陷；**P2** = 边界/潜在/一致性；**P3/NIT** = 微小。"机制确证" ≠ "影响已量化"，下表分母列显式区分。
@@ -22,14 +23,89 @@
 | 上报 P0 / P1 | 7 / 147 |
 | 复验组 | 39 |
 | 逐条判定 | 74 VERIFIED / 12 REFUTED / 2 UNDETERMINED |
-| 最终定档 | **P0 = 3**、**P1 = 29**（Wave 2 后；原 45，16 条降档/改判零实例、C59 升 P0、038 回升 P1）、其余降 P2/P3 |
+| 最终定档 | ~~**P0 = 3**、**P1 = 29**（Wave 2 后）~~ 以 **Wave 4 表（最新）→ Wave 3 定档表**为准（Wave 2 后原 45，16 条降档/改判零实例、C59 升 P0、038 回升 P1） |
 | Wave 2 降档清单（16） | C10、C4、C37、C12、C13、C23、C24、C30、C16、C67、C21、C51、C45、C47、C48、C49 |
 | Wave 2 二次对抗复验 | 14 组（G1–G14 + G4R/G5a/G5b）；结论：2 条 P0 维持并加重、C59 升 P0、038 回升 P1、C44 量化由主审亲自复算确认（26/30 = 87%）、webserver 安全类 REFUTED 判 UPHELD |
-| 子代理 token 量级 | 约 1.9×10⁹（Wave 1）+ 约 1.6×10⁸（Wave 2） |
+| 子代理 token 量级 | 约 1.9×10⁹（Wave 1）+ 约 1.6×10⁸（Wave 2）+ 约 1.9×10⁸（Wave 3） |
+
+### Wave 4 针对性扫描（2026-09-21，未取证条目 + 新线索）
+
+Wave 3 只取证了 65 条被点名条目中的 44 条。Wave 4 补扫剩余未取证条目与本轮新挖线索，回执在 `/tmp/easyicu_review/w4/*.md`（T1/T2 已回收，T3/T4 见本节末"仍在跑"）。
+
+| 条目 | Wave 4 判定 | 关键证据 / 对本报告净剩影响 |
+|---|---|---|
+| **C38** `cohort_review.py::unique_entity_intersection` 名为交集实为 `min()` 夹取 | **WRONG-DESC + 降 P2** | 登记册 `:127` 与 `:292` 并不互斥，差在分母层：复现的 8 行夹取里 **7 行在 10-stay 历史 scratch 目录 `~/easyicu_export`**，真实发表语料 `full6_20260717/miiv`（94,458 stay）19 行**零夹取**。`:127` 的"12 行"无 provenance，建议删。假 ok 确会落盘，但 133 行快照里仅 1 行、属 demo 源 |
+| **新增（自 C38 挖出）** 同形夹取的**放行门** | **新列 P1 候选** | 真实缺陷本体在 `_covered_entities:917/928`，而**同形夹取**另见于 `extraction_filters.py:265`（`min_coverage_pct` 作为**准入放行门**使用）与 `patient_drilldown/__init__.py:2440`。三处须同修，且放行门那一处的后果是"覆盖率不足的数据被放行进入分析"，比 C38 的披露失真更重 |
+| **infection_icd 整列 NaN**（我在 Wave 3 当作新证据提出） | **REFUTED（非缺陷）** | 我那句"11 份带该列、11/11 全 NaN"口径错了：列在 **13/13** 份导出里都存在，只有 eICU 那份有部分值（25.8%，约 52,566 个），其余整列空是该概念的**设计边界**；`api/extraction.py:2924-2930` 明文承认 native-v2 会物化 all-null 结构列，并说明该校验故意不拒 `infection_icd` |
+| **新增（自 infection_icd 挖出）：Angus 归属误述仍在对外目录发表** | **新列 P1** | owner 早在 **2026-07-17** 就在 `data/concept-dict.json` 的 `description` + `_comment` 里更正："NOT the Angus 2001 ICD-9 code list"、"must not be cited as Angus"，实为对 `eicu.diagnosis.diagnosisstring` 的 30 关键词正则（392,374 / 2,710,672 行命中，已知假阳性含 ulcerative colitis/IBD 约 709 行、非感染性心包炎/膀胱炎）。但**用户可见目录仍在教 Angus**：`concept/catalog.py:204`、`:416` 与前端 `webserver/static/js/data-catalog.js:226`、`:501` 四处全部写 "Angus 2001 (explicit infection codes)"，`tests/` 内 **0 处**钉住该标签。后果：研究者按目录写方法学会把关键词正则声称为 ICD-9 码表定义 |
+| **C12** `io/ts_utils.py::fill_gaps` | **STILL-CONFIRMED，改述** | 真实暴露 **135,308 行 / 0.0201%**（headline 805,967 中 83.2% 是 stay-level 设计性空时间戳）；仅 `limits=` 向量化路径、且需整组等距；episode 隔离门不拦。`ts_utils.py` 本轮被并发任务改过，但 hunk 全在 `change_interval`，本条仍未修 |
+| **C13** 公共 `pafi`/`safi` | **机制确证，不升档（P2）** | 真实 pafi 最大 800、19 份文件 `share≥10000 = 0.00%`；"docstring 示例本身即触发"**REFUTED**（该仓无 doctest 配置） |
+| **WRITER_PANEL**（我 Wave 3 自挖：`writer_evidence.py:1684-1686` 两标签共用一个列表） | **WRONG-LEVEL → P2**（我的"恒假字段"过头） | 恒等性 100% 成立（3,840 配置），但 **55.9% 恰好等于真实收敛数**、偏离时只偏低从不偏高；且合并行为有 gate 测试钉死（护身符已找到）。我说的"8 条不等"错，全语料 **71 条**，且不等件全 ≤09-01、相等件全 ≥09-09，与 `3fd5dfe16` 零重叠 ⇒ "出自旧代码"这个猜测被证实。另我漏了发布导出根 244 件（那里 0 条相等） |
+| **C76 残留**（谓词为何不生效） | **CONFIRMED-P1，真因钉死** | 见上表 infection/`:223` 的修订：`envelope_consumers.py:541/586` 重建丢 9 个标识字段。建议补一条穿透 `authoritative_writer_records` 的整合测试 |
+| **PROMOTION-OVERWRITE**（`publication_bundles.py:478-491` 自盖 `rendering_only`） | **REFUTED** | 我提的"可伪造溯源声明"不成立 |
+| **C10-W2 残留** `datasource.py:1236-1239` dedup 吞 9,372 条 | **REFUTED，数字撤回** | labevents/micro/services 的删除量与 join 放大量**逐位相等**，被吞真实事件 **0**；prescriptions 自带 `icustay_id`，根本进不了该分支（引用其 35,422 会是新的口径错误）。本报告"取证完成前不得开工"清单里这一项现可关闭 |
+
+| **C41** 图件绕过 claims 层按声明水平重算 | **WRONG-DESC + WRONG-LEVEL（P1→P2）** | 被审文件不在 `reporting/`（该路径不存在），在 **`authority/descriptive_scientific_claims.py:148-185`**（行号对）。机制半边确证：`figures/` 27 文件对该函数引用数 0、无等效重算，3 个 claims 编译器只有 1 个有保护（另补出登记册漏计的第 4 条内联分支 `scientific_claims.py:416-459`）。**但真实语料 0 载体**：53 份带 CI 标签的产物标签恒为 95%、非 95% 标签 **0 份**，可按 claims 语义重算的 24 行区间 **0 失配**（执行器 `exposure_outcome_distribution_render.py:467-486` 落盘前已重算）。"99% CI" 只存在于构造探针 ⇒ 降 P2。真实缺口改述为：**6,099 行区间所在文件根本没有 `confidence_level` 列，而标签是字面量** |
+| **C63 + C33** resume 冻结字节 / "digest-bound" | **登记册"共同根因"分组作废，须拆三条** | C63 现场在 `scientific_maturity.py:812-816`（`.is_file()` 冒充 digest-bound）+ `:1764` 措辞，**不是** first-write-wins。真实函数重放（`/private/tmp` 副本）：三个 sha 改全 0 后 maturity 仍判 present，而 `agent_pipeline_runs.py:2582-2587` 当场抛错 ⇒ "从不比对"作为**全称** REFUTED。两根 93 份 receipt、活体 85 份摘要 **100% 匹配、0 失配、0 全 0/畸形**，多代 run **0**。⇒ **建议 C46 与 C33 撤回、C63 独立留 P2**，唯一代码修复项是把 `scientific_maturity.py:812-816` 的存在性判据改为读 receipt 并复核绑定字节摘要 |
+| **C61** `scores/` 批次失败静默截断 | **WRONG-DESC（容器）+ 机制 STILL-CONFIRMED，维持 P2** | 点名 `memory_manager.subprocess_batch_load:962-1115`，截断在 `:1074-1078`；构造 40 患者 4 批崩 2 批 ⇒ 静默返回 20 行、无异常无失败字段。"正式重提取不经此函数"**成立但理由错了**：真正原因是 `extraction.py:2491` 把内层 `batch_size` 设成本批大小，不是"有自有记账环" |
+
+### P0-4 `modules` 里的实验性队列定义既不对话端受检、也不在发射端受检（Wave 4 新增，主审亲自复现）
+
+- 坐标：`src/easyicu/webserver/research_launch_scientific.py:405-428`（发射门）与 `:477-478 _configured_modules` → `:694`、`:785/:787`（真正的执行选择器）；`src/easyicu/concept/selection_policy.py:51-80`（`_POLICIES` 只有 `sep3_sofa2` 一个键）。
+- 机制（两跳缺一不可，均已实测）：
+  1. 发射门只吃 **executable primary exposure**：`:408 if not primary_exposure: return`。真实 store 行 `study_c3610aa6fab6d35c` 的 `execution_concepts.primary_exposure` 为 `None` ⇒ 校验器**静默 PASS**，而它的 `modules` 里就装着 `sepsis3_sofa2`、`confirmations={}`、question 不含任何 sofa 字样。
+  2. `modules` **不是展示字段**：`_configured_modules` 经 `ScientificConfiguration.inspect(study).modules()` 取值，并被用来在 `:785/:787` 抛 `research_pipeline_target_outside_configured_modules` / `..._outcome_outside_...`，即它真实约束哪个概念被计算；把 `sepsis3_sofa2` 换成 `sepsis3_sofa1`，筛出的概念集合随之改变（280 概念目录 → 该模块）。
+- **修法陷阱（照字面修会修出一个空门）**：`_POLICIES` 的键是 **concept id `sep3_sofa2`**，而 module 拼写是 **`sepsis3_sofa2`**。主审实测：
+  ```
+  policy table keys: ['sep3_sofa2']
+    lookup 'sep3_sofa2'    -> allowed=False mode=explicit_only reason=concept_explicit_selection_required
+    lookup 'sepsis3_sofa2' -> allowed=True  mode=ordinary      reason=concept_selection_ordinary
+  ```
+  ⇒ 若只按"发射端也查 `modules`"字面实现，每个 module 都会命中 `concept_selection_ordinary` 全放行，门形同虚设。**正确修法**是先把 module 名归一化成 concept id 再查策略表，并且策略表要覆盖到 module 维度。
+- 与 P0-1 的关系：P0-1 是"对话端可被自授权写进配置"，本条是"**即便没有被自授权，配置里的 `modules` 通道也全程无人校验**"。两者独立，须分别修。
+- 触发频率：真实 store 1,094 个 context 中该形态（`modules` 含 sofa2 且无 confirmation 键）**1 条**；未观测到由此产生的真实 run。定 P0 的依据是"队列定义可被换掉且两道门都不看它"，不是已发生。
+
+### Wave 4 追加的主审自纠（T4 抓出，两处我已亲验）
+
+1. **`w3/C42.md` 与本表 P0-1a 里我写的 "`primary_exposure=None`" 不准**：该行的**顶层 `primary_exposure` 字段是字符串 `"Sepsis-3"`**，`None` 出现在 `execution_concepts.primary_exposure`（也就是喂给校验器的那个实参）。我把两个容器混成了一个。（已亲验）
+2. **"该行的写入者是 `POST /api/study-contexts`"是我的推断，不是证据**：store 里没有任何写入者字段，该归属**不可核验**。Wave 3 我把它当事实写进了回执。（已亲验：store 无 provenance 字段）
+3. **`clinical_definition_*` 与 C42 "同族等重"不成立 → 降 P3**：自撰确认键确属同一无枚举容器，但 `pi_copilot/` 全域 `clinical_definition` **0 命中**，它只产一条软项，实测 `planning_prerequisites_missing=()` 不阻断提交与发射；该族在 1,094 个真实 context 上触发 **0 次**。
+4. **`POST /api/study-contexts` 判为不可被模型间接到达**：45/45 工具、sidecar、前端全穷举无路径；且真正的写容器是**同进程直调** `upsert_context`（`study_context_update.py:1563`），该路由并不比工具多给授权。⇒ 钉为"不构成授权旁路"。
+5. **`tools.py:190-206` 空 `user_text` fail-open 确认不可达**（我 Wave 3 的猜测成立）：`ToolExecutionContext(` 生产构造点仅 1 处，且前置 `pi_message_required`；但那层复核在恒真空转。
+6. **C51 不进 `ConceptAuditSeal`**（`extra="forbid"` + 两处 `findings=state.usage_findings`）→ 维持 **P2**，"是否回 P1"这个开放项关闭。
+
+
+
+### Wave 4 追加的主审自纠（T3 抓出，我已逐处复核）
+
+1. **`CONFIRMED.md:105`（C46 行）** 我写"权威门 `readiness.py:697-830` 确有逐字节复核" —— 该区间 `sha256|hexdigest|read_bytes` **命中 0**（那段是 `_publication_figure_bundle_ready`）。真实比对在 **`readiness.py:383`、`:391`、`:419`**（`sha256_of_file`）。⇒ 结论（存在逐字节复核门）不塌，塌的是我引的坐标；我用一个错坐标给一条降级理由"背书"，这比没引更糟。
+2. **C33 行** 我引 `research_evidence_preview.py:455-497` 为"只自校验摘要" —— 该区间摘要比对命中 **0**（实为 figure-id/唯一性抛错），真实 sha 在 **`:798`**（`registered_sha = record["sha256"]`）。
+3. **"13 份留存日志"** → 实测 **20 份**（0 例批次失败的结论不变）。
+4. **`CONFIRMED.md:144`** "C33/C46 共同根因 = C63" 不成立，须拆成三条独立登记。
+
+仍在跑：T4（`clinical_definition_*` 族量化、`modules`-only 在发射端无人校验的后果面、`POST /api/study-contexts` 能否被模型间接到达、`tools.py:204-205` 空文本 fail-open、C51 是否回 P1）。
+
+
+
+
+### Wave 3 定档（取证件制，2026-09-21）
+
+> **本节两处已被上面的 Wave 4 表改判**：①C76 的归因——Wave 3 我写的"否证投影丢 `axis`"是查错容器（拿磁盘 JSON 否证内存对象），真因确在 `envelope_consumers.py:541/586` 的内存重建；②`WRITER_PANEL` 不是"恒假字段"，降为 P2（合并行为有 gate 测试钉死）。
+
+Wave 3 不再产出"结论的转述"：每条必须留五段式取证件（CODE 逐字行 / REPRO 脚本+完整 stdout / POPULATION 枚举过的根+provenance 标签 / GUARD 找过的全部保护层含未找到处 / VERDICT）。**下表是当前唯一有效的定档**；下方 P1 分族正文里 Wave 1/2 的行号与级别若与本表冲突，以本表为准（正文的完整逐条重写待这批改判落地后统一做）。
+
+| 类别 | 条数 | 条目 |
+|---|---|---|
+| **P0 维持并经实物取证** | **3**（Wave 4 再加 1 条 → **共 4**，见 P0-4） | C42（跨轮种植在真实 owner+真实 store 复现；11/16 反例放行）、C43（四环链条逐环实物；纯疑问句亦铸权）、C59（三态塌陷 + 最新导出 32.99% 阴性为缺证据） |
+| **P1 经取证维持** | **24** | C1、C5、C14、C15、C20、C25、C26（人群半边）、C29、C35、C40、C44、C52、C53、C54、C64、C65、C68、C69、C71、C72、C75、C76、C77、CGUARD |
+| **Wave 3 由 P1 下调** | **19** | C2、C3、C16、C17、C18、C19、C28、C39、C46、C55、C56、C57、C58、C62、C66、C70、C73、C74、CGUARD 的 `:2557` 半边（→P2/P3；理由见各 `w3/*.md`。C50/C60/C78/C79 另列"否证/撤下"，不重复计入） |
+| **否证 / 移出修复序列** | 4 | C50（未知键硬抛 + 评审门覆盖三角色）、C60（原理成立但语料分母为 0 → P3）、C78（NOT-ATTESTED）、C79（NEWS `o2sat` 与本仓声明的参考实现 R ricu `news_score` 全域 81 点 0 分歧） |
+| **P1 维持但表述须改写** | 5 | C1（"四出口"→**三处可达 + 一处死码**：③`:1137` 在出货字典面不可达）、C75（WAVE2.md:71 "根因不同"判 WRONG-DESC，出局点就是 C1 的 `:1105`；真实在体测量 `patient_ids={'row_id':458}` → weight 表 **52,570 行 / 43,256 stay = 全库 61,532 的 70.3%**）、CGUARD（`:2391` 返回全表 CONFIRMED；`:2557` 只放大 IO、`:1613-1615` 把数据收回 0 行 ⇒ 原"并列同罪"over-claim）、C76（后果成立、**我的归因被否证**，见下）、C44（数值三项经独立复算吻合，但 `bin_level` 坐标与对外效力收窄） |
+
 
 覆盖以 manifest 与真实文件集的双向差集为准（`real - covered = 0`）；各批自报 `files_read` 合计 989，与批次表解析口径有关，非漏读。
 
-## P0（3 条，必须修）
+## P0（**4 条**，必须修；第 4 条由 Wave 4 新增）
 
 ### P0-1 实验性临床定义可被自授权（患者队列的科学定义被换掉）
 
@@ -43,10 +119,21 @@
 - 最小修复：给 `confirmations` 加闭合键枚举 + 来源位（同仓已有正确范式：`study_contexts.py:1318-1322,1808-1841` 的 `cohort_eligibility_authority`），`explicit_terms` 改词边界匹配，并补"跨轮种植必拒"的 pin 测试。
 - 盲区：未真跑 run；`study_scientific_configuration.py:445-476` 的 `clinical_definition_*` 属同缺陷族，未量化。
 
+### P0-1a Wave 3 取证与自纠（`w3/C42.md`）
+
+- **种植链在实时 HEAD 上端到端复现**：真实 owner 函数 `study_context_update.update_study_context` + 真实 `study_contexts` store（重定向到 `/tmp`，未写 `~/.easyicu`），同句中性的 `user_message`（"帮我把这个研究配置改成只做院内死亡终点…"）——R1 只写 `confirmations:{concept_selection_sep3_sofa2_authorized: true}` 即落盘（`status: ok`），R2 再提 `modules:["sepsis3_sofa2"]` 即被放行（`stored modules = ['demographics','sepsis3_sofa2']`）；R5 同轮两键一起提交仍被挡（防护只做在轮内）；R3 任意键名同样被接受（`made_up_authority_key: true` 落盘）。前置条件仅为该轮带非 privileged 的 `configure` grant（`full` 模式每条消息都发）。
+- **碰撞半扩样后更强**：16 条刻意 SOFA-2-negative 的表述里 **11 条 ALLOWED**，含 `"SOFA 2016 定义下的脓毒症诊断准确性"`（语义正好相反）与 `"评估乳酸清除率与 SOFA 2.5 分界的关系"`。真实 store（1,094 个 study context）里已 **2 条**用户自撰 question 命中碰撞：`"…胆红素和 SOFA-2 肝脏分项与院内死亡的关系…"`（`sofa-2` 指肝脏子分项，不是实验表型）。旧稿"8 条提问 6 条 ALLOWED"作废，改用带逐命中项的 16 条样本。
+- **新增一条更硬的事实**：发射端 `_validate_primary_concept_selection(study, primary_exposure)`（`research_launch_scientific.py:405-428`）**只校验 primary_exposure，不校验 `modules`** ⇒ 只把实验变体放进 `modules` 的配置在 launch 端无人校验；真实 store 里就有这样一条（`study_c3610aa6fab6d35c`：`modules` 含 `sepsis3_sofa2`、`confirmations={}`、question 不含 SOFA-2、`primary_exposure=None`）。该行的写入者是 `POST /api/study-contexts`（`routes/study_contexts.py:100-112`，body 直进 `upsert_context` 且无 policy 校验）——那是**人驱动面**，不算模型自授权证据，但证明 `modules` 侧确有第二入口且发射端不查。
+- **自我否证两处**：①"新建 context 因 `if current` 而绕门"是我自己的推断，探针返回 `study_context_not_found` ⇒ **否证**，copilot 工具不创建 context；②"execution_concepts.primary_exposure 同路径亦通"**有条件**——实测被 `study_execution_source_required` 挡住，需先绑定已验证数据源。
+- 唯一策略覆盖：`_POLICIES` 实测**只有 `sep3_sofa2` 一条**；`tests/core/test_concept_selection_policy.py` 全文 4 个 test，无一条数字碰撞样本，也无一条"跨轮种植必拒"。
+
 ### P0-2 模型自撰文本可铸 privileged one-shot 授权
 
 - 坐标：`src/easyicu/webserver/pi_copilot/turn_authority.py:179-207`（`_DIRECT_EXTRACTION_AUTHORIZATION_MARKERS` 直取分支）；`service.py:2084-2091`；`node_app/src/main.mjs:713`
 - 机制：`infer_explicit_turn_actions` 的 docstring 明文断言 **"The model cannot supply this text"**，而产品自己的 prompt 要求模型逐字撰写 `选择方向 1：` 前缀的**可点击选项文本**"so the host can formalize it"。该直取短语分支**没有** report / provider_run 两条分支都带的疑问-否定守卫，而 `PiMessageRequest` 无来源标记 → 人点击模型撰写的选项与真人输入在服务端不可区分。
+- **Wave 3 取证（`w3/C43.md`）**：链条四环全部取到实物 —— ①`main.mjs:713`/`:588` 命令模型自撰 `选择方向 N：` 与 `- ` 选项；②`static/js/screens-guided-pi-next-actions.js:11-13`（`NEXT_STEP`/`CHOICE` 正则）+ `:110`（`if (!subject) return { label: choice, message: choice }`）+ `:373`（`data-gpi-next-choice="${esc(action.message)}"`）把**模型 bullet 逐字**变成按钮出栈文本，`events.js:414/422` 原样 `sendText(message)`；③`message_input.py:53` 不含本地路径的消息逐字成为 `provider_message`；④`service.py:2084/2089-2092` 铸权。前端用真实 `project()`/`render()` 在 node 垫片下跑通（`probes/c43_frontend_roundtrip.mjs`），后端用真实函数复现（`probes/c43_backend_grant.py`）。第二层 defense-in-depth（`tools.py:190-206`）调用**同一谓词、同一文本**，不构成额外保护。
+- **必须区分"结构可达"与"历史已发生"**：137 份真实转写（`~/.easyicu/pi-agent/sessions/*.jsonl`，索引 100 份在库）全量重算得 433 条用户轮、**165 次 privileged 铸权**（151 provider_run / 10 extract / 4 report_revision），但**click 形状 0 次、用户轮含该直取短语 0 次、模型 bullet 含该短语 0 次**；模型自撰该短语确有 2 次（都在解释这道门的散文里，非选项）。⇒ 维持 P0 的依据是"纯疑问句即铸真实提取权 + 模型自选 `database`"（`tool_catalog.json` 里 `easyicu_start_extraction` 为 `host_mutating: true`、`model: [database, source_mode]`），**不是**"已经发生过"。
+- **撤回**：Wave 2 由代理上报、我未复算即转述的"18 mint grants / 151 host button rows"。165 与 151 的差异说明对方口径串位；本轮数字以 `probes/c43_population.py` + `_stdout.txt` 为准。
 - 主审亲验（`.venv/bin/python`）：
   - `"请解释什么是一次性 extraction 授权？"` → `{'extract'}`
   - `"选择方向 1：请解释一次性 extraction 授权"` → `{'extract'}`
@@ -58,7 +145,7 @@
 
 ### P0-3 已发表产物里"没做培养"与"培养阴性"不可分（Wave 2 升档，主审亲自复核）
 
-- 坐标：`callbacks.py` 培养判据 `:101-113`（hadm 级 any-row 判定）、`:116` `merge(how="left")`、**`:117-118 fillna(False)`**、`:163 astype("boolean")`；eicu 分支 `:139-157` 同构。
+- 坐标（**Wave 3 勘误：文件归属先前写错**）：真实归属是 **`src/easyicu/scores/microbiology.py`** —— `:101-113` hadm 级 any-row 判定、`:116` `merge(how="left")`、**`:117-118 fillna(False)`**、`:162-163 astype("boolean")`（在 fillna **之后**，第三态被主动擦除）；eicu 分支 `:142-157` 同构。原稿写的 `concept/callbacks.py:101-113/:116/:117-118/:163` 是错的：该文件该区间是 `_callback_int`/`_callback_bool`，全文件仅 `:6705` 一处提到 `culture_positive`（在一条 ValueError 文案里）。行号巧合接近、文件不同，属主审引用错误。
 - **升级依据是本报告自己的条款**：登记册原第 4 条"条件性升级"写明 C59"若发现真实产物命中即升 P0"。Wave 2 找到了命中件。
 - 主审独立复核（我自己跑的读数，非转述）：产物 `/Volumes/外置硬盘/easyicu_data/full6_20260717/miiv/sepsis_shared.parquet`（1.9 MB，568,101 行）含 7 列 `[stay_id, charttime, susp_inf, infection_icd, samp, bld_culture_positive, culture_positive]`；按 `stay_id` 聚合后 **94,458 stay，True 31,985 / False 62,473**，其中 **18,401 个（19.4806%）是零培养记录被写成 False**。全量源核对：`microbiologyevents` 3,988,224 行，`hadm_id` 缺失 = 0，故该分母是精确值而非近似。
 - loader **没有第三态**：输出仅 `[stay_id, culture_positive, bld_culture_positive]`，"缺证据"与"证据阴性"共用同一个 `False`，无 `partial`/`NA`/`covered` 列。
@@ -73,7 +160,7 @@
 
 | # | 坐标 | 一句话 | 分母/证据 |
 |---|---|---|---|
-| ~~C59~~ | `scores/` 培养判据（批次 077） | **"培养未做"被报成"培养阴性"** | **Wave 2 升 P0，见 P0-3**（已发表产物命中，18,401/94,458 stay） |
+| ~~C59~~ | `scores/microbiology.py`（批次 077） | **"培养未做"被报成"培养阴性"** | **Wave 2 升 P0、Wave 3 已量化**：13 份导出全普查，11 份带该列；最新一份（`full6_native_v6_dev9_2e0c0441_20260915`，90,088 stay）发表面阴性 59,885 例中 **19,757 例（32.99%，占全队列 21.93%）根本没有任何送检行**；阳性率随口径可差 9.4pp。另 `infection_icd` 在 11/11 份导出里整列 NaN。详见 `w3/C59.md` |
 | C40 | `scores/kdigo_aki.py:1722`、`scores/aki_profiles.py:466`、`callbacks.py:7754` | `rrt_source_complete=True` 硬编码：同一数据仅改标志位即由 `partial/aki=NA` 升为 `negative_complete/aki=False` | 配合子概念吞异常 `concept/__init__.py:2131-2134` + 空帧不抛错 `callbacks.py:7782-7789`；verify_W VERIFIED、verify_AK 补齐 3 个赋值点。**若发现真实产物走过该路径即升 P0** |
 | C60 | SICdb `ICUOffset` 空值补 0 | 死亡时钟原点偏移，探针复现伪造"存活"假阴性 | 现语料 27,386 行 **0 空值** → 未触发 |
 | C62 | SIC 仅取 `ICD10Main` | 属"不披露窗口"而非"漏用数据" | 实测源仅此一列；0.33% 缺码报 0 分 |
@@ -149,7 +236,7 @@
 |---|---|---|---|
 | C56 | `repairs/availability_fraction.py` | 修复器直接改**已报告的 availability 分母**且从不验恒等式（1.0→0.75/0.25，可引入 NaN），并把脚本自写的 "not imposed" 披露覆盖为 "reconstructed exactly" | verify_AJ 维持 P1，**本族最高、近 P0**；宿主 prompt 自宣告的 positive-finite 前置从未实现；pin 测试 exec 断言 1.0→0.75/0.25 |
 | C57 | `repairs/` 授权来源 | 多条修复的授权取自 **agent 自撰 step_summary 散文**而非 runner stderr：`status:"ok"`+note 即可换取删除校验（`nullable_validation.py` 删非有限校验、`figure_distribution.py` 放宽角色白名单）；`clinical_bin` 宿主闭集不存在 | verify_AJ F5 上调 P2→P1；"删除不可见"半条并入 C28 |
-| C55 | `repairs/name_alias.py` | 相似度门只比"首个下划线后后缀"，把**反义键**改写：`excluded_ids_set→included_ids_set`、`adjusted_→unadjusted_`（后者被测试固定为"正确"） | "免披露"须更正为 `requires_disclosure` 全仓 **0 消费者**，SYNTACTIC 空不变量反记 `verified_pass` |
+| C55 | `repairs/name_alias.py` | 相似度门只比"首个下划线后后缀"，把**反义键**改写：`adjusted_↔unadjusted_` **端到端可复现**（取到语义相反的值）；`excluded_ids_set→included_ids_set` 需候选名实际绑定**模块级 dict 字面量**（`:69-79` 的 `ast.Dict` 门），集合字面量不触发 ⇒ 原例 WRONG-DESC | **Wave 3 勘误**："requires_disclosure 全仓 0 消费者"**是错的**：`repair_registry.py:100/201-202/747/802` 有执行期真求值。准确表述是"在 `repair_registry.py` 之外无读者（人审物料/发布列不读它）"。别名改写半条降 **P2**（真实规模 0/52，按取证制不得支撑 P1 量化） |
 | C58 | `replication/paper.py:764-793` | 句末数值（`OR 1.23.`）致未捕获 `ValueError`，CLI/pipeline 三入口裸调崩 | 句末句点是主流形态，端到端探针确证 |
 | C16 | `research_agent/repairs/` 台账 | 同路径重开时把磁盘台账真写成 `{"repairs": []}`，历史 repair 记录丢失 | verify_K VERIFIED；071 并入（mock 台账 2→0 探针复现，mock 三处保护层与本场景正交） |
 | — | 修复前后审计不可见 | `profile_roles.py` 注入的 `coerce_numeric_fail_closed` 确证 0 定义/0 注入（引入提交 `0c5a5dca0` 未附 helper），但 `gates/preflight.py:6402-6403` 的 `undefined_helper_call`/`unresolvable_name`（error 级）实测点名该符号且每轮执行前运行 → **响亮、不出产物，降 P2** | verify_AJ |
@@ -195,7 +282,7 @@
 缺陷**集中在把关层与"交付端口径"，不在评分判据**。经 14 组对抗复验后仍成立的三条：
 
 1. **授权与溯源可铸**（最硬，三条 P0 全在此）：临床定义可跨轮自授权（C42）、privileged grant 可从模型自撰文本铸出（C43）、缺证据可被报成完整采集且阴性（C59/P0-3）。这一类不被任何兜底挡住，因为缺的正是来源位本身。
-2. **交付端口径与判据端口径不一致**：判据端普遍有门（SOFA-2 用 `uo_*_covered_h`、KDIGO 用实际 `total_h`、`bind_primary_output` 覆写 `primary_or`、`_quarantine_rows_outside_icu_episode` 裁窗外事件、窗口聚合默认 median），**但交付出去的列常常绕过这些门**——`uo_24h` 89.77% 行是稀释值而 `covered_h` 不在 renal 模块列清单里、`culture_positive` 把"没做"与"阴性"合成同一个 False、checklist coverage 把模板标题算成已回答、`writer_evidence` 的 `n_independent` 因投影丢 `axis` 而虚高。**共同形状：判据正确、交付物口径失真**，所以缺陷不在科学计算里而在证据物料里。
+2. **交付端口径与判据端口径不一致**：判据端普遍有门（SOFA-2 用 `uo_*_covered_h`、KDIGO 用实际 `total_h`、`bind_primary_output` 覆写 `primary_or`、`_quarantine_rows_outside_icu_episode` 裁窗外事件、窗口聚合默认 median），**但交付出去的列常常绕过这些门**——`uo_24h` 89.77% 行是稀释值而 `covered_h` 不在 renal 模块列清单里、`culture_positive` 把"没做"与"阴性"合成同一个 False、checklist coverage 把模板标题算成已回答、`writer_evidence` 的 `n_independent` 虚高（**Wave 4 定谳，并撤回 Wave 3 我写的那句"勘误"**：真因**就是**投影丢 `axis`，但丢在内存侧——`audits/envelope_consumers.py:541` 以 `rebuild_observed_scalar_tree(loaded.envelope.observed_scalars)` 重建 `step_summary`，`:586` 整体替换，行对象 24 键→15 键、`axis` 等 9 个标识字段消失 ⇒ `row.get("axis") != "primary"` 恒真。Wave 3 那次"否证"**查错了容器**：拿磁盘 JSON 去否证内存对象，磁盘上 132/132 行 `axis` 当然健在。全语料 19 个可配对 run 中该谓词**生效 0 次**。）。**共同形状：判据正确、交付物口径失真**，所以缺陷不在科学计算里而在证据物料里。
 3. **门控的失效方式是"入口窄"而非"没有门"**：`gates/preflight.py` 46 个检测器里 **13 个已在做缺失/义务判定**，仓内也早有义务门模板（`plausibility_obligation`/`plausibility_receipt`）；真正瞎的是**无悬空引用的删除**（守卫、校验调用、产物写出、self-rebind 过滤），而删 import/def/赋值有 96%/94%/72% 会被 error 级 `unresolvable_name` 抓到。因此第三批的落点从"造缺失检测"改为"**复用已有义务门模板**"。
 
 被 Wave 2 **推翻或大幅收窄**的三条原结论：`figures/` 一族多数零实例且"单一修复点"选在只占 1.3% 产出的路径上；概念/IO 层的分母与单位类缺陷（C37/C12/C13/C4/C10）经全库重算后成规模降档；"图件不接 claims 重算"虽成立，但宿主 runners 才是 72.8% 契约的来源。
@@ -238,7 +325,7 @@
 **排序依据已改**：只把 `[产物计数]` / `[全库重算]` 级证据排在前面；`[探针推导]` / `[构造样本]` 级的量化一律不给首批资格（本轮 16 条 P1 就是这样掉下去的）。
 
 1. **P0 三条**：C42（`confirmations` 闭合键枚举 + 来源位 + `explicit_terms` 词边界 + 跨轮种植必拒 pin 测试；顺带补 `primary_exposure`/`outcome` 的文本门缺失——那半条比子串碰撞更重）、C43（grant 来源位/HMAC + 疑问否定守卫）、**C59/P0-3**（`culture_positive` 拆第三态 + `cultures_obtained` 披露列；**已发表物料需勘误或重导**，且 `samp` 恒假使"是否采过培养"在旧物料里不可反推）。
-2. **交付端口径三条（均产物级证据）**：**038**（`writer_evidence` 的 `n_independent` 因投影丢 `axis` 虚高，真实 run 上 +2）、**C44**（30 份 checklist 中 26 份的 `12b`/`22` 靠关键词转绿、18/30 掉 bin、对外五列之一）、**uo_24h 交付侧**（把 `covered_h`/`assessment_rate` 纳入 renal 模块列清单与导出 schema，否则通用统计与人审入口无从门控）。
+2. **交付端口径三条（均产物级证据）**：**038 / C76**（`writer_evidence` 的 `n_independent` 虚高：19/19 份 digest 无一按 `axis` 排除，其中 11 份由**已含该谓词**的代码于 9/09–9/16 生成 ⇒ 非陈旧产物；同时 `:1684-1686` 两个标签共用一个列表，真实 run 上"5 应为 3"，+2）、**C44**（30 份 checklist 中 26 份的 `12b`/`22` 靠关键词转绿、18/30 掉 bin、对外五列之一）、**uo_24h 交付侧**（把 `covered_h`/`assessment_rate` 纳入 renal 模块列清单与导出 schema，否则通用统计与人审入口无从门控）。
 3. **患者身份 fail-open**：先修 `datasource.py:2391`、`:2557`（空 `value_list` 整条 WHERE 不追加 → 读全文件）与 `:1061-1063`（身份列缺失静默 `pass`），**再**改 `_expand_patient_ids` 的出口语义（②物化空键、①④raise、③eICU 属设计、A10 同批），并把 `row_id` 当患者过滤被静默忽略那处（整表 52,570 行）一并收。**注意**：一律物化空键不是解法。
 4. **RRT/AKI 完整性旗标**：C40 三处赋值点 + `rrt_evidence_reason` 进发布列 + 旗标不得自证 `coverage=complete`（`concept/__init__.py:2131` 是保护不是共因，勿当共因修）。
 5. **门控一类修（落点已换）**：复用仓内义务门模板，覆盖面是"无悬空引用的删除"那五类；配 `statistical.py` 的取键改为宿主 canonical（C51 属契约漂移，按漂移修）。
@@ -275,9 +362,19 @@
 ① 任何"某兜底不存在 / 某形态语料 0 次 / 本机无产物"的**否定式全称**，必须列出搜索过的根目录与形态集合，否则改写成"在 X 范围内未找到 Y"；
 ② 每个数字标 provenance：`[产物计数]` / `[全库重算]` / `[探针推导]` / `[构造样本]`，后两类**不具备 P1 量化资格**。本报告第一版的教训是：16 条 P1 里绝大多数掉档，正是因为我用后两类证据支撑了前两类才该有的结论强度。
 
+## Wave 3 新增自纠（2026-09-21，取证件制下暴露的问题）
+
+1. **文件级引用错误**：P0-3 的机制我写在 `concept/callbacks.py`，真实归属 `scores/microbiology.py`。这类错误 `grep <列名>` 一步即可发现，Wave 1/2 都没做。
+2. **转述即复用**：P0-2 的"18 次铸权 / 151 按钮行"来自代理、我未复算就写进结论；全量重算为 165 次（151 provider_run / 10 extract / 4 report_revision），且 **click 形状 0 次**。以后凡引用他方数字，必须我自己有脚本。
+3. **"结构可达"与"历史已发生"被混写**：P0-2 在 137 份真实转写里 0 次触发。维持 P0 的理由是"纯疑问句即铸真实提取权 + 模型可自选 `database`"，不是"已发生"。
+4. **把自己的推断当结论写**：本轮"新建 context 绕过 explicit-only 门"是我自己的假设，探针返回 `study_context_not_found` ⇒ 当场否证；同一条款下 C76 的"envelope 投影丢 `axis`"归因也被独立复算否证（落盘行 `axis` 健在）。
+5. **代理的两处过度断言我抓出来后不再转述**：`deterministic_publication_bundle_promotion`"全库 0 命中"实为**仓库源码 1 命中**（`publication_bundles.py:491`）、产物侧 0 命中；C65 的"8/8 否定句误判"我实测为 **4/6**。两处均已改为可复现口径。
+6. **计数须排除打包残品**：`build/lib/easyicu/**` 有 988 个 .py，任何"全仓 N 处"若不点名是否含 `build/lib`，数字就不可比（上一轮"969"疑即此因）。
+7. **本报告的实时坐标**：初稿 HEAD `2835cbbd1`，现 `e5e7e4059`；本报告自身已被并发任务的提交带入 git 历史。
+
 ## 验证状态与未决事项
 
 - 本报告是**工程审阅证据**，`focused` 级；不授予任何研究启动、正式实验或论文权限，也不把 `analysis_only` 升格为发表权威。
 - 未做：full CI、真跑 run、`tests/`+`tools/`+前端全量审阅。
 - 探针残留待用户处置：`~/.easyicu/idea_mining_runs/idea_20260920_185037_589480000_1d187f30` 及 `~/.easyicu/webserver_idea_mining_runs.json` 中可能的悬空条目（该目录有运行中的锁文件，未经确认不删）。
-- 明细台账与全部探针输出：`/tmp/easyicu_review/`（`CONFIRMED.md` 为逐条索引，`verify_*.md` 为 39 份复验全文，`finding_*.md` 为 83 份批次原文）。本文档是该台账的整理版；两者若有冲突，以当前代码为准。
+- 明细台账与全部探针输出：`/tmp/easyicu_review/`（`CONFIRMED.md` 为逐条索引，`verify_*.md` 为 39 份复验全文，`finding_*.md` 为 83 份批次原文）。**Wave 3 取证件在 `/tmp/easyicu_review/w3/*.md`（49 份，五段式：CODE/REPRO/POPULATION/GUARD/VERDICT），认定矩阵在 `WAVE3.md`，探针脚本与其完整 stdout 在 `probes/`。** 本文档是该台账的整理版；三者若有冲突，以当前代码与取证件为准。
