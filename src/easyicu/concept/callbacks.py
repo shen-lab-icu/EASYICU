@@ -7668,7 +7668,11 @@ def _callback_kdigo_aki(
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
     """Build public-reference and source-native AKI layers for renal export."""
-    from easyicu.scores.aki_profiles import build_renal_aki_bundle
+    from easyicu.scores.aki_profiles import (
+        build_renal_aki_bundle,
+        rrt_modalities_complete,
+        rrt_sources_resolved,
+    )
     from easyicu.scores.kdigo_aki import detect_id_col, detect_time_col
     
     # Extract DataFrames from tables
@@ -7751,7 +7755,14 @@ def _callback_kdigo_aki(
         ),
         interval=ctx.interval or pd.Timedelta(hours=1),
         time_unit="hours",
-        rrt_source_complete='acute_rrt_input' in tables,
+        # The same receipt as the export loader: a resolved RRT concept is a
+        # searched negative only where the mapping covers every modality and
+        # every defined source table is present on this source.
+        rrt_source_complete=(
+            'acute_rrt_input' in tables
+            and rrt_modalities_complete(database)
+            and rrt_sources_resolved(ctx.data_source)
+        ),
     )
     
     if result.empty:

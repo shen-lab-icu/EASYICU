@@ -1,5 +1,6 @@
 import pandas as pd
 import pytest
+from types import SimpleNamespace
 
 from easyicu.scores import aki_profiles
 from easyicu.scores.aki_profiles import (
@@ -16,6 +17,7 @@ from easyicu.scores.aki_profiles import (
     get_aki_profile,
     list_aki_profiles,
     load_aki_profile_registry,
+    load_renal_aki_bundle,
     published_source_native_outputs,
     renal_bundle_column_unavailability,
 )
@@ -220,6 +222,195 @@ def test_empty_rrt_source_requires_explicit_completed_search_receipt():
     assert completed["rrt_evidence_reason"].eq(
         "source_searched_no_active_rrt"
     ).all()
+
+
+def _renal_loader_inputs() -> dict[str, pd.DataFrame]:
+    searched_empty = pd.DataFrame(columns=["stay_id", "charttime", "rrt"])
+    return {
+        "kdigo_creatinine_input": pd.DataFrame(
+            {"stay_id": [1, 1], "charttime": [0, 1], "crea": [1.0, 1.1]}
+        ),
+        "kdigo_urine_input": pd.DataFrame(
+            {"stay_id": [1], "charttime": [0], "urine": [50.0]}
+        ),
+        "weight": pd.DataFrame({"stay_id": [1], "charttime": [0], "weight": [70.0]}),
+        "acute_rrt_input": searched_empty,
+        "crrt_mode_input": searched_empty,
+    }
+
+
+def _rrt_availability(monkeypatch, record, *, on_disk=("chartevents", "procedureevents")):
+    """Stand in for the two owners the RRT receipt reads.
+
+    ``on_disk`` is what the data source resolves; ``record`` is the concept
+    loader's availability record for ``rrt``.
+    """
+
+    import easyicu.api as api
+    from easyicu.datasource import ICUDataSource
+
+    requests: list[dict] = []
+
+    def fake_load_concepts(*, concepts, availability_sink=None, **kwargs):
+        assert concepts == ["rrt"], concepts
+        requests.append(kwargs)
+        if record is not None:
+            availability_sink["rrt"] = record
+        return pd.DataFrame(columns=["stay_id", "charttime", "rrt"])
+
+    monkeypatch.setattr(api, "load_concepts", fake_load_concepts)
+    monkeypatch.setattr(
+        ICUDataSource,
+        "resolve_loader_from_disk",
+        lambda self, table: f"/bound/source/{table}.parquet" if table in on_disk else None,
+    )
+    return requests
+
+
+def _receipt(reason, missing=()):
+    return SimpleNamespace(
+        reason=reason,
+        sources_defined=("chartevents", "procedureevents"),
+        missing_tables=tuple(missing),
+    )
+
+
+def test_a_fully_searched_rrt_source_makes_an_rrt_free_stay_negative(monkeypatch):
+    """Every defined RRT table was read and held no event: a real negative."""
+
+    requests = _rrt_availability(monkeypatch, _receipt("data_missing"))
+    result = load_renal_aki_bundle(
+        database="miiv",
+        data_path="/bound/source",
+        patient_ids=[1],
+        preloaded_data=_renal_loader_inputs(),
+        verbose=False,
+    )
+
+    assert result["rrt_evidence_status"].eq("negative").all()
+    assert result["rrt_evidence_reason"].eq("source_searched_no_active_rrt").all()
+    assert requests and requests[0]["data_path"] == "/bound/source"
+    assert requests[0]["patient_ids"] == [1]
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        # The loader skipped one defined table and searched the rest.
+        _receipt("mapped_present", missing=("procedureevents",)),
+        # No defined table could be read at all.
+        _receipt("source_unavailable", missing=("chartevents", "procedureevents")),
+        # No receipt came back.
+        None,
+    ],
+)
+def test_an_incomplete_rrt_search_never_becomes_a_negative(monkeypatch, record):
+    """A loaded RRT frame is not evidence that every RRT source was searched."""
+
+    _rrt_availability(monkeypatch, record)
+    result = load_renal_aki_bundle(
+        database="miiv",
+        data_path="/bound/source",
+        preloaded_data=_renal_loader_inputs(),
+        verbose=False,
+    )
+
+    assert result["rrt_evidence_status"].eq("indeterminate").all()
+    assert not result["rrt_evidence_reason"].eq("source_searched_no_active_rrt").any()
+
+
+def test_a_defined_rrt_table_missing_on_disk_is_never_searched(monkeypatch):
+    """Measured on the MIMIC-IV demo without procedureevents: the loader read
+    chartevents only (8 of 563 RRT rows) and its availability record still
+    listed no missing table.  The data source's own resolution catches it."""
+
+    requests = _rrt_availability(
+        monkeypatch, _receipt("mapped_present"), on_disk=("chartevents",)
+    )
+    result = load_renal_aki_bundle(
+        database="miiv",
+        data_path="/bound/source",
+        preloaded_data=_renal_loader_inputs(),
+        verbose=False,
+    )
+
+    assert result["rrt_evidence_status"].eq("indeterminate").all()
+    assert requests == []  # no row search is spent on an incomplete source
+
+
+@pytest.mark.parametrize("database", ["hirid", "sic", "mimic", "mimic_demo"])
+def test_an_rrt_mapping_without_every_modality_never_grants_a_negative(
+    monkeypatch, database
+):
+    """SICdb and HiRID map CRRT or haemofiltration only, and MIMIC-III's
+    CareVue era has no dialysis chart items: a search there cannot rule out
+    intermittent dialysis, however complete it was."""
+
+    requests = _rrt_availability(monkeypatch, _receipt("data_missing"))
+
+    assert aki_profiles.rrt_source_receipt(database, data_path="/bound/source") is False
+    assert requests == []
+    for covered in ("miiv", "eicu", "eicu_demo", "aumc", "AmsterdamUMCdb"):
+        assert aki_profiles.rrt_modalities_complete(covered), covered
+
+
+@pytest.mark.parametrize(
+    ("on_disk", "expected"),
+    [(("chartevents", "procedureevents"), "negative"), (("chartevents",), "indeterminate")],
+)
+def test_the_concept_callback_and_the_export_loader_read_rrt_alike(
+    monkeypatch, on_disk, expected
+):
+    """Both routes build the same renal bundle; they must agree on RRT."""
+
+    from easyicu.concept.callbacks import ConceptCallbackContext, _callback_kdigo_aki
+    from easyicu.datasource import ICUDataSource
+    from easyicu.resources import load_data_sources
+
+    _rrt_availability(monkeypatch, _receipt("data_missing"), on_disk=on_disk)
+    inputs = _renal_loader_inputs()
+    exported = load_renal_aki_bundle(
+        database="miiv", data_path="/bound/source", preloaded_data=inputs, verbose=False
+    )
+    ctx = ConceptCallbackContext(
+        concept_name="kdigo_aki",
+        target=None,
+        interval=pd.Timedelta(hours=1),
+        resolver=object(),
+        data_source=ICUDataSource(load_data_sources().get("miiv"), base_path="/bound/source"),
+        patient_ids=None,
+    )
+    called = _callback_kdigo_aki(
+        {
+            "kdigo_creatinine_input": inputs["kdigo_creatinine_input"],
+            "kdigo_urine_input": inputs["kdigo_urine_input"],
+            "weight": inputs["weight"],
+            "acute_rrt_input": inputs["acute_rrt_input"],
+            "crrt_mode_input": inputs["crrt_mode_input"],
+        },
+        ctx,
+    ).data
+
+    assert set(exported["rrt_evidence_status"]) == {expected}
+    assert set(called["rrt_evidence_status"]) == {expected}
+
+
+def test_without_a_bound_source_only_an_explicit_receipt_decides(monkeypatch):
+    _rrt_availability(monkeypatch, _receipt("data_missing"))
+
+    unbound = load_renal_aki_bundle(
+        database="miiv", preloaded_data=_renal_loader_inputs(), verbose=False
+    )
+    explicit = load_renal_aki_bundle(
+        database="miiv",
+        preloaded_data=_renal_loader_inputs(),
+        verbose=False,
+        rrt_source_complete=True,
+    )
+
+    assert unbound["rrt_evidence_status"].eq("indeterminate").all()
+    assert unbound["rrt_evidence_reason"].eq("source_absent").all()
+    assert explicit["rrt_evidence_status"].eq("negative").all()
 
 
 @pytest.mark.parametrize("database", ["aumc", "sic"])

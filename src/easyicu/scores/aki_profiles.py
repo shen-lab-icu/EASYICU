@@ -653,6 +653,96 @@ def build_renal_aki_bundle(
     )
 
 
+#: Databases whose ``rrt`` concept maps every RRT modality the source records --
+#: continuous, intermittent and peritoneal -- so a complete search that finds
+#: no event is a negative.  The mappings follow the audited concept dictionary:
+#: MIMIC-IV reads mimic-code ``rrt.sql`` (chartevents and procedureevents),
+#: eICU its treatment and intake/output records, AmsterdamUMCdb its CVVH and
+#: haemodialysis processes.  SICdb and HiRID map CRRT or haemofiltration only,
+#: and MIMIC-III's CareVue era has no dialysis chart items, so an RRT-free
+#: stay there may still have had intermittent dialysis and stays
+#: indeterminate.
+_RRT_ALL_MODALITY_DATABASES = frozenset({"miiv", "eicu", "aumc"})
+
+
+def rrt_modalities_complete(database: str) -> bool:
+    """Whether this database's ``rrt`` mapping covers every RRT modality."""
+
+    family = _normalize_database(str(database or "")).removesuffix("_demo")
+    return family in _RRT_ALL_MODALITY_DATABASES
+
+
+def rrt_sources_resolved(data_source: Any) -> bool:
+    """Whether the data source resolves every table defined for ``rrt`` on it."""
+
+    from easyicu.resources import load_dictionary
+
+    config = getattr(data_source, "config", None)
+    resolve = getattr(data_source, "resolve_loader_from_disk", None)
+    definition = load_dictionary().get("rrt")
+    if config is None or resolve is None or definition is None:
+        return False
+    try:
+        sources = definition.for_data_source(config)
+    except (AttributeError, TypeError):
+        return False
+    tables = sorted({str(s.table) for s in sources if getattr(s, "table", None)})
+    return bool(tables) and all(resolve(table) is not None for table in tables)
+
+
+def rrt_source_receipt(
+    database: str,
+    *,
+    data_path: str,
+    patient_ids: Optional[list[Any]] = None,
+    max_patients: Optional[int] = None,
+    verbose: bool = False,
+) -> bool:
+    """Whether an RRT-free stay in this cohort is a searched negative.
+
+    Active RRT is positive-event encoded, so a stay without an event is a
+    negative only if every RRT modality was searched.  Three things must hold:
+    the database's ``rrt`` mapping covers every modality
+    (:func:`rrt_modalities_complete`); the data source resolves every table the
+    concept dictionary defines for it (:func:`rrt_sources_resolved`); and the
+    concept loader's availability record for ``rrt`` reports none of them
+    missing.  A loaded frame alone proves nothing: the loader skips a defined
+    table it cannot find or read and still returns the rest -- on the MIMIC-IV
+    demo without procedureevents it loaded 8 of 563 RRT rows and its record
+    listed no missing table.  Anything less keeps the component indeterminate.
+    """
+
+    from easyicu.api import load_concepts
+    from easyicu.datasource import ICUDataSource
+    from easyicu.resources import load_data_sources
+
+    if not rrt_modalities_complete(database):
+        return False
+    try:
+        config = load_data_sources().get(database)
+    except KeyError:
+        return False
+    if not rrt_sources_resolved(ICUDataSource(config, base_path=data_path)):
+        return False
+
+    sink: dict[str, Any] = {}
+    load_concepts(
+        concepts=["rrt"],
+        database=database,
+        data_path=data_path,
+        patient_ids=patient_ids,
+        max_patients=max_patients,
+        verbose=verbose,
+        availability_sink=sink,
+    )
+    record = sink.get("rrt")
+    return bool(
+        record is not None
+        and not getattr(record, "missing_tables", ())
+        and getattr(record, "reason", None) in {"mapped_present", "data_missing"}
+    )
+
+
 def load_renal_aki_bundle(
     database: str,
     *,
@@ -661,13 +751,19 @@ def load_renal_aki_bundle(
     max_patients: Optional[int] = None,
     verbose: bool = True,
     preloaded_data: Optional[Mapping[str, pd.DataFrame]] = None,
-    rrt_source_complete: bool = False,
+    rrt_source_complete: Optional[bool] = None,
 ) -> pd.DataFrame:
     """Load normalized inputs and build the current renal AKI contract.
 
     ``load_kdigo_aki`` remains available for historical reproduction.  New
     physical renal exports call this loader and therefore cannot silently
     inherit the deprecated strict phenotype columns.
+
+    ``rrt_source_complete`` left as ``None`` is read from the loader's
+    availability receipt for the bound source (:func:`rrt_source_receipt`);
+    without a ``data_path`` there is no such receipt and the RRT component
+    stays indeterminate.  A caller that holds a stronger receipt may pass an
+    explicit bool.
     """
 
     from easyicu.api import load_concepts
@@ -718,6 +814,14 @@ def load_renal_aki_bundle(
     urine_df = rename_value(urine_df, "kdigo_urine_input", "urine")
     rrt_df = rename_value(rrt_df, "acute_rrt_input", "rrt")
     crrt_df = rename_value(crrt_df, "crrt_mode_input", "rrt")
+    if rrt_source_complete is None:
+        rrt_source_complete = data_path is not None and rrt_source_receipt(
+            database,
+            data_path=data_path,
+            patient_ids=patient_ids,
+            max_patients=max_patients,
+            verbose=verbose,
+        )
 
     return build_renal_aki_bundle(
         database=database,
