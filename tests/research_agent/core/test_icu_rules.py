@@ -157,6 +157,48 @@ def test_companion_audit_columns_override_base_concept_prefix_metadata(ra):
     assert unrelated_flag.kind == ra.VariableKind.BINARY
 
 
+def test_uncurated_measurements_take_the_concept_owner_category(ra):
+    """Routine labs and vitals the curated table omits are still measurements.
+
+    Falling back to ``other`` hid them from every window-bound role, so a
+    first-day prediction or adjustment could see only the few curated labs.
+    """
+    icu = ra.ICU_RULES
+    for column in ("wbc", "bun_max", "bicar_first_24h", "ph"):
+        hint = icu.classify_variable(column, "float64")
+        assert hint.role.value == "lab", column
+        assert hint.kind == ra.VariableKind.CONTINUOUS, column
+        assert hint.aggregation_default == ra.schema.AggregationRule.MEDIAN_ONLY, column
+    respiratory_rate = icu.classify_variable("resp", "float64")
+    assert respiratory_rate.role.value == "vital"
+    assert respiratory_rate.unit == "insp/min"
+    assert icu.classify_variable("wbc", "").role.value == "lab"
+
+    # The curated table still wins, including under the dictionary's spelling.
+    creatinine = icu.classify_variable("crea", "float64")
+    assert creatinine.unit == "mg/dL"
+    assert "skewed" in " ".join(creatinine.pitfalls)
+    assert icu.classify_variable("spo2", "float64").aggregation_default == (
+        ra.schema.AggregationRule.MEDIAN_ONLY
+    )
+
+
+def test_concept_category_never_types_a_non_measurement(ra):
+    icu = ra.ICU_RULES
+    # Logical, derived and event concepts filed under a measurement category.
+    for column in ("ecmo", "vent_start", "safi"):
+        assert icu.classify_variable(column, "float64").role.value == "other", column
+    # Categories that mix measurements with fluids, drugs or devices.
+    for column in ("urine", "norepi_rate"):
+        assert icu.classify_variable(column, "float64").role.value == "other", column
+    # A non-numeric column, a companion and an unrelated flag keep their own rules.
+    assert icu.classify_variable("wbc", "object").role.value == "other"
+    assert icu.classify_variable("bun_n", "int64", [0, 3]).role.value == "meta"
+    flag = icu.classify_variable("k_flag", "int64", sample_values=[0, 1])
+    assert flag.role.value == "other"
+    assert flag.kind == ra.VariableKind.BINARY
+
+
 def test_aggregation_rule_matrix(ra):
     """Every (role, kind) pair returns at least one allowed aggregation,
     and forbidden ops never sneak in for ordinal/identifier kinds."""

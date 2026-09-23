@@ -446,6 +446,23 @@ _CONCEPT_HINTS: Dict[str, ConceptHint] = {
     "stay_id": ConceptHint(role=VariableRole.ID, kind=VariableKind.IDENTIFIER),
     "subject_id": ConceptHint(role=VariableRole.ID, kind=VariableKind.IDENTIFIER),
 }
+# The concept dictionary spells creatinine ``crea``; ``creat`` stays for
+# exports that spell it out.
+_CONCEPT_HINTS["crea"] = _CONCEPT_HINTS["creat"]
+
+# Concepts the table above does not curate still carry the concept owner's
+# category.  A plain numeric concept filed under one of these categories is a
+# routine bedside or laboratory measurement.  Categories that mix
+# measurements with devices, drugs, fluids or scores are deliberately absent.
+_MEASUREMENT_CATEGORY_HINTS: Dict[str, Tuple[VariableRole, AggregationRule]] = {
+    "vitals": (VariableRole.VITAL, AggregationRule.MEAN_MEDIAN),
+    "respiratory": (VariableRole.VITAL, AggregationRule.MEAN_MEDIAN),
+    "chemistry": (VariableRole.LAB, AggregationRule.MEDIAN_ONLY),
+    "hematology": (VariableRole.LAB, AggregationRule.MEDIAN_ONLY),
+    "blood gas": (VariableRole.LAB, AggregationRule.MEDIAN_ONLY),
+}
+# Value aggregations an export may append to a measurement concept.
+_MEASUREMENT_VALUE_SUFFIXES = ("_first", "_last", "_mean", "_median", "_min", "_max")
 
 
 _COMPANION_WINDOW_SUFFIX_RE = re.compile(
@@ -569,6 +586,54 @@ def _matches_concept_prefix(name: str, prefix: str) -> bool:
     return name[len(prefix)] == "_"
 
 
+def _dictionary_measurement_hint(name: str, dtype: str) -> Optional[ConceptHint]:
+    """Role of an uncurated numeric measurement, as its concept owner files it.
+
+    Without this, a routine lab or vital sign the curated table does not list
+    (white cell count, urea, respiratory rate) falls back to ``other``, and
+    the planner cannot prove when it was observed.  Only the concept itself or
+    a value aggregation of it (``wbc``, ``bun_max``, ``resp_first_24h``)
+    qualifies, and only for a plain numeric concept: flags, text, event times
+    and derived concepts keep the dtype fallback.  Without a dictionary this
+    degrades to the dtype fallback as before.
+    """
+
+    dtype_l = (dtype or "").lower()
+    if dtype_l and not any(token in dtype_l for token in ("float", "double", "int", "decimal")):
+        return None
+    dictionary = _concept_dictionary()
+    if dictionary is None:
+        return None
+    key = str(name or "").strip().lower()
+    stem = _COMPANION_WINDOW_SUFFIX_RE.sub("", key)
+    candidates = [key, stem]
+    candidates.extend(
+        stem[: -len(suffix)] for suffix in _MEASUREMENT_VALUE_SUFFIXES if stem.endswith(suffix)
+    )
+    for candidate in dict.fromkeys(item for item in candidates if item):
+        try:
+            concept = dictionary[candidate]  # type: ignore[index]
+        except (KeyError, TypeError, AttributeError):
+            continue
+        category = str(getattr(concept, "category", "") or "").strip().lower()
+        declared = _MEASUREMENT_CATEGORY_HINTS.get(category)
+        if declared is None or str(getattr(concept, "class_name", "") or "") not in {"", "num_cncpt"}:
+            return None
+        role, aggregation = declared
+        units = getattr(concept, "units", None) or ()
+        if isinstance(units, str):
+            units = (units,)
+        low, high = getattr(concept, "minimum", None), getattr(concept, "maximum", None)
+        return ConceptHint(
+            role=role,
+            kind=VariableKind.CONTINUOUS,
+            unit=str(units[0]) if units else None,
+            valid_range=(float(low), float(high)) if low is not None and high is not None else None,
+            aggregation_default=aggregation,
+        )
+    return None
+
+
 def classify_variable(
     name: str,
     dtype: str,
@@ -579,6 +644,9 @@ def classify_variable(
     Falls back to type-based classification when no concept hint matches.
     """
     hint = _lookup_hint(name)
+    if hint is not None:
+        return hint
+    hint = _dictionary_measurement_hint(name, dtype)
     if hint is not None:
         return hint
 
