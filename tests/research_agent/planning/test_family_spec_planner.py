@@ -1755,7 +1755,10 @@ def test_prediction_template_robustness_is_the_owner_executed_refit_and_decision
     """
 
     from easyicu.research_agent.planning.figure_strategy import build_article_figure_strategy
-    from easyicu.research_agent.planning.scientific_review import build_plan_scientific_review
+    from easyicu.research_agent.planning.scientific_review import (
+        build_plan_scientific_review,
+        remediation_route_for_finding,
+    )
 
     context = _prediction_context()
     request = _request(context, cohort_mode=None)
@@ -1796,6 +1799,23 @@ def test_prediction_template_robustness_is_the_owner_executed_refit_and_decision
             ]
         }
     )
-    narrowed_readiness = review(narrowed).facts["robustness_readiness"]
-    assert narrowed_readiness["status"] != "satisfied"
+    narrowed_review = review(narrowed)
+    narrowed_readiness = narrowed_review.facts["robustness_readiness"]
+    assert narrowed_readiness["status"] == "blocked"
+    assert narrowed_readiness["reason"] == "typed_sensitivity_authority_not_executable"
     assert narrowed_readiness["executable_axes"] == ["decision_threshold"]
+    # The reviewer is owed a finding before execution, not only the run-level
+    # panel's fail-closed verdict after it.
+    assert narrowed_review.facts["sensitivity"]["protocol_only_plan_spec_ids"] == [
+        "complete_case_model_roster"
+    ]
+    not_executable = [
+        finding
+        for finding in narrowed_review.findings
+        if finding.code == "ROBUSTNESS_SPECS_NOT_EXECUTABLE"
+    ]
+    assert len(not_executable) == 1
+    assert "complete_case_model_roster" in not_executable[0].message
+    assert not_executable[0].severity == "major"
+    assert remediation_route_for_finding(not_executable[0]) == "agent_plan_revision"
+    assert narrowed_review.score < reviewed.score
