@@ -541,8 +541,8 @@ def test_prepare_runner_is_idempotent_and_registers_active_source(
             "format": "parquet",
             "scope": "all_modules",
         }
-        demo_sources._write_marker(
-            paths.prepared_marker,
+        demo_sources._write_export_marker(
+            paths,
             source,
             archive_sha256=archive_sha256,
             export=summary,
@@ -878,6 +878,112 @@ def test_export_stage_uses_canonical_all_module_runner(
     assert captured["export_format"] == "parquet"
     assert captured["create_run_subdir"] is False
     assert all("path" not in event and "out_dir" not in event for event in job.events)
+
+
+def _ready_raw(paths, source) -> None:  # type: ignore[no-untyped-def]
+    paths.raw.mkdir(parents=True, exist_ok=True)
+    demo_sources._write_marker(paths.extracted_marker, source, archive_sha256="a" * 64)
+    demo_sources._write_marker(paths.converted_marker, source, archive_sha256="a" * 64)
+
+
+def _finished_export(folder: Path, marker: Path, source, **stamp) -> None:  # type: ignore[no-untyped-def]
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "_manifest.json").write_text('{"generated": "2026-07-28"}', encoding="utf-8")
+    demo_sources._write_marker(marker, source, archive_sha256="a" * 64, **stamp)
+
+
+def test_an_export_the_running_producer_did_not_write_is_not_reused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A July export lacks receipts the current renal contract writes.
+
+    Its marker only matched the release, so the one-click demo kept binding it
+    and a current study design (the strict KDIGO stage) could not run on it.
+    """
+
+    monkeypatch.setenv("EASYICU_DEMO_CACHE_DIR", str(tmp_path / "cache"))
+    source = demo_sources.get_source("eicu_demo_v2_0_1")
+    paths = demo_sources._source_paths(source)
+    _ready_raw(paths, source)
+    legacy = paths.root / "export"
+    _finished_export(legacy, legacy / paths.prepared_marker.name, source, export={})
+    legacy_bytes = (legacy / "_manifest.json").read_bytes()
+
+    status = demo_source_storage.status_payload(source)
+    assert paths.export != legacy
+    assert status["state"] == "converted"
+    assert status["export_ready"] is False
+    assert status["export_update_required"] is True
+
+    # Another producer's marker in the current folder is not ready either.
+    _finished_export(
+        paths.export, paths.prepared_marker, source, producer_identity="sha256:other"
+    )
+    assert demo_sources._export_ready(paths, source) is False
+
+    demo_sources._write_export_marker(paths, source, archive_sha256="a" * 64, export={})
+    status = demo_source_storage.status_payload(source)
+    assert status["state"] == "prepared"
+    assert status["export_update_required"] is False
+    assert demo_sources._superseded_exports(paths) == [legacy]
+    assert (legacy / "_manifest.json").read_bytes() == legacy_bytes
+
+
+def test_registering_a_fresh_export_renames_only_the_release_named_earlier_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two sources may not share one name; a researcher's own label is kept."""
+
+    from easyicu.webserver import demo_source_prepare
+
+    monkeypatch.setenv("EASYICU_DEMO_CACHE_DIR", str(tmp_path / "cache"))
+    source = demo_sources.get_source("eicu_demo_v2_0_1")
+    paths = demo_sources._source_paths(source)
+    label = f"{source.title} v{source.version}"
+    legacy = paths.root / "export"
+    earlier = paths.root / "exports" / ("1" * 16)
+    renamed_by_user = paths.root / "exports" / ("0" * 16)
+    for folder in (legacy, earlier, renamed_by_user):
+        _finished_export(folder, folder / paths.prepared_marker.name, source, export={})
+    renames: list[tuple[str, str]] = []
+
+    def register(path, **kwargs):  # type: ignore[no-untyped-def]
+        return {
+            "ok": True,
+            "sources": [
+                {"path": path, "label": label},
+                # The name the export describes itself with is the host's too.
+                {"path": str(legacy), "label": "EICU_DEMO"},
+                {"path": str(earlier), "label": label},
+                {"path": str(renamed_by_user), "label": "My eICU snapshot"},
+            ],
+        }
+
+    def rename(path, new_label):  # type: ignore[no-untyped-def]
+        renames.append((path, new_label))
+        return {"ok": True}
+
+    monkeypatch.setattr(demo_sources.source_store, "register_source", register)
+    monkeypatch.setattr(demo_sources.source_store, "rename_source", rename)
+    monkeypatch.setattr(
+        demo_sources.dataio,
+        "describe_export_source",
+        lambda path: {"ok": True, "label": "EICU_DEMO"},
+    )
+
+    result = demo_source_prepare.register_export(
+        source, paths, Job("register", "demo-source-prepare")
+    )
+
+    def written(folder: Path) -> str:
+        marker = json.loads((folder / paths.prepared_marker.name).read_text())
+        return marker["updated_at"][:10]
+
+    assert renames == [
+        (str(legacy), f"{label} (earlier extraction, {written(legacy)})"),
+        (str(earlier), f"{label} (earlier extraction, {written(earlier)})"),
+    ]
+    assert result["superseded_exports_relabeled"] == 2
 
 
 def test_demo_source_owner_split_is_directional_and_facade_stays_thin() -> None:

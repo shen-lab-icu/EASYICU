@@ -26,6 +26,8 @@ from easyicu.webserver.demo_source_storage import (
     export_ready,
     parquet_ready,
     read_marker,
+    superseded_exports,
+    write_export_marker,
     write_marker,
 )
 
@@ -236,8 +238,8 @@ def export_dataset(
         "format": "parquet",
         "scope": "all_modules",
     }
-    write_marker(
-        paths.prepared_marker,
+    write_export_marker(
+        paths,
         source,
         archive_sha256=archive_sha256,
         export=summary,
@@ -262,9 +264,10 @@ def register_export(
 
     check_cancelled(job, "register")
     job.emit({"type": "progress", "phase": "register", "stage": "starting"})
+    label = f"{source.title} v{source.version}"
     registry = source_store.register_source(
         str(paths.export),
-        label=f"{source.title} v{source.version}",
+        label=label,
         active=True,
         crossdb=True,
     )
@@ -275,6 +278,9 @@ def register_export(
         "active": True,
         "source_count": len(registry.get("sources") or []),
     }
+    relabeled = _relabel_superseded_exports(source, paths, label, registry)
+    if relabeled:
+        result["superseded_exports_relabeled"] = relabeled
     job.emit(
         {
             "type": "progress",
@@ -284,6 +290,42 @@ def register_export(
         }
     )
     return result
+
+
+def _relabel_superseded_exports(
+    source: DemoSourceSpec,
+    paths: DemoSourcePaths,
+    label: str,
+    registry: dict[str, Any],
+) -> int:
+    """Tell an earlier export of this release apart from the one just registered.
+
+    The earlier folder keeps serving the studies bound to it; only a label the
+    host chose -- the release's own name or the name the export describes
+    itself with -- changes, so the source list does not show two identical
+    names.  A researcher's own label is kept.
+    """
+
+    labels = {
+        str(Path(str(item.get("path") or "")).expanduser().resolve()): str(
+            item.get("label") or ""
+        )
+        for item in registry.get("sources") or []
+        if isinstance(item, dict) and item.get("path")
+    }
+    relabeled = 0
+    for folder in superseded_exports(paths):
+        host_labels = {label, str(dataio.describe_export_source(str(folder)).get("label") or "")}
+        if labels.get(str(folder.resolve())) not in host_labels - {""}:
+            continue
+        marker = read_marker(folder / paths.prepared_marker.name, source) or {}
+        written = str(marker.get("updated_at") or "")[:10] or "unknown date"
+        renamed = source_store.rename_source(
+            str(folder), f"{label} (earlier extraction, {written})"
+        )
+        if renamed.get("ok"):
+            relabeled += 1
+    return relabeled
 
 
 _PREPARE_LOCKS: dict[str, threading.Lock] = {}

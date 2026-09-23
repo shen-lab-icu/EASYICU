@@ -71,8 +71,10 @@ def test_release_pack_sanitizes_paths_and_preserves_license(
         "# Export\n- Source path: `/Users/fixture/private/raw`\n",
         encoding="utf-8",
     )
-    demo_source_storage.write_marker(
-        paths.prepared_marker,
+    # A prepared export is ready only with the producer identity of the code
+    # that wrote it, so the fixture records it through the export owner.
+    demo_source_storage.write_export_marker(
+        paths,
         source,
         archive_sha256="a" * 64,
         export={"file_count": 0, "total_rows": 0},

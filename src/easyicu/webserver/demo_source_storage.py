@@ -27,6 +27,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from easyicu.webserver import state_paths
 from easyicu.webserver import sources as source_store
+from easyicu.webserver.export_producer_identity import native_export_producer_identity
 from easyicu.webserver.demo_source_contracts import (
     CACHE_ENV,
     MARKER_SCHEMA,
@@ -50,12 +51,23 @@ def cache_root() -> Path:
     return root.resolve()
 
 
+def current_export_dir(root: Path) -> Path:
+    """Return the export folder the running extraction producer writes.
+
+    Each producer identity gets its own folder: an older export stays exactly
+    where studies bound it, and is never overwritten by a newer contract.
+    """
+
+    identity = native_export_producer_identity().removeprefix("sha256:")
+    return root / "exports" / identity[:16]
+
+
 def source_paths(source: DemoSourceSpec) -> DemoSourcePaths:
     """Compile all private paths for one immutable allowlist entry."""
 
     root = cache_root() / source.id
     raw = root / "raw"
-    export = root / "export"
+    export = current_export_dir(root)
     return DemoSourcePaths(
         root=root,
         archive=root / source.archive_filename,
@@ -160,17 +172,64 @@ def parquet_ready(paths: DemoSourcePaths, source: DemoSourceSpec) -> bool:
     )
 
 
+def write_export_marker(
+    paths: DemoSourcePaths,
+    source: DemoSourceSpec,
+    *,
+    archive_sha256: str,
+    export: dict[str, Any],
+) -> None:
+    """Record a finished export together with the producer that wrote it."""
+
+    write_marker(
+        paths.prepared_marker,
+        source,
+        archive_sha256=archive_sha256,
+        export=export,
+        producer_identity=native_export_producer_identity(),
+    )
+
+
 def export_ready(paths: DemoSourcePaths, source: DemoSourceSpec) -> bool:
-    """Return whether the all-module export and its marker both exist."""
+    """Return whether the running producer's export and its marker both exist.
+
+    An export another producer wrote is not ready: its concepts, receipts, and
+    row boundaries are those of the code that wrote it.
+    """
 
     manifest = paths.export / "_manifest.json"
-    return (
+    if not (
         paths.export.is_dir()
         and not paths.export.is_symlink()
         and manifest.is_file()
         and not manifest.is_symlink()
-        and read_marker(paths.prepared_marker, source) is not None
+    ):
+        return False
+    marker = read_marker(paths.prepared_marker, source)
+    return (
+        marker is not None
+        and marker.get("producer_identity") == native_export_producer_identity()
     )
+
+
+def superseded_exports(paths: DemoSourcePaths) -> list[Path]:
+    """Earlier exports of this release that the running producer did not write.
+
+    They stay in place for the studies bound to them; preparation only adds.
+    """
+
+    candidates = [paths.root / "export"]
+    exports_root = paths.root / "exports"
+    if exports_root.is_dir() and not exports_root.is_symlink():
+        candidates.extend(sorted(exports_root.iterdir()))
+    return [
+        candidate
+        for candidate in candidates
+        if candidate != paths.export
+        and candidate.is_dir()
+        and not candidate.is_symlink()
+        and (candidate / "_manifest.json").is_file()
+    ]
 
 
 def registry_state(paths: DemoSourcePaths) -> tuple[bool, bool]:
@@ -207,6 +266,11 @@ def status_payload(source: DemoSourceSpec) -> dict[str, Any]:
         "raw_ready": is_raw_ready,
         "parquet_ready": is_parquet_ready,
         "export_ready": is_export_ready,
+        # An earlier export exists, but the current extraction rules did not
+        # write it; preparing again adds one without touching it.
+        "export_update_required": (
+            not is_export_ready and bool(superseded_exports(paths))
+        ),
         "registered": registered,
         "active": active,
         "prepared_at": (marker or {}).get("updated_at"),
