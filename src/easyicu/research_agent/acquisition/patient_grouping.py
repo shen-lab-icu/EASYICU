@@ -173,6 +173,99 @@ def load_verified_patient_grouping(
     )
 
 
+#: The stay and patient columns a derived bridge publishes.
+DERIVED_STAY_COLUMN = "stay_id"
+DERIVED_PATIENT_COLUMN = "patient_key"
+DERIVED_GROUPING_SCHEMA = "easyicu.derived_patient_grouping/1"
+
+
+@dataclass(frozen=True, slots=True)
+class DerivedPatientGrouping:
+    """A stay-to-patient bridge derived from an official identity table.
+
+    ``frame`` is private host state in the same sense as
+    :class:`VerifiedPatientGrouping`: it links stays to a patient key and must
+    never reach a model, an artifact, or a public receipt.  ``receipt`` is
+    aggregate-only and is what a reader is shown.
+    """
+
+    frame: pd.DataFrame
+    receipt: Mapping[str, object]
+
+
+def _surrogate_patient_keys(values: pd.Series) -> pd.Series:
+    """Map opaque patient identifiers to a dense 1-based integer key.
+
+    The materializer's identity contract is integral, while an official patient
+    identifier need not be (eICU's ``uniquepid`` is a string).  A dense rank
+    over the sorted distinct values is deterministic for one exact source
+    table, is auditable from the source, and carries no information beyond the
+    grouping itself -- which is all a cluster-robust estimator uses.
+    """
+
+    text = values.astype("string")
+    if bool(text.isna().any()) or bool(text.str.strip().eq("").any()):
+        raise PatientGroupingError(
+            "official patient identifiers must all be present and non-empty"
+        )
+    ordered = sorted(set(text.tolist()))
+    index = {value: position for position, value in enumerate(ordered, start=1)}
+    return pd.Series(
+        [index[value] for value in text.tolist()], index=values.index, dtype="int64"
+    )
+
+
+def derive_patient_grouping(
+    identity_table: pd.DataFrame,
+    *,
+    stay_column: str,
+    patient_column: str,
+    identity_table_name: str,
+) -> DerivedPatientGrouping:
+    """Derive one stay-to-patient bridge from a verified official table.
+
+    The caller owns the verification of ``identity_table``; this function owns
+    only the shape of the bridge and the aggregate receipt that describes it.
+    """
+
+    missing = [
+        column
+        for column in (stay_column, patient_column)
+        if column not in identity_table.columns
+    ]
+    if missing:
+        raise PatientGroupingError(
+            "official identity table lacks its declared columns: "
+            + ", ".join(missing)
+        )
+    stays = _exact_int_series(
+        identity_table[stay_column], label="official stay identity"
+    )
+    if bool(stays.duplicated().any()):
+        raise PatientGroupingError(
+            "official identity table repeats a stay identifier"
+        )
+    patients = _surrogate_patient_keys(identity_table[patient_column])
+    frame = pd.DataFrame(
+        {DERIVED_STAY_COLUMN: stays.to_numpy(), DERIVED_PATIENT_COLUMN: patients.to_numpy()}
+    )
+    per_patient = frame.groupby(DERIVED_PATIENT_COLUMN, sort=False).size()
+    receipt = {
+        "schema_version": DERIVED_GROUPING_SCHEMA,
+        "identity_table": str(identity_table_name),
+        "stay_column": str(stay_column),
+        "patient_identifier_column": str(patient_column),
+        "patient_key_derivation": "dense_rank_over_sorted_distinct_values",
+        "stays": int(len(frame)),
+        "patients": int(per_patient.size),
+        "patients_with_repeated_stays": int((per_patient > 1).sum()),
+        "stays_in_repeated_patients": int(per_patient[per_patient > 1].sum()),
+        "max_stays_per_patient": int(per_patient.max()) if per_patient.size else 0,
+        "identifier_values_returned": False,
+    }
+    return DerivedPatientGrouping(frame=frame, receipt=receipt)
+
+
 @dataclass(frozen=True, slots=True)
 class PatientGroupingBinding:
     """One digest-bound private mapping used only during materialization."""
@@ -220,8 +313,13 @@ class PatientGroupingBinding:
 
 
 __all__ = [
+    "DERIVED_GROUPING_SCHEMA",
+    "DERIVED_PATIENT_COLUMN",
+    "DERIVED_STAY_COLUMN",
+    "DerivedPatientGrouping",
     "PatientGroupingBinding",
     "PatientGroupingError",
     "VerifiedPatientGrouping",
+    "derive_patient_grouping",
     "load_verified_patient_grouping",
 ]

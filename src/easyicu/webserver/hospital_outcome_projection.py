@@ -6,7 +6,7 @@ from easyicu.research_agent.acquisition.foundation import AcquisitionResult
 from easyicu.research_agent.acquisition.hospital_outcome_materialization import (
     materialize_hospital_status_acquisition,
 )
-from .raw_source_authority import resolve_raw_mimic_iv_source_binding
+from .raw_source_authority import resolve_raw_hospital_source_binding
 from .scientific_runtime_projection import WebScientificRuntimeProjectionError
 
 
@@ -22,7 +22,7 @@ def materialize_web_hospital_status(
     # permitted to silently extend or replace signed cohort lineage.
     if acquisition.cohort_authority_ref is not None:
         return acquisition
-    binding = resolve_raw_mimic_iv_source_binding(
+    binding = resolve_raw_hospital_source_binding(
         export_path=export_path, database=database
     )
     if binding is None:

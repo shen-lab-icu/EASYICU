@@ -1,10 +1,19 @@
 """Host-only resolver for verified patient-grouping coordinates.
 
 Prepared EasyICU exports intentionally do not expose direct patient identifiers.
-When a data owner has separately approved a private stay-to-patient bridge, the
-Web host can bind that bridge through environment coordinates.  Pi and the
+Two authorities can supply the bridge, and both keep it host-private: Pi and the
 Provider receive only the derived column name and digests, never the mapping
 path or its values.
+
+The first is an environment-configured bridge a data owner approved separately
+(:func:`resolve_patient_grouping_authority`).  The second applies when the
+export already names its sealed raw root and that source carries an official
+patient identifier (:func:`resolve_derived_patient_grouping`): eICU's
+``patient`` table is bound and digest-verified for hospital-mortality
+follow-up, and the same verified bytes carry ``uniquepid``.  Requiring a second
+manual approval for a column inside an already-bound table would be ceremony
+without a privacy gain, so the host derives the bridge, materializes it into
+private state, and binds it by digest.
 """
 
 from __future__ import annotations
@@ -20,6 +29,8 @@ from typing import Mapping, Optional
 import pyarrow.parquet as pq
 
 from easyicu.research_agent.acquisition.patient_grouping import (
+    DERIVED_PATIENT_COLUMN,
+    DERIVED_STAY_COLUMN,
     PatientGroupingBinding,
 )
 from easyicu.webserver import state_paths
@@ -39,7 +50,11 @@ _FIELDS = (
     "AUTHORITY_REF",
 )
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+# A single path component, never a traversal or an option-like name.  The
+# leading character excludes "." and "-"; "_" is allowed because the native
+# export manifest is literally "_manifest.json", and an owner-approved
+# bridge must be configurable against a modern export.
+_COMPONENT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
 _DATABASE_ALIASES = {
     "miiv": "mimic_iv",
     "mimiciv": "mimic_iv",
@@ -249,7 +264,140 @@ def resolve_patient_grouping_authority(
     )
 
 
+def _private_grouping_root() -> Path:
+    root = state_paths.state_root() / "private" / "patient-grouping"
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return root
+
+
+def _serialize_grouping(frame) -> bytes:
+    import io
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq_writer
+
+    buffer = io.BytesIO()
+    pq_writer.write_table(pa.Table.from_pandas(frame, preserve_index=False), buffer)
+    return buffer.getvalue()
+
+
+def _materialize_private_mapping(payload: bytes, *, target: Path) -> str:
+    """Write a 0600 private mapping, reusing an identical existing file."""
+
+    digest = hashlib.sha256(payload).hexdigest()
+    if target.exists() and not target.is_symlink() and target.is_file():
+        if _digest(target) == digest:
+            os.chmod(target, 0o600)
+            return digest
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    descriptor = os.open(
+        temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600
+    )
+    try:
+        with os.fdopen(descriptor, "wb", closefd=False) as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    os.replace(temporary, target)
+    os.chmod(target, 0o600)
+    return digest
+
+
+def resolve_derived_patient_grouping(
+    *,
+    export_path: str | Path,
+    database: str,
+) -> Optional[PatientGroupingBinding]:
+    """Bind a grouping derived from the export's own sealed raw source.
+
+    ``None`` means this source has no official patient identity reachable
+    through a verified binding -- not that the study may proceed unclustered.
+    That judgement belongs to the caller.
+    """
+
+    from easyicu.webserver import raw_source_authority
+
+    try:
+        binding = raw_source_authority.resolve_raw_hospital_source_binding(
+            export_path=export_path, database=database
+        )
+    except raw_source_authority.RawSourceAuthorityError as exc:
+        raise PatientGroupingAuthorityError(
+            exc.code, str(exc), details=exc.details
+        ) from exc
+    if binding is None or not getattr(binding, "patient_grouping_available", False):
+        return None
+    try:
+        derived = binding.materialize_patient_grouping()
+    except raw_source_authority.RawSourceAuthorityError as exc:
+        raise PatientGroupingAuthorityError(
+            exc.code, str(exc), details=exc.details
+        ) from exc
+    receipt = binding.patient_grouping_receipt()
+    payload = _serialize_grouping(derived.frame)
+    # Name the file after the verified source table, so a changed raw source
+    # can never be served from a stale bridge.
+    target = _private_grouping_root() / (
+        f"{_database(database)}.{receipt['identity_table_sha256']}.parquet"
+    )
+    mapping_sha256 = _materialize_private_mapping(payload, target=target)
+    return PatientGroupingBinding(
+        mapping_path=target,
+        mapping_sha256=mapping_sha256,
+        mapping_stay_column=DERIVED_STAY_COLUMN,
+        mapping_patient_column=DERIVED_PATIENT_COLUMN,
+        output_identity_column="patient_stay_id",
+        authority_coordinates={
+            "schema_version": "easyicu.patient_grouping_runtime_authority/1",
+            "authority_ref": f"{binding.authority_ref}/patient_grouping",
+            "database": _database(database),
+            "export_manifest_file": binding.export_manifest_file,
+            "export_manifest_sha256": binding.export_manifest_sha256,
+            "mapping_sha256": mapping_sha256,
+            "grouping_derivation": "prefix_before_:s",
+            "identity_table": receipt["identity_table"],
+            "identity_table_sha256": receipt["identity_table_sha256"],
+            "patient_identifier_column": receipt["patient_identifier_column"],
+            "patient_key_derivation": derived.receipt["patient_key_derivation"],
+            "stays": derived.receipt["stays"],
+            "patients": derived.receipt["patients"],
+            "patients_with_repeated_stays": derived.receipt[
+                "patients_with_repeated_stays"
+            ],
+            "provider_visible_values": False,
+        },
+    )
+
+
+def resolve_study_patient_grouping(
+    *,
+    export_path: str | Path,
+    database: str,
+) -> Optional[PatientGroupingBinding]:
+    """Resolve the patient grouping a study may use, by declared precedence.
+
+    An owner-approved bridge wins; otherwise a source that names its sealed raw
+    root may derive one from an official identity table the host already binds.
+    Every consumer -- launcher, readiness review, plan compilation -- must ask
+    here, or the UI would promise a clustering the runner cannot honour (or
+    refuse one it could).
+    """
+
+    configured = resolve_patient_grouping_authority(
+        export_path=export_path, database=database
+    )
+    if configured is not None:
+        return configured
+    return resolve_derived_patient_grouping(
+        export_path=export_path, database=database
+    )
+
+
 __all__ = [
     "PatientGroupingAuthorityError",
+    "resolve_derived_patient_grouping",
     "resolve_patient_grouping_authority",
+    "resolve_study_patient_grouping",
 ]

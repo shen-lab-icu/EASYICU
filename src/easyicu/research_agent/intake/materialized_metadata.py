@@ -17,7 +17,7 @@ import os
 from pathlib import Path
 import stat
 from types import MappingProxyType
-from typing import Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Mapping, Optional, Sequence
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -44,6 +44,9 @@ from easyicu.concept.metadata_sidecar import (
 from ..authority.filesystem import AnchoredDirectory, AuthorityFilesystemError
 from .export_package import ExportPackage, resolve_exported_concept
 
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import pandas as pd
+
 _PRIMARY_ROLES = {ConceptColumnRole.VALUE, ConceptColumnRole.EVENT_STATUS}
 _VALUE_AGGREGATIONS = {"first", "last", "max", "mean", "median", "min", "sum"}
 _EVENT_AGGREGATIONS = {"all", "any", "first", "last", "max", "min"}
@@ -54,6 +57,29 @@ _MAX_AUTHORITY_BYTES = 64 * 1024 * 1024
 _MAX_SELECTOR_BYTES = 4 * 1024 * 1024
 _MAX_AUTHORITY_ANCESTRY = 256
 _HEX = frozenset("0123456789abcdef")
+# A hospital follow-up extension keeps an ordered subset of one initial typed
+# materialization, replaces the export-window event status by the verified
+# raw-source hospital status, and adds the event-time/observation-duration
+# axis. The three follow-up columns are bound to the parent's event-status
+# column; the raw-source coordinates travel in the producer parameters.
+HOSPITAL_FOLLOWUP_EXTENSION_PRODUCER = "hospital_followup_extension"
+HOSPITAL_FOLLOWUP_EVENT_TRANSFORM = "hospital_followup_event_status"
+HOSPITAL_FOLLOWUP_EVENT_TIME_TRANSFORM = "hospital_followup_event_time"
+HOSPITAL_FOLLOWUP_DURATION_TRANSFORM = "hospital_followup_observation_duration"
+_HOSPITAL_FOLLOWUP_TRANSFORMS = {
+    "death": HOSPITAL_FOLLOWUP_EVENT_TRANSFORM,
+    "death_time_hours": HOSPITAL_FOLLOWUP_EVENT_TIME_TRANSFORM,
+    "hospital_followup_time_hours": HOSPITAL_FOLLOWUP_DURATION_TRANSFORM,
+}
+_HOSPITAL_FOLLOWUP_ROLES = {
+    "death": ConceptColumnRole.EVENT_STATUS,
+    "death_time_hours": ConceptColumnRole.EVENT_TIME,
+    "hospital_followup_time_hours": ConceptColumnRole.LAST_OBSERVATION_TIME,
+}
+_HOSPITAL_FOLLOWUP_INVALIDATED_COLUMNS = ("death_time",)
+_STAGE_PARENT_PRODUCERS = frozenset(
+    {"cohort_materializer", HOSPITAL_FOLLOWUP_EXTENSION_PRODUCER}
+)
 
 
 class MaterializedMetadataError(MetadataSidecarError):
@@ -1823,6 +1849,57 @@ def _validate_derivation_contract(
                     f"analysis subset receipt mismatch for {column!r}"
                 )
         return
+    if authority.producer == HOSPITAL_FOLLOWUP_EXTENSION_PRODUCER:
+        parent = authority.parent_authority_sha256
+        if parent is None:
+            raise MaterializedMetadataError(
+                "hospital follow-up extension lacks a parent authority"
+            )
+        parameters = authority.producer_parameters
+        if (
+            parameters.get("parent_authority_sha256") != parent
+            or parameters.get("transform") != "hospital_followup_extension"
+            or parameters.get("event_source_column") != "death"
+            or not isinstance(parameters.get("raw_source"), Mapping)
+            or not isinstance(parameters.get("followup"), Mapping)
+            or parameters.get("selected_row_count") != authority.cohort_rows
+        ):
+            raise MaterializedMetadataError(
+                "hospital follow-up extension receipt mismatch"
+            )
+        if not set(_HOSPITAL_FOLLOWUP_TRANSFORMS).issubset(derivations):
+            raise MaterializedMetadataError(
+                "hospital follow-up extension lacks its follow-up columns"
+            )
+        for column, derivation in derivations.items():
+            expected_transform = _HOSPITAL_FOLLOWUP_TRANSFORMS.get(
+                column, "ordered_row_subset"
+            )
+            if derivation.transform_id != expected_transform or any(
+                source.authority_sha256 != parent for source in derivation.sources
+            ):
+                raise MaterializedMetadataError(
+                    f"hospital follow-up receipt mismatch for {column!r}"
+                )
+            if column in _HOSPITAL_FOLLOWUP_TRANSFORMS and (
+                len(derivation.sources) != 1
+                or derivation.sources[0].column != "death"
+            ):
+                raise MaterializedMetadataError(
+                    f"hospital follow-up column {column!r} is not bound to the "
+                    "parent event status"
+                )
+            binding = file_binding.columns[column]
+            expected_role = _HOSPITAL_FOLLOWUP_ROLES.get(column)
+            if expected_role is not None and (
+                binding.metadata.role is not expected_role
+                or binding.representation_transform != expected_transform
+                or binding.derivation_window is not None
+            ):
+                raise MaterializedMetadataError(
+                    f"hospital follow-up binding mismatch for {column!r}"
+                )
+        return
     raise MaterializedMetadataError(
         f"unsupported materialized cohort producer {authority.producer!r}"
     )
@@ -2035,6 +2112,418 @@ def _validate_analysis_parent_receipts(
         )
 
 
+def _hospital_followup_child_columns(
+    parent_columns: Sequence[str],
+) -> tuple[str, ...]:
+    """Child column order: parent order minus invalidated, follow-up axis last."""
+
+    carried = [
+        column
+        for column in parent_columns
+        if column not in _HOSPITAL_FOLLOWUP_INVALIDATED_COLUMNS
+    ]
+    return tuple(
+        carried
+        + [column for column in _HOSPITAL_FOLLOWUP_TRANSFORMS if column not in carried]
+    )
+
+
+def _hospital_followup_sidecar(
+    parent: VerifiedMaterializedCohortAuthority,
+    *,
+    relative_path: str,
+) -> tuple[ColumnMetadataSidecar, ColumnMetadataFileBinding]:
+    """Rebind the parent sidecar for a hospital follow-up extension child.
+
+    Carried columns keep their sealed metadata byte-for-byte.  The follow-up
+    columns are projections of the parent's ``death`` event-status authority:
+    the verified raw hospital status replaces the export-window event, and the
+    event-time/observation-duration axis is typed on the ICU-admission clock.
+    """
+
+    parent_binding = parent.sidecar.files[0]
+    death = parent_binding.columns.get("death")
+    if death is None or death.metadata.role is not ConceptColumnRole.EVENT_STATUS:
+        raise MaterializedMetadataError(
+            "hospital follow-up extension requires a typed parent 'death' "
+            "event-status column"
+        )
+    columns: dict[str, ColumnMetadataBinding] = {
+        column: ColumnMetadataBinding(
+            metadata=binding.metadata,
+            derivation_window=binding.derivation_window,
+            representation_transform=binding.representation_transform,
+        )
+        for column, binding in parent_binding.columns.items()
+        if column not in _HOSPITAL_FOLLOWUP_INVALIDATED_COLUMNS
+    }
+    for column, role in _HOSPITAL_FOLLOWUP_ROLES.items():
+        time_like = role is not ConceptColumnRole.EVENT_STATUS
+        columns[column] = ColumnMetadataBinding(
+            metadata=derive_concept_column_metadata(
+                death.metadata,
+                spec=ColumnProjectionSpec(
+                    column_name=column,
+                    source_concept=death.metadata.source_concept,
+                    role=role,
+                    aggregation=None,
+                    time_origin="icu_admission" if time_like else None,
+                    time_unit="h" if time_like else None,
+                ),
+            ),
+            derivation_window=None,
+            representation_transform=_HOSPITAL_FOLLOWUP_TRANSFORMS[column],
+        )
+    file_binding = ColumnMetadataFileBinding(
+        relative_path=relative_path,
+        module=HOSPITAL_FOLLOWUP_EXTENSION_PRODUCER,
+        identity_column=parent_binding.identity_column,
+        time_coordinates=parent_binding.time_coordinates,
+        columns=columns,
+    )
+    sidecar = ColumnMetadataSidecar(
+        source_database=parent.sidecar.source_database,
+        source_database_class_prefixes=(
+            parent.sidecar.source_database_class_prefixes
+        ),
+        scope=MATERIALIZED_COHORT_SCOPE,
+        files=(file_binding,),
+    )
+    return sidecar, file_binding
+
+
+def _hospital_followup_derivations(
+    parent: VerifiedMaterializedCohortAuthority,
+    *,
+    child_columns: Sequence[str],
+) -> tuple[OutputDerivation, ...]:
+    parent_binding = parent.sidecar.files[0]
+
+    def source(column: str) -> SourceColumnRef:
+        return SourceColumnRef(
+            authority_sha256=parent.reference.sha256,
+            file=parent.authority.cohort_file,
+            column=column,
+            binding_sha256=binding_payload_sha256(
+                {column: parent_binding.columns[column]}
+            ),
+        )
+
+    return tuple(
+        OutputDerivation(
+            output_column=column,
+            sources=(source("death" if column in _HOSPITAL_FOLLOWUP_TRANSFORMS else column),),
+            transform_id=_HOSPITAL_FOLLOWUP_TRANSFORMS.get(column, "ordered_row_subset"),
+        )
+        for column in child_columns
+        if column != parent.authority.identity_column
+    )
+
+
+def _hospital_followup_columns_sha256(table: pa.Table) -> str:
+    """Digest of the three follow-up columns, bound into the producer receipt."""
+
+    digest = hashlib.sha256()
+    for column in _HOSPITAL_FOLLOWUP_TRANSFORMS:
+        digest.update(column.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(
+            json.dumps(
+                table.column(column).combine_chunks().to_pylist(),
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        )
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _followup_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int,)) and value in (0, 1):
+        return bool(value)
+    try:
+        import numpy as np
+
+        if isinstance(value, np.bool_):
+            return bool(value)
+    except ImportError:  # pragma: no cover - numpy is a pandas dependency
+        pass
+    raise MaterializedMetadataError(
+        "hospital follow-up event status must be a non-null boolean"
+    )
+
+
+def _followup_optional_float(value: object) -> Optional[float]:
+    if value is None or isinstance(value, bool):
+        if value is None:
+            return None
+        raise MaterializedMetadataError("hospital follow-up time is not numeric")
+    try:
+        numeric = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as exc:
+        raise MaterializedMetadataError(
+            "hospital follow-up time is not numeric"
+        ) from exc
+    if numeric != numeric:
+        return None
+    return numeric
+
+
+def _verify_hospital_followup_axis(table: pa.Table) -> None:
+    """Fail closed on a follow-up axis that is not an event/censor contract."""
+
+    death = table.column("death").combine_chunks().to_pylist()
+    event_time = table.column("death_time_hours").combine_chunks().to_pylist()
+    duration = table.column("hospital_followup_time_hours").combine_chunks().to_pylist()
+    for status, event_hours, followup_hours in zip(death, event_time, duration):
+        if status not in (True, False):
+            raise MaterializedMetadataError(
+                "hospital follow-up event status must be a non-null boolean"
+            )
+        if (
+            not isinstance(followup_hours, (int, float))
+            or isinstance(followup_hours, bool)
+            or followup_hours != followup_hours
+            or followup_hours in (float("inf"), float("-inf"))
+            or followup_hours < 0
+        ):
+            raise MaterializedMetadataError(
+                "hospital follow-up observation duration must be finite and "
+                "non-negative"
+            )
+        if status:
+            if event_hours is None or event_hours != followup_hours:
+                raise MaterializedMetadataError(
+                    "hospital death time must equal the follow-up end for events"
+                )
+        elif event_hours is not None:
+            raise MaterializedMetadataError(
+                "censored stays must not carry a hospital death time"
+            )
+
+
+def _validate_hospital_followup_bindings(
+    authority: MaterializedCohortAuthority,
+    *,
+    sidecar: ColumnMetadataSidecar,
+    parent: VerifiedMaterializedCohortAuthority,
+) -> tuple[str, ...]:
+    """JSON-level proof that a follow-up child is bound to its typed parent.
+
+    This is the part of the contract a run directory can re-check when only
+    the parent authority snapshot (not its parquet) was staged alongside.
+    """
+
+    if parent.authority.producer != "cohort_materializer":
+        raise MaterializedMetadataError(
+            "hospital follow-up extension requires an initial typed materialization"
+        )
+    expected_sidecar, _ = _hospital_followup_sidecar(
+        parent, relative_path=authority.cohort_file
+    )
+    expected_columns = _hospital_followup_child_columns(parent.authority.cohort_columns)
+    if (
+        authority.parent_authority_sha256 != parent.reference.sha256
+        or authority.cohort_columns != expected_columns
+        or authority.identity_column != parent.authority.identity_column
+        or authority.source_export_authority_sha256
+        != parent.authority.source_export_authority_sha256
+        or authority.source_column_metadata != parent.authority.source_column_metadata
+        or authority.source_column_metadata_sha256
+        != parent.authority.source_column_metadata_sha256
+        or sidecar != expected_sidecar
+        or authority.output_derivations
+        != tuple(
+            sorted(
+                _hospital_followup_derivations(parent, child_columns=expected_columns),
+                key=lambda item: item.output_column,
+            )
+        )
+        or authority.cohort_rows > parent.authority.cohort_rows
+    ):
+        raise MaterializedMetadataError(
+            "hospital follow-up extension parent binding mismatch"
+        )
+    return expected_columns
+
+
+def _validate_hospital_followup_parent_receipts(
+    authority: MaterializedCohortAuthority,
+    *,
+    child_reference: MaterializedCohortAuthorityRef,
+    sidecar: ColumnMetadataSidecar,
+    parent: VerifiedMaterializedCohortAuthority,
+    parent_path: Path,
+    child_path: Path,
+) -> None:
+    """Prove a follow-up child carries its parent rows exactly and typed axis."""
+
+    expected_columns = _validate_hospital_followup_bindings(
+        authority, sidecar=sidecar, parent=parent
+    )
+    parent_table = _read_verified_parent_table(parent_path, verified=parent)
+    child_table = _read_verified_parent_table(
+        child_path,
+        verified=VerifiedMaterializedCohortAuthority(
+            reference=child_reference,
+            authority=authority,
+            sidecar=sidecar,
+            provenance=authority.semantic_provenance,
+        ),
+    )
+    identity = authority.identity_column
+    parent_positions = {
+        value: position
+        for position, value in enumerate(
+            _canonical_identity_values(
+                parent_table.column(identity).combine_chunks().to_pylist()
+            )
+        )
+    }
+    try:
+        selected_positions = tuple(
+            parent_positions[value]
+            for value in _canonical_identity_values(
+                child_table.column(identity).combine_chunks().to_pylist()
+            )
+        )
+    except KeyError as exc:
+        raise MaterializedMetadataError(
+            "hospital follow-up extension contains an identity outside its parent"
+        ) from exc
+    if any(
+        left >= right for left, right in zip(selected_positions, selected_positions[1:])
+    ):
+        raise MaterializedMetadataError(
+            "hospital follow-up extension is not an ordered parent-row subset"
+        )
+    carried = [
+        column
+        for column in expected_columns
+        if column not in _HOSPITAL_FOLLOWUP_TRANSFORMS
+    ]
+    try:
+        expected_carried = parent_table.select(carried).take(
+            pa.array(selected_positions, type=pa.int64())
+        )
+    except (KeyError, ValueError, pa.ArrowException) as exc:
+        raise MaterializedMetadataError(
+            "cannot verify hospital follow-up parent-row subset"
+        ) from exc
+    if not child_table.select(carried).equals(expected_carried):
+        raise MaterializedMetadataError(
+            "hospital follow-up extension carried values are not an exact "
+            "parent-row subset"
+        )
+    _verify_hospital_followup_axis(child_table)
+    parameters = _thaw_json(authority.producer_parameters)
+    provenance = _thaw_json(authority.semantic_provenance)
+    if (
+        parameters.get("selected_row_count") != len(selected_positions)
+        or parameters.get("selected_row_positions_sha256")
+        != _ordered_positions_sha256(selected_positions)
+        or parameters.get("excluded_row_count")
+        != parent.authority.cohort_rows - len(selected_positions)
+        or parameters.get("followup_columns_sha256")
+        != _hospital_followup_columns_sha256(child_table)
+        or provenance.get("hospital_followup_materialization")
+        != {
+            "raw_source": parameters.get("raw_source"),
+            "followup": parameters.get("followup"),
+            "exclusions": parameters.get("exclusions"),
+            "source_stays": parent.authority.cohort_rows,
+            "analysis_stays": len(selected_positions),
+            "excluded_stays": parent.authority.cohort_rows - len(selected_positions),
+            "event_time_column": "death_time_hours",
+            "observation_duration_column": "hospital_followup_time_hours",
+            "unit": "hours",
+            "source_metadata_kind": "typed_materialized_authority",
+            "invalidated_parent_columns": [
+                column
+                for column in _HOSPITAL_FOLLOWUP_INVALIDATED_COLUMNS
+                if column in parent.authority.cohort_columns
+            ],
+        }
+    ):
+        raise MaterializedMetadataError(
+            "hospital follow-up extension position receipt mismatch"
+        )
+
+
+def _local_initial_materialization(
+    root: Path,
+    *,
+    authority_sha256: str,
+) -> VerifiedMaterializedCohortAuthority:
+    """Resolve a staged initial-materialization snapshot by exact digest."""
+
+    reference, authority = _local_authority_reference(
+        root, authority_sha256=authority_sha256
+    )
+    try:
+        sidecar = read_content_addressed_sidecar(
+            root / authority.column_metadata.file,
+            expected_sha256=authority.column_metadata.sha256,
+            expected_size=authority.column_metadata.size,
+        )
+    except MetadataSidecarError as exc:
+        raise MaterializedMetadataError(str(exc)) from exc
+    binding = sidecar.files[0] if len(sidecar.files) == 1 else None
+    if (
+        binding is None
+        or sidecar.scope != MATERIALIZED_COHORT_SCOPE
+        or sidecar.record_count != authority.column_metadata.record_count
+        or authority.producer != "cohort_materializer"
+        or binding.relative_path != authority.cohort_file
+        or binding.identity_column != authority.identity_column
+        or binding.metadata_payload_sha256 != authority.file_metadata_payload_sha256
+        or set(binding.columns)
+        != set(authority.cohort_columns) - {authority.identity_column}
+    ):
+        raise MaterializedMetadataError(
+            "hospital follow-up ancestor snapshot is not an initial materialization"
+        )
+    _validate_derivation_contract(
+        authority,
+        file_binding=binding,
+        source_sidecar=_read_source_column_metadata(root, authority=authority),
+    )
+    return VerifiedMaterializedCohortAuthority(
+        reference=reference,
+        authority=authority,
+        sidecar=sidecar,
+        provenance=authority.semantic_provenance,
+    )
+
+
+def _validate_staged_hospital_followup_ancestry(
+    root: Path,
+    *,
+    extension_reference: MaterializedCohortAuthorityRef,
+    extension_authority: MaterializedCohortAuthority,
+    extension_sidecar: ColumnMetadataSidecar,
+) -> None:
+    """Bind a staged follow-up parent to its own staged initial ancestor."""
+
+    grandparent_sha = extension_authority.parent_authority_sha256
+    if grandparent_sha is None:  # pragma: no cover - checked by the contract
+        raise MaterializedMetadataError(
+            "hospital follow-up extension lacks a parent authority"
+        )
+    if grandparent_sha == extension_reference.sha256:
+        raise MaterializedMetadataError(
+            "materialized authority ancestry contains a cycle"
+        )
+    grandparent = _local_initial_materialization(
+        root, authority_sha256=grandparent_sha
+    )
+    _validate_hospital_followup_bindings(
+        extension_authority, sidecar=extension_sidecar, parent=grandparent
+    )
+
+
 def load_verified_materialized_cohort_authority(
     cohort_path: Path,
     *,
@@ -2239,7 +2728,7 @@ def load_verified_materialized_cohort_authority(
             )
         parent_binding = parent_sidecar.files[0]
         if (
-            parent_authority.producer != "cohort_materializer"
+            parent_authority.producer not in _STAGE_PARENT_PRODUCERS
             or parent_binding.relative_path != parent_authority.cohort_file
             or parent_binding.identity_column != parent_authority.identity_column
             or parent_binding.metadata_payload_sha256
@@ -2259,6 +2748,15 @@ def load_verified_materialized_cohort_authority(
             file_binding=parent_binding,
             source_sidecar=parent_source_sidecar,
         )
+        if parent_authority.producer == HOSPITAL_FOLLOWUP_EXTENSION_PRODUCER:
+            # The staged copy carries the extension's initial-materialization
+            # ancestor as a snapshot too; prove the extension is bound to it.
+            _validate_staged_hospital_followup_ancestry(
+                cohort_path.parent,
+                extension_reference=parent_ref,
+                extension_authority=parent_authority,
+                extension_sidecar=parent_sidecar,
+            )
         _validate_stage_parent_receipts(
             authority,
             sidecar=sidecar,
@@ -2291,6 +2789,37 @@ def load_verified_materialized_cohort_authority(
         if parent_verified is None:  # pragma: no cover - expected ref forbids legacy
             raise MaterializedMetadataError("materialized cohort parent lost authority")
         _validate_analysis_parent_receipts(
+            authority,
+            child_reference=authority_ref,
+            sidecar=sidecar,
+            parent=parent_verified,
+            parent_path=cohort_path.parent / parent_authority.cohort_file,
+            child_path=cohort_path,
+        )
+    elif authority.producer == HOSPITAL_FOLLOWUP_EXTENSION_PRODUCER:
+        if len(_ancestor_chain) >= _MAX_AUTHORITY_ANCESTRY:
+            raise MaterializedMetadataError(
+                "materialized authority ancestry exceeds the verification limit"
+            )
+        parent_sha = authority.parent_authority_sha256
+        if parent_sha is None:  # pragma: no cover - checked by the contract above
+            raise MaterializedMetadataError(
+                "hospital follow-up extension lacks a parent authority"
+            )
+        parent_ref, parent_authority = _local_authority_reference(
+            cohort_path.parent,
+            authority_sha256=parent_sha,
+        )
+        parent_verified = load_verified_materialized_cohort_authority(
+            cohort_path.parent / parent_authority.cohort_file,
+            expected_authority=parent_ref,
+            _ancestor_chain=_ancestor_chain | {authority_ref.sha256},
+        )
+        if parent_verified is None:  # pragma: no cover - expected ref forbids legacy
+            raise MaterializedMetadataError(
+                "hospital follow-up extension parent lost authority"
+            )
+        _validate_hospital_followup_parent_receipts(
             authority,
             child_reference=authority_ref,
             sidecar=sidecar,
@@ -2367,7 +2896,7 @@ def stage_materialized_cohort_authority(
     )
     if verified is None:
         return None
-    if verified.authority.producer != "cohort_materializer":
+    if verified.authority.producer not in _STAGE_PARENT_PRODUCERS:
         raise MaterializedMetadataError(
             "run staging currently requires an initial typed materialization"
         )
@@ -2447,14 +2976,36 @@ def _stage_materialized_cohort_authority_at(
         sidecar_ref = _write_content_addressed_sidecar_at(
             target_root, sidecar, stem="cohort_column_metadata"
         )
-        for reference, label in (
+        snapshots: list[tuple[SidecarRef | MaterializedCohortAuthorityRef, str]] = [
             (verified.authority.source_column_metadata, "source column metadata"),
             (verified.reference, "parent materialized authority"),
             (
                 verified.authority.column_metadata,
                 "parent materialized column metadata",
             ),
-        ):
+        ]
+        if verified.authority.producer == HOSPITAL_FOLLOWUP_EXTENSION_PRODUCER:
+            # A follow-up extension is verified against its own initial
+            # materialization; stage that ancestor's snapshots as well so the
+            # run directory can re-check the whole typed chain offline.
+            ancestor_sha = verified.authority.parent_authority_sha256
+            if ancestor_sha is None:  # pragma: no cover - contract checked above
+                raise MaterializedMetadataError(
+                    "hospital follow-up extension lacks a parent authority"
+                )
+            ancestor_ref, ancestor_authority = _local_authority_reference(
+                Path(source_root.path), authority_sha256=ancestor_sha
+            )
+            snapshots.extend(
+                [
+                    (ancestor_ref, "ancestor materialized authority"),
+                    (
+                        ancestor_authority.column_metadata,
+                        "ancestor materialized column metadata",
+                    ),
+                ]
+            )
+        for reference, label in snapshots:
             _publish_content_addressed_snapshot_at(
                 source_root,
                 target_root,
@@ -2897,6 +3448,335 @@ def _publish_ordered_subset_at(
             root.unlink(temporary_name, missing_ok=True)
 
 
+def publish_hospital_followup_materialized_cohort(
+    parent_path: Path,
+    target_path: Path,
+    *,
+    followup: "pd.DataFrame",
+    exclusions: "pd.DataFrame",
+    followup_receipt: Mapping[str, object],
+    raw_source_receipt: Mapping[str, object],
+    producer_implementation_sha256: str,
+    producer_parameters: Mapping[str, object],
+    expected_parent_authority: Optional[MaterializedCohortAuthorityRef] = None,
+) -> Optional[VerifiedMaterializedCohortAuthority]:
+    """Publish the hospital follow-up child of one initial typed cohort.
+
+    ``followup`` carries one row per retained parent identity with the columns
+    ``hospital_death``, ``death_time_hours`` and ``hospital_followup_time_hours``
+    keyed by the parent identity column; ``exclusions`` carries every parent
+    identity the raw-source deriver rejected with its ``reason``.  Every parent
+    identity must appear in exactly one of the two frames.  The leaf keeps the
+    parent's row order, carries every parent column except the invalidated
+    export-window event time, replaces ``death`` by the verified hospital
+    status and appends the follow-up axis.  It never selects a cohort,
+    exposure, outcome, method, or estimand.
+    """
+
+    import pandas as pd
+
+    parent_path = Path(parent_path)
+    verified = load_verified_materialized_cohort_authority(
+        parent_path,
+        expected_authority=expected_parent_authority,
+    )
+    if verified is None:
+        return None
+    if verified.authority.producer != "cohort_materializer":
+        raise MaterializedMetadataError(
+            "hospital follow-up extension requires an initial typed materialization"
+        )
+    identity = verified.authority.identity_column
+    if not isinstance(followup, pd.DataFrame) or not isinstance(exclusions, pd.DataFrame):
+        raise MaterializedMetadataError("follow-up and exclusions must be DataFrames")
+    if set(followup.columns) != {
+        identity,
+        "hospital_death",
+        "death_time_hours",
+        "hospital_followup_time_hours",
+    } or set(exclusions.columns) != {identity, "reason"}:
+        raise MaterializedMetadataError(
+            "hospital follow-up frames do not match the follow-up contract"
+        )
+    target_path = Path(target_path)
+    if target_path.name in {"", ".", ".."} or ".." in target_path.parts:
+        raise MaterializedMetadataError(
+            "hospital follow-up target path is not canonical"
+        )
+    target_root = prepare_real_directory(
+        target_path.parent, label="hospital follow-up directory"
+    )
+    target_path = target_root / target_path.name
+    try:
+        with AnchoredDirectory.open(parent_path.parent) as parent_root:
+            with AnchoredDirectory.open(target_root) as target_directory:
+                if parent_root.identity != target_directory.identity:
+                    raise MaterializedMetadataError(
+                        "hospital follow-up parent authority must be published in "
+                        "the target directory"
+                    )
+                authority_ref = _publish_hospital_followup_at(
+                    target_directory,
+                    parent_name=parent_path.name,
+                    target_name=target_path.name,
+                    verified=verified,
+                    followup=followup,
+                    exclusions=exclusions,
+                    followup_receipt=followup_receipt,
+                    raw_source_receipt=raw_source_receipt,
+                    producer_implementation_sha256=producer_implementation_sha256,
+                    producer_parameters=producer_parameters,
+                )
+                target_directory.assert_still_selected()
+    except AuthorityFilesystemError as exc:
+        raise MaterializedMetadataError(
+            "cannot publish hospital follow-up extension"
+        ) from exc
+    result = load_verified_materialized_cohort_authority(
+        target_path, expected_authority=authority_ref
+    )
+    if result is None:  # pragma: no cover - required selector was just committed
+        raise MaterializedMetadataError(
+            "hospital follow-up extension lost its typed authority"
+        )
+    return result
+
+
+def _publish_hospital_followup_at(
+    root: AnchoredDirectory,
+    *,
+    parent_name: str,
+    target_name: str,
+    verified: VerifiedMaterializedCohortAuthority,
+    followup: "pd.DataFrame",
+    exclusions: "pd.DataFrame",
+    followup_receipt: Mapping[str, object],
+    raw_source_receipt: Mapping[str, object],
+    producer_implementation_sha256: str,
+    producer_parameters: Mapping[str, object],
+) -> MaterializedCohortAuthorityRef:
+    import pandas as pd
+
+    if parent_name == target_name:
+        raise MaterializedMetadataError(
+            "hospital follow-up parent and target must be different artifacts"
+        )
+    selector_name = materialized_provenance_path(Path(target_name)).name
+    try:
+        root.require_absent(target_name, selector_name)
+    except AuthorityFilesystemError as exc:
+        raise MaterializedMetadataError(
+            "hospital follow-up target already exists and cannot be overwritten"
+        ) from exc
+    table = _read_verified_parent_table_at(root, name=parent_name, verified=verified)
+    identity = verified.authority.identity_column
+    parent_ids = _canonical_identity_values(
+        table.column(identity).combine_chunks().to_pylist()
+    )
+    if len(set(parent_ids)) != len(parent_ids):
+        raise MaterializedMetadataError("parent cohort identities are not unique")
+    followup_ids = _canonical_identity_values(followup[identity].tolist())
+    excluded_ids = _canonical_identity_values(exclusions[identity].tolist())
+    if len(set(followup_ids)) != len(followup_ids) or set(followup_ids) & set(
+        excluded_ids
+    ):
+        raise MaterializedMetadataError(
+            "hospital follow-up identities must be unique and disjoint from "
+            "exclusions"
+        )
+    declared = set(followup_ids) | set(excluded_ids)
+    if not set(parent_ids).issubset(declared):
+        raise MaterializedMetadataError(
+            "hospital follow-up coverage is incomplete for the parent cohort"
+        )
+    retained = set(followup_ids)
+    positions = tuple(
+        position for position, value in enumerate(parent_ids) if value in retained
+    )
+    # Plain str/int: the counts become producer parameters, which must be
+    # canonical JSON whichever scalar type this pandas returns.
+    exclusion_reasons = {
+        str(reason): int(count)
+        for reason, count in sorted(
+            exclusions.loc[
+                pd.Series(excluded_ids, index=exclusions.index).isin(set(parent_ids)),
+                "reason",
+            ]
+            .astype("string")
+            .value_counts()
+            .items()
+        )
+    }
+    child_columns = _hospital_followup_child_columns(verified.authority.cohort_columns)
+    base = table.take(pa.array(positions, type=pa.int64()))
+    lookup = followup.set_index(pd.Index(followup_ids))
+    ordered = lookup.loc[[parent_ids[position] for position in positions]]
+    try:
+        axis = {
+            "death": pa.array(
+                [
+                    _followup_bool(value)
+                    for value in ordered["hospital_death"].tolist()
+                ],
+                type=pa.bool_(),
+            ),
+            "death_time_hours": pa.array(
+                [
+                    _followup_optional_float(value)
+                    for value in ordered["death_time_hours"].tolist()
+                ],
+                type=pa.float64(),
+            ),
+            "hospital_followup_time_hours": pa.array(
+                [
+                    _followup_optional_float(value)
+                    for value in ordered["hospital_followup_time_hours"].tolist()
+                ],
+                type=pa.float64(),
+            ),
+        }
+    except (TypeError, ValueError, pa.ArrowException) as exc:
+        raise MaterializedMetadataError(
+            "hospital follow-up values are not a typed event/censor axis"
+        ) from exc
+    child = pa.table(
+        {
+            column: (axis[column] if column in axis else base.column(column))
+            for column in child_columns
+        }
+    )
+    _verify_hospital_followup_axis(child)
+    child_sidecar, child_binding = _hospital_followup_sidecar(
+        verified, relative_path=target_name
+    )
+    _atomic_write_json_at(
+        root,
+        name=selector_name,
+        payload={
+            "schema_version": "easyicu.materialized_cohort_transaction/1",
+            "materialized_authority_required": True,
+            "column_metadata": None,
+            "authority_transaction_state": "prepared",
+        },
+        require_absent=True,
+    )
+    sidecar_ref = _write_content_addressed_sidecar_at(
+        root, child_sidecar, stem="cohort_column_metadata"
+    )
+    _publish_content_addressed_snapshot_at(
+        root,
+        root,
+        source_name=verified.authority.source_column_metadata.file,
+        reference=verified.authority.source_column_metadata,
+        label="source column metadata",
+    )
+    temporary_name, descriptor = root.create_temporary(stem=target_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
+            pq.write_table(child, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        (
+            cohort_sha,
+            cohort_size,
+            cohort_rows,
+            cohort_columns,
+            cohort_schema_sha256,
+        ) = _parquet_envelope_at(root, temporary_name)
+        receipt = {
+            "raw_source": dict(_thaw_json(_canonical_mapping(raw_source_receipt, label="raw source receipt"))),
+            "followup": dict(_thaw_json(_canonical_mapping(followup_receipt, label="follow-up receipt"))),
+            "exclusions": exclusion_reasons,
+            "source_stays": verified.authority.cohort_rows,
+            "analysis_stays": len(positions),
+            "excluded_stays": verified.authority.cohort_rows - len(positions),
+            "event_time_column": "death_time_hours",
+            "observation_duration_column": "hospital_followup_time_hours",
+            "unit": "hours",
+            "source_metadata_kind": "typed_materialized_authority",
+            "invalidated_parent_columns": [
+                column
+                for column in _HOSPITAL_FOLLOWUP_INVALIDATED_COLUMNS
+                if column in verified.authority.cohort_columns
+            ],
+        }
+        bound_parameters = {
+            **dict(_thaw_json(producer_parameters)),
+            "parent_authority_sha256": verified.reference.sha256,
+            "transform": "hospital_followup_extension",
+            "event_source_column": "death",
+            "raw_source": receipt["raw_source"],
+            "followup": receipt["followup"],
+            "exclusions": exclusion_reasons,
+            "selected_row_positions_sha256": _ordered_positions_sha256(positions),
+            "selected_row_count": len(positions),
+            "excluded_row_count": verified.authority.cohort_rows - len(positions),
+            "followup_columns_sha256": _hospital_followup_columns_sha256(child),
+        }
+        parent_provenance = dict(_thaw_json(verified.provenance))
+        parent_provenance.pop("column_metadata", None)
+        parent_provenance.pop("materialized_authority_required", None)
+        semantic_provenance = {
+            **parent_provenance,
+            "n_rows": len(positions),
+            "n_stays_after_inclusion_exclusion": len(positions),
+            "columns": list(child_columns),
+            "hospital_followup_materialization": receipt,
+            "extended_from_authority_sha256": verified.reference.sha256,
+        }
+        authority = MaterializedCohortAuthority(
+            cohort_file=target_name,
+            cohort_sha256=cohort_sha,
+            cohort_size=cohort_size,
+            cohort_rows=cohort_rows,
+            cohort_columns=cohort_columns,
+            cohort_schema_sha256=cohort_schema_sha256,
+            identity_column=identity,
+            row_identity_sha256=_row_identity_sha256_at(
+                root, temporary_name, identity_column=identity
+            ),
+            column_metadata=sidecar_ref,
+            column_metadata_scope=MATERIALIZED_COHORT_SCOPE,
+            file_metadata_payload_sha256=child_binding.metadata_payload_sha256,
+            source_export_authority_sha256=(
+                verified.authority.source_export_authority_sha256
+            ),
+            source_column_metadata=verified.authority.source_column_metadata,
+            source_column_metadata_sha256=(
+                verified.authority.source_column_metadata_sha256
+            ),
+            producer=HOSPITAL_FOLLOWUP_EXTENSION_PRODUCER,
+            producer_implementation_sha256=producer_implementation_sha256,
+            producer_parameters=bound_parameters,
+            producer_parameters_sha256=canonical_parameters_sha256(bound_parameters),
+            semantic_provenance=semantic_provenance,
+            output_derivations=_hospital_followup_derivations(
+                verified, child_columns=child_columns
+            ),
+            parent_authority_sha256=verified.reference.sha256,
+        )
+        authority_ref = _write_authority_at(root, authority)
+        root.replace_temporary(temporary_name, target_name, require_absent=True)
+        temporary_name = ""
+        final_provenance = {
+            **dict(_thaw_json(authority.semantic_provenance)),
+            "materialized_authority_required": True,
+            "column_metadata": _descriptor(
+                authority=authority_ref,
+                sidecar=sidecar_ref,
+                file_binding=child_binding,
+            ),
+        }
+        _atomic_write_json_at(root, name=selector_name, payload=final_provenance)
+        return authority_ref
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if temporary_name:
+            root.unlink(temporary_name, missing_ok=True)
+
+
 __all__ = [
     "MATERIALIZED_COHORT_AUTHORITY_SCHEMA",
     "MATERIALIZED_COHORT_DESCRIPTOR_SCHEMA",
@@ -2907,11 +3787,13 @@ __all__ = [
     "OutputDerivation",
     "SourceColumnRef",
     "VerifiedMaterializedCohortAuthority",
+    "HOSPITAL_FOLLOWUP_EXTENSION_PRODUCER",
     "canonical_parameters_sha256",
     "implementation_bundle_sha256",
     "load_verified_materialized_cohort_authority",
     "materialized_provenance_path",
     "prepare_real_directory",
+    "publish_hospital_followup_materialized_cohort",
     "publish_ordered_subset_materialized_cohort",
     "read_verified_materialized_cohort_table",
     "stage_materialized_cohort_authority",

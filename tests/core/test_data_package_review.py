@@ -968,3 +968,134 @@ def test_review_snapshot_load_rejects_path_shaped_external_bytes(tmp_path) -> No
         )
 
     assert exc.value.code == "data_package_review_snapshot_path_forbidden"
+
+
+def test_landmark_mortality_followup_binds_a_modern_eicu_export_by_manifest(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The official eICU demo carries ``data_path``; no private authority exists."""
+
+    raw_root = tmp_path / "raw"
+    raw_root.mkdir()
+    pd.DataFrame(
+        {
+            "patientunitstayid": [1, 2],
+            "hospitaldischargestatus": ["Alive", "Expired"],
+            "hospitaldischargeoffset": [2880, 600],
+        }
+    ).to_parquet(raw_root / "patient.parquet", index=False)
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    (export_root / "_manifest.json").write_text(
+        json.dumps({"database": "eicu_demo", "data_path": str(raw_root)}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        readiness_owner.raw_source_authority,
+        "resolve_raw_mimic_iv_source_binding",
+        lambda **_kwargs: pytest.fail("the private MIMIC-IV authority is not for eICU"),
+    )
+    monkeypatch.setattr(
+        readiness_owner,
+        "read_exported_concept",
+        lambda _root, concept_id: pd.DataFrame(
+            {"stay_id": [1, 2], "charttime": [8.0, 12.0], concept_id: [2.0, 3.0]}
+        ),
+    )
+
+    payload = readiness_owner.build_data_package_execution_readiness(
+        {
+            "data_source": {"path": str(export_root), "database": "eicu_demo"},
+            "execution_concepts": {"outcome": "death", "primary_exposure": "aki_stage"},
+            "sensitivity_specs": [
+                {
+                    "spec_id": "landmark_24h",
+                    "axis": "timing",
+                    "strategy": "landmark",
+                    "landmark_hours": 24,
+                    "require_alive_at_landmark": True,
+                    "exclude_negative_event_times": True,
+                }
+            ],
+        },
+        source_path=str(export_root),
+        catalog_by_id={"los_icu": object()},
+        registered_denominator=2,
+    )
+
+    readiness = payload["runtime_readiness"]
+    assert readiness["outcome_event_time"] == {
+        "status": "ready",
+        "source_concept": "death",
+        "materialized_column": "death_time_hours",
+        "derivation": "eicu_hospital_death_or_discharge_censor",
+    }
+    assert readiness["observation_duration"]["status"] == "ready"
+    assert readiness["observation_duration"]["unit"] == "hours"
+    assert "time_varying_hospital_mortality_followup_contract_unavailable" not in (
+        readiness["required_findings"]
+    )
+    assert str(tmp_path) not in json.dumps(payload)
+
+
+def test_landmark_mortality_followup_is_ready_for_typed_exports(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A typed export is extended through its sealed lineage, not rewritten.
+
+    Readiness no longer withholds the follow-up axis from typed exports: the
+    typed-lineage owner publishes a parent-bound ``hospital_followup_extension``
+    child at acquisition time, so the review reports the same ready contract as
+    for a legacy export.
+    """
+
+    monkeypatch.setattr(
+        readiness_owner.raw_source_authority,
+        "resolve_raw_hospital_source_binding",
+        lambda **_kwargs: SimpleNamespace(
+            public_receipt=lambda: {
+                "hospital_mortality_followup": {
+                    "event_time_column": "death_time_hours",
+                    "observation_duration_column": "hospital_followup_time_hours",
+                    "unit": "hours",
+                    "materializer": "eicu_hospital_death_or_discharge_censor",
+                }
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        readiness_owner,
+        "read_exported_concept",
+        lambda _root, concept_id: pd.DataFrame(
+            {"stay_id": [1, 2], "charttime": [8.0, 12.0], concept_id: [2.0, 3.0]}
+        ),
+    )
+    source_path = str(tmp_path / "typed_export")
+
+    payload = readiness_owner.build_data_package_execution_readiness(
+        {
+            "data_source": {"path": source_path, "database": "eicu_demo"},
+            "execution_concepts": {"outcome": "death", "primary_exposure": "aki_stage"},
+            "sensitivity_specs": [
+                {
+                    "spec_id": "landmark_24h",
+                    "axis": "timing",
+                    "strategy": "landmark",
+                    "landmark_hours": 24,
+                    "require_alive_at_landmark": True,
+                    "exclude_negative_event_times": True,
+                }
+            ],
+        },
+        source_path=source_path,
+        catalog_by_id={"los_icu": object()},
+        registered_denominator=2,
+    )
+
+    readiness = payload["runtime_readiness"]
+    assert readiness["outcome_event_time"]["status"] == "ready"
+    assert readiness["outcome_event_time"]["derivation"] == (
+        "eicu_hospital_death_or_discharge_censor"
+    )
+    assert readiness["observation_duration"]["status"] == "ready"
+    assert readiness["required_findings"] == []

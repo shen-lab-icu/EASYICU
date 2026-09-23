@@ -84,7 +84,7 @@ def _patient_grouping_review(
     source = study.get("data_source")
     source = source if isinstance(source, Mapping) else {}
     try:
-        binding = source_identity_authority.resolve_patient_grouping_authority(
+        binding = source_identity_authority.resolve_study_patient_grouping(
             export_path=source_path,
             database=str(source.get("database") or ""),
         )
@@ -141,22 +141,33 @@ def _concept_time_capability(
     }
 
 
+# One typed materializer per raw database family; both emit the same columns.
+_HOSPITAL_MORTALITY_FOLLOWUP_MATERIALIZERS = frozenset(
+    {
+        "mimic_iv_hospital_death_or_discharge_censor",
+        "eicu_hospital_death_or_discharge_censor",
+    }
+)
+
+
 def _hospital_mortality_followup_capability(
     study: Mapping[str, Any], *, source_path: str
 ) -> dict[str, Any]:
-    """Return the path-free MIMIC-IV hospital-mortality follow-up contract.
+    """Return the path-free hospital-mortality follow-up contract.
 
     The prepared export's ``death`` flag and ``los_icu`` are deliberately not
-    evidence for an in-hospital survival axis.  A legacy export earns this
-    capability only when the host has resolved its exact raw-source authority.
-    That resolver has already validated table digests and schemas; this public
-    review retains only its path-free receipt and typed output coordinates.
+    evidence for an in-hospital survival axis.  An export earns this capability
+    only when the host has resolved its raw-source binding: the manifest's
+    sealed ``data_path`` for a modern export, or the exact private authority
+    for a legacy one.  That resolver has already validated table digests and
+    schemas; this public review retains only its path-free receipt and typed
+    output coordinates.
     """
 
     source = study.get("data_source")
     source = source if isinstance(source, Mapping) else {}
     try:
-        binding = raw_source_authority.resolve_raw_mimic_iv_source_binding(
+        binding = raw_source_authority.resolve_raw_hospital_source_binding(
             export_path=source_path,
             database=str(source.get("database") or ""),
         )
@@ -180,9 +191,12 @@ def _hospital_mortality_followup_capability(
         "event_time_column": "death_time_hours",
         "observation_duration_column": "hospital_followup_time_hours",
         "unit": "hours",
-        "materializer": "mimic_iv_hospital_death_or_discharge_censor",
     }
-    if any(contract.get(key) != value for key, value in expected.items()):
+    materializer = contract.get("materializer")
+    if (
+        any(contract.get(key) != value for key, value in expected.items())
+        or materializer not in _HOSPITAL_MORTALITY_FOLLOWUP_MATERIALIZERS
+    ):
         return {
             "status": "invalid",
             "reason_code": "time_varying_hospital_mortality_followup_contract_unavailable",
@@ -191,6 +205,7 @@ def _hospital_mortality_followup_capability(
     return {
         "status": "ready",
         **expected,
+        "materializer": materializer,
         "source_authority": receipt,
     }
 
