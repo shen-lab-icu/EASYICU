@@ -1925,3 +1925,64 @@ def test_prediction_template_robustness_is_the_owner_executed_refit_and_decision
     assert not_executable[0].severity == "major"
     assert remediation_route_for_finding(not_executable[0]) == "agent_plan_revision"
     assert narrowed_review.score < reviewed.score
+
+
+SURVIVAL_CARD_SOURCES = ("grambsch_therneau_ph_1994", "royston_parmar_rmst_2011")
+
+
+def test_logistic_landmark_plan_never_cites_a_survival_method_card() -> None:
+    # A live KDIGO plan (landmark logistic) bound the proportional-hazards
+    # diagnostics and the restricted mean survival time: their generic design
+    # elements matched, but the plan fits no hazard model.
+    context = _context(exact=False)
+    allowed = (*ALLOWED_CITATIONS, *SURVIVAL_CARD_SOURCES)
+    request = build_family_spec_request(
+        context,
+        analysis_types=candidate_analysis_types(context),
+        variable_roster=select_progressive_variables(context),
+        allowed_literature_citation_keys=allowed,
+        direct_comparator_literature_keys=DIRECT_COMPARATORS,
+        comparison_literature_keys=DIRECT_COMPARATORS,
+        required_primary_cohort_selection_mode="predicate_filtered",
+    )
+    llm = ScriptedMockLLMClient(
+        [json.dumps(_spec_payload(request, adjustment_set=PLANNER_ROSTER))]
+    )
+    result = ProgressivePlannerAgent(llm).run_attempt(
+        context,
+        planner_strategy=FAMILY_SPEC_STRATEGY,
+        allowed_literature_citation_keys=allowed,
+        direct_comparator_literature_keys=DIRECT_COMPARATORS,
+        comparison_literature_keys=DIRECT_COMPARATORS,
+        enforce_article_contract=True,
+        article_contract_context=context,
+        planning_contract_context="",
+        required_primary_cohort_selection_mode="predicate_filtered",
+    )
+    cited = {
+        key for step in result.facts.outline.steps for key in step.literature_citation_keys
+    }
+    assert "anderson_landmark_1983" in cited
+    assert not cited & set(SURVIVAL_CARD_SOURCES)
+
+
+def test_follow_up_unit_is_not_repeated_after_a_label_that_carries_it() -> None:
+    context = _context(exact=False)
+    request = _request(context)
+    with_unit = _run(
+        context, [json.dumps(_spec_payload(request, adjustment_set=PLANNER_ROSTER))]
+    )[1].output
+    window = with_unit.design_selection.selected.observation_window
+    assert f"{LABELS['followup_time_hours']};" in window
+    assert "(hours) (hours)" not in window
+    payload = _spec_payload(request, adjustment_set=PLANNER_ROSTER)
+    payload["reader_display_labels"] = [
+        {**item, "value": "In-hospital follow-up time"}
+        if item["key"] == "followup_time_hours"
+        else item
+        for item in payload["reader_display_labels"]
+    ]
+    without_unit = _run(context, [json.dumps(payload)])[1].output
+    assert "In-hospital follow-up time (hours);" in (
+        without_unit.design_selection.selected.observation_window
+    )

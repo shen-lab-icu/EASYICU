@@ -85,7 +85,7 @@ def _bindings(
                 )
             )
             continue
-        elements = sorted(desired & _method_card_elements(key))
+        elements = sorted(desired & _method_card_elements(key, time_to_event=True))
         if not elements:
             continue
         bindings.append(
@@ -93,7 +93,7 @@ def _bindings(
                 citation_key=key,
                 design_elements=elements,
                 application=(
-                    f"Apply the host-curated method card(s) {_method_card_ids(key, desired)} to the "
+                    f"Apply the host-curated method card(s) {_method_card_ids(key, desired, time_to_event=True)} to the "
                     "sealed landmark survival suite; the family template binds only the curated "
                     "design elements and retains the analysis-only claim ceiling."
                 ),
@@ -283,11 +283,19 @@ def build_landmark_survival_skeleton(
         )
     sealed = request.sealed_suite
     identity = request.identity_column
-    method_keys = [key for key in request.allowed_literature_citation_keys if _method_card_elements(key)]
+    method_keys = [
+        key
+        for key in request.allowed_literature_citation_keys
+        if _method_card_elements(key, time_to_event=True)
+    ]
     primary_keys = list(
         dict.fromkeys(
             [
-                *(k for k in method_keys if _method_card_elements(k) & set(_PRIMARY_DESIGN_ELEMENTS)),
+                *(
+                    k
+                    for k in method_keys
+                    if _method_card_elements(k, time_to_event=True) & set(_PRIMARY_DESIGN_ELEMENTS)
+                ),
                 *request.direct_comparator_literature_keys,
             ]
         )
