@@ -1348,6 +1348,18 @@ def _sensitivity_facts(
             step.step_id for step in replay_steps
         ),
         "owner_executed_plan_spec_ids": sorted(owner_executed_spec_ids),
+        # Plan-locked specs with neither a single replay step nor an owner
+        # that executes them in its own step; the run-level panel would fail
+        # them closed after execution.
+        "protocol_only_plan_spec_ids": (
+            sorted(
+                spec.spec_id
+                for spec in plan.robustness_specs
+                if spec.spec_id not in owner_executed_spec_ids
+            )
+            if len(replay_steps) != 1
+            else []
+        ),
     }
 
 
@@ -2749,6 +2761,45 @@ def build_plan_scientific_review(
                 remediation=(
                     "Prespecify only task-supported sensitivity alternatives "
                     "appropriate to this study family before execution."
+                ),
+            )
+        )
+    elif (
+        robustness_readiness["status"] == "blocked"
+        and robustness_readiness["reason"] == "typed_sensitivity_authority_not_executable"
+        # User-required specs that are not executed already raise the
+        # blocker above; this is the plan's own declaration.
+        and not sensitivity["missing_spec_ids"]
+        and not sensitivity["missing_required"]
+    ):
+        unexecuted = sensitivity["protocol_only_plan_spec_ids"]
+        findings.append(
+            PlanScientificFinding(
+                code="ROBUSTNESS_SPECS_NOT_EXECUTABLE",
+                severity="major",
+                dimension="robustness",
+                message=(
+                    "The plan declares robustness that no host owner executes"
+                    + (f" (specifications: {', '.join(unexecuted)})" if unexecuted else "")
+                    + (
+                        f"; protocol-only axes: {', '.join(sensitivity['protocol_only'])}"
+                        if sensitivity["protocol_only"]
+                        else ""
+                    )
+                    + ". Fewer typed executable axes remain than the study-family "
+                    "playbook requires, and an unexecuted locked specification "
+                    "fails the run closed at the robustness panel."
+                ),
+                evidence_refs=[
+                    "analysis_plan.json.robustness_specs",
+                    "study_design_brief.json.sensitivity_requirements",
+                ],
+                remediation=(
+                    "Declare each robustness specification in the exact shape "
+                    "an executing owner claims -- one robustness replay step, or "
+                    "the specification the primary owner executes in its own "
+                    "step -- or remove it and prespecify a task-supported "
+                    "executable alternative. Do not change the headline estimand."
                 ),
             )
         )
