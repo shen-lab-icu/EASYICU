@@ -710,3 +710,73 @@ def test_a_sealed_suite_prespecifies_its_own_robustness_but_a_draft_does_not() -
         axis for axes in SEALED_SUITE_ROBUSTNESS_AXES.values() for axis in axes
     }
     assert not (contributed - {"timing"}) & declarable
+
+
+def test_sealed_suite_recommendations_follow_a_chinese_question() -> None:
+    """The six review items follow the question; the signed science does not move."""
+
+    import re
+
+    han = re.compile(r"[一-鿿]")
+    _projection, survival = _h1_authority()
+    survival_authorities = ScientificRuntimeAuthorities(trajectory=None, current_case=survival)
+    trajectory = load_trajectory_scientific_runtime_authority(
+        build_runtime_scientific_projection(
+            load_default_case_protocol("h3_trajectory_clustering")
+        ).deterministic_execution_contract
+    )
+    trajectory_authorities = ScientificRuntimeAuthorities(trajectory=trajectory, current_case=None)
+    _projection, feasibility = _h2_authority()
+    feasibility_authorities = ScientificRuntimeAuthorities(trajectory=None, current_case=feasibility)
+    cases = [
+        (_h1_context(survival), survival_authorities, H1_LABELS),
+        (_h3_context(trajectory), trajectory_authorities, H3_LABELS),
+        (
+            _h2_context(feasibility_authorities, contrast_declared=True),
+            feasibility_authorities,
+            H2_LABELS,
+        ),
+    ]
+    def draft(context, authorities, labels):
+        planning_context = authorities.planning_contract_context()
+        request = build_family_spec_request(
+            context,
+            analysis_types=candidate_analysis_types(context),
+            variable_roster=select_progressive_variables(context),
+            allowed_literature_citation_keys=ALLOWED,
+            required_primary_cohort_selection_mode="all_input_rows",
+            planning_contract_context=planning_context,
+        )
+        llm = ScriptedMockLLMClient([json.dumps(_labels_payload(request, labels))])
+        return ProgressivePlannerAgent(llm).run_attempt(
+            context, planner_strategy=FAMILY_SPEC_STRATEGY,
+            allowed_literature_citation_keys=ALLOWED, direct_comparator_literature_keys=[],
+            enforce_article_contract=True, article_contract_context=context,
+            planning_contract_context=planning_context,
+            required_primary_cohort_selection_mode="all_input_rows",
+        ).output
+
+    for context, authorities, labels in cases:
+        english = draft(context, authorities, labels)
+        chinese_context = context.model_copy(
+            update={"research_question": "这个签名研究问题在本数据源上能回答到什么程度？"}
+        )
+        chinese = draft(chinese_context, authorities, labels)
+        english_items = english.design_selection.selected.reviewable_plan
+        chinese_items = chinese.design_selection.selected.reviewable_plan
+        assert len(english_items) == len(chinese_items) == 6
+        assert all(not han.search(item) for item in english_items)
+        assert all(han.search(item) for item in chinese_items)
+        assert chinese_items[0].startswith("研究队列")
+        for item in [*english_items, *chinese_items]:
+            assert not re.match(r"^[A-Za-z /-]{3,40}:\s", item), item
+            assert not re.match(r"^[\u4e00-\u9fff]{2,12}：", item), item
+        # Readers label the six positions (population, exposure/timing,
+        # outcome, model, missing data, sensitivity): the trajectory
+        # candidate grid is the model item, not the outcome item.
+        for items in (english_items, chinese_items):
+            model_items = [index for index, item in enumerate(items) if "BIC" in item]
+            assert model_items in ([], [3]), items
+        assert [step.method for step in english.steps] == [step.method for step in chinese.steps]
+        cohort_name = context.cohort.cohort_name
+        assert all(cohort_name not in item for item in [*english_items, *chinese_items])

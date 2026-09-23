@@ -53,6 +53,7 @@ from .landmark_categorical_template import (
     _method_card_elements,
     _method_card_ids,
 )
+from .plan_language import listing, plan_language, sentence
 
 _PRIMARY_DESIGN_ELEMENTS = (
     "dependence",
@@ -120,6 +121,15 @@ def _design_selection(
         if request.cluster_unit == "patient"
         else "each analysis row is one ICU stay and rows are not assumed to be distinct patients"
     )
+    language = plan_language(request.research_question)
+    unit_text_zh = (
+        "每行为一次 ICU 入住；已声明患者层面的相关性"
+        if request.cluster_unit == "patient"
+        else "每行为一次 ICU 入住，不假定各行来自不同患者"
+    )
+    landmark_zh = f"ICU 入院后 {sealed.landmark_hours:g} h"
+    horizon_zh = f"{sealed.endpoint_horizon_days:g} 天"
+    adjustment_zh = listing([_label(spec, name) for name in sealed.adjustment_columns], language)
     comparator_keys = [
         key for key in request.comparison_literature_keys if key in request.allowed_literature_citation_keys
     ]
@@ -165,18 +175,30 @@ def _design_selection(
             "No causal ventilation effect, no immortal-time-free estimate outside the landmark rule, "
             "and no independence of repeated ICU stays beyond the declared grouping."
         ),
-        reviewable_plan=[
-            f"Population and unit: cohort {request.cohort_name}; {unit_text}; stays alive at the "
-            f"{landmark} landmark with a valid endpoint.",
-            f"Exposure: incident {exposure} by {landmark}; prevalent exposure at time zero is excluded.",
-            f"Outcome: {outcome} through {horizon} from ICU admission, censored administratively.",
-            f"Model: adjusted Cox proportional-hazards model for {adjustment_text}; Wald 95% CI; "
-            "Schoenfeld residual audit with the sealed handling policy.",
-            "Missing data: complete-case on the sealed columns with an audited denominator.",
-            "Robustness: prespecified interval-specific Cox and an unadjusted restricted-mean "
-            "survival-time contrast replace a constant hazard ratio when proportional hazards is "
-            "rejected.",
-        ],
+        reviewable_plan=(
+            [
+                f"研究队列；{unit_text_zh}；纳入在 {landmark_zh} landmark 时存活且终点有效的入住。",
+                f"截至 {landmark_zh} 新发的 {exposure}；排除时间零点时已存在的暴露。",
+                f"自 ICU 入院起 {horizon_zh} 内的 {outcome}，按行政截尾处理。",
+                f"调整 {adjustment_zh} 的 Cox 比例风险模型；Wald 95% CI；按封印的处理政策做 "
+                "Schoenfeld 残差审计。",
+                "对封印的列做完整病例分析，并审计分母。",
+                "比例风险假设被拒绝时，以预先设定的分段 Cox 模型和未调整的限制平均生存时间对比，"
+                "替代恒定的风险比。",
+            ]
+            if language == "zh"
+            else [
+                f"The study cohort; {unit_text}; stays alive at the {landmark} landmark with a valid "
+                "endpoint.",
+                f"Incident {exposure} by {landmark}; prevalent exposure at time zero is excluded.",
+                sentence(f"{outcome} through {horizon} from ICU admission, censored administratively."),
+                f"Adjusted Cox proportional-hazards model for {adjustment_text}; Wald 95% CI; Schoenfeld "
+                "residual audit with the sealed handling policy.",
+                "Complete-case on the sealed columns with an audited denominator.",
+                "Prespecified interval-specific Cox and an unadjusted restricted-mean survival-time "
+                "contrast replace a constant hazard ratio when proportional hazards is rejected.",
+            ]
+        ),
         disposition="selected",
         decision_reason=(
             "The question asks for a time-respecting survival association; the sealed landmark "
@@ -325,7 +347,7 @@ def build_landmark_survival_skeleton(
         analysis_type="survival",
         cohort_objective=(
             f"Estimate the sealed landmark survival association between {exposure_label} and "
-            f"{outcome_label} on cohort {request.cohort_name}, keeping the risk-set rule, "
+            f"{outcome_label} on the study cohort, keeping the risk-set rule, "
             "missingness, and repeated stays visible for review."
         ),
         design_selection=design,

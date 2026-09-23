@@ -40,6 +40,7 @@ from ..progressive_contract import (
     ProgressiveTableOneVariable,
 )
 from .contract import DESCRIPTIVE_FAMILY_ID, FamilyPlanSpec, FamilySpecError, FamilySpecRequest
+from .plan_language import listing, plan_language, sentence
 from .landmark_categorical_template import (
     FamilySkeletonDraft,
     _cohort_intent,
@@ -126,6 +127,12 @@ def _design_selection(
         if request.cluster_unit == "patient"
         else "each analysis row is one ICU stay and rows are not assumed to be distinct patients"
     )
+    language = plan_language(request.research_question)
+    unit_text_zh = (
+        "每行为一次 ICU 入住；已声明患者层面的相关性，重复入住单独报告、不假定独立"
+        if request.cluster_unit == "patient"
+        else "每行为一次 ICU 入住，不假定各行来自不同患者"
+    )
     comparator_keys = [
         key for key in request.comparison_literature_keys if key in request.allowed_literature_citation_keys
     ]
@@ -171,24 +178,43 @@ def _design_selection(
             "No causal effect, no patient-level incidence, no adjusted or independent association, and "
             "no transportability beyond the source population."
         ),
-        reviewable_plan=[
-            (
-                f"Population and unit: all input rows of cohort {request.cohort_name}"
+        reviewable_plan=(
+            [
+                "研究队列的全部输入行"
+                + (
+                    "中满足类型化纳入界限者"
+                    if request.cohort_selection_mode == "predicate_filtered"
+                    else ""
+                )
+                + f"；{unit_text_zh}。",
+                f"{exposure}，封闭水平为 {listing(request.exposure_levels, language)}；"
+                "无法评估水平的行单独计数并报告，不重编码。",
+                f"{outcome}；报告总体及按暴露水平的计数与比例。",
+                "不建立调整模型；本设计为描述性研究，不提出调整后的关联。",
+                "在解读任何比例之前，先审计暴露、结局和基线变量的测量可得性与缺失情况。",
+                "物化前检查暴露水平是否封闭、分母是否一致、是否可能存在重复行，以及观察窗口是否可得。",
+            ]
+            if language == "zh"
+            else [
+                "All input rows of the study cohort"
                 + (
                     " that meet the typed eligibility bound"
                     if request.cohort_selection_mode == "predicate_filtered"
                     else ""
                 )
-                + f"; row identity {request.identity_column}; {unit_text}."
-            ),
-            f"Exposure: {exposure} with closed levels {levels}; rows without an evaluable level are counted and reported, never recoded.",
-            f"Outcome: {outcome}; counts and proportions are reported overall and by exposure level.",
-            "No adjustment model: the design is descriptive and proposes no adjusted association.",
-            "Missing data and coverage: measurement availability and missingness of the exposure, "
-            "outcome, and baseline variables are audited before any proportion is interpreted.",
-            "Feasibility: closed exposure levels, denominator consistency, repeated-row possibility, "
-            "and window availability are checked before materialization.",
-        ],
+                + f"; {unit_text}.",
+                sentence(
+                    f"{exposure} with closed levels {levels}; rows without an evaluable level are "
+                    "counted and reported, never recoded."
+                ),
+                sentence(f"{outcome}; counts and proportions are reported overall and by exposure level."),
+                "No adjustment model; the design is descriptive and proposes no adjusted association.",
+                "Measurement availability and missingness of the exposure, outcome, and baseline "
+                "variables are audited before any proportion is interpreted.",
+                "Closed exposure levels, denominator consistency, repeated-row possibility, and window "
+                "availability are checked before materialization.",
+            ]
+        ),
         disposition="selected",
         decision_reason=(
             "The question asks for occurrence proportions and outcome proportions by group; the sealed "
@@ -366,7 +392,7 @@ def build_descriptive_skeleton(
         analysis_type="descriptive_epidemiology",
         cohort_objective=(
             f"Describe the distribution of {exposure_label} and the proportion with {outcome_label} "
-            f"by level among the analysis rows of cohort {request.cohort_name}, with denominators, "
+            f"by level among the analysis rows of the study cohort, with denominators, "
             "baseline context, and measurement limits visible for review."
         ),
         design_selection=design,
