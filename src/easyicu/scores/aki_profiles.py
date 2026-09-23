@@ -14,7 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from importlib import resources
 import json
-from typing import Any, Mapping, Optional
+from types import MappingProxyType
+from typing import Any, Iterable, Mapping, Optional
 
 import numpy as np
 import pandas as pd
@@ -84,6 +85,110 @@ RENAL_AKI_BUNDLE_OUTPUTS = (
     "uo_rt_24hr",
 )
 
+#: Bundle outputs whose presence depends on the database's registered
+#: source-native profile.  Everything else in the bundle belongs to the
+#: cross-database reference layer or the evidence receipts and is published for
+#: every database.
+SOURCE_NATIVE_BUNDLE_OUTPUTS: tuple[str, ...] = tuple(
+    column for column in RENAL_AKI_BUNDLE_OUTPUTS if "source_native" in column
+)
+
+#: Source-native outputs :func:`build_renal_aki_bundle` publishes for every
+#: registered profile: the stage spine, its severity projection, and the
+#: profile stamp that names the authority behind them.  A profile with no
+#: official stage still publishes the spine, as an all-missing column whose
+#: status and ascertainment say why.
+_UNIVERSAL_SOURCE_NATIVE_OUTPUTS = frozenset(
+    {
+        "aki_stage_source_native",
+        "aki_severe_source_native",
+        "aki_source_native_profile",
+        "aki_source_native_status",
+        "aki_source_native_authority",
+        "aki_source_native_reliability_grade",
+        "aki_source_native_fidelity",
+        "aki_source_native_ascertainment",
+        "aki_source_native_time_scale",
+        "aki_source_native_uses_future",
+    }
+)
+
+#: ``profile_id -> {mode: the further source-native outputs that mode emits}``.
+#: One bundle runs exactly one mode of its profile's adapter.  A column absent
+#: from every mode is structurally absent for every database the profile
+#: serves: the upstream implementation has no such component, so the bundle
+#: must not invent an all-missing column that would read as one.  A column of
+#: another mode is absent because the adapter took the other branch, which the
+#: columns that mode did emit prove.  Declaring a column the adapter never
+#: emits is fail-closed -- the export reports it as an unexplained gap instead
+#: of silently dropping it.
+_PROFILE_SOURCE_NATIVE_MODES: Mapping[str, Mapping[str, frozenset[str]]] = (
+    MappingProxyType(
+        {
+            "MIMIC_IV_MIT_LCP_KDIGO_D20B49A7": MappingProxyType(
+                {
+                    # Creatinine, urine and CRRT components with a smoothed
+                    # stage.
+                    "components": frozenset(
+                        {
+                            "aki_source_native",
+                            "aki_stage_creat_source_native",
+                            "aki_stage_uo_source_native",
+                            "aki_stage_crrt_source_native",
+                            "aki_stage_source_native_smoothed",
+                        }
+                    ),
+                    # The upstream stage needs the CRRT-mode source; without it
+                    # the adapter publishes why instead of the components.
+                    "crrt_source_unavailable": frozenset(
+                        {"aki_source_native_reason"}
+                    ),
+                }
+            ),
+            # MIMIC-III's pinned implementation has no RRT component.
+            "MIMIC_III_MIT_LCP_KDIGO_D20B49A7": MappingProxyType(
+                {
+                    "components": frozenset(
+                        {
+                            "aki_source_native",
+                            "aki_stage_creat_source_native",
+                            "aki_stage_uo_source_native",
+                        }
+                    )
+                }
+            ),
+            # A published event annotation: one stage, no component columns.
+            "HIRID_AKI_EWS_2024_BTAE212": MappingProxyType(
+                {
+                    "event_annotation": frozenset(
+                        {"aki_source_native", "aki_source_native_reason"}
+                    )
+                }
+            ),
+            # Case-level endpoints are not broadcast onto the hourly table.
+            "SICDB_NATIVE_KDIGO_AKI_168_44A27CC8": MappingProxyType(
+                {
+                    "case_level": frozenset(
+                        {"aki_source_native", "aki_source_native_reason"}
+                    )
+                }
+            ),
+            "AUMC_LEGACY_ACUTE_RENAL_FAILURE_8906394D": MappingProxyType(
+                {
+                    "case_level": frozenset(
+                        {"aki_source_native", "aki_source_native_reason"}
+                    )
+                }
+            ),
+            # Urine components only; the pinned maintainer tree publishes no
+            # official eICU AKI stage, so there is nothing further to emit.
+            "EICU_OFFICIAL_RENAL_COMPONENTS_34CECE8C": MappingProxyType(
+                {"urine_components_only": frozenset()}
+            ),
+        }
+    )
+)
+
 
 class AKIProfileError(ValueError):
     """Base error for an invalid source-native profile request."""
@@ -118,7 +223,14 @@ def load_aki_profile_registry() -> Mapping[str, Any]:
 
 
 def list_aki_profiles(database: Optional[str] = None) -> tuple[AKIProfile, ...]:
-    """List profiles, optionally restricted to a database or alias."""
+    """List profiles, optionally restricted to a database or alias.
+
+    An official ``*_demo`` release is a row subset of its parent database with
+    the same schema, so it resolves the parent's source-native profile.  This
+    mirrors the data-source owner's declared demo rule
+    (:mod:`easyicu.databases.profiles`); it never invents a profile for a
+    database whose parent has none.
+    """
 
     profiles = tuple(
         _profile_from_payload(profile_id, payload)
@@ -127,12 +239,15 @@ def list_aki_profiles(database: Optional[str] = None) -> tuple[AKIProfile, ...]:
     if database is None:
         return profiles
     needle = _normalize_database(database)
+    candidates = {needle}
+    if needle.endswith("_demo"):
+        candidates.add(_normalize_database(needle.removesuffix("_demo")))
     return tuple(
         profile
         for profile in profiles
         if profile.database == "all"
-        or needle
-        in {
+        or candidates
+        & {
             _normalize_database(profile.database),
             *{
                 _normalize_database(alias)
@@ -164,6 +279,124 @@ def default_source_native_profile(database: str) -> AKIProfile:
             f"{[profile.profile_id for profile in candidates]!r}"
         )
     return candidates[0]
+
+
+@dataclass(frozen=True, slots=True)
+class RenalBundleColumnUnavailability:
+    """A renal bundle column the database's profile structurally cannot publish.
+
+    This is an owner declaration, not an observation about missing values:
+    either the pinned upstream implementation has no such component, so no
+    extraction of this database can produce the column, or ``source_native_mode``
+    names the adapter branch this export took, which does not emit it.
+    """
+
+    concept_id: str
+    database: str
+    profile_id: str
+    output_kind: str
+    reason_code: str
+    supported_databases: tuple[str, ...]
+    source_native_mode: Optional[str] = None
+
+
+def source_native_output_modes(profile_id: str) -> Mapping[str, frozenset[str]]:
+    """Return ``{mode: optional source-native columns}`` for ``profile_id``."""
+
+    get_aki_profile(profile_id)  # reject an unregistered identifier
+    modes = _PROFILE_SOURCE_NATIVE_MODES.get(profile_id)
+    if not modes:
+        raise AKIProfileError(
+            f"{profile_id!r} declares no source-native output set; register one "
+            "beside its adapter before exporting the renal module"
+        )
+    return modes
+
+
+def published_source_native_outputs(profile_id: str) -> frozenset[str]:
+    """Return the source-native bundle columns ``profile_id`` may publish."""
+
+    optional: frozenset[str] = frozenset().union(
+        *source_native_output_modes(profile_id).values()
+    )
+    return frozenset(_UNIVERSAL_SOURCE_NATIVE_OUTPUTS | optional)
+
+
+def source_native_mode_emitted(
+    profile_id: str, columns: Iterable[str]
+) -> Optional[str]:
+    """Name the one declared mode ``columns`` show the adapter ran, if any.
+
+    ``None`` when the columns carry none of the profile's optional outputs or
+    fit no single mode, so a caller cannot tell which branch ran.
+    """
+
+    modes = source_native_output_modes(profile_id)
+    optional = frozenset().union(*modes.values())
+    emitted = optional & {str(column) for column in columns}
+    if not emitted:
+        return None
+    matching = [name for name, outputs in modes.items() if emitted <= outputs]
+    return matching[0] if len(matching) == 1 else None
+
+
+def _databases_publishing(concept_id: str) -> tuple[str, ...]:
+    databases = {
+        _normalize_database(profile.database)
+        for profile in list_aki_profiles()
+        if profile.database != "all"
+        and concept_id in published_source_native_outputs(profile.profile_id)
+    }
+    return tuple(sorted(databases))
+
+
+def renal_bundle_column_unavailability(
+    concept_id: str,
+    database: str,
+    *,
+    published_columns: Optional[Iterable[str]] = None,
+) -> Optional[RenalBundleColumnUnavailability]:
+    """Return a receipt only for a column this database's profile cannot emit.
+
+    ``published_columns`` are the columns the export actually carries.  With
+    them, a column of another adapter mode is explained by the mode those
+    columns prove ran; without them only a column no mode emits is.
+
+    ``None`` means the absence is not explained here -- either the column is
+    not part of the source-native layer, or the profile does publish it in the
+    mode that ran (or the mode cannot be told) and its absence is a real
+    extraction failure the caller must surface.
+    """
+
+    concept = str(concept_id).strip()
+    if concept not in SOURCE_NATIVE_BUNDLE_OUTPUTS:
+        return None
+    try:
+        profile = default_source_native_profile(database)
+    except AKIProfileError:
+        return None
+    receipt = {
+        "concept_id": concept,
+        "database": _normalize_database(database),
+        "profile_id": profile.profile_id,
+        "output_kind": profile.output_kind,
+        "supported_databases": _databases_publishing(concept),
+    }
+    if concept not in published_source_native_outputs(profile.profile_id):
+        return RenalBundleColumnUnavailability(
+            **receipt,
+            reason_code="source_native_profile_publishes_no_such_component",
+        )
+    if concept in _UNIVERSAL_SOURCE_NATIVE_OUTPUTS or published_columns is None:
+        return None
+    mode = source_native_mode_emitted(profile.profile_id, published_columns)
+    if mode is None or concept in source_native_output_modes(profile.profile_id)[mode]:
+        return None
+    return RenalBundleColumnUnavailability(
+        **receipt,
+        reason_code="source_native_profile_mode_emits_no_such_column",
+        source_native_mode=mode,
+    )
 
 
 def apply_source_native_aki(
@@ -375,6 +608,36 @@ def build_renal_aki_bundle(
     result["aki_severe_source_native"] = (
         native_stage.ge(2).where(native_stage.notna()).astype("boolean")
     )
+    # The declared output set is load-bearing: the export explains a missing
+    # source-native column to the user from it.  Fail here rather than let an
+    # adapter publish a column the declaration does not cover, which would make
+    # that explanation silently wrong for every other database.
+    published = published_source_native_outputs(native_profile.profile_id)
+    undeclared = sorted(
+        column
+        for column in result.columns
+        if column in SOURCE_NATIVE_BUNDLE_OUTPUTS and column not in published
+    )
+    if undeclared:
+        raise AKIProfileError(
+            f"{native_profile.profile_id} published undeclared source-native "
+            "columns: " + ", ".join(undeclared)
+        )
+    # The export tells which adapter branch ran from the optional columns it
+    # carries; a bundle mixing two modes would make that reading wrong.
+    optional_emitted = sorted(
+        column
+        for column in result.columns
+        if column in published and column not in _UNIVERSAL_SOURCE_NATIVE_OUTPUTS
+    )
+    if optional_emitted and source_native_mode_emitted(
+        native_profile.profile_id, optional_emitted
+    ) is None:
+        raise AKIProfileError(
+            f"{native_profile.profile_id} published source-native columns that "
+            "fit no single declared mode: " + ", ".join(optional_emitted)
+        )
+
     # The profile adapters carry internal compatibility columns.  The renal
     # module is a versioned physical contract, so never leak those columns (or
     # the deprecated strict phenotype) into current exports.

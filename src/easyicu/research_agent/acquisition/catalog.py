@@ -51,6 +51,12 @@ class CatalogConcept:
     selection_mode: str = "ordinary"
     selection_note: str = ""
     canonical_alternative: str = ""
+    #: False when the concept comes from the database capability menu but the
+    #: bound source does not carry it.  A planner-only run may still request it
+    #: -- that is how a plan states what a later extraction must produce -- but
+    #: it must know it is asking for one, because a study whose source is the
+    #: final input can never materialize it.
+    present_in_bound_source: bool = True
 
 
 @dataclass
@@ -80,7 +86,10 @@ class AvailableCatalog:
         categories (the agent still sees the category exists).
         """
         has_tags = any(
-            c.methodology or c.selection_mode != "ordinary" for c in self.concepts
+            c.methodology
+            or c.selection_mode != "ordinary"
+            or not c.present_in_bound_source
+            for c in self.concepts
         )
         lines = [
             f"Available concepts in the provided data ({len(self.concepts)} "
@@ -100,7 +109,18 @@ class AvailableCatalog:
             for c in sorted(shown, key=lambda x: x.concept_id):
                 desc = f" — {c.description}" if c.description else ""
                 warnings = [
-                    value for value in (c.methodology, c.selection_note) if value
+                    value
+                    for value in (
+                        c.methodology,
+                        c.selection_note,
+                        (
+                            ""
+                            if c.present_in_bound_source
+                            else "NOT in the bound source: selecting it commits "
+                            "this study to a new extraction"
+                        ),
+                    )
+                    if value
                 ]
                 warn = f"  ⚠ {'; '.join(warnings)}" if warnings else ""
                 lines.append(f"  - {c.concept_id}{desc}{warn}")

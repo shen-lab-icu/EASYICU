@@ -1,10 +1,16 @@
-"""Owner policy for concepts that require an explicit user selection.
+"""Owner policy for concepts whose availability does not imply suitability.
 
 Availability and scientific suitability are different contracts.  A concept
 may be physically present while still being an experimental, deprecated, or
 sensitivity-only alternative that must not replace the ordinary meaning of a
 user's question.  This module owns that small dependency-free boundary so Web,
 Idea Mining, and Research Agent launchers do not each infer it independently.
+
+Two modes exist.  ``explicit_only`` withholds a variant until the user names
+it.  ``prefer_alternative`` never withholds anything -- the concept is a real,
+citable definition -- but carries the owner's caution and the canonical
+alternative to whoever is choosing a role for it, so the caution arrives while
+the design is being written rather than as a refusal afterwards.
 """
 
 from __future__ import annotations
@@ -48,7 +54,59 @@ class ConceptSelectionDecision:
         }
 
 
+#: A variant is withheld until the user names it.
+EXPLICIT_ONLY = "explicit_only"
+#: A definition is selectable, but a better-suited one exists for most roles.
+PREFER_ALTERNATIVE = "prefer_alternative"
+
+#: KDIGO stage bindings whose zero category absorbs unobserved evidence.  Every
+#: one of them follows the upstream rule that a component with no usable
+#: evidence contributes zero, so ``stage 0`` means "no positive evidence was
+#: found", not "kidney injury was ruled out".  They remain the right columns
+#: for reproducing the published cross-database phenotype; they are the wrong
+#: ones for an exposure or endpoint, because the reference group then contains
+#: every never-assessed stay.  The evidence receipts are deliberately absent
+#: from this list: they are the remedy, not the defect.
+OBSERVABILITY_COLLAPSING_KDIGO_CONCEPTS: tuple[str, ...] = (
+    "aki",
+    "aki_reference",
+    "aki_severe",
+    "aki_severe_reference",
+    "aki_severe_source_native",
+    "aki_source_native",
+    "aki_stage",
+    "aki_stage_creat_reference",
+    "aki_stage_creat_source_native",
+    "aki_stage_crrt_source_native",
+    "aki_stage_reference",
+    "aki_stage_reference_smoothed_6h",
+    "aki_stage_rrt_reference",
+    "aki_stage_source_native",
+    "aki_stage_source_native_smoothed",
+    "aki_stage_uo_reference",
+    "aki_stage_uo_source_native",
+    "kdigo_aki",
+    "kdigo_stage",
+)
+
+_KDIGO_OBSERVABILITY_NOTE = (
+    "stage 0 here absorbs never-assessed stays (a component with no usable "
+    "evidence counts as zero); as an exposure or endpoint use aki_stage_strict, "
+    "which keeps unassessed stays unknown"
+)
+
+
 _POLICIES = {
+    concept: ConceptSelectionPolicy(
+        concept_id=concept,
+        selection_mode=PREFER_ALTERNATIVE,
+        rationale=_KDIGO_OBSERVABILITY_NOTE,
+        explicit_terms=(),
+        canonical_alternative="aki_stage_strict",
+    )
+    for concept in OBSERVABILITY_COLLAPSING_KDIGO_CONCEPTS
+}
+_POLICIES.update({
     "sep3_sofa2": ConceptSelectionPolicy(
         concept_id="sep3_sofa2",
         selection_mode="explicit_only",
@@ -77,7 +135,7 @@ _POLICIES = {
         ),
         canonical_alternative="sep3_sofa1",
     ),
-}
+})
 
 _MODULE_CONCEPT_IDS = {
     "sepsis3_sofa2": "sep3_sofa2",
@@ -145,6 +203,17 @@ def evaluate_concept_selection(
             reason_code="concept_selection_ordinary",
             selection_mode="ordinary",
         )
+    if policy.selection_mode != EXPLICIT_ONLY:
+        # An advisory policy carries a caution, never a refusal: the concept is
+        # a real definition and withholding it would remove the published
+        # phenotype from every legitimate reproduction.
+        return ConceptSelectionDecision(
+            concept_id=normalized_id,
+            allowed=True,
+            reason_code="concept_selection_advisory",
+            selection_mode=policy.selection_mode,
+            canonical_alternative=policy.canonical_alternative,
+        )
     text = " ".join(str(user_intent or "").casefold().split())
     explicitly_named = any(
         _explicit_term_present(text, term) for term in policy.explicit_terms
@@ -190,6 +259,9 @@ def is_concept_selection_authority_key(value: Any) -> bool:
 
 
 __all__ = [
+    "EXPLICIT_ONLY",
+    "OBSERVABILITY_COLLAPSING_KDIGO_CONCEPTS",
+    "PREFER_ALTERNATIVE",
     "ConceptSelectionDecision",
     "ConceptSelectionPolicy",
     "concept_id_for_module",

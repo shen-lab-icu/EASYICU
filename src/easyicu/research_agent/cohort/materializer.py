@@ -80,6 +80,8 @@ from ..intake.materialized_metadata import (
 from ..intake.materialized_trajectory import (
     publish_materialized_trajectory_authority,
 )
+from ..contracts.host_derivations import host_derivation
+from .host_derivations import materialize_host_derivation
 from ..acquisition.patient_grouping import (
     PatientGroupingBinding,
     PatientGroupingError,
@@ -87,7 +89,11 @@ from ..acquisition.patient_grouping import (
 )
 from ..trajectory.panel import FixedWindowGrid, fixed_window_panel
 from easyicu.concept.loader import _get_concept_bounds
-from easyicu.concept.metadata_projection import ConceptColumnRole, NumericBounds
+from easyicu.concept.metadata_projection import (
+    ConceptColumnRole,
+    NumericBounds,
+    declares_physical_numeric_domain,
+)
 
 Window = Tuple[float, float]
 _FALSE_TOKENS = {"", "0", "false", "f", "no", "n", "none", "nan", "na", "null", "off"}
@@ -309,6 +315,19 @@ def _bounded_legacy_concept_numeric(
     )
 
 
+def _numeric_input(values: pd.Series) -> pd.Series:
+    """Widen a nullable boolean so a numeric domain fill cannot reject 0/1.
+
+    ``pd.to_numeric`` leaves a ``boolean`` extension series as booleans, and
+    filling one with ``0`` raises.  Counts and measurement statuses are numeric
+    domains, so widen first and keep missing values missing.
+    """
+
+    if pd.api.types.is_bool_dtype(values.dtype) and values.isna().any():
+        return values.astype("Int64")
+    return values
+
+
 def _normalize_typed_output_domain(
     frame: pd.DataFrame,
     *,
@@ -335,7 +354,7 @@ def _normalize_typed_output_domain(
             continue
         if role is ConceptColumnRole.MEASUREMENT_STATUS:
             numeric = _require_finite_numeric(
-                pd.to_numeric(values, errors="coerce"),
+                pd.to_numeric(_numeric_input(values), errors="coerce"),
                 original=values,
                 concept=column,
                 purpose="measurement-status output",
@@ -362,7 +381,7 @@ def _normalize_typed_output_domain(
             continue
         if role is ConceptColumnRole.COUNT:
             numeric = _require_finite_numeric(
-                pd.to_numeric(values, errors="coerce"),
+                pd.to_numeric(_numeric_input(values), errors="coerce"),
                 original=values,
                 concept=column,
                 purpose="count output",
@@ -394,10 +413,8 @@ def _normalize_typed_output_domain(
                 purpose="numeric output",
             )
             continue
-        if role is ConceptColumnRole.VALUE and (
-            metadata.canonical_unit is not None
-            or metadata.extraction_bounds is not None
-            or metadata.analysis_plausibility_range is not None
+        if role is ConceptColumnRole.VALUE and declares_physical_numeric_domain(
+            metadata
         ):
             frame[column] = _bounded_typed_numeric(
                 pd.to_numeric(values, errors="coerce"),
@@ -1242,6 +1259,7 @@ def materialize_cohort(
     prefer_existing: bool = True,
     bounds_violation_policy: str = "reject",
     positive_only_event_concepts: Sequence[str] = (),
+    host_derivations: Sequence[str] = (),
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """Build a per-stay analysis cohort from the EasyICU data layer.
 
@@ -1261,6 +1279,7 @@ def materialize_cohort(
         prefer_existing=prefer_existing,
         bounds_violation_policy=bounds_violation_policy,
         positive_only_event_concepts=positive_only_event_concepts,
+        host_derivations=host_derivations,
     )
     return cohort, provenance
 
@@ -1278,6 +1297,7 @@ def _materialize_cohort_with_metadata(
     prefer_existing: bool,
     bounds_violation_policy: str,
     positive_only_event_concepts: Sequence[str],
+    host_derivations: Sequence[str] = (),
 ) -> tuple[pd.DataFrame, Dict[str, Any], MaterializedColumnMetadataCollector]:
     t0 = time.time()
     source_mode, root = _resolve_source(data_path, prefer_existing)
@@ -1294,6 +1314,7 @@ def _materialize_cohort_with_metadata(
         t0=t0,
         bounds_violation_policy=bounds_violation_policy,
         positive_only_event_concepts=positive_only_event_concepts,
+        host_derivations=host_derivations,
     )
     if source_mode == "export" and is_export_package(root):
         with open_export_package(root) as export_package:
@@ -1322,6 +1343,7 @@ def _materialize_cohort_from_resolved_source(
     t0: float,
     bounds_violation_policy: str,
     positive_only_event_concepts: Sequence[str],
+    host_derivations: Sequence[str] = (),
     verify_source_package: bool = True,
 ) -> tuple[pd.DataFrame, Dict[str, Any], MaterializedColumnMetadataCollector]:
     """Materialize from one already-resolved, explicitly owned source."""
@@ -1388,10 +1410,9 @@ def _materialize_cohort_from_resolved_source(
             # Validate every consumed status before any aggregation, but keep
             # physical nulls intact so ``count`` remains a measurement count.
             _strict_event_status_series(loaded[concept], concept=concept)
-        elif source_metadata.role is ConceptColumnRole.VALUE and (
-            source_metadata.canonical_unit is not None
-            or source_metadata.extraction_bounds is not None
-            or source_metadata.analysis_plausibility_range is not None
+        elif (
+            source_metadata.role is ConceptColumnRole.VALUE
+            and declares_physical_numeric_domain(source_metadata)
         ):
             loaded[concept] = _bounded_typed_numeric(
                 pd.to_numeric(loaded[concept], errors="coerce"),
@@ -1509,6 +1530,45 @@ def _materialize_cohort_from_resolved_source(
             frames.append(static_frame)
             metadata_collector.add_static(c, output_columns=static_frame.columns)
 
+    # ---- declared cross-concept host derivations over the cohort window
+    #
+    # These are the readings no per-concept aggregation can express, because
+    # whether a value is "negative" or "never observed" is decided by several
+    # concepts together.  The declaration names every source; the source rows
+    # are loaded through the same bounded, typed ``load`` as everything else.
+    resolved_host_derivations: List[str] = []
+    for derivation_id in dict.fromkeys(host_derivations):
+        declared = host_derivation(derivation_id)
+        if not metadata_collector.enabled:
+            raise MaterializedMetadataError(
+                "host derivations require a typed export package: "
+                f"{declared.derivation_id!r}"
+            )
+        derivation_frames: Dict[str, pd.DataFrame] = {}
+        for concept in declared.source_concepts:
+            loaded = load(concept)
+            if concept in unavailable or concept not in loaded.columns:
+                raise MaterializedMetadataError(
+                    f"host derivation {declared.derivation_id!r} requires source "
+                    f"concept {concept!r}, which this source does not provide"
+                )
+            derivation_frames[concept] = loaded
+        derived_frame = materialize_host_derivation(
+            declared,
+            frames=derivation_frames,
+            identities=base[ID_COL].tolist(),
+            id_column=ID_COL,
+            time_column=TIME_COL,
+            window=cohort_window,
+        )
+        frames.append(derived_frame)
+        metadata_collector.add_host_derivation(
+            declared,
+            output_columns=tuple(derived_frame.columns),
+            window=cohort_window,
+        )
+        resolved_host_derivations.append(declared.derivation_id)
+
     # ---- outcomes -> whole-stay binary (a death after 24h still counts), plus
     # the event time (<c>_time, e.g. death_time = time-of-death hours from ICU
     # admission) when the source carries a timestamp, so timing-aware analyses
@@ -1620,6 +1680,7 @@ def _materialize_cohort_from_resolved_source(
         "event_indicator_columns_normalized": event_indicator_columns,
         "dense_status_outcomes_preserving_unknown": sorted(dense_status_outcomes),
         "declared_positive_only_event_concepts": list(declared_positive_only),
+        "host_derivations": list(resolved_host_derivations),
         "source_bounds_violation_policy": bounds_violation_policy,
         "source_bounds_exclusions": dict(sorted(bounds_violation_counts.items())),
         "legacy_export_domain_normalizations": (
@@ -1754,10 +1815,9 @@ def _build_trajectory_long_from_resolved_source(
             source_metadata = source_binding.metadata
             if source_metadata.role is ConceptColumnRole.EVENT_STATUS:
                 _strict_event_status_series(df[concept], concept=concept)
-            elif source_metadata.role is ConceptColumnRole.VALUE and (
-                source_metadata.canonical_unit is not None
-                or source_metadata.extraction_bounds is not None
-                or source_metadata.analysis_plausibility_range is not None
+            elif (
+                source_metadata.role is ConceptColumnRole.VALUE
+                and declares_physical_numeric_domain(source_metadata)
             ):
                 df[concept] = _bounded_typed_numeric(
                     pd.to_numeric(df[concept], errors="coerce"),
@@ -1968,6 +2028,7 @@ def _materialize_with_open_export_package(
         t0=time.time(),
         bounds_violation_policy=materialize_args["bounds_violation_policy"],
         positive_only_event_concepts=materialize_args["positive_only_event_concepts"],
+        host_derivations=materialize_args.get("host_derivations", ()),
         verify_source_package=False,
     )
 
@@ -2130,6 +2191,7 @@ def materialize_to_parquet(
             positive_only_event_concepts=materialize_args[
                 "positive_only_event_concepts"
             ],
+            host_derivations=materialize_args.get("host_derivations", ()),
         )
     else:
         cohort, provenance, metadata_collector = _materialize_with_open_export_package(
@@ -2191,6 +2253,10 @@ def materialize_to_parquet(
         "positive_only_event_concepts": list(
             materialize_args["positive_only_event_concepts"]
         ),
+        # The sealed producer receipt names the cross-concept derivations that
+        # produced columns in this cohort; a replay that omits one cannot
+        # reproduce the same authority.
+        "host_derivations": list(provenance["host_derivations"]),
         "identity_column": identity_column,
         "replacement_row_identity": identity_binding,
     }

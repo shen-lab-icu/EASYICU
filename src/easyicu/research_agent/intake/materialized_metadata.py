@@ -42,6 +42,7 @@ from easyicu.concept.metadata_sidecar import (
 )
 
 from ..authority.filesystem import AnchoredDirectory, AuthorityFilesystemError
+from ..contracts.host_derivations import HostDerivation, host_derived_transform
 from .export_package import ExportPackage, resolve_exported_concept
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -1354,6 +1355,87 @@ class MaterializedColumnMetadataCollector:
                     time_unit="h",
                 )
 
+    def add_host_derivation(
+        self,
+        derivation: HostDerivation,
+        *,
+        output_columns: Sequence[str],
+        window: tuple[float, float],
+    ) -> None:
+        """Describe the columns one declared cross-concept derivation published.
+
+        Unlike every other family here, these columns carry more than one source
+        receipt, because the reading genuinely depends on several concepts at
+        once.  The declaration fixes which ones: a column inherits unit, bounds
+        and lineage from its declared primary, names the rest in
+        ``derived_from_concepts``, and binds a receipt to every source read.
+        """
+
+        if not self._enabled:
+            return
+        owners: dict[str, _SourceOwner] = {}
+        for concept in derivation.source_concepts:
+            owner = self._source_owner(concept)
+            if owner is None:
+                raise MaterializedMetadataError(
+                    f"host derivation {derivation.derivation_id!r} requires a "
+                    f"verified source binding for {concept!r}"
+                )
+            owners[concept] = owner
+        names = set(output_columns)
+        derivation_window = DerivationWindow(
+            origin="icu_admission",
+            start_hours=window[0],
+            end_hours=window[1],
+        )
+        coordinates = tuple(
+            owners[concept].coordinate for concept in derivation.source_concepts
+        )
+        for output in derivation.outputs:
+            if output.column not in names:
+                raise MaterializedMetadataError(
+                    f"host derivation {derivation.derivation_id!r} did not publish "
+                    f"its declared column {output.column!r}"
+                )
+            primary = owners[output.primary_concept]
+            binding = ColumnMetadataBinding(
+                metadata=derive_concept_column_metadata(
+                    primary.binding.metadata,
+                    spec=ColumnProjectionSpec(
+                        column_name=output.column,
+                        source_concept=primary.binding.metadata.source_concept,
+                        role=output.role,
+                        aggregation=output.aggregation,
+                        additional_source_concepts=tuple(
+                            concept
+                            for concept in derivation.source_concepts
+                            if concept != output.primary_concept
+                        ),
+                    ),
+                ),
+                derivation_window=derivation_window if output.windowed else None,
+                representation_transform=output.transform_id,
+            )
+            previous = self._columns.get(output.column)
+            if previous is not None and previous != binding:
+                raise MaterializedMetadataError(
+                    f"materialized column {output.column!r} has conflicting "
+                    "derivations"
+                )
+            self._columns[output.column] = binding
+            receipt = OutputDerivation(
+                output_column=output.column,
+                sources=coordinates,
+                transform_id=output.transform_id,
+            )
+            previous_receipt = self._derivations.get(output.column)
+            if previous_receipt is not None and previous_receipt != receipt:
+                raise MaterializedMetadataError(
+                    f"materialized column {output.column!r} has conflicting "
+                    "source receipts"
+                )
+            self._derivations[output.column] = receipt
+
     def add_fixed_window_panel(
         self,
         concept: str,
@@ -1791,10 +1873,16 @@ def _validate_derivation_contract(
                 raise MaterializedMetadataError(
                     f"initial transform receipt mismatch for {column!r}"
                 )
-            if len(derivation.sources) != 1:
+            # One column, one source -- except for a transform the host
+            # derivation contract declares as cross-concept, where the
+            # declaration fixes the exact source set and its primary.  An
+            # undeclared transform can never widen its own lineage.
+            declared = host_derived_transform(binding.representation_transform)
+            if declared is None and len(derivation.sources) != 1:
                 raise MaterializedMetadataError(
                     f"initial source receipt cardinality mismatch for {column!r}"
                 )
+            observed_concepts: list[str] = []
             for source in derivation.sources:
                 if source.authority_sha256 != authority.source_export_authority_sha256:
                     raise MaterializedMetadataError(
@@ -1804,13 +1892,24 @@ def _validate_derivation_contract(
                     source_sidecar,
                     source=source,
                 )
-                if (
-                    source_binding.metadata.source_concept
-                    != binding.metadata.source_concept
-                ):
+                observed_concepts.append(source_binding.metadata.source_concept)
+            if declared is None:
+                if observed_concepts != [binding.metadata.source_concept]:
                     raise MaterializedMetadataError(
                         f"initial source concept mismatch for {column!r}"
                     )
+                continue
+            declared_derivation, declared_column = declared
+            if (
+                declared_column.column != column
+                or declared_column.role is not binding.metadata.role
+                or binding.metadata.source_concept != declared_column.primary_concept
+                or sorted(observed_concepts)
+                != sorted(declared_derivation.source_concepts)
+            ):
+                raise MaterializedMetadataError(
+                    f"host derivation receipt mismatch for {column!r}"
+                )
         return
     if authority.producer == "research_agent_run_stage":
         parent = authority.parent_authority_sha256

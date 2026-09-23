@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import csv
+from dataclasses import replace
 import hashlib
 import json
 import math
@@ -1081,6 +1082,7 @@ def _metadata_only_planning_catalog(
     """Use the same source-aware menu for initial planning and restoration."""
     from easyicu.research_agent.acquisition.catalog import (
         AvailableCatalog,
+        CatalogConcept,
         build_available_catalog,
         build_database_capability_catalog,
     )
@@ -1116,10 +1118,22 @@ def _metadata_only_planning_catalog(
             catalog = AvailableCatalog(
                 source=source_catalog.source,
                 concepts=list(source_catalog.concepts),
+                enrichment_degraded=source_catalog.enrichment_degraded,
             )
         if source_catalog is not None:
             if entry_mode != "study_local_prepared_cohort":
-                by_id = {item.concept_id: item for item in catalog.concepts}
+                carried = {item.concept_id for item in source_catalog.concepts}
+                by_id = {
+                    # The capability menu says what a later narrow extraction
+                    # could produce; it is not evidence that THIS source has
+                    # it.  Say which is which, so a plan that requests a
+                    # re-extraction does so knowingly instead of discovering it
+                    # after acquisition has run.
+                    item.concept_id: replace(
+                        item, present_in_bound_source=item.concept_id in carried
+                    )
+                    for item in catalog.concepts
+                }
                 # Exact source metadata takes precedence without reading values.
                 by_id.update((item.concept_id, item) for item in source_catalog.concepts)
                 catalog.concepts = list(by_id.values())
@@ -1132,6 +1146,39 @@ def _metadata_only_planning_catalog(
         item for item in catalog.concepts
         if structural_outcome_unavailability(item.concept_id, normalized_database) is None
     ]
+    # A declared cross-concept reading is offered exactly when this source
+    # carries every receipt it needs.  It is not a database capability -- no
+    # extraction produces the column -- so it can only appear once the inputs
+    # are physically present, and it never displaces a real concept.
+    from easyicu.research_agent.contracts.host_derivations import HOST_DERIVATIONS
+
+    by_id = {item.concept_id: item for item in catalog.concepts}
+    for derivation in HOST_DERIVATIONS.values():
+        if not set(derivation.source_concepts) <= set(by_id):
+            continue
+        for output in derivation.outputs:
+            if not output.selectable or output.column in by_id:
+                continue
+            # A derived column belongs beside the concepts it reads, so the
+            # planner meets it while looking at that part of the menu rather
+            # than in an "uncategorized" tail.
+            primary = by_id.get(output.primary_concept)
+            entry = CatalogConcept(
+                output.column,
+                description=output.description or derivation.summary,
+                category=primary.category if primary is not None else "",
+                file_name=primary.file_name if primary is not None else "",
+                resolved_column=output.column,
+                # Typed by declaration: the derivation contract fixes this
+                # column's role.  Coverage resolves only typed owners once a
+                # catalog has any, so an untyped entry was listed on the menu
+                # yet could never be selected -- a proposed strict exposure
+                # then vanished from the zero-row planning schema.
+                typed_metadata=True,
+                column_role=output.role.value,
+            )
+            catalog.concepts.append(entry)
+            by_id[output.column] = entry
     return catalog
 
 
@@ -4922,6 +4969,10 @@ def make_research_pipeline_run_runner(
                     development_resume_acquisition=development_resume_acquisition,
                     baseline_requirements=bound_baseline_requirements,
                 )
+                from easyicu.webserver.scientific_runtime_projection import (
+                    required_host_derivations as _required_host_derivations,
+                )
+
                 acquisition = acquire_universe_for_question(
                     export_dir=Path(export_path).expanduser(),
                     question=question,
@@ -4961,6 +5012,15 @@ def make_research_pipeline_run_runner(
                     # The time-varying input owner applies the private grouping
                     # to both row spaces together and emits opaque identifiers.
                     patient_grouping=(None if any(spec.strategy == "time_varying" for spec in sensitivity_specs) else patient_grouping),
+                    # A reviewed design may name a cross-concept reading (for
+                    # example an observability-preserving KDIGO stage) that no
+                    # single concept can express.  Materialize exactly the
+                    # declared derivations its variables require.
+                    host_derivations=_required_host_derivations(
+                        primary_exposure,
+                        foundation_profile.get("primary_exposure_source_concept"),
+                        target,
+                    ),
                 )
                 if not acquisition.blocked and any(spec.strategy == "time_varying" for spec in sensitivity_specs):
                     from easyicu.webserver.time_varying_runtime_projection import materialize_web_time_varying_input
@@ -5802,10 +5862,29 @@ def resume_research_pipeline(
         if kdigo_observability_authority_missing(
             _primary_exposure(entry.study), materialized_exposure
         ):
+            # Report which remedy applies by reading the staged cohort's
+            # schema: the receipts either exist and the strict exposure can be
+            # materialized from them, or the renal module must be re-extracted.
+            from easyicu.webserver.scientific_runtime_projection import (
+                export_kdigo_strict_derivation_available,
+            )
+
+            source = entry.study.get("data_source")
+            derivable = export_kdigo_strict_derivation_available(
+                (source or {}).get("path") if isinstance(source, Mapping) else None
+            )
             raise ResearchPipelineRunError(
                 "research_pipeline_kdigo_observability_authority_missing",
-                "This KDIGO plan uses a legacy exposure that can collapse incomplete observation evidence into stage 0. Regenerate it against the strict KDIGO materialization.",
-                details={"required_binding": "aki_stage_strict"},
+                "This KDIGO plan uses an exposure that can collapse incomplete observation evidence into stage 0. "
+                + (
+                    "Change the exposure to aki_stage_strict, which this source can materialize, and re-plan."
+                    if derivable
+                    else "Re-extract the renal module so it carries the per-component KDIGO evidence receipts, then re-plan."
+                ),
+                details={
+                    "required_binding": "aki_stage_strict",
+                    "strict_derivation_available": derivable,
+                },
             )
     if resolved == "approved" and current_study_context is not None:
         planned_digest = study_context_owner.scientific_configuration_sha256(

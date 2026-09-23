@@ -173,3 +173,155 @@ def test_listed_but_unresolvable_optional_pick_is_dropped_not_fatal(tmp_path, mo
     assert blocked.blocked
     assert blocked.blocked_reason_code == "no_available_concepts"
     assert not (tmp_path / "blocked").exists()
+
+
+def test_a_cross_concept_reading_is_offered_only_when_its_inputs_are_present(
+    monkeypatch,
+):
+    """The strict KDIGO stage is not a database capability, it is a derivation.
+
+    No extraction produces the column, so it may only appear once the source
+    physically carries every evidence receipt the reading combines.  Offering it
+    otherwise would put an unmaterializable exposure on the planning menu.
+    """
+
+    from easyicu.research_agent.acquisition import catalog
+    from easyicu.research_agent.contracts.host_derivations import host_derivation
+
+    declared = host_derivation("strict_kdigo_stage")
+    # Each builder returns a fresh catalog, exactly as the real owners do.
+    monkeypatch.setattr(
+        catalog,
+        "build_database_capability_catalog",
+        lambda _: AvailableCatalog(
+            source="canonical", concepts=[CatalogConcept("death")]
+        ),
+    )
+
+    monkeypatch.setattr(
+        catalog,
+        "build_available_catalog",
+        lambda _: AvailableCatalog(
+            source="legacy",
+            concepts=[CatalogConcept(name) for name in declared.source_concepts],
+        ),
+    )
+    offered = owner._metadata_only_planning_catalog(
+        database="miiv", export_path="/metadata"
+    ).ids()
+    assert "aki_stage_strict" in offered
+    assert "aki_ascertainment" in offered
+    # Receipts travel with the cohort but are not design variables.
+    assert "kidney_window_row_count" not in offered
+    assert "kidney_complete_negative_observed" not in offered
+    # A derived column belongs beside the concepts it reads, with its own
+    # reader-facing line rather than the derivation's generic summary.
+    menu = owner._metadata_only_planning_catalog(
+        database="miiv", export_path="/metadata"
+    )
+    strict = next(c for c in menu.concepts if c.concept_id == "aki_stage_strict")
+    primary = next(
+        c for c in menu.concepts if c.concept_id == declared.source_concepts[0]
+    )
+    assert strict.category == primary.category
+    assert "explicit unknown" in strict.description
+
+    monkeypatch.setattr(
+        catalog,
+        "build_available_catalog",
+        lambda _: AvailableCatalog(
+            source="legacy",
+            concepts=[
+                CatalogConcept(name)
+                for name in declared.source_concepts
+                if name != "rrt_evidence_status"
+            ],
+        ),
+    )
+    assert "aki_stage_strict" not in owner._metadata_only_planning_catalog(
+        database="miiv", export_path="/metadata"
+    ).ids()
+
+
+def test_a_capability_the_bound_source_lacks_is_marked_not_hidden(monkeypatch):
+    """A planner-only menu says what a later extraction could produce.
+
+    That is deliberate -- a plan is allowed to state what must still be
+    extracted.  What was missing is which side of the line a concept is on: the
+    model could name a concept this source does not carry and only find out
+    after acquisition ran, which costs a whole planning round.  For a study
+    whose source IS the final input, it can never be materialized at all.
+    """
+
+    from easyicu.research_agent.acquisition import catalog
+
+    monkeypatch.setattr(
+        catalog,
+        "build_database_capability_catalog",
+        lambda _: AvailableCatalog(
+            source="canonical",
+            # ``lact`` is extractable from the database but absent here.
+            concepts=[CatalogConcept("death"), CatalogConcept("lact")],
+        ),
+    )
+    monkeypatch.setattr(
+        catalog,
+        "build_available_catalog",
+        lambda _: AvailableCatalog(
+            source="export",
+            concepts=[CatalogConcept("death"), CatalogConcept("local_measurement")],
+        ),
+    )
+
+    menu = owner._metadata_only_planning_catalog(
+        database="miiv", export_path="/prepared-export"
+    )
+    by_id = {item.concept_id: item for item in menu.concepts}
+
+    assert sorted(by_id) == ["death", "lact", "local_measurement"]
+    assert by_id["lact"].present_in_bound_source is False
+    assert by_id["death"].present_in_bound_source is True
+    assert by_id["local_measurement"].present_in_bound_source is True
+    # The model is told, in the same place it chooses concepts.
+    assert "NOT in the bound source" in menu.render_for_prompt()
+
+
+def test_an_offered_cross_concept_reading_can_actually_be_selected(monkeypatch):
+    """Listed on the menu must mean selectable.
+
+    Coverage resolves only typed owners once a catalog carries any typed
+    column metadata -- and every current export does.  The derived stage was
+    offered untyped, so a proposed ``aki_stage_strict`` exposure was silently
+    dropped from the zero-row planning schema and the landmark runtime then
+    refused the launch with ``web_scientific_runtime_columns_missing``.
+    """
+
+    from easyicu.research_agent.acquisition import catalog
+    from easyicu.research_agent.acquisition.catalog import assess_coverage
+    from easyicu.research_agent.contracts.host_derivations import host_derivation
+
+    declared = host_derivation("strict_kdigo_stage")
+    monkeypatch.setattr(
+        catalog,
+        "build_database_capability_catalog",
+        lambda _: AvailableCatalog(source="canonical", concepts=[CatalogConcept("death")]),
+    )
+    monkeypatch.setattr(
+        catalog,
+        "build_available_catalog",
+        lambda _: AvailableCatalog(
+            source="export",
+            concepts=[
+                CatalogConcept(name, typed_metadata=True, column_role="value")
+                for name in (*declared.source_concepts, "death")
+            ],
+        ),
+    )
+    menu = owner._metadata_only_planning_catalog(database="eicu_demo", export_path="/export")
+
+    strict = next(c for c in menu.concepts if c.concept_id == "aki_stage_strict")
+    assert strict.typed_metadata is True
+    assert strict.column_role == "value"
+    coverage = assess_coverage(["aki_stage_strict", "aki_ascertainment", "death"], menu)
+    assert coverage.missing == []
+    assert set(coverage.available) == {"aki_stage_strict", "aki_ascertainment", "death"}

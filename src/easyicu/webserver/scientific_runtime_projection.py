@@ -28,6 +28,9 @@ import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from easyicu.concept.selection_policy import (
+    OBSERVABILITY_COLLAPSING_KDIGO_CONCEPTS,
+)
 from easyicu.research_agent.authority.current_case_scientific_runtime import (
     build_current_case_scientific_runtime_authority,
 )
@@ -54,13 +57,45 @@ class WebScientificRuntimeProjection:
     analysis_only_execution: bool = False
 
 
-_LEGACY_KDIGO_EXPOSURE_NAMES = frozenset(
-    {"aki_stage", "aki_stage_max", "kdigo_aki", "kdigo_stage"}
+#: The concept owner declares which KDIGO stage bindings coalesce an
+#: unobserved component to zero; this owner decides what that means for an
+#: exposure.  Keeping one list would have let the two drift, and the refusal
+#: was already a no-op once the renal contract renamed its columns.
+_COLLAPSING_KDIGO_STAGE_BINDINGS = frozenset(
+    OBSERVABILITY_COLLAPSING_KDIGO_CONCEPTS
 )
+#: A materialized exposure carries the cohort aggregation in its name; the
+#: binding underneath is what this owner judges.
+_WINDOW_AGGREGATION_SUFFIXES = ("_max", "_min", "_mean", "_first", "_last")
+
+
+def _kdigo_binding_stem(name: str) -> str:
+    for suffix in _WINDOW_AGGREGATION_SUFFIXES:
+        if name.endswith(suffix) and len(name) > len(suffix):
+            return name[: -len(suffix)]
+    return name
 
 
 def kdigo_observability_authority_missing(*names: str | None) -> bool:
-    """Identify legacy KDIGO bindings that can collapse missing evidence to zero."""
+    """Whether a KDIGO binding can collapse missing evidence into stage 0.
+
+    The public-reference KDIGO stage follows its upstream semantics: a component
+    with no usable evidence contributes zero, so ``stage 0`` means "no positive
+    evidence was found".  Using it as a 0/1/2/3 exposure puts never-assessed
+    patients in the reference group, which this owner refuses.  The judgement
+    is about that semantics, not about one release's column names: the retired
+    phenotype, the reference port and the source-native profiles are all
+    refused, in concept form and in materialized ``<binding>_<aggregation>``
+    form.
+
+    Only an exposure that is observability-preserving *by construction* is
+    authorized -- a host-materialized strict stage, whose unknown rows stay
+    unknown.  Another column existing in the same artifact never authorizes
+    this one: receipts make the strict exposure derivable, they do not make a
+    collapsed exposure safe.  Use
+    :func:`kdigo_strict_derivation_available` to tell a caller which of the two
+    situations they are in.
+    """
 
     normalized = {
         str(name or "").strip().lower()
@@ -72,7 +107,78 @@ def kdigo_observability_authority_missing(*names: str | None) -> bool:
         for name in normalized
     ):
         return False
-    return any(name in _LEGACY_KDIGO_EXPOSURE_NAMES for name in normalized)
+    return any(
+        _kdigo_binding_stem(name) in _COLLAPSING_KDIGO_STAGE_BINDINGS
+        for name in normalized
+    )
+
+
+def required_host_derivations(*names: str | None) -> tuple[str, ...]:
+    """Declared cross-concept derivations the named plan variables require.
+
+    A host derivation is never inferred from the data: a column whose value
+    depends on several concepts at once is produced only when the reviewed
+    design names it.  This resolves those names to the declared derivation ids
+    that acquisition must run, and returns nothing for an ordinary concept.
+    """
+
+    from easyicu.research_agent.contracts.host_derivations import (
+        host_derivation_producing,
+    )
+
+    resolved: list[str] = []
+    for name in names:
+        declared = host_derivation_producing(str(name or "").strip())
+        if declared is None:
+            continue
+        derivation_id = declared[0].derivation_id
+        if derivation_id not in resolved:
+            resolved.append(derivation_id)
+    return tuple(resolved)
+
+
+def kdigo_strict_derivation_available(columns: Sequence[str]) -> bool:
+    """Whether a set of columns carries the receipts a strict KDIGO stage needs.
+
+    This is diagnostic, not authorization: it answers whether the remedy is
+    "materialize the strict exposure from receipts this export already has" or
+    "re-extract the renal module so it carries those receipts at all".
+    """
+
+    from easyicu.scores.aki_strict import strict_kdigo_receipt_columns
+
+    return strict_kdigo_receipt_columns(tuple(columns)) is not None
+
+
+def export_kdigo_strict_derivation_available(source_path: object) -> bool:
+    """Whether the *export* behind a study can support a strict KDIGO stage.
+
+    The receipts must be read from the export, not from the materialized wide
+    cohort: the cohort summarizer reduces a categorical evidence status to a
+    numeric presence indicator, which can no longer distinguish an observed
+    negative from an absent measurement.  An unreadable export answers ``False``
+    so the caller keeps its fail-closed default.
+    """
+
+    from easyicu.research_agent.intake.export_package import (
+        ExportPackageError,
+        is_export_package,
+        open_export_package,
+    )
+
+    root = Path(str(source_path or "")).expanduser()
+    try:
+        if not root.is_dir() or not is_export_package(root):
+            return False
+        with open_export_package(root) as package:
+            columns = {
+                column
+                for physical_file in package.files
+                for column in physical_file.columns
+            }
+    except (ExportPackageError, OSError, ValueError):
+        return False
+    return kdigo_strict_derivation_available(tuple(columns))
 
 
 def compile_web_scientific_runtime_projection(**coordinates: Any) -> WebScientificRuntimeProjection | None:
@@ -519,13 +625,26 @@ def compile_landmark_categorical_runtime_projection(
     if kdigo_observability_authority_missing(
         primary_exposure_source, primary_exposure
     ):
+        source = study.get("data_source") if isinstance(study, Mapping) else None
+        derivable = export_kdigo_strict_derivation_available(
+            (source or {}).get("path") if isinstance(source, Mapping) else None
+        )
         raise WebScientificRuntimeProjectionError(
             "web_kdigo_observability_authority_missing",
-            "KDIGO execution requires a strict exposure that keeps incomplete observation evidence unknown.",
+            "KDIGO execution requires an exposure that keeps incomplete observation evidence unknown.",
             details={
                 "primary_exposure": primary_exposure,
                 "primary_exposure_source": primary_exposure_source,
                 "required_binding": "aki_stage_strict",
+                "strict_derivation_available": derivable,
+                "remedy": (
+                    "select aki_stage_strict as the exposure: this source "
+                    "carries the KDIGO evidence receipts, so the host "
+                    "materializes the observability-preserving stage"
+                    if derivable
+                    else "re-extract the renal module so it carries the "
+                    "per-component KDIGO evidence receipts"
+                ),
             },
         )
 
@@ -890,6 +1009,9 @@ __all__ = [
     "compile_landmark_spline_runtime_projection",
     "compile_web_scientific_runtime_projection",
     "kdigo_observability_authority_missing",
+    "export_kdigo_strict_derivation_available",
+    "kdigo_strict_derivation_available",
+    "required_host_derivations",
     "one_sensitivity_spec",
     "operational_covariates",
     "primary_exposure_kind",

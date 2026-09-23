@@ -348,6 +348,7 @@ def acquire_universe_for_question(
     emit_trajectory: bool = True,
     trajectory_window: Optional[tuple] = None,
     patient_grouping: Optional[PatientGroupingBinding] = None,
+    host_derivations: Sequence[str] = (),
 ) -> AcquisitionResult:
     """Agent selects concepts, we check coverage, then materialise the universe.
 
@@ -360,6 +361,27 @@ def acquire_universe_for_question(
     proceed, and flag ``blocked`` only if the outcome itself is missing.
     """
     from ..cohort.materializer import materialize_to_parquet
+    from ..contracts.host_derivations import host_derivation, host_derivation_producing
+
+    # A declared cross-concept reading can arrive in any concept slot: to the
+    # design it IS a variable, so the planner names it like one.  It is not
+    # extractable, so route it to the derivation request instead of the concept
+    # loader, which would correctly report it unavailable.
+    requested_derivations: List[str] = list(host_derivations)
+
+    def _route_host_derivations(names: Sequence[str]) -> List[str]:
+        kept: List[str] = []
+        for name in names:
+            declared = host_derivation_producing(name)
+            if declared is None:
+                kept.append(str(name))
+                continue
+            if declared[0].derivation_id not in requested_derivations:
+                requested_derivations.append(declared[0].derivation_id)
+        return kept
+
+    static_concepts = _route_host_derivations(static_concepts)
+    required_feature_concepts = _route_host_derivations(required_feature_concepts)
 
     catalog = build_available_catalog(export_dir)
     normalized_modules = {
@@ -434,11 +456,13 @@ def acquire_universe_for_question(
     available_selected = [
         c for c in selection.selected_concepts if c in coverage.available
     ]
-    feature_concepts = [
-        c
-        for c in available_selected
-        if c not in set(outcome_concepts) | set(static_concepts)
-    ]
+    feature_concepts = _route_host_derivations(
+        [
+            c
+            for c in available_selected
+            if c not in set(outcome_concepts) | set(static_concepts)
+        ]
+    )
     required_feature_coverage = assess_coverage(
         list(required_feature_concepts), catalog
     )
@@ -578,6 +602,10 @@ def acquire_universe_for_question(
         # formal pipeline applies the same canonical bounds here and records
         # every excluded source value in materialization provenance.
         bounds_violation_policy="exclude_with_receipt",
+        # Declared cross-concept readings the plan asked for.  They are named,
+        # not inferred: a column whose value depends on several concepts at
+        # once must be requested by the design that will use it.
+        host_derivations=list(dict.fromkeys(requested_derivations)),
         **identity_kwargs,
     )
     try:
@@ -607,6 +635,17 @@ def acquire_universe_for_question(
             # status after owner normalization. ``_max`` is the stable public
             # coordinate, not a newly inferred scientific aggregation.
             analysis_columns[concept] = canonical_event_column
+    # A declared host derivation publishes cohort columns that are not concept
+    # projections, so they need their own public coordinate.  The column name
+    # IS the analysis coordinate: there is no aggregation left to choose, the
+    # derivation already summarized its window.
+    for derivation_id in dict.fromkeys(requested_derivations):
+        for output in host_derivation(derivation_id).outputs:
+            # The receipts travel in the artifact for audit; only the declared
+            # design variables become public analysis coordinates.
+            if output.selectable and output.column in materialized_columns:
+                analysis_columns[output.column] = output.column
+
     endpoint: Optional[EndpointSpec] = None
     target_catalog = catalog_by_id.get(str(target_outcome or ""))
     target_column = analysis_columns.get(str(target_outcome or ""))

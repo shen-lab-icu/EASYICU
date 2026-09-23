@@ -1,9 +1,12 @@
 import pandas as pd
 import pytest
 
+from easyicu.scores import aki_profiles
 from easyicu.scores.aki_profiles import (
     AKIProfileError,
     AKIProfilePrerequisiteError,
+    RENAL_AKI_BUNDLE_OUTPUTS,
+    SOURCE_NATIVE_BUNDLE_OUTPUTS,
     apply_aki_profile,
     apply_reference_aki,
     apply_source_native_aki,
@@ -13,6 +16,8 @@ from easyicu.scores.aki_profiles import (
     get_aki_profile,
     list_aki_profiles,
     load_aki_profile_registry,
+    published_source_native_outputs,
+    renal_bundle_column_unavailability,
 )
 
 
@@ -23,6 +28,31 @@ SICDB = "SICDB_NATIVE_KDIGO_AKI_168_44A27CC8"
 AUMC = "AUMC_LEGACY_ACUTE_RENAL_FAILURE_8906394D"
 EICU = "EICU_OFFICIAL_RENAL_COMPONENTS_34CECE8C"
 REFERENCE = "MIT_LCP_KDIGO_REFERENCE_PORT_V1"
+
+
+def test_a_demo_release_resolves_its_parent_database_profile():
+    """An official ``*_demo`` release is a row subset of the same schema.
+
+    The data-source owner already declares that rule; without it here the renal
+    bundle fails closed on every demo database, which is exactly the source a
+    new user starts from.
+    """
+
+    for demo, parent in (
+        ("eicu_demo", EICU),
+        ("miiv_demo", MIMIC_IV),
+        ("mimic_demo", MIMIC_III),
+    ):
+        assert default_source_native_profile(demo).profile_id == parent
+        assert {profile.profile_id for profile in list_aki_profiles(demo)} == {
+            profile.profile_id for profile in list_aki_profiles(parent_database(demo))
+        }
+    with pytest.raises(AKIProfileError):
+        default_source_native_profile("not_a_database_demo")
+
+
+def parent_database(demo: str) -> str:
+    return demo.removesuffix("_demo")
 
 
 def test_registry_defaults_to_public_reference_and_has_six_native_profiles():
@@ -388,6 +418,223 @@ def test_eicu_profile_emits_official_component_but_no_official_stage():
     assert result["urine_output_source_native"].tolist() == [25.0]
     assert result["aki_stage_source_native"].isna().all()
     assert result["aki_source_native_status"].eq("components_only").all()
+
+
+def test_every_source_native_profile_declares_the_columns_it_publishes():
+    """The declaration is what the export shows a user; it must be complete."""
+
+    assert set(SOURCE_NATIVE_BUNDLE_OUTPUTS) <= set(RENAL_AKI_BUNDLE_OUTPUTS)
+    for profile in list_aki_profiles():
+        if profile.database == "all":
+            continue
+        published = published_source_native_outputs(profile.profile_id)
+        assert published <= set(SOURCE_NATIVE_BUNDLE_OUTPUTS)
+        # Every profile publishes the stage spine and its provenance stamp, so
+        # a database with no official stage still reports why.
+        assert {
+            "aki_stage_source_native",
+            "aki_source_native_profile",
+            "aki_source_native_status",
+        } <= published
+    with pytest.raises(KeyError):
+        published_source_native_outputs("NOT_A_REGISTERED_PROFILE")
+
+
+def test_a_source_without_a_component_explains_the_absent_column():
+    """eICU has no official AKI stage, so its component columns cannot exist.
+
+    Without this receipt the renal module cannot be exported for eICU at all:
+    the export demands a typed primary binding for every planned concept.
+    """
+
+    receipt = renal_bundle_column_unavailability(
+        "aki_stage_creat_source_native", "eicu_demo"
+    )
+
+    assert receipt is not None
+    assert receipt.profile_id == EICU
+    assert receipt.output_kind == "URINE_COMPONENT_ONLY_NO_OFFICIAL_AKI_STAGE"
+    assert receipt.reason_code == "source_native_profile_publishes_no_such_component"
+    assert receipt.supported_databases == ("miiv", "mimic")
+    # MIMIC-III's pinned implementation carries no RRT component either.
+    assert (
+        renal_bundle_column_unavailability("aki_stage_crrt_source_native", "mimic")
+        is not None
+    )
+
+
+def test_a_published_column_is_never_explained_away_as_structural():
+    """A gap the profile should have filled must stay a loud failure."""
+
+    assert (
+        renal_bundle_column_unavailability("aki_stage_crrt_source_native", "miiv")
+        is None
+    )
+    assert renal_bundle_column_unavailability("aki_stage_source_native", "eicu") is None
+    # Reference-layer and evidence columns are not this owner's to explain.
+    assert renal_bundle_column_unavailability("aki_stage_reference", "eicu") is None
+    assert (
+        renal_bundle_column_unavailability("creatinine_evidence_status", "eicu") is None
+    )
+    assert renal_bundle_column_unavailability("aki_source_native", "not_a_db") is None
+
+
+MIMIC_IV_COMPONENTS = (
+    "aki_source_native",
+    "aki_stage_creat_source_native",
+    "aki_stage_uo_source_native",
+    "aki_stage_crrt_source_native",
+    "aki_stage_source_native_smoothed",
+)
+
+
+def _mimic_iv_bundle(crrt_df):
+    creatinine = pd.DataFrame(
+        {"stay_id": [1, 1], "charttime": [0, 60], "crea": [1.0, 1.1]}
+    )
+    return build_renal_aki_bundle(
+        "miiv",
+        crea_df=creatinine,
+        rrt_df=pd.DataFrame(columns=["stay_id", "charttime", "rrt"]),
+        crrt_df=crrt_df,
+        id_col="stay_id",
+        time_col="charttime",
+        time_unit="minutes",
+        rrt_source_complete=True,
+    )
+
+
+def test_the_bundle_runs_exactly_one_declared_mode_of_its_profile():
+    """MIMIC-IV emits the components, or -- with no CRRT-mode source -- a reason."""
+
+    components = _mimic_iv_bundle(pd.DataFrame(columns=["stay_id", "charttime", "rrt"]))
+    unavailable = _mimic_iv_bundle(None)
+
+    assert aki_profiles.source_native_mode_emitted(MIMIC_IV, components) == "components"
+    assert "aki_source_native_reason" not in components
+    assert (
+        aki_profiles.source_native_mode_emitted(MIMIC_IV, unavailable)
+        == "crrt_source_unavailable"
+    )
+    assert not set(MIMIC_IV_COMPONENTS) & set(unavailable)
+    # Every profile's modes together are exactly what it may publish.
+    for profile in list_aki_profiles():
+        if profile.database == "all":
+            continue
+        modes = aki_profiles.source_native_output_modes(profile.profile_id)
+        assert modes
+        assert frozenset().union(*modes.values()) <= published_source_native_outputs(
+            profile.profile_id
+        )
+
+
+def test_a_column_of_the_other_mode_is_explained_by_the_mode_that_ran():
+    """The official MIMIC-IV demo publishes the components, so no reason column.
+
+    Without the mode the export demanded both branches' columns at once, and
+    every current MIMIC-IV renal export failed on the reason column.
+    """
+
+    ran_components = [*MIMIC_IV_COMPONENTS, "aki_stage_source_native"]
+    receipt = renal_bundle_column_unavailability(
+        "aki_source_native_reason", "miiv", published_columns=ran_components
+    )
+
+    assert receipt is not None
+    assert receipt.reason_code == "source_native_profile_mode_emits_no_such_column"
+    assert receipt.source_native_mode == "components"
+    assert receipt.profile_id == MIMIC_IV
+    # The other direction: the reason proves the components were not computed.
+    reason_only = ["aki_source_native_reason", "aki_stage_source_native"]
+    for component in MIMIC_IV_COMPONENTS:
+        other = renal_bundle_column_unavailability(
+            component, "miiv", published_columns=reason_only
+        )
+        assert other is not None
+        assert other.source_native_mode == "crrt_source_unavailable"
+
+
+def test_a_column_of_the_mode_that_ran_stays_a_loud_gap():
+    """Only the branch the columns prove may explain an absence."""
+
+    without_crrt = [
+        column for column in MIMIC_IV_COMPONENTS if column != "aki_stage_crrt_source_native"
+    ]
+    assert (
+        renal_bundle_column_unavailability(
+            "aki_stage_crrt_source_native", "miiv", published_columns=without_crrt
+        )
+        is None
+    )
+    # No optional column at all: which branch ran cannot be told.
+    assert (
+        renal_bundle_column_unavailability(
+            "aki_source_native_reason",
+            "miiv",
+            published_columns=["aki_stage_source_native"],
+        )
+        is None
+    )
+    # Columns of both branches fit no single mode.
+    assert (
+        renal_bundle_column_unavailability(
+            "aki_stage_crrt_source_native",
+            "miiv",
+            published_columns=["aki_source_native", "aki_source_native_reason"],
+        )
+        is None
+    )
+    # The universal spine is never explained by a mode.
+    assert (
+        renal_bundle_column_unavailability(
+            "aki_source_native_status", "miiv", published_columns=MIMIC_IV_COMPONENTS
+        )
+        is None
+    )
+
+
+def test_the_bundle_refuses_to_mix_two_declared_modes(monkeypatch):
+    """The export reads the branch from the columns, so one bundle, one mode."""
+
+    split = dict(aki_profiles._PROFILE_SOURCE_NATIVE_MODES)
+    split[MIMIC_IV] = {
+        "creatinine_half": frozenset(MIMIC_IV_COMPONENTS[:2]),
+        "rest": frozenset(
+            {*MIMIC_IV_COMPONENTS[2:], "aki_source_native_reason"}
+        ),
+    }
+    monkeypatch.setattr(aki_profiles, "_PROFILE_SOURCE_NATIVE_MODES", split)
+
+    with pytest.raises(AKIProfileError, match="fit no single declared mode"):
+        _mimic_iv_bundle(pd.DataFrame(columns=["stay_id", "charttime", "rrt"]))
+
+
+def test_the_bundle_refuses_to_publish_an_undeclared_source_native_column(monkeypatch):
+    """An adapter must not outgrow the declaration the export explains from."""
+
+    shrunk = dict(aki_profiles._PROFILE_SOURCE_NATIVE_MODES)
+    shrunk[MIMIC_IV] = {
+        **shrunk[MIMIC_IV],
+        "components": frozenset(
+            shrunk[MIMIC_IV]["components"] - {"aki_stage_crrt_source_native"}
+        ),
+    }
+    monkeypatch.setattr(aki_profiles, "_PROFILE_SOURCE_NATIVE_MODES", shrunk)
+    creatinine = pd.DataFrame(
+        {"stay_id": [1, 1], "charttime": [0, 60], "crea": [1.0, 1.1]}
+    )
+
+    with pytest.raises(AKIProfileError, match="undeclared source-native"):
+        build_renal_aki_bundle(
+            "miiv",
+            crea_df=creatinine,
+            rrt_df=pd.DataFrame(columns=["stay_id", "charttime", "rrt"]),
+            crrt_df=pd.DataFrame(columns=["stay_id", "charttime", "rrt"]),
+            id_col="stay_id",
+            time_col="charttime",
+            time_unit="minutes",
+            rrt_source_complete=True,
+        )
 
 
 def test_hirid_profile_fails_closed_without_publication_only_endpoint():
