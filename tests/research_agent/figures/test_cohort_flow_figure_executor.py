@@ -192,6 +192,11 @@ def test_complete_flow_figure_draws_stages_exclusions_and_retention(
     assert "91.4% of previous" in svg
     assert "93.8% of previous" in svg
     assert "85.7% of universe" in svg
+    # The grey share sits directly under a red "excluded" count.  It is the
+    # share that REMAINS, and it must say so: a bare "91.4% of previous" under
+    # "-12 excluded" reads as though 91.4% had been excluded.
+    assert "retained 91.4% of previous" in svg
+    assert "retained 93.8% of previous" in svg
     contract = json.loads(
         (out_dir / "cohort_accounting.figure_contract.json").read_text(encoding="utf-8")
     )
@@ -238,6 +243,21 @@ def test_retention_share_makes_no_claim_when_counts_are_not_monotone() -> None:
     assert _retention_text(100, 100) == "100%"
     assert _retention_text(120, 100) is None
     assert _retention_text(10, 0) is None
+
+
+def test_a_rounded_share_never_contradicts_the_exclusion_beside_it() -> None:
+    """Two stays excluded from 48,971 must not read "retained 100%"."""
+
+    from easyicu.research_agent.execution.runners.cohort_flow_figure_executor import (
+        _retention_text,
+    )
+
+    assert _retention_text(48_969, 48_971) == ">99.9%"
+    assert _retention_text(1, 48_971) == "<0.1%"
+    # Exact extremes and ordinary shares are unchanged.
+    assert _retention_text(48_971, 48_971) == "100%"
+    assert _retention_text(0, 48_971) == "0%"
+    assert _retention_text(89_964, 94_418) == "95.3%"
 
 
 @pytest.mark.parametrize(

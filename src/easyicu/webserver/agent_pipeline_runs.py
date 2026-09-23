@@ -5610,6 +5610,10 @@ def make_research_pipeline_run_runner(
                     if patient_grouping is not None
                     else None
                 ),
+                # The identity column's description is agent guidance by
+                # contract; reader-label projections skip row identities
+                # (``reporting.manuscript_labels``), so it never reaches a
+                # figure, table, or manuscript label.
                 concept_descriptions=(
                     {
                         patient_grouping.output_identity_column: (

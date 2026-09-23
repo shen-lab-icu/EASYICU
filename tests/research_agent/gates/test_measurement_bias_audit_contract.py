@@ -528,3 +528,43 @@ def test_missingness_and_process_products_are_not_the_same_table(
         column for column in process.columns if column not in missingness.columns
     ]
     assert exclusive, "the process audit must answer a question of its own"
+
+
+def test_a_renamed_row_identity_is_never_audited_as_a_variable(
+    tmp_path: Path,
+) -> None:
+    """A patient-grouped cohort renames its row identity to ``patient_stay_id``.
+
+    The audit used to recognise identity columns only by a fixed list of
+    familiar names, so the renamed identity became an audited "variable": a
+    0%-missing row in every missingness figure, labelled with the host's
+    guidance text for the agent.  The host types the identity in the research
+    context, and that declaration -- not the spelling -- is the authority.
+    """
+
+    frame = _frame().rename(columns={"stay_id": "patient_stay_id"})
+    frame["patient_stay_id"] = [f"p{index}:s{index}" for index in range(1, 11)]
+    # The realistic leak path: a plan that lists every cohort column as input.
+    step = _step(inputs=list(_step().inputs) + ["patient_stay_id"])
+    context = {
+        **_CONTEXT,
+        "variables": [
+            {
+                "name": "patient_stay_id",
+                "role": "id",
+                "description": (
+                    "Host-verified unique ICU-stay identity. Derive the patient "
+                    "cluster only from the prefix before ':s'; never report "
+                    "identifier values."
+                ),
+            }
+        ],
+    }
+
+    result = _run_audit(tmp_path, step, frame, context)
+
+    assert result["summary"]["status"] == "ok"
+    for relative in result["summary"]["output_files"].values():
+        written = (result["out_dir"] / relative).read_text(encoding="utf-8")
+        assert "patient_stay_id" not in written, relative
+        assert "never report identifier" not in written, relative

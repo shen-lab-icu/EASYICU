@@ -360,9 +360,41 @@ def _retention_text(numerator: int, denominator: int) -> str | None:
     if denominator <= 0 or numerator > denominator:
         return None
     value = 100.0 * numerator / denominator
+    # Rounding must not contradict the exclusion printed beside it: two stays
+    # excluded from 48,971 is not "retained 100%", and one stay kept of many
+    # is not "retained 0%".
+    if numerator < denominator and value >= 99.95:
+        return ">99.9%"
+    if 0 < numerator and value < 0.05:
+        return "<0.1%"
     if abs(value - round(value)) < 0.05:
         return f"{round(value)}%"
     return f"{value:.1f}%"
+
+
+def _share_parts(count: int, previous: int, universe: int) -> list[str]:
+    """The provable retained shares of one stage, each naming its base."""
+
+    return [
+        f"{share} of {scope}"
+        for share, scope in (
+            (_retention_text(count, previous), "previous"),
+            (_retention_text(count, universe), "universe"),
+        )
+        if share
+    ]
+
+
+def _share_note(parts: Sequence[str], *, separator: str) -> str:
+    """The grey note drawn under an exclusion, stating what the share is.
+
+    It sits directly beneath a red "-N excluded" line, so a bare "95.3% of
+    previous" reads as the excluded share -- the opposite of what it is.  The
+    fit pass measures and the draw pass prints this same string, so the two
+    can never disagree about its width.
+    """
+
+    return "retained " + separator.join(parts) if parts else ""
 
 
 def _axes_size_pt(ax: Any) -> tuple[float, float]:
@@ -454,21 +486,11 @@ def _flow_type_scale(
                     max_up_pt, note_line_pt if excluded[index] else 0.0
                 )
                 if draw_shares:
-                    parts = [
-                        text
-                        for text in (
-                            _retention_text(counts[index], counts[index - 1]),
-                            _retention_text(counts[index], counts[0]),
-                        )
-                        if text
-                    ]
+                    parts = _share_parts(
+                        counts[index], counts[index - 1], counts[0]
+                    )
                     if parts:
-                        joined = " \u00b7 ".join(
-                            f"{value} of {scope}"
-                            for value, scope in zip(
-                                parts, ("previous", "universe")[-len(parts) :]
-                            )
-                        )
+                        joined = _share_note(parts, separator=" \u00b7 ")
                         if (
                             not compact
                             and shares_lines == 1
@@ -688,19 +710,13 @@ def render_cohort_flow_axis(
                 fontsize=note_fontsize,
                 color=PALETTE_CLINICAL["red"],
             )
-        previous_text = _retention_text(count, counts[index - 1])
-        universe_text = _retention_text(count, universe)
         # A one-line share note that would overflow the axes edge is stacked;
         # the fit pass already proved the taller block still clears the gap.
         separator = "\n" if compact or shares_lines == 2 else " \u00b7 "
         shares = (
-            separator.join(
-                text
-                for text in (
-                    f"{previous_text} of previous" if previous_text else "",
-                    f"{universe_text} of universe" if universe_text else "",
-                )
-                if text
+            _share_note(
+                _share_parts(count, counts[index - 1], universe),
+                separator=separator,
             )
             if shares_lines
             else ""

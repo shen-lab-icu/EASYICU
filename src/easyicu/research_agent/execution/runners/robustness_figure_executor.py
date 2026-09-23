@@ -703,16 +703,45 @@ def _interval_text(estimate: float, low: float, high: float) -> str:
     and both ends are printed at that same precision.
     """
 
+    point, lower, upper = _interval_parts(estimate, low, high)
+    return f"{point} [{lower}, {upper}]"
+
+
+def _interval_digits(estimate: float, low: float, high: float) -> int:
+    """Significant digits needed to resolve this interval's half-width."""
+
     width = abs(high - low)
     scale = max(abs(estimate), abs(low), abs(high))
     if width <= 0.0 or scale <= 0.0 or not math.isfinite(width / scale):
         digits = 4
     else:
         digits = int(math.ceil(math.log10(scale / width))) + 2
-    digits = max(4, min(digits, 12))
-    return (
-        f"{estimate:.{digits}g} [{low:.{digits}g}, {high:.{digits}g}]"
-    )
+    return max(4, min(digits, 12))
+
+
+def _interval_parts(estimate: float, low: float, high: float) -> tuple[str, str, str]:
+    """The three numbers of one interval at one shared decimal precision.
+
+    Significant-digit formatting drops trailing zeros number by number, so
+    ``0.7383 [0.702, 0.7765]`` reads as though the lower bound were known
+    less precisely than the others.  The decimals are chosen so the smallest
+    of the three still carries the resolving digits, and a trailing zero is
+    dropped only when all three can drop it -- ``1.96 [1.89, 2.03]`` stays
+    short while ``0.7383 [0.7020, 0.7765]`` keeps its zero.
+    """
+
+    digits = _interval_digits(estimate, low, high)
+    magnitudes = [abs(value) for value in (estimate, low, high) if value]
+    finite = [value for value in magnitudes if math.isfinite(value)]
+    magnitude = math.floor(math.log10(min(finite))) if finite else 0
+    decimals = max(0, digits - 1 - magnitude)
+    texts = [f"{value:.{decimals}f}" for value in (estimate, low, high)]
+    while decimals > 0 and all(text.endswith("0") for text in texts):
+        texts = [text[:-1] for text in texts]
+        decimals -= 1
+    if decimals == 0:
+        texts = [text.rstrip(".") for text in texts]
+    return texts[0], texts[1], texts[2]
 
 
 def _reader_label(value: str) -> str:
@@ -848,10 +877,44 @@ def _reader_legend(
     return _plain_legend(parts)
 
 
+def _anchor_already_shown(rows, anchor_value) -> bool:
+    """Whether the bound primary estimate is already printed in the table.
+
+    The anchor and the matrix row are two copies of one statistic, and they
+    need not be rounded identically: a bound ``2.09106`` against a row value
+    of ``2.0910632`` failed an exact comparison, and the table then printed
+    "Primary estimate: 2.09106 (contrast not declared)" beneath the very row
+    that shows ``2.091`` with its declared contrast.  The reader-facing
+    question is whether that number is already visible, so compare what the
+    table displays, at the row's own precision.
+    """
+
+    if anchor_value is None or "axis" not in rows:
+        return False
+    for _, row in rows.loc[rows["axis"].eq("primary")].iterrows():
+        if not bool(row["__drawable"]):
+            continue
+        contrast = _declared_label(row, "contrast_label", "")
+        if not contrast or contrast.lower() == "nan":
+            continue
+        shown, _, _ = _interval_parts(row["__estimate"], row["__low"], row["__high"])
+        anchor, _, _ = _interval_parts(anchor_value, row["__low"], row["__high"])
+        if shown == anchor:
+            return True
+    return False
+
+
 def _draw_specification_table(ax, rows, effect_scale, anchor_bound, anchor_value):
     """Show each source estimate without implying a common contrast or axis."""
     records = []
-    for _, row in rows.iterrows():
+    labels = [
+        _declared_label(row, "spec_label", row["__label"]) for _, row in rows.iterrows()
+    ]
+    # One specification may report several declared contrasts, one row each.
+    # Printing the same label on every row reads as a duplicated line, so a
+    # repeated label names the contrast it reports.
+    repeated = {label for label in labels if labels.count(label) > 1}
+    for position, (_, row) in enumerate(rows.iterrows()):
         estimate = (_interval_text(row["__estimate"], row["__low"], row["__high"])
                     if row["__drawable"] else "Not estimable")
         identity = [
@@ -862,7 +925,10 @@ def _draw_specification_table(ax, rows, effect_scale, anchor_bound, anchor_value
         basis = "; ".join(identity) if len(identity) == 2 else "Contrast / unit not declared"
         if str(row.get("independent_variant", "")).lower() == "false":
             basis += "; not an independent variant"
-        label = _declared_label(row, "spec_label", row["__label"])
+        label = labels[position]
+        contrast = _declared_label(row, "contrast_label", "")
+        if label in repeated and contrast and contrast.lower() != "nan":
+            label = f"{label}, {contrast}"
         records.append((textwrap.fill(_reader_label(label), 28), estimate,
                         textwrap.fill(_reader_label(basis), 34)))
     line_counts = [max(value.count("\n") + 1 for value in record) for record in records]
@@ -882,16 +948,9 @@ def _draw_specification_table(ax, rows, effect_scale, anchor_bound, anchor_value
         y += lines + 0.6
     if anchor_bound:
         value = f"{anchor_value:.6g}" if anchor_value is not None else "not reported"
-        # Do not add a detached scalar when its exact value is already shown
-        # by the primary row with the producer's declared contrast.
-        primary = rows.loc[rows["axis"].eq("primary")] if "axis" in rows else rows.iloc[0:0]
-        already_shown = (
-            len(primary) == 1
-            and bool(primary.iloc[0]["__drawable"])
-            and primary.iloc[0]["__estimate"] == anchor_value
-            and bool(_declared_label(primary.iloc[0], "contrast_label", ""))
-        )
-        if not already_shown:
+        # Do not add a detached scalar when its value is already shown by a
+        # primary row with the producer's declared contrast.
+        if not _anchor_already_shown(rows, anchor_value):
             ax.text(columns[0], y, f"Primary estimate: {value} (contrast not declared)",
                     va="top", fontsize=7)
 

@@ -83,3 +83,31 @@ def test_source_label_expansion_deduplicates_only_its_exact_multiword_prefix():
     assert repair_reader_internal_phrases(result, reader_display_labels={'outcome':'in hospital mortality'})[0] == result
     unchanged = 'Hospital mortality and in hospital mortality used different denominators: 10 and 10.'
     assert repair_reader_internal_phrases(unchanged, reader_display_labels={'outcome':'in hospital mortality'})[0] == unchanged
+
+
+def test_a_row_identity_description_is_never_projected_as_a_reader_label():
+    """The identity column's description tells the agent how to derive the
+    patient cluster; a reader-label projection must not turn it into a label."""
+
+    guidance = (
+        "Host-verified unique ICU-stay identity. Derive the patient cluster only "
+        "from the prefix before ':s'; never report identifier values."
+    )
+    identity = SimpleNamespace(
+        name="patient_stay_id", description=guidance, role=SimpleNamespace(value="id")
+    )
+    outcome = SimpleNamespace(
+        name="death", description="in hospital mortality", role=SimpleNamespace(value="outcome")
+    )
+    context = SimpleNamespace(variables=[identity, outcome])
+
+    unlabeled = source_bound_manuscript_labels(context, {}, include_unlabeled=True)
+    assert "patient_stay_id" not in unlabeled
+    assert unlabeled["death"] == "in hospital mortality"
+    # A Chinese label for the identity is left alone rather than replaced by
+    # the English agent guidance.
+    chinese = source_bound_manuscript_labels(
+        context, {"patient_stay_id": "住院标识"}, include_unlabeled=True
+    )
+    assert chinese["patient_stay_id"] == "住院标识"
+    assert guidance not in " ".join(chinese.values())

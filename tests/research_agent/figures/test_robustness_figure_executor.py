@@ -781,3 +781,84 @@ def test_the_specification_table_states_its_own_reader_legend(tmp_path):
     assert "logarithmic" not in caption
     assert "dashed vertical line" not in caption
     assert "solid vertical line" not in caption
+
+
+def test_interval_ends_share_one_decimal_precision():
+    """``0.7383 [0.702, 0.7765]`` reads as a coarser lower bound than it is."""
+
+    from easyicu.research_agent.execution.runners.robustness_figure_executor import (
+        _interval_text,
+    )
+
+    assert _interval_text(0.7383, 0.7020, 0.7765) == "0.7383 [0.7020, 0.7765]"
+    # Common trailing zeros still go, so short inputs stay short.
+    assert _interval_text(1.96, 1.89, 2.03) == "1.96 [1.89, 2.03]"
+    assert _interval_text(12.5, 3.0, 51.0) == "12.5 [3.0, 51.0]"
+    # A tight interval straddling 1 keeps the digits that separate its ends,
+    # at the same decimals on both sides of 1.
+    assert _interval_text(
+        0.9999975870226232, 0.9999781605874776, 1.0000170
+    ) == "0.9999976 [0.9999782, 1.0000170]"
+
+
+def test_a_primary_estimate_already_in_the_table_is_not_repeated_below_it():
+    """Two copies of one statistic need not be rounded the same way.
+
+    A bound ``2.09106`` against a matrix value of ``2.0910632`` used to fail an
+    exact comparison, and the table then printed "Primary estimate: 2.09106
+    (contrast not declared)" beneath the very row showing ``2.091`` with its
+    declared contrast -- a footer that contradicts the table above it.
+    """
+
+    import matplotlib.pyplot as plt
+    from easyicu.research_agent.execution.runners.robustness_figure_executor import (
+        _draw_specification_table, _validated_rows,
+    )
+
+    frame = pd.DataFrame([
+        dict(spec_id='primary_upper', spec_label='Nonlinear model, upper contrast',
+             axis='primary', point_estimate=2.0910632, ci_low=2.0161, ci_high=2.1689,
+             contrast_id='x:4.9_vs_2', contrast_label='4.9 vs 2',
+             independent_variant=True),
+        dict(spec_id='primary_lower', spec_label='Primary exposure curve, lower contrast',
+             axis='primary', point_estimate=0.7383, ci_low=0.7020, ci_high=0.7765,
+             contrast_id='x:1_vs_2', contrast_label='1 vs 2',
+             independent_variant=True),
+    ]).assign(effect_scale='OR', converged=True, effect_unit='mmol/L')
+    rows, scale, _ = _validated_rows(frame)
+    fig, ax = plt.subplots()
+    try:
+        _draw_specification_table(ax, rows, scale, True, 2.09106)
+        rendered = '\n'.join(t.get_text() for t in ax.texts)
+        assert '2.091 [2.016, 2.169]' in rendered
+        assert 'Primary estimate:' not in rendered
+        assert 'not declared' not in rendered
+    finally:
+        plt.close(fig)
+
+
+def test_a_specification_reporting_two_contrasts_names_each_row():
+    """The same label twice reads as a duplicated line, not as two contrasts."""
+
+    import matplotlib.pyplot as plt
+    from easyicu.research_agent.execution.runners.robustness_figure_executor import (
+        _draw_specification_table, _validated_rows,
+    )
+
+    base = dict(spec_id='age_rcs', spec_label='age: RCS instead of linear adjustment',
+                axis='functional_form', independent_variant=True)
+    frame = pd.DataFrame([
+        dict(base, point_estimate=0.7382, ci_low=0.7018, ci_high=0.7764,
+             contrast_id='x:1_vs_2', contrast_label='1 vs 2'),
+        dict(base, point_estimate=2.091, ci_low=2.016, ci_high=2.170,
+             contrast_id='x:4.9_vs_2', contrast_label='4.9 vs 2'),
+    ]).assign(effect_scale='OR', converged=True, effect_unit='mmol/L')
+    rows, scale, _ = _validated_rows(frame)
+    fig, ax = plt.subplots()
+    try:
+        _draw_specification_table(ax, rows, scale, False, None)
+        rendered = ' '.join(t.get_text().replace('\n', ' ') for t in ax.texts)
+        assert 'adjustment, 1 vs 2' in rendered
+        assert 'adjustment, 4.9 vs 2' in rendered
+    finally:
+        plt.close(fig)
