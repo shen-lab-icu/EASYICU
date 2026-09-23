@@ -46,6 +46,39 @@ def test_catalog_only_flags_have_the_same_type_before_and_after_export(concept):
     assert binding.columns[concept].metadata.role.value == "event_status"
 
 
+def test_row_free_catalog_labs_and_vitals_are_window_bound_for_planning():
+    """The web planner builds its context from a row-free catalog.
+
+    A routine lab or vital sign must reach it with a role the host can prove
+    was observed inside the feature window; otherwise the planner can neither
+    use it as a predictor nor adjust for it.
+    """
+
+    from easyicu.research_agent.icu_rules import default_time_windows
+    from easyicu.research_agent.planning.adjustment_authority import host_window_bound_roles
+
+    dtypes = {"stay_id": "int64", "death": "float64", "age": "float64", "hr": "float64",
+              "resp": "float64", "wbc": "float64", "bun": "float64", "crea": "float64",
+              "urine": "float64"}
+    frame = pd.DataFrame({name: pd.Series(dtype=dtype) for name, dtype in dtypes.items()})
+    first_day = [window for window in default_time_windows() if window.name == "first_24h"]
+    context = build_research_context(
+        research_question="Predict hospital death from first-day measurements.",
+        cohort=frame, cohort_name="row_free_catalog", database="miiv",
+        target_outcome="death", time_windows=first_day,
+    )
+
+    roles = {variable.name: variable.role.value for variable in context.variables}
+    assert roles["resp"] == "vital"
+    assert roles["wbc"] == roles["bun"] == roles["crea"] == "lab"
+    timing = host_window_bound_roles(context, reference_hours=24.0)
+    assert {name for name, role in timing.items() if role == "at_or_before_time_zero"} == {
+        "hr", "resp", "wbc", "bun", "crea",
+    }
+    assert timing["age"] == "baseline_static"
+    assert "urine" not in timing and "death" not in timing
+
+
 def test_catalog_numeric_output_does_not_acquire_a_boolean_domain():
     info = get_concept_info("icu_free_days_28")
     assert info["class_name"] != "lgl_cncpt"
