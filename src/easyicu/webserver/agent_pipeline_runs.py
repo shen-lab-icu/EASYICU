@@ -5195,6 +5195,57 @@ def make_research_pipeline_run_runner(
                         ),
                     }
                 )
+            from easyicu.webserver.trajectory_runtime_projection import (
+                compile_web_trajectory_runtime_projection,
+            )
+
+            try:
+                trajectory_projection = compile_web_trajectory_runtime_projection(
+                    study=candidate_planning_study,
+                    universe_path=Path(acquisition.universe_path),
+                    scientific_configuration_sha256=(
+                        study_context_owner.scientific_configuration_sha256(study)
+                    ),
+                )
+            except WebScientificRuntimeProjectionError as exc:
+                raise ResearchPipelineRunError(
+                    exc.code,
+                    str(exc),
+                    details=exc.details,
+                ) from exc
+            if trajectory_projection is not None:
+                if runtime_projection is not None:
+                    # Two sealed suites would each claim to be the run's one
+                    # deterministic contract, and the executors share a single
+                    # projection digest. Refuse rather than let the later
+                    # assignment silently decide which design executed.
+                    raise ResearchPipelineRunError(
+                        "research_pipeline_conflicting_sealed_suites",
+                        (
+                            "This study compiles both a current-case suite and a "
+                            "longitudinal trajectory suite; one run carries one "
+                            "sealed scientific contract."
+                        ),
+                        details={
+                            "field": "analysis_design",
+                            "current_case_projection_sha256": (
+                                runtime_projection.projection_sha256
+                            ),
+                            "trajectory_projection_sha256": (
+                                trajectory_projection.projection_sha256
+                            ),
+                        },
+                    )
+                profile_options.update(
+                    {
+                        "trajectory_scientific_runtime_authority": (
+                            trajectory_projection.authority
+                        ),
+                        "scientific_runtime_projection_sha256": (
+                            trajectory_projection.projection_sha256
+                        ),
+                    }
+                )
             analysis_only_execution = bool(runtime_projection is not None and runtime_projection.analysis_only_execution)
             if development_resume_binding is not None:
                 profile_options.update(

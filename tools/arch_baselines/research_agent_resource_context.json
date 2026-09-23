@@ -1,19 +1,13 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/data/concept-dict.json",
-      "src/easyicu/data/sofa2-dict.json"
+      "src/easyicu/research_agent/planning/figure_strategy.py",
+      "src/easyicu/research_agent/planning/study_design.py",
+      "src/easyicu/research_agent/planning/study_design_playbook.py",
+      "src/easyicu/research_agent/reporting/article_contract.py",
+      "src/easyicu/research_agent/schema.py"
     ],
-    "summary_changes": {
-      "max_planner_with_resources_bytes": {
-        "now": 61166,
-        "was": 61107
-      },
-      "max_planner_without_resources_bytes": {
-        "now": 56526,
-        "was": 56467
-      }
-    }
+    "summary_changes": {}
   },
   "baseline_history": [
     {
@@ -551,9 +545,20 @@
           "was": 56467
         }
       }
+    },
+    {
+      "reason": "Method-family closure 2026-09-22 (family_spec_v1 lane): planning and review owners changed -- figure strategy cluster_selection role and phenotyping coverage-heatmap alias, sealed-suite role projection in study_design, playbook and article-contract formal result scope for the sealed feasibility family, per-figure-output panel ids in schema. Only the H3 planning contract moves (+92 bytes, +23 approx tokens, from the cluster_selection role); all summary maxima are unchanged.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/planning/figure_strategy.py",
+        "src/easyicu/research_agent/planning/study_design.py",
+        "src/easyicu/research_agent/planning/study_design_playbook.py",
+        "src/easyicu/research_agent/reporting/article_contract.py",
+        "src/easyicu/research_agent/schema.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Align source digest with v6 foundation dictionaries merged from main@4f759a0c1",
+  "baseline_reason": "Method-family closure 2026-09-22 (family_spec_v1 lane): planning and review owners changed -- figure strategy cluster_selection role and phenotyping coverage-heatmap alias, sealed-suite role projection in study_design, playbook and article-contract formal result scope for the sealed feasibility family, per-figure-output panel ids in schema. Only the H3 planning contract moves (+92 bytes, +23 approx tokens, from the cluster_selection role); all summary maxima are unchanged.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -574,11 +579,11 @@
     "src/easyicu/research_agent/planning/analysis_blueprint.py": "5330a604f9894c879ba400bee3b3ac1b617de1ce24425506139a5a29bb4020b2",
     "src/easyicu/research_agent/planning/analysis_types.py": "090cd53523b66169a81a70797b038798d6e32b62ea233154a11ee72bf33a74d8",
     "src/easyicu/research_agent/planning/cohort_contract.py": "17cbe43c3626550a93d1753f3f21c171f430aba83e1daad3c9a42ddc0ce705c4",
-    "src/easyicu/research_agent/planning/figure_strategy.py": "688f497e13b618ee13f17dd8821294a5bdc5bab5d5d849aa365e57af25a2f5bf",
-    "src/easyicu/research_agent/planning/study_design.py": "8c26e3d42c1397839e3347317b90ceadab56beee58a500170cb182535aca7a3c",
-    "src/easyicu/research_agent/planning/study_design_playbook.py": "c8312eb455d0a65d8c3936bbf8f770cb15a64925923e679cc2509bcf5036d649",
+    "src/easyicu/research_agent/planning/figure_strategy.py": "f3043fd7ff90e494d6edb3ea3bbd783364eece5e0606c20c3ec805e357528eb4",
+    "src/easyicu/research_agent/planning/study_design.py": "84e7d9c0974ca3d1f9deadcc22de065586a9be20fcdf66f101f931469b64cad0",
+    "src/easyicu/research_agent/planning/study_design_playbook.py": "fa07ee36a06d560ca9266999516bf1f394c4ac522d5b1436bf689d274b07888d",
     "src/easyicu/research_agent/providers/prompts/v1/system.txt": "cf9212ac318beac1b2690738506b0b9d658bc28db4b98a521022d57a317eb692",
-    "src/easyicu/research_agent/reporting/article_contract.py": "c7c11a7a2bcbea2aca3fa1dc0905803bf2cf0d98fa0cde292f433e1bf3b89e22",
+    "src/easyicu/research_agent/reporting/article_contract.py": "8c71677ee831deb11d5b1fcc1f3d20e7ca7086e10105039a63ef083d5d39688c",
     "src/easyicu/research_agent/research_context/outbound.py": "5ce4a858b0388749c2163926b02b418c125e19c9d7b9c30f3f1063282b43d433",
     "src/easyicu/research_agent/resources/capability.py": "3fc6dea8ffde23a358dfccd02b5f31620069fcccba8012807057a9913c70ca84",
     "src/easyicu/research_agent/resources/capability_runtime.py": "5e707e8a4b3a5f375ae579951b07c3e1f07d635b8db093109c613936c8b3bc71",
@@ -587,7 +592,7 @@
     "src/easyicu/research_agent/resources/context.py": "8ce42accd83398ff9972b8e50f2f64f9ac926ad610d2c386f2b763adf77af2e1",
     "src/easyicu/research_agent/resources/scheduler.py": "50d836934c0f079c35265004495a067a543ed575e2ed1757319fe619c9c7a280",
     "src/easyicu/research_agent/resources/schema.py": "456053a9d96a8ee5fe0b3e8b2cfa22187f6bb0d8cc81b43d28569ffd311fd288",
-    "src/easyicu/research_agent/schema.py": "38a068da38b77a498ad90a38d2dec1d1e71e512f8f72a1ee51069041e4917b8b",
+    "src/easyicu/research_agent/schema.py": "6f4dac943f6b0baa40c60ab713286b380719a72597054819a9b173174a423c77",
     "tools/research_agent_resource_baseline.py": "4f3fe0d9c859ff713fe1cbdaa9dc47ebe5041b60b2be08fd8b8087d115bd3712"
   },
   "summary": {
@@ -1521,15 +1526,15 @@
       "know_how_prompt_bytes": 3872,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15073,
+        "approx_input_tokens": 15096,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47345,
+            "bytes": 47437,
             "included": true,
             "required": true,
-            "sha256": "87d0c261bf9f71f09272ce66ab053699ab543507b40d97578059f2751a8dfd47"
+            "sha256": "0e5d6924a58da644fb5f4d77a65fff48f696a2a9abfade0d3b6031480013190d"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -1540,30 +1545,30 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 60289,
+        "total_bytes": 60381,
         "truncated_strings": false,
-        "user_bytes": 51845
+        "user_bytes": 51937
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13948,
+        "approx_input_tokens": 13971,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47345,
+            "bytes": 47437,
             "included": true,
             "required": true,
-            "sha256": "87d0c261bf9f71f09272ce66ab053699ab543507b40d97578059f2751a8dfd47"
+            "sha256": "0e5d6924a58da644fb5f4d77a65fff48f696a2a9abfade0d3b6031480013190d"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 55789,
+        "total_bytes": 55881,
         "truncated_strings": false,
-        "user_bytes": 47345
+        "user_bytes": 47437
       },
-      "planning_contract_bytes": 6699,
-      "planning_contract_sha256": "5019311b1cd8e5ee709061265038eece15d09d9c7072757c4f4c2027609b143c",
+      "planning_contract_bytes": 6791,
+      "planning_contract_sha256": "62e1d3ad93ceab51cf7fcb9c872658398efcd2b4de7fe3d55fe660a6d87aaeb2",
       "question": "Cluster longitudinal ICU trajectories into stable subphenotypes.",
       "resource_added_bytes": 4500,
       "resource_allowlist_sha256": "c1e182996b78b356bf511ddf1473ab457bbb70cfb6ff490fe1bcc71047e38cab",

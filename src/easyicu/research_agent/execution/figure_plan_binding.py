@@ -110,6 +110,42 @@ def _planned_panel_signature(panel: Any) -> tuple[str, str, str, tuple[str, ...]
     )
 
 
+def _planned_chart_alternatives(panel: Any) -> frozenset[str]:
+    """Chart grammars the plan lets a sealed runtime policy substitute."""
+
+    return frozenset(
+        str(value)
+        for value in (getattr(panel, "policy_alternative_chart_types", None) or ())
+    )
+
+
+def _match_runtime_panels_to_plan(
+    planned_panels: Sequence[Any],
+    observed: Sequence[tuple[str, str, str, tuple[str, ...]]],
+) -> bool:
+    """Exact multiset match, allowing only a declared policy alternative chart."""
+
+    remaining = list(planned_panels)
+    for panel_id, role, chart, sources in observed:
+        match_index = next(
+            (
+                index
+                for index, planned in enumerate(remaining)
+                if _planned_panel_signature(planned)[:2] == (panel_id, role)
+                and _planned_panel_signature(planned)[3] == sources
+                and (
+                    chart == str(planned.chart_type)
+                    or chart in _planned_chart_alternatives(planned)
+                )
+            ),
+            None,
+        )
+        if match_index is None:
+            return False
+        remaining.pop(match_index)
+    return not remaining
+
+
 def _contract_panels_for_output(
     *,
     contract: Mapping[str, Any],
@@ -321,7 +357,9 @@ def validate_step_planned_figure_contract_binding(
 
         planned = Counter(_planned_panel_signature(panel) for panel in planned_panels)
         observed = Counter(signature for signature in signatures if signature)
-        if observed != planned:
+        if not _match_runtime_panels_to_plan(
+            planned_panels, [signature for signature in signatures if signature]
+        ):
             findings.append(
                 _finding(
                     step_id=str(step.step_id),

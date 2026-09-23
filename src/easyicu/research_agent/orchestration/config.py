@@ -219,6 +219,13 @@ def _deep_freeze(value: Any) -> Any:
     return value
 
 
+# Strategies that compile through the Progressive v2 skeleton, validators,
+# and checkpoint chain.  ``family_spec_v1`` adds a host-template fast path in
+# front of the same gates and is therefore accepted wherever a Progressive v2
+# contract is required.
+PROGRESSIVE_PLANNER_STRATEGIES = frozenset({"progressive_v2", "family_spec_v1"})
+
+
 @dataclass(frozen=True)
 class PipelineConfig:
     """Immutable declarative settings for one pipeline.
@@ -388,7 +395,11 @@ class PipelineConfig:
     # The legacy Planner emits the complete executable DAG in one response.
     # Progressive v2 emits a compact scientific skeleton and lets the host
     # compile exact products, levels, consumption contracts, and methods.
-    planner_strategy: Literal["monolithic_v1", "progressive_v2"] = (
+    # family_spec_v1 keeps every Progressive v2 gate but, for a method family
+    # with a host template, asks the Planner only for the scientific spec
+    # (adjustment roster, labels, comparator applications) and projects the
+    # skeleton itself; other families fall back to Progressive v2 unchanged.
+    planner_strategy: Literal["monolithic_v1", "progressive_v2", "family_spec_v1"] = (
         "monolithic_v1"
     )
     # Explicit non-paper replay of one dependency-bound Progressive Planner
@@ -711,7 +722,7 @@ class PipelineConfig:
                     "enables it) or leave literature design authority off for "
                     "diagnostic runs"
                 )
-            if self.planner_strategy != "progressive_v2":
+            if self.planner_strategy not in PROGRESSIVE_PLANNER_STRATEGIES:
                 raise ValueError(
                     "require_literature_design_authority requires progressive_v2"
                 )
@@ -728,13 +739,14 @@ class PipelineConfig:
                     "enables it) or leave retrieval evidence off for "
                     "diagnostic runs"
                 )
-            if self.planner_strategy != "progressive_v2":
+            if self.planner_strategy not in PROGRESSIVE_PLANNER_STRATEGIES:
                 raise ValueError(
                     "require_literature_retrieval_evidence requires progressive_v2"
                 )
-        if self.planner_strategy not in {"monolithic_v1", "progressive_v2"}:
+        if self.planner_strategy not in {"monolithic_v1", *PROGRESSIVE_PLANNER_STRATEGIES}:
             raise ValueError(
-                "planner_strategy must be 'monolithic_v1' or 'progressive_v2'"
+                "planner_strategy must be 'monolithic_v1', 'progressive_v2', or "
+                "'family_spec_v1'"
             )
         from .profiles import (
             is_paper_facing_profile,
@@ -778,7 +790,7 @@ class PipelineConfig:
                     "development_diagnostic=True or a registered development-only "
                     "profile"
                 )
-            if self.planner_strategy != "progressive_v2":
+            if self.planner_strategy not in PROGRESSIVE_PLANNER_STRATEGIES:
                 raise ValueError(
                     "development progressive resume requires "
                     "planner_strategy='progressive_v2'"
@@ -873,7 +885,7 @@ class PipelineConfig:
                     "development_diagnostic=True or a registered development-only "
                     "profile"
                 )
-            if self.planner_strategy != "progressive_v2":
+            if self.planner_strategy not in PROGRESSIVE_PLANNER_STRATEGIES:
                 raise ValueError(
                     "development Planner efficiency limits require "
                     "planner_strategy='progressive_v2'"
@@ -907,7 +919,7 @@ class PipelineConfig:
                     "development_diagnostic=True or a registered development-only "
                     "profile"
                 )
-            if self.planner_strategy != "progressive_v2":
+            if self.planner_strategy not in PROGRESSIVE_PLANNER_STRATEGIES:
                 raise ValueError(
                     "development outline-only Planner termination requires "
                     "planner_strategy='progressive_v2'"

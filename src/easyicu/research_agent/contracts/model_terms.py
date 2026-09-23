@@ -246,6 +246,52 @@ ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES = frozenset(
 )
 
 
+class AdjustmentProposal(BaseModel):
+    """The reviewed primary model's adjustment decisions, retained plan-wide.
+
+    A signed runtime owner (the landmark spline estimator today) replaces the
+    generic primary step and its ``model_requirements`` with its own sealed
+    contract, which carries the exact columns but not the Planner's confounding
+    rationale or the host-proven temporal role of each covariate. Binding
+    copies those decisions here, keyed by the step and requirement they came
+    from, so plan review, resume, and the executed-run audit read one typed
+    record instead of re-deriving it from inputs or prose.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.adjustment_proposal/1"] = "easyicu.adjustment_proposal/1"
+    source_step_id: str = Field(min_length=1)
+    source_requirement_id: str = Field(min_length=1)
+    covariates: List[str] = Field(default_factory=list)
+    covariate_rationales: Dict[str, str] = Field(default_factory=dict)
+    covariate_temporal_roles: Dict[
+        str, Literal["baseline_static", "at_or_before_time_zero"]
+    ] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _decisions_cover_the_roster(self) -> "AdjustmentProposal":
+        names = [str(value or "").strip() for value in self.covariates]
+        if any(not name for name in names) or len(names) != len(set(names)):
+            raise ValueError("adjustment proposal covariates must be unique non-empty names")
+        roster = set(names)
+        if set(self.covariate_rationales) - roster or set(self.covariate_temporal_roles) - roster:
+            raise ValueError("adjustment proposal decisions must belong to its covariates")
+        return self
+
+    @classmethod
+    def from_requirement(
+        cls, *, step_id: str, requirement: "PlannedModelRequirement"
+    ) -> "AdjustmentProposal":
+        return cls(
+            source_step_id=step_id,
+            source_requirement_id=requirement.requirement_id,
+            covariates=list(requirement.covariates or ()),
+            covariate_rationales=dict(requirement.covariate_rationales),
+            covariate_temporal_roles=dict(requirement.covariate_temporal_roles),
+        )
+
+
 class PlannedModelRequirement(BaseModel):
     """Planner-owned obligation for a supported adjusted-association model.
 
@@ -545,6 +591,7 @@ class PlannedModelRequirement(BaseModel):
 __all__ = [
     "ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES",
     "ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES",
+    "AdjustmentProposal",
     "PlannedModelRequirement",
     "ModelTermCoding",
     "ModelTermRole",

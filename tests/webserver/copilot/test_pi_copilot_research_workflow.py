@@ -8541,7 +8541,7 @@ def test_web_runner_delegates_to_research_agent_pipeline(
     assert calls["config"].submission_profile_version == expected_profile.version
     assert calls["config"].submission_profile_locked_at == expected_profile.locked_at
     assert calls["config"].planner_strategy == (
-        "progressive_v2"
+        "family_spec_v1"
         if budget_mode in {None, "full_reviewed"}
         else "monolithic_v1"
     )

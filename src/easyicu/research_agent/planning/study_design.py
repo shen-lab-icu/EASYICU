@@ -14,8 +14,12 @@ from typing import List, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..contracts.source_feasibility_validation import (
+    context_declares_source_feasibility_scope,
+)
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 from .study_design_playbook import (
+    SOURCE_FEASIBILITY_FAMILY_TEMPLATE,
     DisplayModuleSpec,
     DisplayTier,
     StudyDesignFamily,
@@ -25,6 +29,7 @@ from .study_design_playbook import (
     display_modules_for_family,
     family_template,
     role_check_terms,
+    source_feasibility_display_modules,
     triggered_generic_modules,
 )
 
@@ -279,6 +284,17 @@ def build_study_design_brief(
     exemplar_query = question if question else family.replace("_", " ")
     adaptive_triggers = _adaptive_triggers_for_context(context, family)
     display_modules = _display_modules_for_context(context, family, adaptive_triggers)
+    rationale = f"Detected {family} design family from the research question and context."
+    if context_declares_source_feasibility_scope(context):
+        # The sealed authority declared the contrast non-identifiable: the
+        # article is the fail-closed decision, not an effect-estimation paper.
+        template = SOURCE_FEASIBILITY_FAMILY_TEMPLATE
+        display_modules = source_feasibility_display_modules()
+        adaptive_triggers = []
+        rationale = (
+            f"Detected {family} design family; the sealed source-feasibility "
+            "authority narrows the article to its fail-closed decision."
+        )
     planner_instructions = [
         "Select methods and displays from the study-design brief before writing executable steps.",
         "If the plan omits a required main-text display or sensitivity analysis, state why in the plan rationale.",
@@ -291,7 +307,7 @@ def build_study_design_brief(
     ]
     return StudyDesignBrief(
         analysis_family=family,
-        rationale=f"Detected {family} design family from the research question and context.",
+        rationale=rationale,
         reporting_guidelines=list(template["reporting_guidelines"]),
         design_principles=design_principles_for_family(family),
         required_methods=list(template["required_methods"]),

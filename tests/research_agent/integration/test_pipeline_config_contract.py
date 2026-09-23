@@ -392,3 +392,28 @@ def test_literature_retrieval_evidence_flag_is_strictly_gated(
 def test_literature_retrieval_evidence_defaults_off(ra, tmp_path: Path) -> None:
     config = ra.PipelineConfig(workdir=tmp_path)
     assert config.require_literature_retrieval_evidence is False
+
+
+def test_family_spec_strategy_is_progressive_compatible(ra, tmp_path: Path) -> None:
+    config = ra.PipelineConfig(
+        workdir=tmp_path,
+        planner_strategy="family_spec_v1",
+        enable_literature=True,
+        require_human_plan_review=True,
+        require_literature_design_authority=True,
+    )
+    pipeline = ra.ResearchAgentPipeline.from_config(config)
+
+    assert pipeline._planner_strategy == "family_spec_v1"
+    assert config.canonical_payload()["planner_strategy"] == "family_spec_v1"
+    # A profile that pins progressive_v2 is still an exact contract.
+    from easyicu.research_agent import E1_PROGRESSIVE_PLANNER_CANARY_2026_09_21 as pinned
+
+    with pytest.raises(ValueError, match="pins planner_strategy='progressive_v2'"):
+        ra.PipelineConfig(
+            workdir=tmp_path / "pinned",
+            planner_only=True,
+            submission_profile_name=pinned.name,
+            submission_profile_version=pinned.version,
+            planner_strategy="family_spec_v1",
+        )

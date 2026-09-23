@@ -71,6 +71,7 @@ from ..planning.progressive_compiler import (
     required_reader_display_label_keys,
     validate_progressive_foundation,
 )
+from ..planning.family_spec import family_template_id_for_context
 from ..planning.dependence_authority import (
     context_counts_only_authority,
     descriptive_counts_only_required,
@@ -149,6 +150,7 @@ from .progressive_payload import (
     progressive_step_materialization_request,
 )
 from .plan_payload import bind_literature_citation_authority
+from .family_spec_planner import FAMILY_SPEC_STRATEGY, run_family_spec_attempt
 from .progressive_prompt_contracts import (
     foundation_shape_contract as _foundation_shape_contract,
     outline_shape_contract as _outline_shape_contract,
@@ -1232,6 +1234,32 @@ def _article_reporting_source_keys(
         analysis_type=analysis_type,
     )
     return reporting_method_source_keys_for_guidelines(contract.reporting_guidelines)
+
+
+def _family_spec_fallback_reason(
+    context: ResearchContext,
+    *,
+    analysis_types: Sequence[str],
+    resume_checkpoint: ProgressivePlannerCheckpoint | None,
+    stop_after_outline: bool,
+    planning_contract_context: str = "",
+) -> str | None:
+    """Return why the family-spec strategy must yield to Progressive v2, or None."""
+
+    if resume_checkpoint is not None:
+        return "development_resume_checkpoint_uses_progressive_v2"
+    if stop_after_outline:
+        return "design_canary_uses_progressive_v2"
+    if (
+        family_template_id_for_context(
+            context,
+            analysis_types=analysis_types,
+            planning_contract_context=planning_contract_context,
+        )
+        is None
+    ):
+        return "no_family_template_for_context"
+    return None
 
 
 def _accept_compiled_plan(
@@ -4034,6 +4062,125 @@ class ProgressivePlannerAgent:
                 break
         return prefix_state
 
+    def _run_family_spec_output(
+        self,
+        context: ResearchContext,
+        *,
+        article_context: ResearchContext,
+        analysis_types: Sequence[str],
+        variables: Sequence[str],
+        allowed_citations: Sequence[str],
+        direct_keys: Sequence[str],
+        design_cards: Sequence[LiteratureDesignEvidenceCard],
+        comparison_keys: Sequence[str],
+        allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None,
+        know_how_context: str,
+        planning_contract_context: str,
+        enforce_article_contract: bool,
+        required_primary_cohort_selection_mode: str | None,
+        required_custom_products: Sequence[str],
+        required_visualization_step: bool,
+        available_ordered_trend: tuple[str, str, str] | None,
+        closed_domain_variables: Sequence[str],
+        ordered_domain_variables: Sequence[str],
+        continuous_domain_variables: Sequence[str],
+        required_exact_covariates: Sequence[str],
+        required_functional_form_targets: Sequence[str],
+        checkpoint_authorities: Any,
+        checkpoint_emitter: ProgressivePlannerCheckpointEmitter,
+        progress_callback: Optional[Callable[[Any], None]],
+    ) -> AnalysisPlan:
+        """Delegate the family-spec attempt while keeping host binders in-module.
+
+        The sibling owner runs the single spec call, the template projection,
+        and the unchanged validator/compiler chain; this method only supplies
+        the Planner-private outline binders and acceptance callables.
+        """
+
+        context_required_method_layers = required_method_layers_for_context(context)
+
+        def bind_outline(outline: ProgressivePlanOutline) -> ProgressivePlanOutline:
+            outline = _bind_runtime_action_dependencies(outline)
+            outline = _bind_direct_comparator_source(
+                outline, direct_comparator_literature_keys=direct_keys,
+            )
+            return _bind_required_outline_method_sources(
+                outline,
+                allowed_literature_citation_keys=allowed_citations,
+                context_required_method_layers=context_required_method_layers,
+                continuous_domain_variables=continuous_domain_variables,
+            )
+
+        def validate_outline(outline: ProgressivePlanOutline) -> None:
+            self._validate_outline_authority(
+                outline,
+                analysis_types=analysis_types,
+                variable_names=variables,
+                allowed_literature_citation_keys=allowed_citations,
+                required_custom_products=required_custom_products,
+                required_visualization_step=required_visualization_step,
+                available_ordered_trend=available_ordered_trend,
+                closed_domain_variables=closed_domain_variables,
+                ordered_domain_variables=ordered_domain_variables,
+                continuous_domain_variables=continuous_domain_variables,
+                primary_exposure=context.primary_exposure,
+                target_outcome=context.target_outcome,
+                required_exact_covariates=required_exact_covariates,
+                required_functional_form_targets=required_functional_form_targets,
+                context_required_method_layers=context_required_method_layers,
+                require_design_selection=True,
+                literature_design_evidence_cards=design_cards,
+                comparison_literature_keys=comparison_keys,
+                direct_comparator_literature_keys=direct_keys,
+                article_context=article_context,
+            )
+
+        def compile_and_accept(skeleton: ProgressivePlanSkeleton):
+            return self._compile_and_accept(
+                skeleton,
+                agent_context=context,
+                article_context=article_context,
+                allowed_literature_citation_keys=allowed_citations,
+                direct_comparator_literature_keys=direct_keys,
+                allowed_know_how_decisions=allowed_know_how_decisions,
+                enforce_article_contract=enforce_article_contract,
+            )
+
+        return run_family_spec_attempt(
+            llm=self.llm,
+            attempt=self._attempt,
+            context=context,
+            article_context=article_context,
+            analysis_types=analysis_types,
+            variables=variables,
+            action_ids=_action_catalog((analysis_types[0],))[0],
+            allowed_citations=allowed_citations,
+            direct_keys=direct_keys,
+            comparison_keys=comparison_keys,
+            allowed_know_how_decisions=allowed_know_how_decisions,
+            know_how_context=know_how_context,
+            planning_contract_context=planning_contract_context,
+            enforce_article_contract=enforce_article_contract,
+            required_primary_cohort_selection_mode=required_primary_cohort_selection_mode,
+            required_visualization_step=required_visualization_step,
+            reporting_source_keys=_article_reporting_source_keys(
+                article_context=article_context,
+                analysis_type="association_study",
+                enforce_article_contract=enforce_article_contract,
+            ),
+            resume_dependency_authority_sha256=(
+                checkpoint_authorities.resume_dependency_authority_sha256
+            ),
+            checkpoint_emitter=checkpoint_emitter,
+            progress_callback=progress_callback,
+            max_parse_retries=_MAX_STEP_PARSE_RETRIES,
+            prompt_byte_limit=planner_prompt_byte_limit(self.llm),
+            bind_outline=bind_outline,
+            validate_outline=validate_outline,
+            compile_and_accept=compile_and_accept,
+            capture_efficiency_metrics=self.capture_efficiency_metrics,
+        )
+
     def run_attempt(
         self,
         context: ResearchContext,
@@ -4087,9 +4234,12 @@ class ProgressivePlannerAgent:
         resume_dependency_context: Mapping[str, Any] | None = None,
         required_primary_cohort_selection_mode: str | None = None,
         stop_after_outline: bool = False,
+        planner_strategy: str = "progressive_v2",
     ) -> AnalysisPlan | ProgressivePlanOutline:
         self._attempt.resume_validated = False
         self._attempt.compile_failure_attempts = []
+        if planner_strategy not in {"progressive_v2", FAMILY_SPEC_STRATEGY}:
+            raise ValueError(f"unsupported planner_strategy {planner_strategy!r}")
         if bool(allowed_know_how_decisions) != bool(know_how_context):
             raise ValueError(
                 "Progressive Planner know-how authority and prompt must be supplied together"
@@ -4238,6 +4388,17 @@ class ProgressivePlannerAgent:
                 host_cohort.model_dump(mode="json") if host_cohort is not None else None
             ),
         }
+        family_spec_fallback_reason: str | None = None
+        if planner_strategy == FAMILY_SPEC_STRATEGY:
+            family_spec_fallback_reason = _family_spec_fallback_reason(
+                context,
+                analysis_types=analysis_types,
+                resume_checkpoint=resume_checkpoint,
+                stop_after_outline=stop_after_outline,
+                planning_contract_context=planning_contract_context,
+            )
+            if family_spec_fallback_reason is None:
+                scientific_authority["planner_strategy"] = FAMILY_SPEC_STRATEGY
         checkpoint_authorities = build_progressive_checkpoint_authorities(
             context=context,
             article_context=article_context,
@@ -4253,6 +4414,35 @@ class ProgressivePlannerAgent:
             ),
             source_checkpoint=resume_checkpoint,
         )
+        if planner_strategy == FAMILY_SPEC_STRATEGY and family_spec_fallback_reason is None:
+            return self._run_family_spec_output(
+                context,
+                article_context=article_context,
+                analysis_types=analysis_types,
+                variables=variables,
+                allowed_citations=allowed_citations,
+                direct_keys=direct_keys,
+                design_cards=design_cards,
+                comparison_keys=comparison_keys,
+                allowed_know_how_decisions=allowed_know_how_decisions,
+                know_how_context=know_how_context,
+                planning_contract_context=planning_contract_context,
+                enforce_article_contract=enforce_article_contract,
+                required_primary_cohort_selection_mode=(
+                    required_primary_cohort_selection_mode
+                ),
+                required_custom_products=required_custom_products,
+                required_visualization_step=required_visualization_step,
+                available_ordered_trend=available_ordered_trend,
+                closed_domain_variables=closed_domain_variables,
+                ordered_domain_variables=ordered_domain_variables,
+                continuous_domain_variables=continuous_domain_variables,
+                required_exact_covariates=required_exact_covariates,
+                required_functional_form_targets=required_functional_form_targets,
+                checkpoint_authorities=checkpoint_authorities,
+                checkpoint_emitter=checkpoint_emitter,
+                progress_callback=progress_callback,
+            )
         resolved_planning_contract_context = ""
         foundation_planning_contract_context = ""
         revision_projection: list[dict] = []
@@ -4362,6 +4552,8 @@ class ProgressivePlannerAgent:
             "candidate_analysis_types": list(analysis_types),
             "selected_scientific_action_ids": list(action_ids),
             "planner_strategy": "progressive_v2",
+            "requested_planner_strategy": planner_strategy,
+            "family_spec_fallback_reason": family_spec_fallback_reason,
             "foundation_cohort_owner": (
                 "host_required_primary_cohort" if host_cohort is not None else "planner"
             ),
@@ -4857,6 +5049,7 @@ class ProgressivePlannerAgent:
 
 
 __all__ = [
+    "FAMILY_SPEC_STRATEGY",
     "ProgressivePlannerAttemptResult",
     "ProgressivePlannerAgent",
     "ProgressivePlannerRunFacts",

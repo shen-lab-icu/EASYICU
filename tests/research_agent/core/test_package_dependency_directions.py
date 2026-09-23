@@ -128,9 +128,13 @@ def test_only_the_entry_surface_may_import_execution() -> None:
     # ``agents`` is deliberately allowed: the Coder prompt must describe the
     # ACTUAL validated sandbox allow-list, and that runtime capability
     # snapshot is execution-owned state (``execution/method_capabilities``).
-    # Verification/authority layers (gates, authority, audits, figures,
-    # methods, ...) stay strictly independent of the execution layer.
-    allowed = {_TOP, "execution", "agents"}
+    # ``skill_packages`` is an execution-side consumer by design: a reference
+    # workflow package composes the same deterministic runner kernels the
+    # pipeline executes (landmark eligibility, the adjusted-association
+    # kernel) instead of re-deriving them, and nothing in ``execution`` may
+    # import it back.  Verification/authority layers (gates, authority, audits,
+    # figures, methods, ...) stay strictly independent of the execution layer.
+    allowed = {_TOP, "execution", "agents", "skill_packages"}
     importers = sorted(
         source
         for source, targets in edges.items()

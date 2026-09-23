@@ -730,6 +730,58 @@ def test_signed_landmark_curve_is_a_primary_estimand_product(ra):
     assert "primary_estimand" in roles_covered_by_plan(plan, contract)
 
 
+def test_sealed_survival_suite_step_evidences_its_registered_article_roles(ra):
+    from easyicu.research_agent.reporting.article_contract import (
+        build_article_analysis_contract,
+        roles_covered_by_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    context = _context(
+        ra,
+        "Estimate the landmark survival association between ventilation and 28-day death.",
+        outcome="mort_28d",
+        exposure="mech_vent_max",
+    )
+    contract = build_article_analysis_contract(context, analysis_type="survival")
+    # Case-specific product names carry no role terms; only the closed sealed
+    # method name credits the roles the suite registers inside one step.
+    outputs = [
+        "table:h1_landmark_table_one",
+        "table:h1_landmark_risk_set_flow",
+        "table:h1_landmark_km_curve",
+        "table:h1_landmark_cox_summary",
+        "table:h1_landmark_ph_diagnostics",
+    ]
+    sealed = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="survival",
+        steps=[
+            AnalysisStep(
+                step_id="primary_survival_suite",
+                planned_analysis_role="primary",
+                intent="Execute the sealed landmark survival suite.",
+                method="signed_landmark_survival_suite",
+                expected_outputs=outputs,
+            )
+        ],
+    )
+    unsigned = sealed.model_copy(
+        update={"steps": [sealed.steps[0].model_copy(update={"method": "cox_proportional_hazards"})]}
+    )
+
+    assert {
+        "baseline_context",
+        "cohort_accounting",
+        "temporal_absolute_risk",
+        "survival_effect",
+        "diagnostics",
+    } <= roles_covered_by_plan(sealed, contract)
+    assert not {"temporal_absolute_risk", "survival_effect", "diagnostics"} & (
+        roles_covered_by_plan(unsigned, contract)
+    )
+
+
 def test_sensitivity_role_cannot_cover_primary_estimand_plan_or_artifact(ra, tmp_path):
     from easyicu.research_agent.reporting.article_contract import (
         build_article_analysis_contract,

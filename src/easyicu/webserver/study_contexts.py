@@ -75,6 +75,7 @@ _CONTEXT_FIELDS = {
     "covariate_operationalizations",
     "execution_concepts",
     "analysis_design",
+    "trajectory_design",
     "sensitivity_specs",
     "time_window",
     "comparator",
@@ -284,6 +285,7 @@ _LITERATURE_SCOPE_FIELDS_V2 = (
     "covariate_operationalizations",
     "execution_concepts",
     "analysis_design",
+    "trajectory_design",
     "sensitivity_specs",
     "time_window",
     "comparator",
@@ -1133,6 +1135,35 @@ def normalize_analysis_design(value: Any) -> Dict[str, str]:
     return design
 
 
+def normalize_trajectory_design(
+    value: Any, *, enforce_design_rules: bool = True
+) -> Dict[str, Any]:
+    """Validate a declared longitudinal trajectory design at its owner.
+
+    The design vocabulary lives in the dependency-neutral contract so the Web
+    projection and the benchmark protocol compiler seal the same authority; this
+    wrapper only re-attributes its failures to the StudyContext boundary.
+    """
+
+    from easyicu.research_agent.contracts.trajectory_design import (
+        TrajectoryDesignError,
+        normalize_trajectory_design as _normalize,
+    )
+
+    try:
+        return _normalize(value, enforce_design_rules=enforce_design_rules)
+    except TrajectoryDesignError as exc:
+        raise StudyContextError(
+            {
+                "error": exc.code,
+                "field": exc.field,
+                "detail": str(exc),
+                "remediation_route": "agent_plan_revision",
+                "requires_user_authorization": False,
+            }
+        ) from exc
+
+
 def normalize_sensitivity_specs(value: Any) -> List[Dict[str, Any]]:
     """Normalize typed user-reviewed sensitivities at the StudyContext owner."""
 
@@ -1218,6 +1249,7 @@ def _default_context(context_id: str, timestamp: str) -> Dict[str, Any]:
         "covariate_operationalizations": {},
         "execution_concepts": {},
         "analysis_design": {},
+        "trajectory_design": {},
         "sensitivity_specs": [],
         "time_window": {},
         "comparator": "",
@@ -1322,6 +1354,10 @@ def _sanitize_patch(
     if "analysis_design" in raw:
         patch["analysis_design"] = normalize_analysis_design(
             raw.get("analysis_design")
+        )
+    if "trajectory_design" in raw:
+        patch["trajectory_design"] = normalize_trajectory_design(
+            raw.get("trajectory_design")
         )
     if "sensitivity_specs" in raw:
         patch["sensitivity_specs"] = normalize_sensitivity_specs(
@@ -1546,7 +1582,11 @@ def _contexts_from_raw(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
         _enforce_context_budget(row)
         _reject_row_level_metadata(row)
         patch = _sanitize_patch(
-            {field: row[field] for field in _CONTEXT_FIELDS if field in row and field != "analysis_design"},
+            {
+                field: row[field]
+                for field in _CONTEXT_FIELDS
+                if field in row and field not in ("analysis_design", "trajectory_design")
+            },
             allow_literature_authority=True,
             allow_cohort_eligibility_authority=True,
         )
@@ -1555,6 +1595,13 @@ def _contexts_from_raw(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
             # project list or disappear through a fallback. New writes and
             # execution independently enforce the current semantic contract.
             patch["analysis_design"] = _normalize_analysis_design_shape(row["analysis_design"])
+        if "trajectory_design" in row:
+            # Same rule for the trajectory design: reading a stored project
+            # keeps its shape without re-imposing the current cross-field
+            # scientific rules, which a later revision may have tightened.
+            patch["trajectory_design"] = normalize_trajectory_design(
+                row["trajectory_design"], enforce_design_rules=False
+            )
         context_id = patch.pop("id")
         created_at = (
             _text(row.get("created_at"), field="created_at", max_length=64) or _now()
@@ -2152,6 +2199,11 @@ def _scientific_fields_sha256(
         allow_cohort_eligibility_authority=True,
         allow_concept_selection_authority=True,
     )
+    # An undeclared trajectory design contributes nothing, so every digest
+    # recorded before this field existed stays byte-identical; declaring one
+    # is a scientific change and does move the digest.
+    if not sanitized.get("trajectory_design"):
+        sanitized.pop("trajectory_design", None)
     encoded = json.dumps(
         sanitized,
         ensure_ascii=False,

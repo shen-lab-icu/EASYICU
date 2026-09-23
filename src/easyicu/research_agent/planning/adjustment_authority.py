@@ -15,8 +15,9 @@ be able to bypass the same scientific authority that constrained a fresh plan.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from typing import Any, Literal, Optional, Sequence
+from typing import Any, Literal, Mapping, Optional, Sequence
 
 from ..authority.declared_levels import observed_levels_for
 from ..research_context.typed import declared_domain_for_variable
@@ -33,6 +34,125 @@ _MODEL_TERM_INELIGIBLE_ROLES = frozenset(
 _MODEL_TERM_DYNAMIC_ROLES = frozenset(
     {"vital", "lab", "intervention", "ordinal_score", "composite_score"}
 )
+HostTemporalRole = Literal["baseline_static", "at_or_before_time_zero"]
+# ``first_24h``, ``0-24h``, ``0_24h``, ``24h``: the trailing hour bound of a
+# named window is the only fact this owner reads from a window label.
+_WINDOW_END_HOURS = re.compile(r"(?:^|[^0-9])(\d+(?:\.\d+)?)\s*h(?:ours?)?\s*$", re.IGNORECASE)
+#: The research-context builder's own label form, ``icu_admission[start,end]h``.
+_WINDOW_INTERVAL_HOURS = re.compile(
+    r"icu_admission\[\s*-?\d+(?:\.\d+)?\s*,\s*(\d+(?:\.\d+)?)\s*\]\s*h(?:ours?)?\s*$",
+    re.IGNORECASE,
+)
+
+
+def primary_landmark_hours(context: Any) -> Optional[float]:
+    """Return the typed landmark (hours after ICU admission) or ``None``.
+
+    The landmark is a study-context fact: an explicit ``landmark_hours``
+    preference or the prespecified landmark timing sensitivity.  Prose is not
+    authority, so no text is parsed here.
+    """
+
+    preferences = getattr(context, "user_preferences", None)
+    if preferences is None:
+        return None
+    declared = getattr(preferences, "landmark_hours", None)
+    if declared is not None:
+        return float(declared)
+    for spec in getattr(preferences, "sensitivity_specs", ()) or ():
+        if (
+            str(getattr(spec, "axis", "") or "") == "timing"
+            and str(getattr(spec, "strategy", "") or "") == "landmark"
+            and getattr(spec, "landmark_hours", None) is not None
+        ):
+            return float(spec.landmark_hours)
+    return None
+
+
+def host_outer_feature_window_end_hours(context: Any) -> Optional[float]:
+    """Return the end (hours after ICU admission) of the host-bound feature window.
+
+    ``ResearchContext.time_windows`` are the windows the host materialized; the
+    cohort carries no measurement outside the widest of them.  Windows with a
+    different anchor cannot be compared with an ICU-admission landmark and are
+    ignored.
+    """
+
+    ends = [
+        float(window.end_hours)
+        for window in (getattr(context, "time_windows", ()) or ())
+        if str(getattr(window, "anchor", "") or "") == "icu_admission"
+        and getattr(window, "end_hours", None) is not None
+    ]
+    return max(ends) if ends else None
+
+
+def _analysis_window_end_hours(label: Any) -> Optional[float]:
+    text = str(label or "").strip()
+    if not text:
+        return None
+    interval = _WINDOW_INTERVAL_HOURS.search(text)
+    if interval:
+        return float(interval.group(1))
+    match = _WINDOW_END_HOURS.search(text)
+    return float(match.group(1)) if match else None
+
+
+def host_window_bound_roles(
+    context: Any,
+    *,
+    reference_hours: Optional[float],
+    dynamic_roles: frozenset[str] = _MODEL_TERM_DYNAMIC_ROLES,
+    outer_window_fallback_roles: frozenset[str] = _MODEL_TERM_DYNAMIC_ROLES,
+) -> dict[str, HostTemporalRole]:
+    """Project which variables the host can prove observed by ``reference_hours``.
+
+    An owner-declared baseline demographic is static. A window-derived variable
+    with one of ``dynamic_roles`` is available at or before the reference time
+    only when its materialization window ends at or before it: its own
+    ``analysis_window`` label, or -- for the clinical roles listed in
+    ``outer_window_fallback_roles`` -- the outer host-bound feature window.
+    Every other variable is absent from the mapping. With no reference time
+    only the demographics are provable.
+    """
+
+    outer_end = host_outer_feature_window_end_hours(context)
+    roles: dict[str, HostTemporalRole] = {}
+    for variable in getattr(context, "variables", ()) or ():
+        name = str(getattr(variable, "name", "") or "").strip()
+        role = str(getattr(variable.role, "value", variable.role) or "")
+        if not name:
+            continue
+        if role == "demographic":
+            roles[name] = "baseline_static"
+            continue
+        if role not in dynamic_roles or reference_hours is None:
+            continue
+        window_end = _analysis_window_end_hours(
+            getattr(variable, "analysis_window", None)
+        )
+        if window_end is None and role in outer_window_fallback_roles:
+            window_end = outer_end
+        if window_end is not None and window_end <= reference_hours:
+            roles[name] = "at_or_before_time_zero"
+    return roles
+
+
+def host_proven_temporal_roles(context: Any) -> dict[str, HostTemporalRole]:
+    """Project the covariate timing the host can prove without a rationale.
+
+    An owner-declared baseline demographic is static.  A window-derived clinical
+    measurement or score is available at or before time zero only when its
+    materialization window (its own ``analysis_window`` label, else the outer
+    host-bound feature window) ends at or before the typed landmark.  Every
+    other variable is absent from the mapping: a generated clinical rationale
+    never replaces this timing authority, so such a variable can enter an
+    adjustment set only through an exact user-reviewed roster.
+    """
+
+    return host_window_bound_roles(
+        context, reference_hours=primary_landmark_hours(context)
+    )
 
 
 def _matches_declared_covariate(declared: str, observed: str) -> bool:
@@ -217,6 +337,7 @@ def adjusted_model_term_planning_authority(
     primary_exposure = str(context.primary_exposure or "").strip()
     outcome = str(context.target_outcome or "").strip()
     variables = {item.name: item for item in context.variables}
+    host_timed: Mapping[str, HostTemporalRole] = host_proven_temporal_roles(context)
     eligible: list[dict[str, Any]] = []
     excluded: list[dict[str, str]] = []
     for name in dict.fromkeys(str(value or "").strip() for value in variable_names):
@@ -229,12 +350,16 @@ def adjusted_model_term_planning_authority(
         if role in _MODEL_TERM_INELIGIBLE_ROLES:
             excluded.append({"name": name, "reason": f"semantic_role:{role}"})
             continue
-        if adjustment.selection != "exact" and role != "demographic":
+        if adjustment.selection != "exact" and name not in host_timed:
             excluded.append(
                 {"name": name, "reason": "planner_baseline_authority_missing"}
             )
             continue
-        if role in _MODEL_TERM_DYNAMIC_ROLES and name not in authorized_time_zero:
+        if (
+            role in _MODEL_TERM_DYNAMIC_ROLES
+            and name not in authorized_time_zero
+            and host_timed.get(name) != "at_or_before_time_zero"
+        ):
             excluded.append({"name": name, "reason": "time_zero_authority_missing"})
             continue
         observed = observed_levels_for(name=name, variables=variables)
@@ -244,6 +369,7 @@ def adjusted_model_term_planning_authority(
             {
                 "name": name,
                 "semantic_role": role,
+                "host_temporal_role": host_timed.get(name),
                 "allowed_codings": [
                     "binary" if len(closed_domain) == 2 else "categorical"
                 ]
@@ -271,6 +397,11 @@ def validate_plan_against_adjustment_authority(*, plan: Any, context: Any) -> No
 __all__ = [
     "AdjustmentAuthorityError",
     "AdjustmentSetAuthority",
+    "HostTemporalRole",
     "adjusted_model_term_planning_authority",
+    "host_outer_feature_window_end_hours",
+    "host_proven_temporal_roles",
+    "host_window_bound_roles",
+    "primary_landmark_hours",
     "validate_plan_against_adjustment_authority",
 ]

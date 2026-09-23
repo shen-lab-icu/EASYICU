@@ -30,12 +30,18 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from ...contracts.dependence import PlannedDependenceRequirement, resolve_patient_groups
 from ...contracts.prediction_execution import (
+    PREDICTION_CALIBRATION_PRODUCT,
+    PREDICTION_CLINICAL_UTILITY_PRODUCT,
+    PREDICTION_INTERNAL_VALIDATION_PRODUCT,
     PREDICTION_MODEL_ANALYSIS_KIND,
     PREDICTION_PERFORMANCE_PRODUCT,
     PREDICTION_PRIMARY_ACTION,
     PREDICTION_SCORES_PRODUCT,
-    static_prediction_execution_verdict,
+    STATIC_PREDICTION_ACTION_OUTPUTS as _ACTION_OUTPUTS,
+    static_prediction_executes_robustness_spec,
+    static_prediction_features,
     static_prediction_model_columns,
+    static_prediction_owns_step,
 )
 from ...contracts.prediction_validation import PredictionValidationSpec
 from ...methods.delong_auc import delong_auc_ci
@@ -62,19 +68,6 @@ from .typed_input_binding import (
     sole_typed_cohort_input,
 )
 
-PREDICTION_INTERNAL_VALIDATION_PRODUCT = "table:validation"
-PREDICTION_CALIBRATION_PRODUCT = "table:calibration"
-PREDICTION_CLINICAL_UTILITY_PRODUCT = "table:clinical_utility"
-
-_ACTION_OUTPUTS = {
-    "prediction.discrimination_calibration": (
-        PREDICTION_SCORES_PRODUCT,
-        PREDICTION_PERFORMANCE_PRODUCT,
-    ),
-    "prediction.internal_validation": (PREDICTION_INTERNAL_VALIDATION_PRODUCT,),
-    "prediction.calibration_metrics": (PREDICTION_CALIBRATION_PRODUCT,),
-    "prediction.decision_curve": (PREDICTION_CLINICAL_UTILITY_PRODUCT,),
-}
 _PRIMARY_ACTION = PREDICTION_PRIMARY_ACTION
 _SCORE_COLUMNS = ("unit_id", "subject_id", "split", "outcome", "probability")
 _THRESHOLDS = tuple(float(value) for value in np.linspace(0.05, 0.50, 10))
@@ -83,29 +76,13 @@ _REPEATED_SPLIT_SEEDS = tuple(range(1730, 1740))
 
 
 def prediction_model_executor_owns_step(step: AnalysisStep) -> bool:
-    """Own only one exact action/product/input shape."""
+    """Own only one exact action/product/input shape.
 
-    action = str(step.scientific_action_id or "")
-    expected = _ACTION_OUTPUTS.get(action)
-    if expected is None or tuple(step.expected_outputs) != expected:
-        return False
-    if action == _PRIMARY_ACTION:
-        return static_prediction_execution_verdict(step).claimed
-    else:
-        typed_inputs = tuple(value for value in step.inputs if ":" in value)
-        if (
-            step.planned_analysis_role not in {"secondary", "auxiliary"}
-            or typed_inputs != (PREDICTION_SCORES_PRODUCT,)
-        ):
-            return False
-    return bool(
-        step.table_one_spec is None
-        and step.cohort_definition_spec is None
-        and step.measurement_audit_spec is None
-        and step.robustness_replay_spec is None
-        and step.trajectory_stability_spec is None
-        and not step.model_requirements
-    )
+    The shape is a dependency-neutral contract so the plan reviewer asks the
+    same question the executor answers.
+    """
+
+    return static_prediction_owns_step(step)
 
 
 def prediction_model_consumed_input_keys(step: AnalysisStep) -> tuple[str, ...]:
@@ -487,24 +464,15 @@ def run_prediction_robustness_specs(
 
     panel_rows: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
-    expected_variables = set((*features, outcome.name))
     for spec in specs:
-        missing = getattr(spec, "missing_override", None)
-        if (
-            getattr(spec, "axis", None) != "missing"
-            or getattr(spec, "cohort_override", None) is not None
-            or getattr(spec, "outcome_override", None) is not None
-            or not isinstance(missing, Mapping)
-            or str(missing.get("strategy") or "") != "complete_case"
+        if not static_prediction_executes_robustness_spec(
+            spec, features=features, outcome=str(outcome.name)
         ):
             continue
-        variables = tuple(str(value or "").strip() for value in missing.get("variables", ()))
-        if (
-            not variables
-            or len(variables) != len(set(variables))
-            or set(variables) != expected_variables
-            or any(variable not in frame.columns for variable in variables)
-        ):
+        variables = tuple(
+            str(value or "").strip() for value in spec.missing_override["variables"]
+        )
+        if any(variable not in frame.columns for variable in variables):
             continue
         complete = frame.loc[:, list(variables)].notna().all(axis=1).to_numpy()
         development = complete & (split == "development")
@@ -610,10 +578,10 @@ def run_prediction_model(
     missing = sorted(required - set(frame.columns))
     if missing:
         raise RuntimeError(f"prediction cohort is missing declared columns: {missing!r}")
-    features = tuple(
-        column
-        for column in declared_columns
-        if column not in {outcome_column, group_authority.group_source}
+    features = static_prediction_features(
+        declared_columns,
+        outcome=outcome_column,
+        group_source=group_authority.group_source,
     )
     if not features or len(features) != len(set(features)):
         raise RuntimeError("prediction requires a unique non-empty predictor roster")

@@ -13,6 +13,43 @@ from .capability_ids import SOURCE_FEASIBILITY_ANALYSIS_KIND
 
 _CONTRACT_REF = re.compile(r"^scientific_runtime_contract:([0-9a-f]{64})$")
 
+#: The formal result scope a sealed source-feasibility authority projects into
+#: the run context: the reviewed protocol found the requested contrast
+#: non-identifiable, so the only current-run result is the fail-closed
+#: decision and the article, figure, robustness and primary-result contracts
+#: narrow to it.
+SOURCE_FEASIBILITY_FORMAL_SCOPE = "source_feasibility_fail_closed"
+
+
+def context_declares_source_feasibility_scope(context: object) -> bool:
+    """Whether the typed run context carries the fail-closed feasibility scope."""
+
+    preferences = getattr(context, "user_preferences", None)
+    return (
+        str(getattr(preferences, "formal_result_scope", "") or "")
+        == SOURCE_FEASIBILITY_FORMAL_SCOPE
+    )
+
+
+def plan_names_sealed_feasibility_owner(plan: object) -> bool:
+    """Whether a plan's only analysis owner is the signed feasibility method.
+
+    A pre-bind draft may still carry cohort-accounting and report steps; the
+    host's ``bind_plan`` replaces the whole draft with the signed single-step
+    plan.  What the draft must never carry is a primary effect step.
+    """
+
+    steps = tuple(getattr(plan, "steps", ()) or ())
+    owners = [
+        step
+        for step in steps
+        if str(getattr(step, "method", "") or "").strip()
+        == SOURCE_FEASIBILITY_ANALYSIS_KIND
+    ]
+    return len(owners) == 1 and not any(
+        getattr(step, "planned_analysis_role", None) == "primary" for step in steps
+    )
+
 
 class SourceFeasibilityRuntimeReceipt(BaseModel):
     """Evidence that a signed source audit prohibited an unidentified contrast."""
@@ -187,7 +224,10 @@ def source_feasibility_runtime_bundle_errors(
 
 
 __all__ = [
+    "SOURCE_FEASIBILITY_FORMAL_SCOPE",
     "SourceFeasibilityRuntimeReceipt",
+    "context_declares_source_feasibility_scope",
+    "plan_names_sealed_feasibility_owner",
     "source_feasibility_plan_claimed",
     "source_feasibility_plan_contract_errors",
     "source_feasibility_runtime_bundle_errors",

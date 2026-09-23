@@ -30,7 +30,10 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from easyicu.outcome_availability import FOLLOWUP_OUTCOME_DATABASES
+from easyicu.outcome_availability import (
+    FIXED_HORIZON_MORTALITY_ENDPOINTS,
+    FOLLOWUP_OUTCOME_DATABASES,
+)
 
 from .comorbidity import lower_cols
 from ..databases.profiles import normalize_database_key
@@ -96,7 +99,12 @@ def _raw_table(database: str, data_path: object, table: str) -> pd.DataFrame:
     raise FileNotFoundError(f"{table}.parquet not found under {root}")
 
 
-_HORIZONS = {"mort_28d": 28, "mort_90d": 90, "mort_365d": 365}
+# The event/follow-up pairing is owned by ``easyicu.outcome_availability`` so
+# the materializer and the research-agent survival projection agree on it.
+_HORIZONS = {
+    endpoint.event_concept: endpoint.horizon_days
+    for endpoint in FIXED_HORIZON_MORTALITY_ENDPOINTS.values()
+}
 
 
 def _patient_values(patient_ids):
@@ -284,7 +292,7 @@ def load_outcomes(
         endpoint[died_by] = True
         endpoint[known_alive] = False
         out[name] = endpoint
-        followup_name = f"followup_days_{horizon}d"
+        followup_name = FIXED_HORIZON_MORTALITY_ENDPOINTS[name].followup_concept
         followup_time = np.full(len(base), np.nan, dtype="float64")
         followup_time[died_by] = dtd[died_by]
         followup_time[known_alive] = float(horizon)

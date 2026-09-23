@@ -27,12 +27,42 @@ from .typed_input_binding import load_typed_input
 
 TRAJECTORY_SELECTION_TABLE = "table:trajectory_candidate_selection"
 TRAJECTORY_AVAILABILITY_TABLE = "table:feature_availability"
+TRAJECTORY_PROFILE_TABLE = "table:trajectory_profiles"
+TRAJECTORY_CLUSTER_SIZE_TABLE = "table:cluster_sizes"
+TRAJECTORY_STABILITY_TABLE = "table:cluster_stability"
 TRAJECTORY_SELECTION_FIGURE = "figure:trajectory_selection_diagnostics"
+#: The second declared surface. One exported image is one surface, and the
+#: end-of-execute join resolves a runtime contract per declared output, so the
+#: phenotype characterization cannot be extra panels on the diagnostic figure.
+TRAJECTORY_CHARACTERIZATION_FIGURE = "figure:trajectory_phenotype_characterization"
 TRAJECTORY_SELECTION_FIGURE_INPUTS = (
     TRAJECTORY_SELECTION_TABLE,
     TRAJECTORY_AVAILABILITY_TABLE,
+    TRAJECTORY_PROFILE_TABLE,
+    TRAJECTORY_CLUSTER_SIZE_TABLE,
+    TRAJECTORY_STABILITY_TABLE,
+)
+TRAJECTORY_SELECTION_FIGURE_OUTPUTS = (
+    TRAJECTORY_SELECTION_FIGURE,
+    TRAJECTORY_CHARACTERIZATION_FIGURE,
 )
 TRAJECTORY_SELECTION_FIGURE_METHOD = "signed_trajectory_selection_diagnostic_figure"
+_PROFILE_COLUMNS = (
+    "cluster",
+    "source_column",
+    "window_start_hours",
+    "window_end_hours",
+    "summary_statistic",
+    "value",
+    "n_observed",
+)
+_CLUSTER_SIZE_COLUMNS = ("cluster", "n")
+_STABILITY_COLUMNS = (
+    "resample_id",
+    "n_overlap",
+    "adjusted_rand_index",
+    "selected_n_clusters",
+)
 
 _SELECTION_COLUMNS = (
     "n_clusters",
@@ -69,7 +99,7 @@ def trajectory_selection_figure_executor_owns_step(step: AnalysisStep) -> bool:
         step.planned_analysis_role == "auxiliary"
         and step.method == TRAJECTORY_SELECTION_FIGURE_METHOD
         and tuple(step.inputs) == TRAJECTORY_SELECTION_FIGURE_INPUTS
-        and tuple(step.expected_outputs) == (TRAJECTORY_SELECTION_FIGURE,)
+        and tuple(step.expected_outputs) == TRAJECTORY_SELECTION_FIGURE_OUTPUTS
         and step.table_one_spec is None
         and step.cohort_definition_spec is None
         and step.measurement_audit_spec is None
@@ -179,6 +209,307 @@ def _validated_availability(frame: pd.DataFrame) -> pd.DataFrame:
     return availability
 
 
+def _source_projection(
+    frame: pd.DataFrame,
+    *,
+    columns: tuple[str, ...],
+    bound: Any,
+    path: Path,
+) -> None:
+    """Write one registered source-data projection of an exact parent table."""
+
+    projection = frame.loc[:, list(columns)].copy()
+    parent = str(bound.binding.get("produced_by_step") or "")
+    if not parent:
+        raise ValueError("trajectory figure parents lack producer-step lineage")
+    projection["source_row_index"] = range(len(projection))
+    projection["source_table"] = bound.path.name
+    projection["source_step_id"] = parent
+    projection.to_csv(path, index=False)
+
+
+def _no_solution_axis(axis: Any, *, title: str, reason_code: str) -> None:
+    """State the sealed decision instead of drawing a phenotype that has none."""
+
+    axis.set_title(title, loc="left", pad=5)
+    axis.set_xticks([])
+    axis.set_yticks([])
+    for spine in axis.spines.values():
+        spine.set_visible(False)
+    axis.text(
+        0.5,
+        0.5,
+        "No stable phenotype solution\n"
+        + (reason_code or "prespecified reportability rule not met"),
+        ha="center",
+        va="center",
+        fontsize=6.4,
+        wrap=True,
+    )
+
+
+def _profile_matrix(profiles: pd.DataFrame) -> tuple[Any, list[str], list[str], list[int]]:
+    """Coordinate x (cluster, window) means, ordered exactly as the table is."""
+
+    frame = profiles.copy()
+    frame["concept"] = frame["source_column"].astype(str).str.split("__h").str[0]
+    frame["window_start_hours"] = pd.to_numeric(
+        frame["window_start_hours"], errors="coerce"
+    )
+    frame["value"] = pd.to_numeric(frame["value"], errors="coerce")
+    concepts = sorted(dict.fromkeys(frame["concept"]))
+    clusters = sorted(dict.fromkeys(frame["cluster"].astype(str)))
+    windows = sorted(dict.fromkeys(frame["window_start_hours"].dropna().tolist()))
+    matrix = np.full((len(concepts), len(clusters) * len(windows)), np.nan)
+    for _, row in frame.iterrows():
+        if pd.isna(row["window_start_hours"]):
+            continue
+        r = concepts.index(str(row["concept"]))
+        c = clusters.index(str(row["cluster"])) * len(windows) + windows.index(
+            row["window_start_hours"]
+        )
+        matrix[r, c] = row["value"]
+    return matrix, concepts, clusters, [int(value) for value in windows]
+
+
+def _render_characterization_figure(
+    *,
+    out_dir: Path,
+    profiles: pd.DataFrame,
+    sizes: pd.DataFrame,
+    stability: pd.DataFrame,
+    bounds: tuple[Any, Any, Any],
+    failed_closed: bool,
+    reason_code: str,
+) -> dict[str, Any]:
+    """Render the phenotype characterization surface from three sealed tables."""
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    profile_bound, size_bound, stability_bound = bounds
+    profile_source = out_dir / "trajectory_profiles_source_data.csv"
+    size_source = out_dir / "trajectory_cluster_sizes_source_data.csv"
+    stability_source = out_dir / "trajectory_cluster_stability_source_data.csv"
+    _source_projection(
+        profiles, columns=_PROFILE_COLUMNS, bound=profile_bound, path=profile_source
+    )
+    _source_projection(
+        sizes, columns=_CLUSTER_SIZE_COLUMNS, bound=size_bound, path=size_source
+    )
+    _source_projection(
+        stability,
+        columns=_STABILITY_COLUMNS,
+        bound=stability_bound,
+        path=stability_source,
+    )
+
+    palette = apply_publication_style(font_size=7.0)
+    fig, (ax_profile, ax_structure, ax_stability) = plt.subplots(
+        1, 3, figsize=(183 / 25.4, 66 / 25.4), gridspec_kw={"width_ratios": [1.5, 1.0, 1.0]}
+    )
+    solution = not failed_closed and not profiles.empty and not sizes.empty
+    if solution:
+        matrix, concepts, clusters, windows = _profile_matrix(profiles)
+        image = ax_profile.imshow(matrix, aspect="auto", cmap="viridis")
+        ax_profile.set_yticks(range(len(concepts)))
+        ax_profile.set_yticklabels(
+            [display_label(concept) for concept in concepts], fontsize=5.6
+        )
+        ax_profile.set_xticks(
+            [
+                index * len(windows) + len(windows) / 2 - 0.5
+                for index in range(len(clusters))
+            ]
+        )
+        ax_profile.set_xticklabels([f"Class {name}" for name in clusters], fontsize=5.8)
+        for index in range(1, len(clusters)):
+            ax_profile.axvline(index * len(windows) - 0.5, color="white", linewidth=1.1)
+        ax_profile.set_xlabel(
+            f"Prespecified {windows[1] - windows[0] if len(windows) > 1 else 0}-hour "
+            "windows within each class"
+        )
+        bar = fig.colorbar(image, ax=ax_profile, fraction=0.045, pad=0.02)
+        bar.ax.tick_params(labelsize=5.4)
+        bar.set_label("Pooled z-scored coordinate mean", fontsize=5.6)
+        ax_profile.set_title("Class coordinate profiles", loc="left", pad=5)
+
+        collapsed = np.full((len(clusters), len(concepts)), np.nan)
+        for row_index in range(len(concepts)):
+            for column_index in range(len(clusters)):
+                block = matrix[
+                    row_index,
+                    column_index * len(windows) : (column_index + 1) * len(windows),
+                ]
+                collapsed[column_index, row_index] = np.nanmean(block)
+        structure = ax_structure.imshow(collapsed, aspect="auto", cmap="viridis")
+        size_by_cluster = {
+            str(row["cluster"]): int(row["n"]) for _, row in sizes.iterrows()
+        }
+        ax_structure.set_yticks(range(len(clusters)))
+        ax_structure.set_yticklabels(
+            [
+                f"Class {name} (n={size_by_cluster.get(str(name), 0)})"
+                for name in clusters
+            ],
+            fontsize=5.6,
+        )
+        ax_structure.set_xticks(range(len(concepts)))
+        ax_structure.set_xticklabels(
+            [display_label(concept) for concept in concepts],
+            rotation=45,
+            ha="right",
+            fontsize=5.4,
+        )
+        bar = fig.colorbar(structure, ax=ax_structure, fraction=0.045, pad=0.02)
+        bar.ax.tick_params(labelsize=5.4)
+        ax_structure.set_title("Between-class separation", loc="left", pad=5)
+    else:
+        _no_solution_axis(
+            ax_profile, title="Class coordinate profiles", reason_code=reason_code
+        )
+        _no_solution_axis(
+            ax_structure, title="Between-class separation", reason_code=reason_code
+        )
+
+    ari = pd.to_numeric(
+        stability.get("adjusted_rand_index", pd.Series(dtype=float)), errors="coerce"
+    ).dropna()
+    if len(ari):
+        ax_stability.hist(
+            ari, bins=min(20, max(5, len(ari) // 5)), color=palette["blue"], alpha=0.85
+        )
+        mean_ari = float(ari.mean())
+        ax_stability.axvline(
+            mean_ari,
+            color=palette["red"],
+            linewidth=1.3,
+            label=f"Mean ARI = {mean_ari:.3f}",
+        )
+        ax_stability.legend(frameon=False, fontsize=5.8, loc="upper left")
+        ax_stability.set_xlabel("Adjusted Rand index per prespecified resample")
+        ax_stability.set_ylabel("Resamples")
+    else:
+        _no_solution_axis(
+            ax_stability,
+            title="Resampling stability",
+            reason_code=reason_code or "no completed resample",
+        )
+    ax_stability.set_title("Resampling stability", loc="left", pad=5)
+    for index, axis in enumerate((ax_profile, ax_structure, ax_stability)):
+        add_panel_label(axis, "abc"[index])
+    fig.tight_layout()
+
+    solution_claim = (
+        "Class profiles are the sealed representation's own coordinate means; "
+        "they describe the selected partition and do not establish that the "
+        "classes are distinct clinical entities."
+        if solution
+        else "The prespecified reportability rule returned no stable phenotype "
+        "solution, so no class profile is drawn."
+    )
+    contract = make_figure_contract(
+        figure_id=TRAJECTORY_CHARACTERIZATION_FIGURE,
+        core_claim=(
+            "Class profiles, between-class separation, and resampling stability "
+            "of the prespecified trajectory solution."
+            if solution
+            else "No stable phenotype solution was reportable under the "
+            "prespecified rule."
+        ),
+        archetype="quantitative_grid",
+        width_mm=183.0,
+        height_mm=66.0,
+        panels=[
+            {
+                "panel_id": "a",
+                "title": "Class coordinate profiles",
+                "role": "phenotype_profile",
+                "claim": solution_claim,
+                "evidence_ids": [profile_source.name],
+                "metadata": {
+                    "article_role": "phenotype_profile",
+                    "chart_type": "profile_heatmap",
+                    "source_products": [TRAJECTORY_PROFILE_TABLE],
+                    "source_data": [profile_source.name],
+                },
+            },
+            {
+                "panel_id": "b",
+                "title": "Between-class separation",
+                "role": "phenotype_structure",
+                "claim": (
+                    "Window-averaged coordinate means per class show how far "
+                    "apart the selected classes sit; separation is not evidence "
+                    "of clinical validity."
+                    if solution
+                    else solution_claim
+                ),
+                "evidence_ids": [profile_source.name, size_source.name],
+                "metadata": {
+                    "article_role": "phenotype_structure",
+                    "chart_type": "cluster_heatmap",
+                    "source_products": [
+                        TRAJECTORY_PROFILE_TABLE,
+                        TRAJECTORY_CLUSTER_SIZE_TABLE,
+                    ],
+                    "source_data": [profile_source.name, size_source.name],
+                },
+            },
+            {
+                "panel_id": "c",
+                "title": "Resampling stability",
+                "role": "stability",
+                "claim": (
+                    "Adjusted Rand indices come from the sealed subsampling "
+                    "design; the threshold decision itself is made by the "
+                    "stability owner, not by this figure."
+                ),
+                "evidence_ids": [stability_source.name],
+                "metadata": {
+                    "article_role": "stability",
+                    "chart_type": "subsampling_ari",
+                    "source_products": [TRAJECTORY_STABILITY_TABLE],
+                    "source_data": [stability_source.name],
+                },
+            },
+        ],
+        source_data=[profile_source.name, size_source.name, stability_source.name],
+        reader_caption=(
+            "(a) Coordinate means per prespecified window within each class. "
+            "(b) Window-averaged coordinate means per class with class sizes. "
+            "(c) Distribution of adjusted Rand indices across the prespecified "
+            "resamples. No panel establishes clinical validity of the classes."
+        ),
+        statistics_note=(
+            "Every value is copied from the sealed characterization and "
+            "stability tables; this renderer refits nothing, relabels nothing, "
+            "and applies no threshold of its own."
+        ),
+    )
+    stem = out_dir / TRAJECTORY_CHARACTERIZATION_FIGURE.split(":", 1)[1]
+    outputs = save_publication_figure(
+        fig, stem, contract=contract, formats=("png", "svg", "pdf", "tiff"), dpi=300
+    )
+    plt.close(fig)
+    return {
+        "stem": stem,
+        "figure_files": [
+            path.name for key, path in outputs.items() if key != "contract"
+        ],
+        "contract_file": f"{stem.name}.figure_contract.json",
+        "source_data_files": [
+            profile_source.name,
+            size_source.name,
+            stability_source.name,
+        ],
+        "panel_ids": ["a", "b", "c"],
+        "reportable_solution": bool(solution),
+    }
+
+
 def run_trajectory_selection_figure(
     *,
     out_dir: Path,
@@ -209,6 +540,27 @@ def run_trajectory_selection_figure(
         expected_columns=_AVAILABILITY_COLUMNS,
         require_consumption_contract=True,
         minimum_row_count=2,
+    )
+    # The characterization tables are empty by design when the sealed
+    # reportability rule returns no stable solution, so they bind with no row
+    # floor; the renderer states that outcome instead of drawing a phenotype.
+    profile_bound, size_bound, stability_bound = (
+        load_typed_input(
+            input_key=key,
+            run_dir=Path(run_dir),
+            resolved_inputs=resolved_inputs,
+            step_id=step_id,
+            expected_declared_kind="table",
+            expected_evidence_kind="table",
+            expected_columns=columns,
+            require_consumption_contract=True,
+            minimum_row_count=0,
+        )
+        for key, columns in (
+            (TRAJECTORY_PROFILE_TABLE, _PROFILE_COLUMNS),
+            (TRAJECTORY_CLUSTER_SIZE_TABLE, _CLUSTER_SIZE_COLUMNS),
+            (TRAJECTORY_STABILITY_TABLE, _STABILITY_COLUMNS),
+        )
     )
     selection, failed_closed, reason_code = _validated_selection(selection_bound.frame)
     availability = _validated_availability(availability_bound.frame)
@@ -371,12 +723,15 @@ def run_trajectory_selection_figure(
             {
                 "panel_id": "a",
                 "title": "Prespecified candidate-grid assessment",
-                "role": "phenotype_structure",
+                # ``PanelRole`` is the rendered-surface vocabulary; the typed
+                # article role below is what the plan promises.
+                "role": "diagnostics",
                 "claim": selection_claim,
                 "evidence_ids": [selection_source.name],
                 "metadata": {
-                    "article_role": "phenotype_structure",
+                    "article_role": "cluster_selection",
                     "chart_type": "criterion_curve",
+                    "source_products": [TRAJECTORY_SELECTION_TABLE],
                     "source_data": [selection_source.name],
                 },
             },
@@ -392,6 +747,7 @@ def run_trajectory_selection_figure(
                 "metadata": {
                     "article_role": "data_quality",
                     "chart_type": "availability_heatmap",
+                    "source_products": [TRAJECTORY_AVAILABILITY_TABLE],
                     "source_data": [availability_source.name],
                 },
             },
@@ -422,6 +778,15 @@ def run_trajectory_selection_figure(
     )
     plt.close(fig)
     figure_files = [path.name for key, path in outputs.items() if key != "contract"]
+    characterization = _render_characterization_figure(
+        out_dir=out_dir,
+        profiles=profile_bound.frame,
+        sizes=size_bound.frame,
+        stability=stability_bound.frame,
+        bounds=(profile_bound, size_bound, stability_bound),
+        failed_closed=failed_closed,
+        reason_code=reason_code,
+    )
     summary = {
         "step_id": step_id,
         "status": "ok",
@@ -436,10 +801,33 @@ def run_trajectory_selection_figure(
         "coordinate_count": int(len(availability)),
         "figure_path": f"{stem.name}.png",
         "figure_contract": f"{stem.name}.figure_contract.json",
-        "figure_files": figure_files,
-        "contract_files": [f"{stem.name}.figure_contract.json"],
-        "source_data_files": [selection_source.name, availability_source.name],
-        "output_files": {TRAJECTORY_SELECTION_FIGURE: f"{stem.name}.png"},
+        "figure_files": [*figure_files, *characterization["figure_files"]],
+        "contract_files": [
+            f"{stem.name}.figure_contract.json",
+            characterization["contract_file"],
+        ],
+        "source_data_files": [
+            selection_source.name,
+            availability_source.name,
+            *characterization["source_data_files"],
+        ],
+        "reportable_phenotype_solution": characterization["reportable_solution"],
+        "output_files": {
+            TRAJECTORY_SELECTION_FIGURE: f"{stem.name}.png",
+            TRAJECTORY_CHARACTERIZATION_FIGURE: f"{characterization['stem'].name}.png",
+        },
+        # Two declared outputs, so each surface names the panels that answer it
+        # rather than letting the join guess.
+        "planner_product_slot_bindings": {
+            TRAJECTORY_SELECTION_FIGURE: {
+                "slot": "selection_diagnostics",
+                "panel_ids": ["a", "b"],
+            },
+            TRAJECTORY_CHARACTERIZATION_FIGURE: {
+                "slot": "phenotype_characterization",
+                "panel_ids": list(characterization["panel_ids"]),
+            },
+        },
         "input_bindings": [
             {
                 "input_key": bound.input_key,
@@ -448,7 +836,13 @@ def run_trajectory_selection_figure(
                 "loaded": True,
                 "row_count": bound.row_count,
             }
-            for bound in (selection_bound, availability_bound)
+            for bound in (
+                selection_bound,
+                availability_bound,
+                profile_bound,
+                size_bound,
+                stability_bound,
+            )
         ],
         "export_qa": [],
     }
@@ -459,7 +853,9 @@ def run_trajectory_selection_figure(
 
 
 __all__ = [
+    "TRAJECTORY_CHARACTERIZATION_FIGURE",
     "TRAJECTORY_SELECTION_FIGURE",
+    "TRAJECTORY_SELECTION_FIGURE_OUTPUTS",
     "TRAJECTORY_SELECTION_FIGURE_INPUTS",
     "TRAJECTORY_SELECTION_FIGURE_METHOD",
     "run_trajectory_selection_figure",

@@ -61,7 +61,10 @@ from .analysis_types import (
     get_analysis_type,
     validate_host_authorized_analysis_family,
 )
-from .adjustment_authority import AdjustmentSetAuthority
+from .adjustment_authority import (
+    AdjustmentSetAuthority,
+    host_proven_temporal_roles,
+)
 from .cohort_contract import (
     CohortDefinition,
     CohortSchemaError,
@@ -1501,12 +1504,28 @@ def _compile_adjusted_association(
     )
     adjustment_authority = AdjustmentSetAuthority.from_context(context)
     temporal_roles = adjustment_authority.operational_temporal_roles
+    # Planner-selectable terms carry only the timing the host can prove from
+    # typed facts (owner-declared demographics; window-derived measurements
+    # bound at or before the landmark).  An exact roster carries the user's
+    # reviewed timing instead; the two authorities are never mixed.
+    host_timed_roles = (
+        host_proven_temporal_roles(context)
+        if adjustment_authority.selection != "exact"
+        else {}
+    )
     authorized_time_zero_covariates = frozenset(
-        name
-        for name in adjustment_authority.operational_covariates
-        if adjustment_authority.selection == "exact"
-        and temporal_roles.get(name)
-        in {"baseline_static", "at_or_before_time_zero"}
+        {
+            name
+            for name in adjustment_authority.operational_covariates
+            if adjustment_authority.selection == "exact"
+            and temporal_roles.get(name)
+            in {"baseline_static", "at_or_before_time_zero"}
+        }
+        | {
+            name
+            for name, role in host_timed_roles.items()
+            if role == "at_or_before_time_zero"
+        }
     )
     terms, covariates, exposure_levels, reference, primary_contrast = (
         _compile_model_terms(
@@ -1525,17 +1544,14 @@ def _compile_adjusted_association(
             path="model_terms",
         )
     if adjustment_authority.selection != "exact":
-        nonbaseline = [
-            name
-            for name in covariates
-            if str(getattr(variables[name].role, "value", variables[name].role))
-            != "demographic"
-        ]
+        nonbaseline = [name for name in covariates if name not in host_timed_roles]
         if nonbaseline:
             raise _fail(
                 "progressive_planner_covariate_baseline_authority_missing",
-                "Planner-selected adjustment is limited to owner-declared "
-                "baseline demographic variables; unavailable timing authority "
+                "Planner-selected adjustment is limited to variables whose "
+                "pre-time-zero availability the host can prove: owner-declared "
+                "baseline demographics, or window-derived measurements bound at "
+                "or before the typed landmark; unavailable timing authority "
                 "cannot be replaced by a generated rationale",
                 step=step,
                 step_index=step_index,
@@ -1562,7 +1578,7 @@ def _compile_adjusted_association(
             if term.role == "covariate" and term.name in covariates
         }
         covariate_temporal_roles = {
-            name: "baseline_static" for name in covariates
+            name: host_timed_roles[name] for name in covariates
         }
     method_family = (
         ASSOCIATION_LOGIT_ESTIMATOR

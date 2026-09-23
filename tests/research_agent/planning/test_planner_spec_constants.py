@@ -67,6 +67,14 @@ def _literal_options(annotation: object) -> list[object] | None:
     return list(typing.get_args(candidate))
 
 
+def _admits_absence(annotation: object) -> bool:
+    """Whether ``None`` is a legal value, i.e. the field has a declared absence."""
+
+    return typing.get_origin(annotation) is typing.Union and type(None) in typing.get_args(
+        annotation
+    )
+
+
 def _schema_models() -> list[type[BaseModel]]:
     models = []
     for name in dir(S):
@@ -76,14 +84,20 @@ def _schema_models() -> list[type[BaseModel]]:
     return models
 
 
-def _single_value_literal_fields() -> list[tuple[str, str, object, bool]]:
+def _single_value_literal_fields() -> list[tuple[str, str, object, bool, bool]]:
     rows = []
     for model in _schema_models():
         for field_name, field in model.model_fields.items():
             options = _literal_options(field.annotation)
             if options is not None and len(options) == 1:
                 rows.append(
-                    (model.__name__, field_name, options[0], field.is_required())
+                    (
+                        model.__name__,
+                        field_name,
+                        options[0],
+                        field.is_required(),
+                        _admits_absence(field.annotation),
+                    )
                 )
     return rows
 
@@ -98,7 +112,7 @@ def test_the_schema_really_has_single_value_literal_fields():
 
     rows = _single_value_literal_fields()
     assert len(rows) >= 20, f"expected many one-value literals, found {len(rows)}"
-    assert len({model for model, _, _, _ in rows}) >= 5
+    assert len({row[0] for row in rows}) >= 5
 
 
 def test_one_legal_value_means_the_host_supplies_it():
@@ -110,7 +124,7 @@ def test_one_legal_value_means_the_host_supplies_it():
 
     required = [
         f"{model}.{field}"
-        for model, field, _, is_required in _single_value_literal_fields()
+        for model, field, _, is_required, _absent in _single_value_literal_fields()
         if is_required
     ]
     assert not required, (
@@ -120,14 +134,26 @@ def test_one_legal_value_means_the_host_supplies_it():
 
 
 def test_the_default_is_that_one_legal_value():
-    """A default that is not the only legal value would be a different bug."""
+    """A default that is not the only legal value would be a different bug.
 
-    for model_name, field_name, only_value, _ in _single_value_literal_fields():
+    ``Optional[Literal[X]]`` has a second legal state -- ``None``, the declared
+    absence -- so its default may also be ``None``.  That is what a host-
+    projected coordinate such as ``UserPreferences.formal_result_scope`` needs:
+    the sealed authority sets it for the runs it governs, and every other run
+    legitimately carries no scope.  Either way the Planner never retypes the
+    constant, which is what the invariant above protects.
+    """
+
+    for model_name, field_name, only_value, _required, absent in (
+        _single_value_literal_fields()
+    ):
         model = getattr(S, model_name)
         default = model.model_fields[field_name].default
-        assert (
-            default == only_value
-        ), f"{model_name}.{field_name} defaults to {default!r}"
+        allowed = {only_value, None} if absent else {only_value}
+        assert default in allowed, (
+            f"{model_name}.{field_name} defaults to {default!r}, which is neither "
+            f"its one legal value nor a declared absence"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +330,7 @@ def test_the_directive_still_asks_for_the_real_decisions():
     "field_name,only_value",
     [
         (field, value)
-        for model, field, value, _ in _single_value_literal_fields()
+        for model, field, value, _required, _absent in _single_value_literal_fields()
         if model == "TrajectoryStabilitySpec"
     ],
 )

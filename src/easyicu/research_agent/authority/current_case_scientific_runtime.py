@@ -33,9 +33,12 @@ from ..contracts.capability_ids import (
     LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
 )
 from ..contracts.cohort_product_keys import sole_typed_cohort_input
-from ..contracts.figure_plan import landmark_association_composite_panels
+from ..contracts.figure_plan import (
+    DeterministicFigurePanelTemplate,
+    landmark_association_composite_panels,
+)
 from ..contracts.dependence import PlannedDependenceRequirement
-from ..contracts.model_terms import ModelTermSpec
+from ..contracts.model_terms import AdjustmentProposal, ModelTermSpec
 from ..contracts.functional_form import (
     FunctionalFormSpec, RCS_LINEAR_SENSITIVITY_METHODS, functional_form_products,
 )
@@ -107,6 +110,7 @@ class _AuthorityBase(BaseModel):
             legacy.pop("population_flow_product", None)
             legacy.pop("variable_opportunity_sensitivity_product", None)
             legacy.pop("dependence", None)
+            legacy.pop("plan_bound_adjustment_roster", None)
             observed = hashlib.sha256(_canonical_bytes(legacy)).hexdigest()
         if (
             observed != self.execution_contract_sha256
@@ -117,6 +121,7 @@ class _AuthorityBase(BaseModel):
         ):
             legacy = dict(body)
             legacy.pop("dependence", None)
+            legacy.pop("plan_bound_adjustment_roster", None)
             observed = hashlib.sha256(_canonical_bytes(legacy)).hexdigest()
         if (
             observed != self.execution_contract_sha256
@@ -139,6 +144,36 @@ class _AuthorityBase(BaseModel):
         ):
             legacy = dict(body)
             legacy.pop("association_model_grid", None)
+            legacy.pop("plan_bound_adjustment_roster", None)
+            observed = hashlib.sha256(_canonical_bytes(legacy)).hexdigest()
+        if (
+            observed != self.execution_contract_sha256
+            and (
+                (
+                    body.get("authority_kind") == "landmark_categorical_association"
+                    and body.get("schema_version")
+                    in {
+                        "easyicu.landmark_categorical_association_runtime_authority/1",
+                        "easyicu.landmark_categorical_association_runtime_authority/2",
+                    }
+                )
+                or (
+                    body.get("authority_kind") == "landmark_spline_association"
+                    and body.get("schema_version")
+                    in {
+                        "easyicu.landmark_spline_runtime_authority/1",
+                        "easyicu.landmark_spline_runtime_authority/2",
+                        "easyicu.landmark_spline_runtime_authority/3",
+                        "easyicu.landmark_spline_runtime_authority/4",
+                    }
+                )
+            )
+            and body.get("plan_bound_adjustment_roster") is None
+        ):
+            # Contracts signed before the plan-bound roster field existed keep
+            # their digests with the absent field.
+            legacy = dict(body)
+            legacy.pop("plan_bound_adjustment_roster", None)
             observed = hashlib.sha256(_canonical_bytes(legacy)).hexdigest()
         if observed != self.execution_contract_sha256:
             raise ValueError(
@@ -674,6 +709,41 @@ class AssociationModelGridRuntimeAuthority(_AuthorityBase):
         self.governed_step(plan, allow_signed_parent=allow_signed_parent)
 
 
+class PlanBoundAdjustmentRoster(BaseModel):
+    """Seal a Planner-selected adjustment roster from the reviewed plan.
+
+    An exact (v1/v2) contract names its roster before planning. A plan-bound
+    contract instead fixes the *domain* the projection can prove executable
+    (every materialized column with a supported encoding, minus the design
+    coordinates) and stays ``sealed=False`` until ``seal_adjustment_roster``
+    copies the sole primary model's covariates into
+    ``required_adjustment_columns`` and re-signs the authority. Sealing reads
+    plan coordinates only, never patient rows, and a column outside the domain
+    fails closed. Scientific admissibility (pre-time-zero availability) is the
+    planning authority's rule; this owner enforces physical executability and
+    exact-coordinate binding.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    authority: Literal["plan_primary_model"]
+    admissible_columns: Tuple[str, ...]
+    admissible_categorical_columns: Tuple[str, ...]
+    sealed: bool
+
+    @model_validator(mode="after")
+    def _closed_domain(self) -> "PlanBoundAdjustmentRoster":
+        if len(self.admissible_columns) != len(set(self.admissible_columns)):
+            raise ValueError("plan-bound adjustment domain must be unique")
+        if not set(self.admissible_categorical_columns).issubset(
+            self.admissible_columns
+        ):
+            raise ValueError(
+                "plan-bound categorical adjustment columns must be admissible columns"
+            )
+        return self
+
+
 class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
     """Bind a fixed-landmark cohort to one declared categorical association.
 
@@ -681,11 +751,16 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
     to the existing adjusted-association adapter. Exposure coding, contrasts,
     adjustment variables, and dependence remain explicit typed coordinates;
     no prompt text or observed patient values are used to choose them.
+
+    Schema ``/3`` adds ``plan_bound_adjustment_roster``: the roster is sealed
+    from the reviewed plan's primary model instead of the StudyContext, and the
+    model grid becomes optional. ``/1`` and ``/2`` keep their signed bytes.
     """
 
     schema_version: Literal[
         "easyicu.landmark_categorical_association_runtime_authority/1",
         "easyicu.landmark_categorical_association_runtime_authority/2",
+        "easyicu.landmark_categorical_association_runtime_authority/3",
     ]
     authority_kind: Literal["landmark_categorical_association"]
     cohort_method: Literal["signed_landmark_analysis_cohort"]
@@ -712,6 +787,11 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
     dependence: PlannedDependenceRequirement | None = None
     interpretation: Literal["descriptive_prognostic_association_not_causal"]
     association_model_grid: AssociationModelGridRuntimeAuthority | None = None
+    # Absent from dumps when unset so v1/v2/v4 contracts, their signed digests
+    # and every benchmark projection built from them stay byte-identical.
+    plan_bound_adjustment_roster: PlanBoundAdjustmentRoster | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def _closed_contract(self) -> "LandmarkCategoricalAssociationRuntimeAuthority":
@@ -749,24 +829,136 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
         grid = self.association_model_grid
         if self.schema_version.endswith("/1") and grid is not None:
             raise ValueError("landmark categorical v1 cannot attach a model grid")
-        if self.schema_version.endswith("/2"):
-            if grid is None:
-                raise ValueError("landmark categorical v2 requires a model grid")
-            if (
-                grid.protocol_content_sha256 != self.protocol_content_sha256
-                or grid.cohort_product != self.cohort_product
-                or grid.parent_product != self.primary_product
-                or grid.output_product in {
-                    self.cohort_product,
-                    self.cohort_flow_product,
-                    self.primary_product,
-                }
-            ):
+        if self.schema_version.endswith("/2") and grid is None:
+            raise ValueError("landmark categorical v2 requires a model grid")
+        if grid is not None and (
+            grid.protocol_content_sha256 != self.protocol_content_sha256
+            or grid.cohort_product != self.cohort_product
+            or grid.parent_product != self.primary_product
+            or grid.output_product in {
+                self.cohort_product,
+                self.cohort_flow_product,
+                self.primary_product,
+            }
+        ):
+            raise ValueError(
+                "landmark categorical model grid disagrees with its signed parent"
+            )
+        roster = self.plan_bound_adjustment_roster
+        if self.schema_version.endswith("/3"):
+            if roster is None:
                 raise ValueError(
-                    "landmark categorical model grid disagrees with its signed parent"
+                    "landmark categorical v3 requires a plan-bound adjustment roster"
                 )
+        elif roster is not None:
+            raise ValueError(
+                "landmark categorical v1/v2 contracts name their roster before planning"
+            )
+        if roster is not None:
+            design_columns = {
+                self.exposure_column,
+                self.outcome_column,
+                self.event_time_column,
+                self.observation_duration_column,
+                *((self.dependence.group_source,) if self.dependence is not None else ()),
+                *(
+                    variant.exposure_column
+                    for variant in (grid.variants if grid is not None else ())
+                    if variant.exposure_column is not None
+                ),
+            }
+            if set(roster.admissible_columns) & design_columns:
+                raise ValueError(
+                    "plan-bound adjustment domain overlaps the signed design columns"
+                )
+            if not roster.sealed:
+                if self.required_adjustment_columns or self.categorical_adjustment_columns:
+                    raise ValueError(
+                        "an unsealed plan-bound contract cannot name adjustment columns"
+                    )
+            else:
+                if not set(self.required_adjustment_columns).issubset(
+                    roster.admissible_columns
+                ):
+                    raise ValueError(
+                        "sealed adjustment columns must come from the admissible domain"
+                    )
+                expected_categorical = tuple(
+                    column
+                    for column in self.required_adjustment_columns
+                    if column in set(roster.admissible_categorical_columns)
+                )
+                if self.categorical_adjustment_columns != expected_categorical:
+                    raise ValueError(
+                        "sealed categorical adjustment columns must follow the domain encoding"
+                    )
         self._verify_digest()
         return self
+
+    @property
+    def adjustment_roster_sealed(self) -> bool:
+        roster = self.plan_bound_adjustment_roster
+        return roster is None or roster.sealed
+
+    def _require_sealed_roster(self) -> None:
+        if not self.adjustment_roster_sealed:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark categorical authority has not sealed its Planner-selected "
+                "adjustment roster; seal it from the reviewed plan before binding, "
+                "validating, or executing"
+            )
+
+    def seal_adjustment_roster(
+        self, plan: AnalysisPlan
+    ) -> "LandmarkCategoricalAssociationRuntimeAuthority":
+        """Re-sign the contract with the primary model's adjustment roster.
+
+        Exact and already-sealed contracts return themselves. An unsealed
+        plan-bound contract reads the sole primary model requirement (the
+        signed primary owner on a saved plan, otherwise the draft primary) and
+        copies its covariates in order. Deterministic: the same plan always
+        yields the same digest, so a saved plan re-seals to the digest already
+        recorded in its ``icu_rule_refs`` and a tampered roster fails the
+        rule-ref check instead of being accepted.
+        """
+
+        roster = self.plan_bound_adjustment_roster
+        if roster is None or roster.sealed:
+            return self
+        signed = [step for step in plan.steps if step.method == self.primary_method]
+        if len(signed) > 1:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark categorical plan lacks one signed primary owner"
+            )
+        primary = signed[0] if signed else self._draft_primary(plan)
+        requirement = sole_primary_model_requirement(primary)
+        if requirement is None or requirement.covariates is None:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark categorical primary declares no adjustment roster to seal"
+            )
+        selected = tuple(str(value) for value in requirement.covariates)
+        if len(selected) != len(set(selected)):
+            raise CurrentCaseScientificAuthorityError(
+                "landmark categorical Planner roster repeats a covariate"
+            )
+        outside = [name for name in selected if name not in set(roster.admissible_columns)]
+        if outside:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark categorical Planner roster leaves the sealed admissible "
+                "adjustment domain: " + ", ".join(outside)
+            )
+        body = self.model_dump(mode="json", exclude={"execution_contract_sha256"})
+        body["required_adjustment_columns"] = list(selected)
+        body["categorical_adjustment_columns"] = [
+            name for name in selected if name in set(roster.admissible_categorical_columns)
+        ]
+        body["plan_bound_adjustment_roster"] = {
+            **body["plan_bound_adjustment_roster"],
+            "sealed": True,
+        }
+        sealed = build_current_case_scientific_runtime_authority(body)
+        assert isinstance(sealed, LandmarkCategoricalAssociationRuntimeAuthority)
+        return sealed
 
     @property
     def cohort_filter_columns(self) -> Tuple[str, ...]:
@@ -811,7 +1003,7 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
         This is planning guidance, not a replacement for ``validate_plan``.
         """
 
-        coordinates = {
+        coordinates: dict[str, Any] = {
             "primary_exposure": self.exposure_column,
             "outcome": self.outcome_column,
             "outcome_type": "binary",
@@ -826,13 +1018,28 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
             "primary_contrast_level_index": self.exposure_levels.index(
                 self.primary_contrast_level
             ),
-            "covariates": list(self.required_adjustment_columns),
         }
+        if self.adjustment_roster_sealed:
+            coordinates["covariates"] = list(self.required_adjustment_columns)
+            roster_rule = (
+                "Copy exposure_term into model_terms and include the "
+                "declared covariates in their exact order. "
+            )
+        else:
+            roster = self.plan_bound_adjustment_roster
+            assert roster is not None
+            coordinates["adjustment_roster_authority"] = roster.authority
+            coordinates["admissible_adjustment_columns"] = list(roster.admissible_columns)
+            roster_rule = (
+                "Copy exposure_term into model_terms. The adjustment roster is "
+                "Planner-selected within the host's typed timing authority and "
+                "only from admissible_adjustment_columns; the host seals the "
+                "reviewed primary model's covariates into the runtime contract. "
+            )
         return (
             "CALLER-BOUND LANDMARK ASSOCIATION COORDINATES: the primary "
             "adjusted-association step must preserve the following exact "
-            "coordinates. Copy exposure_term into model_terms and include the "
-            "declared covariates in their exact order. Level indices refer to "
+            "coordinates. " + roster_rule + "Level indices refer to "
             "the host-published domain; do not choose another contrast or "
             "replace a categorical contrast with a linear trend. The host "
             "separately binds temporal eligibility and dependence authority.\n"
@@ -882,6 +1089,7 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
     def bind_plan(self, plan: AnalysisPlan) -> AnalysisPlan:
         """Compile the temporal cohort owner and signed primary route."""
 
+        self._require_sealed_roster()
         signed_methods = {self.cohort_method, self.primary_method}
         if any(step.method in signed_methods for step in plan.steps):
             # Saved plans cross this boundary again during deterministic replay
@@ -994,6 +1202,7 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
         return bound
 
     def governed_cohort_step(self, plan: AnalysisPlan) -> AnalysisStep:
+        self._require_sealed_roster()
         candidates = [step for step in plan.steps if step.method == self.cohort_method]
         if len(candidates) != 1:
             raise CurrentCaseScientificAuthorityError(
@@ -1021,6 +1230,7 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
         return step
 
     def governed_primary_step(self, plan: AnalysisPlan) -> AnalysisStep:
+        self._require_sealed_roster()
         candidates = [step for step in plan.steps if step.method == self.primary_method]
         if len(candidates) != 1:
             raise CurrentCaseScientificAuthorityError(
@@ -1077,6 +1287,7 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
         return step
 
     def validate_plan(self, plan: AnalysisPlan) -> None:
+        self._require_sealed_roster()
         self.governed_cohort_step(plan)
         self.governed_primary_step(plan)
         if self.association_model_grid is not None:
@@ -1105,11 +1316,20 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
 
 
 class LandmarkSplineRuntimeAuthority(_AuthorityBase):
+    """Signed fixed-landmark restricted-cubic-spline association contract.
+
+    Schema ``/5`` adds ``plan_bound_adjustment_roster``: like the categorical
+    contract's v3, the adjustment roster is sealed from the reviewed plan's
+    primary model instead of the StudyContext, and the dependence contract may
+    be present or absent. Earlier versions keep their signed bytes.
+    """
+
     schema_version: Literal[
         "easyicu.landmark_spline_runtime_authority/1",
         "easyicu.landmark_spline_runtime_authority/2",
         "easyicu.landmark_spline_runtime_authority/3",
         "easyicu.landmark_spline_runtime_authority/4",
+        "easyicu.landmark_spline_runtime_authority/5",
     ]
     authority_kind: Literal["landmark_spline_association"]
     plan_method: Literal["signed_landmark_restricted_cubic_spline"]
@@ -1134,6 +1354,11 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
     curve_points: int = Field(ge=5, le=201)
     linear_sensitivity_per_unit: Literal[1.0]
     interpretation: Literal["descriptive_prognostic_association_not_causal"]
+    # Absent from dumps when unset so v1/v2/v4 contracts, their signed digests
+    # and every benchmark projection built from them stay byte-identical.
+    plan_bound_adjustment_roster: PlanBoundAdjustmentRoster | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @property
     def observation_threshold(self) -> float:
@@ -1236,12 +1461,154 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                 raise ValueError(
                     "landmark spline v1/v2 authority cannot declare repeated-unit dependence"
                 )
-        elif self.dependence is None:
+        elif self.schema_version.endswith(("/3", "/4")) and self.dependence is None:
             raise ValueError(
                 "landmark spline v3/v4 authority requires a cluster-robust dependence contract"
             )
+        roster = self.plan_bound_adjustment_roster
+        if self.schema_version.endswith("/5"):
+            if roster is None:
+                raise ValueError(
+                    "landmark spline v5 authority requires a plan-bound adjustment roster"
+                )
+        elif roster is not None:
+            raise ValueError(
+                "landmark spline v1-v4 contracts name their roster before planning"
+            )
+        if roster is not None:
+            design_columns = {
+                self.exposure_column,
+                self.outcome_column,
+                self.outcome_time_column,
+                self.observation_duration_column,
+                *self.alternative_exposure_columns,
+                *((self.dependence.group_source,) if self.dependence is not None else ()),
+            }
+            if set(roster.admissible_columns) & design_columns:
+                raise ValueError(
+                    "plan-bound adjustment domain overlaps the signed design columns"
+                )
+            if not roster.sealed:
+                if self.required_adjustment_columns or self.categorical_adjustment_columns:
+                    raise ValueError(
+                        "an unsealed plan-bound contract cannot name adjustment columns"
+                    )
+            else:
+                if not set(self.required_adjustment_columns).issubset(
+                    roster.admissible_columns
+                ):
+                    raise ValueError(
+                        "sealed adjustment columns must come from the admissible domain"
+                    )
+                expected_categorical = tuple(
+                    column
+                    for column in self.required_adjustment_columns
+                    if column in set(roster.admissible_categorical_columns)
+                )
+                if self.categorical_adjustment_columns != expected_categorical:
+                    raise ValueError(
+                        "sealed categorical adjustment columns must follow the domain encoding"
+                    )
         self._verify_digest()
         return self
+
+    @property
+    def adjustment_roster_sealed(self) -> bool:
+        roster = self.plan_bound_adjustment_roster
+        return roster is None or roster.sealed
+
+    def _require_sealed_roster(self) -> None:
+        if not self.adjustment_roster_sealed:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark spline authority has not sealed its Planner-selected "
+                "adjustment roster; seal it from the reviewed plan before binding, "
+                "validating, or executing"
+            )
+
+    def _signed_primary_roster(self, step: AnalysisStep) -> tuple[str, ...]:
+        """Recover the roster a signed primary carries in its exact input order.
+
+        ``bind_plan`` writes ``[cohort, *required_columns]`` where the adjustment
+        columns sit between the four fixed source columns and the alternative-
+        exposure / dependence tail; the plan-bound domain excludes every one of
+        those, so the slice is exact.
+        """
+
+        inputs = [str(value) for value in step.inputs]
+        fixed = [
+            self.exposure_column,
+            self.outcome_column,
+            self.outcome_time_column,
+            self.observation_duration_column,
+        ]
+        tail = [
+            *self.alternative_exposure_columns,
+            *((self.dependence.group_source,) if self.dependence is not None else ()),
+        ]
+        if (
+            len(inputs) < 1 + len(fixed) + len(tail)
+            or inputs[1 : 1 + len(fixed)] != fixed
+            or (tail and inputs[len(inputs) - len(tail) :] != tail)
+        ):
+            raise CurrentCaseScientificAuthorityError(
+                "landmark spline signed primary inputs do not carry the sealed roster"
+            )
+        return tuple(inputs[1 + len(fixed) : len(inputs) - len(tail)])
+
+    def seal_adjustment_roster(self, plan: AnalysisPlan) -> "LandmarkSplineRuntimeAuthority":
+        """Re-sign the contract with the primary model's adjustment roster.
+
+        Exact and already-sealed contracts return themselves. A draft plan
+        contributes its sole primary model requirement's covariates; a saved
+        signed plan contributes the roster its primary inputs carry, so resume
+        re-seals to the digest already recorded in the plan.
+        """
+
+        roster = self.plan_bound_adjustment_roster
+        if roster is None or roster.sealed:
+            return self
+        primary = [step for step in plan.steps if step.planned_analysis_role == "primary"]
+        if len(primary) != 1:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark spline authority requires exactly one primary step"
+            )
+        step = primary[0]
+        if step.method == self.plan_method:
+            proposal = plan.adjustment_proposal
+            selected = (
+                tuple(str(value) for value in proposal.covariates)
+                if proposal is not None and proposal.source_step_id == step.step_id
+                else self._signed_primary_roster(step)
+            )
+        else:
+            requirement = sole_primary_model_requirement(step)
+            if requirement is None or requirement.covariates is None:
+                raise CurrentCaseScientificAuthorityError(
+                    "landmark spline primary declares no adjustment roster to seal"
+                )
+            selected = tuple(str(value) for value in requirement.covariates)
+        if len(selected) != len(set(selected)):
+            raise CurrentCaseScientificAuthorityError(
+                "landmark spline Planner roster repeats a covariate"
+            )
+        outside = [name for name in selected if name not in set(roster.admissible_columns)]
+        if outside:
+            raise CurrentCaseScientificAuthorityError(
+                "landmark spline Planner roster leaves the sealed admissible "
+                "adjustment domain: " + ", ".join(outside)
+            )
+        body = self.model_dump(mode="json", exclude={"execution_contract_sha256"})
+        body["required_adjustment_columns"] = list(selected)
+        body["categorical_adjustment_columns"] = [
+            name for name in selected if name in set(roster.admissible_categorical_columns)
+        ]
+        body["plan_bound_adjustment_roster"] = {
+            **body["plan_bound_adjustment_roster"],
+            "sealed": True,
+        }
+        sealed = build_current_case_scientific_runtime_authority(body)
+        assert isinstance(sealed, LandmarkSplineRuntimeAuthority)
+        return sealed
 
     def _table_products_containing(self, *tokens: str) -> tuple[str, ...]:
         return tuple(
@@ -1392,6 +1759,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         a new scientific decision.
         """
 
+        self._require_sealed_roster()
         primary = [
             step for step in plan.steps if step.planned_analysis_role == "primary"
         ]
@@ -1806,14 +2174,22 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                     ArtifactConsumptionContract(input_key=key, mode="all_rows") for key in inputs
                 ],
             })
-        return plan.model_copy(
-            update={"steps": steps, "robustness_specs": robustness_specs}
-        )
+        update: dict[str, Any] = {"steps": steps, "robustness_specs": robustness_specs}
+        # The signed primary carries the exact columns but drops the Planner's
+        # model requirement; keep its reviewed rationale and temporal roles as
+        # one typed plan record for review, resume, and the executed-run audit.
+        draft_requirement = sole_primary_model_requirement(candidate)
+        if plan.adjustment_proposal is None and draft_requirement is not None:
+            update["adjustment_proposal"] = AdjustmentProposal.from_requirement(
+                step_id=candidate.step_id, requirement=draft_requirement
+            )
+        return plan.model_copy(update=update)
 
     def absolute_risk_population_inputs(self, cohort_input: str) -> tuple[str, ...]:
         return (cohort_input, *self.required_columns, self.linear_sensitivity_product)
 
     def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
+        self._require_sealed_roster()
         primary = [
             step for step in plan.steps if step.planned_analysis_role == "primary"
         ]
@@ -1850,6 +2226,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         return step
 
     def validate_plan(self, plan: AnalysisPlan) -> None:
+        self._require_sealed_roster()
         primary = self.governed_step(plan)
         for step in plan.steps:
             if step.planned_analysis_role == "sensitivity" and step.robustness_replay_spec is not None:
@@ -2092,6 +2469,12 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
                 "icu_rule_refs": list(
                     dict.fromkeys([*candidate.icu_rule_refs, self.plan_rule_ref])
                 ),
+                # The sealed event column is the executable endpoint of this
+                # suite; review reads it through the same digest-bound ref.
+                "runtime_outcome_contract": RuntimeOutcomeContract(
+                    owner_ref=self.plan_rule_ref,
+                    outcomes=(self.event_column,),
+                ),
             }
         )
         figure_owner = AnalysisStep.model_validate(
@@ -2107,9 +2490,99 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
                     for value in self.figure_input_products
                 ],
                 "icu_rule_refs": [self.plan_rule_ref],
+                "figure_panels": [
+                    panel.bind(figure_output=self.figure_product).model_dump(
+                        mode="json"
+                    )
+                    for panel in self.figure_panel_templates()
+                ],
             }
         )
         return plan.model_copy(update={"steps": [cohort_owner, bound, figure_owner]})
+
+    def figure_panel_templates(self) -> tuple[DeterministicFigurePanelTemplate, ...]:
+        """Exact panels of the signed composite figure, by article role.
+
+        Panel b's grammar is decided at execution by the sealed PH policy:
+        the constant hazard-ratio forest is withheld when the assumption is
+        rejected and replaced by the prespecified interval-specific Cox or
+        the PH-free RMST contrast. The plan promises the headline grammar
+        and lists exactly those policy alternatives.
+        """
+
+        contrast_sources = (
+            self.cox_product,
+            *((self.rmst_product,) if self.rmst_product is not None else ()),
+            *(
+                (self.time_varying_cox_product,)
+                if self.time_varying_cox_product is not None
+                else ()
+            ),
+        )
+        alternatives = (
+            *(
+                ("time_varying_hazard_ratio_forest",)
+                if self.time_varying_cox_product is not None
+                else ()
+            ),
+            *(
+                ("rmst_difference_forest",)
+                if self.rmst_product is not None
+                and self.non_ph_alternative == "unadjusted_rmst_difference"
+                else ()
+            ),
+        )
+        return (
+            DeterministicFigurePanelTemplate(
+                panel_id="a",
+                article_role="temporal_absolute_risk",
+                chart_type="kaplan_meier_curve",
+                source_products=(self.km_product,),
+            ),
+            DeterministicFigurePanelTemplate(
+                panel_id="b",
+                article_role="survival_effect",
+                chart_type="hazard_ratio_forest",
+                source_products=contrast_sources,
+                policy_alternative_chart_types=alternatives,
+            ),
+            DeterministicFigurePanelTemplate(
+                panel_id="c",
+                article_role="cohort_accounting",
+                chart_type="cohort_flow",
+                source_products=(self.risk_set_product,),
+            ),
+            DeterministicFigurePanelTemplate(
+                panel_id="d",
+                article_role="diagnostics",
+                chart_type="schoenfeld_plot",
+                source_products=(self.ph_product,),
+            ),
+        )
+
+    def planning_contract_context(self) -> str:
+        """Disclose the sealed suite so a planner can name its owner, not re-derive it."""
+
+        coordinates = {
+            "sealed_primary_owner": self.plan_method,
+            "exposure_status_column": self.exposure_status_column,
+            "exposure_onset_column": self.exposure_onset_column,
+            "event_column": self.event_column,
+            "followup_time_column": self.followup_time_column,
+            "landmark_hours": self.landmark_hours,
+            "endpoint_horizon_days": self.endpoint_horizon_days,
+            "adjustment_columns": list(self.adjustment_columns),
+            "plan_outputs": list(self.plan_outputs),
+        }
+        return (
+            "CALLER-BOUND LANDMARK SURVIVAL SUITE: the single primary step is "
+            "owned by the sealed host suite named in sealed_primary_owner; it "
+            "must declare exactly the listed source columns and outputs and "
+            "carry no model requirement of its own. The host compiles risk-set "
+            "accounting, Table 1, Kaplan-Meier, adjusted Cox, the PH audit and "
+            "the composite figure from this contract.\n"
+            + json.dumps(coordinates, ensure_ascii=False, sort_keys=True)
+        )
 
     @property
     def analysis_plan_outputs(self) -> tuple[str, ...]:
@@ -2288,6 +2761,35 @@ class SourceFeasibilityRuntimeAuthority(_AuthorityBase):
         self._verify_digest()
         return self
 
+    @property
+    def formal_result_scope(self) -> str:
+        """The run-context scope this authority projects (``UserPreferences``)."""
+
+        return "source_feasibility_fail_closed"
+
+    def planning_contract_context(self) -> str:
+        """Disclose the sealed decision so the Planner never drafts a contrast."""
+
+        payload = {
+            "sealed_owner": self.plan_method,
+            "plan_intent": self.plan_intent,
+            "plan_outputs": list(self.plan_outputs),
+            "source": self.source,
+            "audited_window_hours": list(self.audited_window_hours),
+            "decision": self.decision,
+            "reason_code": self.reason_code,
+            "forbidden_plan_tokens": list(self.forbidden_plan_tokens),
+        }
+        return (
+            "CALLER-BOUND SOURCE FEASIBILITY DECISION: the reviewed protocol "
+            "found the requested treatment contrast not identifiable from the "
+            "current source capture, so the only current-run result is the "
+            "signed fail-closed feasibility decision. Plan no control arm, "
+            "weighting, matching, or effect estimate; the host executes the "
+            "sealed owner. Coordinates (JSON): "
+            + json.dumps(payload, sort_keys=True)
+        )
+
     def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
         if len(plan.steps) != 1:
             raise CurrentCaseScientificAuthorityError(
@@ -2447,6 +2949,7 @@ __all__ = [
     "LandmarkCategoricalAssociationRuntimeAuthority",
     "LandmarkSplineRuntimeAuthority",
     "LandmarkSurvivalRuntimeAuthority",
+    "PlanBoundAdjustmentRoster",
     "SourceFeasibilityRuntimeAuthority",
     "build_current_case_scientific_runtime_authority",
     "load_current_case_scientific_runtime_authority",

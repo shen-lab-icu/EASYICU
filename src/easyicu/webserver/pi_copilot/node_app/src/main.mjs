@@ -891,6 +891,21 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
       Type.Literal("site"), Type.Literal("custom"),
     ])),
   }, { additionalProperties: false });
+  const trajectoryConcept = Type.String({ minLength: 1, maxLength: 80, pattern: "^[a-z][a-z0-9_]{0,79}$" });
+  const trajectoryDesign = Type.Object({
+    coordinate_concepts: Type.Array(trajectoryConcept, { minItems: 2, maxItems: 16, description: "Exact concept ids clustered as trajectory coordinates; at least one must be a SOFA-2 component, because the signed owner defines eligibility as a count of owner-available SOFA-2 windows." }),
+    descriptive_only_concepts: Type.Optional(Type.Array(trajectoryConcept, { maxItems: 16, description: "Reported beside the classes but never a model coordinate." })),
+    window_start_hours: Type.Optional(Type.Integer({ minimum: 0, maximum: 720 })),
+    window_end_hours: Type.Optional(Type.Integer({ minimum: 1, maximum: 720 })),
+    grid_width_hours: Type.Optional(Type.Integer({ minimum: 1, maximum: 168, description: "The window must divide into complete fixed windows of this width." })),
+    minimum_available_windows: Type.Optional(Type.Integer({ minimum: 1, maximum: 48 })),
+    candidate_cluster_min: Type.Optional(Type.Integer({ minimum: 2, maximum: 12 })),
+    candidate_cluster_max: Type.Optional(Type.Integer({ minimum: 3, maximum: 12, description: "Minimum-BIC selection fails closed at the upper boundary, so the grid needs room above the expected answer." })),
+    stability_resamples: Type.Optional(Type.Integer({ minimum: 2, maximum: 500 })),
+    stability_sample_fraction: Type.Optional(Type.Number({ exclusiveMinimum: 0, exclusiveMaximum: 1 })),
+    minimum_mean_stability: Type.Optional(Type.Number({ minimum: -1, maximum: 1, description: "Mean adjusted-Rand threshold below which no stable solution is reported." })),
+    minimum_cluster_fraction: Type.Optional(Type.Number({ exclusiveMinimum: 0, exclusiveMaximum: 1 })),
+  }, { additionalProperties: false });
   const sensitivitySpec = Type.Object({
     spec_id: Type.String({ minLength: 1, maxLength: 80, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$" }),
     axis: Type.Union([
@@ -983,6 +998,7 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
       )),
       execution_concepts: Type.Optional(executionConcepts),
       analysis_design: Type.Optional(analysisDesign),
+      trajectory_design: Type.Optional(trajectoryDesign),
       sensitivity_specs: Type.Optional(Type.Array(sensitivitySpec, { maxItems: 16 })),
       time_window: Type.Optional(studyWindow), comparator: optionalText(500),
       export_format: optionalText(40), analysis_goal: optionalText(1200),

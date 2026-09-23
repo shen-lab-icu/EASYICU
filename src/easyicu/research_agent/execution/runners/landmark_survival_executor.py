@@ -563,6 +563,17 @@ def _render_figure(
     ax_ph.set_title("Proportional-hazards diagnostics", loc="left")
     add_panel_label(ax_ph, "d", x=-0.16, y=1.05, fontsize=8.0)
 
+    # Plan-time panel promises live on the sealed authority; each rendered
+    # panel repeats its role and exact digest-bound sources so the
+    # end-of-execute join can bind them without prose inference.
+    panel_sources = {
+        panel.panel_id: list(panel.source_products)
+        for panel in sealed.figure_panel_templates()
+    }
+
+    def _panel_metadata(panel_id: str) -> dict[str, Any]:
+        return {"placement": "main", "source_products": panel_sources[panel_id]}
+
     contract = make_figure_contract(
         figure_id="landmark_survival_suite",
         core_claim=(
@@ -583,6 +594,7 @@ def _render_figure(
                 "claim": "Unadjusted absolute post-landmark survival is displayed by the frozen incident-exposure groups.",
                 "evidence_ids": [],
                 "review_risk": "This is an observational landmark comparison and does not identify a causal exposure effect.",
+                "metadata": _panel_metadata("a"),
             },
             {
                 "panel_id": "b",
@@ -624,6 +636,7 @@ def _render_figure(
                         else "The RMST contrast is unadjusted and observational; do not recover or quote the source-table hazard ratio as a constant headline effect."
                     )
                 ),
+                "metadata": _panel_metadata("b"),
             },
             {
                 "panel_id": "c",
@@ -633,6 +646,7 @@ def _render_figure(
                 "claim": "The analytic denominator is traceable through endpoint, landmark and exposure-timing gates.",
                 "evidence_ids": [],
                 "review_risk": "Excluded prevalent or timing-unknown exposure rows define the supported estimand boundary.",
+                "metadata": _panel_metadata("c"),
             },
             {
                 "panel_id": "d",
@@ -642,6 +656,7 @@ def _render_figure(
                 "claim": "Schoenfeld-residual tests disclose whether the fitted Cox proportional-hazards assumption is rejected.",
                 "evidence_ids": [],
                 "review_risk": "A diagnostic p value does not repair non-proportional hazards; the signed handling policy still governs reportability.",
+                "metadata": _panel_metadata("d"),
             },
         ],
         export_formats=("svg", "pdf", "png"),

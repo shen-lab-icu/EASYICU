@@ -149,6 +149,7 @@ _STUDY_SETUP_FIELDS = frozenset(
         "covariate_operationalizations",
         "execution_concepts",
         "analysis_design",
+        "trajectory_design",
         "sensitivity_specs",
         "time_window",
         "comparator",
@@ -167,6 +168,7 @@ _NESTED_STUDY_PATCH_FIELDS = frozenset(
         "confirmations",
         "execution_concepts",
         "analysis_design",
+        "trajectory_design",
         "covariate_rationales",
         "covariate_temporal_roles",
         "covariate_operationalizations",
@@ -1506,6 +1508,26 @@ def update_study_context(
                     if exc.detail.get(key) is not None
                 },
             )
+    if "trajectory_design" in patch:
+        try:
+            patch["trajectory_design"] = study_contexts.normalize_trajectory_design(
+                patch.get("trajectory_design")
+            )
+        except study_contexts.StudyContextError as exc:
+            return _result(
+                context,
+                status="blocked",
+                code=str(exc.detail.get("error") or "study_trajectory_design_invalid"),
+                summary=(
+                    "The StudyContext owner rejected the proposed trajectory design."
+                ),
+                owner="easyicu.webserver.study_contexts",
+                details={
+                    key: exc.detail.get(key)
+                    for key in ("field", "detail", "fields", "allowed")
+                    if exc.detail.get(key) is not None
+                },
+            )
     if "covariate_selection" in patch:
         selection = str(patch.get("covariate_selection") or "").strip()
         if selection not in {"planner_selectable", "exact"}:
@@ -1560,7 +1582,9 @@ def update_study_context(
             },
         )
 
-    if "analysis_design" in params:
+    if "analysis_design" in params or "trajectory_design" in params:
+        # The two halves are one design: changing either can make the pair
+        # unexecutable, and the launch gate owns that judgement.
         proposed = {**dict(current or {}), **patch}
         try:
             agent_pipeline_runs.validate_analysis_design_for_execution(proposed)
