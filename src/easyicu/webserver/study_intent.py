@@ -150,6 +150,7 @@ _PHRASE_TO_CONCEPT: Tuple[Tuple[str, str], ...] = (
     (r"\bbmi\b|体重指数", "bmi"),
     (r"\bage\b|年龄", "age"),
     (r"\bsex\b|gender|性别", "sex"),
+    (r"\badmission (?:type|category)\b|\btype of admission\b|入院类型|入院类别|入科类型", "adm"),
     (r"in-?hospital mortality|hospital mortality|院内死亡|住院death|住院死亡", "death"),
     (r"28-?\s*day mortality|28\s*天死亡", "mort_28d"),
     (r"90-?\s*day mortality|90\s*天死亡", "mort_90d"),

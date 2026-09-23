@@ -98,6 +98,20 @@ def _analysis_window_end_hours(label: Any) -> Optional[float]:
     return float(match.group(1)) if match else None
 
 
+def owner_declared_baseline_static(variable: Any) -> bool:
+    """Whether the concept owner declares this variable a baseline attribute.
+
+    The concept dictionary's ``demographic`` role is an owner declaration that
+    the value describes the admission itself (age, sex, admission type), not a
+    measurement taken during the stay.  It is the same authority that lets the
+    host prove a baseline covariate's timing without a rationale, so it is
+    shared rather than re-derived from a column name or a physical window.
+    """
+
+    role = str(getattr(getattr(variable, "role", None), "value", None) or getattr(variable, "role", "") or "")
+    return role == "demographic"
+
+
 def host_window_bound_roles(
     context: Any,
     *,
@@ -123,7 +137,7 @@ def host_window_bound_roles(
         role = str(getattr(variable.role, "value", variable.role) or "")
         if not name:
             continue
-        if role == "demographic":
+        if owner_declared_baseline_static(variable):
             roles[name] = "baseline_static"
             continue
         if role not in dynamic_roles or reference_hours is None:
