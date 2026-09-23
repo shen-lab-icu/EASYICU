@@ -699,10 +699,10 @@ def test_web_without_landmark_still_requires_source_bound_hospital_status(source
 
     acquisition, followup, _ = source
     acquisition = replace(acquisition, materialized_columns=("stay_id", "death"))
-    monkeypatch.setattr(owner, "resolve_raw_mimic_iv_source_binding", lambda **_: None)
+    monkeypatch.setattr(owner, "resolve_raw_hospital_source_binding", lambda **_: None)
     with pytest.raises(ValueError, match="Legacy hospital mortality"):
         materialize_web_hospital_followup(acquisition, specs=[], export_path=acquisition.universe_path.parent, database="miiv")
-    monkeypatch.setattr(owner, "resolve_raw_mimic_iv_source_binding", lambda **_: SimpleNamespace(
+    monkeypatch.setattr(owner, "resolve_raw_hospital_source_binding", lambda **_: SimpleNamespace(
         materialize_hospital_mortality_status=lambda: HospitalMortalityStatus(followup.frame[["stay_id", "hospital_death"]], {}),
         public_receipt=lambda: {"authority_ref": "test"},
     ))

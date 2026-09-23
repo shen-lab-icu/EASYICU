@@ -1,4 +1,4 @@
-"""Contracts for the source-bound MIMIC-IV hospital follow-up owner."""
+"""Contracts for the source-bound hospital follow-up owner (MIMIC-IV and eICU)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,9 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.acquisition.hospital_mortality_followup import (
+    HOSPITAL_MORTALITY_FOLLOWUP_COLUMNS,
     HospitalMortalityFollowupError,
+    derive_eicu_hospital_mortality_followup,
     derive_mimic_iv_hospital_mortality_followup,
 )
 
@@ -122,3 +124,86 @@ def test_ambiguous_raw_join_fails_closed(table: str, column: str, code: str) -> 
 
     with pytest.raises(HospitalMortalityFollowupError, match=code):
         derive_mimic_iv_hospital_mortality_followup(icustays, admissions)
+
+
+def _patient() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "patientunitstayid": [201, 202, 203, 204, 205, 206, 207, 208],
+            "hospitaldischargestatus": [
+                "Expired",  # event at 0 h is a valid zero-time event
+                "Alive",
+                "Alive",  # hospital discharge recorded before unit discharge
+                None,  # status missing
+                "Unknown",  # status outside the eICU domain
+                "Expired",  # offset missing
+                "Expired",  # death before ICU admission
+                "Alive",  # discharge before ICU admission
+            ],
+            "hospitaldischargeoffset": [0, 2880, 600, 1440, 1440, None, -30, -60],
+            "unitdischargeoffset": [0, 2000, 660, 1400, 1400, 100, 10, 10],
+        }
+    )
+
+
+def test_eicu_patient_table_derives_the_same_hospital_axis() -> None:
+    result = derive_eicu_hospital_mortality_followup(_patient(), database="eicu_demo")
+
+    assert tuple(result.frame.columns) == HOSPITAL_MORTALITY_FOLLOWUP_COLUMNS
+    assert result.frame[["stay_id", "hospital_death", "hospital_followup_time_hours"]].to_dict(
+        orient="records"
+    ) == [
+        {"stay_id": 201, "hospital_death": 1, "hospital_followup_time_hours": 0.0},
+        {"stay_id": 202, "hospital_death": 0, "hospital_followup_time_hours": 48.0},
+        {"stay_id": 203, "hospital_death": 0, "hospital_followup_time_hours": 10.0},
+    ]
+    assert result.frame.loc[0, "death_time_hours"] == 0.0
+    assert pd.isna(result.frame.loc[1, "death_time_hours"])
+    assert result.exclusions.to_dict(orient="records") == [
+        {"stay_id": 204, "reason_code": "hospital_mortality_status_missing"},
+        {"stay_id": 205, "reason_code": "hospital_mortality_status_invalid"},
+        {"stay_id": 206, "reason_code": "hospital_discharge_offset_missing"},
+        {"stay_id": 207, "reason_code": "hospital_death_before_icu_admission"},
+        {"stay_id": 208, "reason_code": "hospital_discharge_before_icu_admission"},
+    ]
+    receipt = result.receipt
+    assert receipt["schema_version"] == "easyicu.eicu_hospital_mortality_followup/1"
+    assert receipt["database"] == "eicu_demo"
+    assert receipt["time_origin"] == "icu_admission"
+    assert receipt["event"]["definition"] == "patient.hospitaldischargestatus == 'Expired'"
+    assert receipt["zero_time_event_stays"] == 1
+    assert receipt["event_stays"] == 1
+    assert receipt["censored_stays"] == 2
+    assert receipt["chronology_notes"] == {
+        "hospital_discharge_before_icu_discharge_stays": 1
+    }
+    assert receipt["exclusion_counts"] == {
+        "hospital_death_before_icu_admission": 1,
+        "hospital_discharge_before_icu_admission": 1,
+        "hospital_discharge_offset_missing": 1,
+        "hospital_mortality_status_invalid": 1,
+        "hospital_mortality_status_missing": 1,
+    }
+    assert receipt["privacy"]["identifier_values_returned"] is False
+    # The receipt vocabulary is shared with the MIMIC-IV derivation.
+    mimic = derive_mimic_iv_hospital_mortality_followup(_icustays(), _admissions())
+    assert set(mimic.receipt) - {"chronology_notes"} == set(receipt) - {"chronology_notes"}
+
+
+def test_eicu_derivation_fails_closed_on_ambiguous_identity_or_database() -> None:
+    duplicated = _patient()
+    duplicated.loc[1, "patientunitstayid"] = duplicated.loc[0, "patientunitstayid"]
+    with pytest.raises(
+        HospitalMortalityFollowupError, match="hospital_followup_patient_key_nonunique"
+    ):
+        derive_eicu_hospital_mortality_followup(duplicated)
+    with pytest.raises(
+        HospitalMortalityFollowupError, match="hospital_followup_database_unsupported"
+    ):
+        derive_eicu_hospital_mortality_followup(_patient(), database="miiv")
+    with pytest.raises(
+        HospitalMortalityFollowupError, match="hospital_followup_patient_columns_missing"
+    ):
+        derive_eicu_hospital_mortality_followup(
+            _patient().drop(columns=["hospitaldischargeoffset"])
+        )

@@ -605,3 +605,67 @@ def test_keep_sensitivities_without_a_confirmed_timing_spec_fails_closed() -> No
         )
 
     assert raised.value.code == "plan_decision_confirmed_timing_missing"
+
+
+def test_agent_plan_first_stay_restriction_answers_repeated_stay_finding() -> None:
+    """A bound first-stay cohort closes the repeated-stay finding without grouping.
+
+    This is the official-demo path: eICU exports carry no patient grouping, the
+    researcher keeps one first ICU stay per patient, and the remaining runtime
+    findings (landmark timing, primary population) must still compile.
+    """
+
+    plan = _aki_landmark_plan()
+    requirement = plan["steps"][0]["model_requirements"][0]
+    requirement.update(
+        {
+            "covariate_rationales": {
+                "age": "Baseline age precedes the exposure window.",
+                "sex": "Baseline sex precedes the exposure window.",
+            },
+            "covariate_temporal_roles": {
+                "age": "baseline_static",
+                "sex": "baseline_static",
+            },
+        }
+    )
+    study = _aki_study()
+    study["cohort"] = {**dict(study.get("cohort") or {}), "exclude_readmissions": True}
+
+    compiled = compile_agent_plan_configuration(
+        study=study,
+        agent_plan=plan,
+        runtime_finding_codes=(
+            "PRIMARY_POPULATION_EXECUTION_OWNER_MISSING",
+            "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+            "REPEATED_STAY_IDENTITY_UNAVAILABLE",
+        ),
+        patient_cluster_available=False,
+    )
+
+    assert compiled.runtime_finding_codes == (
+        "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+        "PRIMARY_POPULATION_EXECUTION_OWNER_MISSING",
+    )
+    assert compiled.patch["analysis_design"] == {
+        "analysis_family": "association_study",
+        "analysis_unit": "icu_stay",
+        "variance_estimator": "model_based",
+    }
+    assert "cohort" not in compiled.patch
+    confirmations = compiled.patch["confirmations"]
+    assert confirmations["plan_repeated_stays_first"] is True
+    assert confirmations["plan_repeated_stays_clustered"] is False
+    assert confirmations["plan_timing_landmark_24h"] is True
+    timing = next(
+        item for item in compiled.patch["sensitivity_specs"] if item["axis"] == "timing"
+    )
+    assert timing["strategy"] == "landmark"
+    assert compiled.patch["execution_concepts"]["primary_exposure"] == "aki_stage"
+    # The resulting StudyContext resolves the reviewer's repeated-stay decision.
+    from easyicu.webserver.study_scientific_configuration import ScientificConfiguration
+
+    merged = {**study, **compiled.patch}
+    assert ScientificConfiguration.inspect(merged).decision_is_resolved(
+        "REPEATED_STAY_IDENTITY_UNAVAILABLE"
+    )

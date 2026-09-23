@@ -1,7 +1,11 @@
-"""Attach verified hospital status or follow-up to a legacy one-stay cohort.
+"""Attach verified hospital status or follow-up to a one-stay cohort.
 
-This transformation preserves its parent artifacts and explicitly accounts for
-every rejected follow-up row. It never substitutes ICU length of stay.
+Legacy (untyped) cohorts are rewritten here with a receipt in the sibling
+provenance selector.  Typed cohorts that carry a sealed authority are extended
+through the typed-lineage owner instead, which publishes a parent-bound child
+authority; this module never downgrades or forges that lineage.  Both paths
+preserve their parent artifacts, account for every rejected follow-up row and
+never substitute ICU length of stay.
 """
 
 from __future__ import annotations
@@ -106,12 +110,74 @@ def _source_cohort(acquisition: AcquisitionResult):
     return path, frame, provenance, source_ids, payload
 
 
+def _materialize_typed_hospital_followup(
+    acquisition: AcquisitionResult,
+    *,
+    followup: HospitalMortalityFollowup,
+    raw_source_receipt: Mapping[str, Any],
+) -> AcquisitionResult:
+    """Extend a typed (sealed) cohort through the typed-lineage owner.
+
+    The cohort authority owner publishes the child and re-verifies it against
+    the parent parquet; this adapter only maps the deriver's ``stay_id`` axis
+    onto the sealed identity column and forwards the two receipts.
+    """
+    from ..intake.materialized_metadata import (
+        load_verified_materialized_cohort_authority,
+        publish_hospital_followup_materialized_cohort,
+    )
+
+    if acquisition.universe_path is None or acquisition.cohort_authority_ref is None:
+        raise ValueError("hospital_followup_source_cohort_required")
+    path = Path(acquisition.universe_path)
+    verified = load_verified_materialized_cohort_authority(
+        path, expected_authority=acquisition.cohort_authority_ref
+    )
+    if verified is None:
+        raise ValueError("hospital_followup_source_cohort_required")
+    identity = verified.authority.identity_column
+    followup_frame = followup.frame.rename(columns={"stay_id": identity})[
+        [identity, "hospital_death", "death_time_hours", "hospital_followup_time_hours"]
+    ]
+    exclusions = followup.exclusions.rename(
+        columns={"stay_id": identity, "reason_code": "reason"}
+    )[[identity, "reason"]]
+    target = path.parent / "hospital_followup_cohort.parquet"
+    if target.exists() or (path.parent / "hospital_followup_cohort_provenance.json").exists():
+        raise ValueError("hospital_followup_artifact_exists")
+    published = publish_hospital_followup_materialized_cohort(
+        path,
+        target,
+        followup=followup_frame,
+        exclusions=exclusions,
+        followup_receipt=dict(followup.receipt),
+        raw_source_receipt=dict(raw_source_receipt),
+        producer_implementation_sha256=sha256_file(Path(__file__)),
+        producer_parameters={"adapter": "hospital_outcome_materialization"},
+        expected_parent_authority=acquisition.cohort_authority_ref,
+    )
+    if published is None:  # pragma: no cover - typed parent verified above
+        raise ValueError("hospital_followup_source_cohort_required")
+    return replace(
+        acquisition,
+        universe_path=target,
+        provenance_path=path.parent / "hospital_followup_cohort_provenance.json",
+        cohort_authority_path=path.parent / published.reference.file,
+        cohort_authority_ref=published.reference,
+        materialized_columns=tuple(published.authority.cohort_columns),
+    )
+
+
 def materialize_hospital_followup_acquisition(
     acquisition: AcquisitionResult,
     *,
     followup: HospitalMortalityFollowup,
     raw_source_receipt: Mapping[str, Any],
 ) -> AcquisitionResult:
+    if acquisition.cohort_authority_ref is not None:
+        return _materialize_typed_hospital_followup(
+            acquisition, followup=followup, raw_source_receipt=raw_source_receipt
+        )
     path, frame, provenance, source_ids, payload = _source_cohort(acquisition)
     declared = set(followup.frame["stay_id"]) | set(followup.exclusions["stay_id"])
     if not set(source_ids).issubset(declared):

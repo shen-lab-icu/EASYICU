@@ -232,12 +232,12 @@ def materialize_web_time_varying_input(
     from easyicu.research_agent.acquisition.time_varying_materialization import (
         materialize_time_varying_acquisition,
     )
-    from .raw_source_authority import resolve_raw_mimic_iv_source_binding
+    from .raw_source_authority import resolve_raw_hospital_source_binding
 
     selected = time_varying_specification(specs)
     if selected is None:
         return acquisition
-    binding = resolve_raw_mimic_iv_source_binding(
+    binding = resolve_raw_hospital_source_binding(
         export_path=export_path, database=database
     )
     if binding is None or patient_grouping is None:
@@ -277,9 +277,9 @@ def materialize_web_hospital_followup(
     from easyicu.research_agent.acquisition.hospital_followup_materialization import (
         materialize_hospital_followup_acquisition,
     )
-    from .raw_source_authority import resolve_raw_mimic_iv_source_binding
+    from .raw_source_authority import resolve_raw_hospital_source_binding
 
-    binding = resolve_raw_mimic_iv_source_binding(
+    binding = resolve_raw_hospital_source_binding(
         export_path=export_path, database=database
     )
     if binding is None:

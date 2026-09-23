@@ -186,7 +186,7 @@ def _patient_grouping_for_analysis_design(
     if not export_path or not database:
         return None
     try:
-        return source_identity_authority.resolve_patient_grouping_authority(
+        return source_identity_authority.resolve_study_patient_grouping(
             export_path=export_path,
             database=database,
         )

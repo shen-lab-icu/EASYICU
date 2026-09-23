@@ -376,6 +376,10 @@
       "easyicu.research_agent.contracts.dependence"
     ],
     [
+      "easyicu.research_agent.acquisition.hospital_outcome_materialization",
+      "easyicu.research_agent.intake.materialized_metadata"
+    ],
+    [
       "easyicu.research_agent.acquisition.mcp_projection",
       "easyicu.research_agent.acquisition.catalog"
     ],
@@ -12692,7 +12696,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3165,
+    "edge_count": 3166,
     "largest_scc_size": 0,
     "module_count": 752,
     "package_count": 36,

@@ -327,6 +327,13 @@ def plan_decision_context(
     }
 
 
+def _first_stay_restriction_bound(study: Mapping[str, Any]) -> bool:
+    """Return whether the StudyContext keeps one first ICU stay per patient."""
+
+    cohort = study.get("cohort")
+    return isinstance(cohort, Mapping) and cohort.get("exclude_readmissions") is True
+
+
 def compile_agent_plan_configuration(
     *,
     study: Mapping[str, Any],
@@ -363,6 +370,18 @@ def compile_agent_plan_configuration(
             "agent_plan_runtime_finding_unsupported",
             "The reviewed plan requires a runtime owner that this compiler does not provide.",
             details={"finding_codes": unsupported},
+        )
+    # A typed first-stay restriction already answers the repeated-stay finding:
+    # the reviewer's question was how to handle repeated ICU stays, and the
+    # researcher (or the cohort-eligibility owner on their behalf) closed it by
+    # keeping one stay per patient.  Compiling the all-stay clustered route on
+    # top of that choice would contradict it, and demanding patient grouping
+    # for it would block the remaining runtime findings for no reason.  The
+    # launch still verifies the first-stay coordinate before execution.
+    first_stay_restricted = _first_stay_restriction_bound(study)
+    if "REPEATED_STAY_IDENTITY_UNAVAILABLE" in codes and first_stay_restricted:
+        codes = tuple(
+            code for code in codes if code != "REPEATED_STAY_IDENTITY_UNAVAILABLE"
         )
     if (
         "REPEATED_STAY_IDENTITY_UNAVAILABLE" in codes
@@ -488,6 +507,13 @@ def compile_agent_plan_configuration(
         "analysis_unit": "icu_stay",
         "variance_estimator": "model_based",
     }
+    if first_stay_restricted:
+        confirmations.update(
+            {
+                "plan_repeated_stays_first": True,
+                "plan_repeated_stays_clustered": False,
+            }
+        )
     if "REPEATED_STAY_IDENTITY_UNAVAILABLE" in codes:
         analysis_design.update(
             {
