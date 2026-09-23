@@ -4640,6 +4640,9 @@ def _materialization_concept_roster(
     }
     if baseline_requirements is not None:
         from easyicu.concept_output_sources import resolve_composite_concept_output
+        from easyicu.webserver.scientific_runtime_projection import (
+            host_derived_design_sources,
+        )
 
         available = foundation_profile.get("available_concepts", ())
         already_classified = set(roster["static_concepts"]) | set(roster["outcome_concepts"])
@@ -4649,10 +4652,18 @@ def _materialization_concept_roster(
             for coordinate in (table.group_by, *table.variables)
             if coordinate is not None and coordinate.source_concept is not None
         }
-        resolved = {
-            concept: resolve_composite_concept_output(concept, available)
-            for concept in requested
-        }
+
+        def resolve(concept: str) -> Optional[str]:
+            # A declared derived variable (a Table 1 grouped by the strict
+            # KDIGO stage) is produced by its derivation, which the
+            # acquisition owner runs for any roster name it declares; it is
+            # available exactly when every concept the derivation reads is.
+            derived_sources = host_derived_design_sources(concept)
+            if derived_sources is not None:
+                return concept if set(derived_sources) <= set(available) else None
+            return resolve_composite_concept_output(concept, available)
+
+        resolved = {concept: resolve(concept) for concept in requested}
         if any(value is None for value in resolved.values()):
             raise ResearchPipelineRunError(
                 "accepted_baseline_source_unresolved",

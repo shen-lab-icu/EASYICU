@@ -137,6 +137,25 @@ def required_host_derivations(*names: str | None) -> tuple[str, ...]:
     return tuple(resolved)
 
 
+def host_derived_design_sources(column: str | None) -> tuple[str, ...] | None:
+    """Source concepts of a declared host derivation a plan may name, if any.
+
+    A derived design variable (the strict KDIGO stage) has no single exported
+    source; it is available exactly when every concept its declaration reads
+    is.  Receipts a derivation publishes for audit are not design variables,
+    so they resolve like any other column instead.
+    """
+
+    from easyicu.research_agent.contracts.host_derivations import (
+        host_derivation_producing,
+    )
+
+    declared = host_derivation_producing(str(column or "").strip())
+    if declared is None or not declared[1].selectable:
+        return None
+    return declared[0].source_concepts
+
+
 def kdigo_strict_derivation_available(columns: Sequence[str]) -> bool:
     """Whether a set of columns carries the receipts a strict KDIGO stage needs.
 
