@@ -4,6 +4,7 @@ import pytest
 
 from easyicu.webserver.pi_copilot.plan_decisions import (
     PlanDecisionError,
+    agent_plan_configuration_available,
     compile_agent_plan_configuration,
     compile_plan_decision,
     plan_decision_context,
@@ -312,6 +313,69 @@ def test_agent_plan_runtime_projection_fails_closed_without_patient_grouping() -
         )
 
     assert raised.value.code == "agent_plan_patient_grouping_unavailable"
+
+
+def _repeated_stay_plan() -> dict:
+    plan = _aki_landmark_plan()
+    plan["steps"][0]["model_requirements"][0].update(
+        {
+            "covariate_rationales": {
+                "age": "Baseline age precedes the exposure window.",
+                "sex": "Baseline sex precedes the exposure window.",
+            },
+            "covariate_temporal_roles": {
+                "age": "baseline_static",
+                "sex": "baseline_static",
+            },
+        }
+    )
+    return plan
+
+
+@pytest.mark.parametrize("family", ["survival", "trajectory_clustering"])
+def test_a_family_that_fits_one_model_per_stay_never_compiles_patient_clustering(
+    family: str,
+) -> None:
+    study = _aki_study()
+    study["analysis_design"] = {
+        "analysis_family": family,
+        "analysis_unit": "icu_stay",
+        "variance_estimator": "model_based",
+    }
+
+    with pytest.raises(PlanDecisionError) as raised:
+        compile_agent_plan_configuration(
+            study=study,
+            agent_plan=_repeated_stay_plan(),
+            runtime_finding_codes=("REPEATED_STAY_IDENTITY_UNAVAILABLE",),
+            patient_cluster_available=True,
+        )
+
+    assert raised.value.code == "agent_plan_family_clustering_unsupported"
+    assert raised.value.details == {"analysis_family": family}
+    assert not agent_plan_configuration_available(
+        study=study,
+        agent_plan=_repeated_stay_plan(),
+        runtime_finding_codes=("REPEATED_STAY_IDENTITY_UNAVAILABLE",),
+    )
+
+
+def test_an_association_study_compiles_the_repeated_stay_finding_to_clustering() -> None:
+    compiled = compile_agent_plan_configuration(
+        study=_aki_study(),
+        agent_plan=_repeated_stay_plan(),
+        runtime_finding_codes=("REPEATED_STAY_IDENTITY_UNAVAILABLE",),
+        patient_cluster_available=True,
+    )
+
+    assert compiled.patch["analysis_design"] == {
+        "analysis_family": "association_study",
+        "analysis_unit": "icu_stay",
+        "variance_estimator": "cluster_robust",
+        "cluster_unit": "patient",
+    }
+    assert compiled.patch["cohort"]["exclude_readmissions"] is False
+    assert compiled.patch["confirmations"]["plan_repeated_stays_clustered"] is True
 
 
 @pytest.mark.parametrize(
