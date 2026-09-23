@@ -16,6 +16,26 @@ import pytest
 from easyicu.api import extraction as api
 
 
+@pytest.fixture(autouse=True)
+def _restore_process_temp_directory(monkeypatch: pytest.MonkeyPatch) -> None:
+    """In-process extraction points the process temp dir at its spill folder.
+
+    That is intended for a real extraction (DuckDB and forked workers spill
+    beside the output), but it outlives these tests and made a later test in
+    the same worker read the spill folder as the system temp directory.
+    """
+
+    import os
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", tempfile.tempdir)
+    for name in ("TMPDIR", "EASYICU_DUCKDB_TEMP_DIR"):
+        if name in os.environ:
+            monkeypatch.setenv(name, os.environ[name])
+        else:
+            monkeypatch.delenv(name, raising=False)
+
+
 def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
