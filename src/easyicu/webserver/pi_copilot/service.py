@@ -3383,7 +3383,7 @@ class PiCopilotService:
         source = context.get("data_source")
         source = source if isinstance(source, Mapping) else {}
         try:
-            grouping = source_identity_authority.resolve_patient_grouping_authority(
+            grouping = source_identity_authority.resolve_study_patient_grouping(
                 export_path=str(source.get("path") or ""),
                 database=str(source.get("database") or ""),
             )

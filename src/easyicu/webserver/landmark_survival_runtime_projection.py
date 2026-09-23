@@ -73,6 +73,16 @@ def survival_family_declared(study: Mapping[str, Any]) -> bool:
     return canonical_analysis_family(design.get("analysis_family")) == "survival"
 
 
+def survival_inference_supported(design: Mapping[str, Any]) -> bool:
+    """Whether the sealed suite executes this analysis unit and variance estimator."""
+
+    return (
+        str(design.get("analysis_unit") or "") == _SUPPORTED_ANALYSIS_UNIT
+        and str(design.get("variance_estimator") or "")
+        == _SUPPORTED_VARIANCE_ESTIMATOR
+    )
+
+
 def _hours_token(value: float) -> str:
     return str(int(value)) if float(value).is_integer() else f"{value:g}".replace(".", "p")
 
@@ -197,10 +207,7 @@ def compile_landmark_survival_runtime_projection(
     design = design if isinstance(design, Mapping) else {}
     analysis_unit = str(design.get("analysis_unit") or "")
     variance_estimator = str(design.get("variance_estimator") or "")
-    if (
-        analysis_unit != _SUPPORTED_ANALYSIS_UNIT
-        or variance_estimator != _SUPPORTED_VARIANCE_ESTIMATOR
-    ):
+    if not survival_inference_supported(design):
         raise WebScientificRuntimeProjectionError(
             "web_landmark_survival_design_unsupported",
             "The sealed survival suite fits one model-based Cox model per ICU "
@@ -351,4 +358,5 @@ def compile_landmark_survival_runtime_projection(
 __all__ = [
     "compile_landmark_survival_runtime_projection",
     "survival_family_declared",
+    "survival_inference_supported",
 ]

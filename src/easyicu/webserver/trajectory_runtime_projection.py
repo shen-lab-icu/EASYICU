@@ -44,6 +44,7 @@ __all__ = [
     "TRAJECTORY_ANALYSIS_FAMILY",
     "compile_web_trajectory_runtime_projection",
     "trajectory_family_declared",
+    "trajectory_inference_supported",
     "trajectory_provenance_path",
     "validate_trajectory_design_declaration",
 ]
@@ -102,14 +103,21 @@ def _typed_design(study: Mapping[str, Any]) -> FixedWindowTrajectoryDesign:
     return design
 
 
+def trajectory_inference_supported(design: Mapping[str, Any]) -> bool:
+    """Whether the signed trajectory owners execute this unit and estimator."""
+
+    return (
+        str(design.get("analysis_unit") or "").strip() == _SUPPORTED_ANALYSIS_UNIT
+        and str(design.get("variance_estimator") or "").strip()
+        == _SUPPORTED_VARIANCE_ESTIMATOR
+    )
+
+
 def _require_supported_inference(study: Mapping[str, Any]) -> None:
     design = _analysis_design(study)
     analysis_unit = str(design.get("analysis_unit") or "").strip()
     variance_estimator = str(design.get("variance_estimator") or "").strip()
-    if (
-        analysis_unit != _SUPPORTED_ANALYSIS_UNIT
-        or variance_estimator != _SUPPORTED_VARIANCE_ESTIMATOR
-    ):
+    if not trajectory_inference_supported(design):
         _fail(
             "web_trajectory_design_unsupported",
             (

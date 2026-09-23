@@ -456,6 +456,39 @@ def _first_stay_restriction_bound(study: Mapping[str, Any]) -> bool:
     return isinstance(cohort, Mapping) and cohort.get("exclude_readmissions") is True
 
 
+#: The design the repeated-stay route compiles: every stay, clustered by patient.
+_PATIENT_CLUSTERED_DESIGN = {
+    "analysis_unit": "icu_stay",
+    "variance_estimator": "cluster_robust",
+    "cluster_unit": "patient",
+}
+
+
+def _declared_family_executes_patient_clustering(study: Mapping[str, Any]) -> bool:
+    """Ask a declared sealed family's owner whether it runs clustered inference.
+
+    The fixed-landmark survival suite and the trajectory owners fit one
+    model-based row per ICU stay; compiling patient clustering onto either
+    would only move their refusal to launch.  Other families have no such
+    owner restriction here.
+    """
+
+    from easyicu.webserver.landmark_survival_runtime_projection import (
+        survival_family_declared,
+        survival_inference_supported,
+    )
+    from easyicu.webserver.trajectory_runtime_projection import (
+        trajectory_family_declared,
+        trajectory_inference_supported,
+    )
+
+    if survival_family_declared(study):
+        return survival_inference_supported(_PATIENT_CLUSTERED_DESIGN)
+    if trajectory_family_declared(study):
+        return trajectory_inference_supported(_PATIENT_CLUSTERED_DESIGN)
+    return True
+
+
 def compile_agent_plan_configuration(
     *,
     study: Mapping[str, Any],
@@ -504,6 +537,22 @@ def compile_agent_plan_configuration(
     if "REPEATED_STAY_IDENTITY_UNAVAILABLE" in codes and first_stay_restricted:
         codes = tuple(
             code for code in codes if code != "REPEATED_STAY_IDENTITY_UNAVAILABLE"
+        )
+    if (
+        "REPEATED_STAY_IDENTITY_UNAVAILABLE" in codes
+        and not _declared_family_executes_patient_clustering(study)
+    ):
+        declared = study.get("analysis_design")
+        raise PlanDecisionError(
+            "agent_plan_family_clustering_unsupported",
+            "The study's analysis family executes one model-based fit per ICU stay; patient-clustered inference has no executable owner for it.",
+            details={
+                "analysis_family": (
+                    declared.get("analysis_family")
+                    if isinstance(declared, Mapping)
+                    else None
+                ),
+            },
         )
     if (
         "REPEATED_STAY_IDENTITY_UNAVAILABLE" in codes

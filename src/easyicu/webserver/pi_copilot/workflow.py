@@ -8,6 +8,8 @@ owners' receipts.
 
 from __future__ import annotations
 
+import functools
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -1040,6 +1042,59 @@ def build_research_workflow_snapshot(
     )
 
 
+#: Runtime findings an approvable candidate may still carry that the Host
+#: compiler closes from the plan itself once the bound source groups stays.
+_SOURCE_RESOLVABLE_UPGRADE_FINDINGS = frozenset(
+    {"REPEATED_STAY_IDENTITY_UNAVAILABLE"}
+)
+
+
+@functools.lru_cache(maxsize=32)
+def _source_groups_stays_at(export_path: str, database: str, _stamp: int) -> bool:
+    from easyicu.webserver import source_identity_authority
+
+    try:
+        grouping = source_identity_authority.resolve_study_patient_grouping(
+            export_path=export_path,
+            database=database,
+        )
+    except source_identity_authority.PatientGroupingAuthorityError:
+        return False
+    return grouping is not None
+
+
+def _study_source_groups_stays(study: Mapping[str, Any]) -> bool:
+    """Whether the bound source resolves a verified patient grouping.
+
+    Resolution may read and digest the source's identity table, so a polled
+    workflow asks once per export state; the compiler resolves it again
+    before it writes anything.
+    """
+
+    source = study.get("data_source")
+    source = source if isinstance(source, Mapping) else {}
+    export_path = str(source.get("path") or "").strip()
+    database = str(source.get("database") or "").strip()
+    if not export_path or not database:
+        return False
+    try:
+        stamp = Path(export_path).expanduser().stat().st_mtime_ns
+    except OSError:
+        return False
+    return _source_groups_stays_at(export_path, database, stamp)
+
+
+def _repeated_stays_decided(study: Mapping[str, Any]) -> bool:
+    design = study.get("analysis_design")
+    design = design if isinstance(design, Mapping) else {}
+    cohort = study.get("cohort")
+    cohort = cohort if isinstance(cohort, Mapping) else {}
+    return (
+        design.get("variance_estimator") == "cluster_robust"
+        or cohort.get("exclude_readmissions") is True
+    )
+
+
 def _enrich_plan_review(
     snapshot: ResearchWorkflowSnapshot,
     *,
@@ -1104,15 +1159,33 @@ def _enrich_plan_review(
         if isinstance(remediation, Mapping)
         else None
     )
+    # A candidate reviewed before the study chose clustered inference was
+    # planned without the source's patient grouping, so it is approvable only
+    # with a "patient identity unavailable" limitation.  When the bound source
+    # does group stays, the reviewer's remedy is available now: the compiler
+    # persists the clustered design from this plan and a fresh plan follows,
+    # rather than offering the limited plan for approval.
+    source_resolvable_upgrade = bool(
+        snapshot.next_action_code == "plan_execution_upgrade_required"
+        and isinstance(runtime_codes, list)
+        and runtime_codes
+        and {str(code) for code in runtime_codes}
+        <= _SOURCE_RESOLVABLE_UPGRADE_FINDINGS
+        and not _repeated_stays_decided(study)
+        and _study_source_groups_stays(study)
+    )
     if (
         isinstance(agent_plan, Mapping)
         and isinstance(runtime_codes, list)
         and runtime_codes
-        and snapshot.next_action_code
-        in {
-            "agent_plan_revision_nonconvergent",
-            "plan_scientific_changes_required",
-        }
+        and (
+            snapshot.next_action_code
+            in {
+                "agent_plan_revision_nonconvergent",
+                "plan_scientific_changes_required",
+            }
+            or source_resolvable_upgrade
+        )
         and plan_decisions.agent_plan_configuration_available(
             study=study,
             agent_plan=agent_plan,
