@@ -46,4 +46,15 @@ def sentence(text: str) -> str:
     return text[:1].upper() + text[1:]
 
 
-__all__ = ["PlanLanguage", "listing", "plan_language", "sentence"]
+def bounded_roster(labels: Sequence[str], *, budget: int) -> str | None:
+    """The labels joined for a reader, or ``None`` when they exceed ``budget``.
+
+    A design sentence names its variables only while it stays within its
+    owner's length contract; the plan itself always lists the full roster.
+    """
+
+    text = ", ".join(labels)
+    return text if len(text) <= budget else None
+
+
+__all__ = ["PlanLanguage", "bounded_roster", "listing", "plan_language", "sentence"]

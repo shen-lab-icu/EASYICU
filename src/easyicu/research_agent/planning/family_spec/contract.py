@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from ...canonical_json import canonical_sha256
 from ..adjustment_authority import HostTemporalRole
+from ..design_selection import ResearchDesignCandidate
 from ..progressive_contract import ModelTermCoding
 
 FAMILY_SPEC_SCHEMA_VERSION = "easyicu.family_plan_spec/1"
@@ -493,6 +494,22 @@ class SpecComparatorApplication(BaseModel):
     application: str = Field(min_length=_APPLICATION_MIN, max_length=_APPLICATION_MAX)
 
 
+def design_field_max_length(field: str) -> int:
+    """The design schema's own bound for one field, read from its single owner."""
+
+    for item in ResearchDesignCandidate.model_fields[field].metadata:
+        bound = getattr(item, "max_length", None)
+        if bound is not None:
+            return int(bound)
+    raise ValueError(f"design field {field!r} declares no maximum length")
+
+
+#: A fit roster must fit the plan it compiles into: the selected design names
+#: every variable it needs, and the host adds the row identity and the outcome.
+#: A longer roster would pass the Planner and fail only after it was paid for.
+MAX_FIT_FEATURES = design_field_max_length("required_variables") - 2
+
+
 class FamilyPlanSpec(BaseModel):
     """The Planner's complete output for one family-spec attempt."""
 
@@ -503,7 +520,7 @@ class FamilyPlanSpec(BaseModel):
     request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     adjustment_set: list[SpecCovariateDecision] = Field(default_factory=list, max_length=24)
     baseline_variables: list[str] = Field(default_factory=list, max_length=16)
-    feature_variables: list[str] = Field(default_factory=list, max_length=64)
+    feature_variables: list[str] = Field(default_factory=list, max_length=MAX_FIT_FEATURES)
     cohort_membership_column: Optional[str] = Field(default=None, max_length=128)
     reader_display_labels: list[SpecReaderLabel] = Field(default_factory=list, max_length=64)
     comparator_applications: list[SpecComparatorApplication] = Field(
@@ -609,6 +626,21 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
             raise FamilySpecError(
                 "family_spec_feature_roster_invalid",
                 "the cluster solution needs at least two distinct fit features",
+                path="feature_variables",
+            )
+        design_limit = design_field_max_length("required_variables")
+        roster = (
+            2  # the row identity and the outcome
+            + (1 if spec.cohort_membership_column else 0)
+            + len(spec.baseline_variables)
+            + len(features)
+        )
+        if roster > design_limit:
+            raise FamilySpecError(
+                "family_spec_roster_exceeds_design",
+                f"the design names at most {design_limit} variables including the row identity "
+                f"and the outcome; this roster needs {roster}: keep the most informative features "
+                "and baseline descriptors",
                 path="feature_variables",
             )
         for index, name in enumerate(features):
