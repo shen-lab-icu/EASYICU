@@ -222,9 +222,16 @@
         const resource = { kind: /\.(pdf|html)$/i.test(item.name) ? 'research_document' : 'research_artifact', run_id: review.run_id, artifact: item.name,
           label: window.AGENT_RENDER.artifactTitle(item.name), sha256: item.sha256, media_type: /\.pdf$/i.test(item.name) ? 'application/pdf' : /\.html$/i.test(item.name) ? 'text/html' : 'application/json' };
         const canPreview = current.projectId && review.engine === 'easyicu.research_agent.pipeline' && /\.(json|pdf|html)$/i.test(item.name);
-        return `<div class="gpi-run-file">${canPreview ? resourceButton(resource) : /\.json$/i.test(item.name) ? `<button type="button" data-run-files-artifact="${index}" ${disabled ? 'disabled' : ''}>${esc(resource.label)}</button>` : `<span>${esc(resource.label)}</span>`}<small>${esc(item.name)}</small><button type="button" data-run-files-download="${index}" ${disabled ? 'disabled' : ''}>${tr('Download', '下载')}</button></div>`;
+        // A reader sees what the file is for; the exact file name stays on hover.
+        const note = window.AGENT_RENDER.artifactSummary(item.name, false);
+        return `<div class="gpi-run-file">${canPreview ? resourceButton(resource) : /\.json$/i.test(item.name) ? `<button type="button" data-run-files-artifact="${index}" ${disabled ? 'disabled' : ''}>${esc(resource.label)}</button>` : `<span>${esc(resource.label)}</span>`}<small title="${esc(item.name)}">${esc(note || item.name)}</small><button type="button" data-run-files-download="${index}" ${disabled ? 'disabled' : ''}>${tr('Download', '下载')}</button></div>`;
       };
-      const primaryNames = ['manuscript_provenance.json', 'manuscript_revision.pdf', 'result_tables.json', 'figure_gallery.json', 'agent_plan.json', 'literature_evidence.json'];
+      // Before execution the result and figure files are empty shells; lead
+      // with what the researcher reviews at that stage.
+      const executed = !(review.readiness && rows(review.readiness.non_human_failures).includes('execution_complete'));
+      const primaryNames = executed
+        ? ['manuscript_provenance.json', 'manuscript_revision.pdf', 'result_tables.json', 'figure_gallery.json', 'agent_plan.json', 'literature_evidence.json']
+        : ['agent_plan.json', 'scientific_plan_review.json', 'literature_evidence.json', 'cohort_summary.json'];
       const primary = primaryNames.map(name => artifacts.findIndex(item => item.name === name)).filter(index => index >= 0).map(index => file(artifacts[index], index)).join('');
       const other = artifacts.map((item, index) => primaryNames.includes(item.name) ? '' : file(item, index)).join('');
       const signable = review.readiness && review.readiness.signable === true && !review.signed && !state.selected.readOnly;

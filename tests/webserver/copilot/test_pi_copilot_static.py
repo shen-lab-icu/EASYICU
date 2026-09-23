@@ -84,12 +84,12 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-next-actions.js?v=20260922-next-note1" in index
     assert "js/screens-guided-pi-message-actions.js?v=20260921-fit1" in index
     assert "js/screens-guided-pi-regeneration.js?v=20260830-plan-branch2" in index
-    assert "js/screens-guided-pi-starters.js?v=20260921-catalogue-search1" in index
+    assert "js/screens-guided-pi-starters.js?v=20260922-demo-card1" in index
     assert "js/screens-guided-pi-idea-source.js?v=20260922-popover1" in index
     assert "js/screens-guided-pi-header.js?v=20260922-popover1" in index
     assert "js/screens-guided-pi-model-menu.js?v=20260921-friendly-error1" in index
     assert "css/workspace-canvas.css?v=20260921-fit1" in index
-    assert "css/guided-pi-workspace.css?v=20260922-phone1" in index
+    assert "css/guided-pi-workspace.css?v=20260922-demo-card1" in index
     assert "css/guided-pi-empty-tasks.css?v=20260921-empty-tasks1" in index
     assert "js/screens-guided-pi-demo.js?v=20260815-real-render2" in index
     assert "js/screens-guided-pi-workbench-preview.js?v=20260829-data-readiness1" in index
@@ -100,7 +100,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-technical-report.js?v=20260904-empty-gallery1"
         in index
     )
-    assert "js/screens-guided-pi-analysis-report.js?v=20260916-study-workspace3" in index
+    assert "js/screens-guided-pi-analysis-report.js?v=20260922-estimates1" in index
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
     assert "js/screens-guided-pi-source-view.js?v=20260921-reader-tab1" in index
     assert "js/screens-guided-pi-preview.js?v=20260921-reader-tab1" in index
@@ -109,12 +109,12 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-run-outcome.js?v=20260921-fit2" in index
     assert "js/screens-guided-pi-activity.js?v=20260921-turn-traces3" in index
     assert (
-        "js/screens-guided-pi-provider.js?v=20260919-connection4"
+        "js/screens-guided-pi-provider.js?v=20260922-demo-entry2"
         in index
     )
     assert "js/screens-guided-pi-provider-control.js?v=20260830-owner-split1" in index
     assert "js/screens-guided-pi-study-workspace.js?v=20260922-popover1" in index
-    assert "js/screens-guided-pi-events.js?v=20260922-named-demo1" in index
+    assert "js/screens-guided-pi-events.js?v=20260923-no-legacy1" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20260922-named-demo1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20260908-source-conversation1" in index
@@ -126,7 +126,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-plan-actions.js?v=20260921-plan-config1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260921-plan-progress1" in index
     assert "js/screens-guided-pi-error-text.js?v=20260923-gate-detail1" in index
-    assert "js/screens-guided-pi.js?v=20260922-notes1" in index
+    assert "js/screens-guided-pi.js?v=20260923-no-legacy1" in index
     assert "js/screens-guided.js?v=20260922-state-menus1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -1703,7 +1703,8 @@ def test_local_source_picker_activates_the_sessions_bound_study_context() -> Non
         "guidedPi.optional('preview')"
     )
     assert "emptyResearchHtml" in owner
-    assert "暂不读取数据或运行分析" in starters
+    # A starter only fills the composer: its wording keeps analysis behind review.
+    assert "审阅通过前不运行分析" in starters
     assert "Selecting a card never sends or grants data access" in starters
 
 
@@ -6629,7 +6630,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20260921-turn-traces3" in index
-    assert "screens-guided-pi.js?v=20260922-notes1" in index
+    assert "screens-guided-pi.js?v=20260923-no-legacy1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

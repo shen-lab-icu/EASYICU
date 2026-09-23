@@ -101,8 +101,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec, ...] = (
         ("descriptive.table_one",),
         "deterministic_host",
         "analysis_only",
-        "Use the cohort-characterization and Table 1 workflow. First confirm the cohort, grouping variable, closed grouping levels, variables, units, and summary rules. Then build the typed plan and run only after the scientific plan is reviewed.",
-        "请使用“队列描述与 Table 1”方法。先确认研究队列、分组变量与封闭分组水平、待汇总变量、单位和汇总规则，再生成类型明确的方法计划；科学计划审阅通过后再运行。",
+        "Use the Cohort characterization and Table 1 method. The research plan proposes the grouping levels, summarized variables, units, and summary rules; I review them together in the plan, and nothing runs before that review. My research question: ",
+        "请使用“队列描述与 Table 1”方法。分组水平、汇总变量、单位与汇总规则由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：",
         layer="analysis_module",
     ),
     MethodSkillSpec(
@@ -117,8 +117,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec, ...] = (
         ("descriptive.missingness_audit", "association.missingness_audit"),
         "deterministic_host",
         "analysis_only",
-        "Use the missingness and measurement audit workflow. Confirm the cohort, audited variables, time windows, denominators, structural absence rules, and requested missingness products before planning execution.",
-        "请使用“缺失与测量审计”方法。先确认队列、审计变量、时间窗、分母、结构性缺失规则和需要输出的缺失数据产物，再制定执行计划。",
+        "Use the Missingness and measurement audit method. The research plan proposes the audited variables, time windows, denominators, and structural-absence rules; I review them together in the plan, and nothing runs before that review. My research question: ",
+        "请使用“缺失与测量审计”方法。审计变量、时间窗、分母与结构性缺失规则由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：",
         layer="analysis_module",
     ),
     MethodSkillSpec(
@@ -133,8 +133,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec, ...] = (
         (),
         "deterministic_host",
         "reportable",
-        "Use the exposure and outcome distribution workflow. Confirm the cohort, closed exposure levels, outcome definition, denominator, interval method, and dependence structure. Keep the interpretation descriptive and non-causal.",
-        "请使用“研究因素与结局分布”方法。先确认队列、封闭的研究因素水平、结局定义、分母、区间方法和相关性结构；解释必须保持描述性，不作因果推断。",
+        "Use the Exposure and outcome distribution method. The research plan proposes the exposure levels, outcome definition, denominators, and interval method; I review them together in the plan, and nothing runs before that review. Interpretation stays descriptive. My research question: ",
+        "请使用“研究因素与结局分布”方法。研究因素水平、结局定义、分母与区间方法由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。解释保持描述性，不作因果推断。我的研究问题是：",
         layer="analysis_module",
     ),
     MethodSkillSpec(
@@ -149,8 +149,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec, ...] = (
         ("association.adjusted_association",),
         "deterministic_host",
         "reportable",
-        "Use the adjusted association workflow. Confirm one exposure, one outcome, estimator, covariate roster, coding, reference levels, transforms, population, and missing-data policy before producing the model contract.",
-        "请使用“调整后关联模型”方法。先确认一个研究因素、一个结局、估计量、协变量清单、编码方式、参考水平、变量变换、分析人群和缺失数据策略，再生成模型契约。",
+        "Use the Adjusted association model method. The research plan proposes the estimand, covariates, coding and reference level, analysis population, and missing-data strategy; I review them together in the plan, and nothing runs before that review. My research question: ",
+        "请使用“调整后关联模型”方法。估计量、协变量、编码与参照水平、分析人群和缺失数据策略由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：",
         layer="analysis_module",
     ),
     MethodSkillSpec(
@@ -165,8 +165,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec, ...] = (
         ("association.ordinal_trend",),
         "agent_coded_with_host_gates",
         "analysis_only",
-        "Use the ordinal trend and dose-response workflow. Confirm at least three ordered levels, their order and reference, the primary contrast, outcome, adjustment set, and trend method. Do not coerce a binary or continuous exposure into ordinal levels.",
-        "请使用“有序趋势与剂量反应”方法。先确认至少三个有序水平及其顺序与参考水平、主要对比、结局、调整集和趋势检验方法；不得把二分类或连续研究因素强行改成有序分组。",
+        "Use the Ordinal trend and dose-response method. The research plan proposes the ordered levels and reference, primary contrast, adjustment set, and trend test; I review them together in the plan, and nothing runs before that review. A binary or continuous exposure is not forced into ordered groups. My research question: ",
+        "请使用“有序趋势与剂量反应”方法。有序水平与参照、主要对比、调整集与趋势检验由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。不会把二分类或连续研究因素改成有序分组。我的研究问题是：",
         layer="analysis_module",
     ),
     MethodSkillSpec(
@@ -181,8 +181,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec, ...] = (
         ("association.adjusted_association",),
         "deterministic_host",
         "reportable",
-        "Use the fixed-landmark categorical association workflow. Confirm time zero, landmark, observation opportunity, eligible population, exposure levels and reference, binary outcome, adjustment set, and dependence contract.",
-        "请使用“Landmark 分类关联”方法。先确认时间零点、landmark、观察机会、合格人群、研究因素水平与参考水平、二分类结局、调整集和相关性契约。",
+        "Use the Landmark categorical association method. The research plan proposes time zero, the landmark, the eligible population, exposure levels and reference, and the adjustment set; I review them together in the plan, and nothing runs before that review. My research question: ",
+        "请使用“Landmark 分类关联”方法。时间零点、landmark、合格人群、研究因素水平与参照、调整集由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：",
         layer="analysis_module",
     ),
     MethodSkillSpec(
@@ -197,8 +197,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec, ...] = (
         (),
         "deterministic_host",
         "reportable",
-        "Use the fixed-landmark spline workflow. Confirm time zero, landmark, exposure window, continuous exposure, knots, reference value, outcome, adjustment set, and the spline-versus-linear comparison before planning execution.",
-        "请使用“Landmark 样条剂量反应”方法。先确认时间零点、landmark、研究因素窗口、连续研究因素、结点、参考值、结局、调整集以及样条与线性模型的比较方式，再制定执行计划。",
+        "Use the Landmark spline dose-response method. The research plan proposes time zero, the landmark, the exposure window, spline knots and reference value, and the adjustment set; I review them together in the plan, and nothing runs before that review. My research question: ",
+        "请使用“Landmark 样条剂量反应”方法。时间零点、landmark、暴露窗口、样条结点与参考值、调整集由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：",
         layer="analysis_module",
     ),
     MethodSkillSpec(
@@ -213,8 +213,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec, ...] = (
         (),
         "deterministic_host",
         "analysis_only",
-        "Use the time-varying exposure Cox workflow. Confirm time zero, interval construction, exposure update rule, unmeasured-state handling, event and censoring rules, baseline coding, covariates, and patient clustering.",
-        "请使用“时间变化研究因素 Cox 模型”方法。先确认时间零点、区间构造、研究因素更新规则、未测量状态处理、事件与删失规则、基线编码、协变量以及患者聚类。",
+        "Use the Time-varying exposure Cox model method. The research plan proposes time zero, interval construction, exposure-update rules, event and censoring rules, and covariates; I review them together in the plan, and nothing runs before that review. My research question: ",
+        "请使用“时间变化研究因素 Cox 模型”方法。时间零点、区间构造、暴露更新规则、事件与删失规则和协变量由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：",
         layer="analysis_module",
     ),
     MethodSkillSpec(
@@ -229,8 +229,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec, ...] = (
         ("association.adjusted_association",),
         "deterministic_host",
         "reportable",
-        "Use the complete adjusted exposure-outcome study workflow. Confirm the cohort, one exposure, one outcome, time zero, covariates, coding and reference levels, missing-data policy, primary estimator, diagnostics, and sensitivity analyses before execution.",
-        "请使用“观察性研究因素—结局关联”完整工作流。先确认队列、一个研究因素、一个结局、时间零点、协变量、编码与参考水平、缺失数据策略、主要估计量、诊断和敏感性分析，再开始执行。",
+        "Use the Adjusted exposure-outcome study method. The research plan proposes the cohort, time zero, covariates, missing-data strategy, diagnostics, and sensitivity analyses; I review them together in the plan, and nothing runs before that review. My research question: ",
+        "请使用“观察性研究因素—结局关联”方法。队列、时间零点、协变量、缺失数据策略、诊断与敏感性分析由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：",
         included_module_ids=(
             "cohort-characterization-table-one",
             "missingness-measurement-audit",
@@ -257,8 +257,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec, ...] = (
         ("association.ordinal_trend",),
         "agent_coded_with_host_gates",
         "analysis_only",
-        "Use the complete ordinal exposure dose-response workflow. Confirm the ordered exposure levels and reference, outcome, population, covariates, trend contrast, missingness policy, nonlinearity checks, and reporting boundary before execution.",
-        "请使用“有序研究因素剂量反应研究”完整工作流。先确认有序水平及参考、结局、人群、协变量、趋势对比、缺失数据策略、非线性检查和报告边界，再开始执行。",
+        "Use the Ordinal exposure dose-response study method. The research plan proposes the ordered levels and reference, population, covariates, trend contrast, and nonlinearity checks; I review them together in the plan, and nothing runs before that review. My research question: ",
+        "请使用“有序研究因素剂量反应研究”方法。有序水平与参照、人群、协变量、趋势对比与非线性检查由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：",
         included_module_ids=(
             "cohort-characterization-table-one",
             "missingness-measurement-audit",
@@ -285,8 +285,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec, ...] = (
         ("association.adjusted_association",),
         "deterministic_host",
         "reportable",
-        "Use the complete fixed-landmark association workflow. Confirm time zero, landmark, observation opportunity, eligibility at the landmark, exposure window and levels, outcome horizon, adjustment set, censoring, and dependence structure.",
-        "请使用“固定 Landmark 关联研究”完整工作流。先确认时间零点、landmark、观察机会、landmark 时仍符合条件的人群、研究因素窗口与水平、结局时间范围、调整集、删失和相关性结构。",
+        "Use the Fixed-landmark association study method. The research plan proposes time zero, the landmark, the population still eligible at it, outcome horizon, adjustment set, and censoring; I review them together in the plan, and nothing runs before that review. My research question: ",
+        "请使用“固定 Landmark 关联研究”方法。时间零点、landmark、届时仍合格的人群、结局时间范围、调整集与删失由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：",
         included_module_ids=(
             "cohort-characterization-table-one",
             "missingness-measurement-audit",
@@ -313,8 +313,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec, ...] = (
         (),
         "deterministic_host",
         "analysis_only",
-        "Use the complete time-varying exposure survival workflow. Confirm time zero, interval construction, exposure update and carry-forward rules, unmeasured states, event and censoring definitions, baseline covariates, patient clustering, and sensitivity analyses.",
-        "请使用“时间变化研究因素生存研究”完整工作流。先确认时间零点、区间构造、研究因素更新与延续规则、未测量状态、事件与删失定义、基线协变量、患者聚类和敏感性分析。",
+        "Use the Time-varying exposure survival study method. The research plan proposes time zero, interval construction, exposure-update rules, event and censoring definitions, patient clustering, and sensitivity analyses; I review them together in the plan, and nothing runs before that review. My research question: ",
+        "请使用“时间变化研究因素生存研究”方法。时间零点、区间构造、暴露更新规则、事件与删失定义、患者聚类和敏感性分析由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：",
         included_module_ids=(
             "cohort-characterization-table-one",
             "missingness-measurement-audit",
@@ -340,8 +340,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec, ...] = (
         ("time_to_event.cox_hr", "time_to_event.km_logrank", "time_to_event.ph_check"),
         "deterministic_host",
         "reportable",
-        "Use the survival and time-to-event workflow. Confirm time origin and unit, event indicator and value, censoring, exposure and reference, exact covariates, horizon, complete-case policy, and proportional-hazards policy.",
-        "请使用“生存与时间结局分析”方法。先确认时间起点与单位、事件指示及取值、删失规则、研究因素与参考水平、精确协变量、观察期限、完整案例策略和比例风险检验策略。",
+        "Use the Survival and time-to-event analysis method. The research plan proposes the time origin, event and censoring rules, reference level, covariates, follow-up horizon, and proportional-hazards check; I review them together in the plan, and nothing runs before that review. My research question: ",
+        "请使用“生存与时间结局分析”方法。时间起点、事件与删失规则、参照水平、协变量、观察期限与比例风险检验由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：",
         included_module_ids=(
             "cohort-characterization-table-one",
             "missingness-measurement-audit",
@@ -359,8 +359,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec, ...] = (
         ("time_to_event.rmst",),
         "deterministic_host",
         "analysis_only",
-        "Use the RMST workflow. Confirm the two groups and reference, time origin and unit, event and censoring definitions, analysis horizon, population, and interval method before execution.",
-        "请使用“限制性平均生存时间（RMST）”方法。先确认两组及参考组、时间起点与单位、事件与删失定义、分析时间范围、人群和区间方法，再执行分析。",
+        "Use the Restricted mean survival time method. The research plan proposes the groups and reference, time origin, event and censoring definitions, and restriction time; I review them together in the plan, and nothing runs before that review. My research question: ",
+        "请使用“限制性平均生存时间（RMST）”方法。分组与参照、时间起点、事件与删失定义、限制时间由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：",
         layer="analysis_module",
     ),
     MethodSkillSpec(
@@ -375,8 +375,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec, ...] = (
         ("prediction.discrimination_calibration", "prediction.calibration_metrics", "prediction.decision_curve", "prediction.internal_validation"),
         "deterministic_host",
         "reportable",
-        "Use the clinical risk prediction workflow. Confirm the prediction time, target horizon, binary outcome, predictors available at prediction time, patient-level split, preprocessing, internal validation, calibration, and clinical-utility plan.",
-        "请使用“临床风险预测”方法。先确认预测时点、目标时间范围、二分类结局、预测时点可用的预测变量、患者级数据划分、预处理、内部验证、校准和临床效用评估方案。",
+        "Use the Clinical risk prediction method. The research plan proposes the prediction time, horizon, predictors, patient-level split, validation, and calibration; I review them together in the plan, and nothing runs before that review. My research question: ",
+        "请使用“临床风险预测”方法。预测时点、时间范围、预测变量、患者级数据划分、验证与校准由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：",
         included_module_ids=(
             "cohort-characterization-table-one",
             "missingness-measurement-audit",
@@ -394,8 +394,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec, ...] = (
         (),
         "agent_coded_with_host_gates",
         "analysis_only",
-        "Use the dynamic landmark prediction workflow. Confirm patient identity, measurement times, landmarks, lookback windows, target horizons, censoring and observability, predictors, and patient-level development and validation splits.",
-        "请使用“动态 Landmark 预测”方法。先确认患者标识、测量时间、landmark、回看窗口、目标时间范围、删失与可观察性、预测变量，以及患者级开发集和验证集划分。",
+        "Use the Dynamic landmark prediction method. The research plan proposes the landmarks, look-back window, horizon, predictors, and patient-level split; I review them together in the plan, and nothing runs before that review. My research question: ",
+        "请使用“动态 Landmark 预测”方法。landmark、回看窗口、时间范围、预测变量与患者级数据划分由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：",
         included_module_ids=(
             "cohort-characterization-table-one",
             "missingness-measurement-audit",
@@ -413,8 +413,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec, ...] = (
         (),
         "agent_coded_with_host_gates",
         "analysis_only",
-        "Use the target-trial emulation workflow. First specify eligibility, treatment strategies, assignment, time zero, follow-up, outcome, causal contrast, censoring, confounding strategy, positivity checks, and falsification analyses. Keep the result analysis-only unless independent identification and readiness gates pass.",
-        "请使用“目标试验模拟”方法。先明确纳入标准、治疗策略、分配方式、时间零点、随访、结局、因果对比、删失、混杂控制、可交换性/阳性检查和证伪分析；除非独立的识别与就绪门禁通过，否则结果保持“仅分析”。",
+        "Use the Target-trial emulation method. The research plan proposes eligibility, treatment strategies, time zero, follow-up, causal contrast, and confounding control; I review them together in the plan, and nothing runs before that review. Results stay analysis-only unless the identification and readiness gates pass. My research question: ",
+        "请使用“目标试验模拟”方法。纳入标准、治疗策略、时间零点、随访、因果对比与混杂控制由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。除非独立的识别与就绪门禁通过，结果保持仅分析级。我的研究问题是：",
         included_module_ids=(
             "cohort-characterization-table-one",
             "missingness-measurement-audit",
@@ -433,8 +433,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec, ...] = (
         ("phenotyping.cluster_solution", "phenotyping.k_selection", "phenotyping.cluster_stability", "phenotyping.cluster_sizes", "phenotyping.outcome_by_cluster"),
         "deterministic_host",
         "reportable",
-        "Use the cross-sectional phenotyping workflow. Confirm the cohort, feature window, feature roster excluding outcomes, scaling and missingness rules, closed candidate-k grid, selection rule, stability design, and descriptive outcome comparison.",
-        "请使用“横断面表型聚类”方法。先确认队列、特征窗口、不包含结局的特征清单、标准化与缺失规则、封闭的候选 k 网格、选择规则、稳定性设计和描述性结局比较。",
+        "Use the Cross-sectional phenotyping method. The research plan proposes the feature window, outcome-free feature list, candidate k grid, and selection and stability rules; I review them together in the plan, and nothing runs before that review. My research question: ",
+        "请使用“横断面表型聚类”方法。特征时间窗、不含结局的特征清单、候选 k 网格、选择与稳定性规则由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：",
         included_module_ids=(
             "cohort-characterization-table-one",
             "missingness-measurement-audit",
@@ -456,8 +456,8 @@ METHOD_SKILLS: Tuple[MethodSkillSpec, ...] = (
         ),
         "deterministic_host",
         "analysis_only",
-        "Use the trajectory phenotyping and early-assignment workflow. Confirm the fixed trajectory window, representation, closed candidate grid, selection and stability rules; freeze subtype labels before fitting a separate classifier from early clinical features using patient-disjoint development and validation sets.",
-        "请使用“轨迹表型发现与早期识别”工作流。先确认固定轨迹时间窗、表示方法、封闭候选网格、选择与稳定性规则；冻结亚型标签后，再用早期临床特征和患者互斥的开发集、验证集训练独立分类器。",
+        "Use the Trajectory phenotyping and early subtype assignment method. The research plan proposes the trajectory window, representation, candidate grid, selection rules, and the early classifier's patient-level split; I review them together in the plan, and nothing runs before that review. My research question: ",
+        "请使用“轨迹表型发现与早期识别”方法。轨迹时间窗、表示方法、候选网格、选择规则，以及早期分类器的患者级数据划分由研究计划提出，我在计划里一次审阅，审阅通过前不运行分析。我的研究问题是：",
         included_module_ids=(
             "cohort-characterization-table-one",
             "missingness-measurement-audit",
@@ -563,13 +563,14 @@ def _method_component_catalog(*, enabled: bool) -> tuple[list[dict[str, Any]], i
                     "reporting_items": list(method.reporting_items),
                     "kernel_modules": list(method.kernel_modules),
                     "prompt": (
-                        f"Use {method.name} as the requested method component. "
-                        "First confirm applicability, inputs, assumptions, comparison, and output contract. "
-                        "Keep the component analysis-only unless the enclosing reviewed workflow grants a higher ceiling."
+                        f"Use {method.name} as a method component in the research plan. "
+                        "The plan proposes its applicability, inputs, assumptions, and comparison for one review; "
+                        "it stays analysis-only unless the enclosing reviewed workflow grants a higher ceiling. "
+                        "My research question: "
                     ),
                     "prompt_zh": (
-                        f"请在研究方案中使用“{title_zh}”方法组件。先确认适用性、输入、假设、比较方式和输出契约；"
-                        "除非外层经过审阅的研究工作流明确授予更高权限，否则保持“仅分析”。"
+                        f"请在研究方案中使用“{title_zh}”方法组件。适用性、输入、假设和比较方式由研究计划提出，我在计划里一次审阅；"
+                        "除非外层经过审阅的研究工作流明确授予更高权限，否则保持“仅分析”。我的研究问题是："
                     ),
                 }
             )

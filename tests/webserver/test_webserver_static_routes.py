@@ -188,7 +188,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/screens-extraction-folder-picker.js?v=20260921-owner-split1" in index_html
     assert "js/screens-extraction.js?v=20260921-source-label1" in index_html
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-run-files.js?v=20260915-product-label1" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20260923-plan-stage-files1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 
 
@@ -197,7 +197,7 @@ def test_project_monitor_run_history_has_a_dedicated_projection_owner() -> None:
     history_js = _static_js("screens-agent-run-history.js")
 
     owner_asset = "js/screens-agent-run-history.js?v=20260823-run-history-owner1"
-    monitor_asset = "js/screens-guided-pi-run-files.js?v=20260915-product-label1"
+    monitor_asset = "js/screens-guided-pi-run-files.js?v=20260923-plan-stage-files1"
     assert owner_asset in index_html
     assert index_html.index(owner_asset) < index_html.index(monitor_asset)
     assert "window.EU_AGENT_RUN_HISTORY_VIEW" in history_js
@@ -707,7 +707,7 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     index_html = _static_html("index.html")
 
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-run-files.js?v=20260915-product-label1" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20260923-plan-stage-files1" in index_html
     assert "css/agent.css?v=20260829-artifact-contents1" in index_html
     assert "css/agent-layout.css?v=20260817-project-monitor-states2" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
@@ -829,7 +829,7 @@ def test_project_monitor_excludes_copilot_setup_and_run_initiation() -> None:
     assert "data-gpi-provider-form" in provider_js
     assert "css/agent.css?v=20260829-artifact-contents1" in index_html
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-run-files.js?v=20260915-product-label1" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20260923-plan-stage-files1" in index_html
 
 
 def test_native_agent_render_layer_is_split_into_owner_file() -> None:
@@ -856,7 +856,11 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     assert (
         fixtures_pos < render_pos < main_pos
     ), "agent fixtures and renderer must load before screens-guided-pi-run-files.js"
-    assert "js/screens-agent-render.js?v=20260921-owner-split1" in index_html
+    # Reader vocabulary (review findings, column and table names) is read by
+    # the renderer at call time, so it must be defined before it.
+    vocab_pos = index_html.find("js/screens-agent-reader-vocab.js?v=20260922-reader-vocab1")
+    assert fixtures_pos < vocab_pos < render_pos
+    assert "js/screens-agent-render.js?v=20260922-reader-vocab1" in index_html
     assert "css/agent-plan.css?v=20260829-plan-flow1" in index_html
 
 
@@ -909,7 +913,7 @@ def test_copilot_owns_provider_selection_and_agent_projects_do_not() -> None:
     assert provider_pos != -1 and control_pos != -1 and main_pos != -1
     assert provider_pos < control_pos < main_pos
     assert (
-        "js/screens-guided-pi-provider.js?v=20260919-connection4"
+        "js/screens-guided-pi-provider.js?v=20260922-demo-entry2"
         in index_html
     )
 
@@ -967,7 +971,7 @@ def test_native_agent_historical_evaluation_import_uses_normal_project_surface()
     assert "css/agent-question.css?v=20260629-ux-readability" in index_html
     assert "css/agent.css?v=20260829-artifact-contents1" in index_html
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-run-files.js?v=20260915-product-label1" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20260923-plan-stage-files1" in index_html
 
     for name in (
         "benchmark_scorecard.json",

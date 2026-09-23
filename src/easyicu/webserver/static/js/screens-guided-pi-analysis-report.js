@@ -59,9 +59,17 @@
     if (!/^[A-Za-z0-9_.-]{1,160}$/.test(evidenceId) || !/^[a-f0-9]{64}$/.test(sha256)) return '';
     return ` data-gpi-evidence-open data-evidence-id="${esc(evidenceId)}" data-evidence-sha256="${esc(sha256)}" data-evidence-kind="${esc(evidence.kind || 'statistic')}" data-evidence-label="${esc(evidence.description || evidenceId)}" data-evidence-pointer="${esc(row.source_json_pointer || '')}" data-evidence-source-value="${esc(row.source_value || row.display_value || '')}"`;
   }
+  // Display precision only: registered values keep their full precision in
+  // the source JSON the evidence button opens.
+  function readable(value) {
+    const text = String(value);
+    if (/^-?\d{4,}$/.test(text)) return Number(text).toLocaleString('en-US');
+    const percent = /^(-?\d+\.\d{3,})%$/.exec(text);
+    return percent ? `${Number(percent[1]).toFixed(2)}%` : text;
+  }
   function metric(label, value, note, row) {
     const tag = evidenceAttributes(row) ? 'button' : 'article';
-    return `<${tag} class="gpi-analysis-metric"${evidenceAttributes(row)}><span>${esc(label)}</span><strong>${esc(value)}</strong><small>${esc(note)}</small></${tag}>`;
+    return `<${tag} class="gpi-analysis-metric"${evidenceAttributes(row)}><span>${esc(label)}</span><strong>${esc(readable(value))}</strong><small>${esc(note)}</small></${tag}>`;
   }
   function evidenceValue(label, row, suffix) {
     return `<button type="button" class="gpi-analysis-evidence-value"${evidenceAttributes(row)}><span>${esc(label)}</span><strong>${esc(display(row))}${esc(suffix || '')}</strong><small>${esc(tr('Open exact registered source', '打开准确登记来源'))}</small></button>`;
@@ -122,9 +130,20 @@
     const eventN = findClaim(rows, [/^n_events$/]);
     const descriptiveEvents = findClaim(rows, [/overall_outcome\.event_n$/]);
     const overallRisk = findClaim(rows, [/overall_outcome\.risk_pct$/]);
+    // The registered estimate table is the typed source; manuscript claims
+    // remain the fallback for runs whose tables predate it.
+    const estimateRows = Array.isArray(registeredSummary.estimates) ? registeredSummary.estimates : [];
+    const headline = estimateRows[0] || null;
     const effect = findClaim(rows, [/^primary_or$/]);
     const low = findClaim(rows, [/^primary_or_ci\[0\]$/, /^primary_or_ci_low$/]);
     const high = findClaim(rows, [/^primary_or_ci\[1\]$/, /^primary_or_ci_high$/]);
+    const primaryParts = headline
+      ? { measure: headline.measure, value: headline.display.value, low: headline.display.low, high: headline.display.high }
+      : (effect && low && high ? { measure: 'OR', value: display(effect), low: display(low), high: display(high) } : null);
+    const primaryText = primaryParts ? tr(
+      `${primaryParts.measure} ${primaryParts.value} (95% CI ${primaryParts.low}–${primaryParts.high})`,
+      `${primaryParts.measure} ${primaryParts.value}（95% CI ${primaryParts.low}–${primaryParts.high}）`,
+    ) : '';
     const discussion = sectionParagraphs(provenance, 'Discussion', 2);
     const limitations = sectionParagraphs(provenance, 'Limitations', 2);
     const gallery = window.AGENT_RENDER && typeof window.AGENT_RENDER.figureGallery === 'function'
@@ -141,26 +160,29 @@
       tr('Group', '分组'), tr('Records', '记录数'), tr('Cohort share', '占队列比例'),
       tr('Outcome events / observed records', '结局事件数 / 有结局记录数'), tr('Observed proportion', '结局比例'),
     ].map(label => `<th scope="col">${esc(label)}</th>`).join('')}</tr></thead><tbody>${groupRows.map(row => `<tr><th scope="row">${esc(row.label)}</th><td>${esc(count(row.n))}</td><td>${esc(pct(row.sharePct))}</td><td>${esc(count(row.events))} / ${esc(count(row.denominator))}</td><td>${esc(pct(row.outcomeRatePct))}</td></tr>`).join('')}</tbody></table></div>` : '';
+    const estimateTable = estimateRows.length ? `<div class="gpi-analysis-table-scroll"><table><caption>${esc(tr('Registered adjusted estimates (primary model)', '已登记的调整后估计（主模型）'))}</caption><thead><tr>${[
+      tr('Comparison', '对比'), `${headline.measure} (95% CI)`, tr('Analysed records', '分析记录数'),
+    ].map(label => `<th scope="col">${esc(label)}</th>`).join('')}</tr></thead><tbody>${estimateRows.map(row => `<tr${row.primary ? ' class="is-primary"' : ''}><th scope="row">${esc(row.label)}${row.primary ? ` <small>${esc(tr('primary', '主要对比'))}</small>` : ''}</th><td>${esc(row.display.value)} (${esc(row.display.low)}–${esc(row.display.high)})</td><td>${esc(count(row.n))}</td></tr>`).join('')}</tbody></table></div>` : '';
     const article = manuscriptReady && window.AGENT_RENDER && typeof window.AGENT_RENDER.manuscriptProvenanceView === 'function'
       ? window.AGENT_RENDER.manuscriptProvenanceView(provenance) : '';
     const interpretation = [
-      effect && low && high
+      primaryText
         ? tr(
-          `The registered primary estimate is OR ${display(effect)} (95% CI ${display(low)}–${display(high)}). Its exposure, comparator, outcome and time window retain the definitions recorded by the run.`,
-          `已登记的主要估计为 OR ${display(effect)}（95% CI ${display(low)}–${display(high)}）。暴露、对照、结局和时间窗均沿用本次运行中登记的定义。`,
+          `The registered primary estimate is ${primaryText}. Its exposure, comparator, outcome and time window retain the definitions recorded by the run.`,
+          `已登记的主要估计为 ${primaryText}。暴露、对照、结局和时间窗均沿用本次运行中登记的定义。`,
         ) : '',
       tr(
         'Every displayed number and figure is projected from the registered run artifacts. This Web report does not recalculate estimates or infer a causal effect.',
         '所有展示的数值和图件均投影自已登记的运行产物；本 Web 报告不重新计算估计值，也不推断因果效应。',
       ),
-      effect ? tr(
+      primaryText ? tr(
         'Primary and sensitivity estimates may answer different estimand questions. Their numerical values must be interpreted using their registered definitions rather than treated as interchangeable.',
         '主要估计与敏感性估计可能回答不同的 estimand 问题；必须依据各自登记的定义解读，不能把数值视为可以互换。',
       ) : tr('The table describes observed groups. It does not estimate an adjusted association or establish an exposure effect.', '上表描述各组实际观察到的分布，没有估计调整后的关联，也不能证明暴露造成了结局差异。'),
     ].filter(Boolean);
     return `<div class="gpi-analysis-report ag-artifact-readable">
       <header class="gpi-analysis-hero"><div><h2>${esc(tr('Research results and interpretation', '研究结果与解读'))}</h2><details class="gpi-analysis-question"><summary>${esc(tr('Research question and requested deliverables', '研究问题与交付要求'))}</summary><p>${esc(context.question || tr('Research question not recorded', '尚未记录研究问题'))}</p></details></div><em>ANALYSIS ONLY</em></header>
-      <section class="gpi-analysis-summary"><div><small>${esc(tr('Results at a glance', '先看结果'))}</small><h3>${esc(tr('What was observed', '实际观察到了什么'))}</h3></div><div>${groupTable || `<p>${esc(tr('Read the registered result tables and manuscript below; no compatible summary table is available.', '下方提供已登记的结果表与文章；当前没有可直接汇总的分组表。'))}</p>`}<p>${esc(tr('These are analysis records, not necessarily independent patients. Percentages describe observed data; no significance test or causal conclusion is implied.', '这里统计的是分析记录，不一定是相互独立的患者。比例描述实际数据，不代表显著性检验或因果结论。'))}</p></div></section>
+      <section class="gpi-analysis-summary"><div><small>${esc(tr('Results at a glance', '先看结果'))}</small><h3>${esc(tr('What was observed', '实际观察到了什么'))}</h3></div><div>${primaryText ? `<p class="gpi-analysis-headline"><strong>${esc(tr('Primary estimate: ', '主要估计：'))}</strong>${esc(headline ? `${headline.label} · ` : '')}${esc(primaryText)}</p>` : ''}${estimateTable}${groupTable || (estimateTable ? '' : `<p>${esc(tr('Read the registered result tables and manuscript below; no compatible summary table is available.', '下方提供已登记的结果表与文章；当前没有可直接汇总的分组表。'))}</p>`)}<p>${esc(tr('These are analysis records, not necessarily independent patients. Percentages describe observed data; no significance test or causal conclusion is implied.', '这里统计的是分析记录，不一定是相互独立的患者。比例描述实际数据，不代表显著性检验或因果结论。'))}</p></div></section>
       <section class="gpi-analysis-metrics" aria-label="${esc(tr('Key registered results', '核心登记结果'))}">
         ${metric(tr('Source ICU stays', '来源 ICU stay'), display(sourceN), tr('Before eligibility filtering', '纳入条件筛选前'), sourceN)}
         ${metric(tr('Eligible stays', '符合条件 stay'), display(eligibleN), tr('Registered denominator', '已登记分母'), eligibleN)}
@@ -168,7 +190,7 @@
         ${metric(tr('Overall outcome risk', '总体结局风险'), display(overallRisk), descriptiveEvents ? `${display(descriptiveEvents)} / ${display(eligibleN)}` : tr('Descriptive result', '描述性结果'), overallRisk)}
       </section>
       <section class="gpi-analysis-section"><div class="gpi-analysis-section-head"><span>01</span><div><small>${esc(tr('Design and population', '设计与研究人群'))}</small><h3>${esc(tr('The registered plan', '本次采用的研究计划'))}</h3></div></div><p>${esc(tr('Data source: ', '数据源：'))}${esc(context.source && (context.source.label || context.source.database) || '—')} · ${artifactButton('agent_plan.json', tr('Full plan and definitions', '完整计划与定义'))}</p><ol>${scienceSteps.map(step => `<li>${esc(step.intent || step.method || '')}</li>`).join('')}</ol>${completeN ? `<p>${esc(tr('Model-complete records: ', '模型完整记录：'))}${esc(display(completeN))}</p>` : ''}</section>
-      <section class="gpi-analysis-section"><div class="gpi-analysis-section-head"><span>02</span><div><small>${esc(tr('Results', '分析结果'))}</small><h3>${esc(effect ? tr('Primary association and absolute-risk context', '主要关联与绝对风险背景') : tr('Exposure distribution and outcome-risk context', '暴露分布与结局风险背景'))}</h3></div></div>${presentation ? `<div class="gpi-analysis-presentation-note"><strong>${esc(tr('Digest-verified presentation figures', '摘要核验后的展示图'))}</strong><span>${esc(tr('Re-rendered from registered source tables; original run figures and digests are unchanged.', '根据已登记源数据表重新排版；原始运行图件及其摘要保持不变。'))}</span></div>` : ''}${gallery || `<p>${esc(tr('No embedded figure is available.', '暂无可嵌入图件。'))}</p>`}</section>
+      <section class="gpi-analysis-section"><div class="gpi-analysis-section-head"><span>02</span><div><small>${esc(tr('Results', '分析结果'))}</small><h3>${esc(primaryText ? tr('Primary association and absolute-risk context', '主要关联与绝对风险背景') : tr('Exposure distribution and outcome-risk context', '暴露分布与结局风险背景'))}</h3></div></div>${presentation ? `<div class="gpi-analysis-presentation-note"><strong>${esc(tr('Digest-verified presentation figures', '摘要核验后的展示图'))}</strong><span>${esc(tr('Re-rendered from registered source tables; original run figures and digests are unchanged.', '根据已登记源数据表重新排版；原始运行图件及其摘要保持不变。'))}</span></div>` : ''}${gallery || `<p>${esc(tr('No embedded figure is available.', '暂无可嵌入图件。'))}</p>`}</section>
       <section class="gpi-analysis-section is-interpretation"><div class="gpi-analysis-section-head"><span>03</span><div><small>${esc(tr('Result interpretation', '结果解读'))}</small><h3>${esc(tr('Clinical and statistical meaning', '临床与统计含义'))}</h3></div></div><ol>${interpretation.map(value => `<li>${esc(value)}</li>`).join('')}</ol>${discussion.length ? `<details><summary>${esc(tr('Show evidence-bound discussion text', '展开证据绑定的 Discussion 文本'))}</summary>${discussion.map(value => `<p>${esc(value)}</p>`).join('')}</details>` : ''}</section>
       <section class="gpi-analysis-section"><div class="gpi-analysis-section-head"><span>04</span><div><small>${esc(tr('Robustness and data quality', '稳健性与数据质量'))}</small><h3>${esc(tr('What was checked—and how to read it', '检查了什么，以及应如何理解'))}</h3></div></div><ul><li>${esc(tr('Displayed denominators and estimates come from registered evidence; unavailable values remain unavailable.', '展示的分母和估计值来自已登记证据；不可用的数值继续保持不可用。'))}</li><li>${esc(tr('Measurement opportunity, missingness and applicability must be interpreted using the run-specific audit artifacts.', '测量机会、缺失性和适用性必须依据本次运行的审计产物解读。'))}</li><li>${esc(tr('Primary and sensitivity rows must not be treated as independent or equivalent unless the registered analysis says so.', '除非已登记分析明确说明，否则不得把主要分析与敏感性分析视为相互独立或等价。'))}</li></ul></section>
       <section class="gpi-analysis-section is-limit"><div class="gpi-analysis-section-head"><span>05</span><div><small>${esc(tr('Limitations', '局限性'))}</small><h3>${esc(tr('What this report cannot prove', '这份报告不能证明什么'))}</h3></div></div>${limitations.length ? limitations.map(value => `<p>${esc(value)}</p>`).join('') : `<p>${esc(tr('Interpretation is limited to the design, data, estimand and evidence scope registered by this run. This report alone cannot establish causation, clinical validity or external generalizability.', '解释范围受本次运行登记的设计、数据、estimand 和证据边界限制；仅凭本报告不能确立因果关系、临床有效性或外部可推广性。'))}</p>`}</section>
