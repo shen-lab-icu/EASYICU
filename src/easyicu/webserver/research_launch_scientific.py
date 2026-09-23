@@ -645,8 +645,47 @@ def _metadata_planning_operationalized_columns(
     return _normalized_metadata_planning_operationalized_columns(values)
 
 
+#: Combined KDIGO stage bindings a question can name ("KDIGO AKI stage").  They
+#: share the 0-3 stage space of the observability-preserving alternative, so
+#: the concept owner's canonical reading changes no quantity.  Component stages
+#: and binary AKI phenotypes are deliberately not here: substituting the
+#: combined stage for them would change the question.
+_COMBINED_KDIGO_STAGE_BINDINGS = frozenset(
+    {"aki_stage", "aki_stage_reference", "aki_stage_source_native", "kdigo_stage"}
+)
+
+
+def _observability_preserving_exposure(
+    concept: Optional[str], export_path: Optional[str]
+) -> Optional[str]:
+    """Read a named combined KDIGO stage the way its concept owner defines it.
+
+    The concept owner (``concept.selection_policy``) declares that a stage
+    whose zero absorbs never-assessed stays is the wrong exposure, and names
+    the observability-preserving alternative.  The Web runtime refuses the
+    collapsed binding as an exposure, so proposing it would guarantee a plan
+    that cannot run.  When the bound source carries the evidence receipts the
+    alternative is derived from, the named stage is read as that alternative;
+    otherwise the reading is left unchanged and the runtime's own refusal
+    (with its re-extraction remedy) still applies.
+    """
+
+    if concept not in _COMBINED_KDIGO_STAGE_BINDINGS or not export_path:
+        return concept
+    from easyicu.concept.selection_policy import concept_selection_policy
+    from easyicu.webserver.scientific_runtime_projection import (
+        export_kdigo_strict_derivation_available,
+    )
+
+    policy = concept_selection_policy(concept)
+    alternative = policy.canonical_alternative if policy is not None else None
+    if not alternative or not export_kdigo_strict_derivation_available(export_path):
+        return concept
+    return alternative
+
+
 def _metadata_only_planning_coordinates(
-    *, question: str, database: str
+    *, question: str, database: str, export_path: Optional[str] = None
 ) -> Dict[str, Any]:
     """Project only concepts the researcher explicitly named into planning.
 
@@ -655,6 +694,10 @@ def _metadata_only_planning_coordinates(
     the database capability catalog proves that the named concepts exist.  A
     binary endpoint is emitted only when the concept owner declares
     ``event_status`` semantics; names and dtypes are never used to guess it.
+    A named exposure is read through its concept owner's selection policy
+    against the bound source (``export_path``); both callers -- the planning
+    launch and the candidate-upgrade check -- must pass the same source so the
+    proposal is reproducible.
     """
 
     from easyicu.research_agent.acquisition.catalog import (
@@ -681,10 +724,14 @@ def _metadata_only_planning_coordinates(
         return value if value in catalog_by_id else None
 
     target_outcome = named_concept("outcome")
-    primary_exposure = named_concept("exposure")
+    named_exposure = named_concept("exposure")
+    primary_exposure = _observability_preserving_exposure(named_exposure, export_path)
+    # A host-derived window reading is already one value per stay; an
+    # aggregation phrase in the question applies only to a named source concept.
     exposure_operation = (
         explicit_exposure_aggregation(question, concept_id=primary_exposure)
-        if primary_exposure else None
+        if primary_exposure and primary_exposure == named_exposure
+        else None
     )
     endpoint = None
     outcome_type = slots.get("outcome_type")

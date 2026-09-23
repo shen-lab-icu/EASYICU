@@ -211,3 +211,108 @@ def test_explicit_descriptive_question_becomes_one_reviewable_candidate_setup(
         "variance_estimator": "none_counts_only",
     }
     assert writes[0]["confirmations"]["plan_timing_descriptive_only"] is True
+
+
+def _stated_timing_update(monkeypatch, question, *, current_extra=None):
+    current = {
+        "id": "entry-landmark-owner-test", "revision": 1, "question": "",
+        "data_source": {"database": "eicu_demo", "path": "/test/eicu_demo"},
+        "time_window": {"hours": 24, "anchor": "ICU admission"},
+        "confirmations": {},
+        **(current_extra or {}),
+    }
+    writes = []
+    monkeypatch.setattr(study_tools, "_bound_context", lambda _binding: dict(current))
+    monkeypatch.setattr(
+        study_tools.study_contexts, "upsert_context",
+        lambda row, **_kw: writes.append(dict(row)) or {**current, **row, "revision": 2},
+    )
+    monkeypatch.setattr(
+        study_tools, "_workflow_snapshot",
+        lambda _ctx, *, study_override=None: build_research_workflow_snapshot(
+            study=study_override, active_export_present=False,
+            active_job=None, latest_run=None,
+        ).model_dump(mode="json"),
+    )
+    result = study_tools.execute_tool(
+        "easyicu_update_study_context",
+        {"question": question, "outcome": "住院死亡", "primary_exposure": "KDIGO AKI 分期"},
+        ToolExecutionContext(
+            session=PiSessionRecord(
+                session_id="pi-entry-landmark-owner-test",
+                binding=AuthorityBinding(study_context_id=current["id"], study_revision=1),
+            ),
+            user_message=question,
+            allowed_actions={"configure"},
+        ),
+    )
+    return result, writes
+
+
+def test_a_question_stated_landmark_is_the_first_candidates_timing(monkeypatch):
+    """"24 小时 landmark" in the researcher's own words is a timing choice.
+
+    Planning the first candidate without it guaranteed a post-baseline review
+    finding and a second planning round to compile this same landmark.
+    """
+
+    result, writes = _stated_timing_update(
+        monkeypatch,
+        "评估入 ICU 24 小时内的 KDIGO AKI 分期与住院死亡的关联，"
+        "采用 24 小时 landmark，限定于该时点仍存活的 ICU stay。",
+    )
+
+    assert result["code"] == "study_context_updated"
+    timing = [
+        {key: value for key, value in spec.items() if value is not None}
+        for spec in writes[0]["sensitivity_specs"]
+        if spec["axis"] == "timing"
+    ]
+    assert timing == [{
+        "spec_id": "question_landmark_24h",
+        "axis": "timing",
+        "strategy": "landmark",
+        "execution_variables": ["death_time_hours", "hospital_followup_time_hours"],
+        "landmark_hours": 24.0,
+        "require_alive_at_landmark": True,
+        "exclude_negative_event_times": True,
+        "event_time_variable": "death_time_hours",
+        "observation_duration_variable": "hospital_followup_time_hours",
+        "observation_duration_unit": "hours",
+    }]
+    confirmations = writes[0]["confirmations"]
+    assert confirmations["plan_timing_landmark_24h"] is True
+    assert confirmations["plan_timing_descriptive_only"] is False
+    assert confirmations["plan_timing_time_varying"] is False
+
+
+@pytest.mark.parametrize("question", [
+    # No landmark stated: the timing design stays the Planner's to propose.
+    "评估入 ICU 24 小时内的 KDIGO AKI 分期与住院死亡的关联。",
+    # A refused landmark is not a landmark.
+    "评估入院类型与住院死亡的关联；入院类型是基线特征，不采用 24 小时 landmark。",
+    # Only the in-hospital death follow-up contract is compiled.
+    "评估 KDIGO AKI 分期与 ICU 住院时长的关联，采用 24 小时 landmark。",
+])
+def test_no_timing_is_compiled_unless_a_death_landmark_is_stated(monkeypatch, question):
+    result, writes = _stated_timing_update(monkeypatch, question)
+    assert result["code"] == "study_context_updated"
+    assert not [
+        spec for spec in (writes[0].get("sensitivity_specs") or [])
+        if spec.get("axis") == "timing"
+    ]
+    assert (writes[0].get("confirmations") or {}).get("plan_timing_landmark_24h") is not True
+
+
+def test_a_stated_landmark_never_replaces_an_existing_timing_choice(monkeypatch):
+    existing = {
+        "spec_id": "time_varying_primary", "axis": "timing", "strategy": "time_varying",
+        "execution_variables": ["death_time_hours"],
+    }
+    result, writes = _stated_timing_update(
+        monkeypatch,
+        "评估 KDIGO AKI 分期与住院死亡的关联，采用 24 小时 landmark。",
+        current_extra={"sensitivity_specs": [existing]},
+    )
+    assert result["code"] == "study_context_updated"
+    assert "sensitivity_specs" not in writes[0]
