@@ -560,6 +560,7 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             "artifact_refs": artifact_refs,
             "gate_status": stable_code(gate.get("status")),
             "gate_reason_code": stable_code(gate.get("reason")),
+            **_gate_detail_projection(gate.get("detail")),
             "execution_complete": gate_checks.get("execution_complete") is True,
             "analysis_validated": gate_checks.get("analysis_validated") is True,
             "numeric_verified": gate_checks.get("numeric_verified") is True,
@@ -682,6 +683,8 @@ def project_run_outcome(
                 "artifact_refs",
                 "gate_status",
                 "gate_reason_code",
+                "gate_detail_code",
+                "gate_missing_concepts",
                 "execution_complete",
                 "analysis_validated",
                 "numeric_verified",
@@ -1290,6 +1293,22 @@ def ensure_safe_projection(
 
 def _safe_error_code(value: Any) -> Optional[str]:
     return stable_code(str(value or "").split(":", 1)[0])
+
+
+def _gate_detail_projection(detail: Any) -> Dict[str, Any]:
+    """Codes-only projection of a blocked gate's cause; empty when absent."""
+
+    if not isinstance(detail, Mapping):
+        return {}
+    code = stable_code(detail.get("reason_code"))
+    if not code:
+        return {}
+    missing = [
+        concept
+        for concept in (stable_code(item) for item in (detail.get("missing_concepts") or []))
+        if concept
+    ][:16]
+    return {"gate_detail_code": code, "gate_missing_concepts": missing}
 
 
 def stable_code(value: Any) -> Optional[str]:

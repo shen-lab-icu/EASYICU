@@ -1479,6 +1479,13 @@ def _history_row(review: RunRecord, run_dir: Path) -> Dict[str, Any]:
         "project_dir": str(review.directory.path),
         "gate_status": gate.status,
         "gate_reason": gate.reason,
+        # The blocked data foundation's lower-layer cause (codes and concept
+        # ids only), carried so the run record can name what the data lacked.
+        "gate_detail": (
+            dict(gate.payload.get("detail"))
+            if isinstance(gate.payload.get("detail"), Mapping)
+            else None
+        ),
         "gate_checks": gate_checks,
         "run_status": source_manifest.get("status"),
         "research_input_state": project_research_input_state(source_manifest.get("research_input_state")),

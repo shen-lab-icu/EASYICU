@@ -156,8 +156,9 @@
       // A blocked gate that is merely waiting for review is not a failure.
       const failureGate = blocked && /^research_pipeline_|^data_foundation_blocked$/.test(gateReason) ? gateReason : '';
       const failureCode = String(row && (row.error_code || failureGate) || '');
+      const detail = row ? { code: row.gate_detail_code, missing: row.gate_missing_concepts } : null;
       const failure = failureCode
-        ? String(typeof host.runFailureText === 'function' ? host.runFailureText(failureCode) || failureCode : failureCode)
+        ? String(typeof host.runFailureText === 'function' ? host.runFailureText(failureCode, detail) || failureCode : failureCode)
         : '';
       return { stage, failure, failedRunId: failure ? String(row.run_id || '') : '' };
     }
@@ -191,7 +192,7 @@
       const rows = runs.map(run => {
         const status = runStatus(run);
         const cause = ['failed', 'blocked'].includes(status.key) && run.gate_reason_code && typeof host.runFailureText === 'function'
-          ? String(host.runFailureText(run.gate_reason_code) || '') : '';
+          ? String(host.runFailureText(run.gate_reason_code, { code: run.gate_detail_code, missing: run.gate_missing_concepts }) || '') : '';
         const count = Number(run.artifact_count || 0);
         return `<li class="gpi-run-row is-${status.key}${run.authoritative ? ' is-current' : ''}"><span class="gpi-run-mark" aria-hidden="true"></span><div class="gpi-run-copy"><strong>${esc(kind(run))} · ${esc(status.label)}${run.authoritative ? `<span class="gpi-run-current">${tr('current', '当前')}</span>` : ''}</strong><small>${esc(when(run.updated_at))}${count ? ` · ${count} ${tr('files', '个文件')}` : ''}</small>${cause ? `<small class="gpi-run-cause">${esc(cause)}</small>` : ''}<code>${esc(run.run_id)}</code></div></li>`;
       }).join('');

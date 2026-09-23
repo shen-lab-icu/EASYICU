@@ -6867,6 +6867,72 @@ def test_pipeline_projection_uses_real_artifacts_and_withholds_identifier_table(
     assert (wrapper / "system_validation_report.html").is_file()
 
 
+def test_blocked_data_foundation_names_its_cause_as_codes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``data_foundation_blocked`` carries the acquisition owner's reason code
+    and the concept ids it could not source -- through the gate, the run
+    history row, and the browser projection -- while the owner's prose note
+    stays out of every browser-visible file."""
+    from types import SimpleNamespace
+
+    from easyicu.webserver.pi_copilot import projections, workflow
+
+    wrapper = tmp_path / "study-workflow" / "run_web-blocked"
+    monkeypatch.setattr(agent_pipeline_runs, "research_input_state", lambda path: "prepared")
+    acquisition = SimpleNamespace(
+        selection=SimpleNamespace(selected_concepts=["aki_stage", "death", "icu_unit_type"]),
+        materialized_concepts=[],
+        materialized_columns=(),
+        coverage=SimpleNamespace(sufficient=False, missing=["icu_unit_type"]),
+        analysis_columns={},
+        endpoint=None,
+        blocked=True,
+        blocked_reason_code="required_concepts_unavailable",
+        missing_concepts=("icu_unit_type",),
+        note="Required analysis concepts are not available in the prepared export: ['icu_unit_type'] /Users/private/path",
+    )
+    result = agent_pipeline_runs._write_projection(
+        wrapper_dir=wrapper,
+        study=_complete_study(),
+        provider={"provider": "openai", "model": "test-model"},
+        acquisition=acquisition,
+        run_dir=None,
+        blocked_reason="data_foundation_blocked",
+    )
+    gate = result["gate"]
+    assert gate["status"] == "blocked" and gate["reason"] == "data_foundation_blocked"
+    assert gate["detail"] == {
+        "reason_code": "required_concepts_unavailable",
+        "missing_concepts": ["icu_unit_type"],
+    }
+    quality_gate = json.loads((wrapper / "quality_gate.json").read_text(encoding="utf-8"))
+    assert quality_gate["gate"]["detail"]["reason_code"] == "required_concepts_unavailable"
+    for name in ("quality_gate.json", "cohort_summary.json", "run_context.json"):
+        assert "/Users/" not in (wrapper / name).read_text(encoding="utf-8")
+
+    job = projections.project_job(
+        {
+            "id": "job-blocked",
+            "kind": "agent-run",
+            "status": "done",
+            "result": {"run_id": "run_web-blocked", "gate": gate, "artifacts": []},
+        }
+    )
+    assert job["gate_reason_code"] == "data_foundation_blocked"
+    assert job["gate_detail_code"] == "required_concepts_unavailable"
+    assert job["gate_missing_concepts"] == ["icu_unit_type"]
+
+    history = agent_runs.list_run_history(project_root=str(tmp_path))
+    row = history["runs"][0]
+    assert row["gate_reason"] == "data_foundation_blocked"
+    assert row["gate_detail"]["reason_code"] == "required_concepts_unavailable"
+    projected_rows = workflow.project_run_history(history["runs"], authoritative_run_id=row["run_id"])
+    assert projected_rows[0]["gate_detail_code"] == "required_concepts_unavailable"
+    assert projected_rows[0]["gate_missing_concepts"] == ["icu_unit_type"]
+
+
 def test_pipeline_projection_does_not_build_engineering_report_for_manuscript_run(
     tmp_path: Path,
 ) -> None:

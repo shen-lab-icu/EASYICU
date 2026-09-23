@@ -129,9 +129,33 @@
        code. The code stays the contract; the researcher sees what stopped the
        run and what to change next, never the bare identifier. Returns RAW
        copy: callers esc() it before insertion (D-P2-2). */
-    function runFailureText(code) {
+    /* ``detail`` is the gate's lower-layer cause as codes: ``{code, missing}``
+       from the run row's ``gate_detail_code`` / ``gate_missing_concepts``.
+       It turns "data preparation did not pass" into which variable the data
+       lacks, without the projection carrying free text. */
+    function runFailureDetailText(detail) {
+      const code = String(detail && detail.code || '').trim();
+      const missing = Array.isArray(detail && detail.missing) ? detail.missing.map(String).filter(Boolean) : [];
+      const list = missing.length ? missing.join(', ') : '';
+      const detailCopy = {
+        required_concepts_unavailable: list
+          ? tr(`Variables this study needs are not in this data: ${list}. Choose another data source or drop them from the question.`, `这份数据里没有研究所需的变量：${list}。请更换数据源，或从问题中去掉这些变量。`)
+          : tr('A variable this study needs is not in this data.', '这份数据里缺少研究所需的变量。'),
+        outcome_concept_undeclared: tr('No executable outcome variable was named; state the outcome in the question (for example in-hospital death).', '没有可执行的结局变量；请在问题中写明结局（例如住院死亡）。'),
+        outcome_concept_unavailable: list
+          ? tr(`The outcome variable ${list} is not in this data.`, `结局变量 ${list} 不在这份数据里。`)
+          : tr('The outcome variable is not in this data.', '结局变量不在这份数据里。'),
+        concept_selection_failed: tr('The model did not return a usable variable selection; retry or narrow the question.', '模型没有给出可用的变量选择；请重试或收窄问题。'),
+        no_available_concepts: tr('None of the selected variables is available in this data.', '所选变量在这份数据里都不可用。'),
+      };
+      return detailCopy[code] || '';
+    }
+
+    function runFailureText(code, detail) {
       const value = String(code || '').trim();
       if (!value) return '';
+      const suffix = runFailureDetailText(detail);
+      const withDetail = text => (suffix ? `${text} ${suffix}` : text);
       const known = {
         research_pipeline_planning_identity_unavailable: tr(
           'The selected database has no ICU-stay identity definition for planning. Choose a supported database family and generate the plan again.',
@@ -174,9 +198,9 @@
           'EasyICU 无法自动为已审阅的计划完成执行配置。',
         ),
       };
-      if (known[value]) return known[value];
-      const words = value.replace(/^research_pipeline_/, '').replace(/_/g, ' ');
-      return tr(`The run stopped: ${words}.`, `任务停止：${words}。`);
+      if (known[value]) return withDetail(known[value]);
+      // An unlisted code stays visible for diagnosis, after a plain sentence.
+      return withDetail(tr(`The run stopped before finishing (code: ${value}).`, `运行在完成前停止（代码：${value}）。`));
     }
 
     return Object.freeze({ errorText, modelErrorText, providerPreset, option, runFailureText });
