@@ -215,6 +215,54 @@ def _typed_cohort_constraints(context: ResearchContext) -> Mapping[str, Any]:
     return cohort if isinstance(cohort, Mapping) else {}
 
 
+def _typed_cohort_fields(
+    context: ResearchContext,
+    required_primary_cohort_selection_mode: str | None,
+    *,
+    require_typed_bound: bool,
+) -> dict[str, Any]:
+    """The primary cohort's typed row bounds and the selection mode they imply.
+
+    Age bounds and a minimum ICU stay are the only typed predicates a family
+    template applies; prose criteria are not authority.  A minimum stay is
+    checked against ``los_icu``, the stay-level duration the predicate reads,
+    so a roster without it fails here instead of losing the criterion.
+    """
+
+    cohort = _typed_cohort_constraints(context)
+    age_min = _optional_number(cohort.get("age_min"))
+    age_max = _optional_number(cohort.get("age_max"))
+    minimum = _optional_number(cohort.get("min_icu_los_hours"))
+    minimum_icu_hours = minimum if minimum is not None and minimum > 0 else None
+    typed = any(value is not None for value in (age_min, age_max, minimum_icu_hours))
+    if required_primary_cohort_selection_mode in {"all_input_rows", "predicate_filtered"}:
+        selection_mode = required_primary_cohort_selection_mode
+    else:
+        selection_mode = "predicate_filtered" if typed else "all_input_rows"
+    if require_typed_bound and selection_mode == "predicate_filtered" and not typed:
+        raise FamilySpecError(
+            "family_spec_cohort_predicate_unavailable",
+            "a predicate-filtered primary cohort needs a typed age bound or minimum ICU "
+            "stay in data_constraints.cohort; prose criteria are not authority",
+            path="cohort",
+        )
+    if minimum_icu_hours is not None and not any(
+        variable.name == "los_icu" for variable in context.variables
+    ):
+        raise FamilySpecError(
+            "family_spec_cohort_predicate_unavailable",
+            "a minimum ICU stay needs the stay's ICU length of stay (los_icu) in the "
+            "sealed roster",
+            path="cohort",
+        )
+    return {
+        "cohort_selection_mode": selection_mode,
+        "age_min": age_min,
+        "age_max": age_max,
+        "minimum_icu_hours": minimum_icu_hours,
+    }
+
+
 def _optional_number(value: Any) -> Optional[float]:
     if value is None or isinstance(value, bool):
         return None
@@ -551,8 +599,55 @@ def build_family_spec_request(
     required_primary_cohort_selection_mode: str | None = None,
     planning_contract_context: str = "",
 ) -> FamilySpecRequest:
-    """Seal the host authority for one landmark categorical family attempt."""
+    """Seal the host authority for one family attempt, before any Planner call."""
 
+    request = _family_spec_request(
+        context,
+        analysis_types=analysis_types,
+        variable_roster=variable_roster,
+        allowed_literature_citation_keys=allowed_literature_citation_keys,
+        direct_comparator_literature_keys=direct_comparator_literature_keys,
+        comparison_literature_keys=comparison_literature_keys,
+        comparator_titles=comparator_titles,
+        required_primary_cohort_selection_mode=required_primary_cohort_selection_mode,
+        planning_contract_context=planning_contract_context,
+    )
+    _refuse_eligibility_after_time_zero(request)
+    return request
+
+
+def _refuse_eligibility_after_time_zero(request: FamilySpecRequest) -> None:
+    """A typed minimum ICU stay must be decided by the plan's time zero.
+
+    A stay reaches the minimum exactly when it is still in the ICU at that
+    hour.  A minimum beyond time zero would select on survival after it, so
+    the host refuses instead of fitting a plan on that population.
+    """
+
+    minimum = request.minimum_icu_hours
+    time_zero = request.cohort_time_zero_hours
+    if minimum is not None and time_zero is not None and minimum > time_zero:
+        raise FamilySpecError(
+            "family_spec_cohort_eligibility_after_time_zero",
+            f"a minimum ICU stay of {minimum:g} h ends after the plan's time zero at "
+            f"{time_zero:g} h after ICU admission; eligibility would depend on survival "
+            "after time zero",
+            path="cohort",
+        )
+
+
+def _family_spec_request(
+    context: ResearchContext,
+    *,
+    analysis_types: Sequence[str],
+    variable_roster: Sequence[str],
+    allowed_literature_citation_keys: Sequence[str],
+    direct_comparator_literature_keys: Sequence[str],
+    comparison_literature_keys: Sequence[str],
+    comparator_titles: Mapping[str, str] | None,
+    required_primary_cohort_selection_mode: str | None,
+    planning_contract_context: str,
+) -> FamilySpecRequest:
     family_id = family_template_id_for_context(
         context,
         analysis_types=analysis_types,
@@ -766,31 +861,16 @@ def build_family_spec_request(
         )
         if name in variables and name != context.cohort.id_columns[0]
     ]
-    cohort_constraints = _typed_cohort_constraints(context)
-    age_min = _optional_number(cohort_constraints.get("age_min"))
-    age_max = _optional_number(cohort_constraints.get("age_max"))
-    if required_primary_cohort_selection_mode in {"all_input_rows", "predicate_filtered"}:
-        selection_mode = required_primary_cohort_selection_mode
-    else:
-        selection_mode = (
-            "predicate_filtered" if (age_min is not None or age_max is not None) else "all_input_rows"
-        )
-    if selection_mode == "predicate_filtered" and age_min is None and age_max is None:
-        raise FamilySpecError(
-            "family_spec_cohort_predicate_unavailable",
-            "a predicate-filtered primary cohort needs a typed age bound in "
-            "data_constraints.cohort; prose criteria are not authority",
-            path="cohort",
-        )
+    cohort_fields = _typed_cohort_fields(
+        context, required_primary_cohort_selection_mode, require_typed_bound=True
+    )
     reference_index = 0
     contrast_index = len(exposure_levels) - 1 if exposure_levels else 0
     return FamilySpecRequest(
         family_id=family_id,
         research_question=str(context.research_question or "").strip() or "(no question text)",
         cohort_name=str(context.cohort.cohort_name),
-        cohort_selection_mode=selection_mode,
-        age_min=age_min,
-        age_max=age_max,
+        **cohort_fields,
         identity_column=context.cohort.id_columns[0],
         cluster_unit="patient" if dependence is not None else None,
         primary_exposure=exposure,
@@ -893,30 +973,15 @@ def _build_descriptive_request(
         for name in dict.fromkeys([exposure, outcome, *(item.name for item in candidates if item.selectable)])
         if name in variables and name != context.cohort.id_columns[0]
     ]
-    cohort_constraints = _typed_cohort_constraints(context)
-    age_min = _optional_number(cohort_constraints.get("age_min"))
-    age_max = _optional_number(cohort_constraints.get("age_max"))
-    if required_primary_cohort_selection_mode in {"all_input_rows", "predicate_filtered"}:
-        selection_mode = required_primary_cohort_selection_mode
-    else:
-        selection_mode = (
-            "predicate_filtered" if (age_min is not None or age_max is not None) else "all_input_rows"
-        )
-    if selection_mode == "predicate_filtered" and age_min is None and age_max is None:
-        raise FamilySpecError(
-            "family_spec_cohort_predicate_unavailable",
-            "a predicate-filtered primary cohort needs a typed age bound in "
-            "data_constraints.cohort; prose criteria are not authority",
-            path="cohort",
-        )
+    cohort_fields = _typed_cohort_fields(
+        context, required_primary_cohort_selection_mode, require_typed_bound=True
+    )
     return FamilySpecRequest(
         family_id=DESCRIPTIVE_FAMILY_ID,
         analysis_type="descriptive_epidemiology",
         research_question=str(context.research_question or "").strip() or "(no question text)",
         cohort_name=str(context.cohort.cohort_name),
-        cohort_selection_mode=selection_mode,
-        age_min=age_min,
-        age_max=age_max,
+        **cohort_fields,
         identity_column=context.cohort.id_columns[0],
         cluster_unit="patient" if dependence is not None else None,
         primary_exposure=exposure,
@@ -989,23 +1054,15 @@ def _build_feasibility_request(
         if name and name != identity and name in variables
     ][:3]
     dependence = context_dependence_authority(context)
-    cohort_constraints = _typed_cohort_constraints(context)
-    age_min = _optional_number(cohort_constraints.get("age_min"))
-    age_max = _optional_number(cohort_constraints.get("age_max"))
-    if required_primary_cohort_selection_mode in {"all_input_rows", "predicate_filtered"}:
-        selection_mode = required_primary_cohort_selection_mode
-    else:
-        selection_mode = (
-            "predicate_filtered" if (age_min is not None or age_max is not None) else "all_input_rows"
-        )
+    cohort_fields = _typed_cohort_fields(
+        context, required_primary_cohort_selection_mode, require_typed_bound=False
+    )
     return FamilySpecRequest(
         family_id=SOURCE_FEASIBILITY_FAMILY_ID,
         analysis_type="causal_inference",
         research_question=str(context.research_question or "").strip() or "(no question text)",
         cohort_name=str(context.cohort.cohort_name),
-        cohort_selection_mode=selection_mode,
-        age_min=age_min,
-        age_max=age_max,
+        **cohort_fields,
         identity_column=context.cohort.id_columns[0],
         cluster_unit="patient" if dependence is not None else None,
         primary_exposure="",
@@ -1076,23 +1133,15 @@ def _build_trajectory_request(
         for name in dict.fromkeys([outcome, *sealed.coordinate_concepts, *sealed.descriptive_only_concepts])
         if name in variables and name != context.cohort.id_columns[0]
     ]
-    cohort_constraints = _typed_cohort_constraints(context)
-    age_min = _optional_number(cohort_constraints.get("age_min"))
-    age_max = _optional_number(cohort_constraints.get("age_max"))
-    if required_primary_cohort_selection_mode in {"all_input_rows", "predicate_filtered"}:
-        selection_mode = required_primary_cohort_selection_mode
-    else:
-        selection_mode = (
-            "predicate_filtered" if (age_min is not None or age_max is not None) else "all_input_rows"
-        )
+    cohort_fields = _typed_cohort_fields(
+        context, required_primary_cohort_selection_mode, require_typed_bound=False
+    )
     return FamilySpecRequest(
         family_id=FIXED_WINDOW_TRAJECTORY_FAMILY_ID,
         analysis_type="trajectory_clustering",
         research_question=str(context.research_question or "").strip() or "(no question text)",
         cohort_name=str(context.cohort.cohort_name),
-        cohort_selection_mode=selection_mode,
-        age_min=age_min,
-        age_max=age_max,
+        **cohort_fields,
         identity_column=context.cohort.id_columns[0],
         cluster_unit="patient" if dependence is not None else None,
         primary_exposure="",
@@ -1190,23 +1239,15 @@ def _build_survival_request(
         for name in dict.fromkeys([exposure, outcome, *sealed.source_columns])
         if name in variables and name != context.cohort.id_columns[0]
     ]
-    cohort_constraints = _typed_cohort_constraints(context)
-    age_min = _optional_number(cohort_constraints.get("age_min"))
-    age_max = _optional_number(cohort_constraints.get("age_max"))
-    if required_primary_cohort_selection_mode in {"all_input_rows", "predicate_filtered"}:
-        selection_mode = required_primary_cohort_selection_mode
-    else:
-        selection_mode = (
-            "predicate_filtered" if (age_min is not None or age_max is not None) else "all_input_rows"
-        )
+    cohort_fields = _typed_cohort_fields(
+        context, required_primary_cohort_selection_mode, require_typed_bound=False
+    )
     return FamilySpecRequest(
         family_id=LANDMARK_SURVIVAL_FAMILY_ID,
         analysis_type="survival",
         research_question=str(context.research_question or "").strip() or "(no question text)",
         cohort_name=str(context.cohort.cohort_name),
-        cohort_selection_mode=selection_mode,
-        age_min=age_min,
-        age_max=age_max,
+        **cohort_fields,
         identity_column=context.cohort.id_columns[0],
         cluster_unit="patient" if dependence is not None else None,
         primary_exposure=exposure,
@@ -1334,23 +1375,15 @@ def _build_prediction_request(
         and name not in feature_names
         and str(getattr(variables[name].role, "value", variables[name].role)) == "other"
     ]
-    cohort_constraints = _typed_cohort_constraints(context)
-    age_min = _optional_number(cohort_constraints.get("age_min"))
-    age_max = _optional_number(cohort_constraints.get("age_max"))
-    if required_primary_cohort_selection_mode in {"all_input_rows", "predicate_filtered"}:
-        selection_mode = required_primary_cohort_selection_mode
-    else:
-        selection_mode = (
-            "predicate_filtered" if (age_min is not None or age_max is not None) else "all_input_rows"
-        )
+    cohort_fields = _typed_cohort_fields(
+        context, required_primary_cohort_selection_mode, require_typed_bound=False
+    )
     return FamilySpecRequest(
         family_id=PREDICTION_FAMILY_ID,
         analysis_type="prediction_model",
         research_question=str(context.research_question or "").strip() or "(no question text)",
         cohort_name=str(context.cohort.cohort_name),
-        cohort_selection_mode=selection_mode,
-        age_min=age_min,
-        age_max=age_max,
+        **cohort_fields,
         identity_column=identity,
         cluster_unit="patient" if dependence is not None else None,
         primary_exposure="",
@@ -1446,23 +1479,15 @@ def _build_phenotyping_request(
         and str(getattr(variables[name].role, "value", variables[name].role)) == "other"
     ]
     required_label_keys = [name for name in dict.fromkeys([exposure, outcome]) if name in variables]
-    cohort_constraints = _typed_cohort_constraints(context)
-    age_min = _optional_number(cohort_constraints.get("age_min"))
-    age_max = _optional_number(cohort_constraints.get("age_max"))
-    if required_primary_cohort_selection_mode in {"all_input_rows", "predicate_filtered"}:
-        selection_mode = required_primary_cohort_selection_mode
-    else:
-        selection_mode = (
-            "predicate_filtered" if (age_min is not None or age_max is not None) else "all_input_rows"
-        )
+    cohort_fields = _typed_cohort_fields(
+        context, required_primary_cohort_selection_mode, require_typed_bound=False
+    )
     return FamilySpecRequest(
         family_id=PHENOTYPING_FAMILY_ID,
         analysis_type="trajectory_clustering",
         research_question=str(context.research_question or "").strip() or "(no question text)",
         cohort_name=str(context.cohort.cohort_name),
-        cohort_selection_mode=selection_mode,
-        age_min=age_min,
-        age_max=age_max,
+        **cohort_fields,
         identity_column=identity,
         cluster_unit="patient" if dependence is not None else None,
         primary_exposure=exposure,

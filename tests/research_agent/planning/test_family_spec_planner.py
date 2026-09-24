@@ -1992,6 +1992,121 @@ def test_a_landmark_roster_the_design_cannot_name_is_refused_in_the_spec() -> No
     assert caught.value.path == "adjustment_set"
 
 
+def _with_minimum_icu_stay(
+    context: ResearchContext, *, hours: float = 24.0, duration_column: bool = True
+) -> ResearchContext:
+    """Type a minimum ICU stay in the cohort, as the Web cohort field does."""
+
+    constraints = json.loads(context.user_preferences.data_constraints or "{}")
+    constraints["cohort"] = {**constraints.get("cohort", {}), "min_icu_los_hours": hours}
+    variables = list(context.variables)
+    if duration_column:
+        variables.append(
+            ConceptDescriptor(
+                name="los_icu", description="ICU length of stay", role=VariableRole.OUTCOME,
+                dtype="float64", unit="days", source_concept="los_icu",
+            )
+        )
+    return context.model_copy(
+        update={
+            "variables": variables,
+            "user_preferences": context.user_preferences.model_copy(
+                update={"data_constraints": json.dumps(constraints)}
+            ),
+        }
+    )
+
+
+def test_a_typed_minimum_icu_stay_is_the_prediction_cohort_predicate() -> None:
+    """A first-day prediction typed as "ICU stay of at least 24 h" plans that cohort.
+
+    The family template could express only typed age bounds, so such a cohort
+    was refused after the Planner had been paid for its spec.
+    """
+
+    context = _with_minimum_icu_stay(_prediction_context())
+    request = _request(context, cohort_mode="predicate_filtered")
+    assert (request.minimum_icu_hours, request.age_min, request.age_max) == (24.0, None, None)
+    features = ["age", "sex", "hr_max", "lactate_max", "map_min"]
+
+    _llm, result = _run(
+        context,
+        [json.dumps(_prediction_payload(request, features=features))],
+        required_primary_cohort_selection_mode="predicate_filtered",
+    )
+
+    cohort = result.output.cohort
+    assert cohort is not None and cohort.selection_mode == "predicate_filtered"
+    assert [(item.concept_id, item.op, item.value) for item in cohort.inclusion] == [
+        ("los_icu", ">=", 1.0)
+    ]
+    # The outcome-role duration only gates the cohort; it never becomes a predictor.
+    assert "los_icu" not in {item.name for item in request.feature_candidates}
+
+
+def test_the_phenotype_cohort_keeps_its_membership_and_adds_the_minimum_stay() -> None:
+    from easyicu.research_agent.planning.family_spec.contract import spec_from_mapping
+    from easyicu.research_agent.planning.family_spec.phenotyping_template import _cohort_intent
+
+    context = _with_minimum_icu_stay(_phenotyping_context(), hours=24.0)
+    request = _request(context, cohort_mode="predicate_filtered")
+    spec = spec_from_mapping(
+        _phenotyping_payload(
+            request, features=["hr_max", "lactate_max", "map_min"], baseline=["age"],
+            membership="phenotype_flag",
+        )
+    )
+
+    intent = _cohort_intent(request, spec)
+
+    assert [(item.concept_id, item.op) for item in intent.inclusion] == [
+        ("phenotype_flag", "=="),
+        ("los_icu", ">="),
+    ]
+    assert intent.inclusion[1].value.number_value == 1.0
+
+
+def test_a_minimum_stay_beyond_time_zero_is_refused_before_the_planner_call() -> None:
+    """A 48 h minimum stay with first-24-hour predictors selects on later survival."""
+
+    context = _with_minimum_icu_stay(_prediction_context(), hours=48.0)
+    with pytest.raises(FamilySpecError) as caught:
+        _request(context, cohort_mode="predicate_filtered")
+    assert caught.value.reason_code == "family_spec_cohort_eligibility_after_time_zero"
+
+    llm = ScriptedMockLLMClient([])
+    with pytest.raises(Exception, match="family_spec_cohort_eligibility_after_time_zero"):
+        ProgressivePlannerAgent(llm).run_attempt(
+            context,
+            planner_strategy=FAMILY_SPEC_STRATEGY,
+            allowed_literature_citation_keys=ALLOWED_CITATIONS,
+            direct_comparator_literature_keys=DIRECT_COMPARATORS,
+            comparison_literature_keys=DIRECT_COMPARATORS,
+            enforce_article_contract=True,
+            article_contract_context=context,
+            planning_contract_context="",
+            required_primary_cohort_selection_mode="predicate_filtered",
+        )
+    assert llm.calls == []
+
+
+def test_a_minimum_icu_stay_without_its_duration_is_refused_not_dropped() -> None:
+    context = _with_minimum_icu_stay(_prediction_context(), duration_column=False)
+
+    with pytest.raises(FamilySpecError) as caught:
+        _request(context, cohort_mode="predicate_filtered")
+
+    assert caught.value.reason_code == "family_spec_cohort_predicate_unavailable"
+    assert "los_icu" in str(caught.value)
+
+
+def test_a_request_without_a_minimum_stay_keeps_its_sealed_identity() -> None:
+    request = _request(_spline_context())
+
+    assert request.minimum_icu_hours is None
+    assert "minimum_icu_hours" not in request.model_dump(mode="json")
+
+
 def test_prediction_template_robustness_is_the_owner_executed_refit_and_decision_curve() -> None:
     """Two playbook axes, both executed by the host prediction owner.
 

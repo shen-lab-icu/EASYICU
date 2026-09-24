@@ -241,6 +241,11 @@ class FamilySpecRequest(BaseModel):
     cohort_selection_mode: Literal["all_input_rows", "predicate_filtered"]
     age_min: Optional[float] = None
     age_max: Optional[float] = None
+    #: A typed minimum ICU stay in hours.  Omitted from the digest when absent,
+    #: so requests sealed before it existed keep their identity.
+    minimum_icu_hours: Optional[float] = Field(
+        default=None, gt=0.0, exclude_if=lambda value: value is None
+    )
     identity_column: str = Field(min_length=1, max_length=128)
     cluster_unit: Optional[Literal["patient"]] = None
     primary_exposure: str = Field(max_length=128)
@@ -305,6 +310,12 @@ class FamilySpecRequest(BaseModel):
         if any(not value for value in cleaned) or len(cleaned) != len(set(cleaned)):
             raise ValueError("request rosters must contain unique non-empty values")
         return cleaned
+
+    @property
+    def cohort_time_zero_hours(self) -> Optional[float]:
+        """Hours after ICU admission by which typed cohort eligibility is decided."""
+
+        return self.landmark_hours or self.observation_window_hours
 
     @model_validator(mode="after")
     def _exposure_shape(self) -> "FamilySpecRequest":

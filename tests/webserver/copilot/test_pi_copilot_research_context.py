@@ -77,6 +77,54 @@ def test_web_data_foundation_profile_keeps_continuous_outcome_static(
     }
 
 
+@pytest.mark.parametrize("duration_available", [True, False])
+def test_web_data_foundation_profile_materializes_the_typed_cohort_duration(
+    monkeypatch: pytest.MonkeyPatch, duration_available: bool,
+) -> None:
+    """The execution roster carries the duration a typed minimum stay reads."""
+
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+
+    concepts = [
+        ("age", "demographics.parquet", "value"),
+        ("death", "outcome.parquet", "event_status"),
+        *([("los_icu", "outcome.parquet", "value")] if duration_available else []),
+    ]
+    monkeypatch.setattr(
+        catalog_module,
+        "build_available_catalog",
+        lambda _path: AvailableCatalog(
+            source="typed-demo",
+            concepts=[
+                CatalogConcept(
+                    concept_id=concept, file_name=file_name, typed_metadata=True,
+                    column_role=role,
+                )
+                for concept, file_name, role in concepts
+            ],
+        ),
+    )
+    study = {"modules": ["demographics", "outcome"], "cohort": {"min_icu_los_hours": 24}}
+
+    if not duration_available:
+        with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as raised:
+            research_launch_scientific._data_foundation_profile(
+                export_path="/typed/demo", study=study, target="death",
+            )
+        assert raised.value.code == "research_pipeline_cohort_concept_unavailable"
+        assert raised.value.details == {
+            "field": "cohort.min_icu_los_hours", "concept_id": "los_icu",
+        }
+        return
+
+    profile = research_launch_scientific._data_foundation_profile(
+        export_path="/typed/demo", study=study, target="death",
+    )
+
+    assert profile["static_concepts"] == ("age", "los_icu")
+    assert profile["outcome_concepts"] == ("death",)
+
+
 @pytest.mark.parametrize("question_owned", [False, True])
 def test_web_data_foundation_profile_keeps_all_candidate_plan_outcomes(
     monkeypatch: pytest.MonkeyPatch,
