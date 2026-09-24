@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from easyicu.research_agent.canonical_json import canonical_sha256
+from easyicu.research_agent.cohort import materializer as cohort_materializer
 from easyicu.research_agent.orchestration.human_review_checkpoint import HumanReviewCheckpoint
 from easyicu.research_agent.orchestration.workflow import HumanReviewRequest
 from easyicu.research_agent.planning.baseline_requirements import (
@@ -19,11 +20,14 @@ from easyicu.research_agent.planning.population_requirements import (
     bind_population_requirements, candidate_population_requirements, validate_population_choice,
 )
 from easyicu.research_agent.planning.scientific_review import build_plan_scientific_review
+from easyicu.research_agent.research_context.builder import build_research_context
+from easyicu.research_agent.research_context.typed import RESEARCH_CONTEXT_V3_SCHEMA_VERSION
 from easyicu.research_agent.schema import ConceptDescriptor
 from easyicu.webserver import agent_pipeline_runs, plan_change_requirements as owner, study_contexts
 from easyicu.webserver.plan_change_request import PlanChangeRequest, ReferencedPlan, reference_plan_content
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
 from tests.research_agent.planning.test_baseline_requirements import _context, _plan
+from tests.support.typed_export import typed_export
 
 
 @pytest.fixture
@@ -35,19 +39,20 @@ def source(tmp_path, monkeypatch):
     checkpoint_path = wrapper / 'pipeline' / run_id / 'human_review_checkpoint.json'
     checkpoint_path.parent.mkdir(parents=True)
 
-    def build(names=("age", "severity_first"), inherited=None):
-        context = _context().model_copy(update={"variables": [
-            *_context().variables,
-            *[ConceptDescriptor(name=name, source_concept=("severity" if name == "severity_first" else name), role="other", dtype="float64")
-              for name in names if name not in {v.name for v in _context().variables}],
-        ]})
-        population = candidate_population_requirements({"steps": [{
-            "step_id": "risk", "expected_outputs": ["table:absolute_risk_context"], "population_scope": "primary_model",
-        }]}, "d" * 64)
-        context = bind_population_requirements(context, population.model_dump(mode="json"))
-        if inherited is not None:
-            context = bind_baseline_requirements(context, inherited.model_dump(mode="json"))
-        plan = _plan(*names)
+    def build(names=("age", "severity_first"), inherited=None, context=None, group="exposure"):
+        if context is None:
+            context = _context().model_copy(update={"variables": [
+                *_context().variables,
+                *[ConceptDescriptor(name=name, source_concept=("severity" if name == "severity_first" else name), role="other", dtype="float64")
+                  for name in names if name not in {v.name for v in _context().variables}],
+            ]})
+            population = candidate_population_requirements({"steps": [{
+                "step_id": "risk", "expected_outputs": ["table:absolute_risk_context"], "population_scope": "primary_model",
+            }]}, "d" * 64)
+            context = bind_population_requirements(context, population.model_dump(mode="json"))
+            if inherited is not None:
+                context = bind_baseline_requirements(context, inherited.model_dump(mode="json"))
+        plan = _plan(*names, group=group)
         review = build_plan_scientific_review(context=context, plan=plan)
         plan_payload, context_payload = plan.model_dump(mode="json"), context.model_dump(mode="json")
         artifact_sha = hashlib.sha256(json.dumps(plan_payload).encode()).hexdigest()
@@ -192,6 +197,28 @@ def test_fresh_revision_binds_complete_roster_through_outline_and_final_review(s
     assert baseline_requirement_coverage(context, f.plan)['status'] == 'complete'
     assert baseline_outline_coverage(context, [{'step_id': 'renamed', 'module_id': 'table_one', 'variable_names': ['exposure', *names]}])['status'] == 'complete'
     assert not any(v.name == 'outcome' for v in required.tables[0].variables)
+
+
+def test_a_source_that_prepared_its_data_binds_by_its_context_version(source, tmp_path):
+    """Preparing data seals a typed context; a fresh plan still inherits its requirements."""
+    paths = cohort_materializer.materialize_to_parquet(
+        tmp_path / "materialized", data_path=typed_export(tmp_path / "export"), database="miiv",
+        static_concepts=("age",), feature_concepts=("lact",), outcome_concepts=("death",),
+    )
+    context = build_research_context(
+        research_question="Describe age by first lactate and hospital death.", cohort=paths["parquet"],
+        cohort_name="prepared", database="miiv", target_outcome="death", primary_exposure="lact_first",
+        id_columns=("stay_id",), outcome_columns=("death",),
+    )
+    f = source(names=("age",), context=context, group="lact_first")
+
+    bound = bind(f).source_requirements
+
+    assert context.schema_version == RESEARCH_CONTEXT_V3_SCHEMA_VERSION
+    assert bound.source_context_sha256 == canonical_sha256(context.model_dump(mode="json"))
+    [table] = bound.baseline.tables
+    assert table.group_by.name == "lact_first"
+    assert [variable.name for variable in table.variables] == ["age"]
 
 
 def test_inherited_requirements_survive_even_an_incomplete_source_candidate(source):

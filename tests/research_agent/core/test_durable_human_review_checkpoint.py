@@ -20,6 +20,11 @@ from easyicu.research_agent.authority.provider_hard_stop import (
 )
 from easyicu.research_agent.pipeline import ResearchAgentPipeline
 from easyicu.research_agent.providers.mocks import MockLLMClient
+from easyicu.research_agent.cohort import materializer as cohort_materializer
+from easyicu.research_agent.research_context.typed import (
+    RESEARCH_CONTEXT_V3_SCHEMA_VERSION,
+)
+from tests.support.typed_export import typed_export
 
 
 def _pipeline(root: Path, **overrides) -> ResearchAgentPipeline:
@@ -136,6 +141,49 @@ def test_new_pipeline_instance_resumes_without_running_planner_again(
     assert approved["plan_sha256"] == lineage["plan_sha256"]
     assert approved["normalized_plan_authority_sha256"] == lineage["authority_sha256"]
     assert approved["decision_set_sha256"] == checkpoint.consumed_decision_sha256
+
+
+def test_a_pause_on_prepared_data_resumes_in_a_new_process(
+    monkeypatch, tmp_path
+) -> None:
+    """A context sealed with its materialized inputs reopens by its own version."""
+
+    _force_approvable_plan_review(monkeypatch)
+    paths = cohort_materializer.materialize_to_parquet(
+        tmp_path / "materialized",
+        data_path=typed_export(tmp_path / "export"),
+        database="miiv",
+        static_concepts=("age",),
+        feature_concepts=("lact", "mech_vent"),
+        outcome_concepts=("death",),
+    )
+    workdir = tmp_path / "runs"
+    pending = _pipeline(workdir).run(
+        question="Does age describe hospital mortality?",
+        cohort=paths["parquet"],
+        target_outcome="death",
+    )
+    checkpoint_file = Path(pending.run_dir) / "human_review_checkpoint.json"
+    handoff = load_checkpoint(checkpoint_file).plan_handoff
+    assert handoff["context"]["schema_version"] == RESEARCH_CONTEXT_V3_SCHEMA_VERSION
+
+    # A fresh object stands in for a restarted host approving the paused plan.
+    result = _pipeline(workdir).resume_human_review(
+        [
+            HumanReviewDecision(
+                review_id=request.review_id,
+                authority_sha256=request.authority_sha256,
+                decision="approved",
+                reviewer="test reviewer",
+                decided_at="2026-09-24T13:40:00Z",
+            )
+            for request in pending.requests
+        ],
+        run_id=pending.run_id,
+    )
+
+    assert result.run_id == pending.run_id
+    assert load_checkpoint(checkpoint_file, require_pending=False).state == "completed"
 
 
 def test_completed_review_is_reused_for_exact_execution_retry(
