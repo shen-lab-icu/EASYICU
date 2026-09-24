@@ -155,8 +155,17 @@ def _load_context(run_dir: Path) -> ResearchContextAuthority:
 
 
 def _binary_outcome(values: pd.Series, *, column: str) -> pd.Series:
-    if values.isna().any() or pd.api.types.is_bool_dtype(values.dtype):
+    """Return the complete 0/1 outcome every later prediction table carries.
+
+    A logical column is the same closed binary outcome spelled True/False
+    (data preparation may write an event flag that way); it becomes 0/1 here,
+    once, so the scores and every downstream validator see one numeric outcome.
+    """
+
+    if values.isna().any():
         raise RuntimeError(f"prediction outcome {column!r} must be complete numeric 0/1")
+    if pd.api.types.is_bool_dtype(values.dtype):
+        return values.astype(int)
     numeric = pd.to_numeric(values, errors="coerce")
     if numeric.isna().any() or not numeric.isin((0, 1)).all():
         raise RuntimeError(f"prediction outcome {column!r} must use exact numeric 0/1")
