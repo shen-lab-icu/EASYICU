@@ -104,6 +104,9 @@ class ResearchWorkflowSnapshot(BaseModel):
     plan_execution_ready: bool = False
     analysis_validation_retry_available: bool = False
     latest_attempt_failure: Optional[PreservedPlanFailure] = None
+    #: Path-free retry assessment for a failed approved execution: whether a
+    #: retry could change the outcome, and the counts and codes saying why.
+    execution_retry: Optional[Mapping[str, Any]] = None
 
 
 class ProjectWorkflowProjection(BaseModel):
@@ -297,6 +300,7 @@ def build_research_workflow_snapshot(
     continuing_review_choices: bool = False,
     latest_attempt: Optional[Mapping[str, Any]] = None,
     report_revision_ready: bool = False,
+    execution_retry: Optional[Mapping[str, Any]] = None,
 ) -> ResearchWorkflowSnapshot:
     """Compile owner receipts into one deterministic Copilot workflow state."""
 
@@ -772,9 +776,19 @@ def build_research_workflow_snapshot(
     plan_regeneration_required = bool(
         plan_regeneration_required or failed_pipeline_regeneration_required
     )
+    # A retry resumes the failed step's sealed code with its restored repair
+    # budget.  When that budget is spent and nothing it runs on changed, the
+    # retry can only repeat the failure, so it is not offered.
+    execution_retry_futile = bool(
+        failed_execution_retry_available
+        and isinstance(execution_retry, Mapping)
+        and execution_retry.get("state") == "futile"
+    )
     plan_regeneration_reason_code = (
         "planner_checkpoint_resume_available"
         if planner_checkpoint_resume_available
+        else "failed_pipeline_execution_retry_futile"
+        if execution_retry_futile
         else "failed_pipeline_execution_retry_available"
         if failed_execution_retry_available
         else "failed_pipeline_requires_fresh_plan"
@@ -1039,6 +1053,11 @@ def build_research_workflow_snapshot(
         plan_execution_ready=plan_execution_ready,
         analysis_validation_retry_available=(analysis_validation_retry_available),
         latest_attempt_failure=latest_attempt_failure,
+        execution_retry=(
+            dict(execution_retry)
+            if failed_execution_retry_available and isinstance(execution_retry, Mapping)
+            else None
+        ),
     )
 
 
@@ -1285,7 +1304,7 @@ def build_project_workflow_projection(
         review_evidence_refs=review_evidence,
     )
 
-    snapshot = build_research_workflow_snapshot(
+    snapshot_inputs: Dict[str, Any] = dict(
         study=study,
         active_export_present=registered_export_matches_study(study, registry),
         active_job=active_job,
@@ -1297,6 +1316,22 @@ def build_project_workflow_projection(
             study, latest_run or {}, review,
         ),
     )
+    snapshot = build_research_workflow_snapshot(**snapshot_inputs)
+    if (
+        latest_run
+        and snapshot.next_action_code == "failed_pipeline_execution_retry_available"
+    ):
+        # Only this state pays for the assessment: it reads the failed step's
+        # records and, when its budget is spent and the code is unchanged,
+        # asks Docker for the current runner image.
+        assessment = agent_pipeline_runs.execution_retry_assessment(
+            study=study,
+            project_root=research_pipeline_project_root(clean_study_id or None),
+            source_run_id=str(latest_run.get("run_id") or ""),
+        )
+        snapshot = build_research_workflow_snapshot(
+            **snapshot_inputs, execution_retry=assessment.public()
+        )
     if projected_study is not study:
         snapshot = snapshot.model_copy(
             update={

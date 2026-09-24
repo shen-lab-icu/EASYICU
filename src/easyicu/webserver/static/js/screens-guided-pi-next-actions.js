@@ -189,6 +189,7 @@
     // explicit request to regenerate the research plan must remain available.
     // The host routes that request to a fresh Planner run, never to chat.
     'failed_pipeline_execution_retry_available',
+    'failed_pipeline_execution_retry_futile',
     'planner_checkpoint_resume_available',
     // A candidate plan waiting for data preparation may still be explicitly
     // replaced. This creates a fresh plan run; it never approves or executes

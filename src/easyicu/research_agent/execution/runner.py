@@ -3403,6 +3403,8 @@ class RunnerAvailability:
     reason_code: str = ""
     probe_phase: str = ""
     exit_code: Optional[int] = None
+    #: The inspected image identifier (``sha256:...``) when Docker answered.
+    image_id: str = ""
 
 
 class ExecutionRuntimeUnavailableError(SafeRunnerUnavailableError):
@@ -3506,7 +3508,9 @@ def probe_runner_availability(
                 image=runtime_image, workdir=workdir,
                 timeout=max(0.1, float(probe_timeout_seconds)),
             )
-        return RunnerAvailability(kind=kind, available=True, image=runtime_image)
+        return RunnerAvailability(
+            kind=kind, available=True, image=runtime_image, image_id=image_id
+        )
     return RunnerAvailability(
         kind=kind,
         available=False,
@@ -3577,6 +3581,7 @@ def _probe_docker_workspace(
     return RunnerAvailability(
         kind="docker", available=available, image=image,
         reason_code="" if available else "docker_workspace_unavailable",
+        image_id=image_id,
     )
 
 
