@@ -7,6 +7,7 @@ status, and stay verifiable after the run stage copies it into a run directory.
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 
@@ -32,6 +33,11 @@ from easyicu.research_agent.intake.materialized_metadata import (
     load_verified_materialized_cohort_authority,
     publish_hospital_followup_materialized_cohort,
     stage_materialized_cohort_authority,
+)
+from easyicu.research_agent.intake.materialized_trajectory import (
+    MaterializedTrajectoryError,
+    load_verified_materialized_trajectory_authority,
+    stage_materialized_trajectory_authority,
 )
 
 from tests.support.typed_export import typed_export
@@ -454,3 +460,194 @@ def test_a_patient_grouped_typed_cohort_is_extended_on_its_grouped_identity(
         assert dependence is not None
         assert dependence.group_source == "patient_stay_id"
         assert context.cohort.provenance["patient_identity_available"] is True
+
+
+def _typed_parent_with_trajectory(tmp_path: Path, *, lact):
+    source = typed_export(
+        tmp_path / "export",
+        labs=pd.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 3],
+                "charttime": [1.0, 1.0, 1.0, 2.0],
+                "age": [50, 60, 70, 70],
+                "lact": lact,
+                "mech_vent": [True, False, False, True],
+            }
+        ),
+        outcomes=pd.DataFrame(
+            {"stay_id": [1, 2, 3], "death": [False, True, False]}
+        ),
+    )
+    paths = cohort_materializer.materialize_to_parquet(
+        tmp_path / "materialized",
+        stem="universe",
+        data_path=source,
+        database="miiv",
+        static_concepts=("age",),
+        feature_concepts=("lact", "mech_vent"),
+        outcome_concepts=("death",),
+        emit_trajectory=True,
+        trajectory_concepts=("lact", "mech_vent"),
+        trajectory_window=(0.0, 24.0),
+    )
+    parent = load_verified_materialized_cohort_authority(paths["parquet"])
+    assert parent is not None
+    trajectory = load_verified_materialized_trajectory_authority(
+        paths["trajectory"], expected_universe_authority=parent.reference
+    )
+    assert trajectory is not None
+    acquisition = AcquisitionResult(
+        universe_path=paths["parquet"],
+        provenance_path=paths["provenance"],
+        selection=None,
+        coverage=None,
+        materialized_concepts=["age", "lact", "mech_vent", "death"],
+        cohort_authority_path=paths["parquet"].parent / parent.reference.file,
+        cohort_authority_ref=parent.reference,
+        materialized_columns=tuple(parent.authority.cohort_columns),
+        trajectory_path=paths["trajectory"],
+        trajectory_provenance_path=paths["trajectory_provenance"],
+        trajectory_authority_path=paths["trajectory"].parent / trajectory.reference.file,
+        trajectory_authority_ref=trajectory.reference,
+    )
+    return acquisition, trajectory
+
+
+def _raw_followup(hospital_expire_flag):
+    icustays = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "hadm_id": [10, 20, 30],
+            "intime": pd.to_datetime(["2020-01-01", "2020-01-02", "2020-01-03"]),
+        }
+    )
+    admissions = pd.DataFrame(
+        {
+            "hadm_id": [10, 20, 30],
+            "dischtime": pd.to_datetime(["2020-01-02", "2020-01-03", "2020-01-04"]),
+            "deathtime": [pd.NaT, pd.Timestamp("2020-01-03"), pd.NaT],
+            "hospital_expire_flag": hospital_expire_flag,
+        }
+    )
+    return derive_mimic_iv_hospital_mortality_followup(icustays, admissions)
+
+
+def test_a_sealed_trajectory_follows_the_followup_child(tmp_path: Path) -> None:
+    """Dev9 E3 (first ICU stays, 24 h landmark): the universe's trajectory
+    stayed bound to the parent after follow-up dropped stays, and the run
+    refused it before any step ("bound to a different universe authority")."""
+
+    acquisition, source = _typed_parent_with_trajectory(
+        tmp_path, lact=[1.0, 2.0, 3.0, 4.0]
+    )
+
+    extended = materialize_hospital_followup_acquisition(
+        acquisition,
+        followup=_raw_followup([0, 1, pd.NA]),
+        raw_source_receipt=_RAW_SOURCE_RECEIPT,
+    )
+
+    # The run verifies the trajectory against the cohort it analyses.
+    with pytest.raises(MaterializedTrajectoryError, match="different universe"):
+        load_verified_materialized_trajectory_authority(
+            acquisition.trajectory_path,
+            expected_authority=source.reference,
+            expected_universe_authority=extended.cohort_authority_ref,
+        )
+    child = load_verified_materialized_trajectory_authority(
+        extended.trajectory_path,
+        expected_authority=extended.trajectory_authority_ref,
+        expected_universe_authority=extended.cohort_authority_ref,
+    )
+    assert child is not None
+    assert extended.trajectory_path.name == "hospital_followup_cohort_trajectory.parquet"
+    parent_rows = pd.read_parquet(acquisition.trajectory_path)
+    pd.testing.assert_frame_equal(
+        pd.read_parquet(extended.trajectory_path),
+        parent_rows.loc[parent_rows["stay_id"] != 3].reset_index(drop=True),
+    )
+    assert child.authority.materialized_concepts == source.authority.materialized_concepts
+    assert child.authority.concept_bindings == source.authority.concept_bindings
+    assert child.authority.window == source.authority.window
+    recorded = child.authority.to_dict()["semantic_provenance"]
+    assert recorded["hospital_followup_restriction"] == {
+        "source_trajectory_authority_sha256": source.reference.sha256,
+        "source_trajectory_sha256": source.authority.trajectory_sha256,
+        "source_universe_authority_sha256": acquisition.cohort_authority_ref.sha256,
+        "source_rows": source.authority.trajectory_rows,
+        "source_stays": source.authority.trajectory_stays,
+    }
+    assert recorded["n_stays"] == 2
+    # The parent's trajectory is untouched.
+    assert load_verified_materialized_trajectory_authority(
+        acquisition.trajectory_path, expected_authority=source.reference
+    ) is not None
+    # The run stage copies both and re-verifies them offline.
+    run_dir = tmp_path / "run"
+    staged_cohort = stage_materialized_cohort_authority(
+        extended.universe_path,
+        run_dir / "cohort.parquet",
+        producer_implementation_sha256="c" * 64,
+    )
+    assert staged_cohort is not None
+    staged = stage_materialized_trajectory_authority(
+        extended.trajectory_path,
+        run_dir / "cohort_trajectory.parquet",
+        source_universe_path=extended.universe_path,
+        target_universe_path=run_dir / "cohort.parquet",
+        expected_source_authority=extended.trajectory_authority_ref,
+        expected_target_universe_authority=staged_cohort.reference,
+        producer_implementation_sha256="c" * 64,
+    )
+    assert load_verified_materialized_trajectory_authority(
+        run_dir / "cohort_trajectory.parquet",
+        expected_authority=staged.reference,
+        expected_universe_authority=staged_cohort.reference,
+    ) is not None
+
+
+def test_a_concept_left_without_rows_is_available_but_unobserved(
+    tmp_path: Path,
+) -> None:
+    acquisition, source = _typed_parent_with_trajectory(
+        tmp_path, lact=[None, 2.0, 3.0, 4.0]
+    )
+    assert source.authority.materialized_concepts == ("lact", "mech_vent")
+
+    extended = materialize_hospital_followup_acquisition(
+        acquisition,
+        followup=_raw_followup([0, pd.NA, pd.NA]),
+        raw_source_receipt=_RAW_SOURCE_RECEIPT,
+    )
+
+    child = load_verified_materialized_trajectory_authority(
+        extended.trajectory_path,
+        expected_authority=extended.trajectory_authority_ref,
+        expected_universe_authority=extended.cohort_authority_ref,
+    )
+    assert child is not None
+    assert pd.read_parquet(extended.trajectory_path)["stay_id"].tolist() == [1]
+    assert child.authority.requested_concepts == ("lact", "mech_vent")
+    assert child.authority.materialized_concepts == ("mech_vent",)
+    assert child.authority.available_unobserved_concepts == ("lact",)
+
+
+def test_an_unsealed_trajectory_is_refused_before_the_child_is_written(
+    tmp_path: Path,
+) -> None:
+    acquisition, _ = _typed_parent_with_trajectory(
+        tmp_path, lact=[1.0, 2.0, 3.0, 4.0]
+    )
+    unsealed = replace(
+        acquisition, trajectory_authority_path=None, trajectory_authority_ref=None
+    )
+
+    with pytest.raises(ValueError, match="hospital_followup_trajectory_authority_required"):
+        materialize_hospital_followup_acquisition(
+            unsealed,
+            followup=_raw_followup([0, 1, pd.NA]),
+            raw_source_receipt=_RAW_SOURCE_RECEIPT,
+        )
+    assert not (
+        acquisition.universe_path.parent / "hospital_followup_cohort.parquet"
+    ).exists()

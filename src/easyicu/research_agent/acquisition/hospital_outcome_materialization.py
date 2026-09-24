@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import pandas as pd
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
 
 from ..authority.filesystem import AnchoredDirectory
 from ..canonical_json import canonical_json_bytes, sha256_bytes, sha256_file
@@ -160,11 +162,17 @@ def _materialize_typed_hospital_followup(
 
     The cohort authority owner publishes the child and re-verifies it against
     the parent parquet; this adapter only maps the deriver's ``stay_id`` axis
-    onto the sealed identity column and forwards the two receipts.
+    onto the sealed identity column and forwards the two receipts.  A sealed
+    trajectory is bound to the universe it was cut from, which is no longer
+    the analysis universe, so it follows the child (``_followup_trajectory``).
     """
     from ..intake.materialized_metadata import (
         load_verified_materialized_cohort_authority,
         publish_hospital_followup_materialized_cohort,
+    )
+    from ..intake.materialized_trajectory import (
+        load_verified_materialized_trajectory_authority,
+        materialized_trajectory_provenance_path,
     )
 
     if acquisition.universe_path is None or acquisition.cohort_authority_ref is None:
@@ -175,6 +183,17 @@ def _materialize_typed_hospital_followup(
     )
     if verified is None:
         raise ValueError("hospital_followup_source_cohort_required")
+    # Verified before anything is written: an unsealed trajectory cannot be
+    # bound to the child, and a sealed one must describe this parent.
+    source_trajectory = None
+    if acquisition.trajectory_path is not None:
+        if acquisition.trajectory_authority_ref is None:
+            raise ValueError("hospital_followup_trajectory_authority_required")
+        source_trajectory = load_verified_materialized_trajectory_authority(
+            Path(acquisition.trajectory_path),
+            expected_authority=acquisition.trajectory_authority_ref,
+            expected_universe_authority=acquisition.cohort_authority_ref,
+        )
     identity = verified.authority.identity_column
     stay_axis = _typed_parent_stay_axis(path, identity)
     followup_frame = _onto_parent_identity(
@@ -186,7 +205,13 @@ def _materialize_typed_hospital_followup(
         stay_axis=stay_axis,
     )[[identity, "reason"]]
     target = path.parent / "hospital_followup_cohort.parquet"
-    if target.exists() or (path.parent / "hospital_followup_cohort_provenance.json").exists():
+    trajectory_target = path.parent / "hospital_followup_cohort_trajectory.parquet"
+    if (
+        target.exists()
+        or (path.parent / "hospital_followup_cohort_provenance.json").exists()
+        or trajectory_target.exists()
+        or materialized_trajectory_provenance_path(trajectory_target).exists()
+    ):
         raise ValueError("hospital_followup_artifact_exists")
     published = publish_hospital_followup_materialized_cohort(
         path,
@@ -201,13 +226,141 @@ def _materialize_typed_hospital_followup(
     )
     if published is None:  # pragma: no cover - typed parent verified above
         raise ValueError("hospital_followup_source_cohort_required")
-    return replace(
+    extended = replace(
         acquisition,
         universe_path=target,
         provenance_path=path.parent / "hospital_followup_cohort_provenance.json",
         cohort_authority_path=path.parent / published.reference.file,
         cohort_authority_ref=published.reference,
         materialized_columns=tuple(published.authority.cohort_columns),
+    )
+    if source_trajectory is None:
+        return extended
+    child_trajectory = _followup_trajectory(
+        source_trajectory,
+        source_path=Path(acquisition.trajectory_path),
+        child_path=target,
+        child=published,
+        target=trajectory_target,
+    )
+    return replace(
+        extended,
+        trajectory_path=trajectory_target,
+        trajectory_provenance_path=materialized_trajectory_provenance_path(
+            trajectory_target
+        ),
+        trajectory_authority_path=trajectory_target.parent
+        / child_trajectory.reference.file,
+        trajectory_authority_ref=child_trajectory.reference,
+    )
+
+
+def _followup_trajectory(
+    source: Any,
+    *,
+    source_path: Path,
+    child_path: Path,
+    child: Any,
+    target: Path,
+) -> Any:
+    """Republish the retained stays' trajectory rows bound to the follow-up child.
+
+    Only the trajectory owner publishes a trajectory, and only onto the exact
+    universe it describes.  Retained rows keep their source order; a concept
+    left without rows is available but unobserved, as the materializer records
+    it.  The parent's source receipts are carried unchanged and the
+    restriction is recorded next to them.
+    """
+    from ..intake import materialized_trajectory as trajectory_owner
+    from ..intake.materialized_metadata import implementation_bundle_sha256
+
+    authority = source.authority
+    with AnchoredDirectory.open(source_path.parent) as directory:
+        trajectory = pq.read_table(
+            io.BytesIO(
+                directory.read_bytes(
+                    source_path.name,
+                    max_bytes=authority.trajectory_size,
+                    expected_size=authority.trajectory_size,
+                    expected_sha256=authority.trajectory_sha256,
+                )
+            )
+        )
+    with AnchoredDirectory.open(child_path.parent) as directory:
+        retained = pq.read_table(
+            io.BytesIO(
+                directory.read_bytes(
+                    child_path.name,
+                    max_bytes=child.authority.cohort_size,
+                    expected_size=child.authority.cohort_size,
+                    expected_sha256=child.authority.cohort_sha256,
+                )
+            ),
+            columns=[child.authority.identity_column],
+        ).column(0)
+    identity = trajectory.column(authority.identity_column)
+    kept = trajectory.filter(
+        pc.is_in(identity, value_set=retained.combine_chunks().cast(identity.type))
+    )
+    observed = set(kept.column(authority.concept_column).to_pylist())
+    available = {*authority.materialized_concepts, *authority.available_unobserved_concepts}
+    materialized = [c for c in authority.requested_concepts if c in observed]
+    unobserved = [
+        c for c in authority.requested_concepts if c in available and c not in observed
+    ]
+    window = (
+        (authority.window.start_hours, authority.window.end_hours)
+        if authority.window is not None
+        else None
+    )
+    frame = kept.to_pandas()
+    recorded = authority.to_dict()
+    parameters = {
+        "database": child.sidecar.source_database,
+        "requested_concepts": list(authority.requested_concepts),
+        "materialized_concepts": materialized,
+        "available_unobserved_concepts": unobserved,
+        "unavailable_concepts": list(authority.unavailable_concepts),
+        "window": list(window) if window is not None else None,
+        "bound_universe_authority_sha256": child.reference.sha256,
+        **{
+            key: recorded["producer_parameters"][key]
+            for key in ("bounds_violation_policy", "source_bounds_exclusions")
+            if key in recorded["producer_parameters"]
+        },
+    }
+    provenance = {
+        **recorded["semantic_provenance"],
+        "n_rows": kept.num_rows,
+        "n_stays": len(set(kept.column(authority.identity_column).to_pylist())),
+        "trajectory_concepts_materialized": materialized,
+        "available_unobserved_concepts": unobserved,
+        "trajectory_sha256": _cohort_sha256(frame),
+        "hospital_followup_restriction": {
+            "source_trajectory_authority_sha256": source.reference.sha256,
+            "source_trajectory_sha256": authority.trajectory_sha256,
+            "source_universe_authority_sha256": (
+                authority.bound_universe_authority.sha256
+            ),
+            "source_rows": authority.trajectory_rows,
+            "source_stays": authority.trajectory_stays,
+        },
+    }
+    return trajectory_owner.publish_materialized_trajectory_authority(
+        frame,
+        target,
+        bound_universe_path=child_path,
+        bound_universe=child,
+        requested_concepts=authority.requested_concepts,
+        materialized_concepts=materialized,
+        available_unobserved_concepts=unobserved,
+        unavailable_concepts=authority.unavailable_concepts,
+        window=window,
+        semantic_provenance=provenance,
+        producer_implementation_sha256=implementation_bundle_sha256(
+            (Path(__file__), Path(trajectory_owner.__file__))
+        ),
+        producer_parameters=parameters,
     )
 
 
