@@ -4452,6 +4452,10 @@ def _execution_resume_acquisition_projection(
         ) from exc
     preferences = identity.get("user_preferences")
     preferences = preferences if isinstance(preferences, Mapping) else {}
+    operationalizations = preferences.get("covariate_operationalizations")
+    operationalizations = (
+        operationalizations if isinstance(operationalizations, Mapping) else {}
+    )
     requested = list(
         dict.fromkeys(
             str(value).strip()
@@ -4459,7 +4463,13 @@ def _execution_resume_acquisition_projection(
                 identity.get("primary_exposure"),
                 identity.get("target_outcome"),
                 *(identity.get("outcome_columns") or ()),
-                *(preferences.get("covariates") or ()),
+                # An exact covariate is sealed as its concept plus the
+                # reviewed materialized column it binds to; the analysis read
+                # that column, so the retry checks it, not the concept id.
+                *(
+                    operationalizations.get(name) or name
+                    for name in (preferences.get("covariates") or ())
+                ),
             )
             if str(value or "").strip()
         )
