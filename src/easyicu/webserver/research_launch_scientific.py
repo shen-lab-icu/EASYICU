@@ -809,8 +809,14 @@ def _data_foundation_profile(
     covariates: tuple[str, ...] = (),
     sensitivity_specs: tuple[Any, ...] = (),
     additional_outcomes: tuple[str, ...] = (),
+    analysis_inputs: tuple[str, ...] = (),
 ) -> Dict[str, Any]:
-    """Compile StudyContext modules into one typed materialization request."""
+    """Compile StudyContext modules into one typed materialization request.
+
+    ``analysis_inputs`` are an accepted candidate's primary-analysis concepts
+    (``planning.accepted_analysis_inputs``); they are materialized like any
+    declared scientific input so the package-bound plan can keep them.
+    """
 
     from easyicu.research_agent.acquisition.catalog import build_available_catalog
 
@@ -929,7 +935,9 @@ def _data_foundation_profile(
     scientific_inputs = tuple(
         dict.fromkeys(
             value
-            for value in (primary_exposure, *covariates, *sensitivity_variables)
+            for value in (
+                primary_exposure, *covariates, *sensitivity_variables, *analysis_inputs,
+            )
             if value and value != target
         )
     )
@@ -969,15 +977,21 @@ def _data_foundation_profile(
             role = (
                 "primary_exposure"
                 if concept_id == primary_exposure
-                else (
-                    "covariate" if concept_id in covariates else "sensitivity_variable"
-                )
+                else "covariate"
+                if concept_id in covariates
+                else "sensitivity_variable"
+                if concept_id in sensitivity_variables
+                else "analysis_input"
             )
             raise ResearchPipelineRunError(
                 f"research_pipeline_{role}_outside_configured_modules",
                 f"The configured {role.replace('_', ' ')} is not available in the selected feature modules.",
                 details={
-                    "field": f"execution_concepts.{role}",
+                    "field": (
+                        "candidate_plan.steps.inputs"
+                        if role == "analysis_input"
+                        else f"execution_concepts.{role}"
+                    ),
                     "concept_id": concept_id,
                 },
             )

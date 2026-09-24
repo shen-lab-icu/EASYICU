@@ -756,6 +756,9 @@ def test_candidate_plan_without_an_exposure_role_binds_materialization_authority
     assert authority.outcome_concepts == ("death",)
     assert authority.primary_cohort_selection_mode == "all_input_rows"
     assert "primary_performance" in authority.contract
+    assert authority.analysis_inputs is not None
+    assert authority.analysis_inputs.concepts == ("hr", "age")
+    assert authority.analysis_inputs.source_step_ids == ("primary_performance",)
 
 
 @pytest.mark.parametrize(

@@ -1041,6 +1041,10 @@
     ],
     [
       "easyicu.research_agent.agents.progressive_planner",
+      "easyicu.research_agent.planning.accepted_analysis_inputs"
+    ],
+    [
+      "easyicu.research_agent.agents.progressive_planner",
       "easyicu.research_agent.planning.adjustment_authority"
     ],
     [
@@ -7901,6 +7905,10 @@
     ],
     [
       "easyicu.research_agent.orchestration.config",
+      "easyicu.research_agent.planning.accepted_analysis_inputs"
+    ],
+    [
+      "easyicu.research_agent.orchestration.config",
       "easyicu.research_agent.planning.baseline_requirements"
     ],
     [
@@ -8653,6 +8661,10 @@
     ],
     [
       "easyicu.research_agent.pipeline",
+      "easyicu.research_agent.planning.accepted_analysis_inputs"
+    ],
+    [
+      "easyicu.research_agent.pipeline",
       "easyicu.research_agent.planning.adjustment_authority"
     ],
     [
@@ -8934,6 +8946,10 @@
     [
       "easyicu.research_agent.plan_utils",
       "easyicu.research_agent.planning.plan_graph"
+    ],
+    [
+      "easyicu.research_agent.planning.accepted_analysis_inputs",
+      "easyicu.research_agent.schema"
     ],
     [
       "easyicu.research_agent.planning.adjustment_authority",
@@ -12736,9 +12752,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3176,
+    "edge_count": 3180,
     "largest_scc_size": 0,
-    "module_count": 755,
+    "module_count": 756,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -13235,6 +13251,7 @@
     "easyicu.research_agent.pipeline": "pipeline.py",
     "easyicu.research_agent.plan_utils": "plan_utils.py",
     "easyicu.research_agent.planning": "planning/__init__.py",
+    "easyicu.research_agent.planning.accepted_analysis_inputs": "planning/accepted_analysis_inputs.py",
     "easyicu.research_agent.planning.adjustment_authority": "planning/adjustment_authority.py",
     "easyicu.research_agent.planning.advanced_plan_contract": "planning/advanced_plan_contract.py",
     "easyicu.research_agent.planning.analysis_blueprint": "planning/analysis_blueprint.py",

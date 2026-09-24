@@ -451,6 +451,9 @@ class PipelineConfig:
     # cannot silently forget a baseline requirement.
     bound_baseline_requirements: Optional[Dict[str, Any]] = None
     bound_population_requirements: Optional[Dict[str, Any]] = None
+    # The accepted candidate's primary-analysis input concepts, kept visible
+    # to the package-bound Planner (planning.accepted_analysis_inputs).
+    bound_analysis_inputs: Optional[Dict[str, Any]] = None
     enable_tavily: bool = False
     tavily_api_key: Optional[str] = None
     tavily_retmax: int = 5
@@ -674,6 +677,13 @@ class PipelineConfig:
                 self.bound_baseline_requirements
             )
             object.__setattr__(self, "bound_baseline_requirements", parsed.model_dump(mode="json"))
+        if self.bound_analysis_inputs is not None:
+            from ..planning.accepted_analysis_inputs import AcceptedAnalysisInputs
+
+            if not self.require_human_plan_review:
+                raise ValueError("bound_analysis_inputs requires require_human_plan_review")
+            parsed = AcceptedAnalysisInputs.model_validate(self.bound_analysis_inputs)
+            object.__setattr__(self, "bound_analysis_inputs", parsed.model_dump(mode="json"))
         for field_def in fields(self):
             value = getattr(self, field_def.name)
             frozen = _deep_freeze(value)
@@ -1100,7 +1110,11 @@ class PipelineConfig:
             for key, value in sorted(self._field_values().items())
             # An absent additive contract must not invalidate archived config
             # digests; once present it is part of the immutable run identity.
-            if key not in {"bound_baseline_requirements", "bound_population_requirements"} or value is not None
+            if key not in {
+                "bound_analysis_inputs",
+                "bound_baseline_requirements",
+                "bound_population_requirements",
+            } or value is not None
         }
 
     def recovery_payload(self) -> Dict[str, Any]:

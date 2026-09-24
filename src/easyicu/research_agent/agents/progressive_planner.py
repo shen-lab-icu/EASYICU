@@ -32,6 +32,7 @@ from ..planning.design_selection import (
     ResearchDesignSelectionError,
     validate_research_design_selection,
 )
+from ..planning.accepted_analysis_inputs import analysis_input_value_columns
 from ..planning.baseline_requirements import (
     baseline_outline_coverage,
     baseline_requirement_projection,
@@ -1120,6 +1121,25 @@ def select_progressive_variables(
             f"columns; retrieval limit={limit}. No required column was silently pruned.",
             path="variables",
         )
+    # An accepted candidate's primary-analysis inputs are the reviewed design:
+    # every value representation of each input stays visible (the Planner, not
+    # the host, chooses the aggregation) and none of them consumes the optional
+    # budget, which keeps its space for the measurement-process inputs an audit
+    # reads.  Process companions never stand in for the value.
+    accepted_inputs = analysis_input_value_columns(context)
+    lost_inputs = sorted(concept for concept, columns in accepted_inputs.items() if not columns)
+    if lost_inputs:
+        raise ProgressivePlanCompileError(
+            "progressive_accepted_input_unavailable",
+            "Accepted primary-analysis inputs have no value representation in the "
+            f"materialized context: {', '.join(lost_inputs)}.",
+            path="variables",
+        )
+    accepted_columns = {
+        name for columns in accepted_inputs.values() for name in columns
+    } - required
+    required |= accepted_columns
+    limit += len(accepted_columns)
     selected = [variable.name for variable in context.variables if variable.name in required]
     # Required clinical alternatives do not consume the optional family quota;
     # that quota must still expose measurement-process inputs for the audit.

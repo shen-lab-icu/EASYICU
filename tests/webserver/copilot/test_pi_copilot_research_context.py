@@ -309,6 +309,79 @@ def test_web_data_foundation_materializes_typed_exposure_and_covariates(
     }
 
 
+def test_web_data_foundation_materializes_accepted_analysis_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An accepted candidate's primary-analysis concepts are materialized.
+
+    Dev9 M2/M3 had no exposure or exact covariates; their reviewed predictors
+    and clustering features reached the universe only if the acquisition
+    model happened to select them.
+    """
+
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+
+    monkeypatch.setattr(
+        catalog_module,
+        "build_available_catalog",
+        lambda _path: AvailableCatalog(
+            source="typed-demo",
+            concepts=[
+                CatalogConcept(
+                    concept_id="age",
+                    file_name="demographics.parquet",
+                    typed_metadata=True,
+                    column_role="value",
+                ),
+                CatalogConcept(
+                    concept_id="death",
+                    file_name="outcome.parquet",
+                    typed_metadata=True,
+                    column_role="event_status",
+                ),
+                CatalogConcept(
+                    concept_id="hr",
+                    file_name="vitals.parquet",
+                    typed_metadata=True,
+                    column_role="value",
+                ),
+                CatalogConcept(
+                    concept_id="wbc",
+                    file_name="hematology.parquet",
+                    typed_metadata=True,
+                    column_role="value",
+                ),
+            ],
+        ),
+    )
+    study = {"modules": ["demographics", "outcome", "vitals", "hematology"]}
+
+    profile = research_launch_scientific._data_foundation_profile(
+        export_path="/typed/demo",
+        study=study,
+        target="death",
+        covariates=(),
+        analysis_inputs=("age", "hr", "wbc"),
+    )
+
+    assert profile["static_concepts"] == ("age",)
+    assert profile["required_feature_concepts"] == ("hr", "wbc")
+    assert profile["primary_exposure_source_concept"] is None
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as caught:
+        research_launch_scientific._data_foundation_profile(
+            export_path="/typed/demo",
+            study=study,
+            target="death",
+            covariates=(),
+            analysis_inputs=("hr", "lact"),
+        )
+    assert caught.value.code == "research_pipeline_analysis_input_outside_configured_modules"
+    assert caught.value.details == {
+        "field": "candidate_plan.steps.inputs",
+        "concept_id": "lact",
+    }
+
+
 def test_web_data_foundation_materializes_sensitivity_support_without_adjustment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
