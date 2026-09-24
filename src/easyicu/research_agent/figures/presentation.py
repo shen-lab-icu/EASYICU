@@ -109,8 +109,13 @@ def wrap_figure_label(label: str, *, renderer: Any, font: Any, width: float) -> 
 
     lines: list[str] = []
     line = ""
-    # Preserve ordinary words and versioned Latin terms inside CJK labels.
-    tokens = re.findall(r"[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*|[^\S\n]+|\n|.", label)
+    # A run of non-space Latin text is one token, so punctuation stays with
+    # its word ("(arterial)", "availability:"). Each CJK character remains
+    # its own token because unspaced CJK text may break between characters.
+    tokens = re.findall(
+        r"[^\s぀-ヿ㐀-鿿가-힯豈-﫿]+|[^\S\n]+|\n|.",
+        label,
+    )
     for token in tokens:
         if token == "\n":
             lines.append(line.rstrip())

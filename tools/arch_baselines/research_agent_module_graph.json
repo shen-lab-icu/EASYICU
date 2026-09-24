@@ -5129,6 +5129,10 @@
     ],
     [
       "easyicu.research_agent.execution.runners.composite_descriptive_figure_executor",
+      "easyicu.research_agent.execution.runners.bound_variable_display"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.composite_descriptive_figure_executor",
       "easyicu.research_agent.execution.runners.cohort_flow_figure_executor"
     ],
     [
@@ -5138,6 +5142,10 @@
     [
       "easyicu.research_agent.execution.runners.composite_descriptive_figure_executor",
       "easyicu.research_agent.execution.runners.typed_input_binding"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.composite_descriptive_figure_executor",
+      "easyicu.research_agent.figures.display_labels"
     ],
     [
       "easyicu.research_agent.execution.runners.composite_descriptive_figure_executor",
@@ -5754,6 +5762,10 @@
     [
       "easyicu.research_agent.execution.runners.missingness_measurement_figure_executor",
       "easyicu.research_agent.execution.runners._shared"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.missingness_measurement_figure_executor",
+      "easyicu.research_agent.execution.runners.bound_variable_display"
     ],
     [
       "easyicu.research_agent.execution.runners.missingness_measurement_figure_executor",
@@ -12764,7 +12776,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3183,
+    "edge_count": 3186,
     "largest_scc_size": 0,
     "module_count": 757,
     "package_count": 36,

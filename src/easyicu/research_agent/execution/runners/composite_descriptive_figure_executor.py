@@ -30,6 +30,8 @@ from ...figures.publication import (
     save_publication_figure,
 )
 from ...schema import AnalysisStep
+from ...figures.display_labels import figure_language_labels
+from .bound_variable_display import load_bound_variable_descriptions
 from .cohort_flow_figure_executor import render_cohort_flow_axis
 from .figure_input_capability import TypedInputCapability
 from .typed_input_binding import BoundTypedInput, load_typed_input, sha256_file
@@ -417,6 +419,12 @@ def run_composite_descriptive_figure(
         resolved_inputs=resolved_inputs,
         step_id=step_id,
         input_keys=input_keys,
+    )
+    display_labels = figure_language_labels(
+        display_labels,
+        load_bound_variable_descriptions(
+            run_dir=Path(run_dir), resolved_inputs=resolved_inputs
+        ),
     )
     sensitivity_key = _association_sensitivity_input(tuple(input_keys))
     for key, item in bound.items():

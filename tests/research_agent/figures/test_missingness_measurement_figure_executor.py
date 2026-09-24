@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import pandas as pd
 import pytest
 from pydantic import ValidationError
 
+from easyicu.research_agent import (
+    CohortDescriptor,
+    ConceptDescriptor,
+    ResearchContext,
+)
 from easyicu.research_agent.audits.validators import (
     FigureContractQualityValidator,
     FigureSourceDataValidator,
@@ -586,6 +592,62 @@ def test_runner_renders_complete_source_backed_bundle(tmp_path: Path) -> None:
         )
         if finding.severity == "error"
     ]
+
+
+def test_a_planner_label_in_another_script_is_drawn_as_its_english_description(
+    tmp_path: Path,
+) -> None:
+    run_dir, manifest = _binding(tmp_path)
+    context = ResearchContext(
+        research_question="Is first lactate associated with in-hospital death?",
+        cohort=CohortDescriptor(
+            cohort_name="Adult ICU stays", database="eicu", n_patients=900, n_stays=_N,
+        ),
+        variables=[
+            ConceptDescriptor(
+                name="lact_first", description="first lactate", role="lab",
+                dtype="float64", unit="mmol/L", source_concept="lact",
+            ),
+            ConceptDescriptor(
+                name="death", description="in-hospital death", role="outcome",
+                dtype="bool", source_concept="death",
+            ),
+            ConceptDescriptor(
+                name="death_time", description="in-hospital death", role="time",
+                dtype="float64", unit="h", source_concept="death",
+            ),
+        ],
+        primary_exposure="lact_first",
+        target_outcome="death",
+    )
+    context_path = run_dir / "research_context.json"
+    context_path.write_text(context.model_dump_json(), encoding="utf-8")
+    manifest["context"] = {
+        "relative_path": context_path.name,
+        "sha256": hashlib.sha256(context_path.read_bytes()).hexdigest(),
+    }
+    out_dir = run_dir / "steps" / STEP_ID / "outputs"
+    run_missingness_measurement_figure(
+        out_dir=out_dir,
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id=STEP_ID,
+        figure_product=PRODUCT,
+        display_labels={"lact_first": "首次乳酸", "death_time": "死亡时间"},
+    )
+
+    svg = (out_dir / f"{PRODUCT}.svg").read_text(encoding="utf-8")
+    assert "First lactate" in svg
+    assert "Time to" in svg
+    assert "Lact First" not in svg and "Death Time" not in svg
+    # Panel letters are lowercase, as the caption cites them.
+    assert re.search(r">a</text>", svg) and re.search(r">b</text>", svg)
+    assert not re.search(r">[AB]</text>", svg)
+    assert not re.search(r"[\u3400-\u9fff]", svg)
+    contract = json.loads(
+        (out_dir / f"{PRODUCT}.figure_contract.json").read_text(encoding="utf-8")
+    )
+    assert "(a)" in contract["reader_caption"] and "(b)" in contract["reader_caption"]
 
 
 def test_all_zero_missingness_renders_explicit_completeness_instead_of_blank_bars(
