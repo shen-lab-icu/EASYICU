@@ -392,6 +392,10 @@
       "easyicu.research_agent.intake.materialized_metadata"
     ],
     [
+      "easyicu.research_agent.acquisition.hospital_outcome_materialization",
+      "easyicu.research_agent.intake.materialized_trajectory"
+    ],
+    [
       "easyicu.research_agent.acquisition.mcp_projection",
       "easyicu.research_agent.acquisition.catalog"
     ],
@@ -12752,7 +12756,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3180,
+    "edge_count": 3181,
     "largest_scc_size": 0,
     "module_count": 756,
     "package_count": 36,
