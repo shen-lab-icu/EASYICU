@@ -6637,7 +6637,7 @@ def test_agent_run_review_and_local_signoff_write_safe_artifact(
     )
     assert bundle.status_code == 200
     with zipfile.ZipFile(io.BytesIO(bundle.content)) as zf:
-        assert set(zf.namelist()) == {*AGENT_PREFLIGHT_ARTIFACTS, "human_signoff.json"}
+        assert {n.split("/")[-1] for n in zf.namelist()} == {*AGENT_PREFLIGHT_ARTIFACTS, "human_signoff.json", "README.md"}
 
     cohort_path = run_dir / "cohort_summary.json"
     cohort_payload = json.loads(cohort_path.read_text(encoding="utf-8"))
