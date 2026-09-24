@@ -58,6 +58,14 @@ def _study() -> dict:
     }
 
 
+def _windowed_study() -> dict:
+    """A study whose sealed exposure window is ICU hours 0-24."""
+
+    study = _study()
+    study["time_window"] = {"hours": 24, "anchor": "ICU admission"}
+    return study
+
+
 def _sepsis_plan() -> dict:
     plan = _plan()
     selected = plan["design_selection"]["candidates"][0]
@@ -104,13 +112,13 @@ def test_landmark_choice_compiles_one_complete_typed_update() -> None:
     compiled = compile_plan_decision(
         decision_code="POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
         option_id="landmark_24h",
-        study=_study(),
+        study=_windowed_study(),
         agent_plan=_plan(),
     )
 
     assert compiled.next_action == "replan"
     assert compiled.patch["outcome"] == "院内死亡（第 24 小时起至出院）"
-    assert compiled.patch["primary_exposure"] == "入 ICU 后 0–24 小时最高乳酸水平"
+    assert compiled.patch["primary_exposure"] == "入 ICU 后 0–24 小时乳酸（最高值）"
     assert compiled.patch["execution_concepts"] == {
         "outcome": "death",
         "primary_exposure": "lact",
@@ -140,7 +148,7 @@ def test_landmark_choice_compiles_one_complete_typed_update() -> None:
 
 
 def test_landmark_choice_preserves_confirmed_patient_cluster_design() -> None:
-    study = _study()
+    study = _windowed_study()
     study["analysis_design"] = {
         "analysis_family": "association_study",
         "analysis_unit": "icu_stay",
@@ -182,7 +190,7 @@ def test_fixed_window_aki_plan_uses_the_shared_landmark_decision() -> None:
     )
 
     assert context["timing_profile"] == "fixed_24h_landmark"
-    assert context["exposure_label_zh"] == "KDIGO AKI 分级"
+    assert context["exposure_label_zh"] == "KDIGO AKI分期（0-3）（最高值）"
     assert compiled.patch["outcome"] == study["outcome"]
     assert compiled.patch["primary_exposure"] == study["primary_exposure"]
     assert "Table 1、分期结局和趋势审计" in compiled.patch["analysis_goal"]
@@ -459,7 +467,7 @@ def test_landmark_choice_fails_closed_without_one_selected_design() -> None:
     assert raised.value.code == "plan_decision_design_ambiguous"
 
 
-def test_non_lactate_plan_cannot_receive_lactate_24h_landmark() -> None:
+def test_a_plan_without_a_sealed_24h_window_cannot_receive_the_landmark() -> None:
     with pytest.raises(PlanDecisionError) as raised:
         compile_plan_decision(
             decision_code="POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
@@ -472,7 +480,7 @@ def test_non_lactate_plan_cannot_receive_lactate_24h_landmark() -> None:
     assert raised.value.details["primary_exposure"] == "sep3_sofa1_max"
 
 
-def test_non_lactate_timing_context_and_descriptive_patch_are_plan_bound() -> None:
+def test_an_unwindowed_timing_context_and_descriptive_patch_are_plan_bound() -> None:
     plan = _sepsis_plan()
     study = _study()
     study.update({
@@ -492,7 +500,7 @@ def test_non_lactate_timing_context_and_descriptive_patch_are_plan_bound() -> No
     )
 
     assert context["timing_profile"] == "unspecified_post_baseline"
-    assert context["exposure_label_zh"] == "Sepsis-3 状态"
+    assert context["exposure_label_zh"] == "Sepsis-3诊断 (基于传统SOFA)"
     assert context["time_zero"] == "预先规定的 Sepsis-3 判定地标"
 
     compiled = compile_plan_decision(
@@ -502,7 +510,7 @@ def test_non_lactate_timing_context_and_descriptive_patch_are_plan_bound() -> No
         agent_plan=plan,
     )
 
-    assert compiled.patch["primary_exposure"] == "Sepsis-3 状态"
+    assert compiled.patch["primary_exposure"] == "Sepsis-3诊断 (基于传统SOFA)"
     assert "0–24 小时" not in compiled.patch["primary_exposure"]
     assert compiled.patch["analysis_design"] == {
         "analysis_family": "descriptive_epidemiology",
@@ -799,3 +807,103 @@ def test_a_host_derived_strict_stage_is_compiled_without_an_aggregation(
     assert "primary_exposure_aggregation" not in execution
     timing = [spec for spec in compiled.patch["sensitivity_specs"] if spec["axis"] == "timing"]
     assert [spec["spec_id"] for spec in timing] == ["agent_plan_landmark_24h"]
+
+
+def _window_plan(exposure_source: str, *, design_id: str) -> dict:
+    plan = _plan()
+    plan["design_selection"]["candidates"][0]["design_id"] = design_id
+    plan["steps"][0]["model_requirements"][0]["exposure_source"] = exposure_source
+    return plan
+
+
+def test_no_exposure_earns_the_landmark_choice_by_its_name() -> None:
+    """The exposure the old decision path special-cased is judged by the design."""
+
+    plan = _window_plan("lact_max", design_id="adjusted_association")
+    study = _study()
+
+    context = plan_decision_context(
+        plan, "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED", study
+    )
+    assert context["timing_profile"] == "unspecified_post_baseline"
+    with pytest.raises(PlanDecisionError) as raised:
+        compile_plan_decision(
+            decision_code="POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+            option_id="landmark_24h",
+            study=study,
+            agent_plan=plan,
+        )
+    assert raised.value.code == "plan_decision_option_not_applicable"
+
+
+def test_any_fixed_window_exposure_gets_the_same_landmark_choice() -> None:
+    plan = _window_plan("bili_max", design_id="landmark_adjusted_association")
+
+    context = plan_decision_context(
+        plan, "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED", _windowed_study()
+    )
+    compiled = compile_plan_decision(
+        decision_code="POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+        option_id="landmark_24h",
+        study=_windowed_study(),
+        agent_plan=plan,
+    )
+
+    assert context["timing_profile"] == "fixed_24h_landmark"
+    assert (context["exposure_label_en"], context["exposure_label_zh"]) == (
+        "Total Bilirubin (maximum)",
+        "总胆红素（最高值）",
+    )
+    assert compiled.patch["primary_exposure"] == "入 ICU 后 0–24 小时总胆红素（最高值）"
+    assert compiled.patch["outcome"] == "院内死亡（第 24 小时起至出院）"
+    assert compiled.patch["execution_concepts"] == {
+        "outcome": "death",
+        "primary_exposure": "bili",
+        "primary_exposure_aggregation": "max",
+    }
+
+
+def test_the_landmark_choice_keeps_the_plans_own_window_operation() -> None:
+    plan = _window_plan("map_mean", design_id="landmark_adjusted_association")
+
+    compiled = compile_plan_decision(
+        decision_code="POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+        option_id="landmark_24h",
+        study=_windowed_study(),
+        agent_plan=plan,
+    )
+
+    assert compiled.patch["execution_concepts"]["primary_exposure_aggregation"] == "mean"
+    assert compiled.patch["primary_exposure"] == "入 ICU 后 0–24 小时平均动脉压（平均值）"
+
+
+def test_a_host_derived_exposure_is_not_given_a_window_operation() -> None:
+    """A derivation already publishes one reading per stay; ``_max`` names nothing."""
+
+    plan = _window_plan("aki_stage_strict", design_id="landmark_adjusted_association")
+    study = _windowed_study()
+    study["execution_concepts"] = {"primary_exposure_aggregation": "max"}
+
+    compiled = compile_plan_decision(
+        decision_code="POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+        option_id="landmark_24h",
+        study=study,
+        agent_plan=plan,
+    )
+
+    assert compiled.patch["execution_concepts"] == {
+        "outcome": "death",
+        "primary_exposure": "aki_stage_strict",
+    }
+
+
+def test_a_time_varying_choice_names_the_series_not_the_window_summary() -> None:
+    compiled = compile_plan_decision(
+        decision_code="POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
+        option_id="time_varying_reextract",
+        study=_study(),
+        agent_plan=_plan(),
+    )
+
+    assert compiled.patch["primary_exposure"] == "带时间戳的乳酸"
+    assert compiled.display_label_en == "Re-extract timestamped Lactate"

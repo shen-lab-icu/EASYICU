@@ -516,9 +516,7 @@
       if (code === 'POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED') {
         const context = item && item.decision_context && typeof item.decision_context === 'object'
           ? item.decision_context : {};
-        const isFixed24hLactate = String(context.timing_profile || '') === 'fixed_24h_lactate';
-        const isFixed24hLandmark = ['fixed_24h_lactate', 'fixed_24h_landmark']
-          .includes(String(context.timing_profile || ''));
+        const isFixed24hLandmark = String(context.timing_profile || '') === 'fixed_24h_landmark';
         if (!isFixed24hLandmark) {
           const exposureLabel = String(
             window.EU_LANG === 'zh'
@@ -579,108 +577,55 @@
             ],
           };
         }
-        if (!isFixed24hLactate) {
-          const exposureLabel = String(
-            window.EU_LANG === 'zh'
-              ? context.exposure_label_zh || tr('the exposure', '当前暴露')
-              : context.exposure_label_en || tr('the exposure', '当前暴露')
-          );
-          return {
-            cardTitle: tr(
-              `Choose how the first-24-hour ${exposureLabel} window should align with mortality follow-up`,
-              `请选择首 24 小时${exposureLabel}窗口如何与死亡随访对齐`,
-            ),
-            context: tr(
-              `${exposureLabel} is classified from ICU hours 0–24, so adjusted mortality follow-up needs an explicit time design.`,
-              `${exposureLabel}由入 ICU 后 0–24 小时的信息判定，因此调整后死亡关联必须明确时间设计。`,
-            ),
-            evidenceLabel: tr('Current plan evidence', '当前计划证据'),
-            evidenceStatus: String(context.time_zero || '').trim() || tr(
-              'Exposure window: ICU admission to 24 hours',
-              '暴露窗：入 ICU 后 0–24 小时',
-            ),
-            evidenceDetail: tr(
-              'Patients with an event before hour 24 cannot contribute a complete fixed-window exposure, while survivors have the full classification opportunity.',
-              '24 小时前发生结局的患者无法贡献完整的固定窗口暴露，而存活者拥有完整的分级机会。',
-            ),
-            guidance: tr(
-              'Recommended for the current fixed-window plan: use a 24-hour landmark. It preserves the selected exposure definition and starts outcome follow-up only after exposure classification is complete.',
-              '当前固定窗口计划推荐采用 24 小时 landmark：保留既定暴露定义，并在暴露分级完成后才开始结局随访。',
-            ),
-            technicalEvidence: String((item && item.evidence) || ''),
-            technicalRemediation: String((item && item.remediation) || ''),
-            options: [
-              {
-                optionId: 'landmark_24h',
-                label: tr('Use a 24-hour landmark (recommended)', '采用 24 小时 landmark（推荐）'),
-                effect: tr('Estimate the association from hour 24 among patients alive then.', '仅在 24 小时仍存活者中，从第 24 小时开始估计关联。'),
-                requirement: tr('Uses the current fixed-window exposure and excludes events before the landmark.', '使用当前固定窗口暴露；排除 landmark 前发生的结局。'),
-              },
-              {
-                optionId: 'descriptive_only',
-                label: tr('Keep this version descriptive', '当前版本仅保留描述性分析'),
-                effect: tr(`Show ${exposureLabel} and outcome distributions without a time-aligned adjusted claim.`, `展示${exposureLabel}和结局分布，不提出时间对齐后的调整关联。`),
-                requirement: tr('Keeps early events but does not answer the adjusted association question.', '保留早期结局，但不能回答调整后的关联问题。'),
-              },
-              {
-                optionId: 'time_varying_reextract',
-                label: tr('Re-extract for a time-varying model', '重新提取并采用时变模型'),
-                effect: tr(`Retain early events and update ${exposureLabel} over time.`, `保留早期结局，并随时间更新${exposureLabel}。`),
-                requirement: tr('Requires a new governed extraction with verified timestamps.', '需要重新提取并核验带时间戳的数据。'),
-              },
-            ],
-          };
-        }
+        const exposureLabel = String(
+          window.EU_LANG === 'zh'
+            ? context.exposure_label_zh || tr('the exposure', '当前暴露')
+            : context.exposure_label_en || tr('the exposure', '当前暴露')
+        );
         return {
-        cardTitle: tr(
-          'Choose how the first-24-hour lactate window should align with mortality follow-up',
-          '请选择首 24 小时乳酸窗如何与死亡随访对齐',
-        ),
-        context: tr(
-          'The exposure is the maximum lactate measured during ICU hours 0–24, so mortality follow-up cannot fairly begin at ICU admission without an explicit time design.',
-          '当前暴露是入 ICU 后 0–24 小时内的乳酸最大值；若死亡随访从入 ICU 当刻开始，就必须明确处理这段暴露测量机会。',
-        ),
-        evidenceLabel: tr('Current plan evidence', '当前计划证据'),
-        evidenceStatus: tr(
-          'Exposure window: ICU admission to 24 hours',
-          '暴露窗：入 ICU 后 0–24 小时',
-        ),
-        evidenceDetail: tr(
-          'Patients who die early cannot contribute a complete 24-hour maximum, while survivors have more opportunity to be classified as highly exposed.',
-          '早期死亡患者无法贡献完整的 24 小时最大值，而存活更久的患者有更多机会被归为高乳酸。',
-        ),
-        guidance: tr(
-          'Recommended for the current prepared data: use a 24-hour landmark. It is executable and aligns exposure opportunity, but the result applies only to patients alive at 24 hours. A time-varying model retains early events but needs newly extracted timestamped lactate measurements.',
-          '当前已准备数据推荐采用 24 小时 landmark：可直接执行并对齐暴露机会，但结论仅适用于 24 小时仍存活者。时变模型可保留早期事件，但需重新提取带时间戳的乳酸测量。',
-        ),
-        technicalEvidence: tr(
-          'The scientific review found a post-baseline exposure timing blocker: lact_max summarizes ICU hours 0–24, but the current plan does not bind the outcome clock to that completed window.',
-          '科学审阅识别到基线后暴露时间阻断：lact_max 汇总入 ICU 后 0–24 小时，但当前计划尚未把结局时钟绑定到完成后的暴露窗。',
-        ),
-        technicalRemediation: tr(
-          'Authorize one new study version: a 24-hour landmark, a timestamped time-varying exposure, or descriptive-only reporting without a time-aligned association claim.',
-          '需授权一个新研究版本：24 小时 landmark、带时间戳的时变暴露，或仅作描述且不提出时间对齐后的关联结论。',
-        ),
-        options: [
-          {
-            optionId: 'landmark_24h',
-            label: tr('Use a 24-hour landmark (recommended)', '采用 24 小时 landmark（推荐）'),
-            effect: tr('Estimate mortality association from hour 24 among patients alive then.', '仅在 24 小时仍存活者中，从第 24 小时开始估计院内死亡关联。'),
-            requirement: tr('Uses the current 0–24-hour lactate maximum; excludes deaths before the landmark.', '可使用当前 0–24 小时乳酸最大值；会排除 landmark 前死亡。'),
-          },
-          {
-            optionId: 'descriptive_only',
-            label: tr('Keep this version descriptive', '当前版本仅保留描述性分析'),
-            effect: tr('Show lactate and mortality distributions without a time-aligned association claim.', '展示乳酸与死亡的分布和分层，不提出时间对齐后的关联结论。'),
-            requirement: tr('Keeps early deaths, but does not answer an adjusted association question.', '保留早期死亡，但不能回答调整后的关联问题。'),
-          },
-          {
-            optionId: 'time_varying_reextract',
-            label: tr('Re-extract for a time-varying model', '重新提取并采用时变乳酸模型'),
-            effect: tr('Retain early events and update exposure with each timestamped lactate result.', '保留早期事件，并随每次带时间戳的乳酸结果更新暴露。'),
-            requirement: tr('Requires a new extraction with timestamped lactate measurements; lact_max alone is insufficient.', '需重新提取带时间戳的乳酸测量；仅有 lact_max 摘要不足。'),
-          },
-        ],
+          cardTitle: tr(
+            `Choose how the first-24-hour ${exposureLabel} window should align with mortality follow-up`,
+            `请选择首 24 小时${exposureLabel}窗口如何与死亡随访对齐`,
+          ),
+          context: tr(
+            `${exposureLabel} is classified from ICU hours 0–24, so adjusted mortality follow-up needs an explicit time design.`,
+            `${exposureLabel}由入 ICU 后 0–24 小时的信息判定，因此调整后死亡关联必须明确时间设计。`,
+          ),
+          evidenceLabel: tr('Current plan evidence', '当前计划证据'),
+          evidenceStatus: String(context.time_zero || '').trim() || tr(
+            'Exposure window: ICU admission to 24 hours',
+            '暴露窗：入 ICU 后 0–24 小时',
+          ),
+          evidenceDetail: tr(
+            'Patients with an event before hour 24 cannot contribute a complete fixed-window exposure, while survivors have the full classification opportunity.',
+            '24 小时前发生结局的患者无法贡献完整的固定窗口暴露，而存活者拥有完整的分级机会。',
+          ),
+          guidance: tr(
+            'Recommended for the current fixed-window plan: use a 24-hour landmark. It preserves the selected exposure definition and starts outcome follow-up only after exposure classification is complete.',
+            '当前固定窗口计划推荐采用 24 小时 landmark：保留既定暴露定义，并在暴露分级完成后才开始结局随访。',
+          ),
+          technicalEvidence: String((item && item.evidence) || ''),
+          technicalRemediation: String((item && item.remediation) || ''),
+          options: [
+            {
+              optionId: 'landmark_24h',
+              label: tr('Use a 24-hour landmark (recommended)', '采用 24 小时 landmark（推荐）'),
+              effect: tr('Estimate the association from hour 24 among patients alive then.', '仅在 24 小时仍存活者中，从第 24 小时开始估计关联。'),
+              requirement: tr('Uses the current fixed-window exposure and excludes events before the landmark.', '使用当前固定窗口暴露；排除 landmark 前发生的结局。'),
+            },
+            {
+              optionId: 'descriptive_only',
+              label: tr('Keep this version descriptive', '当前版本仅保留描述性分析'),
+              effect: tr(`Show ${exposureLabel} and outcome distributions without a time-aligned adjusted claim.`, `展示${exposureLabel}和结局分布，不提出时间对齐后的调整关联。`),
+              requirement: tr('Keeps early events but does not answer the adjusted association question.', '保留早期结局，但不能回答调整后的关联问题。'),
+            },
+            {
+              optionId: 'time_varying_reextract',
+              label: tr('Re-extract for a time-varying model', '重新提取并采用时变模型'),
+              effect: tr(`Retain early events and update ${exposureLabel} over time.`, `保留早期结局，并随时间更新${exposureLabel}。`),
+              requirement: tr('Requires a new governed extraction with verified timestamps.', '需要重新提取并核验带时间戳的数据。'),
+            },
+          ],
         };
       }
       if (code === 'ADJUSTMENT_SET_NOT_USER_CONFIRMED') {

@@ -172,8 +172,8 @@ def _design_selection(
             "its risk-set accounting and assumption audit."
         ),
         cannot_prove=(
-            "No causal ventilation effect, no immortal-time-free estimate outside the landmark rule, "
-            "and no independence of repeated ICU stays beyond the declared grouping."
+            f"No causal effect of {exposure}, no immortal-time-free estimate outside the landmark "
+            "rule, and no independence of repeated ICU stays beyond the declared grouping."
         ),
         reviewable_plan=(
             [

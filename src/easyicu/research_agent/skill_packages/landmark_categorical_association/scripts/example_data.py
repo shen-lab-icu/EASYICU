@@ -5,11 +5,11 @@ a reviewer can see every output file before touching patient data.  It is
 generated from declared parameters with a fixed seed; nothing in it comes from
 a real database and it must never be presented as a clinical result.
 
-The column roster mirrors the E3 (MIMIC-IV strict KDIGO stage / in-hospital
-mortality) study context: one row per ICU stay, ``patient_stay_id`` spelled
-``p<patient>:s<stay>``, an ordered four-level exposure with an explicit unknown
-state, event time and hospital follow-up in hours, ICU length of stay in days,
-and three alternate exposure definitions.
+The column roster is generic: one row per ICU stay, ``patient_stay_id``
+spelled ``p<patient>:s<stay>``, an ordered four-level exposure grade with an
+explicit unknown state, event time and hospital follow-up in hours, ICU length
+of stay in days, and three alternate exposure definitions.  The names describe
+no particular clinical score.
 """
 
 from __future__ import annotations
@@ -28,16 +28,16 @@ EXAMPLE_PROVENANCE = "synthetic_example_generated_by_easyicu_skill"
 
 
 def example_spec() -> LandmarkCategoricalSpec:
-    """The E3-shaped specification the synthetic cohort satisfies."""
+    """The specification the synthetic cohort satisfies."""
 
     return LandmarkCategoricalSpec(
-        title="Synthetic example: strict KDIGO stage (0-24 h) and in-hospital death after a 24 h landmark",
+        title="Synthetic example: an ordered grade (0-24 h) and in-hospital death after a 24 h landmark",
         identity_column="patient_stay_id",
-        exposure="aki_stage_strict",
+        exposure="grade_strict",
         exposure_levels=["0", "1", "2", "3"],
         reference_level="0",
         primary_contrast_level="3",
-        exposure_label="Strict KDIGO AKI stage, 0-24 h",
+        exposure_label="Strictly ascertained grade, 0-24 h",
         outcome="death",
         outcome_label="In-hospital death after the 24 h landmark",
         event_time_column="death_time_hours",
@@ -60,7 +60,7 @@ def example_spec() -> LandmarkCategoricalSpec:
             group_derivation="prefix_before_delimiter",
             delimiter=":s",
         ),
-        alternate_exposures=["aki_stage_creat_strict", "aki_stage_uo_strict", "aki_stage_reference"],
+        alternate_exposures=["grade_domain_a", "grade_domain_b", "grade_reference"],
         first_stay_column="first_icu_stay",
         functional_form_covariates=["age", "charlson"],
         functional_form_knots=4,
@@ -68,14 +68,14 @@ def example_spec() -> LandmarkCategoricalSpec:
             SecondaryOutcomeSpec(name="los_icu", unit="days", label="ICU length of stay (days)")
         ],
         measurement_audit_columns=[
-            "aki_ascertainment",
-            "kidney_complete_negative_observed",
-            "kidney_window_row_count",
+            "grade_ascertainment",
+            "grade_complete_negative_observed",
+            "grade_window_row_count",
         ],
         display_labels={
-            "aki_stage_creat_strict": "Strict creatinine-domain stage",
-            "aki_stage_uo_strict": "Strict urine-output-domain stage",
-            "aki_stage_reference": "Public reference stage",
+            "grade_domain_a": "Strict domain-A grade",
+            "grade_domain_b": "Strict domain-B grade",
+            "grade_reference": "Public reference grade",
         },
     )
 
@@ -104,22 +104,22 @@ def make_example_cohort(
     sex = np.where(rng.random(n_stays) < 0.56, "Male", "Female")
     charlson = np.clip(rng.poisson(3.2, size=n_stays), 0, 16).astype(float)
 
-    # Latent kidney injury severity drives stage, its alternate definitions,
-    # ascertainment and outcome.  Stage probabilities are fixed by design.
+    # A latent severity drives the grade, its alternate definitions,
+    # ascertainment and outcome.  Grade probabilities are fixed by design.
     stage = rng.choice([0, 1, 2, 3], size=n_stays, p=[0.58, 0.20, 0.12, 0.10]).astype(float)
-    creat_stage = np.where(rng.random(n_stays) < 0.80, stage, np.maximum(stage - 1, 0))
-    uo_stage = np.where(rng.random(n_stays) < 0.65, stage, np.maximum(stage - 1, 0))
+    domain_a_stage = np.where(rng.random(n_stays) < 0.80, stage, np.maximum(stage - 1, 0))
+    domain_b_stage = np.where(rng.random(n_stays) < 0.65, stage, np.maximum(stage - 1, 0))
     reference_stage = np.where(rng.random(n_stays) < 0.90, stage, np.minimum(stage + 1, 3))
 
-    # Strict ascertainment: some stays lack an evaluable baseline; they are
+    # Strict ascertainment: some stays lack evaluable evidence; they are
     # unknown and are slightly enriched for sicker patients so that recoding
-    # them to stage 0 would be visibly wrong.
+    # them to grade 0 would be visibly wrong.
     unknown_probability = np.clip(unknown_share + 0.05 * (stage >= 2), 0.0, 0.95)
     unknown = rng.random(n_stays) < unknown_probability
-    aki_stage_strict = np.where(unknown, np.nan, stage)
-    aki_stage_creat_strict = np.where(rng.random(n_stays) < 0.12, np.nan, creat_stage)
-    aki_stage_uo_strict = np.where(rng.random(n_stays) < 0.30, np.nan, uo_stage)
-    aki_stage_reference = reference_stage  # the public reference never reports unknown
+    grade_strict = np.where(unknown, np.nan, stage)
+    grade_domain_a = np.where(rng.random(n_stays) < 0.12, np.nan, domain_a_stage)
+    grade_domain_b = np.where(rng.random(n_stays) < 0.30, np.nan, domain_b_stage)
+    grade_reference = reference_stage  # the public reference never reports unknown
     ascertainment = np.where(
         unknown, 3.0, np.where(stage > 0, 0.0, np.where(rng.random(n_stays) < 0.7, 1.0, 2.0))
     )
@@ -164,15 +164,15 @@ def make_example_cohort(
             "charlson": charlson,
             "death_time_hours": np.round(death_time, 3),
             "hospital_followup_time_hours": np.round(followup, 3),
-            "aki_stage_creat_strict": aki_stage_creat_strict,
-            "aki_stage_uo_strict": aki_stage_uo_strict,
-            "aki_stage_reference": aki_stage_reference,
+            "grade_domain_a": grade_domain_a,
+            "grade_domain_b": grade_domain_b,
+            "grade_reference": grade_reference,
             "first_icu_stay": first_stay.astype(float),
-            "aki_stage_strict": aki_stage_strict,
+            "grade_strict": grade_strict,
             "death": death,
-            "aki_ascertainment": ascertainment,
-            "kidney_complete_negative_observed": complete_negative,
-            "kidney_window_row_count": window_rows,
+            "grade_ascertainment": ascertainment,
+            "grade_complete_negative_observed": complete_negative,
+            "grade_window_row_count": window_rows,
             "los_icu": los_icu,
         }
     )
