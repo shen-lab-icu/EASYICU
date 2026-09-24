@@ -149,6 +149,7 @@
     // researcher looking for a problem in their study design.
     const executionRuntimeDown = errorCode
       === 'research_pipeline_execution_runtime_unavailable';
+    const runnerImageMismatch = errorCode === 'research_pipeline_runner_image_mismatch';
     const created = Number(job && job.created_at_epoch);
     const finished = Number(job && job.finished_at_epoch);
     const reportOnly = Boolean(job && (job.report_only === true
@@ -201,7 +202,7 @@
           ? translate('Planner saved a validated checkpoint', '规划器已保存验证检查点')
         : planFoundationBlocked
           ? translate('Research plan was not generated', '研究计划未生成')
-        : executionRuntimeDown
+        : executionRuntimeDown || runnerImageMismatch
           ? translate('Analysis runtime was not available', '分析运行环境不可用')
           : gateBlocked
             ? translate('EasyICU task did not pass its scientific gate', 'EasyICU 科研任务未通过')
@@ -218,6 +219,8 @@
           ? translate('Research plan was not generated because data preparation did not pass', '研究计划未生成：数据准备未通过')
         : executionRuntimeDown
           ? translate('The container runtime that executes analysis code was not running; start it and run again', '执行分析代码的容器运行环境未启动；启动后可重新运行')
+        : runnerImageMismatch
+          ? translate('The analysis runner image did not match this EasyICU version; rebuild it and restart before running again', '分析运行镜像与当前 EasyICU 版本不一致；重建镜像并重启后可重新运行')
           : gateBlocked
             ? translate('The scientific gate blocked this task', '科学闸门已阻止本次任务')
             : '',
