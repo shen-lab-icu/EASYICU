@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, Literal, Mapping, Optional, Sequence, Union
 
 from easyicu.research_agent.contracts.frozen_payload import freeze_payload, thaw_payload
+from easyicu.webserver.run_file_guide import RunFileGuideEntry, run_file_guide
 
 
 @dataclass(frozen=True)
@@ -197,6 +198,7 @@ class RunRecord:
     signoff: Optional[RunSignoff]
     artifacts: tuple[RunArtifact, ...]
     artifact_payloads: Mapping[str, Mapping[str, Any]]
+    file_guide: tuple[RunFileGuideEntry, ...] = ()
 
     @property
     def signed(self) -> bool:
@@ -232,6 +234,10 @@ class RunRecord:
             signoff=(RunSignoff.from_payload(signoff_payload) if signoff_payload is not None else None),
             artifacts=tuple(RunArtifact.from_payload(item) for item in artifacts),
             artifact_payloads=freeze_payload(artifact_payloads),
+            file_guide=run_file_guide(
+                (str(item.get("name") or "") for item in artifacts),
+                gate_checks=RunGate.from_payload(gate_payload).checks,
+            ),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -252,6 +258,7 @@ class RunRecord:
             "signoff": self.signoff.to_dict() if self.signoff is not None else None,
             "artifacts": [artifact.to_dict() for artifact in self.artifacts],
             "artifact_payloads": thaw_payload(self.artifact_payloads),
+            "file_guide": [entry.to_dict() for entry in self.file_guide],
         }
 
 

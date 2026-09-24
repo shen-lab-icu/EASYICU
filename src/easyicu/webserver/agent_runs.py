@@ -30,6 +30,7 @@ from easyicu.webserver import numeric_evidence_audit
 from easyicu.webserver import provider_adapter
 from easyicu.webserver import provider_gate
 from easyicu.webserver import run_artifact_disclosure
+from easyicu.webserver import run_file_guide
 from easyicu.webserver.research_evidence_preview import (
     EvidencePreviewError,
     build_evidence_preview,
@@ -871,7 +872,10 @@ def read_run_artifact_bytes(project_dir: str, artifact_name: str) -> Dict[str, A
 
 
 def build_run_bundle(project_dir: str) -> Dict[str, Any]:
-    """Build a zip containing only whitelisted local run artifacts."""
+    """Build a zip of the whitelisted run artifacts, foldered for a reader.
+
+    ``run_file_guide`` owns the layout, the README and the reader copies.
+    """
     run_dir = _resolve_run_dir(project_dir)
     if run_dir is None:
         return {"ok": False, "error": "project_dir_required"}
@@ -880,14 +884,17 @@ def build_run_bundle(project_dir: str) -> Dict[str, Any]:
     artifacts = _run_artifacts(run_dir)
     if not artifacts:
         return {"ok": False, "error": "no_artifacts", "project_dir": str(run_dir)}
+    contents: Dict[str, bytes] = {}
+    for artifact in artifacts:
+        name = str(artifact.get("name") or "")
+        loaded = read_run_artifact_bytes(str(run_dir), name)
+        if not loaded.get("ok"):
+            return loaded
+        contents[name] = loaded["content"]
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for artifact in artifacts:
-            name = str(artifact.get("name") or "")
-            loaded = read_run_artifact_bytes(str(run_dir), name)
-            if not loaded.get("ok"):
-                return loaded
-            zf.writestr(name, loaded["content"])
+        for path, content in run_file_guide.bundle_files(contents):
+            zf.writestr(path, content)
     filename = f"{run_dir.name}_artifacts.zip"
     return {
         "ok": True,
