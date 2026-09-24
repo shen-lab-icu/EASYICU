@@ -57,7 +57,11 @@ from .manuscript_sections import (
     quality_repair_section_errors,
 )
 from .manuscript_quality import repair_section_opening_connectors
-from .manuscript_labels import recorded_definition_section_errors, source_bound_manuscript_labels
+from .manuscript_labels import (
+    reader_claim_labels,
+    recorded_definition_section_errors,
+    source_bound_manuscript_labels,
+)
 from .manuscript_baseline import baseline_reporting_mentions
 from .manuscript_surface import deduplicate_claim_paragraphs, repair_filtered_section_openers
 from .manuscript_method_facts import place_manuscript_method_facts
@@ -208,13 +212,23 @@ def _read_only_authority(run_dir: Path) -> _ReadOnlyAuthority:
     )
 
 
-def _claim_reader_view(run_dir: Path, manuscript: str) -> str:
+def _migration_claim_labels(prepared: PreparedWriterOnlyMigration) -> dict[str, str]:
+    """Name claims from the source run's sealed context and plan, as its write phase did."""
+    return reader_claim_labels(
+        prepared.context, dict(prepared.plan.display_labels) if prepared.plan else {},
+    )
+
+
+def _claim_reader_view(
+    run_dir: Path, manuscript: str, *, reader_labels: Mapping[str, str] | None,
+) -> str:
     """Audit the rendered verified claims while retaining the canonical tokens."""
     if "{claim" not in manuscript:
         return manuscript
     authority = _read_only_authority(run_dir)
     expanded = expand_scientific_claim_tokens(
         manuscript, resolve_claim=authority.claims_by_ref.get,
+        reader_labels=reader_labels,
         current_evidence_ids={record.evidence_id for record in authority.records},
     )
     if expanded.missing_claim_refs or expanded.malformed_sentences:
@@ -790,7 +804,10 @@ def repair_writer_only(
         )
         canonical = remove_empty_optional_subsections(canonical)
         canonical = repair_section_opening_connectors(canonical)
-        reader_view = _claim_reader_view(prepared.source_run_dir, canonical)
+        reader_view = _claim_reader_view(
+            prepared.source_run_dir, canonical,
+            reader_labels=_migration_claim_labels(prepared),
+        )
         canonical_quality = audit_manuscript_quality(
             reader_view,
             analysis_plan=prepared.plan,
@@ -893,7 +910,10 @@ def repair_writer_only(
         for key in repaired_authority_keys:
             if key not in authority_repaired:
                 authority_repaired.append(key)
-    reader_view = _claim_reader_view(prepared.source_run_dir, manuscript)
+    reader_view = _claim_reader_view(
+        prepared.source_run_dir, manuscript,
+        reader_labels=_migration_claim_labels(prepared),
+    )
     quality = audit_manuscript_quality(
         reader_view,
         analysis_plan=prepared.plan,
@@ -945,6 +965,7 @@ def _bind_and_copy_evidence(
     expanded = expand_scientific_claim_tokens(
         manuscript,
         resolve_claim=authority.claims_by_ref.get,
+        reader_labels=_migration_claim_labels(prepared),
         current_evidence_ids=set(records_by_id),
     )
     if expanded.missing_claim_refs or expanded.malformed_sentences:

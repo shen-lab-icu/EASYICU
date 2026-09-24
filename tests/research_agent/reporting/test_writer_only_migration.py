@@ -553,7 +553,7 @@ def test_claim_reader_view_rejects_unresolved_authority(tmp_path, monkeypatch, c
     else:
         authority.records = (SimpleNamespace(evidence_id="another_summary"),)
     with pytest.raises(WriterOnlyMigrationError, match="SCIENTIFIC_CLAIM_BINDING_FAILED"):
-        owner._claim_reader_view(tmp_path, text)
+        owner._claim_reader_view(tmp_path, text, reader_labels=None)
 
 
 @pytest.mark.parametrize("separator", [",", ", ", ";", "; "])

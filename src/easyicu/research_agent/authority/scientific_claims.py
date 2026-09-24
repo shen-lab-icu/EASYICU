@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from typing import Literal, Sequence
+from typing import Literal, Mapping, Sequence
 
 from .claim_coordinates import contrast_exposure_coordinate
 from pydantic import (
@@ -28,35 +28,94 @@ from pydantic import (
 )
 
 
-def _reader_coordinate(coordinate: str) -> str:
+def _coordinate_parts(coordinate: str) -> list[tuple[str, str]] | None:
+    """Split ``x=1 versus x=0`` into (key, JSON level) pairs; None for other text."""
+
+    parts: list[tuple[str, str]] = []
+    remaining = coordinate
+    while remaining:
+        key, separator, value = remaining.partition("=")
+        if not separator:
+            return None
+        try:
+            _level, end = json.JSONDecoder().raw_decode(value)
+        except ValueError:
+            return None
+        parts.append((key, value[:end]))
+        tail = value[end:]
+        if not tail:
+            return parts
+        if not tail.startswith(" versus "):
+            return None
+        remaining = tail[len(" versus "):]
+    return None
+
+
+def _level_label(key: str, level: str, labels: Mapping[str, str]) -> str | None:
+    label = labels.get(f"{key}={level}")
+    decoded = json.loads(level)
+    if label is None and isinstance(decoded, str):
+        label = labels.get(f"{key}={decoded}")
+    return label
+
+
+def _reader_coordinate(
+    coordinate: str, labels: Mapping[str, str] | None = None
+) -> str:
     """Space variable keys without changing JSON levels or contrast order.
 
     This is typography, not clinical translation. In particular, a category
     value can itself contain underscores, equals signs, or ``versus``; only
     the variable key may be re-spaced. Old non-JSON coordinates are retained
     verbatim rather than guessing their group identity.
+
+    ``labels`` are reader names that the reporting layer built from the plan
+    and the sealed research context; this module never invents one.  A
+    labelled variable reads by its name.  A contrast within one labelled
+    variable keeps its levels in order ("<name> 3 versus 0"), and levels the
+    plan names read by those names.  Anything unlabelled keeps the
+    coordinate form.
     """
 
     if "=" not in coordinate:
+        if labels and coordinate in labels:
+            return labels[coordinate]
         return coordinate.replace("_", " ")
-    remaining = coordinate
-    parts: list[str] = []
-    while remaining:
-        key, separator, value = remaining.partition("=")
-        if not separator:
-            return coordinate
-        try:
-            _level, end = json.JSONDecoder().raw_decode(value)
-        except ValueError:
-            return coordinate
-        parts.append(f"{key.replace('_', ' ')}={value[:end]}")
-        tail = value[end:]
-        if not tail:
-            return " versus ".join(parts)
-        if not tail.startswith(" versus "):
-            return coordinate
-        remaining = tail[len(" versus "):]
-    return coordinate
+    parts = _coordinate_parts(coordinate)
+    if parts is None:
+        return coordinate
+    if labels:
+        level_labels = [_level_label(key, level, labels) for key, level in parts]
+        if all(level_labels):
+            return " versus ".join(str(label) for label in level_labels)
+        key = parts[0][0]
+        if key in labels and all(part_key == key for part_key, _level in parts):
+            return f"{labels[key]} " + " versus ".join(level for _key, level in parts)
+    return " versus ".join(f"{key.replace('_', ' ')}={level}" for key, level in parts)
+
+
+def _sentence_initial(text: str) -> str:
+    """Capitalize an opening lower-case word; a mixed-case term (pH, eGFR) stays."""
+
+    first = text.split(" ", 1)[0]
+    return text[:1].upper() + text[1:] if first == first.lower() else text
+
+
+def _unambiguous_labels(
+    labels: Mapping[str, str] | None, terms: Sequence[str]
+) -> Mapping[str, str] | None:
+    """Keep reader labels only when the terms of one claim stay distinct.
+
+    Two variables may share a source description (an outcome and its event
+    time).  A sentence that would name two of its terms alike reads every
+    term by its key instead.
+    """
+
+    if not labels:
+        return None
+    distinct = set(terms)
+    rendered = {_reader_coordinate(term, labels).casefold() for term in distinct}
+    return labels if len(rendered) == len(distinct) else None
 
 
 # An analysis-set key that names an engineering rule is not a population a
@@ -306,7 +365,12 @@ class ScientificClaim(ScientificClaimDraft):
             f"{self.analysis_role})."
         )
 
-    def render_reader_text(self, *, include_estimate: bool = True) -> str:
+    def render_reader_text(
+        self,
+        *,
+        include_estimate: bool = True,
+        labels: Mapping[str, str] | None = None,
+    ) -> str:
         """Render the same claim as publication-scale reader-facing prose.
 
         ``render_text`` remains the exact machine-authority representation used
@@ -319,11 +383,19 @@ class ScientificClaim(ScientificClaimDraft):
         unchanged.  Numbers use one fixed precision per kind: ratios and
         coefficients three decimals, percentages two, each with at least two
         significant figures.
+
+        ``labels`` name the claim's variables for readers (see
+        ``_reader_coordinate``).  Every caller that renders a claim and every
+        caller that checks the rendered sentence must pass the same labels.
         """
 
+        labels = _unambiguous_labels(
+            labels, [self.exposure, self.outcome, *self.adjusted_for]
+        )
+
         if self.claim_type == "descriptive_absolute_risk":
-            group = _reader_coordinate(self.exposure)
-            outcome = _reader_coordinate(self.outcome)
+            group = _reader_coordinate(self.exposure, labels)
+            outcome = _reader_coordinate(self.outcome, labels)
             if not include_estimate:
                 return (
                     f"These findings describe {outcome} in the {group} group within "
@@ -362,8 +434,8 @@ class ScientificClaim(ScientificClaimDraft):
                 "descriptive, unadjusted, noncausal estimate."
             )
         if self.claim_type == "descriptive_risk_difference":
-            contrast = _reader_coordinate(self.exposure)
-            outcome = _reader_coordinate(self.outcome)
+            contrast = _reader_coordinate(self.exposure, labels)
+            outcome = _reader_coordinate(self.outcome, labels)
             if not include_estimate:
                 return (
                     f"The comparison of {outcome} for {contrast} within "
@@ -401,12 +473,17 @@ class ScientificClaim(ScientificClaimDraft):
             )
         model_prefix = (
             "After adjustment for "
-            + _reader_series([_reader_coordinate(term) for term in self.adjusted_for])
+            + _reader_series([
+                _reader_coordinate(term, labels) for term in self.adjusted_for
+            ])
             + ", " if self.adjusted_for else ""
         )
+        subject = _reader_coordinate(self.exposure, labels)
+        if labels and not model_prefix:
+            subject = _sentence_initial(subject)
         return (
-            f"{model_prefix}{_reader_coordinate(self.exposure)} {relation} "
-            f"{_reader_coordinate(self.outcome)} in "
+            f"{model_prefix}{subject} {relation} "
+            f"{_reader_coordinate(self.outcome, labels)} in "
             f"{_reader_population(self.population)}{estimate_text}."
         )
 

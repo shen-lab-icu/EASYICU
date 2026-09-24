@@ -102,7 +102,7 @@ def test_drafting_reviewer_sees_current_errors_and_preserves_recovered_history(t
     write_phase._run_drafting_reviewer_round(
         SimpleNamespace(), plan=plan, per_step_records=records,
         evidence=evidence, findings=findings, bound=_valid_manuscript(),
-        repro_envelope=None, run_dir=tmp_path,
+        repro_envelope=None, run_dir=tmp_path, context=None,
     )
     review = json.dumps(json.loads((tmp_path / "reviewer_report.json").read_text()))
     assert "current_runtime" in review
@@ -111,7 +111,7 @@ def test_drafting_reviewer_sees_current_errors_and_preserves_recovered_history(t
     assert len([f for f in findings if f.validator.endswith("_runtime")]) == 2
     active, historical, _ = write_phase.current_validation_findings(
         plan=plan, per_step_records=records, findings=findings, evidence=evidence,
-        run_dir=tmp_path, manuscript_text=_valid_manuscript(),
+        run_dir=tmp_path, manuscript_text=_valid_manuscript(), context=None,
     )
     assert any(f.message == "Prior derived reject" for f in historical)
     assert any(f.validator == "current_runtime" for f in active)
@@ -121,7 +121,7 @@ def test_drafting_reviewer_sees_current_errors_and_preserves_recovered_history(t
     write_phase._run_drafting_reviewer_round(
         SimpleNamespace(), plan=plan, per_step_records=records,
         evidence=evidence, findings=findings, bound=_valid_manuscript() + "\n",
-        repro_envelope=None, run_dir=tmp_path,
+        repro_envelope=None, run_dir=tmp_path, context=None,
     )
     latest_id = findings[-1].evidence_ids[-1]
     assert latest_id != first_json.evidence_id

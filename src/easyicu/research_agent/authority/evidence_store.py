@@ -659,6 +659,16 @@ _NUMERIC_IN_PROSE_RE = re.compile(
 )
 
 
+def prose_requires_numeric_provenance(text: str) -> bool:
+    """Return whether the numeric binder would ask ``text`` for provenance.
+
+    A reader name for a variable must not carry a value into a host-rendered
+    sentence: the binder would read it as an untraced result.
+    """
+
+    return _NUMERIC_IN_PROSE_RE.search(str(text or "")) is not None
+
+
 # ---------------------------------------------------------------------------
 # Derived-claim formula evaluator (restricted AST sandbox)
 # ---------------------------------------------------------------------------
@@ -3274,6 +3284,7 @@ class EvidenceStore:
         self,
         scaffold: str,
         *,
+        reader_labels: Optional[Mapping[str, str]],
         current_evidence_ids: Optional[set[str]] = None,
     ) -> str:
         """Replace whole-sentence claim references with host-rendered prose."""
@@ -3281,6 +3292,7 @@ class EvidenceStore:
         result = expand_scientific_claim_tokens(
             scaffold,
             resolve_claim=self._scientific_claim_by_ref,
+            reader_labels=reader_labels,
             current_evidence_ids=current_evidence_ids,
         )
         if (result.missing_claim_refs or result.malformed_sentences) and (
@@ -3304,6 +3316,7 @@ class EvidenceStore:
         *,
         verbose: bool = False,
         per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+        reader_labels: Optional[Mapping[str, str]] = None,
     ) -> str:
         """Replace ``{evidence:<id>}`` placeholders with provenance links.
 
@@ -3321,6 +3334,9 @@ class EvidenceStore:
         :class:`EvidenceEnforcementError` so the run fails before a
         manuscript containing ``[evidence missing: …]`` markers can be
         written out.
+
+        ``reader_labels`` name the variables of expanded scientific claims;
+        the caller checks the Results with the same labels.
         """
         malformed_authority = malformed_authority_placeholder_sentences(scaffold)
         if malformed_authority and (
@@ -3345,6 +3361,7 @@ class EvidenceStore:
         )
         scaffold = self._expand_scientific_claim_tokens(
             scaffold,
+            reader_labels=reader_labels,
             current_evidence_ids=current_ids,
         )
         out: List[str] = []
@@ -4020,6 +4037,7 @@ __all__ = [
     "DerivedFormulaError",
     "sha256_of_file",
     "sha256_of_bytes",
+    "prose_requires_numeric_provenance",
     "SessionEventKind",
     "SessionStatus",
     "SessionEvent",

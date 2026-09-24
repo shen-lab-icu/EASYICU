@@ -3,6 +3,8 @@
 import re
 from typing import Mapping
 
+from ..authority.evidence_store import prose_requires_numeric_provenance
+
 
 def _recorded_term(variable):
     semantics = getattr(variable, "observation_semantics", None)
@@ -78,6 +80,38 @@ def source_bound_manuscript_labels(context, labels: Mapping[str, str], *, langua
         term = str(definition.definition or "").strip()
         if term and not re.search(r"[\u3400-\u9fff]", term):
             result[key] = ("No recorded " if level == "0" else "Recorded ") + term
+    return result
+
+
+# A reader name sits inside a host sentence, next to Markdown and authority
+# placeholders; these characters could change what that sentence means.
+_UNSAFE_READER_NAME_RE = re.compile(r"[{}\[\]<>`\\*_#|]")
+
+
+def reader_claim_labels(context, labels: Mapping[str, str]) -> dict[str, str]:
+    """Reader names for host-rendered scientific claim sentences.
+
+    Claim sentences are English host templates, so their names are the
+    English source-bound labels whatever the manuscript language.  A name is
+    left out, and the claim keeps the variable key, when it is not English
+    text, could break Markdown or a placeholder, or would carry a value that
+    the numeric binder must trace.  Every caller that expands claims and every
+    caller that checks the expanded Results builds its labels here.
+    """
+    result: dict[str, str] = {}
+    named = source_bound_manuscript_labels(
+        context, labels, language="en", include_unlabeled=True,
+    )
+    for key, label in named.items():
+        name = " ".join(str(label or "").split())
+        if (
+            not name or name == key or len(name) > 80
+            or re.search(r"[\u3400-\u9fff]", name)
+            or _UNSAFE_READER_NAME_RE.search(name)
+            or prose_requires_numeric_provenance(name)
+        ):
+            continue
+        result[str(key)] = name
     return result
 
 

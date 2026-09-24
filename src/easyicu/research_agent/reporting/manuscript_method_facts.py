@@ -89,10 +89,14 @@ def audit_bound_source_method_facts(
     evidence: EvidenceStore,
     per_step_records: Sequence[Mapping[str, Any]],
 ) -> ValidationFinding | None:
+    # A method fact cites evidence and never carries a scientific claim, so no
+    # claim labels apply.
     missing = missing_bound_method_facts(
         bound,
         evidence.manuscript_method_facts(per_step_records),
-        lambda text: evidence.bind_manuscript(text, per_step_records=per_step_records),
+        lambda text: evidence.bind_manuscript(
+            text, per_step_records=per_step_records, reader_labels=None,
+        ),
     )
     if not missing:
         return None

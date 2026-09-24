@@ -73,6 +73,7 @@ from .manuscript_quality import (
     render_reader_manuscript,
 )
 from .manuscript_baseline import baseline_reporting_mentions
+from .manuscript_labels import reader_claim_labels
 from .administrative_authority import load_manuscript_administrative_authority
 from .manuscript_provenance import (
     ManuscriptProvenanceError,
@@ -2076,6 +2077,40 @@ def _restore_binding_context_citations(
     return scaffold
 
 
+def _result_claim_sufficiency_finding(
+    bound: str,
+    *,
+    evidence: Any,
+    per_step_records: Sequence[Dict[str, Any]],
+    primary_result_facts: Sequence[Any],
+    claim_labels: Mapping[str, str],
+) -> ValidationFinding | None:
+    """Report host claims that final filtering removed from the Results.
+
+    A claim that a verified primary result fact replaced is reported by that
+    fact instead.  The claims are read with the labels they were bound with.
+    """
+    authoritative_claims = evidence.authoritative_scientific_claims(per_step_records)
+    missing_facts = missing_primary_result_facts(bound, primary_result_facts).get("Results", ())
+    projected_claim_refs = {fact.replaces_claim_ref for fact in primary_result_facts if fact not in missing_facts}
+    missing_result_claims = missing_scientific_claims_in_results(
+        bound,
+        claims=[claim for claim in authoritative_claims if claim.claim_ref not in projected_claim_refs],
+        reader_labels=claim_labels,
+    )
+    if not missing_result_claims:
+        return None
+    return ValidationFinding(
+        validator="manuscript_result_sufficiency",
+        severity="error",
+        message=(
+            "Final evidence/numeric filtering removed or failed to bind "
+            "host-authorized scientific claim(s) from the Results section."
+        ),
+        detail={"missing_claim_refs": list(missing_result_claims)},
+    )
+
+
 def _bind_and_review_manuscript(
     pipeline: Any,
     *,
@@ -2096,6 +2131,7 @@ def _bind_and_review_manuscript(
     plan: AnalysisPlan | None = None,
 ) -> _BindingStageResult:
     """Bind manuscript claims to current evidence and persist the critique."""
+    claim_labels = reader_claim_labels(context, reader_display_labels)
     primary_result_facts = compile_primary_counts_only_report_facts(
         per_step_records, evidence=evidence, reader_display_labels=reader_display_labels,
         context=context, manuscript_language=manuscript_language,
@@ -2187,6 +2223,7 @@ def _bind_and_review_manuscript(
     bound_unfiltered = evidence.bind_manuscript(
         evidence_bound_scaffold,
         per_step_records=per_step_records,
+        reader_labels=claim_labels,
     )
     bound, demoted_missing_ids = _demote_unresolved_evidence_placeholders(
         bound_unfiltered
@@ -2268,25 +2305,12 @@ def _bind_and_review_manuscript(
                 detail={"repairs": list(post_filter_structural_repairs)},
             )
         )
-    authoritative_claims = evidence.authoritative_scientific_claims(per_step_records)
-    missing_facts = missing_primary_result_facts(bound, primary_result_facts).get("Results", ())
-    projected_claim_refs = {fact.replaces_claim_ref for fact in primary_result_facts if fact not in missing_facts}
-    missing_result_claims = missing_scientific_claims_in_results(
-        bound,
-        claims=[claim for claim in authoritative_claims if claim.claim_ref not in projected_claim_refs],
+    result_claim_finding = _result_claim_sufficiency_finding(
+        bound, evidence=evidence, per_step_records=per_step_records,
+        primary_result_facts=primary_result_facts, claim_labels=claim_labels,
     )
-    if missing_result_claims:
-        findings.append(
-            ValidationFinding(
-                validator="manuscript_result_sufficiency",
-                severity="error",
-                message=(
-                    "Final evidence/numeric filtering removed or failed to bind "
-                    "host-authorized scientific claim(s) from the Results section."
-                ),
-                detail={"missing_claim_refs": list(missing_result_claims)},
-            )
-        )
+    if result_claim_finding is not None:
+        findings.append(result_claim_finding)
     side_findings = collect_side_findings(per_step_records)
     bound, language_guard_detail = enforce_writer_claim_language(
         bound,
@@ -3008,7 +3032,7 @@ def _publish_and_audit_manuscript(
         _run_drafting_reviewer_round(
             pipeline, plan=plan, per_step_records=per_step_records,
             evidence=evidence, findings=findings, bound=bound,
-            repro_envelope=repro_envelope, run_dir=run_dir,
+            repro_envelope=repro_envelope, run_dir=run_dir, context=context,
         )
 
 
@@ -3016,6 +3040,7 @@ def _run_drafting_reviewer_round(
     pipeline: Any, *, plan: AnalysisPlan,
     per_step_records: Sequence[Dict[str, Any]], evidence: Any,
     findings: List[ValidationFinding], bound: str, repro_envelope: Any, run_dir: Path,
+    context: ResearchContext | None,
 ) -> None:
     """Review current executed evidence without replaying historical failures."""
     _register_reproducibility_envelope_for_review(
@@ -3027,6 +3052,7 @@ def _run_drafting_reviewer_round(
     active_review_findings, _, _ = current_validation_findings(
         plan=plan, per_step_records=per_step_records, findings=findings,
         evidence=evidence, run_dir=run_dir, manuscript_text=bound,
+        context=context,
     )
     primary_bindings = derive_reviewer_primary_result_bindings(
         evidence_store=evidence, per_step_records=per_step_records,

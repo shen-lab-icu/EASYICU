@@ -636,8 +636,13 @@ def missing_scientific_claims_in_results(
     manuscript: str,
     *,
     claims: Sequence[ScientificClaim],
+    reader_labels: Mapping[str, str] | None = None,
 ) -> tuple[str, ...]:
-    """Return host-authorized claims absent from the final Results prose."""
+    """Return host-authorized claims absent from the final Results prose.
+
+    ``reader_labels`` must be the labels the claims were expanded with; the
+    check looks for the sentence the reader actually sees.
+    """
 
     span = _results_section_span(manuscript)
     if span is None:
@@ -650,7 +655,9 @@ def missing_scientific_claims_in_results(
         claim.claim_ref
         for claim in claims
         if " ".join(
-            round_reader_numeric_display(claim.render_reader_text())[0].split()
+            round_reader_numeric_display(
+                claim.render_reader_text(labels=reader_labels)
+            )[0].split()
         )
         not in normalized_results
     )
@@ -914,9 +921,14 @@ def expand_scientific_claim_tokens(
     scaffold: str,
     *,
     resolve_claim: ClaimResolver,
+    reader_labels: Mapping[str, str] | None = None,
     current_evidence_ids: Optional[set[str]] = None,
 ) -> ScientificClaimExpansion:
-    """Replace complete claim-token sentences with host-rendered prose."""
+    """Replace complete claim-token sentences with host-rendered prose.
+
+    ``reader_labels`` name the claims' variables for readers; a caller that
+    later checks the Results passes the same labels.
+    """
 
     out: list[str] = []
     missing: list[str] = []
@@ -961,6 +973,7 @@ def expand_scientific_claim_tokens(
         # and source URLs are provenance, not display values.
         reader_text, _ = round_reader_numeric_display(claim.render_reader_text(
             include_estimate=not (conclusion_depth is not None or abstract_conclusion),
+            labels=reader_labels,
         ))
         out.append(
             f"{structure_prefix}{reader_text} "
