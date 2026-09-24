@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 import re
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from .concept_availability import normalize_concept_name
 from .concept_catalog import ConceptCatalog, load_concept_catalog
@@ -185,6 +185,44 @@ def literature_concept_identity(value: Any) -> Optional[LiteratureConceptIdentit
     return identity if identity is not None else _catalog_identity(value)
 
 
+@lru_cache(maxsize=1)
+def _export_display_labels() -> dict[str, str]:
+    """English display labels the export catalog issues, by concept id."""
+
+    try:
+        from easyicu.concept.catalog import CONCEPT_DICTIONARY
+    except Exception:
+        return {}
+    return {
+        str(key): " ".join(entry[0].split())
+        for key, entry in CONCEPT_DICTIONARY.items()
+        if isinstance(entry, (tuple, list)) and entry and isinstance(entry[0], str)
+    }
+
+
+def is_export_display_label(text: Any, concepts: Iterable[Any]) -> bool:
+    """Whether ``text`` is the export display label of a concept outside the dictionary.
+
+    A code-derived public output has no concept-dictionary entry, so the
+    description it carries is its export display label.  That label names the
+    implementation (a reference or source-native variant, one component of a
+    composite score) rather than the clinical construct, so it is never a
+    retrieval phrase.  The description of a dictionary concept is dictionary
+    text and is unaffected.
+    """
+
+    value = " ".join(str(text or "").split()).casefold()
+    if not value:
+        return False
+    dictionary = set(_shared_concept_catalog().available_concepts)
+    labels = _export_display_labels()
+    for concept in concepts:
+        key = str(concept or "").strip()
+        if key and key not in dictionary and labels.get(key, "").casefold() == value:
+            return True
+    return False
+
+
 def literature_concept_phrase(value: Any, *, fallback: Any = None) -> str:
     """Return one stable literature phrase without case-specific callers.
 
@@ -212,6 +250,7 @@ def literature_concept_phrase(value: Any, *, fallback: Any = None) -> str:
 __all__ = [
     "LiteratureConceptIdentity",
     "concept_id",
+    "is_export_display_label",
     "literature_concept_identity",
     "literature_concept_phrase",
 ]
