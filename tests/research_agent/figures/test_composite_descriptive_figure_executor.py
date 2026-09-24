@@ -628,10 +628,10 @@ def test_cohort_balance_association_profile_selects_and_renders(
     # the exclusion on the way to the manuscript figure.
     svg = (out_dir / "cohort_balance_figure.svg").read_text(encoding="utf-8")
     if stage_count == 2:
-        assert "\u221220 excluded" in svg
+        assert "Excluded (n = 20)" in svg
         assert "83.3% of previous" in svg
     else:
-        assert svg.count("\u22124 excluded") == 5
+        assert svg.count("Excluded (n = 4)") == 5
         assert contract["height_mm"] > 132.0
     assert "83.3% of universe" in svg
     assert "source cohort" in svg and "eligible cohort" in svg

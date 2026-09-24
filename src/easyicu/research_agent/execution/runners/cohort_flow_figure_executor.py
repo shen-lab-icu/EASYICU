@@ -2,8 +2,8 @@
 
 The cohort-definition owner has already fixed every eligibility predicate and
 count.  This renderer verifies those exact bytes and draws the sequential
-flow, every exclusion and the retained share of each recorded stage; it
-never reloads the cohort or invents another inclusion rule.
+flow, with a side box for every exclusion and the share its stage retained;
+it never reloads the cohort or invents another inclusion rule.
 """
 
 from __future__ import annotations
@@ -326,6 +326,11 @@ def _humanize_token(value: Any) -> str:
 
 
 def _display_labels(frame: pd.DataFrame, *, complete: bool) -> list[str]:
+    """Reader names for each stage, from the ledger's own predicates.
+
+    The first stage is the ledger's source cohort whatever its predicate is
+    called.  The last stage is marked by its drawing, not by a prefix.
+    """
     if not complete:
         return [
             "All bound input rows"
@@ -336,7 +341,7 @@ def _display_labels(frame: pd.DataFrame, *, complete: bool) -> list[str]:
     for index, (_, row) in enumerate(frame.iterrows()):
         kind = str(row.get("predicate_kind") or "").strip()
         if index == 0:
-            labels.append("Source universe")
+            labels.append("Source cohort")
             continue
         concept = _humanize_token(row.get("concept_id"))
         label = (
@@ -344,8 +349,6 @@ def _display_labels(frame: pd.DataFrame, *, complete: bool) -> list[str]:
             if concept and kind.casefold() in {"inclusion", "exclusion"}
             else _humanize_token(kind)
         )
-        if index == len(frame) - 1:
-            label = f"Final · {label}"
         labels.append(label)
     return labels
 
@@ -485,7 +488,7 @@ def _flow_type_scale(
                 max_up_pt = max(
                     max_up_pt, note_line_pt if excluded[index] else 0.0
                 )
-                if draw_shares:
+                if draw_shares and excluded[index]:
                     parts = _share_parts(
                         counts[index], counts[index - 1], counts[0]
                     )
@@ -501,7 +504,7 @@ def _flow_type_scale(
                             max_down_pt,
                             note_line_pt * (shares_lines if len(parts) == 2 else 1),
                         )
-            if max_up_pt + max_down_pt <= note_band_pt:
+            if max_up_pt + max_down_pt + 2 * _NOTE_BOX_PAD_PT <= note_band_pt:
                 return scale, wrap, height, shares_lines if draw_shares else 0
         scale -= 0.05
 
@@ -518,6 +521,7 @@ def _add_flow_node(
     label_fontsize: float = 8.5,
     count_fontsize: float = 9.0,
     wrap: int = 36,
+    final: bool = False,
 ) -> None:
     from matplotlib.patches import FancyBboxPatch
 
@@ -530,10 +534,10 @@ def _add_flow_node(
                 f"round,pad={min(0.006, height * 0.05)},"
                 f"rounding_size={min(0.012, height * 0.15)}"
             ),
-            linewidth=0.9,
+            linewidth=1.4 if final else 0.9,
             edgecolor=PALETTE_CLINICAL["blue"],
             facecolor=PALETTE_CLINICAL["blue_soft"],
-            alpha=0.45,
+            alpha=0.85 if final else 0.45,
             zorder=2,
         )
     )
@@ -564,6 +568,78 @@ def _add_flow_node(
         color=PALETTE_CLINICAL["blue"],
         zorder=3,
     )
+
+
+# Space between a side box's edge and its text, in points.
+_NOTE_BOX_PAD_PT = 3.0
+
+
+def _add_exclusion_box(
+    ax: Any,
+    *,
+    middle: float,
+    hub_x: float,
+    side_x: float,
+    note_offset: float,
+    excluded: int,
+    shares: str,
+    fontsize: float,
+) -> None:
+    """A participant-flow side box: the exclusion count over the retained shares.
+
+    A line joins it to the arrow between the two stages it separates.  The
+    text keeps the coordinates the fit pass measured; the box only frames it.
+    """
+
+    from matplotlib.patches import FancyBboxPatch
+
+    _panel_w, panel_h_pt = _axes_size_pt(ax)
+    line = fontsize * 1.25 / panel_h_pt
+    pad = _NOTE_BOX_PAD_PT / panel_h_pt
+    share_lines = shares.count("\n") + 1 if shares else 0
+    top = middle + note_offset + line + pad
+    bottom = middle - note_offset - share_lines * line - pad
+    left = side_x - 0.012
+    ax.plot(
+        [hub_x, left],
+        [middle, middle],
+        color=PALETTE_CLINICAL["neutral"],
+        linewidth=0.6,
+        zorder=0,
+    )
+    ax.add_patch(
+        FancyBboxPatch(
+            (left, bottom),
+            0.995 - left,
+            top - bottom,
+            boxstyle="round,pad=0,rounding_size=0.006",
+            linewidth=0.6,
+            edgecolor=PALETTE_CLINICAL["neutral_light"],
+            facecolor="white",
+            zorder=1,
+        )
+    )
+    ax.text(
+        side_x,
+        middle + note_offset,
+        f"Excluded (n = {excluded:,})",
+        ha="left",
+        va="bottom",
+        fontsize=fontsize,
+        color=PALETTE_CLINICAL["red"],
+        zorder=3,
+    )
+    if shares:
+        ax.text(
+            side_x,
+            middle - note_offset,
+            shares,
+            ha="left",
+            va="top",
+            fontsize=fontsize,
+            color=PALETTE_CLINICAL["neutral"],
+            zorder=3,
+        )
 
 
 def render_cohort_flow_axis(
@@ -675,6 +751,7 @@ def render_cohort_flow_axis(
             label_fontsize=body_fontsize,
             count_fontsize=count_fontsize,
             wrap=wrap,
+            final=stages > 1 and index == stages - 1,
         )
         if index == 0:
             continue
@@ -692,45 +769,29 @@ def render_cohort_flow_axis(
                 zorder=1,
             )
         )
-        middle = (y_previous + y) / 2
-        if excluded[index]:
-            ax.plot(
-                [hub_x + 0.015, side_x - 0.012],
-                [middle, middle],
-                color=PALETTE_CLINICAL["neutral_light"],
-                linewidth=0.6,
-                zorder=0,
-            )
-            ax.text(
-                side_x,
-                middle + note_offset,
-                f"\u2212{excluded[index]:,} excluded",
-                ha="left",
-                va="bottom",
-                fontsize=note_fontsize,
-                color=PALETTE_CLINICAL["red"],
-            )
+        if not excluded[index]:
+            # A stage that excluded nobody has no exclusion to report.
+            continue
         # A one-line share note that would overflow the axes edge is stacked;
         # the fit pass already proved the taller block still clears the gap.
         separator = "\n" if compact or shares_lines == 2 else " \u00b7 "
-        shares = (
-            _share_note(
-                _share_parts(count, counts[index - 1], universe),
-                separator=separator,
-            )
-            if shares_lines
-            else ""
+        _add_exclusion_box(
+            ax,
+            middle=(y_previous + y) / 2,
+            hub_x=hub_x,
+            side_x=side_x,
+            note_offset=note_offset,
+            excluded=excluded[index],
+            shares=(
+                _share_note(
+                    _share_parts(count, counts[index - 1], universe),
+                    separator=separator,
+                )
+                if shares_lines
+                else ""
+            ),
+            fontsize=note_fontsize,
         )
-        if shares:
-            ax.text(
-                side_x,
-                middle - note_offset,
-                shares,
-                ha="left",
-                va="top",
-                fontsize=note_fontsize,
-                color=PALETTE_CLINICAL["neutral"],
-            )
 
 
 def run_cohort_flow_figure(
@@ -774,14 +835,11 @@ def run_cohort_flow_figure(
     source.to_csv(source_path, index=False)
 
     apply_publication_style()
-    height = max(3.4, 1.05 * len(frame) + 1.8)
+    # The caption names the figure, so the canvas holds only the flow.
+    height = max(2.4, 0.8 * len(frame) + 0.8)
     fig, ax = plt.subplots(figsize=(7.2, height))
     render_cohort_flow_axis(ax, frame, display_labels, complete=complete)
-    ax.set_title(
-        "Cohort accounting" if complete else "Cohort accounting \u00b7 single stage",
-        loc="left",
-    )
-    fig.tight_layout()
+    fig.tight_layout(pad=0.4)
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
         core_claim=(
