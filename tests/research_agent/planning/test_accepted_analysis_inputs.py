@@ -19,6 +19,7 @@ from easyicu.research_agent.planning.accepted_analysis_inputs import (
     candidate_analysis_inputs,
     context_analysis_inputs,
 )
+from easyicu.research_agent.planning.baseline_requirements import bind_baseline_requirements
 from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
 from easyicu.research_agent.schema import ConceptDescriptor
 
@@ -146,6 +147,50 @@ def test_accepted_inputs_do_not_consume_the_optional_retrieval_budget() -> None:
     assert accepted <= selected
     assert len(selected) == 6 + len(accepted)
     assert {context.primary_exposure, context.target_outcome} <= selected
+
+
+def _with_table_one_of(context, *concepts: str):
+    return bind_baseline_requirements(context, {
+        "schema_version": "easyicu.accepted_baseline_requirements/1",
+        "source_plan_sha256": _SHA,
+        "tables": [{
+            "source_step_id": "baseline_context",
+            "group_by": {"name": "death"},
+            "variables": [{"name": concept, "source_concept": concept} for concept in concepts],
+        }],
+    })
+
+
+def test_a_table_one_of_the_accepted_inputs_keeps_them_outside_the_budget() -> None:
+    """Dev9 M2: a prediction model's Table 1 describes its own 22 predictors.
+
+    Its 79 value columns were counted against the 48-column retrieval limit as
+    Table 1 rows before the accepted-input exemption applied, and the
+    package-bound run failed before any Provider call.
+    """
+
+    context = _with_table_one_of(_bound(_materialized_context(*_FEATURES), *_FEATURES), *_FEATURES)
+    accepted = {f"{concept}_{suffix}" for concept in _FEATURES for suffix in _VALUE_SUFFIXES}
+    process = {f"{concept}_{suffix}" for concept in _FEATURES for suffix, _role in _PROCESS_SUFFIXES}
+    anchors = {context.primary_exposure, context.target_outcome, "age"}
+
+    selected = set(select_progressive_variables(context, max_variables=6))
+
+    assert accepted | anchors <= selected
+    assert len(selected) == 6 + len(accepted)
+    # Only the Table 1 grouping and study anchors spend the budget; the rest
+    # reaches the measurement-process inputs the audit reads.
+    assert selected - accepted - anchors <= process
+    assert len(selected - accepted - anchors) == 6 - len(anchors)
+
+
+def test_table_one_rows_outside_the_accepted_inputs_still_fail_closed() -> None:
+    context = _with_table_one_of(_materialized_context(*_FEATURES), *_FEATURES)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        select_progressive_variables(context, max_variables=6)
+
+    assert caught.value.reason_code == "progressive_required_variables_exceed_budget"
 
 
 def test_pipeline_config_validates_the_bound_inputs_and_keeps_old_digests(tmp_path) -> None:

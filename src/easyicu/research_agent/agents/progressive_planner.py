@@ -1114,18 +1114,13 @@ def select_progressive_variables(
     # offered clinical alternative, plus the exact study anchors, before the
     # relevance/source-family quota allocates optional retrieval space.
     required = (baseline_columns | exact) & variable_by_name.keys() if baseline["tables"] else set()
-    if len(required) > limit:
-        raise ProgressivePlanCompileError(
-            "progressive_required_variables_exceed_budget",
-            f"Accepted baseline representations and study anchors require {len(required)} "
-            f"columns; retrieval limit={limit}. No required column was silently pruned.",
-            path="variables",
-        )
     # An accepted candidate's primary-analysis inputs are the reviewed design:
     # every value representation of each input stays visible (the Planner, not
     # the host, chooses the aggregation) and none of them consumes the optional
     # budget, which keeps its space for the measurement-process inputs an audit
-    # reads.  Process companions never stand in for the value.
+    # reads.  Process companions never stand in for the value.  A Table 1 that
+    # describes those same inputs (a prediction model's predictors) does not
+    # move them back into the budget.
     accepted_inputs = analysis_input_value_columns(context)
     lost_inputs = sorted(concept for concept, columns in accepted_inputs.items() if not columns)
     if lost_inputs:
@@ -1135,9 +1130,15 @@ def select_progressive_variables(
             f"materialized context: {', '.join(lost_inputs)}.",
             path="variables",
         )
-    accepted_columns = {
-        name for columns in accepted_inputs.values() for name in columns
-    } - required
+    accepted_columns = {name for columns in accepted_inputs.values() for name in columns}
+    budgeted = required - accepted_columns
+    if len(budgeted) > limit:
+        raise ProgressivePlanCompileError(
+            "progressive_required_variables_exceed_budget",
+            f"Accepted baseline representations and study anchors require {len(budgeted)} "
+            f"columns; retrieval limit={limit}. No required column was silently pruned.",
+            path="variables",
+        )
     required |= accepted_columns
     limit += len(accepted_columns)
     selected = [variable.name for variable in context.variables if variable.name in required]
