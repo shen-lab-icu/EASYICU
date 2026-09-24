@@ -52,6 +52,11 @@ def _label(value: Any) -> str:
     return re.sub(r"[_\s]+", " ", str(value).strip()) or "Not reported"
 
 
+def _sentence_label(value: Any) -> str:
+    text = _label(value)
+    return text[:1].upper() + text[1:]
+
+
 def _measurement_state_label(value: Any) -> str:
     """Reader-facing label for generic measurement-source states."""
 
@@ -91,6 +96,17 @@ def _validate_interval_table(
     return result
 
 
+_RATIO_SCALE_NAMES = {
+    "or": "Odds ratio",
+    "odds_ratio": "Odds ratio",
+    "hr": "Hazard ratio",
+    "hazard_ratio": "Hazard ratio",
+    "rr": "Risk ratio",
+    "risk_ratio": "Risk ratio",
+}
+_RATIO_TICKS = (0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0)
+
+
 def _forest(
     ax: Any,
     frame: pd.DataFrame,
@@ -101,33 +117,57 @@ def _forest(
     color: str,
     label_formatter: Any | None = None,
 ) -> None:
+    """Point estimates with their intervals, each row labelled with its values.
+
+    Ratio measures use a log axis, where equal ratios in either direction span
+    equal distances and the null line sits at 1.
+    """
+
     positions = np.arange(len(frame))
     estimates = frame[estimate_column].to_numpy(dtype=float)
-    errors = np.vstack(
-        [
-            estimates - frame["ci_low"].to_numpy(dtype=float),
-            frame["ci_high"].to_numpy(dtype=float) - estimates,
-        ]
+    lows = frame["ci_low"].to_numpy(dtype=float)
+    highs = frame["ci_high"].to_numpy(dtype=float)
+    errors = np.vstack([estimates - lows, highs - estimates])
+    ax.errorbar(
+        estimates, positions, xerr=errors, fmt="o", color=color, capsize=2.5,
+        markersize=4.0, elinewidth=1.0,
     )
-    ax.errorbar(estimates, positions, xerr=errors, fmt="o", color=color, capsize=2.5)
     formatter = label_formatter or (lambda value: display_label(value))
     ax.set_yticks(
         positions, [formatter(value) for value in frame[label_column]], fontsize=6.3
     )
-    ax.invert_yaxis()
+    ax.set_ylim(len(frame) - 0.4, -0.75)
     scales = {str(value).strip().lower() for value in frame["effect_scale"]}
-    if scales and scales <= {
-        "or",
-        "odds_ratio",
-        "hazard_ratio",
-        "risk_ratio",
-        "hr",
-        "rr",
-    }:
+    ratio = bool(scales) and scales <= set(_RATIO_SCALE_NAMES)
+    if ratio:
         if (frame[[estimate_column, "ci_low", "ci_high"]] <= 0).any().any():
             raise ValueError("ratio-scale estimates and intervals must be positive")
         ax.axvline(1.0, color="#777777", linewidth=0.8, linestyle="--")
-    ax.set_xlabel(_label(next(iter(scales), "estimate")))
+        low = min(float(lows.min()), 1.0) / 1.3
+        high = max(float(highs.max()), 1.0) * 1.3
+        ax.set_xscale("log")
+        ax.set_xlim(low, high)
+        ticks = [tick for tick in _RATIO_TICKS if low <= tick <= high]
+        ax.set_xticks(ticks, [f"{tick:g}" for tick in ticks])
+        ax.minorticks_off()
+        names = {_RATIO_SCALE_NAMES[scale] for scale in scales}
+        name = names.pop() if len(names) == 1 else "Ratio"
+        ax.set_xlabel(f"{name} (95% CI, log scale)")
+    else:
+        ax.set_xlabel(_label(next(iter(scales), "estimate")))
+    for position, estimate, low_value, high_value in zip(
+        positions, estimates, lows, highs
+    ):
+        text = (
+            f"{estimate:.2f} ({low_value:.2f}\u2013{high_value:.2f})"
+            if ratio
+            else f"{estimate:.3g} ({low_value:.3g} to {high_value:.3g})"
+        )
+        ax.annotate(
+            text, xy=(1.0, position), xycoords=("axes fraction", "data"),
+            xytext=(0, 3.5), textcoords="offset points", ha="right", va="bottom",
+            fontsize=5.8, color="#333333",
+        )
     ax.set_title(title, loc="left", pad=7)
 
 
@@ -195,7 +235,7 @@ def _robustness_coverage(ax: Any, frame: pd.DataFrame, *, color: str) -> dict[st
         ax,
         frame,
         color=color,
-        label_formatter=lambda value: _label(value),
+        label_formatter=_sentence_label,
     )
 
 
@@ -224,7 +264,7 @@ def _robustness_matrix_status(
         robustness_matrix_to_coverage(frame),
         color=color,
         title="Sensitivity-specification status",
-        label_formatter=lambda value: _label(value),
+        label_formatter=_sentence_label,
     )
     metadata.update(
         {
@@ -262,6 +302,74 @@ def _absolute_risk_context(frame: pd.DataFrame) -> pd.DataFrame:
     ).any():
         raise ValueError("absolute-risk intervals must contain their estimates")
     return result
+
+
+_MEASURED_STATE_TOKENS = {"observed", "measured", "source_present", "with_source"}
+
+
+def _draw_absolute_risk_points(
+    ax: Any,
+    frame: pd.DataFrame,
+    *,
+    color: str,
+    neutral: str,
+    level_label: Any,
+) -> str:
+    """Observed risk per group as a point with its 95% CI; returns the title.
+
+    The measured-exposure total comes first in a neutral colour, set apart
+    from the exposure levels; other measurement states follow the levels.
+    Each tick states the group's events/n.
+    """
+
+    # Rows without a group type are measurement states (the older table shape).
+    types = (
+        frame["group_type"].astype(str)
+        if "group_type" in frame.columns
+        else pd.Series("source_state", index=frame.index)
+    )
+    values = frame["group_value"] if "group_value" in frame.columns else frame["label"]
+    tokens = values.map(
+        lambda value: re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    )
+    is_level = types.eq("exposure_level")
+    is_total = ~is_level & tokens.isin(_MEASURED_STATE_TOKENS) & bool(is_level.any())
+    groups = (
+        [(index, "total") for index in frame.index[is_total]]
+        + [(index, "level") for index in frame.index[is_level]]
+        + [(index, "state") for index in frame.index[~is_level & ~is_total]]
+    )
+    labels = []
+    for position, (index, kind) in enumerate(groups):
+        row = frame.loc[index]
+        estimate = 100.0 * float(row["estimate"])
+        interval = [
+            [estimate - 100.0 * float(row["ci_low"])],
+            [100.0 * float(row["ci_high"]) - estimate],
+        ]
+        ax.errorbar(
+            position, estimate, yerr=interval, fmt="o", capsize=2.5,
+            markersize=4.0, elinewidth=1.0,
+            color=color if kind == "level" or not is_level.any() else neutral,
+        )
+        name = (
+            "All measured" if kind == "total"
+            else level_label(values.loc[index]) if kind == "level"
+            else _measurement_state_label(values.loc[index])
+        )
+        labels.append(f"{name}\n{int(row['event_n'])}/{int(row['n'])}")
+    kinds = [kind for _index, kind in groups]
+    for boundary in range(1, len(kinds)):
+        if kinds[boundary] != kinds[boundary - 1]:
+            ax.axvline(boundary - 0.5, color="#CCCCCC", linewidth=0.6, linestyle=":")
+    ax.set_xticks(np.arange(len(groups)), labels, fontsize=6.0)
+    ax.set_xlim(-0.6, len(groups) - 0.4)
+    ax.set_ylim(0.0, 100.0 * float(frame["ci_high"].max()) * 1.12)
+    return (
+        "Observed risk by exposure level"
+        if "level" in kinds
+        else "Observed risk by measurement state"
+    )
 
 
 def _measurement_availability(frame: pd.DataFrame) -> pd.DataFrame:
@@ -390,6 +498,15 @@ _PANEL_LEGENDS = {
     "Absolute risk by source state": (
         "the observed outcome risk in each exposure state with its 95% "
         "confidence interval"
+    ),
+    "Observed risk by exposure level": (
+        "the observed outcome risk with its 95% confidence interval in each "
+        "exposure level, after the total with a measured exposure; numbers "
+        "under each group are events/n"
+    ),
+    "Observed risk by measurement state": (
+        "the observed outcome risk with its 95% confidence interval in each "
+        "measurement state; numbers under each group are events/n"
     ),
     "Primary adjusted association": (
         "estimates of the primary adjusted model with 95% confidence "
@@ -1113,18 +1230,35 @@ def render_association_publication_figure(
             )
         absolute_title = "Exposure prevalence and observed outcome risk"
     else:
-        values = 100.0 * levels["estimate"].to_numpy(dtype=float)
-        yerr = np.vstack(
-            [
-                values - 100.0 * levels["ci_low"].to_numpy(dtype=float),
-                100.0 * levels["ci_high"].to_numpy(dtype=float) - values,
-            ]
+        risk_exposure = (
+            str(levels["exposure"].dropna().iloc[0])
+            if "exposure" in levels.columns and levels["exposure"].notna().any()
+            else None
         )
-        state_column = "group_value" if "group_value" in levels.columns else "label"
-        level_labels = [
-            _measurement_state_label(value) for value in levels[state_column]
-        ]
-        absolute_title = "Absolute risk by source state"
+
+        def level_label(value: Any) -> str:
+            numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+            token = (
+                str(int(numeric))
+                if pd.notna(numeric) and float(numeric).is_integer()
+                else str(value)
+            )
+            declared = (
+                scoped_label_lookup(risk_exposure, token, labels)
+                if risk_exposure
+                else None
+            )
+            return declared or token
+
+        absolute_title = _draw_absolute_risk_points(
+            ax,
+            levels,
+            color=palette["orange"],
+            neutral="#6F6F6F",
+            level_label=level_label,
+        )
+        if risk_exposure:
+            ax.set_xlabel(display_label(risk_exposure, labels))
     if distribution is not None:
         width = 0.36
         ax.bar(
@@ -1146,19 +1280,28 @@ def render_association_publication_figure(
             label="Outcome risk",
         )
         ax.legend(frameon=False, fontsize=5.8)
+        rotate_levels = (
+            len(level_labels) > 3 or max(map(len, level_labels), default=0) > 18
+        )
+        ax.set_xticks(
+            x,
+            level_labels,
+            rotation=20 if rotate_levels else 0,
+            ha="right" if rotate_levels else "center",
+            fontsize=6.2 if rotate_levels else None,
+        )
+        ax.set_ylabel("Percent")
     else:
-        ax.bar(x, values, color=palette["orange"], yerr=yerr, capsize=2.5)
-    rotate_levels = len(level_labels) > 3 or max(map(len, level_labels), default=0) > 18
-    ax.set_xticks(
-        x,
-        level_labels,
-        rotation=20 if rotate_levels else 0,
-        ha="right" if rotate_levels else "center",
-        fontsize=6.2 if rotate_levels else None,
-    )
-    ax.set_ylabel(
-        "Percent" if distribution is not None else "Observed outcome risk (%)"
-    )
+        outcomes = (
+            adjusted["outcome"].dropna().astype(str).unique()
+            if "outcome" in adjusted.columns
+            else ()
+        )
+        ax.set_ylabel(
+            f"{display_label(outcomes[0], labels)} (%)"
+            if len(outcomes) == 1
+            else "Observed outcome risk (%)"
+        )
     ax.set_title(absolute_title, loc="left", pad=7)
     add_panel_label(ax, "a", x=-0.12, y=1.04, fontsize=8.0)
 
@@ -1190,8 +1333,17 @@ def render_association_publication_figure(
         color=palette["blue"],
         label_formatter=(lambda value: str(value))
         if adjusted_label == "_reader_contrast"
+        else _label
+        if adjusted_label == "contrast"
         else None,
     )
+    contrast_exposures = (
+        adjusted["exposure"].dropna().astype(str).unique()
+        if adjusted_label == "contrast" and "exposure" in adjusted.columns
+        else ()
+    )
+    if len(contrast_exposures) == 1:
+        axes[0, 1].set_ylabel(display_label(contrast_exposures[0], labels))
     add_panel_label(axes[0, 1], "b", x=-0.12, y=1.04, fontsize=8.0)
 
     if scientific_sensitivity is not None and scientific_sensitivity_key is not None:
@@ -1278,6 +1430,17 @@ def render_association_publication_figure(
         raise ValueError("association composite has no fourth-panel source")
     if show_panel_d:
         add_panel_label(axes[1, 1], "d", x=-0.12, y=1.04, fontsize=8.0)
+    audit_strips = {"Sensitivity-specification status", "Sensitivity-analysis coverage"}
+    if (
+        show_panel_d
+        and panel_c[0] in audit_strips
+        and panel_d is not None
+        and panel_d[0] in audit_strips
+    ):
+        # Status strips carry a few counts, not a result: they do not get the
+        # height of a result panel.
+        axes[0, 0].get_gridspec().set_height_ratios((1.0, 0.42))
+        fig.set_size_inches(7.2, 5.4)
 
     if scientific_sensitivity is not None:
         panel_specs = (
