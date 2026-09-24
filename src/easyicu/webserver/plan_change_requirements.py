@@ -20,7 +20,7 @@ from easyicu.research_agent.planning.population_requirements import (
     candidate_population_requirements, context_population_requirements,
 )
 from easyicu.research_agent.planning.scientific_review import PlanScientificReview
-from easyicu.research_agent.schema import ResearchContext
+from easyicu.research_agent.research_context.typed import parse_research_context
 from easyicu.webserver import agent_runs, study_contexts
 from easyicu.webserver.plan_change_request import (
     PlanChangeRequest, PlanChangeRequirements, ReferencedPlan, reference_plan_content,
@@ -155,7 +155,9 @@ def bind_plan_change_requirements(
             or canonical_sha256(checkpoint.plan_handoff["plan"]) != review.plan_sha256
             or canonical_sha256(context_payload) != review.context_sha256):
             raise ValueError("source plan/review/context drift")
-        context = ResearchContext.model_validate(context_payload)
+        # The context owner dispatches every supported version; a run that
+        # prepared its data seals a typed context with its materialized inputs.
+        context = parse_research_context(context_payload)
         baseline = population = None
         concepts: set[str] = set()
         operationalized: set[str] = set()

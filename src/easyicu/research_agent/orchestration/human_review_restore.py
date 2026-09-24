@@ -39,8 +39,8 @@ from ..intake.materialized_trajectory import (
 from ..literature import LiteratureBundle
 from ..planning.cohort_contract import cohort_concept_id_scope
 from ..planning.progressive_compiler import progressive_cohort_concept_ids
-from ..research_context.typed import parse_research_context_json
-from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
+from ..research_context.typed import parse_research_context, parse_research_context_json
+from ..schema import AnalysisPlan, ValidationFinding
 from ..contracts.runtime import WritePhaseResult
 from ..skills import get_skill
 from .human_review_checkpoint import (
@@ -509,8 +509,10 @@ def restore_durable_human_review_pause(
 
     handoff = dict(checkpoint.plan_handoff)
     try:
-        context = ResearchContext.model_validate(handoff["context"])
-        agent_context = ResearchContext.model_validate(handoff["agent_context"])
+        # A run that planned on prepared data seals a typed context; the
+        # context owner reads every supported version.
+        context = parse_research_context(handoff["context"])
+        agent_context = parse_research_context(handoff["agent_context"])
         findings = [
             ValidationFinding.model_validate(item)
             for item in list(handoff.get("findings") or ())
