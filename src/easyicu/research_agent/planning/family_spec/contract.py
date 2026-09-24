@@ -80,6 +80,19 @@ class AdjustmentCandidate(BaseModel):
     boundary: str = Field(min_length=1, max_length=300)
 
 
+class AcceptedFeatureGroup(BaseModel):
+    """One accepted primary-analysis input and the fit features that represent it.
+
+    A package-bound attempt keeps the reviewed candidate's primary inputs; the
+    Planner chooses each input's value representation, not whether it stays.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    concept: str = Field(min_length=1, max_length=128)
+    columns: list[str] = Field(min_length=1)
+
+
 class SensitivityAxisBinding(BaseModel):
     """One prespecified StudyContext sensitivity spec projected for the template."""
 
@@ -268,6 +281,7 @@ class FamilySpecRequest(BaseModel):
     level_label_keys: list[str] = Field(default_factory=list)
     counts_only: bool = False
     feature_candidates: list[AdjustmentCandidate] = Field(default_factory=list)
+    accepted_feature_groups: list[AcceptedFeatureGroup] = Field(default_factory=list)
     membership_candidates: list[str] = Field(default_factory=list)
     secondary_continuous_outcome: Optional[str] = Field(default=None, max_length=128)
     sealed_suite: Optional[SealedSuiteCoordinates] = None
@@ -462,7 +476,12 @@ class FamilySpecRequest(BaseModel):
 
     @property
     def request_sha256(self) -> str:
-        return canonical_sha256(self.model_dump(mode="json"))
+        payload = self.model_dump(mode="json")
+        # A request without accepted inputs keeps the digest it had before
+        # the field existed.
+        if not payload.get("accepted_feature_groups"):
+            payload.pop("accepted_feature_groups", None)
+        return canonical_sha256(payload)
 
     @property
     def selectable_candidates(self) -> tuple[AdjustmentCandidate, ...]:
@@ -693,6 +712,23 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
                     f"{name!r} is not a host-offered fit feature",
                     path=f"feature_variables[{index}]",
                 )
+        missing_inputs = [
+            group.concept
+            for group in request.accepted_feature_groups
+            if not set(group.columns) & set(features)
+        ]
+        if missing_inputs:
+            raise FamilySpecError(
+                "family_spec_accepted_input_missing",
+                "the reviewed design keeps every accepted primary input; select at least one "
+                "of its columns for: "
+                + "; ".join(
+                    f"{group.concept} ({', '.join(group.columns)})"
+                    for group in request.accepted_feature_groups
+                    if group.concept in missing_inputs
+                ),
+                path="feature_variables",
+            )
         if request.family_id == PREDICTION_FAMILY_ID and spec.baseline_variables:
             raise FamilySpecError(
                 "family_spec_baseline_variables_not_applicable",
@@ -853,6 +889,7 @@ def spec_from_mapping(payload: Mapping[str, Any]) -> FamilyPlanSpec:
 
 
 __all__ = [
+    "AcceptedFeatureGroup",
     "FAMILY_SPEC_REQUEST_SCHEMA_VERSION",
     "FAMILY_SPEC_SCHEMA_VERSION",
     "DESCRIPTIVE_FAMILY_ID",
