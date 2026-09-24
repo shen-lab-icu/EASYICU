@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -1124,3 +1125,79 @@ def test_renderer_fails_closed_on_inconsistent_display_values(
             step_id=_step().step_id,
             figure_product="primary_publication_figure",
         )
+
+
+def _absolute_risk_frames() -> dict[str, pd.DataFrame]:
+    frames = _source_aware_association_frames()
+    frames.pop("table:measurement_process_audit")
+    frames["table:robustness_matrix"] = _association_frames()["table:robustness_matrix"]
+    return frames
+
+
+def _matrix_and_summary_frames() -> dict[str, pd.DataFrame]:
+    frames = _association_frames()
+    frames["table:robustness_summary"] = _association_summary_frames()[
+        "table:robustness_summary"
+    ]
+    frames.pop("table:measurement_missingness")
+    return frames
+
+
+@pytest.mark.parametrize(
+    ("frames", "input_keys"),
+    [
+        (_frames, COMPOSITE_DESCRIPTIVE_FIGURE_INPUTS),
+        (_robustness_frames, COMPOSITE_DESCRIPTIVE_ROBUSTNESS_FIGURE_INPUTS),
+        (_association_frames, COMPOSITE_ASSOCIATION_PUBLICATION_FIGURE_INPUTS),
+        (
+            _association_summary_frames,
+            COMPOSITE_ASSOCIATION_SUMMARY_PUBLICATION_FIGURE_INPUTS,
+        ),
+        (
+            _matrix_and_summary_frames,
+            COMPOSITE_ASSOCIATION_ROBUSTNESS_PUBLICATION_FIGURE_INPUTS,
+        ),
+        (
+            _association_measurement_frames,
+            COMPOSITE_ASSOCIATION_MEASUREMENT_PUBLICATION_FIGURE_INPUTS,
+        ),
+        (
+            _source_aware_association_frames,
+            COMPOSITE_SOURCE_AWARE_ASSOCIATION_FIGURE_INPUTS,
+        ),
+        (_absolute_risk_frames, ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS),
+        (
+            _cohort_balance_association_frames,
+            COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
+        ),
+        (_balance_association_frames, BALANCE_ASSOCIATION_COMPOSITE_INPUTS),
+    ],
+)
+def test_every_composite_layout_writes_a_legend_for_each_drawn_panel(
+    tmp_path: Path, frames, input_keys
+) -> None:
+    """A promoted composite becomes the manuscript figure, which needs a legend."""
+
+    bindings = {}
+    for key, frame in frames().items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+    out_dir = tmp_path / "outputs"
+    run_composite_descriptive_figure(
+        out_dir=out_dir,
+        run_dir=tmp_path,
+        resolved_inputs={"step_id": "figure_suite", "inputs": bindings},
+        step_id="figure_suite",
+        figure_product="figure_suite",
+        input_keys=input_keys,
+    )
+
+    contract = json.loads((out_dir / "figure_suite.figure_contract.json").read_text())
+    caption = contract["reader_caption"]
+    clauses = re.findall(r"\(([A-Da-d])\) ([^:]+): ", caption)
+    assert [title for _letter, title in clauses] == [
+        panel["title"] for panel in contract["panels"]
+    ]
+    assert "registered source table" not in caption
+    assert caption.endswith("applies no further selection.")
