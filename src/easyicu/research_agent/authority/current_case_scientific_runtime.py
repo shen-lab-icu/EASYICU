@@ -34,8 +34,10 @@ from ..contracts.capability_ids import (
 )
 from ..contracts.cohort_product_keys import sole_typed_cohort_input
 from ..contracts.figure_plan import (
+    CANONICAL_MEASUREMENT_PROCESS_PRODUCT_IDS,
     DeterministicFigurePanelTemplate,
     landmark_association_composite_panels,
+    typed_measurement_process_products,
 )
 from ..contracts.dependence import PlannedDependenceRequirement
 from ..contracts.model_terms import AdjustmentProposal, ModelTermSpec
@@ -1815,12 +1817,18 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                 for product in products
             }
         )
+        # The measurement audit's typed spec names its process table; a
+        # template's own product id must not hide it from the composite.
+        typed_process_products = typed_measurement_process_products(plan.steps)
         measurement_products = [
             product
             for product in declared_products
             if product.partition(":")[0] == "table"
-            and product.partition(":")[2]
-            in {"measurement_process", "measurement_process_audit"}
+            and (
+                product in typed_process_products
+                or product.partition(":")[2]
+                in CANONICAL_MEASUREMENT_PROCESS_PRODUCT_IDS
+            )
         ]
         sensitivity_contrast_products = [
             product
@@ -2035,7 +2043,10 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
                             "figure_panels": [
                                 panel.bind(figure_output=figure_output)
                                 for panel in landmark_association_composite_panels(
-                                    composite_inputs
+                                    composite_inputs,
+                                    measurement_process_products=(
+                                        typed_process_products
+                                    ),
                                 )
                             ],
                         }
