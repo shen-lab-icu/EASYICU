@@ -3910,7 +3910,7 @@ def _compile_plan_revision_contract(
 class _CandidatePlanMaterializationAuthority:
     """Exact metadata-only Plan coordinates accepted for data preparation."""
 
-    primary_exposure: str
+    primary_exposure: Optional[str]
     target_outcome: str
     outcome_concepts: tuple[str, ...]
     contract: str
@@ -4113,10 +4113,16 @@ def _load_candidate_plan_materialization_authority(
     expected_primary_exposure = configured_primary_exposure
     if configured_primary_exposure and aggregation:
         expected_primary_exposure = f"{configured_primary_exposure}_{aggregation}"
+    # A design without an exposure role (a prediction model, a phenotype
+    # discovery) has no exposure coordinate on either side.  Launch
+    # preparation requires one only when the StudyContext configures it, and
+    # the sealed candidate must agree with that configuration
+    # (``primary_exposure != expected_primary_exposure`` below).  Every other
+    # coordinate stays mandatory.
     source_required_concepts = tuple(
         dict.fromkeys(
             (
-                configured_primary_exposure,
+                *((configured_primary_exposure,) if configured_primary_exposure else ()),
                 _clean_text(proposed.get("target_outcome"), 160),
                 *requested_outcomes,
                 *covariates,
@@ -4126,7 +4132,7 @@ def _load_candidate_plan_materialization_authority(
     planned_analysis_coordinates = tuple(
         dict.fromkeys(
             (
-                primary_exposure,
+                *((primary_exposure,) if primary_exposure else ()),
                 target_outcome,
                 *requested_outcomes,
                 *candidate_covariates,
@@ -4212,7 +4218,7 @@ def _load_candidate_plan_materialization_authority(
             details={"field": "table_one_spec", "cause": str(exc)},
         ) from exc
     return _CandidatePlanMaterializationAuthority(
-        primary_exposure=primary_exposure,
+        primary_exposure=primary_exposure or None,
         target_outcome=target_outcome,
         outcome_concepts=requested_outcomes,
         contract=_candidate_plan_contract(review=parsed_review, plan=plan),
