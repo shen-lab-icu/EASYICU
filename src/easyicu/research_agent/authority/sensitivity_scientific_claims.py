@@ -15,6 +15,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .claim_coordinates import contrast_exposure_coordinate
+
 _POPULATION_BY_STRATEGY = {
     "functional_form": (
         "the {analysis_set} analysis set with {covariate} modelled by a "
@@ -44,6 +46,10 @@ class BinarySensitivityReporting(BaseModel):
     upper: float = Field(gt=0)
     n: int = Field(gt=0, strict=True)
     events: int = Field(ge=0, strict=True)
+    # Present when the exposure has several non-reference levels: the
+    # contrast the refit's estimate reports.
+    exposure_level: str | None = Field(default=None, min_length=1)
+    reference_level: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def _coherent(self) -> "BinarySensitivityReporting":
@@ -55,6 +61,10 @@ class BinarySensitivityReporting(BaseModel):
             raise ValueError(
                 "only a functional-form refit names the covariate it reshaped"
             )
+        if (self.exposure_level is None) != (self.reference_level is None) or (
+            self.exposure_level is not None and self.exposure_level == self.reference_level
+        ):
+            raise ValueError("a named contrast needs two distinct levels")
         return self
 
 
@@ -75,7 +85,13 @@ def derive_sensitivity_claim_payloads(summary: dict) -> list[dict]:
             "claim_id": "sensitivity_"
             + re.sub(r"[^a-z0-9]+", "_", report.analysis_id.lower()).strip("_"),
             "claim_type": "association",
-            "exposure": report.exposure,
+            "exposure": (
+                report.exposure
+                if report.exposure_level is None
+                else contrast_exposure_coordinate(
+                    report.exposure, report.exposure_level, str(report.reference_level)
+                )
+            ),
             "outcome": report.outcome,
             "direction": direction,
             "estimand": "adjusted odds ratio",

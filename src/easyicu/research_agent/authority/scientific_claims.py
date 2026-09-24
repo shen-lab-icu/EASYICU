@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import json
 import math
-from typing import Literal
+import re
+from typing import Literal, Sequence
 
+from .claim_coordinates import contrast_exposure_coordinate
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -62,6 +64,12 @@ def _reader_coordinate(coordinate: str) -> str:
 # manuscript quality audit prescribes for the same phrase.
 _READER_ANALYSIS_SET_POPULATIONS = {
     "the source aware analysis set": "the analysis set",
+    "the primary model complete-case records": (
+        "the primary model's complete-case records"
+    ),
+    "the bound analysis records with an observed outcome": (
+        "the analysis records with an observed outcome"
+    ),
 }
 
 
@@ -71,6 +79,51 @@ def _reader_population(population: str) -> str:
         if reader.casefold().startswith(rule):
             return plain + reader[len(rule):]
     return reader
+
+
+def _reader_decimals(value: float, minimum: int) -> str:
+    """Round to ``minimum`` decimals, keeping two significant figures below that.
+
+    The places are fixed, not trimmed, so a point and its interval read at one
+    precision.  The numeric binder matches a displayed value within half its
+    last place, so the precision also keeps close values of one evidence
+    record apart.
+    """
+
+    if value == 0 or not math.isfinite(value):
+        return f"{value:.{minimum}f}"
+    places = max(minimum, 1 - math.floor(math.log10(abs(value))))
+    return f"{value:.{places}f}"
+
+
+def _reader_ratio(value: float) -> str:
+    """Ratios and coefficients carry three decimals."""
+
+    return _reader_decimals(value, 3)
+
+
+def _reader_percent(value: float) -> str:
+    """Percentages and percentage points carry two decimals."""
+
+    return _reader_decimals(value, 2)
+
+
+def _reader_series(terms: Sequence[str]) -> str:
+    """Join terms as a reader list: "a", "a and b", "a, b, and c"."""
+
+    items = [str(term) for term in terms]
+    if len(items) <= 2:
+        return " and ".join(items)
+    return ", ".join(items[:-1]) + ", and " + items[-1]
+
+
+# The absolute-risk adapter states a counts-only frequency in this exact form
+# (absolute_risk_scientific_claims); the reader sentence restates its counts.
+_COUNTS_ONLY_FREQUENCY_RE = re.compile(
+    r"observed outcome frequency was (?P<percent>\d+(?:\.\d+)?)% "
+    r"\((?P<events>\d+) events among (?P<n>\d+) records; counts only, "
+    r"no confidence interval\)"
+)
 
 
 class ScientificClaimDraft(BaseModel):
@@ -263,11 +316,10 @@ class ScientificClaim(ScientificClaimDraft):
         keys re-spaced for readers, without inventing clinical translations.
         The projection retains the claim type, direction, estimate, interval, and causal
         ceiling.  The immutable claim object and its evidence coordinates are
-        unchanged.
+        unchanged.  Numbers use one fixed precision per kind: ratios and
+        coefficients three decimals, percentages two, each with at least two
+        significant figures.
         """
-
-        def display_number(value: float) -> str:
-            return f"{value:.3f}".rstrip("0").rstrip(".")
 
         if self.claim_type == "descriptive_absolute_risk":
             group = _reader_coordinate(self.exposure)
@@ -277,6 +329,19 @@ class ScientificClaim(ScientificClaimDraft):
                     f"These findings describe {outcome} in the {group} group within "
                     f"{_reader_population(self.population)}; interpretation is "
                     "descriptive and unadjusted and does not establish a causal effect."
+                )
+            counts = (
+                _COUNTS_ONLY_FREQUENCY_RE.fullmatch(self.estimand)
+                if self.point_estimate is None
+                else None
+            )
+            if counts is not None:
+                return (
+                    f"The observed frequency of {outcome} was "
+                    f"{_reader_percent(float(counts['percent']))}% "
+                    f"({int(counts['events']):,} of {int(counts['n']):,} records) in "
+                    f"{_reader_population(self.population)}; this was a "
+                    "descriptive, unadjusted, noncausal frequency."
                 )
             if (
                 self.point_estimate is None
@@ -291,9 +356,9 @@ class ScientificClaim(ScientificClaimDraft):
             assert upper is not None
             return (
                 f"The observed absolute risk of {outcome} in the {group} group was "
-                f"{display_number(point)}% ({confidence:g}% CI, "
-                f"{display_number(lower)}% to "
-                f"{display_number(upper)}%); this was a "
+                f"{_reader_percent(point)}% ({confidence:g}% CI, "
+                f"{_reader_percent(lower)}% to "
+                f"{_reader_percent(upper)}%); this was a "
                 "descriptive, unadjusted, noncausal estimate."
             )
         if self.claim_type == "descriptive_risk_difference":
@@ -311,9 +376,9 @@ class ScientificClaim(ScientificClaimDraft):
             return (
                 f"The prespecified unadjusted risk difference for {outcome} "
                 f"({contrast}; comparison minus reference) "
-                f"was {display_number(point)} percentage points "
-                f"({confidence:g}% CI, {display_number(lower)} to "
-                f"{display_number(upper)}); this was a "
+                f"was {_reader_percent(point)} percentage points "
+                f"({confidence:g}% CI, {_reader_percent(lower)} to "
+                f"{_reader_percent(upper)}); this was a "
                 "descriptive, unadjusted, noncausal contrast."
             )
 
@@ -323,24 +388,26 @@ class ScientificClaim(ScientificClaimDraft):
             relation = "was negatively associated with"
         else:
             relation = "showed no clear association with"
-        estimate_text = self.estimand
+        # A conclusion keeps the estimand: it can carry the claim's scope
+        # ("this point contrast only").
+        estimate_text = f" ({self.estimand})"
         if include_estimate and self.point_estimate is not None:
             assert self.interval_lower is not None
             assert self.interval_upper is not None
             estimate_text = (
-                f"{self.estimand}, {display_number(self.point_estimate)}; "
-                f"95% CI, {display_number(self.interval_lower)} to "
-                f"{display_number(self.interval_upper)}"
+                f" ({self.estimand}, {_reader_ratio(self.point_estimate)}; "
+                f"95% CI, {_reader_ratio(self.interval_lower)} to "
+                f"{_reader_ratio(self.interval_upper)})"
             )
         model_prefix = (
             "After adjustment for "
-            + ", ".join(_reader_coordinate(term) for term in self.adjusted_for)
+            + _reader_series([_reader_coordinate(term) for term in self.adjusted_for])
             + ", " if self.adjusted_for else ""
         )
         return (
             f"{model_prefix}{_reader_coordinate(self.exposure)} {relation} "
             f"{_reader_coordinate(self.outcome)} in "
-            f"{_reader_population(self.population)} ({estimate_text})."
+            f"{_reader_population(self.population)}{estimate_text}."
         )
 
     def _reader_interval(self) -> tuple[float, float, float, float]:
@@ -502,12 +569,26 @@ def derive_scientific_claim_drafts(
     covariates = summary.get("adjustment_covariates", summary.get("covariates", []))
     if not isinstance(covariates, list):
         raise ValueError("scientific_claims adjustment covariates must be a list")
+    exposure = _required_adjusted_text("exposure")
+    # An exposure with several non-reference levels has one estimate per
+    # contrast; the claim names the one its estimate reports.
+    contrast = summary.get("primary_contrast")
+    if contrast is not None:
+        if not isinstance(contrast, dict):
+            raise ValueError("scientific_claims primary_contrast must be an object")
+        level = " ".join(str(contrast.get("exposure_level") or "").split())
+        reference = " ".join(str(contrast.get("reference_level") or "").split())
+        if not level or not reference or level == reference:
+            raise ValueError(
+                "scientific_claims primary_contrast must name two distinct levels"
+            )
+        exposure = contrast_exposure_coordinate(exposure, level, reference)
 
     return [
         ScientificClaimDraft(
             claim_id="adjusted_association",
             claim_type="association",
-            exposure=_required_adjusted_text("exposure"),
+            exposure=exposure,
             outcome=_required_adjusted_text("outcome"),
             direction=direction,
             estimand=estimand,

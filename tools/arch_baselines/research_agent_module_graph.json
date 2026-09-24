@@ -2369,6 +2369,10 @@
     ],
     [
       "easyicu.research_agent.authority.scientific_claims",
+      "easyicu.research_agent.authority.claim_coordinates"
+    ],
+    [
+      "easyicu.research_agent.authority.scientific_claims",
       "easyicu.research_agent.authority.descriptive_scientific_claims"
     ],
     [
@@ -2378,6 +2382,10 @@
     [
       "easyicu.research_agent.authority.scientific_claims",
       "easyicu.research_agent.authority.sensitivity_scientific_claims"
+    ],
+    [
+      "easyicu.research_agent.authority.sensitivity_scientific_claims",
+      "easyicu.research_agent.authority.claim_coordinates"
     ],
     [
       "easyicu.research_agent.authority.source_status",
@@ -10989,6 +10997,10 @@
     ],
     [
       "easyicu.research_agent.reporting.descriptive_report_facts",
+      "easyicu.research_agent.contracts.cohort_product_keys"
+    ],
+    [
+      "easyicu.research_agent.reporting.descriptive_report_facts",
       "easyicu.research_agent.contracts.descriptive_execution"
     ],
     [
@@ -12776,9 +12788,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3186,
+    "edge_count": 3189,
     "largest_scc_size": 0,
-    "module_count": 757,
+    "module_count": 758,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -12839,6 +12851,7 @@
     "easyicu.research_agent.authority": "authority/__init__.py",
     "easyicu.research_agent.authority.absolute_risk_scientific_claims": "authority/absolute_risk_scientific_claims.py",
     "easyicu.research_agent.authority.analysis_cohort": "authority/analysis_cohort.py",
+    "easyicu.research_agent.authority.claim_coordinates": "authority/claim_coordinates.py",
     "easyicu.research_agent.authority.coder_authority": "authority/coder_authority.py",
     "easyicu.research_agent.authority.context_numeric_claims": "authority/context_numeric_claims.py",
     "easyicu.research_agent.authority.current_case_scientific_runtime": "authority/current_case_scientific_runtime.py",

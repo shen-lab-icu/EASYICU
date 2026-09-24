@@ -401,6 +401,9 @@ def test_first_stay_variant_refits_the_parent_model_on_first_stays(tmp_path, mon
     [claim] = derive_scientific_claim_drafts(summary)
     assert claim.analysis_role == "sensitivity"
     assert claim.population.endswith("restricted to the first ICU stay of each patient")
+    # A four-level exposure: the refit's claim names the contrast it reports.
+    assert (reporting["exposure_level"], reporting["reference_level"]) == ("3", "0")
+    assert claim.exposure == "aki_stage_strict=3 versus aki_stage_strict=0"
     table = pd.read_csv(out_dir / summary["output_files"]["table:sensitivity_first_icu_stay_only"])
     assert table.loc[0, "odds_ratio"] == pytest.approx(row["odds_ratio"])
     code = association_binary_sensitivity_executor_code(plan.steps[2], plan=plan)
@@ -451,6 +454,8 @@ def test_functional_form_variant_reports_spline_effect_and_nonlinearity(tmp_path
     assert reporting["strategy"] == "functional_form" and reporting["covariate"] == "age"
     [claim] = derive_scientific_claim_drafts(summary)
     assert claim.claim_id == "sensitivity_age_restricted_cubic_spline"
+    assert (reporting["exposure_level"], reporting["reference_level"]) == ("3", "0")
+    assert claim.exposure == "aki_stage_strict=3 versus aki_stage_strict=0"
     assert (claim.point_estimate, claim.interval_lower, claim.interval_upper) == (
         row["odds_ratio"], row["ci_low"], row["ci_high"]
     )

@@ -213,7 +213,7 @@ def test_model_claim_registration_is_sealed_and_reader_retains_comparison(tmp_pa
     store.enforce_evidence_bound_scaffold("## Results\n\n" + "\n\n".join(c.placeholder for c in claims))
     reader = claims[1].render_reader_text()
     for required in ("5 versus 2 mmHg", "icu readmission", "800 complete-case", "24-hour landmark",
-                     "adjustment for age, admission score", "not a summary of the nonlinear curve"):
+                     "adjustment for age and admission score", "not a summary of the nonlinear curve"):
         assert required in reader
     assert "900" not in reader
     forged = copy.deepcopy(summary)

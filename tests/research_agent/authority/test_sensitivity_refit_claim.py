@@ -62,7 +62,7 @@ def test_c_functional_form_refit_reads_as_an_adjusted_sensitivity_estimate() -> 
         "association", "sensitivity", "no_clear_association",
     )
     assert claim.render_reader_text() == (
-        "After adjustment for age, sex, aki stage strict showed no clear association "
+        "After adjustment for age and sex, aki stage strict showed no clear association "
         "with death in the analysis set with age modelled by a restricted cubic "
         "spline (adjusted odds ratio, 1.205; 95% CI, 0.516 to 2.814)."
     )
@@ -236,7 +236,7 @@ def test_c_the_expanded_sensitivity_sentence_survives_strict_numeric_binding(
             ),
             "lactate max was positively associated with icu readmission in the "
             "analysis set with sofa modelled by a restricted cubic spline "
-            "(adjusted odds ratio, 1.31; 95% CI, 1.05 to 1.63).",
+            "(adjusted odds ratio, 1.310; 95% CI, 1.050 to 1.630).",
         ),
         (
             dict(
@@ -247,7 +247,7 @@ def test_c_the_expanded_sensitivity_sentence_survives_strict_numeric_binding(
             ),
             "vasopressor any was negatively associated with mort 28d in the "
             "complete case analysis set restricted to the first ICU stay of each "
-            "patient (adjusted odds ratio, 0.72; 95% CI, 0.55 to 0.94).",
+            "patient (adjusted odds ratio, 0.720; 95% CI, 0.550 to 0.940).",
         ),
     ],
     ids=["lactate_readmission_spline", "vasopressor_mortality_first_stay"],

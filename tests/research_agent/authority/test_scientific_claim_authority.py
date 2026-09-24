@@ -458,12 +458,12 @@ def test_host_derives_only_descriptive_absolute_risks_and_risk_difference() -> N
     reader = " ".join(claim.render_reader_text() for claim in claims).lower()
     assert (
         "observed absolute risk of hospital mortality in the "
-        "early lactate elevation=0 group was 10%" in reader
+        "early lactate elevation=0 group was 10.00%" in reader
     )
     assert (
         "unadjusted risk difference for hospital mortality "
         "(early lactate elevation=1 versus early lactate elevation=0; "
-        "comparison minus reference) was 20 percentage points" in reader
+        "comparison minus reference) was 20.00 percentage points" in reader
     )
     assert "analysis role" not in reader
     assert "bound typed cohort" not in reader
