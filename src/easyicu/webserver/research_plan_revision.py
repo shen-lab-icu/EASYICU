@@ -17,6 +17,7 @@ from typing import Any, Mapping
 from easyicu.research_agent.authority.run_input import load_verified_run_input_capsule
 from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.contracts.frozen_payload import thaw_payload
+from easyicu.research_agent.planning.accepted_analysis_inputs import AcceptedAnalysisInputs
 from easyicu.research_agent.planning.baseline_requirements import (
     AcceptedBaselineRequirements, candidate_baseline_requirements,
 )
@@ -49,6 +50,9 @@ class PreparedPlanRevision:
     failed_execution_replan: bool = False
     baseline_requirements: AcceptedBaselineRequirements | None = None
     population_requirements: PlanPopulationRequirements | None = None
+    # The accepted candidate's primary-analysis inputs sealed into the source
+    # run's configuration; every repair on this prepared input keeps them.
+    analysis_inputs: AcceptedAnalysisInputs | None = None
 
 
 def load_prepared_plan_revision(
@@ -240,6 +244,11 @@ def load_prepared_plan_revision(
             failed_execution_replan=failed_execution_replan,
             baseline_requirements=baseline,
             population_requirements=population,
+            analysis_inputs=(
+                AcceptedAnalysisInputs.model_validate(thaw_payload(config.bound_analysis_inputs))
+                if config.bound_analysis_inputs is not None
+                else None
+            ),
         )
     except Exception as exc:
         # No raw paths, source contents or old Provider environment in errors.

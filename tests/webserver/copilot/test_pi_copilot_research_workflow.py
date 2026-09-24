@@ -8172,11 +8172,18 @@ def test_prepared_plan_revision_reuses_inputs_but_requires_a_new_plan_review(
     pd.DataFrame({"heart_rate_max": [90.0], "death": [0], "charlson": [2.0]}).to_parquet(cohort)
     pd.DataFrame({"heart_rate": [90.0]}).to_parquet(trajectory)
     before = {path: path.read_bytes() for path in (cohort, trajectory)}
+    from easyicu.research_agent.planning.accepted_analysis_inputs import AcceptedAnalysisInputs
+
+    accepted_inputs = AcceptedAnalysisInputs(
+        source_plan_sha256="c" * 64, source_step_ids=("primary_model",),
+        concepts=("heart_rate", "charlson"),
+    )
     scope = research_plan_revision.PreparedPlanRevision(
         run_dir=old_run, pipeline_config_sha256="a" * 64,
         prepared_package_binding={"sha256": "b" * 64},
         prior_plan_contract="Retain the reviewed baseline and 48-hour window.",
         required_primary_cohort_selection_mode="all_input_rows",
+        analysis_inputs=accepted_inputs,
     )
     inputs = agent_pipeline_runs._ExecutionResumeInputs(
         cohort_path=cohort, cohort_authority_path=None, cohort_authority_ref=None,
@@ -8255,6 +8262,8 @@ def test_prepared_plan_revision_reuses_inputs_but_requires_a_new_plan_review(
 
     assert thaw_payload(config.bound_baseline_requirements) == baseline
     assert thaw_payload(config.bound_population_requirements) == population
+    # The repair stays bound to the accepted candidate's primary inputs.
+    assert thaw_payload(config.bound_analysis_inputs) == accepted_inputs.model_dump(mode="json")
     assert "48-hour" in config.bound_plan_revision_contract
     assert ("ACCEPTED_BASELINE_CONTENT_MISSING" in config.bound_plan_revision_contract) is not failed_execution
     assert all(path.read_bytes() == content for path, content in before.items())

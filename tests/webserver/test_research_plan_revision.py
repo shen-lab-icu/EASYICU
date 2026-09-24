@@ -79,6 +79,7 @@ def source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         workdir=run_dir.parent,
         bound_plan_revision_contract="Preserve age, sex, admission type and Charlson.",
         required_primary_cohort_selection_mode="all_input_rows",
+        bound_analysis_inputs=None,
     )
     checkpoint = SimpleNamespace(
         run_id="run_inner",
@@ -175,6 +176,29 @@ def test_failed_execution_replan_preserves_source_inputs_and_full_requirements(f
     assert source.checkpoint.approved_decisions == [{"decision": "approved"}]
     assert not hasattr(result, "approved_decisions")
     assert not hasattr(result, "runner_image")
+
+
+@pytest.mark.parametrize("fixture", ["source", "failed_source"])
+def test_a_repair_keeps_the_accepted_candidates_primary_inputs(request, fixture) -> None:
+    """Dev9 M3: the first package-bound plan kept its ten reviewed features, but
+    its automatic repair re-planned without them and the phenotyping family was
+    refused ("needs selectable feature candidates") before any Provider call."""
+
+    source = request.getfixturevalue(fixture)
+    accepted = {
+        "schema_version": "easyicu.accepted_analysis_inputs/1",
+        "source_plan_sha256": "b" * 64,
+        "source_step_ids": ["primary_cluster_solution"],
+        "concepts": ["hr", "wbc", "crea"],
+    }
+    source.config.bound_analysis_inputs = accepted
+
+    result = load(source)
+
+    assert result.failed_execution_replan is (fixture == "failed_source")
+    assert result.analysis_inputs.model_dump(mode="json") == accepted
+    source.config.bound_analysis_inputs = None
+    assert load(source).analysis_inputs is None
 
 
 @pytest.mark.parametrize("mutation", [
