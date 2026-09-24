@@ -56,6 +56,10 @@ from easyicu.research_agent.planning.scientific_review import (
     plan_revision_blocker_codes,
     render_agent_plan_revision_contract,
 )
+from easyicu.research_agent.planning.accepted_analysis_inputs import (
+    AcceptedAnalysisInputs,
+    candidate_analysis_inputs,
+)
 from easyicu.research_agent.planning.baseline_requirements import (
     AcceptedBaselineRequirements,
     candidate_baseline_requirements,
@@ -3918,6 +3922,7 @@ class _CandidatePlanMaterializationAuthority:
     primary_exposure_aggregation: Optional[str] = None
     baseline_requirements: Optional[AcceptedBaselineRequirements] = None
     population_requirements: Optional[PlanPopulationRequirements] = None
+    analysis_inputs: Optional[AcceptedAnalysisInputs] = None
 
 
 def _candidate_plan_contract(
@@ -4217,6 +4222,28 @@ def _load_candidate_plan_materialization_authority(
             "The accepted baseline content does not match the verified planning catalog.",
             details={"field": "table_one_spec", "cause": str(exc)},
         ) from exc
+    try:
+        analysis_inputs = candidate_analysis_inputs(
+            plan=plan,
+            source_plan_sha256=parsed_review.plan_sha256,
+            selected_concepts=tuple(selected_concepts),
+            excluded=(
+                primary_exposure,
+                configured_primary_exposure,
+                target_outcome,
+                *requested_outcomes,
+                *(
+                    _clean_text(receipt.get(key), 160)
+                    for key in ("row_identity_column", "patient_identity_column")
+                ),
+            ),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ResearchPipelineRunError(
+            "candidate_plan_materialization_authority_invalid",
+            "The accepted primary-analysis inputs do not match the verified planning catalog.",
+            details={"field": "steps.inputs", "cause": str(exc)},
+        ) from exc
     return _CandidatePlanMaterializationAuthority(
         primary_exposure=primary_exposure or None,
         target_outcome=target_outcome,
@@ -4226,6 +4253,7 @@ def _load_candidate_plan_materialization_authority(
         primary_exposure_aggregation=aggregation or None,
         baseline_requirements=baseline_requirements,
         population_requirements=population_requirements,
+        analysis_inputs=analysis_inputs,
     )
 
 
@@ -4951,6 +4979,7 @@ def make_research_pipeline_run_runner(
             bound_change_request.population_requirements()
             if bound_change_request is not None else None
         )
+        bound_analysis_inputs: Optional[AcceptedAnalysisInputs] = None
         source_agent_plan_revision_codes: tuple[str, ...] = ()
         if prepared_revision is not None and prepared_revision.failed_execution_replan:
             bound_plan_revision_contract = prepared_revision.prior_plan_contract or ""
@@ -4977,6 +5006,7 @@ def make_research_pipeline_run_runner(
                 candidate_exposure_aggregation = candidate_authority.primary_exposure_aggregation
                 bound_baseline_requirements = candidate_authority.baseline_requirements
                 bound_population_requirements = candidate_authority.population_requirements
+                bound_analysis_inputs = candidate_authority.analysis_inputs
                 foundation_profile = _data_foundation_profile(
                     export_path=export_path,
                     study=candidate_planning_study,
@@ -4987,6 +5017,11 @@ def make_research_pipeline_run_runner(
                     covariates=covariates,
                     sensitivity_specs=sensitivity_specs,
                     additional_outcomes=candidate_outcome_concepts,
+                    analysis_inputs=(
+                        bound_analysis_inputs.concepts
+                        if bound_analysis_inputs is not None
+                        else ()
+                    ),
                 )
                 bound_plan_revision_contract = candidate_authority.contract
             else:
@@ -5603,6 +5638,11 @@ def make_research_pipeline_run_runner(
                 bound_baseline_requirements=(
                     bound_baseline_requirements.model_dump(mode="json")
                     if bound_baseline_requirements is not None
+                    else None
+                ),
+                bound_analysis_inputs=(
+                    bound_analysis_inputs.model_dump(mode="json")
+                    if bound_analysis_inputs is not None
                     else None
                 ),
                 # Live PubMed is frozen by the selected additive profile, not

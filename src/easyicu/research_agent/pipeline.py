@@ -3161,6 +3161,7 @@ class ResearchAgentPipeline:
         # after its last revision, so it never got to satisfy it.
         long_trajectory_bound = long_trajectory_is_bound(trajectory_binding)
         context_path = run_dir / "research_context.json"
+        from .planning.accepted_analysis_inputs import bind_analysis_inputs
         from .planning.baseline_requirements import bind_baseline_requirements
         from .planning.population_requirements import bind_population_requirements
 
@@ -3179,6 +3180,9 @@ class ResearchAgentPipeline:
             )
             bind_population_requirements(
                 context, self._config.bound_population_requirements, restoring=True,
+            )
+            bind_analysis_inputs(
+                context, self._config.bound_analysis_inputs, restoring=True,
             )
             if not context_path.is_file() or sha256_of_file(
                 context_path
@@ -3228,6 +3232,9 @@ class ResearchAgentPipeline:
             )
             context = bind_population_requirements(
                 context, self._config.bound_population_requirements,
+            )
+            context = bind_analysis_inputs(
+                context, self._config.bound_analysis_inputs,
             )
             context_path.write_text(
                 context.model_dump_json(indent=2),
