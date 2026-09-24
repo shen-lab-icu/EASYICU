@@ -181,20 +181,20 @@ def test_complete_flow_figure_draws_stages_exclusions_and_retention(
 
     source = pd.read_csv(out_dir / "cohort_accounting_source_data.csv")
     assert source["display_label"].tolist() == [
-        "Source universe",
+        "Source cohort",
         "Adult",
-        "Final \u00b7 First icu stay",
+        "First icu stay",
     ]
     svg = (out_dir / "cohort_accounting.svg").read_text(encoding="utf-8")
     assert "First_Icu_Stay" not in svg
     assert "n = 140" in svg and "n = 128" in svg and "n = 120" in svg
-    assert "\u221212 excluded" in svg and "\u22128 excluded" in svg
+    assert "Excluded (n = 12)" in svg and "Excluded (n = 8)" in svg
     assert "91.4% of previous" in svg
     assert "93.8% of previous" in svg
     assert "85.7% of universe" in svg
-    # The grey share sits directly under a red "excluded" count.  It is the
+    # The grey share sits directly under a red exclusion count.  It is the
     # share that REMAINS, and it must say so: a bare "91.4% of previous" under
-    # "-12 excluded" reads as though 91.4% had been excluded.
+    # "Excluded (n = 12)" reads as though 91.4% had been excluded.
     assert "retained 91.4% of previous" in svg
     assert "retained 93.8% of previous" in svg
     contract = json.loads(
@@ -410,7 +410,7 @@ def test_sorted_flow_preserves_original_row_coordinates(tmp_path: Path) -> None:
     source = pd.read_csv(path)
     assert source["source_row_index"].tolist() == [1, 2, 0]
     assert source["n_remaining"].tolist() == [140, 128, 120]
-    assert source["display_label"].iloc[0] == "Source universe"
+    assert source["display_label"].iloc[0] == "Source cohort"
     assert (
         FigureSourceDataValidator._compare_source_to_upstream(
             source_df=source,
@@ -740,3 +740,67 @@ def test_extreme_stage_counts_and_exclusions_stay_inside_the_axes() -> None:
     for x0, _y0, x1, _y1, _text in rows:
         assert x0 >= -0.01 and x1 <= 1.01, "text escaped the axes"
     plt.close(fig)
+
+
+def test_each_exclusion_gets_a_side_box_and_the_final_stage_stands_out(
+    tmp_path: Path,
+) -> None:
+    """A participant-flow diagram: side boxes for exclusions, no corner title.
+
+    A stage that excluded nobody has nothing to report beside it; the last
+    stage is marked by its outline, not by a "Final" prefix in its name.
+    """
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import FancyBboxPatch
+
+    from easyicu.research_agent.execution.runners.cohort_flow_figure_executor import (
+        render_cohort_flow_axis,
+    )
+
+    frame = pd.DataFrame(
+        [
+            [0, "universe", 5_000, 0, 5_000],
+            [1, "adult", 5_000, 200, 4_800],
+            [2, "consented", 4_800, 0, 4_800],
+            [3, "first_icu_stay", 4_800, 700, 4_100],
+            [4, "stay_of_24_hours", 4_100, 200, 3_900],
+        ],
+        columns=["step_order", "predicate_kind", "n_before", "n_excluded", "n_remaining"],
+    )
+    labels = ["Source cohort", "Adult", "Consented", "First icu stay", "Stay of 24 hours"]
+    fig, ax = plt.subplots(figsize=(7.2, 4.8))
+    render_cohort_flow_axis(ax, frame, labels)
+    texts = [text.get_text() for text in ax.texts]
+
+    assert [text for text in texts if text.startswith("Excluded")] == [
+        "Excluded (n = 200)", "Excluded (n = 700)", "Excluded (n = 200)",
+    ]
+    assert sum(text.startswith("retained") for text in texts) == 3
+    assert not any("100% of previous" in text for text in texts)
+    nodes = [
+        patch for patch in ax.patches
+        if isinstance(patch, FancyBboxPatch) and patch.get_facecolor()[:3] != (1.0, 1.0, 1.0)
+    ]
+    side_boxes = [
+        patch for patch in ax.patches
+        if isinstance(patch, FancyBboxPatch) and patch.get_facecolor()[:3] == (1.0, 1.0, 1.0)
+    ]
+    assert len(nodes) == 5 and len(side_boxes) == 3
+    assert [patch.get_linewidth() for patch in nodes] == [0.9, 0.9, 0.9, 0.9, 1.4]
+    _assert_no_text_overlap(_drawn_text_rows(fig, ax))
+    plt.close(fig)
+
+    step = _step()
+    run_dir, manifest, _binding_row = _binding(tmp_path, frame=frame)
+    out_dir = run_dir / "steps" / step.step_id / "outputs"
+    run_cohort_flow_figure(
+        out_dir=out_dir, run_dir=run_dir, resolved_inputs=manifest,
+        step_id=step.step_id, figure_product="cohort_accounting",
+    )
+    svg = (out_dir / "cohort_accounting.svg").read_text(encoding="utf-8")
+    assert "Cohort accounting" not in svg and "Final" not in svg
+    assert "Stay of 24 hours" in svg and "n = 3,900" in svg
