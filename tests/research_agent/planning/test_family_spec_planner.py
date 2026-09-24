@@ -1210,14 +1210,14 @@ def _spline_context() -> ResearchContext:
     )
 
 
-def _spline_spec_payload(request, *, adjustment_set):
+def _spline_spec_payload(request, *, adjustment_set, labels=SPLINE_LABELS):
     return {
         "schema_version": "easyicu.family_plan_spec/1",
         "family_id": request.family_id,
         "request_sha256": request.request_sha256,
         "adjustment_set": adjustment_set,
         "reader_display_labels": [
-            {"key": key, "value": SPLINE_LABELS[key]} for key in request.required_reader_label_keys
+            {"key": key, "value": labels[key]} for key in request.required_reader_label_keys
         ],
         "comparator_applications": [
             {
@@ -1920,6 +1920,76 @@ def test_a_roster_the_design_cannot_name_is_refused_before_it_compiles() -> None
             request,
         )
     assert caught.value.reason_code == "family_spec_roster_exceeds_design"
+
+
+def _landmark_roster_payload(request, labs: list[str]) -> dict:
+    """A severity-adjusted landmark spec: age, sex and first-day organ measurements."""
+
+    rationale = "Measured within the 24 h window, available at the landmark, and related to death."
+    labels = {
+        **SPLINE_LABELS,
+        **{
+            name: f"Worst value of routine organ-function measurement {name[4:6]} in the first 24 h after ICU admission"
+            for name in request.variable_roster
+            if name.startswith("lab_")
+        },
+    }
+    payload = _spline_spec_payload(
+        request,
+        adjustment_set=[
+            *(item for item in PLANNER_ROSTER if item["name"] in {"age", "sex"}),
+            *(
+                {"name": name, "coding": "continuous", "reference_level_index": None,
+                 "clinical_rationale": rationale}
+                for name in labs
+            ),
+        ],
+        labels=labels,
+    )
+    payload["reader_display_labels"] = [
+        {"key": key, "value": labels[key]}
+        for key in dict.fromkeys([*request.required_reader_label_keys, *labs])
+    ]
+    return payload
+
+
+def test_a_landmark_roster_is_named_in_the_estimand_only_while_it_fits() -> None:
+    """A severity-adjusted landmark model compiles, and its estimand stays one bounded sentence.
+
+    The template wrote every covariate label into the estimand, so a landmark
+    association adjusted for the other first-day organ scores passed the
+    Planner and failed only when the selected design was built.
+    """
+
+    from easyicu.research_agent.planning.family_spec.contract import design_field_max_length
+
+    context = _with_routine_measurements(_spline_context(), 8)
+    request = _request(context)
+    labs = [f"lab_{i:02d}_max" for i in range(8)]
+    assert set(labs) <= {item.name for item in request.selectable_candidates}
+
+    _llm, result = _run(context, [json.dumps(_landmark_roster_payload(request, labs))])
+
+    selected = result.output.design_selection.selected
+    assert {"age", "sex", *labs} <= set(selected.required_variables)
+    assert len(selected.estimand) <= design_field_max_length("estimand")
+    assert "adjusted for 10 prespecified covariates named in the plan" in selected.estimand
+    primary = next(step for step in result.output.steps if step.planned_analysis_role == "primary")
+    assert primary.model_requirements[0].covariates == ["age", "sex", *labs]
+
+
+def test_a_landmark_roster_the_design_cannot_name_is_refused_in_the_spec() -> None:
+    """The design bound is checked while the Planner can still answer, never truncated after."""
+
+    context = _with_routine_measurements(_spline_context(), 24)
+    request = _request(context)
+    labs = [f"lab_{i:02d}_max" for i in range(20)]
+
+    with pytest.raises(FamilySpecError) as caught:
+        parse_family_plan_spec(json.dumps(_landmark_roster_payload(request, labs)), request)
+
+    assert caught.value.reason_code == "family_spec_roster_exceeds_design"
+    assert caught.value.path == "adjustment_set"
 
 
 def test_prediction_template_robustness_is_the_owner_executed_refit_and_decision_curve() -> None:
