@@ -2029,6 +2029,52 @@ def _local_authority_reference(
     return reference, _read_authority(path, reference=reference)
 
 
+#: The host's receipt for a universe restricted to each patient's first ICU stay.
+FIRST_ICU_STAY_RESTRICTION_SCHEMA = "easyicu.first_icu_stay_restriction/1"
+
+
+def sealed_first_icu_stay_restriction(
+    verified: "VerifiedMaterializedCohortAuthority",
+    *,
+    cohort_path: Path,
+) -> Optional[dict[str, object]]:
+    """The first-ICU-stay restriction sealed into a verified cohort's lineage.
+
+    The materializer seals the restriction in the universe's producer
+    parameters; a child cohort (a follow-up extension, a run stage) inherits
+    its parent's rows, so the lineage is walked through the same explicitly
+    named local authorities the verifier already bound.  Only aggregate,
+    digest-level fields are returned.
+    """
+
+    authority: Optional[MaterializedCohortAuthority] = verified.authority
+    seen: set[str] = set()
+    while authority is not None:
+        restriction = authority.producer_parameters.get("first_icu_stay_restriction")
+        if isinstance(restriction, Mapping):
+            if restriction.get("schema_version") != FIRST_ICU_STAY_RESTRICTION_SCHEMA:
+                raise MaterializedMetadataError(
+                    "sealed first ICU stay restriction is invalid"
+                )
+            coordinate = _digest(
+                restriction.get("coordinate_sha256"),
+                label="first ICU stay coordinate sha256",
+            )
+            return {
+                "schema_version": FIRST_ICU_STAY_RESTRICTION_SCHEMA,
+                "coordinate_sha256": coordinate,
+                "stays_after": restriction.get("stays_after"),
+            }
+        parent = authority.parent_authority_sha256
+        if parent is None or parent in seen:
+            return None
+        seen.add(parent)
+        _reference, authority = _local_authority_reference(
+            Path(cohort_path).parent, authority_sha256=parent
+        )
+    return None
+
+
 def _validate_stage_parent_receipts(
     authority: MaterializedCohortAuthority,
     *,
@@ -3939,11 +3985,13 @@ def _publish_hospital_followup_at(
 
 
 __all__ = [
+    "FIRST_ICU_STAY_RESTRICTION_SCHEMA",
     "MATERIALIZED_COHORT_AUTHORITY_SCHEMA",
     "MATERIALIZED_COHORT_DESCRIPTOR_SCHEMA",
     "MaterializedCohortAuthority",
     "MaterializedCohortAuthorityRef",
     "MaterializedColumnMetadataCollector",
+    "sealed_first_icu_stay_restriction",
     "MaterializedMetadataError",
     "OutputDerivation",
     "SourceColumnRef",

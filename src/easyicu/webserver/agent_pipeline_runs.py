@@ -38,6 +38,9 @@ from easyicu.research_agent.providers.structured_retry import (
     safe_structured_attempt_metadata,
 )
 from easyicu.research_agent.providers.clients import safe_provider_http_status_code
+from easyicu.research_agent.intake.materialized_metadata import (
+    FIRST_ICU_STAY_RESTRICTION_SCHEMA,
+)
 from easyicu.research_agent.acquisition.patient_grouping import (
     PatientGroupingBinding,
 )
@@ -110,6 +113,7 @@ from easyicu.webserver.research_launch_scientific import (
     _configured_covariates,
     _configured_sensitivity_specs,
     _data_foundation_profile,
+    _first_icu_stay_for_cohort,
     _metadata_only_planning_coordinates,
     _materialized_column_dtype,
     _normalized_metadata_planning_operationalized_columns,
@@ -1195,6 +1199,7 @@ def _metadata_only_planning_acquisition(
     patient_grouping: Optional[PatientGroupingBinding] = None,
     operationalized_columns: Sequence[str] = (),
     plan_change_request: PlanChangeRequest | None = None,
+    first_icu_stay: Any = None,
 ) -> Any:
     """Select a planning catalog without reading patient data.
 
@@ -1445,12 +1450,28 @@ def _metadata_only_planning_acquisition(
         }
     )
     planning_catalog = pd.DataFrame(planning_columns)
+    # A verified first-stay coordinate tells the reviewer the host will keep
+    # one ICU stay per patient; only its digest crosses into the catalog.
+    first_icu_stay_restriction = (
+        {
+            "schema_version": FIRST_ICU_STAY_RESTRICTION_SCHEMA,
+            "coordinate_sha256": first_icu_stay.coordinate_sha256,
+            "provider_visible_values": False,
+        }
+        if first_icu_stay is not None
+        else None
+    )
     planning_catalog.attrs["easyicu_planning_authority"] = {
         "kind": "metadata_only_planning_catalog",
         "patient_rows_read": False,
         **(
             {"replacement_row_identity": replacement_row_identity}
             if replacement_row_identity is not None
+            else {}
+        ),
+        **(
+            {"first_icu_stay_restriction": first_icu_stay_restriction}
+            if first_icu_stay_restriction is not None
             else {}
         ),
     }
@@ -1466,6 +1487,11 @@ def _metadata_only_planning_acquisition(
             "patient_identity_column": projected_patient_identity,
             "operationalized_columns": list(normalized_operationalized),
             "replacement_row_identity": replacement_row_identity,
+            **(
+                {"first_icu_stay_restriction": first_icu_stay_restriction}
+                if first_icu_stay_restriction is not None
+                else {}
+            ),
             "selected_concepts": selected,
             "unavailable_model_concepts": unavailable_model_concepts,
             "selected_concepts_sha256": hashlib.sha256(
@@ -2168,6 +2194,19 @@ def _exclusion_criteria(study: Mapping[str, Any]) -> List[str]:
         )
     )
     return rows[:32]
+
+
+def _verified_first_icu_stay_or_none(study: Mapping[str, Any]) -> Any:
+    """The verified coordinate of a first-stay study, or ``None`` without refusing.
+
+    A candidate plan may still be proposed on a source that cannot prove each
+    patient's first stay; the launch refuses the restriction later.
+    """
+
+    try:
+        return _first_icu_stay_for_cohort(study)
+    except ResearchPipelineRunError:
+        return None
 
 
 def _require_first_icu_stay_materialized(acquisition: Any, binding: Any) -> None:
@@ -5087,6 +5126,7 @@ def make_research_pipeline_run_runner(
                     ),
                     patient_grouping=patient_grouping,
                     operationalized_columns=metadata_operationalized_columns,
+                    first_icu_stay=_verified_first_icu_stay_or_none(study),
                 )
             else:
                 materialization_roster = _materialization_concept_roster(

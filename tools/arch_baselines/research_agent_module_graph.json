@@ -9077,6 +9077,10 @@
     ],
     [
       "easyicu.research_agent.planning.dependence_authority",
+      "easyicu.research_agent.intake.materialized_metadata"
+    ],
+    [
+      "easyicu.research_agent.planning.dependence_authority",
       "easyicu.research_agent.planning.analysis_types"
     ],
     [
@@ -9146,6 +9150,10 @@
     [
       "easyicu.research_agent.planning.family_spec.contract",
       "easyicu.research_agent.planning.adjustment_authority"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.contract",
+      "easyicu.research_agent.planning.design_selection"
     ],
     [
       "easyicu.research_agent.planning.family_spec.contract",
@@ -12728,7 +12736,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3174,
+    "edge_count": 3176,
     "largest_scc_size": 0,
     "module_count": 755,
     "package_count": 36,

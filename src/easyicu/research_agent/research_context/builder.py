@@ -44,10 +44,12 @@ from ..schema import (
     VariableRole,
 )
 from ..intake.materialized_metadata import (
+    FIRST_ICU_STAY_RESTRICTION_SCHEMA,
     MaterializedMetadataError,
     VerifiedMaterializedCohortAuthority,
     load_verified_materialized_cohort_authority,
     read_verified_materialized_cohort_table,
+    sealed_first_icu_stay_restriction,
     verified_cohort_replacement_row_identity,
 )
 from ..intake.materialized_trajectory import (
@@ -102,6 +104,24 @@ def _planning_catalog_provenance(frame: pd.DataFrame) -> Dict[str, Any]:
         "evidence_stage": "metadata_only_planning",
         "patient_rows_read": False,
     }
+    first_stay = authority.get("first_icu_stay_restriction")
+    if first_stay is not None:
+        # The host will restrict the universe to each patient's first ICU stay
+        # with this verified coordinate before any analysis step runs.
+        if (
+            not isinstance(first_stay, dict)
+            or first_stay.get("schema_version") != FIRST_ICU_STAY_RESTRICTION_SCHEMA
+            or re.fullmatch(r"[0-9a-f]{64}", str(first_stay.get("coordinate_sha256") or ""))
+            is None
+            or first_stay.get("provider_visible_values") is not False
+        ):
+            raise MaterializedMetadataError(
+                "metadata-only first ICU stay restriction is invalid"
+            )
+        projected["first_icu_stay_restriction"] = {
+            "schema_version": FIRST_ICU_STAY_RESTRICTION_SCHEMA,
+            "coordinate_sha256": first_stay["coordinate_sha256"],
+        }
     replacement = authority.get("replacement_row_identity")
     if replacement is None:
         return projected
@@ -720,6 +740,11 @@ def build_research_context(
     )
 
     planning_catalog_provenance = _planning_catalog_provenance(df)
+    sealed_first_stay = (
+        sealed_first_icu_stay_restriction(verified_cohort, cohort_path=cohort_path_obj)
+        if verified_cohort is not None
+        else None
+    )
     replacement_row_identity = (
         legacy_materialization_provenance.get("replacement_row_identity")
         if legacy_materialization_provenance is not None
@@ -756,6 +781,11 @@ def build_research_context(
             **(
                 {"replacement_row_identity": dict(typed_row_identity)}
                 if typed_row_identity is not None
+                else {}
+            ),
+            **(
+                {"first_icu_stay_restriction": sealed_first_stay}
+                if sealed_first_stay is not None
                 else {}
             ),
             "inclusion_criteria": list(inclusion_criteria or []),
