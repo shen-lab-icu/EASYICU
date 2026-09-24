@@ -534,12 +534,17 @@ def test_landmark_observation_duration_is_a_source_materialization_variable() ->
 def test_new_plan_timing_coordinates_compile_in_the_real_runtime(tmp_path) -> None:
     from easyicu.webserver.pi_copilot.plan_decisions import compile_plan_decision
 
+    # A selected landmark design over a sealed 24-hour window: the shared
+    # contract every fixed-window exposure uses.
     decision = compile_plan_decision(
         decision_code="POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
         option_id="landmark_24h",
-        study={},
+        study={"time_window": {"hours": 24, "anchor": "ICU admission"}},
         agent_plan={
-            "design_selection": {"candidates": [{"disposition": "selected"}]},
+            "design_selection": {"candidates": [{
+                "disposition": "selected",
+                "design_id": "landmark_adjusted_association",
+            }]},
             "steps": [{"model_requirements": [{
                 "analysis_role": "primary", "exposure_source": "lact_max",
                 "outcome": "death_max", "covariates": ["age", "sex"],

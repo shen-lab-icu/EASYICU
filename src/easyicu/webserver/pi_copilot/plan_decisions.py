@@ -54,18 +54,45 @@ _AGENT_COMPILED_RUNTIME_FINDINGS = frozenset(
 
 
 _AGGREGATION_SUFFIXES = ("_first", "_last", "_min", "_max", "_mean", "_sum")
-_DISPLAY_LABELS_ZH = {
-    "death": "院内死亡",
-    "aki_stage": "KDIGO AKI 分级",
-    "lact": "最高乳酸水平",
-    "sep3_sofa1": "Sepsis-3 状态",
+#: Reader qualifier for a window operation on the exposure coordinate.
+_AGGREGATION_LABELS = {
+    "first": ("first value", "首次值"),
+    "last": ("last value", "末次值"),
+    "min": ("minimum", "最低值"),
+    "max": ("maximum", "最高值"),
+    "mean": ("mean", "平均值"),
+    "sum": ("total", "累计值"),
 }
-_DISPLAY_LABELS_EN = {
-    "death": "in-hospital mortality",
-    "aki_stage": "KDIGO AKI stage",
-    "lact": "maximum lactate level",
-    "sep3_sofa1": "Sepsis-3 status",
-}
+
+
+def _reader_labels(concept: str, aggregation: str | None = None) -> tuple[str, str]:
+    """English and Chinese reader names for one concept coordinate.
+
+    Every concept is named by the shared catalog -- its dictionary name, else
+    the head of its catalog description -- and an uncatalogued concept keeps
+    its id.  No concept carries a label written for one study.  A window
+    operation qualifies a measurement; on a boolean status it only means
+    "present in the window", which the status name already says.
+    """
+
+    from easyicu.concept.catalog import CONCEPT_DESCRIPTIONS, CONCEPT_DICTIONARY
+
+    name_en = name_zh = concept
+    entry = CONCEPT_DICTIONARY.get(concept)
+    description = CONCEPT_DESCRIPTIONS.get(concept)
+    if entry:
+        name_en = str(entry[0] or concept)
+        name_zh = str((entry[1] if len(entry) > 1 else "") or name_en)
+        if len(entry) > 2 and str(entry[2] or "").strip() == "boolean":
+            aggregation = None
+    elif description:
+        name_en = str(description[0] or "").split(":", 1)[0].strip() or concept
+        head_zh = str((description[1] if len(description) > 1 else "") or "")
+        name_zh = head_zh.split("：", 1)[0].split(":", 1)[0].strip() or name_en
+    if aggregation in _AGGREGATION_LABELS:
+        qualifier_en, qualifier_zh = _AGGREGATION_LABELS[aggregation]
+        return f"{name_en} ({qualifier_en})", f"{name_zh}（{qualifier_zh}）"
+    return name_en, name_zh
 
 
 def _source_concept(materialized: Any, *, field: str) -> str:
@@ -385,19 +412,14 @@ def _fixed_24h_landmark_candidate(
 ) -> bool:
     """Recognize a typed fixed-window landmark design without naming a concept.
 
-    The original Web decision path special-cased ``lact_max`` even though the
-    Research Agent's selected-design contract is shared by every fixed 0-24 h
-    exposure.  Require both the selected landmark design and the StudyContext's
-    sealed 24-hour window before offering the executable landmark choice.
+    The Research Agent's selected-design contract is shared by every fixed
+    0-24 h exposure.  Require both the selected landmark design and the
+    StudyContext's sealed 24-hour window before offering the executable
+    landmark choice; no exposure earns the choice by its name.
     """
 
     selected = _selected_design(plan)
-    coordinates = _timing_coordinates(plan)
-    if (
-        coordinates["exposure"] == "lact"
-        and coordinates["exposure_materialized"] == "lact_max"
-    ):
-        return True
+    _timing_coordinates(plan)
     if str(selected.get("design_id") or "").strip() != (
         "landmark_adjusted_association"
     ):
@@ -424,28 +446,23 @@ def plan_decision_context(
         return {}
     coordinates = _timing_coordinates(plan)
     selected = _selected_design(plan)
-    exposure = coordinates["exposure"]
-    outcome = coordinates["outcome"]
-    fixed_24h_lactate = (
-        exposure == "lact" and coordinates["exposure_materialized"] == "lact_max"
+    exposure, aggregation = _source_coordinate(
+        coordinates["exposure_materialized"], field="primary exposure"
     )
-    fixed_24h_landmark = _fixed_24h_landmark_candidate(plan, study)
+    exposure_en, exposure_zh = _reader_labels(exposure, aggregation)
+    outcome_en, outcome_zh = _reader_labels(coordinates["outcome"])
     return {
         **coordinates,
-        "exposure_label_en": _DISPLAY_LABELS_EN.get(exposure, exposure),
-        "exposure_label_zh": _DISPLAY_LABELS_ZH.get(exposure, exposure),
-        "outcome_label_en": _DISPLAY_LABELS_EN.get(outcome, outcome),
-        "outcome_label_zh": _DISPLAY_LABELS_ZH.get(outcome, outcome),
+        "exposure_label_en": exposure_en,
+        "exposure_label_zh": exposure_zh,
+        "outcome_label_en": outcome_en,
+        "outcome_label_zh": outcome_zh,
         "time_zero": str(selected.get("time_zero") or "").strip(),
         "observation_window": str(selected.get("observation_window") or "").strip(),
         "timing_profile": (
-            "fixed_24h_lactate"
-            if fixed_24h_lactate
-            else (
-                "fixed_24h_landmark"
-                if fixed_24h_landmark
-                else "unspecified_post_baseline"
-            )
+            "fixed_24h_landmark"
+            if _fixed_24h_landmark_candidate(plan, study)
+            else "unspecified_post_baseline"
         ),
     }
 
@@ -911,23 +928,28 @@ def compile_plan_decision(
             details={"decision_code": code},
         )
     coordinates = _timing_coordinates(agent_plan)
-    exposure = coordinates["exposure"]
     outcome = coordinates["outcome"]
-    exposure_zh = _DISPLAY_LABELS_ZH.get(exposure, exposure)
-    outcome_zh = _DISPLAY_LABELS_ZH.get(outcome, outcome)
-    exposure_en = _DISPLAY_LABELS_EN.get(exposure, exposure)
-    outcome_en = _DISPLAY_LABELS_EN.get(outcome, outcome)
-    fixed_24h_lactate = (
-        exposure == "lact" and coordinates["exposure_materialized"] == "lact_max"
-    )
     fixed_24h_landmark = _fixed_24h_landmark_candidate(agent_plan, study)
+    # The exposure keeps the plan's own window operation (or none, for a host
+    # derivation that already publishes one reading per stay), resolved by
+    # the same case-neutral owner as an Agent-compiled configuration.
+    exposure, aggregation = _agent_primary_source_coordinate(
+        coordinates["exposure_materialized"],
+        fixed_window=fixed_24h_landmark,
+        study=study,
+    )
+    exposure_en, exposure_zh = _reader_labels(exposure, aggregation)
+    outcome_en, outcome_zh = _reader_labels(outcome)
     execution = dict(study.get("execution_concepts") or {})
-    execution.update(
-        {
-            "outcome": outcome,
-            "primary_exposure": exposure,
-            "primary_exposure_aggregation": "max",
-        }
+    execution.update({"outcome": outcome, "primary_exposure": exposure})
+    if aggregation is not None:
+        execution["primary_exposure_aggregation"] = aggregation
+    else:
+        execution.pop("primary_exposure_aggregation", None)
+    follow_up_end_zh = (
+        "至出院"
+        if coordinates["observation_duration"] == "hospital_followup_time_hours"
+        else ""
     )
 
     if option == "landmark_24h":
@@ -1000,11 +1022,7 @@ def compile_plan_decision(
                 "cohort": cohort,
                 "outcome": str(
                     study.get("outcome")
-                    or (
-                        f"{outcome_zh}（第 24 小时起至出院）"
-                        if fixed_24h_lactate
-                        else outcome_zh
-                    )
+                    or f"{outcome_zh}（第 24 小时起{follow_up_end_zh}）"
                 ),
                 "primary_exposure": str(
                     study.get("primary_exposure")
@@ -1047,7 +1065,7 @@ def compile_plan_decision(
     if option == "descriptive_only":
         exposure_display = (
             f"入 ICU 后 0–24 小时{exposure_zh}"
-            if fixed_24h_lactate
+            if fixed_24h_landmark
             else exposure_zh
         )
         descriptive_execution = dict(execution)
@@ -1097,6 +1115,9 @@ def compile_plan_decision(
         )
 
     if option == "time_varying_reextract":
+        # A time-varying exposure is the timestamped series itself, not the
+        # superseded window summary.
+        exposure_en, exposure_zh = _reader_labels(exposure)
         sensitivity = {
             "spec_id": "time_varying_exposure",
             "axis": "timing",

@@ -48,7 +48,7 @@ def test_fixed_landmark_package_ships_executable_reference_scripts() -> None:
         "references/methods.md",
         "references/caveat_flags.md",
         "references/reporting_checklist.md",
-        "references/comparators_kdigo_mortality.md",
+        "references/comparator_review.md",
     ):
         assert reference in files
     assert files["references/reference_scripts.md"]["content"] == (

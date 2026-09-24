@@ -631,7 +631,7 @@ def _render_figure(
                     "Interpretation depends on proportional-hazards diagnostics and residual confounding remains possible."
                     if headline_hr_authorized
                     else (
-                        "Interval-specific hazard ratios remain observational sensitivities and do not establish a causal ventilation effect."
+                        "Interval-specific hazard ratios remain observational sensitivities and do not establish a causal effect of the exposure."
                         if promotes_time_varying
                         else "The RMST contrast is unadjusted and observational; do not recover or quote the source-table hazard ratio as a constant headline effect."
                     )

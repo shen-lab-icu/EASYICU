@@ -239,11 +239,11 @@ def test_cohort_contract_rejects_undeclared_levels_and_all_unknown() -> None:
     spec = example_spec()
     frame = make_example_cohort(400)
     bad = frame.copy()
-    bad.loc[bad.index[0], "aki_stage_strict"] = 7.0
+    bad.loc[bad.index[0], "grade_strict"] = 7.0
     with pytest.raises(CohortContractError, match="outside the declared"):
         load_cohort(bad, spec, verbose=False)
     unknown = frame.copy()
-    unknown["aki_stage_strict"] = float("nan")
+    unknown["grade_strict"] = float("nan")
     with pytest.raises(CohortContractError, match="unknown exposure"):
         load_cohort(unknown, spec, verbose=False)
     missing = frame.drop(columns=["charlson"])
@@ -331,14 +331,14 @@ def test_figures_use_reader_labels_not_identifiers(example_run) -> None:
     assert _flow_label("some_new_predicate") == "Some new predicate"
     assert _variant_label("primary", spec) == "Primary model"
     assert _variant_label("first_stay_only", spec) == "First ICU stay only"
-    assert _variant_label("alternate_exposure__aki_stage_creat_strict", spec) == (
-        "Alternate definition: Strict creatinine-domain stage"
+    assert _variant_label("alternate_exposure__grade_domain_a", spec) == (
+        "Alternate definition: Strict domain-A grade"
     )
     assert _variant_label("functional_form__age", spec) == "Spline form: Age (years)"
     # The SVG is text: level rows carry the contrast only, the exposure name once.
     forest = (out_dir / "figure_adjusted_association_forest.svg").read_text(encoding="utf-8")
     assert "3 vs 0" in forest
-    assert forest.count("Strict KDIGO AKI stage, 0-24 h") == 1
+    assert forest.count("Strictly ascertained grade, 0-24 h") == 1
     flow = (out_dir / "figure_cohort_flow.svg").read_text(encoding="utf-8")
     assert "Alive at landmark" in flow and "alive_at_landmark" not in flow
 

@@ -8,7 +8,7 @@ needs the enclosing study (source description, literature, interpretation).
 | Study design | STROBE 4 | `report.md › Design`; `spec.json` | rationale for the landmark and level set |
 | Setting, dates | STROBE 5; RECORD 6.1–6.3 | — | database, version, extraction receipts (host provenance) |
 | Participants, eligibility | STROBE 6; RECORD 6.1 | `cohort_flow.csv`, `figure_cohort_flow` | upstream cohort criteria (age, admission type) |
-| Variables | STROBE 7; RECORD 7.1 (codes/algorithms) | `spec.json`, `measurement_audit.csv` | exposure algorithm text and code digest (e.g. `scores/kdigo_aki.py`), covariate derivation |
+| Variables | STROBE 7; RECORD 7.1 (codes/algorithms) | `spec.json`, `measurement_audit.csv` | exposure algorithm text and code digest (the host module that derives it), covariate derivation |
 | Data sources / measurement | STROBE 8 | `measurement_audit.csv`, `figure_exposure_ascertainment` | validation of the algorithm against the source |
 | Bias | STROBE 9 | landmark design (`report.md › Fixed limitations`), `caveat_flags.json` | unmeasured confounding discussion |
 | Study size | STROBE 10 | `key_metrics.csv` (`n_landmark`, `n_fit`, `epv`) | — |

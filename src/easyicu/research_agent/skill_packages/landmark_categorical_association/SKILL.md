@@ -36,14 +36,15 @@ This skill runs one prespecified design end to end:
 - Exposure or covariate selection — every variable arrives in the specification.
 - Landmarks other than the one declared; a moving or time-updated exposure
   belongs to the time-varying exposure workflow.
-- Novelty or transportability claims — see `references/comparators_kdigo_mortality.md`
+- Novelty or transportability claims — see `references/comparator_review.md`
   for how a comparator table is filled in instead.
 
 ## When to use this skill
 
 - The exposure is determined inside a fixed window after ICU admission
-  (e.g. strict KDIGO stage at 0–24 h) and the outcome is a later binary event
-  (in-hospital death) — the landmark removes immortal-time leakage.
+  (e.g. an ordered grade classified over hours 0–24) and the outcome is a later
+  binary event (e.g. in-hospital death) — the landmark removes immortal-time
+  leakage.
 - Several definitions of the same exposure exist and must be compared without
   choosing one after seeing results.
 - Repeated ICU stays per patient are present and must be handled by design.
@@ -66,7 +67,7 @@ One row per ICU stay with, at minimum:
 | optional | `alternate_exposures[]`, `first_stay_column`, `secondary_outcomes[]`, `measurement_audit_columns[]` | as declared |
 
 Formats: `.parquet`, `.csv`, `.tsv` or an in-memory `pandas.DataFrame`. The
-specification is a `LandmarkCategoricalSpec` (JSON or Python); the E3-shaped
+specification is a `LandmarkCategoricalSpec` (JSON or Python); the synthetic
 example is `example_spec()`.
 
 ## Outputs (all in the output directory)
@@ -171,5 +172,5 @@ missing artefact by hand.
 
 Methods and thresholds: `references/methods.md`. Flags → sentences:
 `references/caveat_flags.md`. Reporting checklist mapping (STROBE / RECORD):
-`references/reporting_checklist.md`. Comparator table template for KDIGO
-stage–mortality studies: `references/comparators_kdigo_mortality.md`.
+`references/reporting_checklist.md`. Comparator review template:
+`references/comparator_review.md`.

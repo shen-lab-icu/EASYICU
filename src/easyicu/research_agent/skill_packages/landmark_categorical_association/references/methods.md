@@ -20,10 +20,11 @@ Observed values are matched to the declared level set with the host's
 `level_spelling` (numeric `3.0` and text `"3"` are the same level). Missing
 values form the `unknown` state: reported in `absolute_risk.csv`,
 `exposure_level_counts.csv`, `measurement_audit.csv` and Table 1's
-`group_missing_excluded_n`; excluded from every model. For strict KDIGO staging
-this state is scientifically meaningful — stage 0 requires an evaluable baseline
-and both creatinine and urine-output domains — so the share of unknown rows is
-itself a headline number (`unknown_exposure_share`, flagged at
+`group_missing_excluded_n`; excluded from every model. When the exposure
+definition needs complete evidence for its reference level (a strictly
+ascertained grade whose lowest level requires every contributing domain to be
+observed), this state is scientifically meaningful, so the share of unknown rows
+is itself a headline number (`unknown_exposure_share`, flagged at
 `unknown_exposure_warning_share`, default 10 %).
 
 ## Primary model

@@ -835,7 +835,7 @@ def _package_skill_markdown(kind: str, row: dict[str, Any]) -> str:
                     "downstream report is copied from `key_metrics.csv`. The package's own "
                     "`references/reference_scripts.md` (its SKILL.md), `references/methods.md`, "
                     "`references/caveat_flags.md`, `references/reporting_checklist.md` and "
-                    "`references/comparators_kdigo_mortality.md` are included in this package.",
+                    "`references/comparator_review.md` are included in this package.",
                     "",
                     "Running the scripts does not replace the host's plan review, evidence "
                     "binding or human approval; the output stays analysis-only until the "
