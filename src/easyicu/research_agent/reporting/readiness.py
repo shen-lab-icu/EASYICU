@@ -83,6 +83,7 @@ from .completion import (
     readiness_status as _readiness_status,
     step_completion_projection,
 )
+from .manuscript_labels import reader_claim_labels
 from .manuscript_gate_state import (
     GATE_STATE_SUPERSESSION_PATTERNS,
     current_manuscript_completion_state,
@@ -1900,13 +1901,15 @@ def _plan_truncation_status(
 def current_validation_findings(
     *, plan: Optional[AnalysisPlan], per_step_records: Sequence[Dict[str, Any]],
     findings: Sequence[ValidationFinding], evidence: EvidenceStore, run_dir: Path,
-    manuscript_text: str, stop_after_analysis: bool = False,
+    manuscript_text: str, context: Optional[ResearchContext],
+    stop_after_analysis: bool = False,
     writer_probe_mode: bool = False, execution: Optional[Dict[str, Any]] = None,
 ) -> tuple[list[ValidationFinding], list[ValidationFinding], Dict[str, bool]]:
     """Resolve current versus historical findings for readiness and review.
 
     Both consumers use the same current artifacts, attempt identities and
     supersession policy. Historical failures remain in the persisted ledger.
+    The context and plan name the claims exactly as the write phase did.
     """
     if execution is None:
         execution = execution_gate_status(plan=plan, per_step_records=per_step_records, run_dir=run_dir)
@@ -1998,6 +2001,9 @@ def current_validation_findings(
             per_step_records=per_step_records,
             stop_after_analysis=stop_after_analysis,
             writer_probe_mode=writer_probe_mode,
+            reader_labels=reader_claim_labels(
+                context, dict(getattr(plan, "display_labels", None) or {}),
+            ),
         )
     )
     critique_path = run_dir / "manuscript_critique.json"
@@ -2092,6 +2098,7 @@ def _compute_readiness_gates(
     active_findings, superseded_findings, current_gate_state = current_validation_findings(
         plan=plan, per_step_records=per_step_records, findings=findings,
         evidence=evidence, run_dir=run_dir, manuscript_text=manuscript_text,
+        context=context,
         stop_after_analysis=stop_after_analysis, writer_probe_mode=writer_probe_mode,
         execution=execution,
     )
@@ -2756,6 +2763,7 @@ def write_readiness_artifacts(
             plan=plan, per_step_records=per_step_records, findings=findings,
             evidence=evidence, run_dir=run_dir,
             manuscript_text=manuscript_path.read_text(encoding="utf-8") if manuscript_path.exists() else "",
+            context=context,
             stop_after_analysis=stop_after_analysis, writer_probe_mode=writer_probe_mode,
         )
         primary_bindings = derive_reviewer_primary_result_bindings(

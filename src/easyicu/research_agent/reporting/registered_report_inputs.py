@@ -25,7 +25,7 @@ from ..schema import EvidenceRecord
 from ..schema import AnalysisPlan
 from ..literature import LiteratureBundle
 from .manuscript_reader import build_manuscript_reader
-from .manuscript_labels import source_bound_manuscript_labels
+from .manuscript_labels import reader_claim_labels, source_bound_manuscript_labels
 from .writer_evidence import _render_writer_evidence_digest_v2
 from ..research_context.typed import parse_research_context_json
 from .descriptive_report_facts import (
@@ -230,14 +230,16 @@ def bind_registered_report_numbers(run_dir: Path, manuscript: str) -> tuple[str,
     )
     claims = load_registered_scientific_claims(root=run_dir, records=evidence.records())
     plan = AnalysisPlan.model_validate_json(evidence.verify_input("analysis_plan.json", "analysis_plan"))
+    context = parse_research_context_json(evidence.verify_input("research_context.json", "research_context"))
     facts = compile_primary_counts_only_report_facts(
         records, evidence=evidence, reader_display_labels=plan.display_labels,
-        context=parse_research_context_json(evidence.verify_input("research_context.json", "research_context")),
+        context=context,
     )
     manuscript = render_descriptive_report_claims(manuscript, facts)
     expanded = expand_scientific_claim_tokens(
         manuscript,
         resolve_claim={claim.claim_ref: claim for claim in claims}.get,
+        reader_labels=reader_claim_labels(context, plan.display_labels),
         current_evidence_ids={
             row.evidence_id for row in evidence.current_verified_records(records)
         },

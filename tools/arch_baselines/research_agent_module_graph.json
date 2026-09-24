@@ -11148,6 +11148,10 @@
       "easyicu.research_agent.reporting.manuscript_figures"
     ],
     [
+      "easyicu.research_agent.reporting.manuscript_labels",
+      "easyicu.research_agent.authority.evidence_store"
+    ],
+    [
       "easyicu.research_agent.reporting.manuscript_literature",
       "easyicu.research_agent.literature"
     ],
@@ -11509,6 +11513,10 @@
     ],
     [
       "easyicu.research_agent.reporting.readiness",
+      "easyicu.research_agent.reporting.manuscript_labels"
+    ],
+    [
+      "easyicu.research_agent.reporting.readiness",
       "easyicu.research_agent.reporting.manuscript_state"
     ],
     [
@@ -11858,6 +11866,10 @@
     [
       "easyicu.research_agent.reporting.write_phase",
       "easyicu.research_agent.reporting.manuscript_figures"
+    ],
+    [
+      "easyicu.research_agent.reporting.write_phase",
+      "easyicu.research_agent.reporting.manuscript_labels"
     ],
     [
       "easyicu.research_agent.reporting.write_phase",
@@ -12824,7 +12836,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3198,
+    "edge_count": 3201,
     "largest_scc_size": 0,
     "module_count": 759,
     "package_count": 36,

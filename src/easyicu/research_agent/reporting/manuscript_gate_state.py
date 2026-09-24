@@ -80,8 +80,12 @@ def current_manuscript_completion_state(
     per_step_records: Sequence[Mapping[str, Any]],
     stop_after_analysis: bool,
     writer_probe_mode: bool,
+    reader_labels: Mapping[str, str] | None,
 ) -> dict[str, bool]:
-    """Project quality and scientific-claim completion from current artifacts."""
+    """Project quality and scientific-claim completion from current artifacts.
+
+    ``reader_labels`` are the claim labels the manuscript was bound with.
+    """
 
     quality_complete = False
     quality_audit_path = run_dir / "manuscript_quality_audit.json"
@@ -104,6 +108,7 @@ def current_manuscript_completion_state(
         and not missing_scientific_claims_in_results(
             manuscript_text,
             claims=authoritative_claims,
+            reader_labels=reader_labels,
         )
         and not stop_after_analysis
         and not writer_probe_mode
