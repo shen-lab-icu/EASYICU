@@ -1,3 +1,5 @@
+import pytest
+
 from easyicu.research_agent.literature_concepts import (
     concept_id,
     literature_concept_identity,
@@ -95,3 +97,161 @@ def test_non_e1_scope_uses_the_same_typed_query_compiler() -> None:
     assert '"acute kidney injury"[Title/Abstract]' in clause
     assert '"AKI"[Title/Abstract]' in clause
     assert "Sepsis" not in clause
+
+
+def _derived_column_context(*, name, source_concept, description, question):
+    from easyicu.research_agent.schema import (
+        CohortDescriptor, ConceptDescriptor, ResearchContext,
+    )
+
+    return ResearchContext(
+        research_question=question,
+        cohort=CohortDescriptor(cohort_name="ICU", database="eicu_demo", n_stays=100),
+        variables=[
+            ConceptDescriptor(
+                name=name, dtype="float64",
+                source_concept=source_concept, description=description,
+            ),
+            ConceptDescriptor(
+                name="death", dtype="int64",
+                source_concept="death", description="in hospital mortality",
+            ),
+        ],
+        primary_exposure=name, target_outcome="death",
+    )
+
+
+_DERIVED_COLUMNS = [
+    # A host-derived column named after its concept, bound to a component
+    # source concept that has no clinical name of its own.
+    dict(
+        name="aki_stage_strict", source_concept="aki_stage_creat_reference",
+        description="Reference AKI Stage (Creatinine)",
+        question="KDIGO AKI stage and in-hospital mortality in ICU stays",
+        clinical_atom='"AKI"[Title/Abstract]', clinical_term="acute kidney injury",
+        implementation_text="Reference AKI Stage",
+        title="Acute kidney injury and in-hospital mortality in critically ill adults",
+    ),
+    dict(
+        name="lact", source_concept="lact_arterial_reference",
+        description="Reference Lactate (Arterial)",
+        question="Lactate and in-hospital mortality in ICU stays",
+        clinical_atom='"lactate"[Title/Abstract]', clinical_term="lactate",
+        implementation_text="Reference Lactate",
+        title="Lactate and in-hospital mortality in critically ill adults",
+    ),
+]
+
+
+@pytest.mark.parametrize("case", _DERIVED_COLUMNS, ids=lambda case: case["name"])
+def test_a_column_retrieves_through_the_clinical_name_of_its_own_concept(case) -> None:
+    from easyicu.research_agent.literature import (
+        CitationRecord,
+        _screening_decision_for_record,
+        _variable_focus_terms,
+        build_pubmed_protocol_queries_for_context,
+    )
+
+    context = _derived_column_context(
+        name=case["name"], source_concept=case["source_concept"],
+        description=case["description"], question=case["question"],
+    )
+
+    queries = build_pubmed_protocol_queries_for_context(context)
+    focus = _variable_focus_terms(context, case["name"])
+    decision = _screening_decision_for_record(
+        context=context,
+        record=CitationRecord(
+            key="comparator", year="2021", title=case["title"],
+            relevance=(
+                "Study-design excerpt: This retrospective cohort study of adult "
+                "intensive care unit patients evaluated the association between "
+                f"{case['clinical_term']} and in-hospital mortality."
+            ),
+            publication_types=["Observational Study"],
+        ),
+        source="pubmed", query=None,
+    )
+
+    assert queries
+    assert all(case["implementation_text"] not in query for query in queries)
+    assert case["clinical_atom"] in queries[0]
+    assert case["clinical_term"] in focus
+    assert decision.exposure_match
+    assert decision.disposition == "include"
+
+
+def test_an_export_display_label_is_never_a_search_phrase() -> None:
+    from easyicu.research_agent.literature import (
+        _protocol_search_term,
+        build_pubmed_protocol_queries_for_context,
+    )
+    from easyicu.research_agent.literature_concepts import is_export_display_label
+
+    # The Elixhauser index is a code-derived public output: it has no
+    # dictionary entry, so its description is the export display label.
+    context = _derived_column_context(
+        name="elixhauser", source_concept="elixhauser",
+        description="Elixhauser (van Walraven) Score",
+        question="Comorbidity burden and in-hospital mortality in ICU stays",
+    )
+
+    queries = build_pubmed_protocol_queries_for_context(context)
+
+    assert is_export_display_label("Elixhauser (van Walraven) Score", ["elixhauser"])
+    assert _protocol_search_term(context, "elixhauser") == "elixhauser"
+    assert '"elixhauser"[Title/Abstract]' in queries[0]
+    assert all("van Walraven" not in query for query in queries)
+    # A dictionary concept's description is dictionary text and still used.
+    assert not is_export_display_label("in hospital mortality", ["death"])
+    assert '"hospital mortality"[Title/Abstract]' in queries[0]
+
+
+@pytest.mark.parametrize("stratified", [True, False], ids=["strata", "single_query"])
+def test_the_retained_excerpt_keeps_the_sentence_naming_the_exposure_clinically(
+    stratified: bool,
+) -> None:
+    import json
+
+    from easyicu.research_agent.literature import PubMedLiteratureClient
+
+    context = _derived_column_context(**{
+        key: _DERIVED_COLUMNS[0][key]
+        for key in ("name", "source_concept", "description", "question")
+    })
+    design = " ".join((
+        "Adult patients were eligible.",
+        "The cohort comprised admissions to 12 units.",
+        "Exclusion criteria were applied at admission.",
+        "Follow-up continued to hospital discharge.",
+        "Inclusion required a stay of at least one day.",
+        "Patients were grouped at the index time.",
+    ))
+    abstract = (
+        design
+        + " Acute kidney injury was more frequent among non-survivors."
+        + " In-hospital mortality was 12%."
+    )
+    responses = {
+        "esearch.fcgi": json.dumps({"esearchresult": {"idlist": ["111"]}}).encode(),
+        "esummary.fcgi": json.dumps({"result": {"uids": ["111"], "111": {
+            "uid": "111", "title": "Kidney injury in intensive care",
+            "pubdate": "2020", "source": "Crit Care",
+            "authors": [{"name": "Doe J"}],
+        }}}).encode(),
+        "efetch.fcgi": (
+            "<PubmedArticleSet><PubmedArticle><MedlineCitation><PMID>111</PMID>"
+            f"<Article><Abstract><AbstractText>{abstract}</AbstractText></Abstract>"
+            "</Article></MedlineCitation></PubmedArticle></PubmedArticleSet>"
+        ).encode(),
+    }
+    client = PubMedLiteratureClient(timeout=1.0)
+    client._http_get = lambda path, params: responses.get(path)  # type: ignore[attr-defined]
+
+    if stratified:
+        [record] = client.search_context_strata(context, retmax=5).records
+    else:
+        [record] = client.search_for_context(context, retmax=5)
+
+    assert "Acute kidney injury was more frequent" in record.relevance
+    assert "In-hospital mortality was 12%" in record.relevance

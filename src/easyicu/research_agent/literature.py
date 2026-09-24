@@ -43,7 +43,11 @@ from .concept_availability import (
 )
 from .bibliographic_metadata import complete_missing_authors
 from .gates.data_answerability import analysis_answerability_findings
-from .literature_concepts import literature_concept_identity
+from .literature_concepts import (
+    LiteratureConceptIdentity,
+    is_export_display_label,
+    literature_concept_identity,
+)
 from .literature_excerpt import select_source_backed_excerpt
 from .planning.method_literature import method_literature_citations
 from .planning.literature_design_authority import LiteratureDesignEvidenceCard
@@ -839,8 +843,8 @@ class PubMedLiteratureClient:
             build_pubmed_protocol_query_for_context(context),
             retmax=max(int(retmax) * 3, 12),
             excerpt_terms=(
-                _protocol_search_term(context, context.primary_exposure),
-                _protocol_search_term(context, context.target_outcome),
+                *_variable_focus_terms(context, context.primary_exposure),
+                *_variable_focus_terms(context, context.target_outcome),
                 "intensive care",
                 "critical care",
                 "ICU",
@@ -903,8 +907,8 @@ class PubMedLiteratureClient:
         records = self._hydrate_ids(
             selected_ids,
             excerpt_terms=(
-                _protocol_search_term(context, context.primary_exposure),
-                _protocol_search_term(context, context.target_outcome),
+                *_variable_focus_terms(context, context.primary_exposure),
+                *_variable_focus_terms(context, context.target_outcome),
                 _question_topic_term(context.research_question),
                 *_study_intent_focus_terms(context.research_question),
                 "intensive care",
@@ -1176,6 +1180,52 @@ def build_pubmed_query_for_context(context: ResearchContext) -> str:
     return " AND ".join(terms)
 
 
+def _variable_literature_identity(
+    context: ResearchContext, name: Optional[str]
+) -> Optional[LiteratureConceptIdentity]:
+    """Resolve one study variable's literature identity from its own concept keys.
+
+    A column carries two concept keys: the source concept it was built from
+    and its own name.  A host-derived column is named after the derived
+    concept (for example a strict stage), while its source concept is the
+    component whose scale it inherits, which may have no clinical name.  Both
+    keys are tried, source concept first.  The concepts a column was derived
+    from are other constructs and are never consulted.
+    """
+
+    if not name:
+        return None
+    variable = context.variable(name)
+    keys = (
+        (variable.source_concept, variable.name) if variable is not None else (name,)
+    )
+    for key in dict.fromkeys(str(key) for key in keys if key):
+        identity = literature_concept_identity(key)
+        if identity is not None:
+            return identity
+    return None
+
+
+def _variable_focus_terms(
+    context: ResearchContext, name: Optional[str]
+) -> tuple[str, ...]:
+    """Excerpt-selection terms for one variable: its clinical names first.
+
+    The comparator screen reads the retained excerpt, so the sentence naming
+    the exposure or endpoint must survive selection; it is found by the terms
+    articles use, not by a column's implementation name.
+    """
+
+    identity = _variable_literature_identity(context, name)
+    terms = [
+        str(value)
+        for alternative in (identity.retrieval_alternatives if identity else ())
+        for value in alternative
+    ]
+    terms.append(_protocol_search_term(context, name))
+    return tuple(dict.fromkeys(term for term in terms if term.strip()))
+
+
 def _protocol_search_term(context: ResearchContext, name: Optional[str]) -> str:
     if not name:
         return ""
@@ -1183,9 +1233,13 @@ def _protocol_search_term(context: ResearchContext, name: Optional[str]) -> str:
     candidates: List[str] = []
     if variable is not None:
         description = " ".join(str(variable.description or "").strip().split())
-        semantic_description = _clinical_phrase_from_description(description)
-        if semantic_description:
-            candidates.append(semantic_description)
+        # An export display label names the implementation, not the construct.
+        if not is_export_display_label(
+            description, (variable.source_concept, variable.name)
+        ):
+            semantic_description = _clinical_phrase_from_description(description)
+            if semantic_description:
+                candidates.append(semantic_description)
         candidates.extend([variable.source_concept or "", variable.name])
     else:
         candidates.append(name)
@@ -1249,14 +1303,7 @@ def _screening_decision_for_record(
 
     exposure = _protocol_search_term(context, context.primary_exposure)
     outcome = _protocol_search_term(context, context.target_outcome)
-    exposure_variable = context.variable(context.primary_exposure)
-    exposure_identity = literature_concept_identity(
-        (
-            exposure_variable.source_concept or exposure_variable.name
-            if exposure_variable is not None
-            else context.primary_exposure
-        )
-    )
+    exposure_identity = _variable_literature_identity(context, context.primary_exposure)
     return screen_source_backed_direct_comparator(
         exposure=(
             exposure_identity.screening_role_term
@@ -1916,9 +1963,7 @@ def _pubmed_identity_clause(context: ResearchContext, name: Optional[str]) -> st
                 '"intensive care mortality"[Title/Abstract] OR '
                 '"ICU death"[Title/Abstract])'
             )
-    variable = context.variable(name)
-    concept = variable.source_concept or variable.name if variable is not None else name
-    identity = literature_concept_identity(concept)
+    identity = _variable_literature_identity(context, name)
     if identity is None:
         value = _protocol_search_term(context, name).replace('"', "")
         return f'"{value}"[Title/Abstract]' if value else ""
@@ -2320,13 +2365,8 @@ def build_pubmed_protocol_queries_for_context(
         for marker in ("survival", "hazard", "time-to-event", "time to event")
     ):
         exposure = _protocol_search_term(context, context.primary_exposure)
-        outcome_variable = context.variable(context.target_outcome or "")
-        outcome_identity = literature_concept_identity(
-            (
-                outcome_variable.source_concept or outcome_variable.name
-                if outcome_variable is not None
-                else context.target_outcome
-            )
+        outcome_identity = _variable_literature_identity(
+            context, context.target_outcome
         )
         outcome = (
             outcome_identity.canonical_phrase
@@ -2360,14 +2400,7 @@ def _rank_protocol_search_results(
     context: ResearchContext,
     records: Sequence[CitationRecord],
 ) -> List[CitationRecord]:
-    exposure_variable = context.variable(context.primary_exposure or "")
-    exposure_identity = literature_concept_identity(
-        (
-            exposure_variable.source_concept or exposure_variable.name
-            if exposure_variable is not None
-            else context.primary_exposure
-        )
-    )
+    exposure_identity = _variable_literature_identity(context, context.primary_exposure)
     exposure = (
         exposure_identity.screening_role_term
         if exposure_identity is not None
