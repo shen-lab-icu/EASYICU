@@ -1517,6 +1517,24 @@ def _primary_records_for_readiness(
     return filtered
 
 
+def _executed_gate_approved_code(record: Mapping[str, Any]) -> bool:
+    """Whether a step ran the exact script the pre-execution code gate approved.
+
+    The candidate loop records ``concept_approved_code_sha256`` only after
+    :func:`~easyicu.research_agent.gates.concept.deterministic_code_gate_findings`
+    returned no error for that script, and that gate runs the same
+    :func:`~easyicu.research_agent.gates.method_compatibility.detect_forbidden_pattern_usage`
+    matrix as :func:`fallback_method_compatibility_findings`. Outputs whose
+    executed digest differs from the approved one are rejected before they are
+    registered, so equal digests are the compatibility evidence of a record
+    that does not carry its code, such as a persisted or resumed record.
+    """
+
+    executed = str(record.get("executed_code_sha256") or "").strip().lower()
+    approved = str(record.get("concept_approved_code_sha256") or "").strip().lower()
+    return re.fullmatch(r"[0-9a-f]{64}", executed) is not None and executed == approved
+
+
 def _fallback_method_compatibility_errors(
     *,
     per_step_records: Any,
@@ -1527,10 +1545,11 @@ def _fallback_method_compatibility_errors(
 
     Every fallback-generation record must have passed
     :func:`fallback_method_compatibility_findings`. When the executed code is
-    available on the record it is scanned; otherwise a missing
-    ``method_compatibility_checked`` marker fails closed. Plan-allowed
-    fallback primaries are still checked — the flag only controls primary
-    counting, never gate bypass.
+    available on the record it is scanned. Otherwise the record needs either a
+    ``method_compatibility_checked`` marker or proof that it executed the
+    exact script the pre-execution code gate approved; without either it
+    fails closed. Plan-allowed fallback primaries are still checked — the flag
+    only controls primary counting, never gate bypass.
     """
 
     from ..contracts.runtime import ValidationFinding as _ValidationFinding
@@ -1547,6 +1566,7 @@ def _fallback_method_compatibility_errors(
         checked = bool(
             record.get("method_compatibility_checked")
             or summary_map.get("method_compatibility_checked")
+            or _executed_gate_approved_code(record)
         )
         code = record.get("code") or record.get("executed_code") or ""
         if not isinstance(code, str):
