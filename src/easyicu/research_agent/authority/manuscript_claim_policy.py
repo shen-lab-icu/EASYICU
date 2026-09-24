@@ -141,6 +141,16 @@ _HEADING_RESULT_CONTEXT_RE = re.compile(
 )
 _HEADING_NUMERIC_RE = re.compile(r"(?:\d|%|\bp\s*[<=>])", re.I)
 _VERSIONED_TERM_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9]*-\d+\b")
+# A time window says when a study variable is observed ("6-hour window",
+# "30-day follow-up", "within 48 hours"): a study coordinate, not a reported
+# value.  Only a hyphenated duration modifier or a window preposition marks a
+# window, so a stated duration ("a median stay of 6 days") keeps its digits.
+_TIME_WINDOW_TERM_RE = re.compile(
+    r"\b\d+(?:\.\d+)?-(?:hours?|hrs?|h|days?|d|weeks?|wks?|months?|mo|years?|yrs?)\b"
+    r"|\b(?:within|first|after|before|by|during|over|following)\s+"
+    r"\d+(?:\.\d+)?\s*(?:hours?|hrs?|h|days?|weeks?|wks?|months?|years?|yrs?)\b",
+    re.I,
+)
 _HEADING_RESULT_VERB_RE = re.compile(
     r"\b(?:was|were|had|showed|demonstrated|differ(?:ed|s)?|varied)\b",
     re.I,
@@ -661,9 +671,12 @@ def _heading_requires_evidence(content: str) -> bool:
         return True
     # Versioned clinical or data terms such as ``Sepsis-3`` and ``SOFA-2``
     # identify the study coordinate; their suffix is not a reported numeric
-    # result.  Any surrounding assertion ("was higher", "20%") remains caught
-    # by the unchanged assertion and numeric checks.
-    numeric_semantic = _VERSIONED_TERM_RE.sub("", semantic)
+    # result, and neither is a time window.  Any surrounding assertion ("was
+    # higher", "20%") remains caught by the unchanged assertion and numeric
+    # checks.
+    numeric_semantic = _TIME_WINDOW_TERM_RE.sub(
+        "", _VERSIONED_TERM_RE.sub("", semantic)
+    )
     return bool(
         _HEADING_NUMERIC_RE.search(numeric_semantic)
         and _HEADING_RESULT_CONTEXT_RE.search(semantic)
