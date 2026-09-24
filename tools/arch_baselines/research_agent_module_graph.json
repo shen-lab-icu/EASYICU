@@ -4792,6 +4792,38 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.execution.retry_basis",
+      "easyicu.research_agent.authority.run_input"
+    ],
+    [
+      "easyicu.research_agent.execution.retry_basis",
+      "easyicu.research_agent.authority.runtime_artifacts"
+    ],
+    [
+      "easyicu.research_agent.execution.retry_basis",
+      "easyicu.research_agent.authority.step_capsule"
+    ],
+    [
+      "easyicu.research_agent.execution.retry_basis",
+      "easyicu.research_agent.authority.step_runtime"
+    ],
+    [
+      "easyicu.research_agent.execution.retry_basis",
+      "easyicu.research_agent.canonical_json"
+    ],
+    [
+      "easyicu.research_agent.execution.retry_basis",
+      "easyicu.research_agent.execution.kernel_identity"
+    ],
+    [
+      "easyicu.research_agent.execution.retry_basis",
+      "easyicu.research_agent.execution.provider_budget_runtime"
+    ],
+    [
+      "easyicu.research_agent.execution.retry_basis",
+      "easyicu.research_agent.providers.prompts"
+    ],
+    [
       "easyicu.research_agent.execution.run_coordination",
       "easyicu.research_agent.authority.provider_hard_stop"
     ],
@@ -12792,9 +12824,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3190,
+    "edge_count": 3198,
     "largest_scc_size": 0,
-    "module_count": 758,
+    "module_count": 759,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -13073,6 +13105,7 @@
     "easyicu.research_agent.execution.repair_reservation": "execution/repair_reservation.py",
     "easyicu.research_agent.execution.replan_review": "execution/replan_review.py",
     "easyicu.research_agent.execution.resume_revalidation": "execution/resume_revalidation.py",
+    "easyicu.research_agent.execution.retry_basis": "execution/retry_basis.py",
     "easyicu.research_agent.execution.run_coordination": "execution/run_coordination.py",
     "easyicu.research_agent.execution.runner": "execution/runner.py",
     "easyicu.research_agent.execution.runners": "execution/runners/__init__.py",

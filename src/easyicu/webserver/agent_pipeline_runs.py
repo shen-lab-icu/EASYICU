@@ -83,6 +83,7 @@ from easyicu.webserver import (
     provider_adapter,
     run_artifact_disclosure,
 )
+from easyicu.webserver import execution_retry as execution_retry_policy
 from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.plan_change_request import PlanChangeRequest, reference_plan_content
 from easyicu.research_agent.planning.population_requirements import (
@@ -4665,6 +4666,42 @@ def _resolve_execution_resume_wrapper(
     )
 
 
+def execution_retry_assessment(
+    *,
+    study: Mapping[str, Any],
+    project_root: Optional[str],
+    source_run_id: str,
+    runner_image: Optional[str] = None,
+    max_age_seconds: float = execution_retry_policy.ASSESSMENT_MAX_AGE_SECONDS,
+) -> execution_retry_policy.ExecutionRetryAssessment:
+    """Whether retrying one failed approved run could change its outcome.
+
+    The failed step is resolved exactly as the retry resolves it, so the
+    policy's answer and the retry's own typed refusals cannot disagree.
+    """
+
+    def failed_step() -> tuple[Path, Optional[str]]:
+        target = _resolve_execution_resume_wrapper(
+            study=study,
+            project_root=project_root,
+            source_run_id=source_run_id,
+        )
+        return (
+            target.wrapper_dir / "pipeline" / target.pipeline_run_id,
+            target.resume_from_step_id,
+        )
+
+    return execution_retry_policy.assess_execution_retry(
+        source_run_id=source_run_id,
+        configuration_sha256=study_context_owner.scientific_configuration_sha256(
+            dict(study)
+        ),
+        resolve_failed_step=failed_step,
+        runner_image=runner_image,
+        max_age_seconds=max_age_seconds,
+    )
+
+
 def _validated_execution_retry_config(
     *,
     current_config: Any,
@@ -4878,6 +4915,25 @@ def make_research_pipeline_run_runner(
             plan_change_request=plan_change_request,
         )
     )
+    if prepared.execution.execution_resume_source_run_id:
+        # The page hides a futile retry, but a stale page or a direct request
+        # can still ask.  Answer afresh, against the image this launch would
+        # use, before a job or a run record exists.
+        retry = execution_retry_assessment(
+            study=prepared.scientific.study,
+            project_root=prepared.execution.project_root,
+            source_run_id=prepared.execution.execution_resume_source_run_id,
+            runner_image=prepared.execution.runner_image or None,
+            max_age_seconds=0.0,
+        )
+        if retry.state == "futile":
+            raise ResearchPipelineRunError(
+                "research_pipeline_execution_retry_futile",
+                "The failed step has used its automatic repairs and nothing it "
+                "runs on changed since; a retry would repeat the failure. "
+                "Generate a fresh plan, or update EasyICU before retrying.",
+                details=retry.public(),
+            )
 
     def runner(job: Any) -> Dict[str, Any]:
         scientific = prepared.scientific

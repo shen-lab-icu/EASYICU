@@ -543,6 +543,7 @@ const PLAN_LIFECYCLE_WORKFLOW_CODES = new Set([
   "scientific_plan_review_policy_stale",
   "failed_pipeline_requires_fresh_plan",
   "failed_pipeline_execution_retry_available",
+  "failed_pipeline_execution_retry_futile",
   "plan_execution_upgrade_required",
   "operator_plan_approval_required",
 ]);

@@ -148,6 +148,32 @@
         ),
         approve: tr('Retry analysis from failed step', '从失败步骤重试分析'),
       };
+      if (code === 'failed_pipeline_execution_retry_futile') {
+        // The server found the failed step's repair budget spent and nothing
+        // it runs on changed, so a retry could only replay the same failure.
+        const retry = workflow.execution_retry || {};
+        const used = Number(retry.repair_attempts);
+        const limit = Number(retry.repair_limit);
+        const counted = Number.isInteger(used) && Number.isInteger(limit) && limit > 0;
+        return {
+          code, grants: ['provider_run', 'literature'], hideEdit: true,
+          message: tr(
+            'Keep the failed run as history. Start a fresh Research Agent planning run from the current study configuration, and pause for my review before analysis.',
+            '保留失败的运行作为历史。请按当前研究配置启动一次新的 Research Agent 规划，并在分析前停下让我审核。',
+          ),
+          title: tr('Retrying the failed step would repeat the same failure', '从失败步骤重试只会重复同样的失败'),
+          note: counted
+            ? tr(
+              `The failed step's automatic repair budget is spent (${used} of ${limit} code repairs), and neither EasyICU nor the runner image has changed since. Generate a fresh plan, or update EasyICU and return to retry.`,
+              `失败步骤的自动修复预算已用尽（代码修复 ${used}/${limit} 次），且此后 EasyICU 与运行镜像都没有变化。请重新生成计划，或更新 EasyICU 后再回来重试。`,
+            )
+            : tr(
+              'The failed step\'s automatic repair budget is spent, and neither EasyICU nor the runner image has changed since. Generate a fresh plan, or update EasyICU and return to retry.',
+              '失败步骤的自动修复预算已用尽，且此后 EasyICU 与运行镜像都没有变化。请重新生成计划，或更新 EasyICU 后再回来重试。',
+            ),
+          approve: tr('Generate a fresh research plan', '重新生成研究计划'),
+        };
+      }
       if (code === 'failed_pipeline_requires_fresh_plan') return {
         code, grants: ['provider_run', 'literature'],
         message: tr(

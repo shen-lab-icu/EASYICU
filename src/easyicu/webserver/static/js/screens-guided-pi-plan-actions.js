@@ -25,6 +25,12 @@
     'scientific_plan_review_policy_stale',
     'plan_scientific_changes_required',
   ]);
+  // Both states describe a failed approved execution; they differ only in
+  // whether retrying the failed step could change its outcome.
+  const FAILED_EXECUTION_WORKFLOW_CODES = new Set([
+    'failed_pipeline_execution_retry_available',
+    'failed_pipeline_execution_retry_futile',
+  ]);
   const AUTOMATIC_PROVIDER_RUN_CODES = new Set([
     'provider_ready_to_generate_plan',
     'scientific_plan_review_policy_stale',
@@ -182,7 +188,7 @@
       const executionUpgrade = reasonCode === 'plan_execution_upgrade_required';
       const retryingFailedPlan = reasonCode === 'failed_pipeline_requires_fresh_plan';
       const replanningFailedExecution = retryingFailedPlan
-        && workflowCode() === 'failed_pipeline_execution_retry_available';
+        && FAILED_EXECUTION_WORKFLOW_CODES.has(workflowCode());
       const staleScientificPolicy = reasonCode === 'scientific_plan_review_policy_stale';
       // Both a plan-owned revision and a candidate-to-package upgrade must be
       // bound to the exact reviewed run.  The server distinguishes the two by
@@ -481,7 +487,7 @@
       if (!grants.includes('provider_run')) return false;
       host.truncateMessagesAt(id);
       void startFormalPlanGeneration(
-        code === 'failed_pipeline_execution_retry_available'
+        FAILED_EXECUTION_WORKFLOW_CODES.has(code)
           ? 'failed_pipeline_requires_fresh_plan'
           : code,
       );
@@ -626,6 +632,12 @@
       }
       if (confirmation.code === 'failed_pipeline_execution_retry_available') {
         await retryFailedExecution();
+        return;
+      }
+      if (confirmation.code === 'failed_pipeline_execution_retry_futile') {
+        // The retry is not offered; the card's only action is the same fresh
+        // plan the retry card offers as its alternative.
+        await startFormalPlanGeneration('failed_pipeline_requires_fresh_plan');
         return;
       }
       if (confirmation.code === 'agent_plan_configuration_required') {
