@@ -4213,6 +4213,76 @@ class _ExecutionResumeInputs:
     scientific_identity: Dict[str, Any]
 
 
+def _execution_retry_source_cohort(
+    source_dir: Path, raw_ref: Any
+) -> tuple[Path, Path, Dict[str, Any]]:
+    """The typed source cohort the approved run declared, verified again."""
+
+    from easyicu.research_agent.intake.materialized_metadata import (
+        MaterializedCohortAuthority,
+        MaterializedCohortAuthorityRef,
+        MaterializedMetadataError,
+        load_verified_materialized_cohort_authority,
+    )
+
+    try:
+        ref = MaterializedCohortAuthorityRef.from_dict(raw_ref)
+        authority_path = source_dir / ref.file
+        authority = MaterializedCohortAuthority.from_dict(
+            json.loads(authority_path.read_text(encoding="utf-8"))
+        )
+        cohort_path = source_dir / authority.cohort_file
+        source = load_verified_materialized_cohort_authority(
+            cohort_path, expected_authority=ref
+        )
+    except (OSError, TypeError, ValueError, MaterializedMetadataError) as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_input_invalid",
+            "The approved run's source cohort could not be verified; start a new run.",
+        ) from exc
+    if source is None:
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_input_invalid",
+            "The approved run's source cohort could not be verified; start a new run.",
+        )
+    return cohort_path, authority_path, ref.to_dict()
+
+
+def _execution_retry_source_trajectory(
+    source_dir: Path, raw_ref: Any
+) -> tuple[Path, Path, Dict[str, Any]]:
+    """The typed source trajectory the approved run declared, verified again."""
+
+    from easyicu.research_agent.intake.materialized_trajectory import (
+        MaterializedTrajectoryAuthority,
+        MaterializedTrajectoryAuthorityRef,
+        MaterializedTrajectoryError,
+        load_verified_materialized_trajectory_authority,
+    )
+
+    try:
+        ref = MaterializedTrajectoryAuthorityRef.from_dict(raw_ref)
+        authority_path = source_dir / ref.file
+        authority = MaterializedTrajectoryAuthority.from_dict(
+            json.loads(authority_path.read_text(encoding="utf-8"))
+        )
+        trajectory_path = source_dir / authority.trajectory_file
+        source = load_verified_materialized_trajectory_authority(
+            trajectory_path, expected_authority=ref
+        )
+    except (OSError, TypeError, ValueError, MaterializedTrajectoryError) as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_input_invalid",
+            "The approved run's source trajectory could not be verified; start a new run.",
+        ) from exc
+    if source is None:
+        raise ResearchPipelineRunError(
+            "research_pipeline_execution_retry_input_invalid",
+            "The approved run's source trajectory could not be verified; start a new run.",
+        )
+    return trajectory_path, authority_path, ref.to_dict()
+
+
 def _verified_execution_resume_inputs(
     target: _ExecutionResumeTarget,
 ) -> _ExecutionResumeInputs:
@@ -4240,17 +4310,22 @@ def _verified_execution_resume_inputs(
         ) from exc
 
     capsule = verified.capsule
+    cohort_path = run_dir / capsule.cohort_relative_path
     cohort_authority_path: Optional[Path] = None
     cohort_authority_ref: Optional[Dict[str, Any]] = None
+    # A typed run seals a staged copy of each declared input and keeps the
+    # declared source's authority in its scientific identity.  Resuming
+    # declares those sources again, exactly as the approved run did, and the
+    # pipeline proves each staged copy still descends from its source.  The
+    # staged copy's own authority can never pass that proof.
+    source_dir = target.wrapper_dir / "pipeline_input"
     if isinstance(capsule, RunInputCapsuleV2):
-        cohort_authority_ref = dict(capsule.materialized_cohort_authority_ref)
-        authority_file = Path(str(cohort_authority_ref.get("file") or ""))
-        if not authority_file.name or authority_file.name != str(authority_file):
-            raise ResearchPipelineRunError(
-                "research_pipeline_execution_retry_input_invalid",
-                "The failed run's sealed cohort authority path is invalid.",
+        cohort_path, cohort_authority_path, cohort_authority_ref = (
+            _execution_retry_source_cohort(
+                source_dir,
+                scientific_identity.get("materialized_cohort_authority_ref"),
             )
-        cohort_authority_path = run_dir / authority_file
+        )
 
     trajectory_path = (
         run_dir / capsule.trajectory_relative_path
@@ -4260,24 +4335,17 @@ def _verified_execution_resume_inputs(
     trajectory_authority_path: Optional[Path] = None
     trajectory_authority_ref: Optional[Dict[str, Any]] = None
     if isinstance(capsule, RunInputCapsuleV3):
-        trajectory_authority_ref = dict(
-            capsule.materialized_trajectory_authority_ref
-        )
-        trajectory_authority_file = Path(
-            str(trajectory_authority_ref.get("file") or "")
-        )
-        if (
-            not trajectory_authority_file.name
-            or trajectory_authority_file.name != str(trajectory_authority_file)
-        ):
-            raise ResearchPipelineRunError(
-                "research_pipeline_execution_retry_input_invalid",
-                "The failed run's sealed trajectory authority path is invalid.",
+        trajectory_path, trajectory_authority_path, trajectory_authority_ref = (
+            _execution_retry_source_trajectory(
+                source_dir,
+                scientific_identity.get(
+                    "materialized_trajectory_authority_ref"
+                ),
             )
-        trajectory_authority_path = run_dir / trajectory_authority_file
+        )
 
     return _ExecutionResumeInputs(
-        cohort_path=run_dir / capsule.cohort_relative_path,
+        cohort_path=cohort_path,
         cohort_authority_path=cohort_authority_path,
         cohort_authority_ref=cohort_authority_ref,
         trajectory_path=trajectory_path,

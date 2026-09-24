@@ -158,12 +158,17 @@ def seal_test_run_input_capsule(
     research_question: str,
     primary_exposure: str | None,
     target_outcome: str,
+    source_dir: Path | None = None,
 ) -> RunInputCapsuleV2:
-    """Seal a replay-verifiable typed V2 capsule for a small ICU export."""
+    """Seal a replay-verifiable typed V2 capsule for a small ICU export.
+
+    ``source_dir`` places the declared source cohort where a caller's layout
+    keeps it (a web run keeps it in its wrapper's ``pipeline_input``).
+    """
 
     source = _typed_export(run_dir.parent / f"{run_dir.name}_typed_export")
     materialized = cohort_materializer.materialize_to_parquet(
-        run_dir.parent / f"{run_dir.name}_typed_materialized",
+        source_dir or run_dir.parent / f"{run_dir.name}_typed_materialized",
         data_path=source,
         database="miiv",
         static_concepts=("age",),
