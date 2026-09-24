@@ -1,13 +1,56 @@
-"""Planner-owned display labels for deterministic publication figures."""
+"""Planner-owned display labels for deterministic publication figures.
+
+Figure titles, axes and captions are written in English, so every label a
+figure shows must be English too.  A Planner label written in another script
+(for example in the language of the user's question) is not figure text.
+"""
 
 from __future__ import annotations
 
 import re
 from typing import Any, Mapping, Optional
 
+_FOREIGN_SCRIPT_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯豈-﫿]")
+
 
 def _normalise_display_key(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(value or "").casefold()).strip("_")
+
+
+def _figure_text(label: Any) -> Optional[str]:
+    text = str(label or "").strip()
+    if not text or _FOREIGN_SCRIPT_RE.search(text):
+        return None
+    return text
+
+
+def figure_language_labels(
+    display_labels: Optional[Mapping[str, str]],
+    descriptions: Optional[Mapping[str, str]] = None,
+) -> dict[str, str]:
+    """Keep only labels a figure can show in its own (English) text.
+
+    A variable label in another script is replaced by that variable's English
+    source description, first letter capitalised.  A level label
+    (``variable=level``) or a variable without an English description keeps
+    no label, so the renderer's case-neutral rendering of the key applies.
+    """
+
+    english = {
+        str(name): " ".join(str(text or "").split())
+        for name, text in (descriptions or {}).items()
+    }
+    result: dict[str, str] = {}
+    for key, label in (display_labels or {}).items():
+        text = _figure_text(label)
+        if text is not None:
+            result[str(key)] = text
+            continue
+        name, separator, _level = str(key).partition("=")
+        description = _figure_text(english.get(name))
+        if not separator and description is not None:
+            result[str(key)] = description[:1].upper() + description[1:]
+    return result
 
 
 def label_lookup(
@@ -18,15 +61,16 @@ def label_lookup(
     if not display_labels:
         return None
     raw = str(value or "").strip()
-    exact = display_labels.get(raw)
-    if exact is not None and str(exact).strip():
-        return str(exact).strip()
+    exact = _figure_text(display_labels.get(raw))
+    if exact is not None:
+        return exact
     normalized = _normalise_display_key(raw)
     if not normalized:
         return None
     for key, label in display_labels.items():
-        if _normalise_display_key(key) == normalized and str(label).strip():
-            return str(label).strip()
+        text = _figure_text(label)
+        if _normalise_display_key(key) == normalized and text is not None:
+            return text
     return None
 
 
@@ -57,9 +101,9 @@ def scoped_label_lookup(
     # Exact scoped categories need not be binary (e.g. an ordinal stage or a
     # named treatment). Never borrow a global level label from another field.
     raw_value = str(value).strip()
-    exact = (display_labels or {}).get(f"{scope}={raw_value}")
-    if exact is not None and str(exact).strip():
-        return str(exact).strip()
+    exact = _figure_text((display_labels or {}).get(f"{scope}={raw_value}"))
+    if exact is not None:
+        return exact
     level = _binary_level(value)
     if not scope_key or level is None or not display_labels:
         return None
@@ -68,11 +112,11 @@ def scoped_label_lookup(
         if "=" not in key:
             continue
         raw_scope, raw_level = key.rsplit("=", 1)
-        label = str(raw_label or "").strip()
+        label = _figure_text(raw_label)
         if (
             _normalise_display_key(raw_scope) == scope_key
             and _binary_level(raw_level) == level
-            and label
+            and label is not None
         ):
             return label
     return None
@@ -162,6 +206,7 @@ __all__ = [
     "binary_contrast_label",
     "binary_scope_label",
     "display_label",
+    "figure_language_labels",
     "label_lookup",
     "scoped_label_lookup",
 ]

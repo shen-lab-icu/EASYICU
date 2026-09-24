@@ -27,8 +27,9 @@ import textwrap
 from typing import Any, Mapping
 
 import pandas as pd
-from ...figures.display_labels import display_label
+from ...figures.display_labels import display_label, figure_language_labels
 from ...figures.presentation import wrap_figure_label
+from .bound_variable_display import load_bound_variable_descriptions
 
 from ...figures.publication import (
     add_panel_label,
@@ -1003,7 +1004,7 @@ def run_measurement_missingness_figure(
             "Share of the declared cohort (%)\n"
             "Conditional event times are applicable only when the event occurs"
         )
-    add_panel_label(ax, "A", x=-0.20, y=1.02)
+    add_panel_label(ax, "a", x=-0.20, y=1.02)
     fig.subplots_adjust(left=0.24, right=0.96, bottom=0.20, top=0.76)
 
     contract = make_figure_contract(
@@ -1114,6 +1115,12 @@ def run_missingness_measurement_figure(
         raise ValueError("unsafe or malformed figure product id")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    display_labels = figure_language_labels(
+        display_labels,
+        load_bound_variable_descriptions(
+            run_dir=Path(run_dir), resolved_inputs=resolved_inputs
+        ),
+    )
     bindings = _load_bindings(
         run_dir=Path(run_dir),
         resolved_inputs=resolved_inputs,
@@ -1273,9 +1280,9 @@ def run_missingness_measurement_figure(
     ):
         ax_a.set_xlabel(
             "Stays with no source value (% of cohort)\n"
-            "† applies to only part of the cohort; see panel B"
+            "† applies to only part of the cohort; see panel b"
         )
-    add_panel_label(ax_a, "A", x=-0.30, y=1.02)
+    add_panel_label(ax_a, "a", x=-0.30, y=1.02)
 
     matrix = [
         [
@@ -1339,7 +1346,7 @@ def run_missingness_measurement_figure(
     colorbar = fig.colorbar(image, ax=ax_b, fraction=0.032, pad=0.02)
     colorbar.set_label("Share of the cohort (%)", fontsize=6.2)
     colorbar.ax.tick_params(labelsize=5.8)
-    add_panel_label(ax_b, "B", x=-0.30, y=1.02)
+    add_panel_label(ax_b, "b", x=-0.30, y=1.02)
     fig.subplots_adjust(left=0.20, right=0.94, bottom=0.22, top=0.88, wspace=0.72)
     cohort_sizes = {int(entry["denominator"]) for entry in per_variable.values()}
     denominator_note = (
@@ -1415,14 +1422,14 @@ def run_missingness_measurement_figure(
         reader_caption=(
             "Source availability and record coverage. " + denominator_note
             + (
-                "(A) Bars show completeness among eligible stays because every "
+                "(a) Bars show completeness among eligible stays because every "
                 "audited missing count is zero. A variable with no eligible "
                 "stays remains N/A, not 100% complete. "
-                if zero_missing_display else "(A) Bars show stays with a missing "
+                if zero_missing_display else "(a) Bars show stays with a missing "
                 "source value as a percentage of the whole cohort, with counts "
                 "alongside. "
             )
-            + "(B) Shading and labels show applicable stays, stays with a source "
+            + "(b) Shading and labels show applicable stays, stays with a source "
             "value/status, and stays with repeated source records, each as a "
             "percentage of the cohort. "
             + ("The dagger marks variables applicable to only part of the cohort. "
@@ -1446,7 +1453,7 @@ def run_missingness_measurement_figure(
             "fields have no repetition display; missing count-source semantics "
             "remain unknown rather than becoming a zero. Source counts are preserved."
             + (
-                " Because every missing count is zero, panel A deterministically "
+                " Because every missing count is zero, panel a deterministically "
                 "shows eligible-stay completeness (100% when an eligible "
                 "denominator exists) instead of an invisible zero-length "
                 "missingness bar."

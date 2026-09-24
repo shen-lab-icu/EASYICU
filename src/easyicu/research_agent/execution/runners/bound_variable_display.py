@@ -38,6 +38,48 @@ def _bound_bytes(run_dir: Path, manifest: Mapping[str, Any], key: str) -> tuple[
     return raw, digest
 
 
+def load_bound_variable_descriptions(
+    *, run_dir: Path, resolved_inputs: Path | Mapping[str, Any],
+) -> dict[str, str]:
+    """Return each context variable's source description from the bound bytes.
+
+    A manifest without a context binding yields no descriptions; a present
+    binding must still match its digest.  An event-time variable described
+    exactly like the outcome of its own source concept is named after that
+    event ("Time to <outcome> (<unit>)"), so the outcome and its timing never
+    share one name.
+    """
+    manifest = (
+        resolved_inputs
+        if isinstance(resolved_inputs, Mapping)
+        else json.loads(Path(resolved_inputs).read_text(encoding="utf-8"))
+    )
+    if not isinstance(manifest, Mapping) or manifest.get("context") is None:
+        return {}
+    context_bytes, _context_sha = _bound_bytes(run_dir, manifest, "context")
+    context = parse_research_context_json(context_bytes)
+    described = [
+        (variable, " ".join(str(variable.description or "").split()))
+        for variable in context.variables
+        if str(variable.description or "").strip()
+    ]
+    outcome_descriptions = {
+        (variable.source_concept, description.casefold())
+        for variable, description in described
+        if variable.role == "outcome" and variable.source_concept
+    }
+    result: dict[str, str] = {}
+    for variable, description in described:
+        if (
+            variable.role == "time"
+            and (variable.source_concept, description.casefold()) in outcome_descriptions
+        ):
+            unit = str(variable.unit or "").strip()
+            description = f"time to {description}" + (f" ({unit})" if unit else "")
+        result[variable.name] = description
+    return result
+
+
 def load_bound_variable_display(
     *, run_dir: Path, manifest: Mapping[str, Any], step_id: str, column: str,
 ) -> BoundVariableDisplay:
