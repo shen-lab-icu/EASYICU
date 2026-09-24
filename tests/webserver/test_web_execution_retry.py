@@ -7,8 +7,28 @@ from types import SimpleNamespace
 import pytest
 
 from easyicu.webserver import agent_pipeline_runs
+from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.authority.run_input import (
+    RunInputCapsuleV3,
+    build_environment_identity,
+    seal_run_input_capsule,
+)
+from easyicu.research_agent.intake.materialized_metadata import (
+    load_verified_materialized_cohort_authority,
+    stage_materialized_cohort_authority,
+)
+from easyicu.research_agent.intake.materialized_trajectory import (
+    StagedTrajectoryBinding,
+    stage_materialized_trajectory_authority,
+)
 from tests.support.figure2 import seal_test_run_input_capsule
+from tests.support.typed_trajectory import (
+    trajectory_context_and_evidence,
+    trajectory_implementation_sha,
+    trajectory_scientific_identity,
+    typed_trajectory_bundle,
+)
 
 
 @pytest.mark.parametrize(
@@ -240,6 +260,7 @@ def test_execution_retry_reuses_verified_sealed_pipeline_inputs(
         research_question="Does lactate predict mortality?",
         primary_exposure="lact_max",
         target_outcome="death",
+        source_dir=wrapper / "pipeline_input",
     )
 
     inputs = agent_pipeline_runs._verified_execution_resume_inputs(
@@ -250,11 +271,20 @@ def test_execution_retry_reuses_verified_sealed_pipeline_inputs(
         )
     )
 
-    assert inputs.cohort_path == run_dir / capsule.cohort_relative_path
-    assert inputs.cohort_authority_ref == capsule.materialized_cohort_authority_ref
+    # The retry declares the approved run's source again, not its staged copy:
+    # the pipeline resumes only when the staged copy descends from it.
+    source_ref = capsule.scientific_identity["materialized_cohort_authority_ref"]
+    assert inputs.cohort_authority_ref == source_ref
+    assert inputs.cohort_authority_ref != capsule.materialized_cohort_authority_ref
     assert inputs.cohort_authority_path == (
-        run_dir / capsule.materialized_cohort_authority_ref["file"]
+        wrapper.resolve() / "pipeline_input" / source_ref["file"]
     )
+    assert inputs.cohort_path.parent == wrapper.resolve() / "pipeline_input"
+    staged = load_verified_materialized_cohort_authority(
+        run_dir / capsule.cohort_relative_path
+    )
+    assert staged is not None
+    assert staged.authority.parent_authority_sha256 == source_ref["sha256"]
     assert inputs.trajectory_path is None
     assert inputs.scientific_identity["primary_exposure"] == "lact_max"
 
@@ -267,6 +297,105 @@ def test_execution_retry_reuses_verified_sealed_pipeline_inputs(
         "death": "death",
     }
     assert acquisition.note.startswith("Digest-verified execution retry projection")
+
+
+def test_execution_retry_refuses_when_the_source_is_gone(tmp_path: Path) -> None:
+    wrapper = tmp_path / "projects" / "study" / "run-wrapper"
+    run_dir = wrapper / "pipeline" / "run-analysis"
+    run_dir.mkdir(parents=True)
+    capsule = seal_test_run_input_capsule(
+        run_dir=run_dir,
+        evidence=EvidenceStore(root=run_dir),
+        research_question="Does lactate predict mortality?",
+        primary_exposure="lact_max",
+        target_outcome="death",
+        source_dir=wrapper / "pipeline_input",
+    )
+    source_ref = capsule.scientific_identity["materialized_cohort_authority_ref"]
+    (wrapper / "pipeline_input" / source_ref["file"]).unlink()
+
+    with pytest.raises(ResearchPipelineRunError) as raised:
+        agent_pipeline_runs._verified_execution_resume_inputs(
+            agent_pipeline_runs._ExecutionResumeTarget(
+                wrapper_dir=wrapper.resolve(),
+                pipeline_run_id="run-analysis",
+                pipeline_config_sha256="b" * 64,
+            )
+        )
+
+    assert raised.value.code == "research_pipeline_execution_retry_input_invalid"
+
+
+def test_execution_retry_redeclares_the_source_trajectory(tmp_path: Path) -> None:
+    wrapper = tmp_path / "projects" / "study" / "run-wrapper"
+    wrapper.mkdir(parents=True)
+    paths, source_cohort, source_trajectory = typed_trajectory_bundle(wrapper)
+    (wrapper / "materialized").rename(wrapper / "pipeline_input")
+    universe = wrapper / "pipeline_input" / Path(paths["parquet"]).name
+    trajectory = wrapper / "pipeline_input" / Path(paths["trajectory"]).name
+    run_dir = wrapper / "pipeline" / "run-analysis"
+    run_dir.mkdir(parents=True)
+    cohort_path = run_dir / "cohort.parquet"
+    staged_cohort = stage_materialized_cohort_authority(
+        universe,
+        cohort_path,
+        expected_source_authority=source_cohort.reference,
+        producer_implementation_sha256=trajectory_implementation_sha(),
+    )
+    assert staged_cohort is not None
+    staged_trajectory = stage_materialized_trajectory_authority(
+        trajectory,
+        run_dir / "cohort_trajectory.parquet",
+        source_universe_path=universe,
+        target_universe_path=cohort_path,
+        expected_source_authority=source_trajectory.reference,
+        expected_target_universe_authority=staged_cohort.reference,
+        producer_implementation_sha256=trajectory_implementation_sha(),
+    )
+    context_path, evidence = trajectory_context_and_evidence(
+        run_dir,
+        cohort_path,
+        trajectory_binding=StagedTrajectoryBinding(
+            path=run_dir / "cohort_trajectory.parquet",
+            sha256=staged_trajectory.authority.trajectory_sha256,
+            size=staged_trajectory.authority.trajectory_size,
+            authority_ref=staged_trajectory.reference,
+        ),
+    )
+    capsule = seal_run_input_capsule(
+        run_dir=run_dir,
+        evidence=evidence,
+        scientific_identity=trajectory_scientific_identity(
+            cohort_path=universe,
+            cohort_ref=source_cohort.reference,
+            trajectory_path=trajectory,
+            trajectory_ref=source_trajectory.reference,
+        ),
+        initial_environment=build_environment_identity(llm_signature="mock"),
+        context_path=context_path,
+        cohort_path=cohort_path,
+        experiment_spec_path=None,
+    )
+    assert isinstance(capsule, RunInputCapsuleV3)
+
+    inputs = agent_pipeline_runs._verified_execution_resume_inputs(
+        agent_pipeline_runs._ExecutionResumeTarget(
+            wrapper_dir=wrapper.resolve(),
+            pipeline_run_id="run-analysis",
+            pipeline_config_sha256="b" * 64,
+        )
+    )
+
+    assert inputs.cohort_path == wrapper.resolve() / "pipeline_input" / universe.name
+    assert inputs.cohort_authority_ref == source_cohort.reference.to_dict()
+    assert inputs.trajectory_path == (
+        wrapper.resolve() / "pipeline_input" / trajectory.name
+    )
+    assert inputs.trajectory_authority_ref == source_trajectory.reference.to_dict()
+    assert (
+        staged_trajectory.authority.parent_trajectory_authority
+        == source_trajectory.reference
+    )
 
 
 def test_execution_retry_accepts_missing_seed_only_for_exact_checkpoint_digest(
