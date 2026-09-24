@@ -57,6 +57,22 @@ def _reader_coordinate(coordinate: str) -> str:
     return coordinate
 
 
+# An analysis-set key that names an engineering rule is not a population a
+# reader recognises.  Its projection is the plain analysis set, the wording the
+# manuscript quality audit prescribes for the same phrase.
+_READER_ANALYSIS_SET_POPULATIONS = {
+    "the source aware analysis set": "the analysis set",
+}
+
+
+def _reader_population(population: str) -> str:
+    reader = _reader_coordinate(population)
+    for rule, plain in _READER_ANALYSIS_SET_POPULATIONS.items():
+        if reader.casefold().startswith(rule):
+            return plain + reader[len(rule):]
+    return reader
+
+
 class ScientificClaimDraft(BaseModel):
     """One machine-readable scientific claim derived by the host."""
 
@@ -259,7 +275,7 @@ class ScientificClaim(ScientificClaimDraft):
             if not include_estimate:
                 return (
                     f"These findings describe {outcome} in the {group} group within "
-                    f"{_reader_coordinate(self.population)}; interpretation is "
+                    f"{_reader_population(self.population)}; interpretation is "
                     "descriptive and unadjusted and does not establish a causal effect."
                 )
             if (
@@ -286,7 +302,7 @@ class ScientificClaim(ScientificClaimDraft):
             if not include_estimate:
                 return (
                     f"The comparison of {outcome} for {contrast} within "
-                    f"{_reader_coordinate(self.population)} describes an unadjusted "
+                    f"{_reader_population(self.population)} describes an unadjusted "
                     "risk difference and does not establish a causal effect."
                 )
             point, lower, upper, confidence = self._reader_interval()
@@ -324,7 +340,7 @@ class ScientificClaim(ScientificClaimDraft):
         return (
             f"{model_prefix}{_reader_coordinate(self.exposure)} {relation} "
             f"{_reader_coordinate(self.outcome)} in "
-            f"{_reader_coordinate(self.population)} ({estimate_text})."
+            f"{_reader_population(self.population)} ({estimate_text})."
         )
 
     def _reader_interval(self) -> tuple[float, float, float, float]:
