@@ -2376,6 +2376,10 @@
       "easyicu.research_agent.authority.model_contrast_scientific_claims"
     ],
     [
+      "easyicu.research_agent.authority.scientific_claims",
+      "easyicu.research_agent.authority.sensitivity_scientific_claims"
+    ],
+    [
       "easyicu.research_agent.authority.source_status",
       "easyicu.research_agent.schema"
     ],
@@ -12756,9 +12760,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3181,
+    "edge_count": 3182,
     "largest_scc_size": 0,
-    "module_count": 756,
+    "module_count": 757,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -12868,6 +12872,7 @@
     "easyicu.research_agent.authority.scientific_claim_registry": "authority/scientific_claim_registry.py",
     "easyicu.research_agent.authority.scientific_claims": "authority/scientific_claims.py",
     "easyicu.research_agent.authority.secret_redaction": "authority/secret_redaction.py",
+    "easyicu.research_agent.authority.sensitivity_scientific_claims": "authority/sensitivity_scientific_claims.py",
     "easyicu.research_agent.authority.source_fingerprints": "authority/source_fingerprints.py",
     "easyicu.research_agent.authority.source_status": "authority/source_status.py",
     "easyicu.research_agent.authority.source_status_sdk": "authority/source_status_sdk.py",
