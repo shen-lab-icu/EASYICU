@@ -403,6 +403,18 @@ def planner_selectable_cohort(cohort: Any) -> Dict[str, Any]:
     return raw
 
 
+def cohort_required_concepts(cohort: Any) -> Tuple[str, ...]:
+    """Stay-level concepts the typed cohort's own predicates read.
+
+    A minimum ICU stay is evaluated from ``los_icu`` (days), so a study that
+    types one needs that concept in the planning catalog and in the
+    materialized universe alike.
+    """
+
+    execution = normalize_execution_cohort(cohort if isinstance(cohort, Mapping) else {})
+    return ("los_icu",) if int(execution["min_icu_los_hours"]) > 0 else ()
+
+
 def planning_selection_mode(cohort: Any) -> Optional[str]:
     """Return only a stated population constraint for a zero-row proposal.
 
@@ -421,6 +433,7 @@ def planning_selection_mode(cohort: Any) -> Optional[str]:
 
 
 __all__ = [
+    "cohort_required_concepts",
     "ADMISSION_ELIGIBILITY_FIELDS",
     "CONCEPT_DERIVED_PRESETS",
     "DEFAULT_OBSERVATION_WINDOW_HOURS",

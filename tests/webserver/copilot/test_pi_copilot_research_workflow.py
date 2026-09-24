@@ -2145,6 +2145,64 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
     assert result["provider"]["model"] == "metadata-only-test"
 
 
+def test_planner_only_runner_plans_with_the_typed_cohort_duration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A typed minimum ICU stay puts its duration in the planning roster.
+
+    The family template applies that criterion to the stay's ``los_icu``; a
+    metadata-only universe without it refused the reviewed cohort instead.
+    """
+
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+
+    monkeypatch.setattr(
+        provider_adapter,
+        "build_research_agent_provider_client",
+        lambda *_args, **_kwargs: (
+            ScriptedMockLLMClient([]),
+            {"provider": "mock", "model": "metadata-only-test"},
+        ),
+    )
+    captured: dict[str, Any] = {}
+
+    def capture_planning_roster(**kwargs: Any) -> Any:
+        captured.update(kwargs)
+        raise agent_pipeline_runs.ResearchPipelineRunError(
+            "test_planning_roster_captured", "stop after the planning roster is bound"
+        )
+
+    monkeypatch.setattr(
+        agent_pipeline_runs, "_metadata_only_planning_acquisition", capture_planning_roster
+    )
+    prepared = _write_pipeline_export(tmp_path / "prepared-mimiciv")
+    study = {**_design_free_study(prepared), "cohort": {"min_icu_los_hours": 24}}
+    runner = agent_pipeline_runs.make_research_pipeline_run_runner(
+        export_path=str(prepared),
+        study_context=study,
+        project_root=str(tmp_path / "projects"),
+        provider={"provider": "openai", "external": True},
+        provider_environment={"OPENAI_API_KEY": "test-key"},
+        credential_source="pi_verified",
+        budget_mode="planner_canary",
+    )
+
+    class Job:
+        id = "job-cohort-duration-plan"
+        cancel_requested = False
+        events: list[dict[str, Any]] = []
+
+        def emit(self, event: dict[str, Any]) -> None:
+            self.events.append(dict(event))
+
+    with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as raised:
+        runner(Job())
+
+    assert raised.value.code == "test_planning_roster_captured"
+    assert "los_icu" in captured["required_concepts"]
+
+
 def test_full_reviewed_launch_uses_a_neutral_scope_until_plan_review(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

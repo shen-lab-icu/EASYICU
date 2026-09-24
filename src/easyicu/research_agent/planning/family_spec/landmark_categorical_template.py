@@ -553,27 +553,44 @@ def _predicate(concept_id: str, op: str, value: float, *, end_hours: float) -> P
     )
 
 
+def typed_bound_predicates(
+    request: FamilySpecRequest, *, end_hours: float
+) -> list[ProgressiveCohortPredicate]:
+    """The request's typed age bounds and minimum ICU stay as cohort predicates."""
+
+    predicates: list[ProgressiveCohortPredicate] = []
+    if request.age_min is not None:
+        predicates.append(_predicate("age", ">=", request.age_min, end_hours=end_hours))
+    if request.age_max is not None:
+        predicates.append(_predicate("age", "<=", request.age_max, end_hours=end_hours))
+    if request.minimum_icu_hours is not None:
+        # ``los_icu`` is the stay's ICU length of stay in days.  A stay reaches
+        # the typed duration exactly when it is still in the ICU at that hour;
+        # the request builder refuses a duration beyond time zero, so no later
+        # information decides eligibility.
+        predicates.append(
+            _predicate("los_icu", ">=", request.minimum_icu_hours / 24.0, end_hours=end_hours)
+        )
+    return predicates
+
+
 def _cohort_intent(request: FamilySpecRequest) -> ProgressiveCohortIntent:
     if request.cohort_selection_mode == "all_input_rows":
         return ProgressiveCohortIntent(
             name=request.cohort_name, selection_mode="all_input_rows", inclusion=[], exclusion=[]
         )
-    end_hours = request.landmark_hours or request.observation_window_hours
+    end_hours = request.cohort_time_zero_hours
     if end_hours is None:
         raise FamilySpecError(
             "family_spec_cohort_window_unavailable",
             "a predicate-filtered cohort needs a typed landmark or observation window",
             path="cohort",
         )
-    inclusion: list[ProgressiveCohortPredicate] = []
-    if request.age_min is not None:
-        inclusion.append(_predicate("age", ">=", request.age_min, end_hours=end_hours))
-    if request.age_max is not None:
-        inclusion.append(_predicate("age", "<=", request.age_max, end_hours=end_hours))
+    inclusion = typed_bound_predicates(request, end_hours=end_hours)
     if not inclusion:
         raise FamilySpecError(
             "family_spec_cohort_predicate_unavailable",
-            "predicate-filtered cohort intent needs a typed age bound",
+            "predicate-filtered cohort intent needs a typed age bound or minimum ICU stay",
             path="cohort",
         )
     return ProgressiveCohortIntent(

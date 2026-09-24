@@ -5015,6 +5015,7 @@ def make_research_pipeline_run_runner(
                             for spec in sensitivity_specs
                             for variable in spec.source_materialization_variables
                         ),
+                        *primary_cohort.cohort_required_concepts(study.get("cohort")),
                     ),
                     patient_grouping=patient_grouping,
                     operationalized_columns=metadata_operationalized_columns,

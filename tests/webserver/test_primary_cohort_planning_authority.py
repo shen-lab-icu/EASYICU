@@ -34,3 +34,20 @@ def test_candidate_population_requirement_preserves_unresolved_scope(
 def test_candidate_population_does_not_hide_invalid_explicit_scope() -> None:
     with pytest.raises(primary_cohort.PrimaryCohortContractError):
         primary_cohort.planning_selection_mode({"preset": "unregistered"})
+
+
+@pytest.mark.parametrize(
+    ("cohort", "expected"),
+    [
+        (None, ()),
+        ({}, ()),
+        ({"age_min": 18}, ()),
+        ({"min_icu_los_hours": 0}, ()),
+        ({"min_icu_los_hours": 24}, ("los_icu",)),
+        ({"preset": "sepsis3", "min_icu_los_hours": "48"}, ("los_icu",)),
+    ],
+)
+def test_a_typed_minimum_icu_stay_requires_its_stay_duration(
+    cohort: object, expected: tuple[str, ...],
+) -> None:
+    assert primary_cohort.cohort_required_concepts(cohort) == expected

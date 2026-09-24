@@ -54,6 +54,7 @@ from .landmark_categorical_template import (
     _label,
     _method_card_elements,
     _method_card_ids,
+    typed_bound_predicates,
 )
 from .plan_language import bounded_roster, listing, plan_language, sentence
 
@@ -123,7 +124,7 @@ def _summary_for(request: FamilySpecRequest, name: str) -> str:
 
 
 def _cohort_intent(request: FamilySpecRequest, spec: FamilyPlanSpec) -> ProgressiveCohortIntent:
-    end_hours = request.observation_window_hours
+    end_hours = request.cohort_time_zero_hours
     inclusion: list[ProgressiveCohortPredicate] = []
     if spec.cohort_membership_column is not None:
         if end_hours is None:
@@ -143,26 +144,17 @@ def _cohort_intent(request: FamilySpecRequest, spec: FamilyPlanSpec) -> Progress
                 value=ProgressivePredicateValue(mode="number", number_value=1.0),
             )
         )
-    for bound, op in ((request.age_min, ">="), (request.age_max, "<=")):
-        if bound is None:
-            continue
+    if any(
+        bound is not None
+        for bound in (request.age_min, request.age_max, request.minimum_icu_hours)
+    ):
         if end_hours is None:
             raise FamilySpecError(
                 "family_spec_cohort_window_unavailable",
                 "a predicate-filtered cohort needs a typed observation window",
                 path="cohort",
             )
-        inclusion.append(
-            ProgressiveCohortPredicate(
-                concept_id="age",
-                anchor="icu_admission",
-                start_offset_hours=0.0,
-                end_offset_hours=float(end_hours),
-                aggregation="first",
-                op=op,
-                value=ProgressivePredicateValue(mode="number", number_value=float(bound)),
-            )
-        )
+        inclusion.extend(typed_bound_predicates(request, end_hours=float(end_hours)))
     if not inclusion:
         return ProgressiveCohortIntent(
             name=request.cohort_name, selection_mode="all_input_rows", inclusion=[], exclusion=[]
