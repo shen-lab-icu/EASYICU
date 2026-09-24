@@ -16,6 +16,7 @@ from ...authority.declared_levels import closed_planning_levels_for
 from ...concept_availability import variable_source_unavailability
 from ...contracts.model_terms import level_spelling
 from ...schema import ResearchContext
+from ..accepted_analysis_inputs import analysis_input_value_columns
 from ..adjustment_authority import (
     AdjustmentSetAuthority,
     adjusted_model_term_planning_authority,
@@ -36,7 +37,9 @@ from .contract import (
     LANDMARK_SURVIVAL_FAMILY_ID,
     PHENOTYPING_FAMILY_ID,
     PREDICTION_FAMILY_ID,
+    MAX_FIT_FEATURES,
     SOURCE_FEASIBILITY_FAMILY_ID,
+    AcceptedFeatureGroup,
     AdjustmentCandidate,
     ExposureKind,
     FamilySpecError,
@@ -612,8 +615,61 @@ def build_family_spec_request(
         required_primary_cohort_selection_mode=required_primary_cohort_selection_mode,
         planning_contract_context=planning_contract_context,
     )
+    request = _bind_accepted_feature_groups(context, request)
     _refuse_eligibility_after_time_zero(request)
     return request
+
+
+def _bind_accepted_feature_groups(
+    context: ResearchContext, request: FamilySpecRequest
+) -> FamilySpecRequest:
+    """Keep the reviewed candidate's primary inputs as the fit's features.
+
+    After data preparation each accepted input is a family of value columns.
+    The Planner chooses which of them represents the input, not whether the
+    input stays; an accepted input with no selectable column, or more accepted
+    inputs than the design holds, is a host contradiction refused before any
+    Provider call.
+    """
+
+    if request.family_id not in {PHENOTYPING_FAMILY_ID, PREDICTION_FAMILY_ID}:
+        return request
+    accepted = analysis_input_value_columns(context)
+    if not accepted:
+        return request
+    selectable = {item.name for item in request.feature_candidates if item.selectable}
+    groups = [
+        AcceptedFeatureGroup(
+            concept=concept, columns=[name for name in columns if name in selectable]
+        )
+        for concept, columns in accepted.items()
+        if any(name in selectable for name in columns)
+    ]
+    unavailable = [
+        concept
+        for concept, columns in accepted.items()
+        if not any(name in selectable for name in columns)
+    ]
+    if unavailable:
+        raise FamilySpecError(
+            "family_spec_accepted_input_not_selectable",
+            "accepted primary inputs have no selectable fit feature in the prepared data: "
+            + ", ".join(unavailable),
+            path="feature_candidates",
+        )
+    if len(groups) > MAX_FIT_FEATURES:
+        raise FamilySpecError(
+            "family_spec_accepted_inputs_exceed_design",
+            f"{len(groups)} accepted primary inputs exceed the {MAX_FIT_FEATURES} fit "
+            "features a design names",
+            path="feature_candidates",
+        )
+    return FamilySpecRequest.model_validate(
+        {
+            **request.model_dump(mode="json"),
+            "accepted_feature_groups": [group.model_dump(mode="json") for group in groups],
+        }
+    )
 
 
 def _refuse_eligibility_after_time_zero(request: FamilySpecRequest) -> None:
@@ -1285,12 +1341,16 @@ def _feature_candidates(
     variable_roster: Sequence[str],
     excluded: frozenset[str],
     include_demographics: bool = False,
+    encodes_categories: bool = False,
 ) -> list[AdjustmentCandidate]:
     """Offer numeric, window-bound, non-outcome measurements as fit features.
 
     ``include_demographics`` admits owner-declared baseline demographics as
     predictors (a prediction model may use age or sex); a phenotype fit keeps
-    them for characterization instead.
+    them for characterization instead.  ``encodes_categories`` is for a fit
+    whose training pipeline one-hot encodes a closed-domain category (the
+    prediction model): such a category (sex, admission type) is selectable
+    like a number.  A phenotype's distance metric has no such encoding.
     """
 
     reference = host_outer_feature_window_end_hours(context)
@@ -1319,6 +1379,7 @@ def _feature_candidates(
         timed = roles.get(name) in {"at_or_before_time_zero", "baseline_static"}
         levels = _levels(context, name)
         closed = len(levels) if len(levels) >= 2 else None
+        encoded_category = bool(encodes_categories and closed and not numeric)
         candidates.append(
             AdjustmentCandidate(
                 name=name,
@@ -1328,12 +1389,15 @@ def _feature_candidates(
                     ["binary"] if closed == 2 else ["categorical"] if closed else ["continuous"]
                 ),
                 closed_domain_size=closed,
-                selectable=bool(numeric and timed),
+                selectable=bool(timed and (numeric or encoded_category)),
                 boundary=(
                     "owner-declared baseline demographic"
                     if roles.get(name) == "baseline_static"
                     else "numeric measurement closed inside the sealed observation window"
                     if numeric and timed
+                    else "closed-domain category inside the sealed observation window; "
+                    "the training pipeline one-hot encodes it"
+                    if encoded_category and timed
                     else "not a numeric window-bound measurement; audit context only"
                 ),
             )
@@ -1366,6 +1430,7 @@ def _build_prediction_request(
         variable_roster=optional_roster,
         excluded=design_columns,
         include_demographics=True,
+        encodes_categories=True,
     )
     feature_names = {item.name for item in feature_candidates}
     measurement_audit_columns = [

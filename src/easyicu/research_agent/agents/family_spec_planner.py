@@ -204,6 +204,15 @@ def family_spec_user_prompt(
                 ensure_ascii=False,
             )
         )
+        if request.accepted_feature_groups:
+            sections.append(
+                "Accepted primary inputs (the reviewed design keeps every one; choose at least "
+                "one of each input's columns as a feature):\n"
+                + json.dumps(
+                    {group.concept: group.columns for group in request.accepted_feature_groups},
+                    ensure_ascii=False,
+                )
+            )
         if request.family_id == PHENOTYPING_FAMILY_ID:
             sections.append(
                 "Cohort membership flags (optional; choose at most one):\n"
@@ -453,6 +462,11 @@ def family_spec_response_shape(request: FamilySpecRequest) -> str:
         lines.append(
             '- "feature_variables": array of at least two distinct names from '
             + json.dumps(features)
+            + (
+                ", including at least one column of every accepted primary input"
+                if request.accepted_feature_groups
+                else ""
+            )
         )
     if request.family_id == PHENOTYPING_FAMILY_ID:
         lines.append(
