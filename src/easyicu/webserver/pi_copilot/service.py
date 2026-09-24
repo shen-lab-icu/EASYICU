@@ -3401,7 +3401,11 @@ class PiCopilotService:
         except source_identity_authority.PatientGroupingAuthorityError:
             grouping = None
         first_stay = None
-        if primary_cohort.first_icu_stay_only(context.get("cohort")):
+        # The reviewer hands a plan without a dependence-bearing estimator to
+        # the one-stay population, which needs the same verified coordinate.
+        if primary_cohort.first_icu_stay_only(context.get("cohort")) or (
+            "REPEATED_STAY_METHOD_NOT_DECLARED" in runtime_codes
+        ):
             try:
                 first_stay = source_identity_authority.resolve_study_first_icu_stay(
                     export_path=str(source.get("path") or ""),

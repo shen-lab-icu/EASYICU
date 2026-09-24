@@ -907,3 +907,86 @@ def test_a_time_varying_choice_names_the_series_not_the_window_summary() -> None
 
     assert compiled.patch["primary_exposure"] == "带时间戳的乳酸"
     assert compiled.display_label_en == "Re-extract timestamped Lactate"
+
+
+_ONE_STAY = ("REPEATED_STAY_METHOD_NOT_DECLARED",)
+
+
+def _all_stay_clustered_study() -> dict:
+    study = _study()
+    study["cohort"] = {"preset": "all_icu"}
+    study["analysis_design"] = {
+        "analysis_unit": "icu_stay",
+        "variance_estimator": "cluster_robust",
+        "cluster_unit": "patient",
+    }
+    return study
+
+
+def test_a_plan_without_a_dependence_estimator_compiles_the_first_stay_population() -> None:
+    """Dev9 M3: a clustering suite cannot execute patient-clustered variance.
+
+    The reviewer hands its repeated stays to the host, which keeps each
+    patient's first ICU stay instead of asking the Planner for an estimator
+    the family does not have.
+    """
+
+    from easyicu.webserver import primary_cohort, study_contexts
+
+    study = _all_stay_clustered_study()
+    compiled = compile_agent_plan_configuration(
+        study=study,
+        agent_plan={"steps": [{"method": "cross_sectional_phenotyping"}]},
+        runtime_finding_codes=_ONE_STAY,
+        patient_cluster_available=True,
+        first_stay_coordinate_available=True,
+    )
+
+    patch = compiled.patch
+    assert set(patch) == {"cohort", "analysis_design", "sensitivity_specs", "confirmations"}
+    assert patch["analysis_design"] == {"analysis_unit": "icu_stay", "variance_estimator": "model_based"}
+    assert patch["confirmations"]["plan_repeated_stays_first"] is True
+    assert patch["confirmations"]["plan_repeated_stays_clustered"] is False
+    merged = {**study, **patch}
+    assert primary_cohort.first_icu_stay_only(merged["cohort"])
+    assert study_contexts.analysis_dependence_finding(merged) is None
+    # The workflow offers this before resolving the source coordinate; the
+    # apply path resolves it and refuses when it is unavailable.
+    assert agent_plan_configuration_available(
+        study=study, agent_plan={"steps": []}, runtime_finding_codes=_ONE_STAY
+    )
+
+
+@pytest.mark.parametrize(
+    ("cohort", "first_stay", "codes", "refusal"),
+    [
+        (
+            {"preset": "all_icu", "exclude_readmissions": False},
+            True,
+            _ONE_STAY,
+            "agent_plan_every_stay_commitment_unexecutable",
+        ),
+        ({"preset": "all_icu"}, False, _ONE_STAY, "agent_plan_first_stay_coordinate_unavailable"),
+        (
+            {"preset": "all_icu"},
+            True,
+            (*_ONE_STAY, "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"),
+            "agent_plan_runtime_finding_unsupported",
+        ),
+    ],
+)
+def test_the_first_stay_population_is_never_imposed_without_its_authority(
+    cohort: dict, first_stay: bool, codes: tuple, refusal: str
+) -> None:
+    study = {**_all_stay_clustered_study(), "cohort": cohort}
+
+    with pytest.raises(PlanDecisionError) as raised:
+        compile_agent_plan_configuration(
+            study=study,
+            agent_plan={"steps": []},
+            runtime_finding_codes=codes,
+            patient_cluster_available=True,
+            first_stay_coordinate_available=first_stay,
+        )
+
+    assert raised.value.code == refusal

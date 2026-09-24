@@ -664,6 +664,56 @@ def _repeated_stay_rule_declared(
     return "readmission" in set(sensitivity_executable_axes or ())
 
 
+def _signed_landmark_dependence(step: AnalysisStep, context: ResearchContext) -> bool:
+    patient_group = context_patient_group_authority(context)
+    return bool(
+        _method_head(step)
+        in {"signed_landmark_restricted_cubic_spline", "time_varying_exposure_model"}
+        and patient_group is not None
+        and patient_group.group_source in step.inputs
+        and any(
+            str(value).startswith("scientific_runtime_contract:")
+            for value in step.icu_rule_refs
+        )
+    )
+
+
+def _repeated_unit_consumer(step: AnalysisStep, context: ResearchContext) -> bool:
+    """Whether one step's estimator can carry a dependence contract."""
+
+    method = _method_head(step)
+    return bool(
+        step.model_requirements
+        or step.exposure_outcome_distribution_spec is not None
+        or method in _EXECUTABLE_DEPENDENCE_METHODS
+        or method == "signed_landmark_restricted_cubic_spline"
+        or _signed_landmark_dependence(step, context)
+        or method == "non_readmission_restriction"
+    )
+
+
+def repeated_unit_estimator_present(
+    context: ResearchContext, plan: Optional[AnalysisPlan]
+) -> bool:
+    """Whether a plan revision has an estimator to bind patient dependence to.
+
+    A plan whose executable steps all fit one row per ICU stay through host
+    actions without a model, interval, or baseline-table contract (a
+    cross-sectional clustering suite, for example) gives a revision nothing to
+    bind: only a population that keeps one stay per patient closes its
+    repeated stays.
+    """
+
+    if plan is None:
+        return False
+    if any(step.table_one_spec is not None for step in plan.steps):
+        return True
+    return any(
+        executable_scientific_step(step) and _repeated_unit_consumer(step, context)
+        for step in scientific_steps(plan)
+    )
+
+
 def repeated_unit_design_closed(
     context: ResearchContext, plan: Optional[AnalysisPlan]
 ) -> bool:
@@ -677,33 +727,17 @@ def repeated_unit_design_closed(
     for step in scientific_steps(plan):
         if not executable_scientific_step(step):
             continue
+        if not _repeated_unit_consumer(step, context):
+            continue
         method = _method_head(step)
         model_requirements = tuple(step.model_requirements)
         distribution = step.exposure_outcome_distribution_spec
-        patient_group = context_patient_group_authority(context)
-        signed_landmark_dependence = bool(
-            method in {"signed_landmark_restricted_cubic_spline", "time_varying_exposure_model"}
-            and patient_group is not None
-            and patient_group.group_source in step.inputs
-            and any(
-                str(value).startswith("scientific_runtime_contract:")
-                for value in step.icu_rule_refs
-            )
-        )
+        signed_landmark_dependence = _signed_landmark_dependence(step, context)
         counts_only_distribution = bool(
             distribution is not None
             and distribution.schema_version
             == "easyicu.exposure_outcome_distribution/3"
         )
-        if not (
-            model_requirements
-            or distribution is not None
-            or method in _EXECUTABLE_DEPENDENCE_METHODS
-            or method == "signed_landmark_restricted_cubic_spline"
-            or signed_landmark_dependence
-            or method == "non_readmission_restriction"
-        ):
-            continue
         applicable = True
         has_patient_authority = patient_identity_available(context)
         if model_requirements and not (
@@ -2469,22 +2503,43 @@ def build_plan_scientific_review(
             )
         )
     elif repeats and not repeated_unit_design_closed(context, plan):
-        findings.append(
-            PlanScientificFinding(
-                code="REPEATED_STAY_METHOD_NOT_DECLARED",
-                severity="blocker",
-                dimension="icu_clinical_design",
-                message="Patient identity exists, but no executable estimator addresses repeated ICU stays.",
-                evidence_refs=["research_context.json", "analysis_plan.json"],
-                remediation=(
-                    "Revise the Agent plan so it selects and binds one executable "
-                    "one-stay, clustered, or mixed estimator. The researcher reviews "
-                    "the resulting plan as a whole and is not asked to choose the "
-                    "statistical implementation."
-                ),
-                remediation_route="agent_plan_revision",
+        if repeated_unit_estimator_present(context, plan):
+            findings.append(
+                PlanScientificFinding(
+                    code="REPEATED_STAY_METHOD_NOT_DECLARED",
+                    severity="blocker",
+                    dimension="icu_clinical_design",
+                    message="Patient identity exists, but no executable estimator addresses repeated ICU stays.",
+                    evidence_refs=["research_context.json", "analysis_plan.json"],
+                    remediation=(
+                        "Revise the Agent plan so it selects and binds one executable "
+                        "one-stay, clustered, or mixed estimator. The researcher reviews "
+                        "the resulting plan as a whole and is not asked to choose the "
+                        "statistical implementation."
+                    ),
+                    remediation_route="agent_plan_revision",
+                )
             )
-        )
+        else:
+            # A revision of these steps cannot bind a dependence contract,
+            # so another Planner turn would only repeat this finding.
+            findings.append(
+                PlanScientificFinding(
+                    code="REPEATED_STAY_METHOD_NOT_DECLARED",
+                    severity="blocker",
+                    dimension="icu_clinical_design",
+                    message=(
+                        "Patient identity exists, but every analysis step fits one row per "
+                        "ICU stay and none can carry patient-level dependence."
+                    ),
+                    evidence_refs=["research_context.json", "analysis_plan.json"],
+                    remediation=(
+                        "Keep each patient's first ICU stay, identified by the host from "
+                        "the bound stay table, and plan again on that population."
+                    ),
+                    remediation_route="runtime_capability",
+                )
+            )
     elif repeats and not _repeated_stay_rule_declared(
         plan, context, sensitivity.get("executable", ())
     ):
@@ -3044,6 +3099,7 @@ __all__ = [
     "post_baseline_exposure",
     "repeat_units_possible",
     "repeated_unit_design_closed",
+    "repeated_unit_estimator_present",
     "render_plan_scientific_guardrails",
     "render_agent_plan_revision_contract",
     "plan_revision_blocker_codes",
