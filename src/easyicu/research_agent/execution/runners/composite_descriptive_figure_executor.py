@@ -701,6 +701,26 @@ def run_composite_descriptive_figure(
             "Displayed percentages are either bound estimates or arithmetic "
             "ratios of the shown bound numerator and denominator; no model is fit."
         ),
+        # The promoted publication figure carries this legend into the
+        # manuscript, which rejects a reader figure without one.
+        reader_caption=(
+            "(A) Cohort accounting: records remaining after each recorded "
+            "eligibility step of the bound cohort ledger. "
+            "(B) Exposure and observed outcome: the share of the cohort in each "
+            "exposure level and the observed, unadjusted outcome rate in that "
+            "level. (C) Measurement missingness: the percentage of records "
+            "without a recorded value for each analysis variable. "
+            + (
+                "(D) Measurement process: the percentage of records with at "
+                "least one recorded measurement of each variable. "
+                if panel_d_role == "data_quality"
+                else "(D) Robustness range: the range of the estimate on each "
+                "sensitivity axis, labelled with converged of total "
+                "specifications. "
+            )
+            + "Values are read from the registered tables; the figure fits no "
+            "model and applies no further selection."
+        ),
     )
     outputs = save_publication_figure(
         fig,

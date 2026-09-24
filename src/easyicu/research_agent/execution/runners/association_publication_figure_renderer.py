@@ -379,6 +379,70 @@ def _draw_component_completeness(ax: Any, frame: pd.DataFrame) -> None:
     ax.set_title("Component completeness", loc="left", pad=12)
 
 
+# One explanatory clause per panel this renderer draws, keyed by the panel's
+# reader-facing title.  A robustness status or coverage panel is an audit view,
+# so its legend never presents it as an effect comparison.
+_PANEL_LEGENDS = {
+    "Exposure prevalence and observed outcome risk": (
+        "the share of records in each exposure level and the observed outcome "
+        "risk in that level"
+    ),
+    "Absolute risk by source state": (
+        "the observed outcome risk in each exposure state with its 95% "
+        "confidence interval"
+    ),
+    "Primary adjusted association": (
+        "estimates of the primary adjusted model with 95% confidence "
+        "intervals; on a ratio scale the dashed line marks no association"
+    ),
+    "Scientific sensitivity analyses": (
+        "estimates with 95% confidence intervals from each prespecified "
+        "sensitivity analysis"
+    ),
+    "Sensitivity-specification status": (
+        "whether each prespecified sensitivity specification was estimated, "
+        "without comparing effect sizes"
+    ),
+    "Sensitivity-analysis coverage": (
+        "how many specifications on each sensitivity axis were estimated, "
+        "without comparing effect sizes"
+    ),
+    "Measurement missingness": (
+        "the percentage of records without a recorded value for each variable"
+    ),
+    "Component completeness": (
+        "the percentage of records in which each component of the exposure "
+        "definition was available"
+    ),
+    "Measurement availability": (
+        "the percentage of eligible records with each measurement available"
+    ),
+    "Cohort accounting": "the records remaining after each recorded eligibility step",
+    "Baseline balance": (
+        "absolute standardized differences of the baseline variables between "
+        "the compared groups"
+    ),
+}
+
+
+def _reader_caption(panels: Any, *, letters: str) -> str:
+    """The figure legend, one clause per drawn panel in its drawn order."""
+
+    clauses = [
+        f"({letter}) {title}: "
+        + _PANEL_LEGENDS.get(title, "values from its registered source table")
+        + "."
+        for letter, (_panel_id, title, *_rest) in zip(letters, panels)
+    ]
+    return " ".join(
+        [
+            *clauses,
+            "Values are read from the registered tables; the figure fits no "
+            "model and applies no further selection.",
+        ]
+    )
+
+
 def _render_cohort_balance_association_figure(
     *,
     bound: Mapping[str, BoundTypedInput],
@@ -549,6 +613,7 @@ def _render_cohort_balance_association_figure(
             for panel_id, title, role, chart_type, source in panel_rows
         ],
         source_data=source_files,
+        reader_caption=_reader_caption(panel_rows, letters="ABCD"),
         statistics_note=(
             "Panel B reports source-table absolute standardized differences; "
             "Panels C and D preserve the reported point estimates and confidence "
@@ -750,6 +815,7 @@ def _render_balance_association_figure(
             for panel_id, title, role, chart_type, source in panels
         ],
         source_data=source_files,
+        reader_caption=_reader_caption(panels, letters="ABCD"),
         statistics_note=(
             "All source rows and original columns are preserved in source-data "
             "files. The renderer performs no model fitting or row selection."
@@ -1340,6 +1406,7 @@ def render_association_publication_figure(
             for panel_id, title, role, chart_type, source in panel_specs
         ],
         source_data=source_files,
+        reader_caption=_reader_caption(panel_specs, letters="abcd"),
         statistics_note=(
             "All source rows and original columns are preserved in source-data files. "
             "The renderer performs no model fitting or scientific row selection."
