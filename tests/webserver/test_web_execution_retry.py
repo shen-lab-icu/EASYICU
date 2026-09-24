@@ -450,6 +450,61 @@ def test_execution_retry_projection_checks_secondary_outcome_columns(
     assert raised.value.details == {"missing_column_count": 1}
 
 
+@pytest.mark.parametrize("bound_column_sealed", [True, False])
+def test_execution_retry_projection_reads_exact_covariates_through_their_bindings(
+    tmp_path: Path, bound_column_sealed: bool,
+) -> None:
+    """Dev9 M1's retry was refused because it looked for ``sofa2_resp``.
+
+    The analysis read the reviewed window summary ``sofa2_resp_max``; a bare
+    time-series concept id never exists as a materialized column.
+    """
+
+    import pandas as pd
+
+    cohort = tmp_path / "cohort.parquet"
+    columns = {"bili_max": [1.0], "death": [0], "age": [70.0]}
+    if bound_column_sealed:
+        columns["sofa2_resp_max"] = [2.0]
+    pd.DataFrame(columns).to_parquet(cohort)
+    inputs = agent_pipeline_runs._ExecutionResumeInputs(
+        cohort_path=cohort,
+        cohort_authority_path=None,
+        cohort_authority_ref=None,
+        trajectory_path=None,
+        trajectory_authority_path=None,
+        trajectory_authority_ref=None,
+        scientific_identity={
+            "primary_exposure": "bili_max",
+            "target_outcome": "death",
+            "user_preferences": {
+                "covariates": ["age", "sofa2_resp"],
+                "covariate_operationalizations": {
+                    "age": "age",
+                    "sofa2_resp": "sofa2_resp_max",
+                },
+            },
+        },
+    )
+
+    if not bound_column_sealed:
+        with pytest.raises(agent_pipeline_runs.ResearchPipelineRunError) as raised:
+            agent_pipeline_runs._execution_resume_acquisition_projection(inputs)
+        assert raised.value.code == "research_pipeline_execution_retry_input_invalid"
+        assert raised.value.details == {"missing_column_count": 1}
+        return
+
+    acquisition = agent_pipeline_runs._execution_resume_acquisition_projection(inputs)
+
+    assert acquisition.analysis_columns == {
+        "bili_max": "bili_max",
+        "death": "death",
+        "age": "age",
+        "sofa2_resp_max": "sofa2_resp_max",
+    }
+    assert acquisition.coverage.sufficient is True
+
+
 def test_execution_retry_rejects_missing_seed_when_checkpoint_digest_drifted(
     tmp_path: Path,
 ) -> None:
