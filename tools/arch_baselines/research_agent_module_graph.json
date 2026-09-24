@@ -11833,6 +11833,10 @@
     ],
     [
       "easyicu.research_agent.reporting.write_phase",
+      "easyicu.research_agent.reporting.manuscript_result_structure"
+    ],
+    [
+      "easyicu.research_agent.reporting.write_phase",
       "easyicu.research_agent.reporting.manuscript_sections"
     ],
     [
@@ -12760,7 +12764,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3182,
+    "edge_count": 3183,
     "largest_scc_size": 0,
     "module_count": 757,
     "package_count": 36,

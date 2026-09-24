@@ -79,6 +79,7 @@ from .manuscript_provenance import (
 )
 from .manuscript_reader import build_manuscript_reader
 from .manuscript_projection import project_owner_issued_manuscript_claims
+from .manuscript_result_structure import planned_result_roles
 from .novelty_positioning import build_unsigned_novelty_positioning_packet
 from ..literature import LiteratureAgent, LiteratureBundle, manuscript_citable_keys
 from ..orchestration.profiles import is_paper_facing_profile
@@ -1442,6 +1443,65 @@ def _ensure_unsigned_novelty_positioning_packet(
         )
 
 
+def _place_host_claims_in_results(
+    scaffold: str,
+    *,
+    claims: Sequence[Any],
+    plan: Optional[AnalysisPlan],
+    findings: List[ValidationFinding],
+) -> str:
+    """Place host claims where the reviewed plan's Results structure needs them."""
+    claim_placement = place_scientific_claim_tokens_in_results(
+        scaffold,
+        claims=claims,
+        planned_step_roles=planned_result_roles(plan),
+    )
+    if claim_placement.inserted_claim_refs:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_result_sufficiency",
+                severity="warning",
+                message=(
+                    "Inserted host-authorized scientific claim token(s) omitted "
+                    "from the Results section by the Writer."
+                ),
+                detail={
+                    "inserted_claim_refs": list(claim_placement.inserted_claim_refs)
+                },
+            )
+        )
+    if claim_placement.role_subsection_claim_refs:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_result_sufficiency",
+                severity="warning",
+                message=(
+                    "Repeated host-authorized scientific claim token(s) in the "
+                    "Results subsection that the reviewed plan assigns to their "
+                    "step; the Writer reported them only elsewhere in Results."
+                ),
+                detail={
+                    "role_subsection_claim_refs": list(
+                        claim_placement.role_subsection_claim_refs
+                    )
+                },
+            )
+        )
+    if claim_placement.missing_claim_refs:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_result_sufficiency",
+                severity="error",
+                message=(
+                    "The manuscript has no Results section in which to place "
+                    "host-authorized scientific claims."
+                ),
+                detail={"missing_claim_refs": list(claim_placement.missing_claim_refs)},
+            )
+        )
+    return claim_placement.scaffold
+
+
 def _draft_manuscript(
     pipeline: Any,
     *,
@@ -1855,38 +1915,12 @@ def _draft_manuscript(
     )
     if method_finding is not None:
         findings.append(method_finding)
-    authoritative_claims = evidence.authoritative_scientific_claims(per_step_records)
-    claim_placement = place_scientific_claim_tokens_in_results(
+    scaffold = _place_host_claims_in_results(
         scaffold,
-        claims=authoritative_claims,
+        claims=evidence.authoritative_scientific_claims(per_step_records),
+        plan=execute_result.plan,
+        findings=findings,
     )
-    scaffold = claim_placement.scaffold
-    if claim_placement.inserted_claim_refs:
-        findings.append(
-            ValidationFinding(
-                validator="manuscript_result_sufficiency",
-                severity="warning",
-                message=(
-                    "Inserted host-authorized scientific claim token(s) omitted "
-                    "from the Results section by the Writer."
-                ),
-                detail={
-                    "inserted_claim_refs": list(claim_placement.inserted_claim_refs)
-                },
-            )
-        )
-    if claim_placement.missing_claim_refs:
-        findings.append(
-            ValidationFinding(
-                validator="manuscript_result_sufficiency",
-                severity="error",
-                message=(
-                    "The manuscript has no Results section in which to place "
-                    "host-authorized scientific claims."
-                ),
-                detail={"missing_claim_refs": list(claim_placement.missing_claim_refs)},
-            )
-        )
     from .manuscript_quality import repair_reader_structure_from_existing_prose
 
     scaffold, structural_repairs = repair_reader_structure_from_existing_prose(scaffold)
