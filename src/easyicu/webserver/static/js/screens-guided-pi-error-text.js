@@ -53,6 +53,9 @@
       if (error.code === 'research_pipeline_execution_runtime_unavailable') {
         return tr('The container runtime that executes analysis code is not running. Start it (Docker Desktop, or "colima start") and run again.', '执行分析代码的容器运行环境未启动。请先启动它（Docker Desktop，或 "colima start"），然后重新运行。');
       }
+      if (error.code === 'research_pipeline_runner_image_mismatch') {
+        return tr('The analysis runner image does not match this EasyICU version. Rebuild it from the current commit, restart EasyICU, and run again.', '分析运行镜像与当前 EasyICU 版本不一致。请按当前提交重建运行镜像并重启 EasyICU，然后重新运行。');
+      }
       // D-P3-5: keep the URL as plain text (no <a>) — errorText() returns RAW
       // copy esc'd by callers per D-P2-2, so embedded HTML would be escaped and
       // never clickable. Copy the address into the browser manually. Terminology
@@ -184,6 +187,10 @@
         research_pipeline_execution_runtime_unavailable: tr(
           'The container runtime that executes analysis code was not running.',
           '执行分析代码的容器运行环境未启动。',
+        ),
+        research_pipeline_runner_image_mismatch: tr(
+          'The analysis runner image did not match this EasyICU version.',
+          '分析运行镜像与当前 EasyICU 版本不一致。',
         ),
         data_foundation_blocked: tr(
           'Data preparation did not pass, so no plan was generated.',

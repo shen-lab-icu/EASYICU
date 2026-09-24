@@ -2429,12 +2429,15 @@ class DockerRunner:
                 "root = Path(easyicu.__file__).resolve().parent\n"
                 f"relative_paths = {list(kernel_paths)!r}\n"
                 "digest = hashlib.sha256()\n"
+                "def refuse(code, message):\n"
+                "    sys.stderr.write(message + '\\n')\n"
+                "    sys.stderr.flush()\n"
+                "    os._exit(code)\n"
                 "for relative_text in relative_paths:\n"
                 "    path = root / relative_text\n"
                 "    if not path.is_file() or path.is_symlink():\n"
-                "        raise RuntimeError(\n"
-                "            f'EasyICU execution-kernel file unavailable: {relative_text}'\n"
-                "        )\n"
+                f"        refuse({_PROBE_KERNEL_MISMATCH_EXIT}, "
+                "f'EasyICU execution-kernel file unavailable: {relative_text}')\n"
                 "    relative = relative_text.encode('utf-8')\n"
                 "    digest.update(len(relative).to_bytes(8, 'big'))\n"
                 "    digest.update(relative)\n"
@@ -2443,20 +2446,19 @@ class DockerRunner:
                 "    digest.update(payload)\n"
                 f"expected = {kernel_identity.source_sha256!r}\n"
                 "if digest.hexdigest() != expected:\n"
-                "    raise RuntimeError(\n"
-                "        'EasyICU execution-kernel source mismatch: ' \n"
-                "        f'expected {expected}, observed {digest.hexdigest()}'\n"
-                "    )\n"
+                f"    refuse({_PROBE_KERNEL_MISMATCH_EXIT}, "
+                "'EasyICU execution-kernel source mismatch: ' "
+                "f'expected {expected}, observed {digest.hexdigest()}')\n"
                 "lock_path = Path('/opt/easyicu-runner/requirements.lock')\n"
                 "if not lock_path.is_file() or lock_path.is_symlink():\n"
-                "    raise RuntimeError('EasyICU Runner requirements.lock unavailable')\n"
+                f"    refuse({_PROBE_LOCK_MISMATCH_EXIT}, "
+                "'EasyICU Runner requirements.lock unavailable')\n"
                 "observed_lock = hashlib.sha256(lock_path.read_bytes()).hexdigest()\n"
                 f"expected_lock = {kernel_identity.requirements_lock_sha256!r}\n"
                 "if observed_lock != expected_lock:\n"
-                "    raise RuntimeError(\n"
-                "        'EasyICU Runner requirements.lock mismatch: ' \n"
-                "        f'expected {expected_lock}, observed {observed_lock}'\n"
-                "    )\n"
+                f"    refuse({_PROBE_LOCK_MISMATCH_EXIT}, "
+                "'EasyICU Runner requirements.lock mismatch: ' "
+                "f'expected {expected_lock}, observed {observed_lock}')\n"
                 "rows = {}\n"
                 "for dist in distributions():\n"
                 "    name = str(dist.metadata.get('Name') or '').strip()\n"
@@ -2555,6 +2557,20 @@ class DockerRunner:
                     "Docker execution-runtime dependency capture produced no result"
                 )
             requirements = capture_proc.stdout.strip()
+            mismatch = _PROBE_MISMATCH_REASONS.get(capture_proc.returncode)
+            if mismatch is not None:
+                # The image was built from other kernel source or another
+                # dependency lock than this host runs.  That is a named,
+                # host-level fix (rebuild the image), not an anonymous failure.
+                raise ExecutionRuntimeUnavailableError(
+                    RunnerAvailability(
+                        kind="docker",
+                        available=False,
+                        image=self.image,
+                        reason_code=mismatch,
+                        exit_code=capture_proc.returncode,
+                    )
+                )
             if capture_proc.returncode != 0 or not requirements:
                 raise RuntimeError(
                     "Docker execution-runtime dependency capture failed: "
@@ -3291,8 +3307,20 @@ RUNNER_UNAVAILABLE_REASON_CODES = frozenset(
         "docker_probe_failed",
         "docker_workspace_unavailable",
         "host_sandbox_missing",
+        "runner_image_kernel_mismatch",
+        "runner_image_lock_mismatch",
     }
 )
+
+#: Exit codes of the in-image dependency probe when the image does not carry
+#: this host's execution-kernel source or dependency lock.  The host maps them
+#: to reason codes and never reads the probe's text.
+_PROBE_KERNEL_MISMATCH_EXIT = 86
+_PROBE_LOCK_MISMATCH_EXIT = 87
+_PROBE_MISMATCH_REASONS = {
+    _PROBE_KERNEL_MISMATCH_EXIT: "runner_image_kernel_mismatch",
+    _PROBE_LOCK_MISMATCH_EXIT: "runner_image_lock_mismatch",
+}
 
 _RUNNER_UNAVAILABLE_REMEDIATION = {
     "docker_daemon_unreachable": (
@@ -3319,6 +3347,17 @@ _RUNNER_UNAVAILABLE_REMEDIATION = {
     "host_sandbox_missing": (
         "macOS 'sandbox-exec' was not found, so no filesystem-isolating host "
         "fallback is available."
+    ),
+    "runner_image_kernel_mismatch": (
+        "The execution image was built from different EasyICU execution-kernel "
+        "source than this host is running. Rebuild the image from the current "
+        "commit, verify it with tools/check_agent_runtime.py, point "
+        "EASYICU_RUNNER_IMAGE at it, and restart the service."
+    ),
+    "runner_image_lock_mismatch": (
+        "The execution image's requirements.lock differs from the lock this "
+        "host pins. Rebuild the image from the current commit and restart the "
+        "service."
     ),
 }
 

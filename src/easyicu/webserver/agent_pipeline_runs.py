@@ -473,6 +473,8 @@ def _pipeline_failure_code(
     if typed_failure.get("owner") == "easyicu.planning.dependence_authority_v1":
         return "research_pipeline_analysis_design_conflict"
     if typed_failure.get("owner") == _EXECUTION_RUNTIME_DIAGNOSTIC_OWNER:
+        if typed_failure.get("reason_code") in _RUNNER_IMAGE_MISMATCH_REASONS:
+            return "research_pipeline_runner_image_mismatch"
         # The same code the launch preflight uses, so a runtime that went down
         # mid-run is attributed to the host environment rather than reported as
         # a generic execution failure of the science.
@@ -542,7 +544,14 @@ _SAFE_RUNNER_UNAVAILABLE_REASONS = frozenset(
         "docker_probe_failed",
         "docker_workspace_unavailable",
         "host_sandbox_missing",
+        "runner_image_kernel_mismatch",
+        "runner_image_lock_mismatch",
     }
+)
+#: The runtime is up but its image was built from other kernel source or
+#: dependencies.  The fix is a rebuild, not starting the container runtime.
+_RUNNER_IMAGE_MISMATCH_REASONS = frozenset(
+    {"runner_image_kernel_mismatch", "runner_image_lock_mismatch"}
 )
 
 
@@ -6021,6 +6030,13 @@ def make_research_pipeline_run_runner(
                     "The container runtime that executes analysis code was not "
                     "available, so no analysis was run. Start it and run again."
                 )
+            elif code == "research_pipeline_runner_image_mismatch":
+                message = (
+                    "The analysis runner image was built from different EasyICU "
+                    "source or dependencies than this checkout, so no analysis "
+                    "was run. Rebuild it from the current commit and restart "
+                    "the service."
+                )
             else:
                 message = (
                     "The Research Agent pipeline stopped before it could produce a "
@@ -6265,18 +6281,29 @@ def resume_research_pipeline(
             )
             remove_review_recovery_record(key)
             _remove_local_recovery(entry.wrapper_dir)
+        runtime_failure = _safe_pipeline_typed_failure(exc)
         runtime_unavailable = (
-            _safe_pipeline_typed_failure(exc).get("owner")
-            == _EXECUTION_RUNTIME_DIAGNOSTIC_OWNER
+            runtime_failure.get("owner") == _EXECUTION_RUNTIME_DIAGNOSTIC_OWNER
+        )
+        image_mismatch = (
+            runtime_unavailable
+            and runtime_failure.get("reason_code") in _RUNNER_IMAGE_MISMATCH_REASONS
         )
         raise ResearchPipelineRunError(
             (
-                "research_pipeline_execution_runtime_unavailable"
+                "research_pipeline_runner_image_mismatch"
+                if image_mismatch
+                else "research_pipeline_execution_runtime_unavailable"
                 if runtime_unavailable
                 else "research_pipeline_review_resume_failed"
             ),
             (
-                "The container runtime that executes analysis code was not "
+                "The analysis runner image was built from different EasyICU "
+                "source or dependencies than this checkout, so the approved "
+                "plan did not run. Rebuild it from the current commit, restart "
+                "the service, and resume again."
+                if image_mismatch
+                else "The container runtime that executes analysis code was not "
                 "available, so the approved plan did not run. Start it and "
                 "resume again."
                 if runtime_unavailable

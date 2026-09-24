@@ -68,6 +68,13 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   assert.match(runFailure('data_foundation_blocked', { code: 'outcome_concept_undeclared' }), /No executable outcome variable/);
   assert.equal(runFailure('data_foundation_blocked', { code: 'unknown_detail_code' }), runFailure('data_foundation_blocked'));
 
+  // A runner image built from other EasyICU source needs a rebuild; telling the
+  // researcher to start Docker would send them to a runtime that is already up.
+  const stale = live({ code: 'research_pipeline_runner_image_mismatch' });
+  assert.match(stale, /Rebuild it from the current commit/);
+  assert.doesNotMatch(stale, /Docker Desktop|colima/);
+  assert.match(runFailure('research_pipeline_runner_image_mismatch'), /runner image did not match/);
+
   // Fallback branch: raw transport text verbatim.
   assert.equal(live({ message: 'Failed to fetch' }), 'Failed to fetch');
   assert.equal(live({ message: 'boom' }), 'boom');
