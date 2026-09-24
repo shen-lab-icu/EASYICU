@@ -599,13 +599,31 @@ def _sentences_missing_evidence_tokens(
                 flags=re.I,
             )
         )
+        # A cited statement with no number that does not speak about this
+        # study is literature background (for example a guideline definition),
+        # not an unquantified result of the analysis.
+        refers_to_this_study = bool(
+            re.search(
+                r"\b(?:our|we|this\s+(?:study|analysis|cohort|work)|"
+                r"the\s+present\s+(?:study|analysis)|"
+                r"(?:these|the)\s+(?:results|findings|estimates))\b",
+                prose_for_result_detection,
+                flags=re.I,
+            )
+        )
+        is_literature_background = (
+            has_literature_citation and not has_number and not refers_to_this_study
+        )
         has_unquantified_result_claim = bool(
             re.search(
                 r"\b(performance|robust(?:ness)?|consistent|overfitting|miscalibration|missingness|generalisability|generalizability)\b",
                 prose_for_result_detection,
                 flags=re.I,
             )
-        ) and not (has_literature_citation and is_literature_attribution)
+        ) and not (
+            (has_literature_citation and is_literature_attribution)
+            or is_literature_background
+        )
         if (has_number and has_claimy_word) or has_unquantified_result_claim:
             unsupported.append(sentence)
     return unsupported
