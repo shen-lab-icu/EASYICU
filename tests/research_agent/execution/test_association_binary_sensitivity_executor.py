@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.authority.scientific_claims import derive_scientific_claim_drafts
 from easyicu.research_agent.audits import StepSummaryIntegrityValidator
 from easyicu.research_agent.authority.typed_binding import (
     _write_host_input_binding_receipts,
@@ -391,6 +392,15 @@ def test_first_stay_variant_refits_the_parent_model_on_first_stays(tmp_path, mon
     # One stay per patient leaves nothing to cluster: the variance drops to one row per group.
     assert row["cluster_count"] == row["n_stays"]
     assert summary["primary_reference"]["odds_ratio"] == pytest.approx(parent_summary["primary_estimate"])
+    reporting = summary["reportable_sensitivity_results"]
+    assert reporting["strategy"] == "first_stay" and reporting["covariate"] is None
+    assert (reporting["estimate"], reporting["lower"], reporting["upper"]) == (
+        row["odds_ratio"], row["ci_low"], row["ci_high"]
+    )
+    assert (reporting["n"], reporting["events"]) == (row["n_stays"], row["n_deaths"])
+    [claim] = derive_scientific_claim_drafts(summary)
+    assert claim.analysis_role == "sensitivity"
+    assert claim.population.endswith("restricted to the first ICU stay of each patient")
     table = pd.read_csv(out_dir / summary["output_files"]["table:sensitivity_first_icu_stay_only"])
     assert table.loc[0, "odds_ratio"] == pytest.approx(row["odds_ratio"])
     code = association_binary_sensitivity_executor_code(plan.steps[2], plan=plan)
@@ -437,6 +447,13 @@ def test_functional_form_variant_reports_spline_effect_and_nonlinearity(tmp_path
     assert len(row["knots"].split("|")) == 3
     receipt = summary["sensitivity_runtime_receipt"]
     assert receipt["strategy"] == "functional_form"
+    reporting = summary["reportable_sensitivity_results"]
+    assert reporting["strategy"] == "functional_form" and reporting["covariate"] == "age"
+    [claim] = derive_scientific_claim_drafts(summary)
+    assert claim.claim_id == "sensitivity_age_restricted_cubic_spline"
+    assert (claim.point_estimate, claim.interval_lower, claim.interval_upper) == (
+        row["odds_ratio"], row["ci_low"], row["ci_high"]
+    )
     assert any(column.startswith("age__rcs_") for column in receipt["design_columns"])
     assert (out_dir / "age_functional_form_sensitivity.csv").exists()
 

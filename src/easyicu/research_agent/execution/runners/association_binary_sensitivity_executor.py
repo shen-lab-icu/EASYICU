@@ -535,6 +535,45 @@ def _refit_functional_form(
     return row, receipt
 
 
+def _sensitivity_reporting(
+    *, row: Mapping[str, Any], requirement: Any, variant: BinarySensitivityVariant
+) -> Optional[dict[str, Any]]:
+    """The reporting envelope the host compiles into one sensitivity claim.
+
+    A refit without a finite estimate, interval and event count publishes no
+    envelope, so the Writer has no claim to borrow for it.
+    """
+
+    estimate = _finite(row.get("odds_ratio"))
+    lower = _finite(row.get("ci_low"))
+    upper = _finite(row.get("ci_high"))
+    if (
+        row.get("fit_status") != "fitted"
+        or estimate is None
+        or lower is None
+        or upper is None
+        or row.get("n_stays") is None
+        or row.get("n_deaths") is None
+    ):
+        return None
+    return {
+        "schema_version": "easyicu.binary_sensitivity_reporting/1",
+        "analysis_id": variant.spec_id,
+        "strategy": variant.strategy,
+        "exposure": requirement.exposure_source,
+        "outcome": requirement.outcome,
+        "analysis_set": requirement.analysis_set,
+        "adjustment_covariates": list(requirement.covariates or ()),
+        "covariate": row.get("covariate") if variant.strategy == "functional_form" else None,
+        "effect_scale": "odds_ratio",
+        "estimate": estimate,
+        "lower": lower,
+        "upper": upper,
+        "n": int(row["n_stays"]),
+        "events": int(row["n_deaths"]),
+    }
+
+
 def run_association_binary_sensitivity(
     *,
     frame: Any,
@@ -603,7 +642,7 @@ def run_association_binary_sensitivity(
     product_name = variant.output_product.partition(":")[2]
     table_path = out_dir / f"{product_name}.csv"
     pd.DataFrame([row]).to_csv(table_path, index=False)
-    return {
+    summary: dict[str, Any] = {
         "status": "ok",
         "deterministic_standard_analysis": ASSOCIATION_BINARY_SENSITIVITY_ANALYSIS_KIND,
         "analysis_family": "association",
@@ -630,6 +669,10 @@ def run_association_binary_sensitivity(
         },
         "output_files": {variant.output_product: table_path.name},
     }
+    reporting = _sensitivity_reporting(row=row, requirement=requirement, variant=variant)
+    if reporting is not None:
+        summary["reportable_sensitivity_results"] = reporting
+    return summary
 
 
 __all__ = [

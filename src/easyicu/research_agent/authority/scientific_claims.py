@@ -373,6 +373,10 @@ def scientific_claim_compilation_requested(summary: object) -> bool:
     interpretation_class = str(summary.get("interpretation_class") or "").strip()
     if interpretation_class == "adjusted_association":
         return True
+    if interpretation_class == "prespecified_sensitivity":
+        # A binary sensitivity refit opts in through its versioned reporting
+        # envelope; an older refit without one stays readable and claims nothing.
+        return "reportable_sensitivity_results" in summary
     if interpretation_class == "absolute_risk_context":
         # Legacy summaries without the versioned reporting envelope remain
         # readable; they cannot acquire scientific authority from a label.
@@ -410,6 +414,12 @@ def derive_scientific_claim_drafts(
 
         return [ScientificClaimDraft.model_validate(payload)
                 for payload in derive_model_contrast_claim_payloads(summary)]
+
+    if summary.get("interpretation_class") == "prespecified_sensitivity":
+        from .sensitivity_scientific_claims import derive_sensitivity_claim_payloads
+
+        return [ScientificClaimDraft.model_validate(payload)
+                for payload in derive_sensitivity_claim_payloads(summary)]
 
     if summary.get("interpretation_class") == "absolute_risk_context":
         from .absolute_risk_scientific_claims import derive_absolute_risk_claim_payloads
