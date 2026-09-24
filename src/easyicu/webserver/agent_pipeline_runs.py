@@ -5066,6 +5066,12 @@ def make_research_pipeline_run_runner(
                         prepared_revision.prior_plan_contract,
                         bound_plan_revision_contract,
                     ))
+        if bound_analysis_inputs is None and prepared_revision is not None:
+            # A repair on the same prepared input is still bound to the
+            # accepted candidate's primary-analysis inputs.  Without them the
+            # Planner roster falls back to relevance ranking and can lose the
+            # reviewed inputs before any Provider call.
+            bound_analysis_inputs = prepared_revision.analysis_inputs
         if execution.development_resume_scope is not None:
             from easyicu.webserver.research_launch_resume import _development_resume_plan_contract
 
