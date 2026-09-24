@@ -15,7 +15,12 @@ from ..contracts.manuscript_result_structure import (
     RESULT_HEADINGS_BY_ROLE,
 )
 
-__all__ = ["PRIMARY_RESULT_HEADINGS", "required_result_subsections", "result_section_instruction"]
+__all__ = [
+    "PRIMARY_RESULT_HEADINGS",
+    "planned_result_roles",
+    "required_result_subsections",
+    "result_section_instruction",
+]
 
 
 def required_result_subsections(plan: AnalysisPlan) -> tuple[str, ...]:
@@ -27,6 +32,22 @@ def required_result_subsections(plan: AnalysisPlan) -> tuple[str, ...]:
     roles = {step.planned_analysis_role for step in plan.steps}
     sections.extend(heading for role, heading in RESULT_HEADINGS_BY_ROLE.items() if role in roles)
     return tuple(sections)
+
+
+def planned_result_roles(plan: AnalysisPlan | None) -> dict[str, str]:
+    """Map each step to the plan role that makes its Results subsection required.
+
+    Host claim placement reads the same roles as the required structure, so a
+    step's claims reach the subsection its role requires. No plan means no
+    role-owned placement.
+    """
+    if plan is None:
+        return {}
+    return {
+        step.step_id: step.planned_analysis_role
+        for step in plan.steps
+        if step.planned_analysis_role in RESULT_HEADINGS_BY_ROLE
+    }
 
 
 def result_section_instruction(plan: AnalysisPlan) -> str:

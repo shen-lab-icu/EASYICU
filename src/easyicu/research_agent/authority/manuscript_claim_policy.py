@@ -10,12 +10,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Callable, Optional, Sequence
+from typing import Callable, Mapping, Optional, Sequence
 
 from .reader_numeric_display import round_reader_numeric_display
 from .scientific_claims import ScientificClaim
 from .manuscript_method_facts import ManuscriptMethodFact, is_method_fact_candidate
-from ..contracts.manuscript_result_structure import PLAN_RESULT_HEADINGS
+from ..contracts.manuscript_result_structure import (
+    PLAN_RESULT_HEADINGS,
+    RESULT_HEADINGS_BY_ROLE,
+)
 from ..contracts.manuscript_sentence_context import contextual_sentence_deletion
 
 ClaimResolver = Callable[[str], Optional[ScientificClaim]]
@@ -44,6 +47,9 @@ class ScientificClaimPlacement:
     scaffold: str
     inserted_claim_refs: tuple[str, ...]
     missing_claim_refs: tuple[str, ...]
+    # Claims the Writer reported elsewhere in Results but not in the
+    # subsection that the reviewed plan assigns to their role.
+    role_subsection_claim_refs: tuple[str, ...] = ()
 
 
 _RESULT_TOKEN_RE = re.compile(
@@ -465,14 +471,71 @@ def _results_section_span(manuscript: str) -> tuple[int, int] | None:
     return heading.end(), next_heading.start() if next_heading else len(manuscript)
 
 
+# Writer headings that predate the plan-derived labels keep their placement.
+_ROLE_HEADING_FALLBACK_PATTERNS = {
+    "secondary": r"^###\s+.*\bsecondary\b.*$",
+    "sensitivity": r"^###\s+.*(?:sensitivity|robustness).*$",
+}
+_NEXT_RESULT_SUBSECTION_RE = re.compile(r"^#{1,3}\s", re.MULTILINE)
+
+
+def _claim_result_role(
+    claim: ScientificClaim,
+    planned_step_roles: Mapping[str, str],
+) -> str | None:
+    """Return the role whose plan-derived Results subsection reports a claim.
+
+    The claim's own role wins when it owns such a subsection, so a sensitivity
+    contrast compiled inside a primary step stays a sensitivity result.
+    Otherwise the reviewed plan role of the producing step decides: the plan
+    made that subsection required, and a fixed role label in a claim adapter
+    must not move the step's result out of it.
+    """
+
+    for role in (claim.analysis_role, planned_step_roles.get(claim.step_id)):
+        normalized = str(role or "").strip().lower()
+        if normalized in RESULT_HEADINGS_BY_ROLE:
+            return normalized
+    return None
+
+
+def _role_heading(results_section: str, role: str) -> re.Match[str] | None:
+    exact = re.search(
+        rf"^###\s+{re.escape(RESULT_HEADINGS_BY_ROLE[role])}[ \t]*$",
+        results_section,
+        re.I | re.MULTILINE,
+    )
+    if exact is not None:
+        return exact
+    fallback = _ROLE_HEADING_FALLBACK_PATTERNS.get(role)
+    if fallback is None:
+        return None
+    return re.search(fallback, results_section, re.I | re.MULTILINE)
+
+
+def _role_subsection_body(results_section: str, role: str) -> str | None:
+    heading = _role_heading(results_section, role)
+    if heading is None:
+        return None
+    following = _NEXT_RESULT_SUBSECTION_RE.search(results_section, heading.end())
+    return results_section[
+        heading.end() : following.start() if following else len(results_section)
+    ]
+
+
 def _claim_target_position(
     results_section: str,
     *,
     claim: ScientificClaim,
+    role: str | None = None,
 ) -> int:
-    if claim.analysis_role == "sensitivity":
-        pattern = r"^###\s+.*(?:sensitivity|robustness).*$"
-    elif claim.claim_type == "association":
+    if role is not None:
+        heading = _role_heading(results_section, role)
+        if heading is not None:
+            return heading.end()
+        if role == "sensitivity":
+            return 0
+    if claim.claim_type == "association":
         pattern = r"^###\s+.*(?:primary\s+association|association|primary\s+model).*$"
     else:
         pattern = r"^###\s+.*(?:primary\s+outcome|outcome|cohort).*$"
@@ -484,6 +547,7 @@ def place_scientific_claim_tokens_in_results(
     scaffold: str,
     *,
     claims: Sequence[ScientificClaim],
+    planned_step_roles: Mapping[str, str] | None = None,
 ) -> ScientificClaimPlacement:
     """Ensure every host-authorized claim is represented inside Results.
 
@@ -492,6 +556,13 @@ def place_scientific_claim_tokens_in_results(
     the reportable set, so placement is structural rather than scientific:
     this function inserts only complete host-owned claim tokens and never
     authors prose or derives a value.
+
+    ``planned_step_roles`` maps each step whose reviewed plan role owns a
+    Results subsection to that role.  Such a claim is placed in that
+    subsection, and a token reported only elsewhere in Results is repeated
+    there without removing the Writer's placement: the subsection the plan
+    made required must report the step that made it required.  Without a
+    plan-derived subsection the claim-type placement is unchanged.
     """
 
     ordered_claims = list(claims)
@@ -504,14 +575,25 @@ def place_scientific_claim_tokens_in_results(
         )
     start, end = span
     results_section = scaffold[start:end]
+    roles = dict(planned_step_roles or {})
     existing_refs = {
         match.group("ref")
         for match in _SCIENTIFIC_CLAIM_TOKEN_RE.finditer(results_section)
     }
-    missing_claims = [
-        claim for claim in ordered_claims if claim.claim_ref not in existing_refs
-    ]
-    if not missing_claims:
+    placements: list[tuple[ScientificClaim, str | None]] = []
+    role_subsection_refs: list[str] = []
+    for claim in ordered_claims:
+        role = _claim_result_role(claim, roles)
+        if claim.claim_ref not in existing_refs:
+            placements.append((claim, role))
+            continue
+        body = _role_subsection_body(results_section, role) if role else None
+        if body is not None and claim.claim_ref not in {
+            match.group("ref") for match in _SCIENTIFIC_CLAIM_TOKEN_RE.finditer(body)
+        }:
+            placements.append((claim, role))
+            role_subsection_refs.append(claim.claim_ref)
+    if not placements:
         return ScientificClaimPlacement(
             scaffold=scaffold,
             inserted_claim_refs=(),
@@ -519,8 +601,8 @@ def place_scientific_claim_tokens_in_results(
         )
 
     insertions: dict[int, list[str]] = {}
-    for claim in missing_claims:
-        position = _claim_target_position(results_section, claim=claim)
+    for claim, role in placements:
+        position = _claim_target_position(results_section, claim=claim, role=role)
         insertions.setdefault(position, []).append(claim.placeholder)
     repaired_results = results_section
     for position in sorted(insertions, reverse=True):
@@ -530,8 +612,13 @@ def place_scientific_claim_tokens_in_results(
         )
     return ScientificClaimPlacement(
         scaffold=scaffold[:start] + repaired_results + scaffold[end:],
-        inserted_claim_refs=tuple(claim.claim_ref for claim in missing_claims),
+        inserted_claim_refs=tuple(
+            claim.claim_ref
+            for claim, _ in placements
+            if claim.claim_ref not in existing_refs
+        ),
         missing_claim_refs=(),
+        role_subsection_claim_refs=tuple(role_subsection_refs),
     )
 
 
