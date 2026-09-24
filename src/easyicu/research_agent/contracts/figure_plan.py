@@ -9,7 +9,7 @@ or reporting owners.
 from __future__ import annotations
 
 import re
-from typing import Any, List, Literal, Sequence, Tuple
+from typing import Any, Collection, List, Literal, NamedTuple, Sequence, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -494,11 +494,40 @@ def association_sensitivity_composite_panels(
     )
 
 
-def _landmark_curve_product(source_products: Sequence[str]) -> str | None:
+#: Product ids that name the measurement-process audit without a typed
+#: declaration.  A ``MeasurementAuditSpec`` may give the same table any id.
+CANONICAL_MEASUREMENT_PROCESS_PRODUCT_IDS = frozenset(
+    {"measurement_process", "measurement_process_audit"}
+)
+
+
+def _measurement_process_products(
+    source_products: Sequence[str],
+    typed_products: Collection[str] = (),
+) -> list[str]:
+    typed = {str(value or "").strip() for value in typed_products}
+    return [
+        value
+        for value in source_products
+        if value.startswith("table:")
+        and (
+            value in typed
+            or value.partition(":")[2] in CANONICAL_MEASUREMENT_PROCESS_PRODUCT_IDS
+        )
+    ]
+
+
+def _landmark_curve_product(
+    source_products: Sequence[str],
+    typed_measurement_products: Collection[str] = (),
+) -> str | None:
     sensitivity = _landmark_sensitivity_contrast_product(source_products)
     reserved = {
         "table:robustness_summary",
         sensitivity,
+        *_measurement_process_products(
+            source_products, typed_measurement_products
+        ),
     }
     adjusted_risk = _landmark_adjusted_risk_product(source_products)
     matches = [
@@ -514,8 +543,6 @@ def _landmark_curve_product(source_products: Sequence[str]) -> str | None:
             )
             and value.partition(":")[2].endswith("_exposure_curve")
         )
-        and value.partition(":")[2]
-        not in {"measurement_process", "measurement_process_audit"}
     ]
     return matches[0] if len(matches) == 1 else None
 
@@ -546,14 +573,11 @@ def _landmark_adjusted_risk_product(
     return matches[0] if len(matches) == 1 else None
 
 
-def _measurement_process_product(source_products: Sequence[str]) -> str | None:
-    matches = [
-        value
-        for value in source_products
-        if value.startswith("table:")
-        and value.partition(":")[2]
-        in {"measurement_process", "measurement_process_audit"}
-    ]
+def _measurement_process_product(
+    source_products: Sequence[str],
+    typed_products: Collection[str] = (),
+) -> str | None:
+    matches = _measurement_process_products(source_products, typed_products)
     return matches[0] if len(matches) == 1 else None
 
 
@@ -573,16 +597,53 @@ def _landmark_sensitivity_contrast_product(
     return matches[0] if len(matches) == 1 else None
 
 
+class LandmarkCompositeRoles(NamedTuple):
+    """Which typed input fills each role of the landmark association display."""
+
+    curve: str | None
+    adjusted_risk: str | None
+    sensitivity: str | None
+    measurement: str | None
+
+
+def landmark_association_composite_roles(
+    source_products: Sequence[str],
+    *,
+    measurement_process_products: Collection[str] = (),
+) -> LandmarkCompositeRoles:
+    """Resolve the display roles of a landmark association profile.
+
+    ``measurement_process_products`` are the tables a plan's typed measurement
+    audits declare as the process view (see
+    :func:`typed_measurement_process_products`); a canonical spelling keeps
+    its meaning without one.  The renderer, the runtime that binds it, and the
+    plan shaper all read roles from here.
+    """
+
+    cleaned = tuple(str(value or "").strip() for value in source_products)
+    return LandmarkCompositeRoles(
+        curve=_landmark_curve_product(cleaned, measurement_process_products),
+        adjusted_risk=_landmark_adjusted_risk_product(cleaned),
+        sensitivity=_landmark_sensitivity_contrast_product(cleaned),
+        measurement=_measurement_process_product(
+            cleaned, measurement_process_products
+        ),
+    )
+
+
 def landmark_association_composite_panels(
     source_products: Sequence[str],
+    *,
+    measurement_process_products: Collection[str] = (),
 ) -> Tuple[DeterministicFigurePanelTemplate, ...]:
     """Bind a claim-led landmark-association display to typed parents."""
 
     cleaned = tuple(str(value or "").strip() for value in source_products)
-    curve = _landmark_curve_product(cleaned)
-    adjusted_risk = _landmark_adjusted_risk_product(cleaned)
-    sensitivity = _landmark_sensitivity_contrast_product(cleaned)
-    measurement = _measurement_process_product(cleaned)
+    curve, adjusted_risk, sensitivity, measurement = (
+        landmark_association_composite_roles(
+            cleaned, measurement_process_products=measurement_process_products
+        )
+    )
     if (
         curve is None
         or adjusted_risk is None
@@ -662,6 +723,7 @@ def separable_display_panel_ids(
     *,
     source_products: Sequence[str],
     panel_ids: Sequence[str],
+    measurement_process_products: Collection[str] = (),
 ) -> frozenset[str]:
     """Which of a step's planned panels its bound renderer can export apart.
 
@@ -676,7 +738,10 @@ def separable_display_panel_ids(
     if not wanted:
         return frozenset()
     try:
-        templates = landmark_association_composite_panels(source_products)
+        templates = landmark_association_composite_panels(
+            source_products,
+            measurement_process_products=measurement_process_products,
+        )
     except ValueError:
         return frozenset()
     declared = {str(template.panel_id) for template in templates}
@@ -722,6 +787,22 @@ def data_quality_audit_source_candidates(
                     (output, str(getattr(step, "step_id", "") or ""))
                 )
     return candidates
+
+
+def typed_measurement_process_products(steps: Sequence[Any]) -> frozenset[str]:
+    """Tables a plan's typed measurement audits declare as the process view.
+
+    The producing step's ``MeasurementAuditSpec`` says what its table means,
+    whatever id the Planner or a family template chose, so a renderer never
+    has to recognize the table by its spelling.
+    """
+
+    return frozenset(
+        output
+        for output, _step_id in data_quality_audit_source_candidates(steps)[
+            "measurement_process"
+        ]
+    )
 
 
 def resolve_data_quality_figure_inputs(
@@ -900,9 +981,13 @@ __all__ = [
     "data_quality_audit_source_candidates",
     "cohort_balance_association_composite_panels",
     "measurement_availability_figure_panels",
+    "CANONICAL_MEASUREMENT_PROCESS_PRODUCT_IDS",
     "LANDMARK_ASSOCIATION_COMPOSITE_INPUTS",
+    "LandmarkCompositeRoles",
     "landmark_association_composite_panels",
+    "landmark_association_composite_roles",
     "separable_display_panel_ids",
     "robustness_figure_panels",
     "resolve_data_quality_figure_inputs",
+    "typed_measurement_process_products",
 ]

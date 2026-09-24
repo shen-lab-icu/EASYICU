@@ -829,3 +829,71 @@ def test_primary_curve_pair_does_not_generate_undeclared_audit_figures(tmp_path)
         )
         == []
     )
+
+
+def test_a_typed_process_audit_is_rendered_whatever_its_product_id(
+    tmp_path: Path,
+) -> None:
+    """The bound panel, not the table's spelling, names the process audit.
+
+    A family template publishes the process view as
+    ``measurement_audit_process`` and types it through its
+    ``MeasurementAuditSpec``.  Recognizing only canonical spellings left such
+    a display with no owner, so generated code had to draw it instead.
+    """
+
+    typed = "table:measurement_audit_process"
+    inputs = (*INPUTS[:3], typed)
+    with pytest.raises(ValueError):
+        landmark_association_composite_panels(inputs)
+    panels = landmark_association_composite_panels(
+        inputs, measurement_process_products={typed}
+    )
+    step = AnalysisStep(
+        step_id="display_suite",
+        planned_analysis_role="auxiliary",
+        intent="Render four typed sources.",
+        inputs=list(inputs),
+        expected_outputs=["figure:display_suite"],
+        method="visualization",
+        input_consumption_contracts=[
+            {"input_key": key, "mode": "all_rows"} for key in inputs
+        ],
+        figure_panels=[panel.bind(figure_output="figure:display_suite") for panel in panels],
+    )
+    frames = _frames()
+    frames[typed] = frames.pop(INPUTS[3])
+    bindings = {}
+    for key, frame in frames.items():
+        path = tmp_path / f"{key.partition(':')[2]}.csv"
+        frame.to_csv(path, index=False)
+        bindings[key] = _binding(key, frame, path)
+
+    assert landmark_association_figure_executor_owns_step(
+        step, resolved_bindings=bindings
+    )
+    summary = run_landmark_association_figure(
+        out_dir=tmp_path / "outputs",
+        run_dir=tmp_path,
+        resolved_inputs={"step_id": "display_suite", "inputs": bindings},
+        step_id="display_suite",
+        figure_product="display_suite",
+        input_keys=inputs,
+        measurement_process_products=(typed,),
+    )
+    assert summary["status"] == "ok"
+    supplementary_contract = json.loads(
+        (
+            tmp_path / "outputs" / "display_suite_supplementary.figure_contract.json"
+        ).read_text()
+    )
+    assert [panel["panel_id"] for panel in supplementary_contract["panels"]] == [
+        "robustness_summary",
+        "measurement_process",
+    ]
+    assert (
+        validate_step_planned_figure_contract_binding(
+            step=step, out_dir=tmp_path / "outputs", step_summary=summary
+        )
+        == []
+    )

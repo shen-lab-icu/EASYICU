@@ -1254,36 +1254,10 @@ def test_spline_family_request_routes_companions_to_the_audit_and_labels_only_th
     assert request.first_stay is not None
 
 
-def test_spline_family_compiles_and_seals_into_the_plan_bound_spline_runtime() -> None:
-    from easyicu.research_agent.authority.current_case_scientific_runtime import (
-        build_current_case_scientific_runtime_authority,
-    )
-    from easyicu.research_agent.orchestration.scientific_runtime import (
-        ScientificRuntimeAuthorities,
-    )
+def _spline_runtime_payload() -> dict:
+    """The unsealed spline runtime authority the spline family binds to."""
 
-    context = _spline_context()
-    request = _request(context)
-    roster = [item for item in PLANNER_ROSTER if item["name"] in {"age", "sex"}]
-    llm, result = _run(context, [json.dumps(_spline_spec_payload(request, adjustment_set=roster))])
-    plan = result.output
-    assert len(llm.calls) == 1
-    assert result.facts.prompt_metrics["planner_strategy"] == FAMILY_SPEC_STRATEGY
-    step_ids = [step.step_id for step in plan.steps]
-    assert "ordinal_trend" not in step_ids
-    assert "age_functional_form" in step_ids
-    primary = next(step for step in plan.steps if step.planned_analysis_role == "primary")
-    requirement = primary.model_requirements[0]
-    assert requirement.exposure_source == "peak_lactate"
-    assert requirement.covariates == ["age", "sex"]
-    assert [term.coding for term in requirement.model_terms if term.role == "exposure"] == ["continuous"]
-    assert primary.sensitivity_spec_ids == ["landmark_24h_primary"]
-    audit = next(step for step in plan.steps if step.step_id == "measurement_audit")
-    assert {"lactate_min", "lactate_n", "lactate_measured"} <= set(audit.inputs)
-    table_one = next(step for step in plan.steps if step.step_id == "table_one")
-    assert table_one.table_one_spec is not None and table_one.table_one_spec.group_by == "death"
-
-    unsealed = build_current_case_scientific_runtime_authority(
+    return (
         {
             "schema_version": "easyicu.landmark_spline_runtime_authority/5",
             "authority_kind": "landmark_spline_association",
@@ -1326,6 +1300,40 @@ def test_spline_family_compiles_and_seals_into_the_plan_bound_spline_runtime() -
             },
         }
     )
+
+
+def test_spline_family_compiles_and_seals_into_the_plan_bound_spline_runtime() -> None:
+    from easyicu.research_agent.authority.current_case_scientific_runtime import (
+        build_current_case_scientific_runtime_authority,
+    )
+    from easyicu.research_agent.orchestration.scientific_runtime import (
+        ScientificRuntimeAuthorities,
+    )
+
+    context = _spline_context()
+    request = _request(context)
+    roster = [item for item in PLANNER_ROSTER if item["name"] in {"age", "sex"}]
+    llm, result = _run(context, [json.dumps(_spline_spec_payload(request, adjustment_set=roster))])
+    plan = result.output
+    assert len(llm.calls) == 1
+    assert result.facts.prompt_metrics["planner_strategy"] == FAMILY_SPEC_STRATEGY
+    step_ids = [step.step_id for step in plan.steps]
+    assert "ordinal_trend" not in step_ids
+    assert "age_functional_form" in step_ids
+    primary = next(step for step in plan.steps if step.planned_analysis_role == "primary")
+    requirement = primary.model_requirements[0]
+    assert requirement.exposure_source == "peak_lactate"
+    assert requirement.covariates == ["age", "sex"]
+    assert [term.coding for term in requirement.model_terms if term.role == "exposure"] == ["continuous"]
+    assert primary.sensitivity_spec_ids == ["landmark_24h_primary"]
+    audit = next(step for step in plan.steps if step.step_id == "measurement_audit")
+    assert {"lactate_min", "lactate_n", "lactate_measured"} <= set(audit.inputs)
+    table_one = next(step for step in plan.steps if step.step_id == "table_one")
+    assert table_one.table_one_spec is not None and table_one.table_one_spec.group_by == "death"
+
+    unsealed = build_current_case_scientific_runtime_authority(
+        _spline_runtime_payload()
+    )
     runtime = ScientificRuntimeAuthorities(trajectory=None, current_case=unsealed)
     sealed = runtime.seal_for_plan(plan).current_case
     assert sealed.required_adjustment_columns == ("age", "sex")
@@ -1337,6 +1345,104 @@ def test_spline_family_compiles_and_seals_into_the_plan_bound_spline_runtime() -
     assert signed.step_id == "adjusted_association"
     assert list(signed.expected_outputs) == list(sealed.plan_outputs)
     assert list(signed.inputs) == ["artifact:analysis_cohort", *sealed.required_columns]
+
+
+def test_spline_family_article_figure_binds_to_its_deterministic_renderer() -> None:
+    """The template's display reaches a renderer through the audit's typed spec.
+
+    The family's measurement audit names its process table
+    ``measurement_audit_process``; only its ``MeasurementAuditSpec`` says it is
+    the process view.  The spline runtime must still rebind the template's
+    article display to the landmark composite, and the landmark renderer must
+    claim it, instead of leaving four unowned panels to generated code.
+    """
+
+    from easyicu.research_agent.authority.current_case_scientific_runtime import (
+        build_current_case_scientific_runtime_authority,
+    )
+    from easyicu.research_agent.execution.runners import (
+        landmark_association_figure_executor as renderer,
+    )
+    from easyicu.research_agent.orchestration.scientific_runtime import (
+        ScientificRuntimeAuthorities,
+    )
+
+    context = _spline_context()
+    request = _request(context)
+    roster = [item for item in PLANNER_ROSTER if item["name"] in {"age", "sex"}]
+    _llm, result = _run(
+        context, [json.dumps(_spline_spec_payload(request, adjustment_set=roster))]
+    )
+    plan = result.output
+    runtime = ScientificRuntimeAuthorities(
+        trajectory=None,
+        current_case=build_current_case_scientific_runtime_authority(
+            _spline_runtime_payload()
+        ),
+    )
+    runtime.seal_for_plan(plan)
+    bound, _findings = runtime.bind_plan(plan)
+
+    display = next(step for step in bound.steps if step.step_id == "visualization")
+    panels = {panel.panel_id: panel for panel in display.figure_panels}
+    assert set(panels) >= {
+        "association_curve",
+        "absolute_risk_curve",
+        "robustness_summary",
+        "measurement_process",
+    }
+    assert panels["measurement_process"].source_products == [
+        "table:measurement_audit_process"
+    ]
+    assert panels["association_curve"].source_products == ["table:landmark_rcs_curve"]
+    assert "table:landmark_rcs_contrasts" not in display.inputs
+
+    required = {
+        "table:landmark_rcs_curve": renderer._REQUIRED_COLUMNS["curve"],
+        "table:landmark_adjusted_absolute_risk": renderer._REQUIRED_COLUMNS[
+            "adjusted_risk_curve"
+        ],
+        "table:robustness_summary": renderer._REQUIRED_COLUMNS[
+            "table:robustness_summary"
+        ],
+        "table:measurement_audit_process": renderer._REQUIRED_COLUMNS[
+            "measurement_process"
+        ],
+    }
+    bindings = {
+        key: {
+            "product_contract": {
+                "columns": sorted(
+                    required.get(key, renderer._REQUIRED_COLUMNS["sensitivity_contrasts"])
+                )
+            }
+        }
+        for key in display.inputs
+    }
+    assert renderer.landmark_association_figure_executor_owns_step(
+        display, resolved_bindings=bindings
+    )
+    code = renderer.landmark_association_figure_executor_code(display)
+    assert "measurement_process_products=('table:measurement_audit_process',)" in code
+
+    # The pipeline then re-runs the idempotent figure passes; the display
+    # stays with its renderer (its audits may move to their dedicated
+    # displays) and no second composite is appended.
+    from easyicu.research_agent.planning.figure_plan_shaping import (
+        apply_runtime_bound_figure_contracts,
+    )
+
+    shaped = apply_runtime_bound_figure_contracts(bound, [])
+    composites = [
+        step
+        for step in shaped.steps
+        if any(panel.panel_id == "association_curve" for panel in step.figure_panels)
+    ]
+    assert [step.step_id for step in composites] == ["visualization"]
+    assert renderer.landmark_association_figure_executor_owns_step(
+        composites[0],
+        resolved_bindings={key: bindings[key] for key in composites[0].inputs},
+    )
 
 
 # ---------------------------------------------------------------------------

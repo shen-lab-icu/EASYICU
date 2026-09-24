@@ -27,6 +27,7 @@ from ..contracts.figure_plan import (
     DATA_QUALITY_AUDIT_ROLES,
     DATA_QUALITY_FIGURE_PANELS,
     EXPOSURE_OUTCOME_DISTRIBUTION_COUNTS_ONLY_FIGURE_PANELS,
+    CANONICAL_MEASUREMENT_PROCESS_PRODUCT_IDS,
     EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS,
     EXPOSURE_OUTCOME_DISTRIBUTION_INPUT,
     GROUPED_DESCRIPTIVE_DISTRIBUTION_FIGURE_PANELS,
@@ -50,6 +51,7 @@ from ..contracts.figure_plan import (
     measurement_availability_figure_panels,
     robustness_figure_panels,
     separable_display_panel_ids,
+    typed_measurement_process_products,
 )
 from ..schema import (
     AnalysisPlan,
@@ -449,11 +451,15 @@ def ensure_landmark_association_composite_figure_step(
             )
         )
     )
+    typed_process_products = typed_measurement_process_products(plan.steps)
     measurement_candidates = sorted(
         output
         for output in produced
-        if output.partition(":")[2]
-        in {"measurement_process", "measurement_process_audit"}
+        if output.startswith("table:")
+        and (
+            output in typed_process_products
+            or output.partition(":")[2] in CANONICAL_MEASUREMENT_PROCESS_PRODUCT_IDS
+        )
     )
     sensitivity_candidates = sorted(
         output
@@ -587,7 +593,9 @@ def ensure_landmark_association_composite_figure_step(
         ],
         figure_panels=[
             panel.bind(figure_output=figure_output)
-            for panel in landmark_association_composite_panels(sources)
+            for panel in landmark_association_composite_panels(
+                sources, measurement_process_products=typed_process_products
+            )
         ],
     )
     if reusable_index is None:
@@ -1519,6 +1527,7 @@ def omit_redundant_composite_audits(
         for candidate in plan.steps
     ):
         return plan, []
+    typed_process_products = typed_measurement_process_products(plan.steps)
     findings = []
     steps = []
     for step in plan.steps:
@@ -1532,7 +1541,9 @@ def omit_redundant_composite_audits(
             steps.append(step)
             continue
         try:
-            panels = landmark_association_composite_panels(step.inputs)
+            panels = landmark_association_composite_panels(
+                step.inputs, measurement_process_products=typed_process_products
+            )
         except ValueError:
             steps.append(step)
             continue
@@ -1572,7 +1583,10 @@ def omit_redundant_composite_audits(
             update={
                 "figure_panels": [
                     panel.bind(figure_output=str(step.expected_outputs[0]))
-                    for panel in landmark_association_composite_panels(primary_inputs)
+                    for panel in landmark_association_composite_panels(
+                        primary_inputs,
+                        measurement_process_products=typed_process_products,
+                    )
                 ]
             }
         )
@@ -1642,6 +1656,12 @@ def _resolve_unseparable_placement_splits(
         separable = separable_display_panel_ids(
             source_products=tuple(str(value) for value in step.inputs),
             panel_ids=[str(panels[index].panel_id) for index in indexes],
+            measurement_process_products=tuple(
+                str(source)
+                for index in indexes
+                if str(panels[index].panel_id) == "measurement_process"
+                for source in panels[index].source_products
+            ),
         )
         stuck = [
             index
@@ -1688,8 +1708,11 @@ def apply_article_figure_strategy_placements(
     }
     audit_only_source_products = {
         "table:robustness_summary",
-        "table:measurement_process",
-        "table:measurement_process_audit",
+        *(
+            f"table:{product_id}"
+            for product_id in CANONICAL_MEASUREMENT_PROCESS_PRODUCT_IDS
+        ),
+        *typed_measurement_process_products(plan.steps),
     }
     changed = False
     steps: list[AnalysisStep] = []
@@ -1749,6 +1772,7 @@ def close_empty_deterministic_figure_contracts(
     data_quality_sources, _candidates, _missing, _ambiguous = (
         _closed_data_quality_sources(plan.steps)
     )
+    typed_process_products = typed_measurement_process_products(plan.steps)
     changed = False
     findings: list[ValidationFinding] = []
     steps: list[AnalysisStep] = []
@@ -1797,13 +1821,15 @@ def close_empty_deterministic_figure_contracts(
                 for value in input_set
             )
             and any(
-                value.partition(":")[2]
-                in {"measurement_process", "measurement_process_audit"}
+                value in typed_process_products
+                or value.partition(":")[2] in CANONICAL_MEASUREMENT_PROCESS_PRODUCT_IDS
                 for value in input_set
             )
         ):
             try:
-                templates = landmark_association_composite_panels(inputs)
+                templates = landmark_association_composite_panels(
+                    inputs, measurement_process_products=typed_process_products
+                )
             except ValueError:
                 templates = None
         elif input_set == frozenset(COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS):

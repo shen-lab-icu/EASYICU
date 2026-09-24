@@ -13,6 +13,7 @@ import pandas as pd
 
 from ...contracts.figure_plan import (
     landmark_association_composite_panels,
+    landmark_association_composite_roles,
 )
 from ...figures.publication import (
     add_panel_label,
@@ -80,71 +81,22 @@ _LEGACY_LANDMARK_ARTICLE_INPUTS = frozenset(
 )
 
 
-def _curve_input(inputs: list[str] | tuple[str, ...]) -> str | None:
-    sensitivity_contrasts = _sensitivity_contrasts_input(inputs)
-    reserved = {
-        "table:robustness_summary",
-        sensitivity_contrasts,
-    }
-    adjusted_risk = _adjusted_risk_input(inputs)
-    matches = [
-        value
-        for value in inputs
-        if value.startswith("table:")
-        and value not in reserved
-        and value != adjusted_risk
-        and not (
-            (
-                "robustness" in value.partition(":")[2]
-                or "sensitivity" in value.partition(":")[2]
-            )
-            and value.partition(":")[2].endswith("_exposure_curve")
+def _bound_measurement_process(step: AnalysisStep) -> tuple[str, ...]:
+    """The process-audit table the step's host-bound panel contract names.
+
+    The plan binds the ``measurement_process`` panel from the producing
+    audit's typed spec, so the renderer reads the role from that binding
+    instead of recognizing the table by its product id.
+    """
+
+    return tuple(
+        dict.fromkeys(
+            str(source)
+            for panel in step.figure_panels
+            if panel.panel_id == "measurement_process"
+            for source in panel.source_products
         )
-        and value.partition(":")[2]
-        not in {"measurement_process", "measurement_process_audit"}
-    ]
-    return matches[0] if len(matches) == 1 else None
-
-
-def _adjusted_risk_input(inputs: list[str] | tuple[str, ...]) -> str | None:
-    accepted_tokens = (
-        "adjusted_absolute_risk",
-        "standardized_absolute_risk",
-        "standardised_absolute_risk",
-        "absolute_risk_curve",
     )
-    matches = [
-        value
-        for value in inputs
-        if value.startswith("table:")
-        and any(token in value.partition(":")[2] for token in accepted_tokens)
-    ]
-    return matches[0] if len(matches) == 1 else None
-
-
-def _measurement_input(inputs: list[str] | tuple[str, ...]) -> str | None:
-    matches = [
-        value
-        for value in inputs
-        if value.startswith("table:")
-        and value.partition(":")[2]
-        in {"measurement_process", "measurement_process_audit"}
-    ]
-    return matches[0] if len(matches) == 1 else None
-
-
-def _sensitivity_contrasts_input(inputs: list[str] | tuple[str, ...]) -> str | None:
-    matches = [
-        value
-        for value in inputs
-        if value.startswith("table:")
-        and value.partition(":")[2].endswith("_exposure_contrasts")
-        and (
-            "robustness" in value.partition(":")[2]
-            or "sensitivity" in value.partition(":")[2]
-        )
-    ]
-    return matches[0] if len(matches) == 1 else None
 
 
 def _exposure_columns(frame: pd.DataFrame) -> tuple[str, str]:
@@ -161,6 +113,8 @@ def _exposure_columns(frame: pd.DataFrame) -> tuple[str, str]:
 
 def landmark_association_figure_input_profile(
     inputs: list[str] | tuple[str, ...],
+    *,
+    measurement_process_products: tuple[str, ...] = (),
 ) -> tuple[str, ...] | None:
     values = tuple(str(value or "").strip() for value in inputs)
     if (
@@ -170,7 +124,9 @@ def landmark_association_figure_input_profile(
     ):
         return values
     try:
-        landmark_association_composite_panels(values)
+        landmark_association_composite_panels(
+            values, measurement_process_products=measurement_process_products
+        )
     except ValueError:
         return None
     return values
@@ -189,7 +145,10 @@ def landmark_association_figure_executor_owns_step(
     *,
     resolved_bindings: Mapping[str, Any] | None = None,
 ) -> bool:
-    profile = landmark_association_figure_input_profile(tuple(step.inputs))
+    measurement_products = _bound_measurement_process(step)
+    profile = landmark_association_figure_input_profile(
+        tuple(step.inputs), measurement_process_products=measurement_products
+    )
     product = (
         _figure_product(step.expected_outputs[0])
         if len(step.expected_outputs) == 1
@@ -207,12 +166,13 @@ def landmark_association_figure_executor_owns_step(
     ):
         return False
     legacy_profile = set(profile) == _LEGACY_LANDMARK_ARTICLE_INPUTS
-    curve = None if legacy_profile else _curve_input(profile)
-    adjusted_risk = None if legacy_profile else _adjusted_risk_input(profile)
-    sensitivity_contrasts = (
-        None if legacy_profile else _sensitivity_contrasts_input(profile)
+    curve, adjusted_risk, sensitivity_contrasts, measurement = (
+        (None, None, None, None)
+        if legacy_profile
+        else landmark_association_composite_roles(
+            profile, measurement_process_products=measurement_products
+        )
     )
-    measurement = None if legacy_profile else _measurement_input(profile)
     return all(
         _binding_has_columns(
             resolved_bindings.get(key),
@@ -244,7 +204,10 @@ def landmark_association_figure_executor_code(step: AnalysisStep) -> str:
         if len(step.expected_outputs) == 1
         else None
     )
-    profile = landmark_association_figure_input_profile(tuple(step.inputs))
+    measurement_products = _bound_measurement_process(step)
+    profile = landmark_association_figure_input_profile(
+        tuple(step.inputs), measurement_process_products=measurement_products
+    )
     if product is None or profile is None:
         raise ValueError("landmark association figure contract is incomplete")
     return textwrap.dedent(
@@ -261,6 +224,7 @@ def landmark_association_figure_executor_code(step: AnalysisStep) -> str:
             figure_product={product!r},
             input_keys={profile!r},
             panel_placements={{{", ".join(f"{panel.panel_id!r}: {panel.placement!r}" for panel in step.figure_panels)}}},
+            measurement_process_products={measurement_products!r},
         )
         """
     ).strip()
@@ -903,12 +867,16 @@ def run_landmark_association_figure(
     figure_product: str,
     input_keys: tuple[str, ...],
     panel_placements: Mapping[str, str] | None = None,
+    measurement_process_products: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Render the exact declared curve/audit profile without model fitting."""
 
     if _figure_product(f"figure:{figure_product}") is None:
         raise ValueError("unsafe figure product")
-    profile = landmark_association_figure_input_profile(input_keys)
+    measurement_process_products = tuple(measurement_process_products)
+    profile = landmark_association_figure_input_profile(
+        input_keys, measurement_process_products=measurement_process_products
+    )
     if profile is None:
         raise ValueError("unsupported landmark association figure profile")
     out_dir = Path(out_dir)
@@ -927,10 +895,11 @@ def run_landmark_association_figure(
             profile=profile,
             bound=bound,
         )
-    curve_key = _curve_input(profile)
-    adjusted_risk_key = _adjusted_risk_input(profile)
-    sensitivity_key = _sensitivity_contrasts_input(profile)
-    measurement_key = _measurement_input(profile)
+    curve_key, adjusted_risk_key, sensitivity_key, measurement_key = (
+        landmark_association_composite_roles(
+            profile, measurement_process_products=measurement_process_products
+        )
+    )
     assert (
         curve_key is not None
         and adjusted_risk_key is not None
@@ -1015,7 +984,9 @@ def run_landmark_association_figure(
 
     palette = apply_publication_style(font_size=7.0)
     placements = dict(panel_placements or {})
-    panel_templates = landmark_association_composite_panels(profile)
+    panel_templates = landmark_association_composite_panels(
+        profile, measurement_process_products=measurement_process_products
+    )
     result_panels = tuple(panel for panel in panel_templates if not panel.separable_display)
     result_placements = {
         placements.get(panel.panel_id, panel.placement) for panel in result_panels
