@@ -10,7 +10,7 @@ never widens the host's timing authority.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Mapping, Optional
+from typing import Any, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -510,6 +510,37 @@ def design_field_max_length(field: str) -> int:
 MAX_FIT_FEATURES = design_field_max_length("required_variables") - 2
 
 
+def landmark_design_roster(request: "FamilySpecRequest", covariates: Sequence[str]) -> list[str]:
+    """Every variable a landmark design names, in the order the plan lists them.
+
+    The host seals the row identity, exposure, outcome, landmark timing,
+    alternate definitions, first-stay flag and audit columns; the adjustment
+    roster is the Planner's or the exact user roster.  The spec is checked and
+    the design is built from this one list, so a roster the design cannot name
+    is refused before it compiles instead of being cut short after.
+    """
+
+    return list(
+        dict.fromkeys(
+            [
+                request.identity_column,
+                request.primary_exposure,
+                request.outcome,
+                *(
+                    column
+                    for column in (request.event_time_column, request.observation_duration_column)
+                    if column
+                ),
+                *covariates,
+                *([request.secondary_continuous_outcome] if request.secondary_continuous_outcome else []),
+                *(item.execution_variables[0] for item in request.alternate_exposures),
+                *([request.first_stay.execution_variables[0]] if request.first_stay else []),
+                *request.measurement_audit_columns,
+            ]
+        )
+    )
+
+
 class FamilyPlanSpec(BaseModel):
     """The Planner's complete output for one family-spec attempt."""
 
@@ -745,6 +776,18 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
                 "family_spec_reference_index_out_of_domain",
                 f"{item.name!r} reference index exceeds its closed domain",
                 path=f"{path}.reference_level_index",
+            )
+    if request.family_id in LANDMARK_FAMILY_IDS:
+        covariates = list(request.exact_roster) if request.adjustment_selection == "exact" else names
+        design_limit = design_field_max_length("required_variables")
+        roster = landmark_design_roster(request, covariates)
+        if len(roster) > design_limit:
+            raise FamilySpecError(
+                "family_spec_roster_exceeds_design",
+                f"the design names at most {design_limit} variables including the row identity, "
+                f"exposure, outcome, landmark timing and audit columns; this roster needs {len(roster)}: "
+                "keep the adjustment covariates that matter most",
+                path="adjustment_set",
             )
     labels = spec.labels
     selected_label_keys = [

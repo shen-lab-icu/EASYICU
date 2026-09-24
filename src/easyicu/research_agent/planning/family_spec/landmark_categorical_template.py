@@ -62,8 +62,10 @@ from .contract import (
     FamilySpecError,
     FamilySpecRequest,
     SpecCovariateDecision,
+    design_field_max_length,
+    landmark_design_roster,
 )
-from .plan_language import listing, plan_language, sentence
+from .plan_language import bounded_roster, listing, plan_language, sentence
 
 FUNCTIONAL_FORM_METHOD = "restricted_cubic_spline_sensitivity"
 FUNCTIONAL_FORM_KNOT_QUANTILES = (0.1, 0.5, 0.9)
@@ -258,6 +260,20 @@ def _table_one_summary(coding: str) -> str:
     return "count_percent" if coding in {"binary", "categorical"} else "both"
 
 
+def _estimand(head: str, labels: list[str], tail: str) -> str:
+    """Name the adjustment roster while the estimand holds it; the plan lists it in full."""
+
+    if not labels:
+        return f"{head}unadjusted (no covariate was authorized){tail}"
+    prefix = "adjusted for "
+    roster = bounded_roster(
+        labels, budget=design_field_max_length("estimand") - len(head) - len(prefix) - len(tail)
+    )
+    if roster:
+        return f"{head}{prefix}{roster}{tail}"
+    return f"{head}{prefix}{len(labels)} prespecified covariates named in the plan{tail}"
+
+
 def _design_selection(
     request: FamilySpecRequest,
     spec: FamilyPlanSpec,
@@ -339,10 +355,12 @@ def _design_selection(
     selected = ResearchDesignCandidate(
         design_id="landmark_adjusted_association",
         analysis_type="association_study",
-        estimand=(
+        estimand=_estimand(
             f"Observational association between {exposure_clause} from information available "
             f"before a {hours} h landmark and {outcome} after the landmark, among analysis rows alive and "
-            f"under observation at the landmark, {adjustment_text}, {cluster_text}."
+            "under observation at the landmark, ",
+            [_label(spec, name) for name in covariates],
+            f", {cluster_text}.",
         ),
         time_zero=(
             f"{hours} h after ICU admission (fixed landmark); the exposure uses only information "
@@ -693,21 +711,17 @@ def build_landmark_categorical_skeleton(
     visualization_variables = [exposure, outcome, *([secondary] if secondary else []), *covariates, *request.measurement_audit_columns]
     report_variables = [identity, exposure, outcome, *([secondary] if secondary else []), *covariates]
 
-    required_variables = list(
-        dict.fromkeys(
-            [
-                identity,
-                exposure,
-                outcome,
-                *landmark_columns,
-                *covariates,
-                *([secondary] if secondary else []),
-                *alternates,
-                *([first_stay] if first_stay else []),
-                *request.measurement_audit_columns,
-            ]
+    required_variables = landmark_design_roster(request, covariates)
+    design_limit = design_field_max_length("required_variables")
+    if len(required_variables) > design_limit:
+        # The spec contract refuses this roster before a template is built;
+        # an exact roster reaching here must fail, never lose variables.
+        raise FamilySpecError(
+            "family_spec_roster_exceeds_design",
+            f"the design names at most {design_limit} variables; this roster needs "
+            f"{len(required_variables)}",
+            path="adjustment_set",
         )
-    )[:24]
     design = _design_selection(
         request,
         spec,
