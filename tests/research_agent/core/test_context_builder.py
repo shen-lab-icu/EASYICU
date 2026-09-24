@@ -349,6 +349,57 @@ def test_metadata_only_planning_authority_survives_context_projection(ra):
     assert dependence.group_derivation == "prefix_before_delimiter"
 
 
+def test_metadata_only_planning_projects_a_verified_first_stay_restriction(ra):
+    from easyicu.research_agent.planning.dependence_authority import repeat_units_possible
+
+    frame = pd.DataFrame(
+        {
+            "stay_id": pd.Series(dtype="int64"),
+            "lact_max": pd.Series(dtype="float64"),
+            "death": pd.Series(dtype="float64"),
+        }
+    )
+    frame.attrs["easyicu_planning_authority"] = {
+        "kind": "metadata_only_planning_catalog",
+        "patient_rows_read": False,
+        "first_icu_stay_restriction": {
+            "schema_version": "easyicu.first_icu_stay_restriction/1",
+            "coordinate_sha256": "e" * 64,
+            "provider_visible_values": False,
+        },
+    }
+
+    context = ra.build_research_context(
+        research_question="Is lactate associated with hospital mortality?",
+        cohort=frame,
+        cohort_name="metadata-only",
+        database="miiv",
+        target_outcome="death",
+        primary_exposure="lact_max",
+    )
+
+    assert context.cohort.provenance["first_icu_stay_restriction"] == {
+        "schema_version": "easyicu.first_icu_stay_restriction/1",
+        "coordinate_sha256": "e" * 64,
+    }
+    assert repeat_units_possible(context) is False
+
+    frame.attrs["easyicu_planning_authority"]["first_icu_stay_restriction"] = {
+        "schema_version": "easyicu.first_icu_stay_restriction/1",
+        "coordinate_sha256": "e" * 64,
+        "provider_visible_values": True,
+    }
+    with pytest.raises(MaterializedMetadataError, match="first ICU stay restriction"):
+        ra.build_research_context(
+            research_question="Is lactate associated with hospital mortality?",
+            cohort=frame,
+            cohort_name="metadata-only",
+            database="miiv",
+            target_outcome="death",
+            primary_exposure="lact_max",
+        )
+
+
 def test_metadata_only_planning_rejects_invalid_patient_grouping_authority(ra):
     frame = pd.DataFrame(
         {

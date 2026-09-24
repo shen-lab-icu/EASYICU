@@ -10,8 +10,9 @@ scientific review.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -21,6 +22,7 @@ from ..contracts.descriptive_execution import (
     exposure_outcome_distribution_execution_verdict,
 )
 from ..contracts.dependence import PlannedDependenceRequirement
+from ..intake.materialized_metadata import FIRST_ICU_STAY_RESTRICTION_SCHEMA
 from ..schema import AnalysisPlan, ResearchContext
 from .analysis_types import canonical_analysis_family
 
@@ -261,10 +263,25 @@ def context_patient_group_authority(
     return None
 
 
+def _host_restricted_to_first_icu_stays(provenance: Mapping[str, Any]) -> bool:
+    restriction = provenance.get("first_icu_stay_restriction")
+    return (
+        isinstance(restriction, Mapping)
+        and restriction.get("schema_version") == FIRST_ICU_STAY_RESTRICTION_SCHEMA
+        and re.fullmatch(r"[0-9a-f]{64}", str(restriction.get("coordinate_sha256") or ""))
+        is not None
+    )
+
+
 def repeat_units_possible(context: ResearchContext) -> bool:
     """Assess repeated-unit risk once for planning, compilation, and review."""
 
     provenance = context.cohort.provenance or {}
+    if _host_restricted_to_first_icu_stays(provenance):
+        # One row per patient by construction: the host kept each patient's
+        # first ICU stay with a verified coordinate before the universe was
+        # sealed (or will, before any analysis step runs).
+        return False
     preferences = context.user_preferences
     if hasattr(preferences, "model_dump"):
         preferences = preferences.model_dump(mode="json")

@@ -146,3 +146,54 @@ def test_the_binding_hands_the_materializer_exact_coordinates(tmp_path):
         FirstIcuStayBinding(coordinate_path="relative.parquet", coordinate_sha256="b" * 64)
     with pytest.raises(ValueError):
         FirstIcuStayBinding(coordinate_path=tmp_path / "x.parquet", coordinate_sha256="nope")
+
+
+def test_a_sealed_restriction_is_found_through_the_cohort_lineage(tmp_path, monkeypatch):
+    """A follow-up extension or run stage inherits its universe's restriction."""
+
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.intake import materialized_metadata as metadata
+
+    restriction = {
+        "schema_version": "easyicu.first_icu_stay_restriction/1",
+        "coordinate_sha256": "f" * 64,
+        "stays_after": 2,
+        "authority_coordinates": {"authority_ref": "private detail stays behind"},
+    }
+    universe = SimpleNamespace(
+        producer_parameters={"first_icu_stay_restriction": restriction},
+        parent_authority_sha256=None,
+    )
+    child = SimpleNamespace(producer_parameters={}, parent_authority_sha256="1" * 64)
+    monkeypatch.setattr(
+        metadata,
+        "_local_authority_reference",
+        lambda root, *, authority_sha256: (None, universe),
+    )
+
+    found = metadata.sealed_first_icu_stay_restriction(
+        SimpleNamespace(authority=child), cohort_path=tmp_path / "cohort.parquet"
+    )
+    assert found == {
+        "schema_version": "easyicu.first_icu_stay_restriction/1",
+        "coordinate_sha256": "f" * 64,
+        "stays_after": 2,
+    }
+
+    unrestricted = SimpleNamespace(producer_parameters={}, parent_authority_sha256=None)
+    assert (
+        metadata.sealed_first_icu_stay_restriction(
+            SimpleNamespace(authority=unrestricted), cohort_path=tmp_path / "cohort.parquet"
+        )
+        is None
+    )
+
+    forged = SimpleNamespace(
+        producer_parameters={"first_icu_stay_restriction": {**restriction, "schema_version": "x"}},
+        parent_authority_sha256=None,
+    )
+    with pytest.raises(metadata.MaterializedMetadataError):
+        metadata.sealed_first_icu_stay_restriction(
+            SimpleNamespace(authority=forged), cohort_path=tmp_path / "cohort.parquet"
+        )

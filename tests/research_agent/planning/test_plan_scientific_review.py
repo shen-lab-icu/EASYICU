@@ -100,6 +100,54 @@ def test_metadata_only_zero_rows_do_not_rule_out_repeated_stays() -> None:
     }
 
 
+def test_a_verified_first_stay_restriction_rules_out_repeated_stays() -> None:
+    """One row per patient by construction once the host keeps first stays."""
+
+    def metadata_only(provenance_extra: dict):
+        return _context().model_copy(
+            update={
+                "cohort": CohortDescriptor(
+                    cohort_name="metadata-only ICU catalog",
+                    database="miiv",
+                    n_patients=None,
+                    n_stays=0,
+                    id_columns=["stay_id"],
+                    provenance={
+                        "analysis_unit": "icu_stay",
+                        "evidence_stage": "metadata_only_planning",
+                        "patient_identity_available": False,
+                        "patient_rows_read": False,
+                        **provenance_extra,
+                    },
+                )
+            }
+        )
+
+    verified = metadata_only(
+        {
+            "first_icu_stay_restriction": {
+                "schema_version": "easyicu.first_icu_stay_restriction/1",
+                "coordinate_sha256": "d" * 64,
+            }
+        }
+    )
+    assert repeat_units_possible(verified) is False
+    review = build_plan_scientific_review(context=verified, plan=_plan())
+    assert "REPEATED_STAY_IDENTITY_UNAVAILABLE" not in {
+        item.code for item in review.findings
+    }
+    # A malformed receipt is not an authority.
+    forged = metadata_only(
+        {
+            "first_icu_stay_restriction": {
+                "schema_version": "easyicu.first_icu_stay_restriction/1",
+                "coordinate_sha256": "not-a-digest",
+            }
+        }
+    )
+    assert repeat_units_possible(forged) is True
+
+
 def test_review_rejects_continuous_coding_for_declared_factor() -> None:
     context = _context().model_copy(
         update={

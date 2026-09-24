@@ -72,6 +72,7 @@ from ..intake.export_package import (
 )
 from ..intake.materialized_metadata import MaterializedColumnMetadataCollector
 from ..intake.materialized_metadata import (
+    FIRST_ICU_STAY_RESTRICTION_SCHEMA,
     MaterializedMetadataError,
     implementation_bundle_sha256,
     load_verified_materialized_cohort_authority,
@@ -2178,7 +2179,7 @@ def _restrict_to_first_icu_stays(
     keep = joined[COORDINATE_FLAG_COLUMN].astype(bool).to_numpy()
     restricted = cohort.loc[keep].reset_index(drop=True)
     return restricted, {
-        "schema_version": "easyicu.first_icu_stay_restriction/1",
+        "schema_version": FIRST_ICU_STAY_RESTRICTION_SCHEMA,
         "coordinate_sha256": coordinate_sha256,
         "stays_before": int(len(cohort)),
         "stays_after": int(len(restricted)),
