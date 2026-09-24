@@ -445,3 +445,109 @@ def test_agent_plan_configuration_is_compiled_without_a_user_choice(
     assert current["question"] == before["question"]
     assert seen_patch["analysis_design"]["variance_estimator"] == "cluster_robust"
     assert seen_patch["confirmations"]["agent_plan_configuration_compiled"] is True
+
+
+@pytest.mark.parametrize("first_stay_proven", [True, False])
+def test_a_clustering_plan_gets_the_first_stay_population_only_with_its_coordinate(
+    states, monkeypatch, first_stay_proven
+):
+    """Dev9 M3: the host, not another Planner turn, closes repeated stays.
+
+    The reviewer routes the finding to the runtime owner because no step of a
+    clustering suite can carry patient dependence; applying the plan settings
+    resolves the source's first-stay coordinate before narrowing anything.
+    """
+
+    from easyicu.webserver.pi_copilot import service as service_module
+    from easyicu.webserver.pi_copilot.contracts import AuthorityBinding, PiSessionRecord
+    from easyicu.webserver.pi_copilot.service import PiCopilotError
+
+    before, _after, run = states
+    before = {
+        **before,
+        "cohort": {"preset": "all_icu"},
+        "analysis_design": {
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "cluster_robust",
+            "cluster_unit": "patient",
+        },
+    }
+    run = {
+        **run,
+        "scientific_configuration_sha256": study_contexts.scientific_configuration_sha256(before),
+    }
+    service = service_module.PiCopilotService.__new__(service_module.PiCopilotService)
+    record = PiSessionRecord(
+        session_id="clustering-session",
+        project_id="clustering-project",
+        binding=AuthorityBinding(study_context_id=before["id"], study_revision=1, run_id=run["run_id"]),
+    )
+    current = dict(before)
+    monkeypatch.setattr(service, "_scoped_record", lambda *a, **kw: record)
+    monkeypatch.setattr(service, "_stale_details", lambda *a: {})
+    monkeypatch.setattr(service, "_save_record", lambda *a: None)
+    monkeypatch.setattr(
+        service,
+        "_binding_for_context",
+        lambda context, run_id=None: AuthorityBinding(
+            study_context_id=context["id"], study_revision=context["revision"], run_id=run_id,
+        ),
+    )
+    monkeypatch.setattr(service_module.study_contexts, "get_context", lambda *a: dict(current))
+    monkeypatch.setattr(
+        service_module, "list_bound_run_history", lambda **kw: [{**run, "project_dir": "/test/clustering"}]
+    )
+    monkeypatch.setattr(service_module, "research_pipeline_project_root", lambda *a: "/test")
+    monkeypatch.setattr(
+        service_module.source_identity_authority,
+        "resolve_study_patient_grouping",
+        lambda **kw: SimpleNamespace(group_source="opaque_patient"),
+    )
+    monkeypatch.setattr(
+        service_module.source_identity_authority,
+        "resolve_study_first_icu_stay",
+        lambda **kw: SimpleNamespace(coordinate_sha256="f" * 64) if first_stay_proven else None,
+    )
+    monkeypatch.setattr(
+        service_module.agent_runs,
+        "read_run_review",
+        lambda *a: {
+            "artifact_payloads": {
+                "agent_plan.json": {"steps": [{"method": "cross_sectional_phenotyping"}]},
+                "scientific_plan_review.json": {
+                    "facts": {
+                        "remediation_buckets": {
+                            "runtime_capability": ["REPEATED_STAY_METHOD_NOT_DECLARED"]
+                        }
+                    }
+                },
+            }
+        },
+    )
+    written = []
+
+    def update(patch, **kw):
+        written.append(patch)
+        current.update(patch)
+        current["revision"] += 1
+        return dict(current)
+
+    monkeypatch.setattr(service_module.study_contexts, "upsert_context", update)
+
+    def apply():
+        return service.apply_agent_plan_configuration(
+            "clustering-session", project_id="clustering-project", expected_revision=1, run_id=run["run_id"],
+        )
+
+    if not first_stay_proven:
+        with pytest.raises(PiCopilotError) as raised:
+            apply()
+        assert raised.value.code == "agent_plan_first_stay_coordinate_unavailable"
+        assert written == []
+        return
+    result = apply()
+    assert result["next_action"] == "fresh_plan"
+    assert result["runtime_finding_codes"] == ["REPEATED_STAY_METHOD_NOT_DECLARED"]
+    assert written[0]["cohort"] == {"preset": "all_icu", "exclude_readmissions": True}
+    assert written[0]["analysis_design"] == {"analysis_unit": "icu_stay", "variance_estimator": "model_based"}
+    assert current["question"] == before["question"]

@@ -49,8 +49,13 @@ _AGENT_COMPILED_RUNTIME_FINDINGS = frozenset(
         "PRIMARY_POPULATION_EXECUTION_OWNER_MISSING",
         "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
         "REPEATED_STAY_IDENTITY_UNAVAILABLE",
+        "REPEATED_STAY_METHOD_NOT_DECLARED",
     }
 )
+#: The reviewer hands this finding to the host only for a plan with no
+#: estimator that could carry patient dependence; its closure is a population
+#: of one first ICU stay per patient, not a plan coordinate.
+_ONE_STAY_POPULATION_FINDING = "REPEATED_STAY_METHOD_NOT_DECLARED"
 
 
 _AGGREGATION_SUFFIXES = ("_first", "_last", "_min", "_max", "_mean", "_sum")
@@ -506,6 +511,39 @@ def _declared_family_executes_patient_clustering(study: Mapping[str, Any]) -> bo
     return True
 
 
+def _one_stay_population_patch(study: Mapping[str, Any]) -> Dict[str, Any]:
+    """Keep each patient's first ICU stay; the plan's own steps stay unchanged."""
+
+    configuration = ScientificConfiguration.inspect(study)
+    cohort = dict(study.get("cohort") or {})
+    cohort["exclude_readmissions"] = True
+    current_design = study.get("analysis_design")
+    analysis_design = {
+        key: value
+        for key, value in (
+            current_design.items() if isinstance(current_design, Mapping) else ()
+        )
+        if key != "cluster_unit"
+    }
+    # One row per patient: patient-clustered variance has nothing left to
+    # cluster, and the plan's estimators never executed it.
+    analysis_design.update(
+        {"analysis_unit": "icu_stay", "variance_estimator": "model_based"}
+    )
+    return {
+        "cohort": cohort,
+        "analysis_design": analysis_design,
+        "sensitivity_specs": configuration.replace_sensitivity(
+            axis="repeated_stays", replacement=None
+        ),
+        "confirmations": configuration.merge_confirmations(
+            plan_repeated_stays_first=True,
+            plan_repeated_stays_clustered=False,
+            agent_plan_configuration_compiled=True,
+        ),
+    }
+
+
 def compile_agent_plan_configuration(
     *,
     study: Mapping[str, Any],
@@ -585,6 +623,32 @@ def compile_agent_plan_configuration(
         raise PlanDecisionError(
             "agent_plan_patient_grouping_unavailable",
             "The selected all-stay analysis cannot be compiled without source-owned patient grouping.",
+        )
+    if _ONE_STAY_POPULATION_FINDING in codes:
+        cohort = study.get("cohort")
+        if isinstance(cohort, Mapping) and cohort.get("exclude_readmissions") is False:
+            # Retaining every stay is a population commitment; an executor
+            # limitation must not narrow it without the researcher.
+            raise PlanDecisionError(
+                "agent_plan_every_stay_commitment_unexecutable",
+                "The study keeps every ICU stay, but no step of this plan can carry patient-level dependence; keeping each patient's first ICU stay needs the researcher's decision.",
+            )
+        if first_stay_coordinate_available is not True:
+            raise PlanDecisionError(
+                "agent_plan_first_stay_coordinate_unavailable",
+                "The plan needs one ICU stay per patient, but the selected source cannot prove which stay came first.",
+            )
+        if codes != (_ONE_STAY_POPULATION_FINDING,):
+            # The reviewer routes this finding here only for a plan without a
+            # model estimator, which never also carries model coordinates.
+            raise PlanDecisionError(
+                "agent_plan_runtime_finding_unsupported",
+                "A one-stay population cannot be compiled together with model runtime coordinates.",
+                details={"finding_codes": list(codes)},
+            )
+        return CompiledAgentPlanConfiguration(
+            patch=_one_stay_population_patch(study),
+            runtime_finding_codes=codes,
         )
 
     selected = _selected_design(agent_plan)
@@ -740,6 +804,11 @@ def agent_plan_configuration_available(
             agent_plan=agent_plan,
             runtime_finding_codes=runtime_finding_codes,
             patient_cluster_available=True,
+            first_stay_coordinate_available=(
+                True
+                if _ONE_STAY_POPULATION_FINDING in {str(code) for code in runtime_finding_codes}
+                else None
+            ),
         )
     except PlanDecisionError:
         return False
