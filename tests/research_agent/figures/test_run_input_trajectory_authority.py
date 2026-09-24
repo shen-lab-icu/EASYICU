@@ -56,81 +56,13 @@ from easyicu.research_agent.research_context.typed import (
     ResearchContextV2,
     parse_research_context_json,
 )
-from tests.research_agent.figures.test_materialized_trajectory_authority import (
-    _bundle,
-    _implementation_sha,
+from tests.support.typed_trajectory import (
+    TRAJECTORY_QUESTION as QUESTION,
+    trajectory_context_and_evidence as _context_and_evidence,
+    trajectory_implementation_sha as _implementation_sha,
+    trajectory_scientific_identity as _identity,
+    typed_trajectory_bundle as _bundle,
 )
-
-QUESTION = "Is lactate associated with hospital mortality?"
-
-
-def _identity(
-    *,
-    cohort_path: Path,
-    cohort_ref=None,
-    trajectory_path: Path | None = None,
-    trajectory_ref: MaterializedTrajectoryAuthorityRef | None = None,
-):
-    return build_scientific_identity(
-        cohort=cohort_path,
-        question=QUESTION,
-        cohort_name="typed_trajectory_capsule",
-        database="miiv",
-        target_outcome="death",
-        primary_exposure="lact_max",
-        cross_database_validation=None,
-        inclusion_criteria=None,
-        exclusion_criteria=None,
-        id_columns=("stay_id",),
-        time_columns=None,
-        outcome_columns=("death",),
-        time_windows=None,
-        concept_descriptions=None,
-        user_preferences=None,
-        notes=None,
-        skill_key=None,
-        experiment_spec=None,
-        source_files=None,
-        disable_icu_context=False,
-        materialized_cohort_authority_ref=(
-            cohort_ref.to_dict() if cohort_ref is not None else None
-        ),
-        trajectory_path=trajectory_path,
-        materialized_trajectory_authority_ref=(
-            trajectory_ref.to_dict() if trajectory_ref is not None else None
-        ),
-    )
-
-
-def _context_and_evidence(
-    run_dir: Path,
-    cohort_path: Path,
-    *,
-    trajectory_binding: StagedTrajectoryBinding | None = None,
-):
-    context = build_research_context(
-        research_question=QUESTION,
-        cohort=cohort_path,
-        cohort_name="typed_trajectory_capsule",
-        database="miiv",
-        target_outcome="death",
-        primary_exposure="lact_max",
-        id_columns=("stay_id",),
-        outcome_columns=("death",),
-        trajectory_binding=trajectory_binding,
-    )
-    context_path = run_dir / "research_context.json"
-    context_path.write_text(context.model_dump_json(indent=2), encoding="utf-8")
-    evidence = EvidenceStore(run_dir)
-    evidence.register_file(
-        kind="log",
-        description="Frozen trajectory research context.",
-        source_path=context_path,
-        evidence_id="research_context",
-        producer="pipeline",
-        generation_mode="system",
-    )
-    return context_path, evidence
 
 
 def _staged_typed_inputs(tmp_path: Path):

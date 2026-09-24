@@ -9,20 +9,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from easyicu.concept.metadata_projection import (
-    ColumnProjectionSpec,
-    ConceptColumnRole,
-    project_concept_column_metadata,
-)
-from easyicu.concept.metadata_sidecar import (
-    EXPORT_PHYSICAL_SCOPE,
-    ColumnMetadataBinding,
-    ColumnMetadataFileBinding,
-    ColumnMetadataSidecar,
-    TimeCoordinate,
-    write_content_addressed_sidecar,
-)
-from easyicu.resources import load_dictionary
+from easyicu.concept.metadata_projection import ConceptColumnRole
 from easyicu.research_agent.cohort import materializer as cohort_materializer
 from easyicu.research_agent.authority.filesystem import AnchoredDirectory
 from easyicu.research_agent.cohort.schema import (
@@ -33,12 +20,9 @@ from easyicu.research_agent.cohort.schema import (
 from easyicu.research_agent.execution.development_sample import (
     materialize_development_execution_sample,
 )
-from easyicu.research_agent.intake import export_package as intake
 from easyicu.research_agent.intake.materialized_metadata import (
     MaterializedCohortAuthorityRef,
     canonical_parameters_sha256,
-    implementation_bundle_sha256,
-    load_verified_materialized_cohort_authority,
     stage_materialized_cohort_authority,
 )
 from easyicu.research_agent.intake.materialized_trajectory import (
@@ -50,6 +34,11 @@ from easyicu.research_agent.intake.materialized_trajectory import (
     load_verified_materialized_trajectory_authority,
     publish_materialized_trajectory_authority,
     stage_materialized_trajectory_authority,
+)
+from tests.support.typed_trajectory import (
+    trajectory_implementation_sha as _implementation_sha,
+    typed_trajectory_bundle as _bundle,
+    typed_trajectory_export as _typed_export,
 )
 
 
@@ -98,127 +87,6 @@ def _resign_selected_trajectory_authority(
         encoding="utf-8",
     )
     return reference
-
-
-def _binding(concept: str, column: str, role: ConceptColumnRole):
-    definition = load_dictionary(include_sofa2=True).get(concept)
-    assert definition is not None
-    return ColumnMetadataBinding(
-        metadata=project_concept_column_metadata(
-            definition,
-            spec=ColumnProjectionSpec(
-                column_name=column,
-                source_concept=concept,
-                role=role,
-            ),
-            source_database="miiv",
-        )
-    )
-
-
-def _typed_export(root: Path) -> Path:
-    root.mkdir()
-    labs = pd.DataFrame(
-        {
-            "stay_id": [1, 1, 2],
-            "charttime": [1.0, 2.0, 1.0],
-            "age": [50, 50, 60],
-            "lact": [1.0, 2.0, 3.0],
-        }
-    )
-    outcomes = pd.DataFrame({"stay_id": [1, 2], "death": [False, True]})
-    labs.to_parquet(root / "labs.parquet", index=False)
-    outcomes.to_parquet(root / "outcomes.parquet", index=False)
-    lab_binding = ColumnMetadataFileBinding(
-        relative_path="labs.parquet",
-        module="labs",
-        identity_column="stay_id",
-        time_coordinates=(
-            TimeCoordinate(column="charttime", origin="icu_admission", unit="h"),
-        ),
-        columns={
-            "age": _binding("age", "age", ConceptColumnRole.VALUE),
-            "lact": _binding("lact", "lact", ConceptColumnRole.VALUE),
-        },
-    )
-    outcome_binding = ColumnMetadataFileBinding(
-        relative_path="outcomes.parquet",
-        module="outcomes",
-        identity_column="stay_id",
-        time_coordinates=(),
-        columns={"death": _binding("death", "death", ConceptColumnRole.EVENT_STATUS)},
-    )
-    sidecar = ColumnMetadataSidecar(
-        source_database="miiv",
-        source_database_class_prefixes=(),
-        scope=EXPORT_PHYSICAL_SCOPE,
-        files=(lab_binding, outcome_binding),
-    )
-    reference = write_content_addressed_sidecar(root, sidecar)
-    (root / intake.NATIVE_MANIFEST).write_text(
-        json.dumps(
-            {
-                "schema_version": intake.NATIVE_MANIFEST_SCHEMA_V2,
-                "database": "miiv",
-                "format": "parquet",
-                "concept_selection": {
-                    "mode": "explicit",
-                    "modules": {
-                        "labs": ["age", "lact"],
-                        "outcomes": ["death"],
-                    },
-                },
-                "files": [
-                    {
-                        "file": "labs.parquet",
-                        "module": "labs",
-                        "concepts": 2,
-                        "concept_ids": ["age", "lact"],
-                        "rows": len(labs),
-                        "column_metadata_columns": ["age", "lact"],
-                    },
-                    {
-                        "file": "outcomes.parquet",
-                        "module": "outcomes",
-                        "concepts": 1,
-                        "concept_ids": ["death"],
-                        "rows": len(outcomes),
-                        "column_metadata_columns": ["death"],
-                    },
-                ],
-                "feature_definitions": {"included": False},
-                "column_metadata": reference.to_dict(),
-            }
-        ),
-        encoding="utf-8",
-    )
-    return root
-
-
-def _bundle(tmp_path: Path):
-    source = _typed_export(tmp_path / "export")
-    paths = cohort_materializer.materialize_to_parquet(
-        tmp_path / "materialized",
-        stem="universe",
-        data_path=source,
-        database="miiv",
-        static_concepts=("age",),
-        feature_concepts=("lact",),
-        outcome_concepts=("death",),
-        emit_trajectory=True,
-        trajectory_concepts=("lact",),
-        trajectory_window=(0.0, 24.0),
-    )
-    cohort = load_verified_materialized_cohort_authority(paths["parquet"])
-    trajectory = load_verified_materialized_trajectory_authority(paths["trajectory"])
-    assert cohort is not None and trajectory is not None
-    return paths, cohort, trajectory
-
-
-def _implementation_sha() -> str:
-    import easyicu.research_agent.intake.materialized_trajectory as module
-
-    return implementation_bundle_sha256((Path(module.__file__),))
 
 
 def test_materializer_publishes_verified_long_trajectory_authority(tmp_path):
