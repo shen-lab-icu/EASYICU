@@ -904,6 +904,13 @@ def run_adjusted_association_from_env(
         "adjustment_covariates": list(adjustment),
         "coefficient_table": coefficient_path.name,
     }
+    if contrasts is not None and len(contrasts.contrast_levels) > 1:
+        # With several non-reference levels the primary estimate is one
+        # contrast among them; the host claim names it from this field.
+        summary["primary_contrast"] = {
+            "exposure_level": contrasts.primary,
+            "reference_level": contrasts.reference,
+        }
     if estimator_kind == "logistic":
         summary["primary_or"] = estimate
         summary["primary_or_ci"] = [ci_low, ci_high]

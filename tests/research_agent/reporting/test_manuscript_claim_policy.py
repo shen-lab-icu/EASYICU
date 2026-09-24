@@ -101,7 +101,7 @@ def test_conclusion_projects_bounded_interpretation_without_repeating_estimate(d
     assert "1.7" in results and "95% CI" in results
     assert "1.7" not in conclusion and "95% CI" not in conclusion
     assert "1.7" not in abstract.split("**Conclusions:**", 1)[1]
-    for coordinate in ("5 versus 2 mmHg", "24-hour landmark", "age, sex", "this point contrast only"):
+    for coordinate in ("5 versus 2 mmHg", "24-hour landmark", "age and sex", "this point contrast only"):
         assert coordinate in conclusion
     assert "1.7" in expanded.split("## Supplementary results", 1)[1]
     assert claim.model_dump_json() == sealed
@@ -453,7 +453,7 @@ def test_claim_expansion_preserves_markdown_prefix_and_binds_evidence() -> None:
     )
 
     assert result.scaffold.startswith(
-        "> After adjustment for age, sex, Lactate"
+        "> After adjustment for age and sex, Lactate"
     )
     assert "{evidence:04_association_summary}" in result.scaffold
     assert result.missing_claim_refs == ()

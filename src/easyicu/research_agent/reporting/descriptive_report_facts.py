@@ -11,6 +11,7 @@ import math
 import re
 from typing import Any, Mapping, Sequence
 
+from ..contracts.cohort_product_keys import is_closed_cohort_product_key
 from ..contracts.descriptive_execution import exposure_outcome_distribution_result_receipt_valid
 from ..authority.scientific_claims import ScientificClaim
 
@@ -196,7 +197,12 @@ def verified_descriptive_source_records(projected, evidence):
 
 
 def _compile_grouped_table_one_cohort_report_facts(projected, evidence):
-    """Copy the source-cohort count from a verified grouped Table 1 result."""
+    """Copy the cohort count from a verified grouped Table 1 result.
+
+    The sentence names the cohort Table 1 read: the closed analysis cohort when
+    it is bound to one (after every exclusion and landmark), else the study
+    cohort as extracted.  Neither is the source database's stay count.
+    """
 
     from .writer_evidence import _verified_evidence_json
 
@@ -228,9 +234,14 @@ def _compile_grouped_table_one_cohort_report_facts(projected, evidence):
         record = evidence.get(source_id)
         if record is None or record.produced_by_step != row.get("step_id"):
             raise ValueError("Grouped Table 1 source does not belong to the verified step")
+        cohort = (
+            "The analysis cohort"
+            if is_closed_cohort_product_key(str(source.get("cohort_input_key") or ""))
+            else "The study cohort"
+        )
         facts.append(DescriptiveReportFact(
             subsection="Cohort characteristics",
-            text=f"The source cohort included {cohort_n:,} ICU stays",
+            text=f"{cohort} included {cohort_n:,} ICU stays",
             evidence_id=record.evidence_id,
             source_sha256=record.sha256,
             source_fields=("cohort_n",),

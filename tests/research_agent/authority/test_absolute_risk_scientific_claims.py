@@ -132,8 +132,12 @@ def test_frequency_is_sealed_idempotent_and_usable_by_strict_writer(tmp_path):
         )
     (claim,) = store.scientific_claims()
     assert len(store.scientific_claims()) == 1
-    assert "18 events among 144 records" in claim.render_reader_text()
-    assert "no confidence interval" in claim.render_reader_text()
+    assert claim.render_reader_text() == (
+        "The observed frequency of death was 12.50% (18 of 144 records) in the "
+        "primary model's complete-case records; this was a descriptive, "
+        "unadjusted, noncausal frequency."
+    )
+    assert "no confidence interval" in claim.estimand
     store.enforce_evidence_bound_scaffold("## Results\n\n" + claim.placeholder)
     assert (tmp_path / record.relative_path).read_bytes() == before
     altered = copy.deepcopy(summary)

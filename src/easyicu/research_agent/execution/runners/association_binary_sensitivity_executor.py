@@ -535,6 +535,20 @@ def _refit_functional_form(
     return row, receipt
 
 
+def _named_primary_contrast(requirement: Any) -> Optional[tuple[str, str]]:
+    """The refit's contrast when the exposure has several non-reference levels."""
+
+    for raw in requirement.model_terms or ():
+        term = raw if isinstance(raw, ModelTermSpec) else ModelTermSpec.model_validate(raw)
+        if (
+            term.role == "exposure"
+            and term.transform == "treatment_contrast"
+            and len(term.contrast_levels) > 1
+        ):
+            return str(requirement.primary_contrast_level), str(term.reference_level)
+    return None
+
+
 def _sensitivity_reporting(
     *, row: Mapping[str, Any], requirement: Any, variant: BinarySensitivityVariant
 ) -> Optional[dict[str, Any]]:
@@ -556,7 +570,7 @@ def _sensitivity_reporting(
         or row.get("n_deaths") is None
     ):
         return None
-    return {
+    envelope: dict[str, Any] = {
         "schema_version": "easyicu.binary_sensitivity_reporting/1",
         "analysis_id": variant.spec_id,
         "strategy": variant.strategy,
@@ -572,6 +586,10 @@ def _sensitivity_reporting(
         "n": int(row["n_stays"]),
         "events": int(row["n_deaths"]),
     }
+    contrast = _named_primary_contrast(requirement)
+    if contrast is not None:
+        envelope["exposure_level"], envelope["reference_level"] = contrast
+    return envelope
 
 
 def run_association_binary_sensitivity(
