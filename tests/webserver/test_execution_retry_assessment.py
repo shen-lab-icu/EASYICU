@@ -63,6 +63,7 @@ def test_spent_repairs_on_unchanged_code_and_image_are_futile() -> None:
         "repair_limit": 2,
         "changed_components": [],
         "image_checked": True,
+        "fresh_repair_budget": False,
     }
 
 
@@ -80,6 +81,23 @@ def test_changed_code_offers_the_retry_without_asking_docker(component: str) -> 
         "execution_retry_code_changed",
     )
     assert assessment.changed_components == (component,)
+
+
+def test_new_code_earns_a_fresh_budget_only_once() -> None:
+    current = current_attempt_identity(image_id=None)
+    failed = replace(current, engine_code_sha256="0" * 64)
+
+    first = assess_failed_step(_basis(failed, used_identities=(failed,)), read_image_id=_unasked)
+    # Rolled back to code that already had its grant: the replay may still
+    # pass under different code, so it stays offered, without a new budget.
+    rollback = assess_failed_step(
+        _basis(failed, used_identities=(current, failed)), read_image_id=_unasked
+    )
+
+    assert (first.state, first.fresh_repair_budget) == ("available", True)
+    assert (rollback.state, rollback.reason_code) == ("available", "execution_retry_code_changed")
+    assert rollback.fresh_repair_budget is False
+    assert rollback.public()["fresh_repair_budget"] is False
 
 
 def test_a_rebuilt_runner_image_offers_the_retry() -> None:

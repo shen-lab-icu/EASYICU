@@ -249,10 +249,16 @@ class StepRepairBudget:
         initial_llm_repair_attempts: int = 0,
         initial_repair_classes: Sequence[str] = (),
         provider_receipt_relative_path: Optional[str] = None,
+        repair_count_offset: int = 0,
+        epoch_repair_counter_field: Optional[str] = None,
     ) -> None:
         self._provider_budget = provider_budget
         self._step_record = step_record
         self._max_llm_repairs = int(max_llm_repairs)
+        # Repairs spent in earlier budget epochs: the allowance below is this
+        # epoch's, while ``step_llm_repair_attempts`` stays cumulative.
+        self._repair_count_offset = int(repair_count_offset)
+        self._epoch_repair_counter_field = epoch_repair_counter_field
         prior_classes = tuple(str(item).strip() for item in initial_repair_classes)
         if prior_classes:
             if len(prior_classes) != int(initial_llm_repair_attempts):
@@ -269,7 +275,7 @@ class StepRepairBudget:
             len(durable_classes),
         )
         if durable_classes:
-            self._step_record["step_llm_repair_attempts"] = len(durable_classes)
+            self._record_repair_count(len(durable_classes))
             self._step_record["step_llm_repair_budget"] = self._max_llm_repairs
             self._step_record["step_llm_repair_classes"] = list(durable_classes)
             provider_snapshot = self._provider_budget.snapshot()
@@ -281,6 +287,13 @@ class StepRepairBudget:
             )
         self._provider_receipt_relative_path = provider_receipt_relative_path
         self._semantic_escalation_recorder: Optional[Callable[[Any], None]] = None
+
+    def _record_repair_count(self, epoch_attempts: int) -> None:
+        self._step_record["step_llm_repair_attempts"] = (
+            self._repair_count_offset + int(epoch_attempts)
+        )
+        if self._epoch_repair_counter_field:
+            self._step_record[self._epoch_repair_counter_field] = int(epoch_attempts)
 
     @property
     def llm_repair_attempts(self) -> int:
@@ -465,7 +478,7 @@ class StepRepairBudget:
             return False
         resumed_unpaid_attempt = attempt_id <= durable_attempts_before
         self._llm_repair_attempts = max(self._llm_repair_attempts, attempt_id)
-        self._step_record["step_llm_repair_attempts"] = self._llm_repair_attempts
+        self._record_repair_count(self._llm_repair_attempts)
         self._step_record["step_llm_repair_budget"] = self._max_llm_repairs
         if attempt_id > self._max_llm_repairs:
             # Otherwise the record reads "budget 2, attempts 3" with nothing
