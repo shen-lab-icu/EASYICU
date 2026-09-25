@@ -1214,6 +1214,7 @@ def _metadata_only_planning_acquisition(
     operationalized_columns: Sequence[str] = (),
     plan_change_request: PlanChangeRequest | None = None,
     first_icu_stay: Any = None,
+    required_coordinates: Sequence[Optional[str]] = (),
 ) -> Any:
     """Select a planning catalog without reading patient data.
 
@@ -1223,6 +1224,8 @@ def _metadata_only_planning_acquisition(
     an export package. The resulting parquet has schema only and zero rows. It
     can inform a reviewable plan, but it cannot authorize execution or support
     denominator, missingness, event-rate, or effect claims.
+    ``required_coordinates`` are the context's exposure and outcome columns;
+    the selection is blocked before the Planner when the schema lacks one.
     """
 
     import pandas as pd
@@ -1389,11 +1392,23 @@ def _metadata_only_planning_acquisition(
     # Unresolvable required concepts keep their historical handling here (the
     # scientific configuration owner validates them before this call); they are
     # named in the receipt so a block is diagnosable, not silently absorbed.
+    # The study's exposure and outcome columns are different: the primary-
+    # result gate requires a plan to bind them exactly, so a coordinate the
+    # zero-row schema cannot carry fails every plan. Stop before the Planner.
+    unavailable_coordinates = [
+        value
+        for value in dict.fromkeys(
+            str(item or "").strip() for item in required_coordinates
+        )
+        if value and value not in selected
+    ]
     blocked_reason_code = (
         "concept_selection_failed"
         if not selection.selection_succeeded
         else "no_available_concepts"
         if not selected or not coverage.sufficient
+        else "required_concepts_unavailable"
+        if unavailable_coordinates
         else ""
     )
     if blocked_reason_code:
@@ -1406,7 +1421,9 @@ def _metadata_only_planning_acquisition(
             blocked=True,
             blocked_reason_code=blocked_reason_code,
             missing_concepts=tuple(
-                dict.fromkeys([*required_missing, *coverage.missing])
+                dict.fromkeys(
+                    [*unavailable_coordinates, *required_missing, *coverage.missing]
+                )
             ),
             note=(
                 "Metadata-only concept selection failed before Planner launch; "
@@ -5249,6 +5266,7 @@ def make_research_pipeline_run_runner(
                     patient_grouping=patient_grouping,
                     operationalized_columns=metadata_operationalized_columns,
                     first_icu_stay=_verified_first_icu_stay_or_none(study),
+                    required_coordinates=(primary_exposure, target),
                 )
             else:
                 materialization_roster = _materialization_concept_roster(
