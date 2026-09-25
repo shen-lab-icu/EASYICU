@@ -720,6 +720,36 @@ def _observability_preserving_exposure(
     return alternative
 
 
+def _bound_source_column(export_path: Optional[str]):
+    """Read a named concept as the bound source's owner-declared output column.
+
+    Some public concepts are published by a versioned composite output under a
+    different column name (``concept_output_sources``). Package materialization
+    already follows that owner mapping. A planning coordinate must name the same
+    column, or the zero-row planning schema never carries the requested concept
+    and no plan can bind it. Absent or ambiguous outputs leave the name as is.
+    """
+
+    from easyicu.concept_output_sources import resolve_composite_concept_output
+    from easyicu.research_agent.acquisition.catalog import build_available_catalog
+
+    available: frozenset[str] = frozenset()
+    if export_path:
+        try:
+            source = build_available_catalog(Path(export_path).expanduser())
+        except (FileNotFoundError, OSError, ValueError):
+            source = None
+        if source is not None:
+            available = frozenset(item.concept_id for item in source.concepts)
+
+    def column(concept: Optional[str]) -> Optional[str]:
+        if not concept:
+            return concept
+        return resolve_composite_concept_output(concept, available) or concept
+
+    return column
+
+
 def _metadata_only_planning_coordinates(
     *, question: str, database: str, export_path: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -731,7 +761,8 @@ def _metadata_only_planning_coordinates(
     binary endpoint is emitted only when the concept owner declares
     ``event_status`` semantics; names and dtypes are never used to guess it.
     A named exposure is read through its concept owner's selection policy
-    against the bound source (``export_path``); both callers -- the planning
+    against the bound source (``export_path``), and both named coordinates as
+    the column that source publishes for them; both callers -- the planning
     launch and the candidate-upgrade check -- must pass the same source so the
     proposal is reproducible.
     """
@@ -762,6 +793,7 @@ def _metadata_only_planning_coordinates(
     target_outcome = named_concept("outcome")
     named_exposure = named_concept("exposure")
     primary_exposure = _observability_preserving_exposure(named_exposure, export_path)
+    source_column = _bound_source_column(export_path)
     # A host-derived window reading is already one value per stay; an
     # aggregation phrase in the question applies only to a named source concept.
     exposure_operation = (
@@ -781,14 +813,14 @@ def _metadata_only_planning_coordinates(
         and target_catalog.column_role == "event_status"
     ):
         endpoint = EndpointSpec(
-            name=target_outcome,
+            name=source_column(target_outcome),
             kind="binary",
             absence_semantics="no_absent_rows",
             levels=[0, 1],
         )
     return {
-        "target_outcome": target_outcome,
-        "primary_exposure": primary_exposure,
+        "target_outcome": source_column(target_outcome),
+        "primary_exposure": source_column(primary_exposure),
         "primary_exposure_aggregation": (
             exposure_operation.aggregation if exposure_operation is not None else None
         ),
