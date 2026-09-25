@@ -39,6 +39,7 @@ from ..contracts.figure_plan import (
     ROBUSTNESS_FIGURE_KNOWN_INPUTS,
     STATIC_PREDICTION_FIGURE_INPUTS,
     STATIC_PREDICTION_FIGURE_PANELS,
+    STATIC_PREDICTION_SPLIT_SURFACE_FIGURE_PANELS,
     STATIC_PREDICTION_VALIDATION_FIGURE_PANELS,
     STATIC_PREDICTION_VALIDATION_FIGURE_SUFFIX,
     association_sensitivity_composite_panels,
@@ -1225,6 +1226,13 @@ def bind_deterministic_figure_panels(
             ),
         ),
     }
+    # When a declared extra surface carries some of the composite's roles, the
+    # composite keeps only the rest, so no role is promised on two images.
+    composite_panels_beside_surfaces = {
+        frozenset(STATIC_PREDICTION_FIGURE_INPUTS): (
+            STATIC_PREDICTION_SPLIT_SURFACE_FIGURE_PANELS
+        ),
+    }
     data_quality_sources, _candidates, _missing, _ambiguous = (
         _closed_data_quality_sources(plan.steps)
     )
@@ -1438,15 +1446,20 @@ def bind_deterministic_figure_panels(
             steps.append(step)
             continue
         figure_output = primary_outputs[0]
+        # Only a step that actually declared the surface gets its promise;
+        # this owner never adds a product slot the plan did not ask for.
+        declared_surfaces = [
+            (f"{figure_output}{suffix}", surface_templates)
+            for suffix, surface_templates in secondary_surfaces
+            if f"{figure_output}{suffix}" in figure_outputs
+        ]
+        if declared_surfaces:
+            templates = composite_panels_beside_surfaces.get(input_set, templates)
         bound = [panel.bind(figure_output=figure_output) for panel in templates]
-        for suffix, surface_templates in secondary_surfaces:
-            surface = f"{figure_output}{suffix}"
-            # Only a step that actually declared the surface gets its promise;
-            # this owner never adds a product slot the plan did not ask for.
-            if surface in figure_outputs:
-                bound.extend(
-                    panel.bind(figure_output=surface) for panel in surface_templates
-                )
+        for surface, surface_templates in declared_surfaces:
+            bound.extend(
+                panel.bind(figure_output=surface) for panel in surface_templates
+            )
         scientific_signatures = {
             (
                 panel.article_role,

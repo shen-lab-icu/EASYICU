@@ -202,12 +202,13 @@ STATIC_PREDICTION_FIGURE_INPUTS = (
     "table:clinical_utility",
 )
 # Exact main-surface panels of the host static-prediction composite renderer
-# (``execution/runners/prediction_figure_executor.py``).  The renderer also
-# exports a repeated-split validation surface, which the step declares as its
-# own product slot (see ``STATIC_PREDICTION_VALIDATION_FIGURE_SUFFIX``); its
-# decision-curve surface stays a supplementary export with no plan-time panel
-# promise.
-STATIC_PREDICTION_FIGURE_PANELS = (
+# (``execution/runners/prediction_figure_executor.py``).  The composite is the
+# figure a manuscript leads with, so it carries calibration (the prediction
+# hero), discrimination and repeated patient-level split validation together:
+# the prediction article strategy asks the main figure for at least three of
+# its roles.  The decision-curve surface stays a supplementary export with no
+# plan-time panel promise.
+_STATIC_PREDICTION_PERFORMANCE_PANELS = (
     DeterministicFigurePanelTemplate(
         panel_id="a", article_role="calibration", chart_type="calibration_curve",
         source_products=("table:calibration",),
@@ -222,10 +223,21 @@ STATIC_PREDICTION_FIGURE_PANELS = (
         source_products=("table:prediction_scores", "table:model_performance"),
     ),
 )
-#: The same renderer's second physical surface. It is a product slot of its
-#: own rather than more panels on the composite, because one exported image is
-#: one surface and the end-of-execute join resolves a runtime contract per
-#: declared figure output.
+STATIC_PREDICTION_FIGURE_PANELS = (
+    *_STATIC_PREDICTION_PERFORMANCE_PANELS,
+    DeterministicFigurePanelTemplate(
+        panel_id="d", article_role="validation", chart_type="metric_dot_interval",
+        source_products=("table:model_performance", "table:validation"),
+    ),
+)
+#: A step may instead declare the renderer's separate repeated-split surface
+#: as its own product slot (plans reviewed before the composite carried
+#: validation do).  Its composite then keeps the three performance panels and
+#: the surface carries the validation roles, so no panel is drawn twice.
+STATIC_PREDICTION_SPLIT_SURFACE_FIGURE_PANELS = _STATIC_PREDICTION_PERFORMANCE_PANELS
+#: The separate surface is a product slot of its own rather than more panels
+#: on the composite, because one exported image is one surface and the
+#: end-of-execute join resolves a runtime contract per declared figure output.
 STATIC_PREDICTION_VALIDATION_FIGURE_SUFFIX = "_validation_stability"
 STATIC_PREDICTION_VALIDATION_FIGURE_PANELS = (
     DeterministicFigurePanelTemplate(
@@ -973,6 +985,7 @@ __all__ = [
     "ROBUSTNESS_PRIMARY_ESTIMATE_INPUT",
     "STATIC_PREDICTION_FIGURE_INPUTS",
     "STATIC_PREDICTION_FIGURE_PANELS",
+    "STATIC_PREDICTION_SPLIT_SURFACE_FIGURE_PANELS",
     "STATIC_PREDICTION_VALIDATION_FIGURE_PANELS",
     "STATIC_PREDICTION_VALIDATION_FIGURE_SUFFIX",
     "PlannedFigurePanelSpec",

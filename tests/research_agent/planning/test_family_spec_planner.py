@@ -1352,7 +1352,6 @@ def test_phenotyping_template_robustness_is_the_host_owned_grid_and_stability() 
 def test_prediction_family_compiles_the_host_owned_reference_layout() -> None:
     from easyicu.research_agent.contracts.figure_plan import (
         STATIC_PREDICTION_FIGURE_PANELS,
-        STATIC_PREDICTION_VALIDATION_FIGURE_PANELS,
     )
     from easyicu.research_agent.contracts.prediction_execution import static_prediction_model_columns
     from easyicu.research_agent.planning.family_spec import PREDICTION_FAMILY_ID, validate_family_plan_spec
@@ -1407,19 +1406,17 @@ def test_prediction_family_compiles_the_host_owned_reference_layout() -> None:
         "table:prediction_scores", "table:model_performance", "table:validation",
         "table:calibration", "table:clinical_utility",
     }
-    # The renderer exports two main surfaces, so the step declares two product
-    # slots and the plan promises each surface's own roles.
-    assert figure.expected_outputs == [
-        "figure:visualization",
-        "figure:visualization_validation_stability",
-    ]
+    # One composite carries calibration, discrimination and repeated-split
+    # validation, so the figure the article leads with meets the prediction
+    # strategy on its own.
+    assert figure.expected_outputs == ["figure:visualization"]
     assert [(panel.panel_id, panel.article_role, panel.chart_type) for panel in figure.figure_panels] == [
         (panel.panel_id, panel.article_role, panel.chart_type)
-        for panel in (
-            *STATIC_PREDICTION_FIGURE_PANELS,
-            *STATIC_PREDICTION_VALIDATION_FIGURE_PANELS,
-        )
+        for panel in STATIC_PREDICTION_FIGURE_PANELS
     ]
+    assert {panel.article_role for panel in figure.figure_panels} == {
+        "calibration", "model_performance", "validation",
+    }
     assert {finding.detail["reason"] for finding in findings} >= {
         "prediction_figure_clinical_utility_bound", "deterministic_figure_panels_bound",
     }

@@ -181,10 +181,37 @@ def prediction_figure_executor_owns_step(
     )
 
 
+def prediction_composite_carries_validation(step: AnalysisStep) -> bool:
+    """Whether this step's composite draws the repeated-split validation panel.
+
+    Each step renders the layout its reviewed plan promised: one that declares
+    the separate repeated-split surface keeps validation there, and one whose
+    composite panels omit validation keeps the three performance panels.
+    Otherwise the composite carries validation beside calibration and
+    discrimination.
+    """
+
+    product = declared_prediction_figure_product(step)
+    if product is None:
+        raise ValueError("prediction figure has no safe figure product")
+    composite = f"figure:{product}"
+    if f"{composite}{STATIC_PREDICTION_VALIDATION_FIGURE_SUFFIX}" in {
+        str(value) for value in step.expected_outputs
+    }:
+        return False
+    declared = [
+        panel for panel in step.figure_panels if str(panel.figure_output) == composite
+    ]
+    return not declared or any(
+        panel.article_role == "validation" for panel in declared
+    )
+
+
 def prediction_figure_executor_code(step: AnalysisStep) -> str:
     product = declared_prediction_figure_product(step)
     if product is None:
         raise ValueError("prediction figure has no safe figure product")
+    validation_on_composite = prediction_composite_carries_validation(step)
     return textwrap.dedent(
         f"""
         import os
@@ -200,6 +227,7 @@ def prediction_figure_executor_code(step: AnalysisStep) -> str:
             resolved_inputs=Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"]),
             step_id={step.step_id!r},
             figure_product={product!r},
+            validation_on_composite={validation_on_composite!r},
         )
         """
     ).strip()
@@ -233,6 +261,49 @@ def _prediction_finite_series(frame: pd.DataFrame, column: str) -> pd.Series:
     return values.astype(float)
 
 
+def _draw_repeated_split_variability(
+    ax: Any,
+    *,
+    labels: tuple[str, ...],
+    means: np.ndarray,
+    sds: np.ndarray,
+    repeated_split_n: int,
+    palette: Mapping[str, str],
+    panel_label: str,
+    label_x: float,
+) -> None:
+    """Mean and SD of each metric over the repeated patient-level splits."""
+
+    positions = np.arange(len(labels))
+    ax.errorbar(
+        means,
+        positions,
+        xerr=sds,
+        fmt="o",
+        color=palette["blue"],
+        capsize=2.5,
+    )
+    ax.set_yticks(positions, labels)
+    ax.invert_yaxis()
+    ax.set_xlim(0.0, 1.0)
+    ax.set_xlabel("Mean performance (error bars: SD)")
+    ax.set_title(
+        f"Repeated patient-level split variability (n={repeated_split_n})",
+        loc="left",
+        pad=12,
+    )
+    for position, mean, sd in zip(positions, means, sds, strict=True):
+        ax.text(
+            min(0.96, mean + sd + 0.035),
+            position,
+            f"{mean:.3f} ± {sd:.3f}",
+            va="center",
+            fontsize=6.2,
+            color=palette["neutral"],
+        )
+    add_panel_label(ax, panel_label, x=label_x, y=1.04, fontsize=8.0)
+
+
 def run_prediction_figure(
     *,
     out_dir: Path,
@@ -240,8 +311,14 @@ def run_prediction_figure(
     resolved_inputs: Path | Mapping[str, Any],
     step_id: str,
     figure_product: str,
+    validation_on_composite: bool,
 ) -> dict[str, Any]:
-    """Render four exact tables without fitting or selecting a model."""
+    """Render four exact tables without fitting or selecting a model.
+
+    ``validation_on_composite`` (``prediction_composite_carries_validation``)
+    puts the repeated-split validation panel on the composite instead of a
+    separate surface.
+    """
 
     if _figure_product(f"figure:{figure_product}") is None:
         raise ValueError("unsafe prediction figure product")
@@ -302,15 +379,56 @@ def run_prediction_figure(
         source_frame.to_csv(out_dir / filename, index=False)
         source_files.append(filename)
 
-    palette = apply_publication_style(font_size=7.0)
-    fig = plt.figure(figsize=(183 / 25.4, 108 / 25.4), constrained_layout=True)
-    grid = fig.add_gridspec(
-        2,
-        3,
-        width_ratios=(1.0, 1.0, 0.88),
-        height_ratios=(1.0, 1.0),
+    repeated_split_n = int(performance.iloc[0]["repeated_split_n"])
+    if repeated_split_n < 2:
+        raise RuntimeError("prediction figure requires repeated patient-level splits")
+    metric_labels = ("AUROC", "Average precision", "Brier score")
+    metric_means = np.asarray(
+        [
+            performance.iloc[0]["repeated_split_auroc_mean"],
+            performance.iloc[0]["repeated_split_average_precision_mean"],
+            performance.iloc[0]["repeated_split_brier_mean"],
+        ],
+        dtype=float,
     )
-    ax_calibration = fig.add_subplot(grid[:, :2])
+    metric_sds = np.asarray(
+        [
+            performance.iloc[0]["repeated_split_auroc_sd"],
+            performance.iloc[0]["repeated_split_average_precision_sd"],
+            performance.iloc[0]["repeated_split_brier_sd"],
+        ],
+        dtype=float,
+    )
+    if not np.isfinite(metric_means).all() or not np.isfinite(metric_sds).all():
+        raise RuntimeError("repeated-split performance summaries are not finite")
+    if (metric_sds < 0).any():
+        raise RuntimeError("repeated-split standard deviations must be non-negative")
+
+    palette = apply_publication_style(font_size=7.0)
+    composite_height_mm = 140.0 if validation_on_composite else 108.0
+    fig = plt.figure(
+        figsize=(183 / 25.4, composite_height_mm / 25.4), constrained_layout=True
+    )
+    if validation_on_composite:
+        # Calibration leads; discrimination beside it; the repeated-split
+        # variability strip spans the foot of the figure.
+        grid = fig.add_gridspec(
+            3,
+            3,
+            width_ratios=(1.0, 1.0, 0.88),
+            height_ratios=(1.0, 1.0, 0.62),
+        )
+        ax_calibration = fig.add_subplot(grid[:2, :2])
+        ax_variability = fig.add_subplot(grid[2, :])
+    else:
+        grid = fig.add_gridspec(
+            2,
+            3,
+            width_ratios=(1.0, 1.0, 0.88),
+            height_ratios=(1.0, 1.0),
+        )
+        ax_calibration = fig.add_subplot(grid[:, :2])
+        ax_variability = None
     ax_roc = fig.add_subplot(grid[0, 2])
     ax_pr = fig.add_subplot(grid[1, 2])
 
@@ -398,6 +516,17 @@ def run_prediction_figure(
         color=palette["neutral"],
     )
     add_panel_label(ax, "a", x=-0.08, y=1.04, fontsize=8.0)
+    if ax_variability is not None:
+        _draw_repeated_split_variability(
+            ax_variability,
+            labels=metric_labels,
+            means=metric_means,
+            sds=metric_sds,
+            repeated_split_n=repeated_split_n,
+            palette=palette,
+            panel_label="d",
+            label_x=-0.09,
+        )
 
     for column in (
         "threshold",
@@ -413,126 +542,85 @@ def run_prediction_figure(
         raise RuntimeError(
             "prediction clinical-utility thresholds must be unique and increasing"
         )
-    repeated_split_n = int(performance.iloc[0]["repeated_split_n"])
-    if repeated_split_n < 2:
-        raise RuntimeError("prediction figure requires repeated patient-level splits")
-    metric_labels = ("AUROC", "Average precision", "Brier score")
-    metric_means = np.asarray(
-        [
-            performance.iloc[0]["repeated_split_auroc_mean"],
-            performance.iloc[0]["repeated_split_average_precision_mean"],
-            performance.iloc[0]["repeated_split_brier_mean"],
-        ],
-        dtype=float,
-    )
-    metric_sds = np.asarray(
-        [
-            performance.iloc[0]["repeated_split_auroc_sd"],
-            performance.iloc[0]["repeated_split_average_precision_sd"],
-            performance.iloc[0]["repeated_split_brier_sd"],
-        ],
-        dtype=float,
-    )
-    if not np.isfinite(metric_means).all() or not np.isfinite(metric_sds).all():
-        raise RuntimeError("repeated-split performance summaries are not finite")
-    if (metric_sds < 0).any():
-        raise RuntimeError("repeated-split standard deviations must be non-negative")
-    validation_fig, (ax_design, ax) = plt.subplots(
-        1,
-        2,
-        figsize=(183 / 25.4, 70 / 25.4),
-        constrained_layout=True,
-        gridspec_kw={"width_ratios": (0.9, 1.35)},
-    )
-    ax_design.set_axis_off()
-    box_style = {
-        "boxstyle": "round,pad=0.45",
-        "facecolor": "#EAF2F8",
-        "edgecolor": palette["blue"],
-        "linewidth": 0.9,
-    }
-    ax_design.text(
-        0.08,
-        0.68,
-        f"Development\n{development_n:,} stays",
-        ha="center",
-        va="center",
-        transform=ax_design.transAxes,
-        bbox=box_style,
-        fontsize=7.0,
-    )
-    ax_design.text(
-        0.78,
-        0.68,
-        f"Validation\n{validation_n:,} stays",
-        ha="center",
-        va="center",
-        transform=ax_design.transAxes,
-        bbox=box_style,
-        fontsize=7.0,
-    )
-    ax_design.annotate(
-        "",
-        xy=(0.64, 0.68),
-        xytext=(0.24, 0.68),
-        xycoords="axes fraction",
-        textcoords="axes fraction",
-        ha="center",
-        va="bottom",
-        fontsize=6.2,
-        color=palette["neutral"],
-        arrowprops={"arrowstyle": "->", "color": palette["neutral"], "lw": 0.9},
-    )
-    ax_design.text(
-        0.43,
-        0.78,
-        "patient-level split",
-        ha="center",
-        va="center",
-        transform=ax_design.transAxes,
-        fontsize=6.2,
-        color=palette["neutral"],
-    )
-    ax_design.text(
-        0.43,
-        0.29,
-        "Patient overlap = 0\nInternal validation only",
-        ha="center",
-        va="center",
-        transform=ax_design.transAxes,
-        fontsize=6.6,
-        color=palette["neutral"],
-    )
-    ax_design.set_title("Evaluation design", loc="left", pad=12)
-    add_panel_label(ax_design, "a", x=-0.06, y=1.04, fontsize=8.0)
-    positions = np.arange(len(metric_labels))
-    ax.errorbar(
-        metric_means,
-        positions,
-        xerr=metric_sds,
-        fmt="o",
-        color=palette["blue"],
-        capsize=2.5,
-    )
-    ax.set_yticks(positions, metric_labels)
-    ax.invert_yaxis()
-    ax.set_xlim(0.0, 1.0)
-    ax.set_xlabel("Mean performance (error bars: SD)")
-    ax.set_title(
-        f"Repeated patient-level split variability (n={repeated_split_n})",
-        loc="left",
-        pad=12,
-    )
-    for position, mean, sd in zip(positions, metric_means, metric_sds, strict=True):
-        ax.text(
-            min(0.96, mean + sd + 0.035),
-            position,
-            f"{mean:.3f} ± {sd:.3f}",
+    if not validation_on_composite:
+        validation_fig, (ax_design, ax) = plt.subplots(
+            1,
+            2,
+            figsize=(183 / 25.4, 70 / 25.4),
+            constrained_layout=True,
+            gridspec_kw={"width_ratios": (0.9, 1.35)},
+        )
+        ax_design.set_axis_off()
+        box_style = {
+            "boxstyle": "round,pad=0.45",
+            "facecolor": "#EAF2F8",
+            "edgecolor": palette["blue"],
+            "linewidth": 0.9,
+        }
+        ax_design.text(
+            0.08,
+            0.68,
+            f"Development\n{development_n:,} stays",
+            ha="center",
             va="center",
+            transform=ax_design.transAxes,
+            bbox=box_style,
+            fontsize=7.0,
+        )
+        ax_design.text(
+            0.78,
+            0.68,
+            f"Validation\n{validation_n:,} stays",
+            ha="center",
+            va="center",
+            transform=ax_design.transAxes,
+            bbox=box_style,
+            fontsize=7.0,
+        )
+        ax_design.annotate(
+            "",
+            xy=(0.64, 0.68),
+            xytext=(0.24, 0.68),
+            xycoords="axes fraction",
+            textcoords="axes fraction",
+            ha="center",
+            va="bottom",
+            fontsize=6.2,
+            color=palette["neutral"],
+            arrowprops={"arrowstyle": "->", "color": palette["neutral"], "lw": 0.9},
+        )
+        ax_design.text(
+            0.43,
+            0.78,
+            "patient-level split",
+            ha="center",
+            va="center",
+            transform=ax_design.transAxes,
             fontsize=6.2,
             color=palette["neutral"],
         )
-    add_panel_label(ax, "b", x=-0.14, y=1.04, fontsize=8.0)
+        ax_design.text(
+            0.43,
+            0.29,
+            "Patient overlap = 0\nInternal validation only",
+            ha="center",
+            va="center",
+            transform=ax_design.transAxes,
+            fontsize=6.6,
+            color=palette["neutral"],
+        )
+        ax_design.set_title("Evaluation design", loc="left", pad=12)
+        add_panel_label(ax_design, "a", x=-0.06, y=1.04, fontsize=8.0)
+        _draw_repeated_split_variability(
+            ax,
+            labels=metric_labels,
+            means=metric_means,
+            sds=metric_sds,
+            repeated_split_n=repeated_split_n,
+            palette=palette,
+            panel_label="b",
+            label_x=-0.14,
+        )
 
     decision_fig, ax = plt.subplots(
         figsize=(183 / 25.4, 75 / 25.4), constrained_layout=True
@@ -587,15 +675,30 @@ def run_prediction_figure(
             (PREDICTION_CALIBRATION_PRODUCT,),
         ),
     )
+    if validation_on_composite:
+        panel_specs += (
+            (
+                "d",
+                "Repeated patient-level split variability",
+                "validation",
+                (PREDICTION_PERFORMANCE_PRODUCT, PREDICTION_INTERNAL_VALIDATION_PRODUCT),
+            ),
+        )
     contract = make_figure_contract(
         figure_id=f"figure:{figure_product}",
         core_claim=(
             "The fixed analysis-only model is evaluated on a patient-separated "
-            "validation partition with source-bound discrimination and calibration."
+            "validation partition with source-bound "
+            + (
+                "discrimination, calibration and repeated patient-level split "
+                "variability."
+                if validation_on_composite
+                else "discrimination and calibration."
+            )
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
-        height_mm=108.0,
+        height_mm=composite_height_mm,
         panels=[
             {
                 "panel_id": panel_id,
@@ -645,88 +748,91 @@ def run_prediction_figure(
     )
     plt.close(fig)
     validation_product = f"{figure_product}_validation_stability"
-    validation_contract = make_figure_contract(
-        figure_id=f"figure:{validation_product}",
-        core_claim=(
-            "Repeated patient-level validation splits quantify internal performance "
-            "variability without establishing external transportability."
-        ),
-        archetype="quantitative_grid",
-        width_mm=183.0,
-        height_mm=70.0,
-        panels=[
-            {
-                "panel_id": "a",
-                "title": "Patient-separated evaluation design",
-                "role": "validation_design",
-                "article_role": "validation_design",
-                "chart_type": "cohort_split_diagram",
-                "claim": (
-                    "This panel reports the registered development and validation "
-                    "sample sizes and zero patient overlap; it does not establish "
-                    "external validation."
-                ),
-                "evidence_ids": [
-                    evidence[PREDICTION_PERFORMANCE_PRODUCT],
-                    evidence[PREDICTION_INTERNAL_VALIDATION_PRODUCT],
-                ],
-                "metadata": {
-                    "placement": "main",
-                    "source_products": [
-                        PREDICTION_PERFORMANCE_PRODUCT,
-                        PREDICTION_INTERNAL_VALIDATION_PRODUCT,
+    validation_contract = None
+    validation_outputs: dict[str, Any] = {}
+    if not validation_on_composite:
+        validation_contract = make_figure_contract(
+            figure_id=f"figure:{validation_product}",
+            core_claim=(
+                "Repeated patient-level validation splits quantify internal performance "
+                "variability without establishing external transportability."
+            ),
+            archetype="quantitative_grid",
+            width_mm=183.0,
+            height_mm=70.0,
+            panels=[
+                {
+                    "panel_id": "a",
+                    "title": "Patient-separated evaluation design",
+                    "role": "validation_design",
+                    "article_role": "validation_design",
+                    "chart_type": "cohort_split_diagram",
+                    "claim": (
+                        "This panel reports the registered development and validation "
+                        "sample sizes and zero patient overlap; it does not establish "
+                        "external validation."
+                    ),
+                    "evidence_ids": [
+                        evidence[PREDICTION_PERFORMANCE_PRODUCT],
+                        evidence[PREDICTION_INTERNAL_VALIDATION_PRODUCT],
                     ],
-                    "source_data": [
-                        "model_performance_source_data.csv",
-                        "validation_source_data.csv",
-                    ],
+                    "metadata": {
+                        "placement": "main",
+                        "source_products": [
+                            PREDICTION_PERFORMANCE_PRODUCT,
+                            PREDICTION_INTERNAL_VALIDATION_PRODUCT,
+                        ],
+                        "source_data": [
+                            "model_performance_source_data.csv",
+                            "validation_source_data.csv",
+                        ],
+                    },
                 },
-            },
-            {
-                "panel_id": "b",
-                "title": "Repeated patient-level split variability",
-                "role": "validation",
-                "article_role": "validation",
-                "chart_type": "metric_dot_interval",
-                "claim": (
-                    "This panel renders registered repeated-split summaries and "
-                    "does not establish performance in an independent cohort."
-                ),
-                "evidence_ids": [
-                    evidence[PREDICTION_PERFORMANCE_PRODUCT],
-                    evidence[PREDICTION_INTERNAL_VALIDATION_PRODUCT],
-                ],
-                "metadata": {
-                    "placement": "main",
-                    "source_products": [
-                        PREDICTION_PERFORMANCE_PRODUCT,
-                        PREDICTION_INTERNAL_VALIDATION_PRODUCT,
+                {
+                    "panel_id": "b",
+                    "title": "Repeated patient-level split variability",
+                    "role": "validation",
+                    "article_role": "validation",
+                    "chart_type": "metric_dot_interval",
+                    "claim": (
+                        "This panel renders registered repeated-split summaries and "
+                        "does not establish performance in an independent cohort."
+                    ),
+                    "evidence_ids": [
+                        evidence[PREDICTION_PERFORMANCE_PRODUCT],
+                        evidence[PREDICTION_INTERNAL_VALIDATION_PRODUCT],
                     ],
-                    "source_data": [
-                        "model_performance_source_data.csv",
-                        "validation_source_data.csv",
-                    ],
+                    "metadata": {
+                        "placement": "main",
+                        "source_products": [
+                            PREDICTION_PERFORMANCE_PRODUCT,
+                            PREDICTION_INTERNAL_VALIDATION_PRODUCT,
+                        ],
+                        "source_data": [
+                            "model_performance_source_data.csv",
+                            "validation_source_data.csv",
+                        ],
+                    },
                 },
-            },
-        ],
-        source_data=[
-            "model_performance_source_data.csv",
-            "validation_source_data.csv",
-        ],
-        statistics_note=(
-            "Means and standard deviations are copied from registered repeated "
-            "patient-level split summaries. Patient overlap is zero. Results are "
-            "internal validation only and do not demonstrate transportability."
-        ),
-    )
-    validation_outputs = save_publication_figure(
-        validation_fig,
-        out_dir / validation_product,
-        contract=validation_contract,
-        formats=("png", "svg", "pdf", "tiff"),
-        dpi=300,
-    )
-    plt.close(validation_fig)
+            ],
+            source_data=[
+                "model_performance_source_data.csv",
+                "validation_source_data.csv",
+            ],
+            statistics_note=(
+                "Means and standard deviations are copied from registered repeated "
+                "patient-level split summaries. Patient overlap is zero. Results are "
+                "internal validation only and do not demonstrate transportability."
+            ),
+        )
+        validation_outputs = save_publication_figure(
+            validation_fig,
+            out_dir / validation_product,
+            contract=validation_contract,
+            formats=("png", "svg", "pdf", "tiff"),
+            dpi=300,
+        )
+        plt.close(validation_fig)
     supplementary_product = f"{figure_product}_supplementary_decision_curve"
     supplementary_contract = make_figure_contract(
         figure_id=f"figure:{supplementary_product}",
@@ -780,6 +886,17 @@ def run_prediction_figure(
         for key, path in output_group.items()
         if key != "contract"
     ]
+    # Only surfaces actually drawn are declared; the decision curve stays a
+    # supplementary export with no declared slot.
+    main_products = [figure_product]
+    if validation_contract is not None:
+        main_products.append(validation_product)
+    slot_contracts = {figure_product: ("composite_performance", contract)}
+    if validation_contract is not None:
+        slot_contracts[validation_product] = (
+            "repeated_split_validation",
+            validation_contract,
+        )
     summary = {
         "step_id": step_id,
         "status": "ok",
@@ -806,34 +923,25 @@ def run_prediction_figure(
         "figure_path": f"{figure_product}.png",
         "figure_contract": f"{figure_product}.figure_contract.json",
         "contract_files": [
-            f"{figure_product}.figure_contract.json",
-            f"{validation_product}.figure_contract.json",
+            *(f"{product}.figure_contract.json" for product in main_products),
             f"{supplementary_product}.figure_contract.json",
         ],
-        "main_figure_paths": [
-            f"{figure_product}.png",
-            f"{validation_product}.png",
-        ],
+        "main_figure_paths": [f"{product}.png" for product in main_products],
         "supplementary_figure_path": f"{supplementary_product}.png",
-        # Both main surfaces are declared product slots: the plan promises
+        # Every main surface is a declared product slot: the plan promises
         # panels per figure output, and the end-of-execute join resolves one
-        # runtime contract per declared output. The decision curve stays a
-        # supplementary export with no declared slot.
+        # runtime contract per declared output.
         "output_files": {
-            f"figure:{figure_product}": f"{figure_product}.png",
-            f"figure:{validation_product}": f"{validation_product}.png",
+            f"figure:{product}": f"{product}.png" for product in main_products
         },
         # With more than one declared output the join refuses to guess which
         # rendered panels answer which slot, so each surface names its own.
         "planner_product_slot_bindings": {
-            f"figure:{figure_product}": {
-                "slot": "composite_performance",
-                "panel_ids": _contract_panel_ids(contract),
-            },
-            f"figure:{validation_product}": {
-                "slot": "repeated_split_validation",
-                "panel_ids": _contract_panel_ids(validation_contract),
-            },
+            f"figure:{product}": {
+                "slot": slot,
+                "panel_ids": _contract_panel_ids(slot_contract),
+            }
+            for product, (slot, slot_contract) in slot_contracts.items()
         },
     }
     (out_dir / "step_summary.json").write_text(

@@ -27,7 +27,6 @@ from __future__ import annotations
 from typing import Callable
 
 from ...canonical_json import canonical_sha256
-from ...contracts.figure_plan import STATIC_PREDICTION_VALIDATION_FIGURE_SUFFIX
 from ..design_selection import ResearchDesignCandidate, ResearchDesignSelection
 from ..progressive_contract import (
     ProgressiveDisplayLabel,
@@ -528,16 +527,12 @@ def build_prediction_skeleton(
             depends_on=["primary_performance", "calibration_metrics", "internal_validation", "clinical_utility"],
             raw_inputs=[],
             product_inputs=[_ref(producer, product) for producer, product in _FIGURE_INPUTS],
+            # One composite: the host renderer draws repeated patient-level
+            # split validation beside calibration and discrimination, so the
+            # figure a manuscript leads with carries every role the
+            # prediction article strategy asks of it.
             outputs=[
                 ProgressiveOutputIntent(product_id="figure:visualization", semantic_role="figure"),
-                # The host renderer exports repeated patient-level split
-                # variability on its own surface. Declaring it makes the plan
-                # promise the validation roles a reviewer is owed instead of
-                # leaving a rendered figure outside the reviewed plan.
-                ProgressiveOutputIntent(
-                    product_id=f"figure:visualization{STATIC_PREDICTION_VALIDATION_FIGURE_SUFFIX}",
-                    semantic_role="figure",
-                ),
             ],
             literature_bindings=[],
         ),

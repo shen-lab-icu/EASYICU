@@ -33,7 +33,9 @@ from .contracts import (
 )
 
 
-PUBLICATION_FIGURE_SKILL_POLICY_VERSION = "publication_figure_skill_policy_v6"
+# v7: a step bundle is promoted by the article strategy it satisfies, and a
+# surface the plan placed in the supplement never becomes the main figure.
+PUBLICATION_FIGURE_SKILL_POLICY_VERSION = "publication_figure_skill_policy_v7"
 
 
 _RATIO_TICK_CANDIDATES = (
