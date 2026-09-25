@@ -4,7 +4,8 @@ This owner prepares only control-plane state that must exist before generated
 code, deterministic repair, or scientific auditing can run:
 
 * monotonic attempt identity and prior-record selection;
-* the initial execution-cohort role and its content digest; and
+* the initial execution-cohort role and its content digest;
+* the budget epoch the attempt spends from (:mod:`.budget_epoch`); and
 * crash-safe provider/logical-repair budget restoration.
 
 It deliberately does not choose a scientific method or mutate a plan.  The
@@ -16,13 +17,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, MutableSequence, Sequence
+from typing import Any, Dict, List, Mapping, MutableSequence, Optional, Sequence
 
 from ..authority.evidence_store import sha256_of_file
 from ..authority.runtime_artifacts import current_step_records
 from ..contracts.primary_cohort import primary_analysis_cohort_producer_uses_universe
 from ..repairs.semantic_boundary import SemanticRepairRecorder
 from ..schema import AnalysisPlan, AnalysisStep, ValidationFinding
+from .budget_epoch import EPOCH_REPAIRS_FIELD, AttemptIdentity, select_budget_epoch
 from .cohort_routing import step_execution_cohort_path
 from .development_sample import DEVELOPMENT_PRIMARY_COHORT_CONFIRMATION_ROLE
 from .provider_budget_runtime import (
@@ -65,8 +67,15 @@ def prepare_step_attempt_bootstrap(
     max_llm_repairs: int,
     reserve_concept_audit: bool,
     allow_terminal_initial_generation_restart: bool,
+    explicit_rerun: bool = False,
+    current_identity: Optional[AttemptIdentity] = None,
 ) -> StepAttemptBootstrap:
-    """Restore one attempt's host control plane without buying new authority."""
+    """Restore one attempt's host control plane without buying new authority.
+
+    The one exception is the user's retry policy: an explicit rerun of a
+    failed step whose ``current_identity`` changed since every earlier grant
+    opens one fresh budget epoch (see :mod:`.budget_epoch`).
+    """
 
     with shared_lock:
         resume_history = (
@@ -144,9 +153,42 @@ def prepare_step_attempt_bootstrap(
             }
         )
 
+    budget_epoch = select_budget_epoch(
+        run_dir=run_dir,
+        step_id=step.step_id,
+        records=prior_attempt_records,
+        latest_record=prior_step_record,
+        current_identity=current_identity,
+        explicit_rerun=explicit_rerun,
+        attempt_id=attempt_id,
+        reserved_final_category="concept_audit" if reserve_concept_audit else None,
+        commit=True,
+    )
+    budget_epoch.tag(step_record, current_identity)
+    if budget_epoch.opened is not None:
+        grant = budget_epoch.opened
+        step_record["step_budget_epoch_opened"] = grant.payload()
+        with shared_lock:
+            findings.append(
+                ValidationFinding(
+                    validator="step_budget_epoch",
+                    severity="warning",
+                    message=(
+                        f"Step {step.step_id} was retried after "
+                        f"{', '.join(grant.changed_components)} changed since its "
+                        f"failure; it starts budget epoch {grant.epoch} with a fresh "
+                        f"allowance of {max_llm_repairs} LLM repairs and "
+                        f"{max_provider_calls} provider calls."
+                    ),
+                    detail=grant.payload(),
+                )
+            )
+
+    # The budget is restored from this epoch's records and receipt only; the
+    # unfiltered history still selects the step's capsule downstream.
     budget_runtime = prepare_step_provider_budget(
-        prior_attempt_records=prior_attempt_records,
-        prior_step_record=prior_step_record,
+        prior_attempt_records=list(budget_epoch.records),
+        prior_step_record=budget_epoch.prior_record,
         run_dir=run_dir,
         step_id=step.step_id,
         step_record=step_record,
@@ -156,6 +198,11 @@ def prepare_step_attempt_bootstrap(
         allow_terminal_initial_generation_restart=(
             allow_terminal_initial_generation_restart
         ),
+        receipt_path=budget_epoch.receipt_path,
+        repair_counter_field=budget_epoch.counter_field,
+        epoch_repair_counter_field=EPOCH_REPAIRS_FIELD if budget_epoch.epoch else None,
+        repair_count_offset=budget_epoch.repair_count_offset,
+        epoch_error=budget_epoch.error,
     )
     budget_runtime.repair_budget.bind_semantic_escalation_recorder(
         SemanticRepairRecorder(

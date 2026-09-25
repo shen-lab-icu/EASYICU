@@ -32,6 +32,7 @@ def monotonic_step_llm_repair_history(
     records: Sequence[Mapping[str, Any]],
     *,
     limit: int,
+    counter_field: str = "step_llm_repair_attempts",
 ) -> tuple[int, List[str], bool]:
     """Recover the largest durable logical-repair counter for one step.
 
@@ -39,15 +40,16 @@ def monotonic_step_llm_repair_history(
     before copying the logical counter (for example, on a damaged provider
     receipt), so latest-record-only recovery can incorrectly buy a fresh
     repair budget.  A malformed explicit counter is treated conservatively as
-    exhausted instead of being ignored.
+    exhausted instead of being ignored.  ``counter_field`` names the counter
+    of the budget epoch being restored (see :mod:`.budget_epoch`).
     """
 
     attempts = 0
     classes: List[str] = []
     invalid_snapshot = False
     for record in records:
-        if "step_llm_repair_attempts" in record:
-            raw_attempts = record.get("step_llm_repair_attempts")
+        if counter_field in record:
+            raw_attempts = record.get(counter_field)
             if (
                 isinstance(raw_attempts, bool)
                 or not isinstance(raw_attempts, int)
@@ -107,8 +109,21 @@ def prepare_step_provider_budget(
     max_llm_repairs: int,
     reserve_concept_audit: bool,
     allow_terminal_initial_generation_restart: bool,
+    receipt_path: Optional[Path] = None,
+    repair_counter_field: str = "step_llm_repair_attempts",
+    epoch_repair_counter_field: Optional[str] = None,
+    repair_count_offset: int = 0,
+    epoch_error: Optional[str] = None,
 ) -> StepProviderBudgetRuntime:
-    """Restore one step's durable provider ledger without buying fresh calls."""
+    """Restore one step's durable provider ledger without buying fresh calls.
+
+    ``prior_attempt_records``, ``prior_step_record`` and ``receipt_path``
+    describe the budget epoch this attempt spends from.  In an epoch opened
+    after an identity change, ``repair_counter_field`` names its epoch-local
+    counter, ``epoch_repair_counter_field`` asks that it be kept on the
+    record, and ``repair_count_offset`` (repairs spent before the epoch) keeps
+    ``step_llm_repair_attempts`` cumulative for run-level accounting.
+    """
 
     (
         step_llm_repair_attempts,
@@ -117,10 +132,15 @@ def prepare_step_provider_budget(
     ) = monotonic_step_llm_repair_history(
         prior_attempt_records,
         limit=max_llm_repairs,
+        counter_field=repair_counter_field,
     )
-    if step_llm_repair_attempts:
-        step_record["step_llm_repair_attempts"] = step_llm_repair_attempts
+    if step_llm_repair_attempts or repair_count_offset:
+        step_record["step_llm_repair_attempts"] = (
+            repair_count_offset + step_llm_repair_attempts
+        )
         step_record["step_llm_repair_budget"] = max_llm_repairs
+    if epoch_repair_counter_field:
+        step_record[epoch_repair_counter_field] = step_llm_repair_attempts
     if prior_repair_classes:
         step_record["step_llm_repair_classes"] = list(prior_repair_classes)
     if repair_history_invalid:
@@ -129,7 +149,7 @@ def prepare_step_provider_budget(
     configured_provider_limit = max_provider_calls
     effective_provider_limit = configured_provider_limit
     reserved_final_category = "concept_audit" if reserve_concept_audit else None
-    provider_receipt_path = provider_call_budget_receipt_path(
+    provider_receipt_path = receipt_path or provider_call_budget_receipt_path(
         run_dir,
         step_id=step_id,
     )
@@ -143,7 +163,9 @@ def prepare_step_provider_budget(
     prior_reservation_released = False
     prior_reserved_category_extensions: tuple[Dict[str, object], ...] = ()
     prior_provider_attempts = 0
-    provider_receipt_integrity_error: Optional[str] = None
+    provider_receipt_integrity_error: Optional[str] = (
+        f"Budget epoch ledger is inconsistent: {epoch_error}" if epoch_error else None
+    )
     prior_snapshot_present = False
     if isinstance(prior_step_record, Mapping):
         snapshot_keys = {
@@ -293,6 +315,8 @@ def prepare_step_provider_budget(
                 prior_repair_classes if provider_receipt_integrity_error is None else ()
             ),
             provider_receipt_relative_path=provider_receipt_relative_path,
+            repair_count_offset=repair_count_offset,
+            epoch_repair_counter_field=epoch_repair_counter_field,
         )
     except (ProviderCallBudgetReceiptError, ValueError) as exc:
         provider_receipt_integrity_error = str(exc)
@@ -302,6 +326,8 @@ def prepare_step_provider_budget(
             max_llm_repairs=max_llm_repairs,
             initial_llm_repair_attempts=step_llm_repair_attempts,
             provider_receipt_relative_path=provider_receipt_relative_path,
+            repair_count_offset=repair_count_offset,
+            epoch_repair_counter_field=epoch_repair_counter_field,
         )
     return StepProviderBudgetRuntime(
         provider_budget=provider_budget,

@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Literal, Optional
 
+from easyicu.research_agent.execution.budget_epoch import earns_fresh_budget
 from easyicu.research_agent.execution.retry_basis import (
     FailedStepRetryBasis,
     current_attempt_identity,
@@ -47,7 +48,9 @@ class ExecutionRetryAssessment:
     ``futile`` is claimed only when the failed step's repair budget is spent
     after a code failure and nothing the step runs on changed since then;
     every doubt (no record, no capsule, a timeout, an infrastructure failure)
-    leaves the retry ``available`` or ``unknown``.
+    leaves the retry ``available`` or ``unknown``.  ``fresh_repair_budget``
+    says whether the retry would also earn a fresh budget epoch: only when
+    its identity differs from every identity the step was granted or ran on.
     """
 
     state: Literal["available", "futile", "unknown"]
@@ -57,6 +60,7 @@ class ExecutionRetryAssessment:
     repair_limit: Optional[int] = None
     changed_components: tuple[str, ...] = ()
     image_checked: bool = False
+    fresh_repair_budget: bool = False
 
     def public(self) -> Dict[str, Any]:
         return {
@@ -67,6 +71,7 @@ class ExecutionRetryAssessment:
             "repair_limit": self.repair_limit,
             "changed_components": list(self.changed_components),
             "image_checked": self.image_checked,
+            "fresh_repair_budget": self.fresh_repair_budget,
         }
 
 
@@ -107,11 +112,14 @@ def assess_failed_step(
         return ExecutionRetryAssessment(
             "unknown", "execution_retry_failed_identity_unknown", **common
         )
-    changed = current_attempt_identity(image_id=None).changes_since(basis.identity)
+    current = current_attempt_identity(image_id=None)
+    changed = current.changes_since(basis.identity)
     if changed:
         return ExecutionRetryAssessment(
             "available", "execution_retry_code_changed",
-            changed_components=changed, **common,
+            changed_components=changed,
+            fresh_repair_budget=earns_fresh_budget(current, basis.used_identities),
+            **common,
         )
     if basis.identity.image_id:
         # The failed attempt ran in a recorded image: a rebuilt image is a
@@ -121,13 +129,14 @@ def assess_failed_step(
             return ExecutionRetryAssessment(
                 "unknown", "execution_retry_runner_image_unreadable", **common
             )
-        changed = current_attempt_identity(image_id=image_id).changes_since(
-            basis.identity
-        )
+        current = current_attempt_identity(image_id=image_id)
+        changed = current.changes_since(basis.identity)
         if changed:
             return ExecutionRetryAssessment(
                 "available", "execution_retry_runner_image_changed",
-                changed_components=changed, image_checked=True, **common,
+                changed_components=changed, image_checked=True,
+                fresh_repair_budget=earns_fresh_budget(current, basis.used_identities),
+                **common,
             )
     return ExecutionRetryAssessment(
         "futile", "execution_retry_repeats_failure",

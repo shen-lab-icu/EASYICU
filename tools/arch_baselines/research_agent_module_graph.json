@@ -3532,6 +3532,38 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.execution.budget_epoch",
+      "easyicu.research_agent.authority.provider_budget"
+    ],
+    [
+      "easyicu.research_agent.execution.budget_epoch",
+      "easyicu.research_agent.authority.run_input"
+    ],
+    [
+      "easyicu.research_agent.execution.budget_epoch",
+      "easyicu.research_agent.authority.runtime_artifacts"
+    ],
+    [
+      "easyicu.research_agent.execution.budget_epoch",
+      "easyicu.research_agent.authority.step_capsule"
+    ],
+    [
+      "easyicu.research_agent.execution.budget_epoch",
+      "easyicu.research_agent.authority.step_runtime"
+    ],
+    [
+      "easyicu.research_agent.execution.budget_epoch",
+      "easyicu.research_agent.canonical_json"
+    ],
+    [
+      "easyicu.research_agent.execution.budget_epoch",
+      "easyicu.research_agent.execution.kernel_identity"
+    ],
+    [
+      "easyicu.research_agent.execution.budget_epoch",
+      "easyicu.research_agent.providers.prompts"
+    ],
+    [
       "easyicu.research_agent.execution.candidate_loop",
       "easyicu.research_agent.authority.evidence_store"
     ],
@@ -4154,6 +4186,10 @@
     [
       "easyicu.research_agent.execution.phase",
       "easyicu.research_agent.execution.article_audit"
+    ],
+    [
+      "easyicu.research_agent.execution.phase",
+      "easyicu.research_agent.execution.budget_epoch"
     ],
     [
       "easyicu.research_agent.execution.phase",
@@ -4841,35 +4877,15 @@
     ],
     [
       "easyicu.research_agent.execution.retry_basis",
-      "easyicu.research_agent.authority.run_input"
-    ],
-    [
-      "easyicu.research_agent.execution.retry_basis",
       "easyicu.research_agent.authority.runtime_artifacts"
     ],
     [
       "easyicu.research_agent.execution.retry_basis",
-      "easyicu.research_agent.authority.step_capsule"
-    ],
-    [
-      "easyicu.research_agent.execution.retry_basis",
-      "easyicu.research_agent.authority.step_runtime"
-    ],
-    [
-      "easyicu.research_agent.execution.retry_basis",
-      "easyicu.research_agent.canonical_json"
-    ],
-    [
-      "easyicu.research_agent.execution.retry_basis",
-      "easyicu.research_agent.execution.kernel_identity"
+      "easyicu.research_agent.execution.budget_epoch"
     ],
     [
       "easyicu.research_agent.execution.retry_basis",
       "easyicu.research_agent.execution.provider_budget_runtime"
-    ],
-    [
-      "easyicu.research_agent.execution.retry_basis",
-      "easyicu.research_agent.providers.prompts"
     ],
     [
       "easyicu.research_agent.execution.run_coordination",
@@ -6626,6 +6642,10 @@
     [
       "easyicu.research_agent.execution.step_attempt_bootstrap",
       "easyicu.research_agent.contracts.primary_cohort"
+    ],
+    [
+      "easyicu.research_agent.execution.step_attempt_bootstrap",
+      "easyicu.research_agent.execution.budget_epoch"
     ],
     [
       "easyicu.research_agent.execution.step_attempt_bootstrap",
@@ -12904,9 +12924,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3218,
+    "edge_count": 3223,
     "largest_scc_size": 0,
-    "module_count": 761,
+    "module_count": 762,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -13157,6 +13177,7 @@
     "easyicu.research_agent.evaluation_scorecard": "evaluation_scorecard.py",
     "easyicu.research_agent.execution": "execution/__init__.py",
     "easyicu.research_agent.execution.article_audit": "execution/article_audit.py",
+    "easyicu.research_agent.execution.budget_epoch": "execution/budget_epoch.py",
     "easyicu.research_agent.execution.candidate_loop": "execution/candidate_loop.py",
     "easyicu.research_agent.execution.code_hygiene": "execution/code_hygiene.py",
     "easyicu.research_agent.execution.cohort_adoption": "execution/cohort_adoption.py",
