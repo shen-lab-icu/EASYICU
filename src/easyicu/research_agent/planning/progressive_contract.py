@@ -1034,6 +1034,83 @@ def validate_progressive_module_action_compatibility(
         )
 
 
+def outline_step_products(
+    step: ProgressiveOutlineStep,
+    actions: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """Products an outline step fixes before its executable detail exists.
+
+    Host-compiled modules and runtime-contract actions (``actions`` maps the
+    analysis type's action ids to catalog actions) own fixed products; a free
+    custom step declares its products only at step materialization.
+    """
+
+    action = actions.get(str(step.scientific_action_id or ""))
+    contract = action.runtime_contract if action is not None else None
+    return tuple(
+        product_id
+        for product_id, _role in (
+            *(contract.outputs if contract is not None else ()),
+            *PROGRESSIVE_HOST_COMPILED_OUTPUTS.get(step.module_id, ()),
+        )
+    )
+
+
+PRIMARY_POPULATION_PRODUCT = "table:adjusted_association_estimates"
+
+
+def validate_primary_population_owner(
+    outline: ProgressivePlanOutline,
+    *,
+    actions: Mapping[str, Any],
+) -> None:
+    """Reject a primary-model population that no preceding primary step owns.
+
+    ``population_scope=primary_model`` reuses the exact rows of the primary
+    result that emits ``table:adjusted_association_estimates``. The compiler
+    enforces that owner step by step, where the outline-owned scope can no
+    longer change; checking the outline returns the choice to its retry. Run
+    after the host-module singleton check, so there is at most one owner.
+    """
+
+    owners: list[ProgressiveOutlineStep] = []
+    for step_index, step in enumerate(outline.steps):
+        if (
+            step.module_id == "absolute_risk_context"
+            and step.population_scope == "primary_model"
+            and not any(owner.planned_analysis_role == "primary" for owner in owners)
+        ):
+            raise ProgressivePlanCompileError(
+                "progressive_outline_primary_population_unsupported",
+                "population_scope=primary_model means the rows of a preceding "
+                f"primary step that emits {PRIMARY_POPULATION_PRODUCT} (the host "
+                "adjusted_association module), and this outline has no such "
+                "step. Keep the selected primary analysis. Set this step's "
+                "population_scope to analysis_cohort and describe the broader "
+                "eligible cohort, or remove the step; a source-bound "
+                "primary_model requirement changes only with a "
+                "population_scope_change_reason.",
+                step_id=step.step_id,
+                step_index=step_index,
+                path="population_scope",
+                findings=({
+                    "required_product": PRIMARY_POPULATION_PRODUCT,
+                    "preceding_owner_step_ids": [owner.step_id for owner in owners],
+                    "primary_steps": [
+                        {
+                            "step_id": primary.step_id,
+                            "module_id": primary.module_id,
+                            "scientific_action_id": primary.scientific_action_id,
+                        }
+                        for primary in outline.steps
+                        if primary.planned_analysis_role == "primary"
+                    ],
+                },),
+            )
+        if PRIMARY_POPULATION_PRODUCT in outline_step_products(step, actions):
+            owners.append(step)
+
+
 __all__ = [
     "ProgressiveCompiledStepReceipt",
     "ProgressiveCohortIntent",
@@ -1059,6 +1136,9 @@ __all__ = [
     "ProgressiveStepMaterialization",
     "ProgressiveSuffixRevision",
     "ProgressiveTableOneVariable",
+    "PRIMARY_POPULATION_PRODUCT",
+    "outline_step_products",
     "progressive_module_ids_for_analysis_types",
+    "validate_primary_population_owner",
     "validate_progressive_module_action_compatibility",
 ]
