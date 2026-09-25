@@ -64,8 +64,10 @@ from .contract import (
     FamilySpecError,
     FamilySpecRequest,
     SpecCovariateDecision,
+    accepted_baseline_additions,
     design_field_max_length,
     landmark_design_roster,
+    table_one_group_column,
 )
 from .plan_language import bounded_roster, listing, plan_language, sentence
 
@@ -757,10 +759,13 @@ def build_landmark_categorical_skeleton(
     ]
     # A continuous exposure has no levels to group by: the baseline table is
     # grouped by the binary outcome and describes the exposure as a variable.
-    table_one_group = outcome if continuous_exposure else exposure
+    table_one_group = table_one_group_column(request)
     table_one_variables = (
         [exposure, *covariates, outcome] if continuous_exposure else [exposure, *covariates]
     )
+    # An accepted baseline roster keeps its other rows beside the model roster.
+    retained_baseline = accepted_baseline_additions(request, table_one_variables)
+    table_one_variables += [row.columns[0] for row in retained_baseline]
     audit_variables = [
         exposure,
         *alternates,
@@ -1011,6 +1016,10 @@ def build_landmark_categorical_skeleton(
                 *(
                     ProgressiveTableOneVariable(name=term.name, summary=_table_one_summary(term.coding))
                     for term in terms
+                ),
+                *(
+                    ProgressiveTableOneVariable(name=row.columns[0], summary=row.summary)
+                    for row in retained_baseline
                 ),
             ],
             literature_bindings=[],

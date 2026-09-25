@@ -17,6 +17,7 @@ from ...concept_availability import variable_source_unavailability
 from ...contracts.model_terms import level_spelling
 from ...schema import ResearchContext
 from ..accepted_analysis_inputs import analysis_input_value_columns
+from ..baseline_requirements import baseline_requirement_projection
 from ..adjustment_authority import (
     AdjustmentSetAuthority,
     adjusted_model_term_planning_authority,
@@ -39,6 +40,7 @@ from .contract import (
     PREDICTION_FAMILY_ID,
     MAX_FIT_FEATURES,
     SOURCE_FEASIBILITY_FAMILY_ID,
+    AcceptedBaselineRow,
     AcceptedFeatureGroup,
     AdjustmentCandidate,
     ExposureKind,
@@ -48,6 +50,7 @@ from .contract import (
     SealedSuiteCoordinates,
     SealedTrajectoryCoordinates,
     SensitivityAxisBinding,
+    table_one_group_column,
 )
 
 #: Marker lines the sealed authorities print before their JSON coordinates
@@ -630,6 +633,7 @@ def build_family_spec_request(
         planning_contract_context=planning_contract_context,
     )
     request = _bind_accepted_feature_groups(context, request)
+    request = _bind_accepted_baseline_rows(context, request)
     _refuse_eligibility_after_time_zero(request)
     return request
 
@@ -682,6 +686,65 @@ def _bind_accepted_feature_groups(
         {
             **request.model_dump(mode="json"),
             "accepted_feature_groups": [group.model_dump(mode="json") for group in groups],
+        }
+    )
+
+
+def _bind_accepted_baseline_rows(
+    context: ResearchContext, request: FamilySpecRequest
+) -> FamilySpecRequest:
+    """Keep an accepted baseline roster in the template's own Table 1.
+
+    A plan change after review retains the reviewed candidate's Table 1 rows
+    (``accepted_baseline_requirements``); a family template that described
+    only its model roster lost the other rows and failed the outline's
+    baseline gate after the Provider call.  Each row binds the prepared value
+    columns the owner accepts for it, named column first, with the summary its
+    closed domain implies.  A roster grouped by another column, or a row with
+    no prepared column, is a host contradiction refused before any Provider
+    call.  A family without a Table 1 is left to the existing gates.
+    """
+
+    projection = baseline_requirement_projection(context)
+    group_column = table_one_group_column(request)
+    if projection["status"] != "bound" or group_column is None:
+        return request
+    rows: dict[str, AcceptedBaselineRow] = {}
+    for table in projection["tables"]:
+        group = table["group_by"]
+        if group["required"] is not None and group_column not in group["available_columns"]:
+            raise FamilySpecError(
+                "family_spec_accepted_baseline_grouping_unsupported",
+                f"the accepted baseline roster is grouped by {group['required']!r}; "
+                f"this family's Table 1 is grouped by {group_column!r}",
+                path="accepted_baseline_rows",
+            )
+        for row in table["variables"]:
+            available = list(row["available_columns"])
+            if not available:
+                raise FamilySpecError(
+                    "family_spec_accepted_baseline_row_unavailable",
+                    f"accepted baseline row {row['required']!r} has no prepared value column",
+                    path="accepted_baseline_rows",
+                )
+            if row["required"] in available:
+                available.remove(row["required"])
+                available.insert(0, row["required"])
+            closed = len(_levels(context, available[0])) >= 2
+            rows.setdefault(
+                row["required"],
+                AcceptedBaselineRow(
+                    required=row["required"],
+                    columns=available,
+                    summary="count_percent" if closed else "both",
+                ),
+            )
+    if not rows:
+        return request
+    return FamilySpecRequest.model_validate(
+        {
+            **request.model_dump(mode="json"),
+            "accepted_baseline_rows": [row.model_dump(mode="json") for row in rows.values()],
         }
     )
 

@@ -47,7 +47,9 @@ from .contract import (
     FamilyPlanSpec,
     FamilySpecError,
     FamilySpecRequest,
+    accepted_baseline_additions,
     design_field_max_length,
+    table_one_group_column,
 )
 from .landmark_categorical_template import (
     FamilySkeletonDraft,
@@ -332,6 +334,9 @@ def build_prediction_skeleton(
     identity = request.identity_column
     outcome = request.outcome
     predictors = [str(value).strip() for value in spec.feature_variables]
+    # An accepted baseline roster keeps its rows beside the predictors.
+    retained_baseline = accepted_baseline_additions(request, [outcome, *predictors])
+    table_one_rows = [*predictors, *(row.columns[0] for row in retained_baseline)]
     method_keys = [key for key in request.allowed_literature_citation_keys if _method_card_elements(key)]
 
     def keys_for(module: str, *, comparators: bool = False) -> list[str]:
@@ -399,7 +404,7 @@ def build_prediction_skeleton(
         _outline_step(
             step_id="baseline_context", role="auxiliary", module_id="table_one",
             objective=objectives["baseline_context"], depends_on=["cohort_accounting"],
-            variable_names=[outcome, *predictors], citations=[],
+            variable_names=[outcome, *table_one_rows], citations=[],
         ),
         _outline_step(
             step_id="measurement_audit", role="auxiliary", module_id="measurement_audit",
@@ -468,11 +473,18 @@ def build_prediction_skeleton(
         ProgressiveSkeletonStep(
             step_id="baseline_context", planned_analysis_role="auxiliary", module_id="table_one",
             objective=objectives["baseline_context"], depends_on=["cohort_accounting"],
-            raw_inputs=list(dict.fromkeys([outcome, *predictors])),
-            table_one_group_by=outcome, table_one_mode="descriptive_smd_only",
+            raw_inputs=list(dict.fromkeys([outcome, *table_one_rows])),
+            table_one_group_by=table_one_group_column(request),
+            table_one_mode="descriptive_smd_only",
             table_one_variables=[
-                ProgressiveTableOneVariable(name=name, summary=_summary_for(request, name))
-                for name in predictors
+                *(
+                    ProgressiveTableOneVariable(name=name, summary=_summary_for(request, name))
+                    for name in predictors
+                ),
+                *(
+                    ProgressiveTableOneVariable(name=row.columns[0], summary=row.summary)
+                    for row in retained_baseline
+                ),
             ],
             literature_bindings=[],
         ),

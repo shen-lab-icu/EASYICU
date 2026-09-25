@@ -121,7 +121,9 @@ def test_a_request_without_accepted_inputs_keeps_its_digest() -> None:
     payload = request.model_dump(mode="json")
 
     assert request.accepted_feature_groups == []
+    assert request.accepted_baseline_rows == []
     payload.pop("accepted_feature_groups")
+    payload.pop("accepted_baseline_rows")
     assert request.request_sha256 == canonical_sha256(payload)
 
 

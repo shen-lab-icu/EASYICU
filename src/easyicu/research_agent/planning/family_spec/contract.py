@@ -99,6 +99,21 @@ class AcceptedFeatureGroup(BaseModel):
     columns: list[str] = Field(min_length=1)
 
 
+class AcceptedBaselineRow(BaseModel):
+    """One row of an accepted baseline roster and the columns that describe it.
+
+    A plan change after review keeps the reviewed candidate's Table 1 content
+    (``accepted_baseline_requirements``).  The template keeps each row in its
+    own Table 1; the first column is the one it adds when none is present.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    required: str = Field(min_length=1, max_length=128)
+    columns: list[str] = Field(min_length=1)
+    summary: Literal["mean_sd", "median_iqr", "both", "count_percent"]
+
+
 class SensitivityAxisBinding(BaseModel):
     """One prespecified StudyContext sensitivity spec projected for the template."""
 
@@ -288,6 +303,7 @@ class FamilySpecRequest(BaseModel):
     counts_only: bool = False
     feature_candidates: list[AdjustmentCandidate] = Field(default_factory=list)
     accepted_feature_groups: list[AcceptedFeatureGroup] = Field(default_factory=list)
+    accepted_baseline_rows: list[AcceptedBaselineRow] = Field(default_factory=list)
     membership_candidates: list[str] = Field(default_factory=list)
     secondary_continuous_outcome: Optional[str] = Field(default=None, max_length=128)
     sealed_suite: Optional[SealedSuiteCoordinates] = None
@@ -483,10 +499,11 @@ class FamilySpecRequest(BaseModel):
     @property
     def request_sha256(self) -> str:
         payload = self.model_dump(mode="json")
-        # A request without accepted inputs keeps the digest it had before
-        # the field existed.
-        if not payload.get("accepted_feature_groups"):
-            payload.pop("accepted_feature_groups", None)
+        # A request without accepted inputs or an accepted baseline keeps the
+        # digest it had before those fields existed.
+        for field in ("accepted_feature_groups", "accepted_baseline_rows"):
+            if not payload.get(field):
+                payload.pop(field, None)
         return canonical_sha256(payload)
 
     @property
@@ -575,6 +592,43 @@ def landmark_design_roster(request: "FamilySpecRequest", covariates: Sequence[st
             ]
         )
     )
+
+
+def table_one_group_column(request: "FamilySpecRequest") -> Optional[str]:
+    """The column a family's own Table 1 is grouped by, or ``None`` without one.
+
+    The templates build Table 1 from this, and the request binding checks an
+    accepted baseline roster against it before any Provider call.  A sealed
+    suite family has none here: its signed owner replaces the plan's steps
+    when the plan is bound, so a template table would not reach the plan.
+    """
+
+    if request.family_id in LANDMARK_FAMILY_IDS:
+        # A continuous exposure has no levels to group by: the baseline table
+        # is grouped by the binary outcome and describes the exposure instead.
+        if request.exposure_kind == "continuous":
+            return request.outcome
+        return request.primary_exposure
+    if request.family_id == DESCRIPTIVE_FAMILY_ID:
+        return request.primary_exposure
+    if request.family_id == PREDICTION_FAMILY_ID:
+        return request.outcome
+    return None
+
+
+def accepted_baseline_additions(
+    request: "FamilySpecRequest", present: Sequence[str]
+) -> list[AcceptedBaselineRow]:
+    """The accepted baseline rows a template's own Table 1 does not describe.
+
+    A row is described when any of its columns is already in the table; the
+    template adds the first column of every other row.
+    """
+
+    shown = set(present)
+    return [
+        row for row in request.accepted_baseline_rows if not shown.intersection(row.columns)
+    ]
 
 
 class FamilyPlanSpec(BaseModel):
@@ -895,6 +949,7 @@ def spec_from_mapping(payload: Mapping[str, Any]) -> FamilyPlanSpec:
 
 
 __all__ = [
+    "AcceptedBaselineRow",
     "AcceptedFeatureGroup",
     "FAMILY_SPEC_REQUEST_SCHEMA_VERSION",
     "FAMILY_SPEC_SCHEMA_VERSION",
@@ -916,6 +971,8 @@ __all__ = [
     "SpecComparatorApplication",
     "SpecCovariateDecision",
     "SpecReaderLabel",
+    "accepted_baseline_additions",
     "spec_from_mapping",
+    "table_one_group_column",
     "validate_family_plan_spec",
 ]
