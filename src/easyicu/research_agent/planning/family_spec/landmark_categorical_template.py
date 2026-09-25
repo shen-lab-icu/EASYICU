@@ -25,7 +25,7 @@ Step layout (mirrors the family's reference workflow):
 3. ``measurement_audit``      source / completeness / missingness / process / denominators
 4. ``adjusted_association``   primary model, declared contrast vs reference
 5. ``absolute_risk_context``  absolute risk by level in the primary population
-6. ``robustness_replay``      prespecified alternate exposures, first stay, complete case
+6. ``robustness_replay``      the prespecified complete-case refit
 7. ``<covariate>_functional_form`` one RCS-vs-linear check per continuous covariate
 8. ``ordinal_trend``          typed ordered trend for the binary + continuous outcomes
 9. ``visualization`` / ``report``
@@ -367,15 +367,16 @@ def _design_selection(
         "reported; a complete-case refit is prespecified."
         if unmeasured
         else "Unknown exposure rows are described but not modelled; covariate-missing rows are "
-        "excluded from the primary model and reported; a complete-case refit is prespecified."
+        "excluded from the primary model and reported, so the primary model is itself the "
+        "complete-case analysis."
     )
     missing_text_zh = (
         f"暴露未知的行只做描述、不进入模型；{listing(unmeasured, language)} 未测量的行作为单独的"
         "未测量状态保留在主模型中（数值变量以中位数填补并加指示变量，分类变量增设一个水平），"
         "缺少其他协变量的行排除并报告；预先设定完整病例重拟合。"
         if unmeasured
-        else "暴露未知的行只做描述、不进入模型；协变量缺失的行从主模型中排除并报告；预先设定完整"
-        "病例重拟合。"
+        else "暴露未知的行只做描述、不进入模型；协变量缺失的行从主模型中排除并报告，因此主模型"
+        "本身就是完整病例分析。"
     )
     # Only the covariates that really get a functional-form step: a spline
     # promised for a binary or categorical covariate would be a check the
@@ -383,13 +384,13 @@ def _design_selection(
     sensitivity_bits = [
         *(f"alternate exposure definition {_label(spec, item.execution_variables[0])}" for item in request.alternate_exposures),
         *(["first-ICU-stay restriction"] if request.first_stay else []),
-        "complete-case reanalysis",
+        *(["complete-case reanalysis"] if unmeasured else []),
         *(f"restricted cubic spline for {_label(spec, name)}" for name in spline_covariates),
     ]
     sensitivity_bits_zh = [
         *(f"替代暴露定义 {_label(spec, item.execution_variables[0])}" for item in request.alternate_exposures),
         *(["仅限首次 ICU 入住"] if request.first_stay else []),
-        "完整病例重分析",
+        *(["完整病例重分析"] if unmeasured else []),
         *(f"{_label(spec, name)} 的限制性立方样条" for name in spline_covariates),
     ]
     comparator_keys = [
@@ -711,6 +712,9 @@ def build_landmark_categorical_skeleton(
     terms = _covariate_terms(request, spec)
     covariates = [term.name for term in terms]
     continuous = _continuous_covariates(terms)
+    # A complete-case refit varies the primary only by dropping the rows it
+    # keeps as unmeasured; without any, the refit restates the primary.
+    kept_unmeasured = [name for name in covariates if _unmeasured_category(request, name)]
     alternates = [item.execution_variables[0] for item in request.alternate_exposures]
     companions = list(request.exposure_companion_columns)
     first_stay = request.first_stay.execution_variables[0] if request.first_stay else None
@@ -843,13 +847,15 @@ def build_landmark_categorical_skeleton(
             "comparable landmark population as context for the relative estimates."
         ),
         "robustness_replay": (
-            "Replay the prespecified sensitivity axes (first-ICU-stay restriction, complete-case "
-            "reanalysis, landmark timing, covariate functional form) against the primary association and "
-            "report comparability of estimand, denominators, and direction."
-            if continuous_exposure
-            else "Replay the prespecified sensitivity axes (alternate exposure definitions, first-ICU-stay "
-            "restriction, complete-case reanalysis, landmark timing) against the primary association and "
-            "report comparability of estimand, denominators, and direction."
+            "Refit the primary association on complete cases, dropping the rows the primary model "
+            f"keeps as unmeasured for {', '.join(_label(spec, name) for name in kept_unmeasured)}, "
+            "and report comparability of estimand, denominators, and direction with the primary "
+            "analysis."
+            if kept_unmeasured
+            else "Refit the primary association on rows complete for the exposure, every adjustment "
+            "covariate, and the outcome. The primary model already fits exactly these rows, so the "
+            "refit restates the primary analysis: it is documented, not counted as a sensitivity "
+            "analysis."
         ),
         "ordinal_trend": (
             f"Estimate the ordered trend of {outcome_label} and describe "
@@ -1185,6 +1191,11 @@ def build_landmark_categorical_skeleton(
                         "Re-estimate the primary association on rows with the exposure, every adjustment "
                         "covariate, and the outcome all available, and compare with the primary analysis; "
                         "event times are not used to define completeness."
+                        if kept_unmeasured
+                        else "Re-estimate the primary association on rows with the exposure, every "
+                        "adjustment covariate, and the outcome all available; the primary model already "
+                        "fits exactly these rows, so this documents the primary analysis rather than "
+                        "varying it. Event times are not used to define completeness."
                     ),
                     missing_strategy="complete_case",
                     complete_case_variables=list(dict.fromkeys([exposure, *covariates, outcome])),

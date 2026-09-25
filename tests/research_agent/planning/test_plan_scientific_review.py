@@ -221,7 +221,18 @@ def test_explicit_endpoint_description_is_not_vetoed_by_source_placeholder() -> 
     assert _endpoint_resolved(context.model_copy(update={"variables": variables}))
 
 
-def test_locked_complete_case_replay_credits_exact_typed_sensitivity_id() -> None:
+@pytest.mark.parametrize(
+    "kept_unmeasured,axes",
+    [
+        # The primary keeps unmeasured age rows; the refit drops them.
+        (["age"], ["missing"]),
+        # The primary already fits complete cases; the refit restates it.
+        (None, []),
+    ],
+)
+def test_locked_complete_case_replay_credits_exact_typed_sensitivity_id(
+    kept_unmeasured, axes
+) -> None:
     context = _context().model_copy(
         update={
             "user_preferences": UserPreferences(
@@ -256,9 +267,23 @@ def test_locked_complete_case_replay_credits_exact_typed_sensitivity_id() -> Non
             },
         }
     )
-    plan = _plan().model_copy(
+    base = _plan()
+    primary = base.steps[0]
+    requirement = type(primary.model_requirements[0]).model_validate(
+        {
+            **primary.model_requirements[0].model_dump(mode="json"),
+            "baseline_missing_handling": (
+                {"covariates": kept_unmeasured} if kept_unmeasured else None
+            ),
+        }
+    )
+    plan = base.model_copy(
         update={
-            "steps": [*_plan().steps, replay],
+            "steps": [
+                primary.model_copy(update={"model_requirements": [requirement]}),
+                *base.steps[1:],
+                replay,
+            ],
             "robustness_specs": [
                 RobustnessSpec(
                     spec_id="complete_case_primary",
@@ -275,9 +300,10 @@ def test_locked_complete_case_replay_credits_exact_typed_sensitivity_id() -> Non
 
     facts = _sensitivity_facts(context, plan)
 
+    # Executed either way; only a refit that differs from the primary is evidence.
     assert facts["executed_spec_ids"] == ["complete_case_primary"]
     assert facts["missing_spec_ids"] == []
-    assert facts["typed_executable"] == ["missing"]
+    assert facts["typed_executable"] == axes
 
 
 def test_compiler_bound_functional_form_step_is_a_distinct_typed_axis() -> None:

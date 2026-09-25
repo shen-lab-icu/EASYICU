@@ -22,6 +22,7 @@ import subprocess
 import sys
 import textwrap
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, List, Optional, Sequence
@@ -1004,6 +1005,9 @@ def _run_robustness_preflight(
             missing_audit.get("notes") if axis == "missing" else None,
             "; ".join(blocking_reasons) if blocking_reasons else None,
         )
+        independent_variant = _matrix_independent_variant(
+            spec=spec, row=row, outcome_audit=outcome_audit
+        )
         converged = bool(
             row.converged
             and _finite(row.point_estimate)
@@ -1048,11 +1052,12 @@ def _run_robustness_preflight(
                     blocking_reasons.append(trace_error)
                 notes = _join_notes(notes, trace_error)
                 converged = False
-        independent_variant = outcome_audit.get("independent_variant")
-        if converged:
-            estimability_status = "estimated"
-        elif independent_variant is False:
+        # A restatement of the primary keeps its true fit; this status, not a
+        # blanked estimate, is what keeps it out of the robustness evidence.
+        if independent_variant is False:
             estimability_status = "not_independent"
+        elif converged:
+            estimability_status = "estimated"
         elif outcome_audit.get("outcome_executable") is False:
             estimability_status = "not_executable"
         else:
@@ -1400,6 +1405,14 @@ def _coefficient_path_from_summary(
     return contained_regular_file(outputs_dir / filename, containment_root)
 
 
+def _is_primary_fit(contract: Dict[str, Any], source: Dict[str, Any]) -> bool:
+    """Whether an inherited model contract is the primary model itself."""
+
+    model_id = str(contract.get("model_id") or "").strip()
+    primary_id = str(source["primary_contract"].get("model_id") or "").strip()
+    return bool(model_id) and model_id == primary_id
+
+
 def _primary_contract_from_summary(
     summary: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
@@ -1702,6 +1715,10 @@ def _fit_structured_robustness_rows(
                     f"step for missing-data strategy {strategy or 'unspecified'}."
                 ),
             )
+            if contract is not None and _is_primary_fit(contract, source):
+                # The primary's own fit restates the primary; only another
+                # model the primary step fitted can vary it.
+                row = replace(row, independent_variant=False)
             rows.append(row)
             evidence_contracts, evidence_coefficients = _variant_model_evidence(
                 summary=source["summary"],
@@ -1780,6 +1797,27 @@ def _fit_structured_robustness_rows(
     )
 
 
+def _matrix_independent_variant(
+    *,
+    spec: Optional[RobustnessSpec],
+    row: RobustnessPanelRow,
+    outcome_audit: Mapping[str, Any],
+) -> Optional[bool]:
+    """Whether one robustness-matrix row is an independent variant.
+
+    The outcome audit decides for outcome variants.  A variant row proved
+    identical to the primary documents that identity: its estimate is the
+    primary's own fit, reported as fitted, but it is no variant and no
+    robustness evidence.  ``None`` means no owner stated it (the primary row
+    included).
+    """
+
+    stated = outcome_audit.get("independent_variant")
+    if stated is None and spec is not None and not row.independent_variant:
+        return False
+    return stated
+
+
 def _verified_complete_case_equivalence(
     *,
     spec: RobustnessSpec,
@@ -1791,7 +1829,12 @@ def _verified_complete_case_equivalence(
     Optional[Dict[str, Any]],
     Optional[str],
 ]:
-    """Reuse a fit only after proving the locked complete-case set is identical."""
+    """Document, after proving it, that the locked complete-case set is the primary's.
+
+    The returned row carries the primary fit's estimate and is marked
+    ``independent_variant=False``: a complete-case analysis over the rows the
+    primary already fitted is the primary analysis, not a robustness variant.
+    """
 
     override = spec.missing_override or {}
     # One reader, shared with the plan-time requirement: the two used to name
@@ -1923,7 +1966,7 @@ def _verified_complete_case_equivalence(
         item["replay_mode"] = "verified_complete_case_equivalence"
         item["analysis_set"] = "complete_case"
         item["analysis_role"] = "sensitivity"
-    return row, coefficient_rows, contract_copy, None
+    return replace(row, independent_variant=False), coefficient_rows, contract_copy, None
 
 
 def _variant_typed_manifest_path(
@@ -3342,6 +3385,9 @@ def _robustness_summary(matrix: Any):
     for axis, group in matrix.groupby("axis", dropna=False, sort=False):
         converged = group[group["converged"].astype(bool)]
         independent = group["independent_variant"]
+        # A restatement of the primary is fitted but varies nothing; the
+        # range spans only the rows that are evidence.
+        varied = converged[~(converged["independent_variant"] == False)]  # noqa: E712
         rows.append(
             {
                 "axis": axis,
@@ -3351,10 +3397,10 @@ def _robustness_summary(matrix: Any):
                     (independent == False).sum()  # noqa: E712
                 ),
                 "range_low": (
-                    float(converged["ci_low"].min()) if not converged.empty else None
+                    float(varied["ci_low"].min()) if not varied.empty else None
                 ),
                 "range_high": (
-                    float(converged["ci_high"].max()) if not converged.empty else None
+                    float(varied["ci_high"].max()) if not varied.empty else None
                 ),
             }
         )

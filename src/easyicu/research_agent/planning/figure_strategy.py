@@ -611,6 +611,13 @@ _panel_chart_type = panel_chart_type
 
 
 def _role_matches_panel(role: FigureRoleStrategy, panel: Mapping[str, Any]) -> bool:
+    metadata = (
+        panel.get("metadata") if isinstance(panel.get("metadata"), Mapping) else {}
+    )
+    if metadata.get("role_evidence_absent") is True:
+        # Its renderer found no evidence for the panel's nominal role (a
+        # robustness grid without an independent variant, for example).
+        return False
     panel_role = _panel_role(panel)
     if panel_role == role.role:
         return True
