@@ -117,6 +117,7 @@ from ..planning.progressive_resume import (
     restore_progressive_resume_prefix,
     restore_progressive_resume_prompt_metrics,
     validate_progressive_materialization_coordinate,
+    validate_progressive_resume_outline_binding,
     validate_progressive_resume_runtime_dependencies,
 )
 from ..planning.robustness_contract import validate_planner_robustness_specs
@@ -4608,6 +4609,25 @@ class ProgressivePlannerAgent:
             "full_revision_count": 0,
             "suffix_request_payload_bytes": [],
         }
+        def bind_outline(parsed: ProgressivePlanOutline) -> ProgressivePlanOutline:
+            parsed = _bind_runtime_action_dependencies(parsed)
+            parsed = _bind_metadata_only_baseline_fallback(
+                parsed,
+                closed_domain_variables=closed_domain_variables,
+            )
+            parsed = _bind_direct_comparator_source(
+                parsed,
+                direct_comparator_literature_keys=direct_keys,
+            )
+            return _bind_required_outline_method_sources(
+                parsed,
+                allowed_literature_citation_keys=allowed_citations,
+                context_required_method_layers=(
+                    required_method_layers_for_context(context)
+                ),
+                continuous_domain_variables=continuous_domain_variables,
+            )
+
         if resume_checkpoint is not None:
             self._attempt.prompt_metrics = restore_progressive_resume_prompt_metrics(
                 checkpoint=resume_checkpoint,
@@ -4616,29 +4636,16 @@ class ProgressivePlannerAgent:
                     checkpoint_authorities.resume_dependency_authority_sha256
                 ),
             )
+            validate_progressive_resume_outline_binding(
+                checkpoint=resume_checkpoint,
+                bound_outline=bind_outline(resume_checkpoint.outline),
+            )
             outline = resume_checkpoint.outline
         else:
             self._attempt.prompt_metrics = current_prompt_metrics
 
             def parse_outline(raw: str) -> ProgressivePlanOutline:
-                parsed = _parse_model(raw, ProgressivePlanOutline)
-                parsed = _bind_runtime_action_dependencies(parsed)
-                parsed = _bind_metadata_only_baseline_fallback(
-                    parsed,
-                    closed_domain_variables=closed_domain_variables,
-                )
-                parsed = _bind_direct_comparator_source(
-                    parsed,
-                    direct_comparator_literature_keys=direct_keys,
-                )
-                parsed = _bind_required_outline_method_sources(
-                    parsed,
-                    allowed_literature_citation_keys=allowed_citations,
-                    context_required_method_layers=(
-                        required_method_layers_for_context(context)
-                    ),
-                    continuous_domain_variables=continuous_domain_variables,
-                )
+                parsed = bind_outline(_parse_model(raw, ProgressivePlanOutline))
                 self._validate_outline_authority(
                     parsed,
                     analysis_types=analysis_types,

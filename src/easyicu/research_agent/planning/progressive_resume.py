@@ -324,6 +324,41 @@ def restore_progressive_resume_prompt_metrics(
     return source_metrics
 
 
+def validate_progressive_resume_outline_binding(
+    *,
+    checkpoint: ProgressivePlannerCheckpoint,
+    bound_outline: ProgressivePlanOutline,
+) -> None:
+    """Reject a prefix whose outline the current host binds differently.
+
+    The host binds an outline once, when the Planner's outline is parsed
+    (product edges, method sources); a resumed run reuses the saved outline
+    and re-runs only its validators. A binding rule added after the
+    checkpoint was written would never reach the resumed plan, and the
+    failure that rule repairs would repeat. ``bound_outline`` is the current
+    host's binding of the saved outline.
+    """
+
+    saved = checkpoint.outline
+    if bound_outline == saved:
+        return
+    raise ProgressivePlanCompileError(
+        "progressive_resume_outline_binding_changed",
+        "the current host binds this development checkpoint's outline "
+        "differently; plan from a new outline so the current outline rules apply",
+        path="resume_checkpoint.outline",
+        findings=[
+            {
+                "changed_step_ids": [
+                    step.step_id
+                    for index, step in enumerate(bound_outline.steps)
+                    if index >= len(saved.steps) or saved.steps[index] != step
+                ]
+            }
+        ],
+    )
+
+
 def restore_progressive_resume_foundation(
     *,
     checkpoint: ProgressivePlannerCheckpoint,
@@ -775,5 +810,6 @@ __all__ = [
     "restore_progressive_resume_prefix",
     "restore_progressive_resume_prompt_metrics",
     "validate_progressive_materialization_coordinate",
+    "validate_progressive_resume_outline_binding",
     "validate_progressive_resume_runtime_dependencies",
 ]
