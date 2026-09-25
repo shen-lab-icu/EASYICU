@@ -63,6 +63,7 @@ from ..cohort.artifact_facts import (
     observed_domain_for_series,
 )
 from ..intake.legacy_materialization import (
+    legacy_first_icu_stay_restriction,
     load_verified_legacy_materialization_provenance,
 )
 from .typed import (
@@ -743,6 +744,8 @@ def build_research_context(
     sealed_first_stay = (
         sealed_first_icu_stay_restriction(verified_cohort, cohort_path=cohort_path_obj)
         if verified_cohort is not None
+        else legacy_first_icu_stay_restriction(legacy_materialization_provenance)
+        if legacy_materialization_provenance is not None
         else None
     )
     replacement_row_identity = (

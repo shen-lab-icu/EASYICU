@@ -13,7 +13,10 @@ from typing import Any, Dict, Optional, Union
 import numpy as np
 import pandas as pd
 
-from .materialized_metadata import MaterializedMetadataError
+from .materialized_metadata import (
+    FIRST_ICU_STAY_RESTRICTION_SCHEMA,
+    MaterializedMetadataError,
+)
 
 
 def load_verified_legacy_materialization_provenance(
@@ -157,9 +160,72 @@ def load_verified_legacy_materialization_provenance(
                 "legacy replacement-row identity authority is invalid"
             )
 
+    restriction = payload.get("first_icu_stay_restriction")
+    if restriction is not None:
+        _validate_first_icu_stay_restriction(restriction, rows=int(len(frame)))
+
     verified = dict(payload)
     verified["provenance_sha256"] = hashlib.sha256(raw_bytes).hexdigest()
     return verified
 
 
-__all__ = ["load_verified_legacy_materialization_provenance"]
+def _validate_first_icu_stay_restriction(restriction: object, *, rows: int) -> None:
+    """Check the materializer's record that it kept each first ICU stay.
+
+    The restriction is the last row change before the cohort is written, so
+    the stays it kept are exactly the receipt's rows.
+    """
+
+    if not isinstance(restriction, dict):
+        raise MaterializedMetadataError(
+            "legacy first ICU stay restriction must be an object"
+        )
+    coordinate = restriction.get("coordinate_sha256")
+    before, after, removed = (
+        restriction.get(key)
+        for key in ("stays_before", "stays_after", "non_first_icu_stays_removed")
+    )
+    coordinates = restriction.get("authority_coordinates")
+    if (
+        restriction.get("schema_version") != FIRST_ICU_STAY_RESTRICTION_SCHEMA
+        or not isinstance(coordinate, str)
+        or re.fullmatch(r"[0-9a-f]{64}", coordinate) is None
+        or any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in (before, after, removed)
+        )
+        or after != rows
+        or before - after != removed
+        or not isinstance(coordinates, dict)
+        or coordinates.get("coordinate_sha256", coordinate) != coordinate
+        or coordinates.get("provider_visible_values", False) is not False
+    ):
+        raise MaterializedMetadataError(
+            "legacy first ICU stay restriction is invalid"
+        )
+
+
+def legacy_first_icu_stay_restriction(
+    provenance: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """The first-ICU-stay restriction a verified legacy receipt records.
+
+    Takes the result of ``load_verified_legacy_materialization_provenance``
+    and returns the same aggregate fields as a typed authority's sealed
+    restriction, or ``None`` when the cohort was not restricted.
+    """
+
+    restriction = provenance.get("first_icu_stay_restriction")
+    if restriction is None:
+        return None
+    return {
+        "schema_version": FIRST_ICU_STAY_RESTRICTION_SCHEMA,
+        "coordinate_sha256": restriction["coordinate_sha256"],
+        "stays_after": restriction["stays_after"],
+    }
+
+
+__all__ = [
+    "legacy_first_icu_stay_restriction",
+    "load_verified_legacy_materialization_provenance",
+]
