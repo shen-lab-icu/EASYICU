@@ -17,6 +17,11 @@ from ..contracts.ordered_stratified import (
     has_fixed_ordered_stratified_input_roster,
 )
 from ..contracts.scientific_runtime_ownership import has_scientific_runtime_owner
+from ..planning.cohort_contract import (
+    CohortDefinition,
+    cohort_concept_id_scope,
+    cohort_definition_concept_ids,
+)
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
 from .evidence_store import EvidenceStore, sha256_of_bytes, sha256_of_file
 from .plan_scope import (
@@ -224,6 +229,15 @@ def resolve_registered_plan_authority(
 
     selected_digest = sha256_of_file(Path(plan_path))
     selected_public_payload = plan.model_dump(mode="json")
+    # The registered bytes are re-read as a plan.  A cohort predicate may name
+    # a materialized column that only the run's scoped registration makes
+    # known, and finalization runs outside that scope; the current plan's own
+    # cohort ids are the ones its registered copy needs, and the dumps must
+    # still match exactly.
+    cohort = getattr(plan, "cohort", None)
+    cohort_ids = cohort_definition_concept_ids(
+        cohort if isinstance(cohort, CohortDefinition) else None
+    )
     candidates = []
     for record in evidence.records():
         payload = record.model_dump(mode="json")
@@ -234,9 +248,10 @@ def resolve_registered_plan_authority(
         if verified_path is None:
             continue
         try:
-            registered_plan = AnalysisPlan.model_validate_json(
-                verified_path.read_text(encoding="utf-8")
-            )
+            with cohort_concept_id_scope(cohort_ids):
+                registered_plan = AnalysisPlan.model_validate_json(
+                    verified_path.read_text(encoding="utf-8")
+                )
         except (OSError, TypeError, ValueError):
             continue
         # Pydantic equality includes PrivateAttr state. Execution may attach

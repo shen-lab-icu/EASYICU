@@ -1,11 +1,7 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/planning/figure_strategy.py",
-      "src/easyicu/research_agent/planning/study_design.py",
-      "src/easyicu/research_agent/planning/study_design_playbook.py",
-      "src/easyicu/research_agent/reporting/article_contract.py",
-      "src/easyicu/research_agent/schema.py"
+      "src/easyicu/research_agent/planning/cohort_contract.py"
     ],
     "summary_changes": {}
   },
@@ -556,9 +552,16 @@
         "src/easyicu/research_agent/schema.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "Registered-plan re-read (2026-09-25): planning/cohort_contract.py gains cohort_definition_concept_ids so finalization can re-read a plan whose cohort filters a materialized column; Canonical9 resource selections and prompt-size metrics are unchanged, only this source digest moves",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/planning/cohort_contract.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Method-family closure 2026-09-22 (family_spec_v1 lane): planning and review owners changed -- figure strategy cluster_selection role and phenotyping coverage-heatmap alias, sealed-suite role projection in study_design, playbook and article-contract formal result scope for the sealed feasibility family, per-figure-output panel ids in schema. Only the H3 planning contract moves (+92 bytes, +23 approx tokens, from the cluster_selection role); all summary maxima are unchanged.",
+  "baseline_reason": "Registered-plan re-read (2026-09-25): planning/cohort_contract.py gains cohort_definition_concept_ids so finalization can re-read a plan whose cohort filters a materialized column; Canonical9 resource selections and prompt-size metrics are unchanged, only this source digest moves",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -578,7 +581,7 @@
     "src/easyicu/research_agent/learning/store.py": "2a951e221b413c6e0c251382224acd3bba7bde8e23cca25812def65df0ef26d0",
     "src/easyicu/research_agent/planning/analysis_blueprint.py": "5330a604f9894c879ba400bee3b3ac1b617de1ce24425506139a5a29bb4020b2",
     "src/easyicu/research_agent/planning/analysis_types.py": "090cd53523b66169a81a70797b038798d6e32b62ea233154a11ee72bf33a74d8",
-    "src/easyicu/research_agent/planning/cohort_contract.py": "17cbe43c3626550a93d1753f3f21c171f430aba83e1daad3c9a42ddc0ce705c4",
+    "src/easyicu/research_agent/planning/cohort_contract.py": "de7fa458023dbb22e07014ab3e60424b4ff7f9f354b7ec845dabece4364e4b83",
     "src/easyicu/research_agent/planning/figure_strategy.py": "f3043fd7ff90e494d6edb3ea3bbd783364eece5e0606c20c3ec805e357528eb4",
     "src/easyicu/research_agent/planning/study_design.py": "84e7d9c0974ca3d1f9deadcc22de065586a9be20fcdf66f101f931469b64cad0",
     "src/easyicu/research_agent/planning/study_design_playbook.py": "fa07ee36a06d560ca9266999516bf1f394c4ac522d5b1436bf689d274b07888d",

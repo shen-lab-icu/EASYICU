@@ -2033,6 +2033,10 @@
     ],
     [
       "easyicu.research_agent.authority.plan_input_closure",
+      "easyicu.research_agent.planning.cohort_contract"
+    ],
+    [
+      "easyicu.research_agent.authority.plan_input_closure",
       "easyicu.research_agent.schema"
     ],
     [
@@ -12920,7 +12924,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3222,
+    "edge_count": 3223,
     "largest_scc_size": 0,
     "module_count": 762,
     "package_count": 36,
