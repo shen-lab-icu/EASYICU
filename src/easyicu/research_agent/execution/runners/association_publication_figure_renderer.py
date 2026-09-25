@@ -365,10 +365,11 @@ def _draw_absolute_risk_points(
     ax.set_xticks(np.arange(len(groups)), labels, fontsize=6.0)
     ax.set_xlim(-0.6, len(groups) - 0.4)
     ax.set_ylim(0.0, 100.0 * float(frame["ci_high"].max()) * 1.12)
+    # The article strategy reads a risk panel by its reader-facing term.
     return (
-        "Observed risk by exposure level"
+        "Absolute risk by exposure level"
         if "level" in kinds
-        else "Observed risk by measurement state"
+        else "Absolute risk by measurement state"
     )
 
 
@@ -499,12 +500,12 @@ _PANEL_LEGENDS = {
         "the observed outcome risk in each exposure state with its 95% "
         "confidence interval"
     ),
-    "Observed risk by exposure level": (
+    "Absolute risk by exposure level": (
         "the observed outcome risk with its 95% confidence interval in each "
         "exposure level, after the total with a measured exposure; numbers "
         "under each group are events/n"
     ),
-    "Observed risk by measurement state": (
+    "Absolute risk by measurement state": (
         "the observed outcome risk with its 95% confidence interval in each "
         "measurement state; numbers under each group are events/n"
     ),
