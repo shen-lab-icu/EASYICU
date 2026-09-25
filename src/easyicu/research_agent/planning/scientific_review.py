@@ -96,6 +96,12 @@ from .sensitivity_authority import (
     FUNCTIONAL_FORM_EXECUTABLE_METHODS,
 )
 from .capability_registry import assess_scientific_capability
+from .robustness_contract import complete_case_variables
+from ..contracts.model_retention import (
+    RETENTION_BLOCKER_BELOW,
+    RETENTION_MAJOR_BELOW,
+    PrimaryModelRetentionEvidence,
+)
 
 
 ScientificReviewSeverity = Literal["blocker", "major", "minor"]
@@ -124,7 +130,7 @@ class PlanScientificFinding(BaseModel):
     authorization_question: Optional[str] = None
 
 
-CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/13"
+CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/14"
 
 
 class PlanScientificReview(BaseModel):
@@ -132,12 +138,14 @@ class PlanScientificReview(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    # Archived reviews remain readable, but cannot substitute for a /13
-    # execution review (the resume gate also binds the review version).
+    # Archived reviews remain readable, but cannot substitute for a /14
+    # execution review (the resume gate also binds the review version).  /14
+    # measures the primary model's retention on the cohort execution reads.
     schema_version: Literal[
         "easyicu.plan_scientific_review/10", "easyicu.plan_scientific_review/11",
         "easyicu.plan_scientific_review/12",
         "easyicu.plan_scientific_review/13",
+        "easyicu.plan_scientific_review/14",
     ] = (
         CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION
     )
@@ -1764,6 +1772,171 @@ def render_agent_plan_revision_contract(review: PlanScientificReview) -> str:
     return "\n".join(lines)
 
 
+def primary_model_retention_findings(
+    evidence: Optional[PrimaryModelRetentionEvidence],
+) -> list[PlanScientificFinding]:
+    """Judge the primary model by the rows it would fit, not by its labels.
+
+    Nothing is said without a measurement (``None``), and candidate planning
+    that reads no rows records the fact only.  Every finding routes to the
+    runtime owner: a Planner must not "repair" a lost cohort by dropping the
+    confounders whose missingness caused it.
+    """
+
+    if evidence is None or evidence.status == "not_applicable":
+        return []
+    refs = ["scientific_plan_review.json.facts.primary_model_retention"]
+    if evidence.status == "rows_unavailable":
+        if evidence.reason_code == "metadata_only_planning":
+            return []
+        return [
+            PlanScientificFinding(
+                code="PRIMARY_MODEL_RETENTION_UNVERIFIED",
+                severity="minor",
+                dimension="statistical_design",
+                message=(
+                    "The rows the primary model would fit could not be counted before "
+                    f"approval ({evidence.reason_code})."
+                ),
+                evidence_refs=refs,
+                remediation=(
+                    "Count the primary model's rows on the cohort execution binds; the "
+                    "fitted denominator is still audited after execution."
+                ),
+                remediation_route="runtime_capability",
+            )
+        ]
+    if evidence.status == "not_evaluable":
+        return [
+            PlanScientificFinding(
+                code="PRIMARY_MODEL_NOT_EVALUABLE_ON_SEALED_COHORT",
+                severity="blocker",
+                dimension="statistical_design",
+                message=(
+                    "The primary model cannot be evaluated on the cohort execution will "
+                    f"read ({evidence.reason_code}); the approved run would fail there."
+                ),
+                evidence_refs=refs,
+                remediation=(
+                    "Bind the primary model to columns and levels the sealed cohort "
+                    "actually carries before approval."
+                ),
+                remediation_route="runtime_capability",
+            )
+        ]
+    if evidence.status == "probe_failed":
+        return [
+            PlanScientificFinding(
+                code="PRIMARY_MODEL_RETENTION_PROBE_FAILED",
+                severity="major",
+                dimension="statistical_design",
+                message=(
+                    "Counting the primary model's rows failed unexpectedly "
+                    f"({evidence.reason_code}); its retention is unknown."
+                ),
+                evidence_refs=refs,
+                remediation="Repair the retention measurement before relying on the plan.",
+                remediation_route="runtime_capability",
+            )
+        ]
+    findings: list[PlanScientificFinding] = []
+    for item in evidence.requirements:
+        if item.retention is None or item.retention >= RETENTION_MAJOR_BELOW:
+            continue
+        drivers = sorted(
+            (
+                entry
+                for entry in item.covariates
+                if entry.handling != "unmeasured_category" and entry.n_missing
+            ),
+            key=lambda entry: (-entry.n_missing, entry.name),
+        )[:3]
+        driver_text = (
+            "; unmeasured "
+            + ", ".join(f"{entry.name} ({entry.n_missing} rows)" for entry in drivers)
+            if drivers
+            else ""
+        )
+        rate_text = (
+            f"; outcome rate {item.outcome_rate_retained:.1%} in fitted rows vs "
+            f"{item.outcome_rate_dropped:.1%} in dropped rows"
+            if item.outcome_rate_retained is not None
+            and item.outcome_rate_dropped is not None
+            else ""
+        )
+        insufficient = item.retention < RETENTION_BLOCKER_BELOW
+        findings.append(
+            PlanScientificFinding(
+                code=(
+                    "PRIMARY_MODEL_RETENTION_INSUFFICIENT"
+                    if insufficient
+                    else "PRIMARY_MODEL_RETENTION_REDUCED"
+                ),
+                severity="blocker" if insufficient else "major",
+                dimension="statistical_design",
+                message=(
+                    f"The primary model {item.requirement_id} would fit {item.model_n} of "
+                    f"{item.evaluable_n} evaluable rows ({item.retention:.0%})"
+                    f"{driver_text}{rate_text}."
+                ),
+                evidence_refs=refs,
+                remediation=(
+                    "Keep frequently unmeasured confounders' rows as an explicit "
+                    "unmeasured state where the primary owner supports it, or change the "
+                    "design so the fitted rows answer the reviewed question; the "
+                    "complete-case fit stays a sensitivity analysis."
+                ),
+                remediation_route="runtime_capability",
+            )
+        )
+    return findings
+
+
+def _missing_category_complete_case_findings(plan: AnalysisPlan) -> list[PlanScientificFinding]:
+    """A kept unmeasured state needs the complete-case fit beside it."""
+
+    covered = [
+        set(variables)
+        for spec in plan.robustness_specs
+        for variables in [complete_case_variables(spec)]
+        if variables
+    ]
+    uncovered = [
+        requirement.requirement_id
+        for step in plan.steps
+        for requirement in (step.model_requirements or ())
+        if requirement.analysis_role == "primary"
+        and requirement.missing_category_covariates()
+        and not any(
+            set(requirement.missing_category_covariates()) <= variables
+            for variables in covered
+        )
+    ]
+    if not uncovered:
+        return []
+    return [
+        PlanScientificFinding(
+            code="MISSING_CATEGORY_WITHOUT_COMPLETE_CASE_SENSITIVITY",
+            severity="major",
+            dimension="robustness",
+            message=(
+                "The primary model keeps unmeasured covariate rows as their own state "
+                "but no prespecified complete-case refit covers those covariates: "
+                + ", ".join(uncovered)
+            ),
+            evidence_refs=[
+                "analysis_plan.json.model_requirements",
+                "analysis_plan.json.robustness_specs",
+            ],
+            remediation=(
+                "Prespecify a complete-case refit whose locked variables include every "
+                "covariate kept as unmeasured."
+            ),
+            remediation_route="agent_plan_revision",
+        )
+    ]
+
+
 def build_plan_scientific_review(
     *,
     context: ResearchContext,
@@ -1772,6 +1945,7 @@ def build_plan_scientific_review(
     figure_strategy: Optional[ArticleFigureStrategy] = None,
     require_reportable_capability: bool = False,
     runtime_authority: CurrentCaseScientificRuntimeAuthority | None = None,
+    model_retention: Optional[PrimaryModelRetentionEvidence] = None,
 ) -> PlanScientificReview:
     """Score and adjudicate the exact proposed plan before human approval."""
 
@@ -2931,6 +3105,8 @@ def build_plan_scientific_review(
             )
         )
 
+    findings.extend(primary_model_retention_findings(model_retention))
+    findings.extend(_missing_category_complete_case_findings(plan))
     routed_findings = [
         finding.model_copy(
             update={"remediation_route": remediation_route_for_finding(finding)}
@@ -2987,6 +3163,9 @@ def build_plan_scientific_review(
         dimension_scores=dimensions,
         findings=findings,
         facts={
+            "primary_model_retention": (
+                model_retention.facts() if model_retention is not None else None
+            ),
             "plan_population_requirements": population_requirements.model_dump(mode="json") if population_requirements else None,
             "population_scope_changes": population_changes,
             "accepted_baseline_coverage": baseline_coverage,
@@ -3103,6 +3282,7 @@ __all__ = [
     "render_plan_scientific_guardrails",
     "render_agent_plan_revision_contract",
     "plan_revision_blocker_codes",
+    "primary_model_retention_findings",
     "remediation_route_for_finding",
     "required_method_layers_for_context",
     "required_method_layers_for_plan",

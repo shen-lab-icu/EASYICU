@@ -253,6 +253,10 @@ from .execution.host_services import (
 )
 from .execution.cohort_routing import PreselectionUniverseOwnerCapability
 from .execution.output_files import _clear_output_dir, _has_figure_exports
+from .execution.primary_model_retention import (
+    measure_primary_model_retention,
+    resolve_review_cohort_path,
+)
 from .concept_dict_audit import (
     assert_dict_matches as assert_concept_dict_matches,
     verify_recorded_dict_match,
@@ -2965,37 +2969,6 @@ class ResearchAgentPipeline:
                 normalized_plan_filename=f"{lifecycle_evidence_id}.json",
                 prompt_pack_version=prompt_version,
             )
-        if self._config.require_human_plan_review:
-            if self._config.require_literature_design_authority:
-                _scientific_plan_gate.append_literature_design_authority_finding(
-                    findings, plan, preplan_literature
-                )
-            if self._config.require_literature_retrieval_evidence:
-                findings.extend(
-                    literature_retrieval_findings(
-                        plan=plan,
-                        contract=contract_for_plan_finalization(
-                            plan=plan,
-                            preplan_literature=preplan_literature,
-                        ),
-                    )
-                )
-            review_gate = _scientific_plan_gate.prepare_scientific_plan_review_gate(
-                context=context,
-                plan=plan,
-                literature=preplan_literature,
-                figure_strategy=article_figure_strategy,
-                run_dir=run_dir,
-                evidence=evidence,
-                require_reportable_capability=(
-                    self._config.require_reportable_scientific_capability
-                ),
-                reuse_existing_review=reused_prior_plan,
-                runtime_authority=(
-                    self._scientific_runtime_authorities.current_case
-                ),
-            )
-            findings.append(review_gate.finding)
         write_locked_cohort_definition(
             run_dir=run_dir,
             plan=plan,
@@ -3017,6 +2990,7 @@ class ResearchAgentPipeline:
         # LLM-generated step to re-apply 纳排 (which run10/run11 showed it does
         # not, so the primary model ran on the full universe). The full universe
         # is exposed only to typed robustness/cohort-construction steps.
+        analysis_cohort: Optional[Dict[str, Any]] = None
         if not reused_prior_plan:
             analysis_cohort = materialize_locked_analysis_cohort(
                 run_dir=run_dir,
@@ -3081,6 +3055,53 @@ class ResearchAgentPipeline:
                     f"({analysis_cohort['error']}); refusing to continue on the "
                     "unfiltered universe"
                 )
+        # The scientific review runs on the cohort execution will bind, so it
+        # can count the rows the primary model would fit (not just its labels).
+        if self._config.require_human_plan_review:
+            if self._config.require_literature_design_authority:
+                _scientific_plan_gate.append_literature_design_authority_finding(
+                    findings, plan, preplan_literature
+                )
+            if self._config.require_literature_retrieval_evidence:
+                findings.extend(
+                    literature_retrieval_findings(
+                        plan=plan,
+                        contract=contract_for_plan_finalization(
+                            plan=plan,
+                            preplan_literature=preplan_literature,
+                        ),
+                    )
+                )
+            review_gate = _scientific_plan_gate.prepare_scientific_plan_review_gate(
+                context=context,
+                plan=plan,
+                literature=preplan_literature,
+                figure_strategy=article_figure_strategy,
+                run_dir=run_dir,
+                evidence=evidence,
+                require_reportable_capability=(
+                    self._config.require_reportable_scientific_capability
+                ),
+                reuse_existing_review=reused_prior_plan,
+                runtime_authority=(
+                    self._scientific_runtime_authorities.current_case
+                ),
+                model_retention=measure_primary_model_retention(
+                    context=context,
+                    plan=plan,
+                    cohort_path=resolve_review_cohort_path(
+                        run_dir=run_dir,
+                        plan=plan,
+                        universe_path=cohort_path,
+                        materialization=analysis_cohort,
+                        cohort_concept_ids=cohort_concept_ids,
+                    ),
+                    runtime_authority=(
+                        self._scientific_runtime_authorities.current_case
+                    ),
+                ),
+            )
+            findings.append(review_gate.finding)
         emit_progress(
             "plan",
             f"Analysis plan ready with {len(plan.steps)} step(s).",

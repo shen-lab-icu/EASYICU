@@ -14,6 +14,7 @@ from ..planning.progressive_contract import (
     PROGRESSIVE_HOST_COMPILED_OUTPUTS,
     ProgressiveCohortIntent,
     ProgressiveFoundationMaterialization,
+    ProgressiveModelTermIntent,
     ProgressiveModuleId,
     ProgressiveOutlineStep,
     ProgressivePlanOutline,
@@ -108,10 +109,36 @@ def _canonicalize_outline_coordinates(payload: Mapping[str, Any]) -> dict[str, A
     return canonical
 
 
+def _without_host_term_fields(value: Any) -> Any:
+    """Drop host-owned model-term fields a provider may have decorated.
+
+    Whether a covariate keeps its unmeasured rows is a family template's
+    decision from measured missingness; the transport schema never offers it,
+    and a provider that writes it anyway is normalized, not obeyed.
+    """
+
+    if isinstance(value, list):
+        return [_without_host_term_fields(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    cleaned = {key: _without_host_term_fields(item) for key, item in value.items()}
+    terms = cleaned.get("model_terms")
+    if isinstance(terms, list):
+        host_owned = ProgressiveModelTermIntent.HOST_OWNED_FIELDS
+        cleaned["model_terms"] = [
+            {key: item for key, item in term.items() if key not in host_owned}
+            if isinstance(term, dict)
+            else term
+            for term in terms
+        ]
+    return cleaned
+
+
 def parse_progressive_model(raw: str, model: type[Any]) -> Any:
     payload = json.loads(str(raw or "").strip())
     if not isinstance(payload, dict):
         raise ValueError("progressive Planner response root must be an object")
+    payload = _without_host_term_fields(payload)
     if model is ProgressivePlanOutline:
         payload = _canonicalize_outline_coordinates(payload)
     parsed = model.model_validate(payload)
@@ -137,6 +164,7 @@ def parse_progressive_foundation_materialization(
     payload = json.loads(str(raw or "").strip())
     if not isinstance(payload, dict):
         raise ValueError("progressive Planner response root must be an object")
+    payload = _without_host_term_fields(payload)
     if outline_sha256 is not None:
         # The digest is a host-computed transport coordinate, not a scientific
         # choice. Bind it here just as the step parser binds
@@ -216,6 +244,7 @@ def parse_progressive_step_materialization(
     payload = json.loads(str(raw or "").strip())
     if not isinstance(payload, dict):
         raise ValueError("progressive Planner response root must be an object")
+    payload = _without_host_term_fields(payload)
     if outline_step is not None and not outline_step_sha256:
         raise ValueError("host outline step digest is required")
     if outline_step_sha256 is not None:
@@ -909,6 +938,10 @@ def _bind_step_rosters(
         step_properties[field] = _nullable(executable_variable)
     table_properties["name"] = copy.deepcopy(executable_variable)
     model_properties["name"] = copy.deepcopy(executable_variable)
+    # Host-owned (a family template's call from measured missingness); the
+    # transport never offers them and the parsers strip a decorated value.
+    for field in ProgressiveModelTermIntent.HOST_OWNED_FIELDS:
+        model_properties.pop(field, None)
     action_schema: dict[str, Any]
     if scientific_action_ids:
         action_schema = _nullable(_string_enum(scientific_action_ids))

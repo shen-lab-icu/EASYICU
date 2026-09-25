@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from ...canonical_json import canonical_sha256
+from ...contracts.model_retention import MISSING_CATEGORY_SHARE_THRESHOLD
 from ..design_selection import ResearchDesignCandidate, ResearchDesignSelection
 from ..method_literature import METHOD_CARDS
 from ..progressive_contract import (
@@ -58,6 +59,7 @@ from ..progressive_contract import (
     ProgressiveTableOneVariable,
 )
 from .contract import (
+    LANDMARK_CATEGORICAL_FAMILY_ID,
     FamilyPlanSpec,
     FamilySpecError,
     FamilySpecRequest,
@@ -194,6 +196,24 @@ def _step_bindings(
     return bindings
 
 
+def keeps_unmeasured_covariate_rows(request: FamilySpecRequest) -> bool:
+    """Whether this family keeps a frequently unmeasured covariate's rows.
+
+    Only the categorical-exposure estimator fits an explicit unmeasured
+    state; the spline family fits complete rows and refuses the policy.
+    """
+
+    return request.family_id == LANDMARK_CATEGORICAL_FAMILY_ID
+
+
+def _unmeasured_category(request: FamilySpecRequest, name: str) -> bool:
+    if not keeps_unmeasured_covariate_rows(request):
+        return False
+    candidate = request.candidate(name)
+    share = candidate.missing_share if candidate is not None else None
+    return share is not None and share >= MISSING_CATEGORY_SHARE_THRESHOLD
+
+
 def _covariate_terms(
     request: FamilySpecRequest,
     spec: FamilyPlanSpec,
@@ -203,6 +223,10 @@ def _covariate_terms(
     Under an exact user roster the user's rationales travel with the terms; the
     spec cannot add or remove a covariate.  Under Planner selection the spec's
     decisions are used exactly as validated against the sealed candidates.
+    Either way, a covariate measured missing in at least
+    ``MISSING_CATEGORY_SHARE_THRESHOLD`` of rows keeps its unmeasured rows as
+    their own state where the family's estimator supports it, instead of
+    silently shrinking the fitted cohort.
     """
 
     decisions: list[SpecCovariateDecision]
@@ -247,6 +271,9 @@ def _covariate_terms(
             coding=item.coding,
             reference_level_index=item.reference_level_index,
             clinical_rationale=item.clinical_rationale,
+            missing_handling=(
+                "unmeasured_category" if _unmeasured_category(request, item.name) else None
+            ),
         )
         for item in decisions
     ]
@@ -328,6 +355,27 @@ def _design_selection(
         "调整 " + listing([_label(spec, name) for name in covariates], language)
         if covariates
         else "不调整（未授权任何协变量）"
+    )
+    unmeasured = [
+        _label(spec, name) for name in covariates if _unmeasured_category(request, name)
+    ]
+    missing_text = (
+        "Unknown exposure rows are described but not modelled; rows where "
+        f"{', '.join(unmeasured)} was not measured stay in the primary model as an explicit "
+        "unmeasured state (a median fill with an indicator for a numeric covariate, an extra "
+        "level for a categorical one); rows missing another covariate are excluded and "
+        "reported; a complete-case refit is prespecified."
+        if unmeasured
+        else "Unknown exposure rows are described but not modelled; covariate-missing rows are "
+        "excluded from the primary model and reported; a complete-case refit is prespecified."
+    )
+    missing_text_zh = (
+        f"暴露未知的行只做描述、不进入模型；{listing(unmeasured, language)} 未测量的行作为单独的"
+        "未测量状态保留在主模型中（数值变量以中位数填补并加指示变量，分类变量增设一个水平），"
+        "缺少其他协变量的行排除并报告；预先设定完整病例重拟合。"
+        if unmeasured
+        else "暴露未知的行只做描述、不进入模型；协变量缺失的行从主模型中排除并报告；预先设定完整"
+        "病例重拟合。"
     )
     # Only the covariates that really get a functional-form step: a spline
     # promised for a binary or categorical covariate would be a check the
@@ -436,10 +484,7 @@ def _design_selection(
                     else f"logistic 模型，采用处理对比（{contrast} vs {reference}），{adjustment_text_zh}；"
                     "另按每级增量报告有序线性趋势项。"
                 ),
-                (
-                    "暴露未知的行只做描述、不进入模型；协变量缺失的行从主模型中排除并报告；预先设定完整"
-                    "病例重拟合。"
-                ),
+                missing_text_zh,
                 (
                     "；".join(dict.fromkeys(sensitivity_bits_zh))
                     + "；每次重拟合都复用主分析内核，解读前先审计分母。"
@@ -471,10 +516,7 @@ def _design_selection(
                     else f"Logistic model with treatment contrasts ({contrast} vs {reference}), "
                     f"{adjustment_text}; an ordinal-linear trend term is reported per level increment."
                 ),
-                (
-                    "Unknown exposure rows are described but not modelled; covariate-missing rows are "
-                    "excluded from the primary model and reported; a complete-case refit is prespecified."
-                ),
+                missing_text,
                 sentence(
                     "; ".join(dict.fromkeys(sensitivity_bits))
                     + "; every refit reuses the primary kernel and denominators are audited before "
@@ -1173,4 +1215,5 @@ __all__ = [
     "PRIMARY_ACTION",
     "build_landmark_association_skeleton",
     "build_landmark_categorical_skeleton",
+    "keeps_unmeasured_covariate_rows",
 ]

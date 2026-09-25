@@ -342,6 +342,7 @@ def _refit_first_stay(
             method_family=requirement.method_family,
             primary_contrast_level=requirement.primary_contrast_level,
             dependence=requirement.dependence,
+            missing_category_covariates=requirement.missing_category_covariates(),
             typed_cohort_input=None,
             frame=restricted,
             cohort_path=None,
@@ -396,7 +397,7 @@ def _refit_functional_form(
         rcs_fit,
     )
     from ...robustness.estimators import fit_estimator
-    from ..model_matrix import ModelTermCompilationError, compile_model_terms
+    from ..model_matrix import ModelTermCompilationError, primary_model_rows
 
     target = str(variant.target_column)
     terms = [
@@ -413,31 +414,70 @@ def _refit_functional_form(
         raise AssociationBinarySensitivityError(
             "declared model column(s) absent from the bound cohort: " + ", ".join(missing)
         )
-    complete = frame.dropna(subset=list(dict.fromkeys(needed)))
-    if complete.empty:
-        raise AssociationBinarySensitivityError("no complete rows for the functional-form refit")
+    # The primary fit's own rows under its declared missing-data policy, so the
+    # spline and linear estimates compared below come from one population.
     try:
-        compiled = compile_model_terms(
-            complete,
-            terms=[term for term in terms if term.name != target],
+        rows = primary_model_rows(
+            frame,
+            terms=terms,
             exposure=requirement.exposure_source,
+            outcome=requirement.outcome,
+            missing_category_covariates=requirement.missing_category_covariates(),
         )
     except ModelTermCompilationError as exc:
         raise AssociationBinarySensitivityError(str(exc)) from exc
-    values = pd.to_numeric(complete[target], errors="coerce")
+    complete = frame.loc[rows.design.index]
+    if requirement.dependence is not None:
+        complete = complete.loc[complete[requirement.dependence.group_source].notna()]
+    if complete.empty:
+        raise AssociationBinarySensitivityError("no complete rows for the functional-form refit")
+    fitted = rows.design.loc[complete.index]
+    unmeasured_target = next(
+        (item for item in rows.missing_category_terms if item.covariate == target), None
+    )
+    target_value_columns = [
+        column
+        for column, source in rows.source_by_design_column.items()
+        if source == target
+        and (unmeasured_target is None or column != unmeasured_target.indicator)
+    ]
+    if target_value_columns != [target]:
+        raise AssociationBinarySensitivityError(
+            f"functional-form target {target!r} is not one continuous design column"
+        )
+    values = pd.to_numeric(fitted[target], errors="coerce")
     if values.isna().any():
         raise AssociationBinarySensitivityError(
             f"functional-form target {target!r} is not numeric on every complete row"
         )
-    knots = np.quantile(values.to_numpy(dtype=float), np.asarray(variant.knot_quantiles))
+    observed = (
+        fitted[unmeasured_target.indicator].eq(0.0)
+        if unmeasured_target is not None
+        else pd.Series(True, index=fitted.index)
+    )
+    # Knots sit on measured values; a filled median is not an observation.
+    knots = np.quantile(
+        values.loc[observed].to_numpy(dtype=float), np.asarray(variant.knot_quantiles)
+    )
     try:
         basis = rcs_basis(values.to_numpy(dtype=float), knots=knots)
     except (RCSError, ValueError) as exc:
         raise AssociationBinarySensitivityError(f"{type(exc).__name__}: {exc}") from exc
     spline = pd.DataFrame(
         np.asarray(basis.matrix, dtype=float),
-        index=complete.index,
+        index=fitted.index,
         columns=[target if name == "x" else f"{target}__rcs_{name}" for name in basis.column_names],
+    )
+    others = fitted.drop(columns=[target])
+    compiled = rows.__class__(
+        design=others,
+        exposure_columns=rows.exposure_columns,
+        source_by_design_column={
+            column: source
+            for column, source in rows.source_by_design_column.items()
+            if column != target
+        },
+        missing_category_terms=rows.missing_category_terms,
     )
     design = pd.concat([compiled.design, spline], axis=1)
     source_by_column = dict(compiled.source_by_design_column)

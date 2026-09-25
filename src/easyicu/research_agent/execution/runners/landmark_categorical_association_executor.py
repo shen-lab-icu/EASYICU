@@ -371,6 +371,7 @@ def run_landmark_categorical_primary(
         method_family=requirement.method_family,
         primary_contrast_level=requirement.primary_contrast_level,
         dependence=requirement.dependence,
+        missing_category_covariates=requirement.missing_category_covariates(),
         typed_cohort_input=sealed.cohort_product,
         frame=frame,
         cohort_path=cohort_path,

@@ -363,10 +363,15 @@ def _variant_model(
             "nonlinear model-grid terms are not parent covariates: "
             + ", ".join(invalid)
         )
+    listed = set(requirement.missing_category_covariates())
     derived = frame.copy()
     compiled_terms: list[ModelTermSpec] = []
     covariates: list[str] = []
     basis_receipts: list[dict[str, Any]] = []
+    # A covariate the parent keeps as unmeasured stays one state across its
+    # basis: the basis bends on measured values only, and the kernel fills
+    # and indicates the unmeasured rows exactly as it does for the parent.
+    term_groups: dict[str, str] = {}
     for term in terms:
         if term.role == "exposure":
             if term.name != requirement.exposure_source:
@@ -405,6 +410,8 @@ def _variant_model(
                     transform="identity",
                 )
             )
+            if term.name in listed:
+                term_groups[str(column)] = term.name
         basis_receipts.append(
             {
                 "source_column": term.name,
@@ -416,7 +423,7 @@ def _variant_model(
         )
     if set(nonlinear) - set(term_by_name):
         raise AssociationModelGridError("nonlinear source is absent from parent terms")
-    return derived, exposure, covariates, compiled_terms, basis_receipts
+    return derived, exposure, covariates, compiled_terms, basis_receipts, term_groups
 
 
 def _model_grid_number(value: Any, *, field: str) -> float:
@@ -514,7 +521,7 @@ def run_association_model_grid(
         n_events = int(outcome.eq(1.0).sum())
         exposure_column = variant.exposure_column or requirement.exposure_source
         exposure_evaluable_n = int(eligible[exposure_column].notna().sum())
-        model_frame, exposure, covariates, terms, receipts = _variant_model(
+        model_frame, exposure, covariates, terms, receipts, term_groups = _variant_model(
             eligible,
             requirement=requirement,
             variant=variant,
@@ -538,6 +545,13 @@ def run_association_model_grid(
                 method_family=requirement.method_family,
                 primary_contrast_level=requirement.primary_contrast_level,
                 dependence=requirement.dependence,
+                # Every variant keeps the parent's declared missing-data policy.
+                missing_category_covariates=[
+                    name
+                    for name in requirement.missing_category_covariates()
+                    if name in covariates or name in term_groups.values()
+                ],
+                missing_category_term_groups=term_groups or None,
                 typed_cohort_input=sealed.cohort_product,
                 frame=model_frame,
                 cohort_path=cohort_path,

@@ -13,6 +13,7 @@ from ..contracts.fraction_scale import (
     is_scale_descriptor_field,
     normalize_metric_key,
 )
+from ..contracts.model_retention import estimable_missing_category_rows
 from ..contracts.model_tokens import canonical_association_method
 from ..contracts.model_contract_match import reported_model_requirement_fields
 from ..schema import (
@@ -1189,6 +1190,26 @@ class PrimaryModelContractValidator:
                     "expected": requirement.get(field),
                     "reported": reported.get(field),
                 }
+            handling = requirement.get("baseline_missing_handling")
+            if isinstance(handling, Mapping):
+                # A declared unmeasured category is part of the model: a fit
+                # that dropped those rows, or kept different ones, is another.
+                if cls._normalise(contract.get("baseline_missing_policy")) != (
+                    cls._normalise(handling.get("policy"))
+                ):
+                    mismatches["baseline_missing_policy"] = {
+                        "expected": handling.get("policy"),
+                        "reported": contract.get("baseline_missing_policy"),
+                    }
+                declared = [str(item) for item in handling.get("covariates") or ()]
+                reported_list = [
+                    str(item) for item in contract.get("missing_category_covariates") or ()
+                ]
+                if declared != reported_list:
+                    mismatches["missing_category_covariates"] = {
+                        "expected": declared,
+                        "reported": reported_list,
+                    }
             if mismatches:
                 issues.append(
                     {
@@ -1955,6 +1976,66 @@ class PrimaryModelContractValidator:
         return issues
 
     @classmethod
+    def _declared_missing_category_covariates(
+        cls, contract: Mapping[str, Any]
+    ) -> Optional[frozenset[str]]:
+        """The covariates a declared unmeasured-category fit kept, or ``None``.
+
+        Only a contract that names its list is read this way; an older
+        ``explicit_missing_category`` contract without one keeps its reading.
+        """
+
+        listed = contract.get("missing_category_covariates")
+        if cls._normalise(contract.get("baseline_missing_policy")) != (
+            "explicit_missing_category"
+        ) or not isinstance(listed, (list, tuple)):
+            return None
+        return frozenset(str(item) for item in listed)
+
+    @classmethod
+    def _declared_policy_mask(
+        cls,
+        frame: pd.DataFrame,
+        mask: pd.Series,
+        *,
+        covariates: Sequence[str],
+        kept: frozenset[str],
+        exposure: str,
+        outcome_values: pd.Series,
+    ) -> Optional[pd.Series]:
+        """Rows such a fit uses, recomputed from the cohort under the shared rule.
+
+        Unlisted covariates and the exposure must be observed; a listed
+        covariate keeps its unmeasured rows only where that state is
+        estimable (``estimable_missing_category_rows``), exactly as the fit.
+        """
+
+        for covariate in covariates:
+            if covariate in kept:
+                continue
+            if covariate not in frame.columns:
+                return None
+            mask = mask & frame[covariate].notna()
+        if exposure not in frame.columns:
+            return None
+        values = frame[exposure]
+        mask = mask & values.notna()
+        if pd.api.types.is_numeric_dtype(values):
+            numeric = pd.to_numeric(values, errors="coerce")
+            mask = mask & numeric.map(
+                lambda value: pd.notna(value) and abs(value) != float("inf")
+            )
+        listed = [str(covariate) for covariate in covariates if covariate in kept]
+        if any(covariate not in frame.columns for covariate in listed):
+            return None
+        mask, _not_estimable = estimable_missing_category_rows(
+            rows=mask,
+            unmeasured={covariate: frame[covariate].isna() for covariate in listed},
+            outcome=outcome_values,
+        )
+        return mask
+
+    @classmethod
     def _expected_denominator(
         cls,
         *,
@@ -1974,6 +2055,24 @@ class PrimaryModelContractValidator:
             mask = outcome_values.notna() & outcome_values.map(math.isfinite)
         else:
             return None
+        kept = cls._declared_missing_category_covariates(contract)
+        if kept is not None:
+            declared_mask = cls._declared_policy_mask(
+                frame,
+                mask,
+                covariates=covariates,
+                kept=kept,
+                exposure=raw_exposure_source or str(contract.get("exposure_source") or ""),
+                outcome_values=outcome_values,
+            )
+            if declared_mask is None:
+                return None
+            event_n = (
+                int(outcome_values.loc[declared_mask].sum())
+                if outcome_type == "binary"
+                else None
+            )
+            return int(declared_mask.sum()), event_n
         policy = cls._normalise(contract.get("baseline_missing_policy"))
         if policy in {"drop_missing", "drop_missing_baseline", "complete_case"}:
             for covariate in covariates:
@@ -2102,9 +2201,14 @@ class PrimaryModelContractValidator:
         policy = cls._normalise(contract.get("baseline_missing_policy"))
         analysis_set = cls._normalise(contract.get("analysis_set"))
         required_sources = [outcome] if outcome else []
-        if policy in {"drop_missing", "drop_missing_baseline", "complete_case"}:
+        kept = cls._declared_missing_category_covariates(contract)
+        if kept is not None:
+            required_sources.extend(
+                str(value) for value in covariates if str(value) not in kept
+            )
+        elif policy in {"drop_missing", "drop_missing_baseline", "complete_case"}:
             required_sources.extend(str(value) for value in covariates)
-        if analysis_set == "complete_case":
+        if analysis_set == "complete_case" or kept is not None:
             required_sources.append(
                 raw_exposure_source or str(contract.get("exposure_source") or "")
             )
@@ -2915,14 +3019,27 @@ class PrimaryModelContractValidator:
         outcome_values = pd.to_numeric(frame[outcome], errors="coerce")
         mask = outcome_values.isin([0, 1])
         policy = cls._normalise(contract.get("baseline_missing_policy"))
-        if policy == "drop_missing_baseline":
+        kept = cls._declared_missing_category_covariates(contract)
+        if kept is not None:
+            declared_mask = cls._declared_policy_mask(
+                frame,
+                mask,
+                covariates=covariates,
+                kept=kept,
+                exposure=str(contract.get("exposure_source") or ""),
+                outcome_values=outcome_values,
+            )
+            if declared_mask is None:
+                return []
+            mask = declared_mask
+        elif policy == "drop_missing_baseline":
             for covariate in covariates:
                 if covariate not in frame.columns:
                     return []
                 mask &= frame[covariate].notna()
         elif policy != "explicit_missing_category":
             return []
-        if cls._normalise(contract.get("analysis_set")) == "complete_case":
+        if kept is None and cls._normalise(contract.get("analysis_set")) == "complete_case":
             exposure = str(contract.get("exposure_source") or "")
             if exposure not in frame.columns:
                 return []
@@ -2983,7 +3100,9 @@ class PrimaryModelContractValidator:
             )
             if not is_categorical:
                 continue
-            if policy == "explicit_missing_category":
+            if policy == "explicit_missing_category" and (
+                kept is None or covariate in kept
+            ):
                 values = values.astype("object").where(values.notna(), "<missing>")
             observed_outcome = outcome_values.loc[mask]
             grouped = (

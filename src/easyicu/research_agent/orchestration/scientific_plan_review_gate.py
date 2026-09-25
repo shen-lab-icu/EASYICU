@@ -17,6 +17,7 @@ from ..authority.current_case_scientific_runtime import (
     CurrentCaseScientificRuntimeAuthority,
 )
 from ..authority.evidence_store import EvidenceStore
+from ..contracts.model_retention import PrimaryModelRetentionEvidence
 from ..contracts.runtime import PlanPhaseResult
 from ..literature import LiteratureBundle
 from ..planning.figure_strategy import ArticleFigureStrategy
@@ -241,13 +242,15 @@ def persist_or_validate_scientific_plan_review(
         if any(
             getattr(existing_review, field) != getattr(current_review, field)
             for field in binding_fields
+        ) or _retention_cohort_sha256(existing_review) != _retention_cohort_sha256(
+            current_review
         ):
             raise ScientificPlanReviewArtifactError(
                 code="scientific_plan_review_binding_drift",
                 path=path,
                 detail=(
                     "the existing review no longer binds the exact current "
-                    "context, plan, literature, and figure strategy"
+                    "context, plan, literature, figure strategy, and measured cohort"
                 ),
             )
         return existing_review, path
@@ -263,6 +266,15 @@ def persist_or_validate_scientific_plan_review(
             ),
         )
     return existing_review, path
+
+
+def _retention_cohort_sha256(review: PlanScientificReview) -> Optional[str]:
+    """The cohort a review measured its primary model on, if it measured one."""
+
+    retention = (review.facts or {}).get("primary_model_retention")
+    if not isinstance(retention, dict):
+        return None
+    return retention.get("cohort_source_sha256")
 
 
 def scientific_plan_review_finding(
@@ -322,8 +334,15 @@ def prepare_scientific_plan_review_gate(
     require_reportable_capability: bool = False,
     reuse_existing_review: bool = False,
     runtime_authority: CurrentCaseScientificRuntimeAuthority | None = None,
+    model_retention: Optional[PrimaryModelRetentionEvidence],
 ) -> ScientificPlanReviewGate:
-    """Build, bind, and project the exact review offered to a human."""
+    """Build, bind, and project the exact review offered to a human.
+
+    ``model_retention`` is the entry surface's measurement of the primary
+    model's rows on the cohort execution will bind
+    (``execution.primary_model_retention``); ``None`` means nothing was
+    measured.  A resumed review must have measured the same cohort.
+    """
 
     current_review = build_plan_scientific_review(
         context=context,
@@ -332,6 +351,7 @@ def prepare_scientific_plan_review_gate(
         figure_strategy=figure_strategy,
         require_reportable_capability=require_reportable_capability,
         runtime_authority=runtime_authority,
+        model_retention=model_retention,
     )
     review, artifact_path = persist_or_validate_scientific_plan_review(
         run_dir=run_dir,

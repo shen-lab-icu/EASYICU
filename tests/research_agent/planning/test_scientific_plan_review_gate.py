@@ -203,3 +203,43 @@ def test_review_finding_preserves_decision_and_authorization_request(
             "question": "Do you authorize the proposed study change?",
         }
     ]
+
+
+def _measured_on(cohort_sha256: str) -> PlanScientificReview:
+    review = _review(status="analysis_only", approval_allowed=True)
+    return review.model_copy(
+        update={
+            "facts": {
+                "primary_model_retention": {
+                    "status": "measured",
+                    "cohort_source_sha256": cohort_sha256,
+                }
+            }
+        }
+    )
+
+
+def test_execution_resume_rejects_a_review_measured_on_another_cohort(
+    tmp_path: Path,
+) -> None:
+    evidence = EvidenceStore(tmp_path)
+    persist_or_validate_scientific_plan_review(
+        run_dir=tmp_path, evidence=evidence, current_review=_measured_on("1" * 64)
+    )
+
+    # The same cohort resumes; a changed cohort no longer carries the verdict.
+    resumed, _ = persist_or_validate_scientific_plan_review(
+        run_dir=tmp_path,
+        evidence=evidence,
+        current_review=_measured_on("1" * 64),
+        reuse_existing_review=True,
+    )
+    assert resumed.facts["primary_model_retention"]["cohort_source_sha256"] == "1" * 64
+    with pytest.raises(ScientificPlanReviewArtifactError) as exc_info:
+        persist_or_validate_scientific_plan_review(
+            run_dir=tmp_path,
+            evidence=evidence,
+            current_review=_measured_on("2" * 64),
+            reuse_existing_review=True,
+        )
+    assert exc_info.value.code == "scientific_plan_review_binding_drift"
