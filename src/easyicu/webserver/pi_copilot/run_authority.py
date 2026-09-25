@@ -13,9 +13,9 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
 
-from easyicu.webserver import agent_runs, state_paths, study_contexts
+from easyicu.webserver import agent_review_recovery, agent_runs, state_paths, study_contexts
 
-from .contracts import PLANNER_CHECKPOINT_GATE_REASONS
+from .contracts import PLAN_RESUME_OFFER_GATE_REASONS, PLANNER_CHECKPOINT_GATE_REASONS
 from .workspace import ProjectWorkspace
 
 _MAX_FAILURE_PROJECTION_BYTES = 64 * 1024
@@ -300,7 +300,9 @@ def resumable_planner_checkpoint_job_id(
     Preparation-only projections and user-cancelled retries do not own a new
     plan, so they remain visible without masking the newest valid checkpoint.
     Every other newer terminal result is an authority boundary and prevents a
-    silent jump back to older planning state.
+    silent jump back to older planning state. A failure lineage seeds at most
+    once: a continuation that a planning gate rejected does not seed again,
+    while a budget or Provider stop keeps its explicit resume route.
     """
 
     resumable_reasons = PLANNER_CHECKPOINT_GATE_REASONS
@@ -350,7 +352,33 @@ def resumable_planner_checkpoint_job_id(
         return ""
     if resolved_candidate.parent.parent != expected_root:
         return ""
+    if str(
+        candidate.get("gate_reason") or ""
+    ) not in PLAN_RESUME_OFFER_GATE_REASONS and _continued_a_planner_checkpoint(
+        resolved_candidate
+    ):
+        # A continuation carries its source prefix forward. When a planning
+        # gate then rejects it, seeding again repeats the same prefix and the
+        # same rejection on every click; the next attempt plans anew instead.
+        return ""
     return match.group(1)
+
+
+def _continued_a_planner_checkpoint(project_dir: Path) -> bool:
+    """Return whether this run was itself launched from a Planner checkpoint.
+
+    The launch seed records the continuation; an unreadable seed is left to
+    the launch-scope owner, which rejects it when the checkpoint is used.
+    """
+
+    try:
+        seed = agent_review_recovery.load_recovery_seed(project_dir)
+    except agent_review_recovery.WebReviewRecoveryError:
+        return False
+    return bool(
+        seed is not None
+        and seed.pipeline_config.get("development_progressive_resume_checkpoint_path")
+    )
 
 
 __all__ = [
