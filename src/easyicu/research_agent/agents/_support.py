@@ -479,6 +479,12 @@ def _suggest_repairs_for(
     return repairs
 
 
+_TRAILING_EVIDENCE_RE = re.compile(
+    r"(?P<stop>[.!?。！？])\s+"
+    r"(?P<evidence>\{evidence:[^}]+\}|\[[^\[\]]*\]\(\s*evidence/[^)]+\))"
+)
+
+
 def _sentences_missing_evidence_tokens(
     scaffold: str,
     *,
@@ -545,6 +551,12 @@ def _sentences_missing_evidence_tokens(
                 continue
         cleaned_lines.append(stripped)
     text = " ".join(cleaned_lines)
+    # A host-rendered sentence carries its evidence after the full stop
+    # ("... (adjusted odds ratio). {evidence:<id>}", a link once bound). That
+    # provenance belongs to the sentence it directly follows.
+    text = _TRAILING_EVIDENCE_RE.sub(
+        lambda match: f" {match.group('evidence')}{match.group('stop')}", text
+    )
     for raw_sentence in re.split(r"(?<=[.!?。！？])\s+", text):
         sentence = raw_sentence.strip()
         if not sentence:
