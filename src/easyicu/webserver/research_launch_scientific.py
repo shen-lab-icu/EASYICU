@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from easyicu.research_agent.acquisition.first_icu_stay import FirstIcuStayBinding
 from easyicu.research_agent.acquisition.patient_grouping import PatientGroupingBinding
-from easyicu.research_agent.icu_rules import VariableKind, classify_variable
+from easyicu.research_agent.icu_rules import VariableKind
 from easyicu.webserver import dataio, primary_cohort, source_identity_authority
 from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
@@ -112,6 +112,7 @@ def _runtime_projection_sensitivity_specs(
     *,
     primary_exposure_source: str,
     primary_exposure_dtype: str = "",
+    primary_exposure: str = "",
 ) -> tuple[Any, ...]:
     """Add only the deterministic runtime's automatic nonlinear safeguard.
 
@@ -119,15 +120,22 @@ def _runtime_projection_sensitivity_specs(
     estimator.  When the researcher has not requested a competing functional-
     form sensitivity, the signed landmark runtime supplies its standard RCS
     primary plus linear sensitivity as a plan-owned automatic remediation.  It
-    is not written back to StudyContext or projected as a user request.
+    is not written back to StudyContext or projected as a user request.  The
+    exposure's kind comes from the projection's own rule, so an exposure the
+    projection binds as binary never receives the continuous safeguard.
     """
 
     if not primary_exposure_source:
         return sensitivity_specs
-    exposure_kind = classify_variable(
-        primary_exposure_source,
-        primary_exposure_dtype,
-    ).kind
+    from easyicu.webserver.scientific_runtime_projection import (
+        exposure_kind_for_dtype,
+    )
+
+    exposure_kind, _levels = exposure_kind_for_dtype(
+        primary_exposure=primary_exposure,
+        primary_exposure_source=primary_exposure_source,
+        dtype=primary_exposure_dtype,
+    )
     if exposure_kind != VariableKind.CONTINUOUS:
         return sensitivity_specs
     strategies = {

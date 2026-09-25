@@ -5563,6 +5563,7 @@ def make_research_pipeline_run_runner(
                     Path(acquisition.universe_path),
                     resolved_primary_exposure,
                 ),
+                primary_exposure=str(resolved_primary_exposure or ""),
             )
             runtime_literature_keys = manuscript_citable_keys(runtime_literature)
             runtime_direct_comparator_keys = tuple(

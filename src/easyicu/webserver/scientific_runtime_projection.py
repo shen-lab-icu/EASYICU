@@ -13,10 +13,11 @@ the projection seals the executable column domain and the runtime owner seals
 the Planner-selected roster from the reviewed plan at bind time.
 
 Allowed dependencies are the dependency-neutral sensitivity contract, the
-current-case authority builder, a parquet *schema* reader, and canonical
-hashing.  It never reads patient rows, selects a variable, or infers a landmark
-from prose.  Failures use ``WebScientificRuntimeProjectionError`` so the Web
-runner can attribute the blocker to this owner.
+current-case authority builder, the concept owner's declared value domain, a
+parquet *schema* reader, and canonical hashing.  It never reads patient rows,
+selects a variable, or infers a landmark from prose.  Failures use
+``WebScientificRuntimeProjectionError`` so the Web runner can attribute the
+blocker to this owner.
 """
 
 from __future__ import annotations
@@ -35,10 +36,13 @@ from easyicu.research_agent.authority.current_case_scientific_runtime import (
     build_current_case_scientific_runtime_authority,
 )
 from easyicu.research_agent.contracts.dependence import PlannedDependenceRequirement
+from easyicu.research_agent.contracts.model_terms import level_spelling
 from easyicu.research_agent.icu_rules import VariableKind, classify_variable
 from easyicu.research_agent.planning.sensitivity_authority import (
     PrespecifiedSensitivitySpec,
 )
+from easyicu.research_agent.research_context.typed import declared_domain_for_variable
+from easyicu.research_agent.schema import ConceptDescriptor
 
 
 class WebScientificRuntimeProjectionError(ValueError):
@@ -325,11 +329,77 @@ def primary_exposure_kind(
                 "The materialized universe schema could not be read for exposure routing.",
                 details={"artifact": Path(universe_path).name, "reason": str(exc)[:500]},
             ) from exc
+    return exposure_kind_for_dtype(
+        primary_exposure=primary_exposure,
+        primary_exposure_source=primary_exposure_source,
+        dtype=dtype,
+    )
+
+
+def exposure_kind_for_dtype(
+    *,
+    primary_exposure: str | None,
+    primary_exposure_source: str | None,
+    dtype: str,
+) -> tuple[VariableKind, tuple[str, ...]]:
+    """Classify an exposure from its names, schema dtype, and declared domain.
+
+    Every Web consumer that routes on the exposure's kind (the signed runtimes
+    and the launch's automatic functional-form safeguard) calls this one rule.
+    """
+
     hint = classify_variable(
         str(primary_exposure_source or primary_exposure or ""),
         dtype,
     )
-    return hint.kind, tuple(str(value) for value in (hint.ordinal_levels or ()))
+    levels = tuple(str(value) for value in (hint.ordinal_levels or ()))
+    if levels:
+        return hint.kind, levels
+    if "bool" in str(dtype or "").lower():
+        # The type fixes this column's domain, and its values bind as
+        # ``false``/``true`` whatever encoding the concept declares.
+        return VariableKind.BINARY, (level_spelling(False), level_spelling(True))
+    declared = _declared_binary_levels(
+        primary_exposure=primary_exposure,
+        primary_exposure_source=primary_exposure_source,
+        dtype=dtype,
+    )
+    if declared:
+        return VariableKind.BINARY, declared
+    return hint.kind, ()
+
+
+def _declared_binary_levels(
+    *,
+    primary_exposure: str | None,
+    primary_exposure_source: str | None,
+    dtype: str,
+) -> tuple[str, ...]:
+    """The concept owner's closed two-level domain for the exposure column.
+
+    Planning reads the same owner (``closed_planning_levels_for``) before any
+    row exists, so a source-published event status such as a Sepsis-3 flag is
+    a binary exposure there even though the zero-row catalog types it float64.
+    The projection has to agree, or the reviewed categorical plan is signed to
+    the continuous spline runtime.  The domain describes the concept's own
+    values, so it applies only to the column named after its source concept;
+    an operationalized column (a maximum, an onset time) is a different
+    quantity.  A domain of three or more nominal levels also needs a reviewed
+    reference level, which this row-free owner cannot choose, so it is left to
+    the name and dtype rules above.  Levels are spelled the way the executor
+    binds observed values (``level_spelling``: ``1.0`` → ``"1"``).
+    """
+
+    exposure = str(primary_exposure or "").strip()
+    if not exposure or exposure != str(primary_exposure_source or "").strip():
+        return ()
+    declared, _basis = declared_domain_for_variable(
+        ConceptDescriptor(name=exposure, dtype=dtype or "unknown", source_concept=exposure)
+    )
+    levels = tuple(level_spelling(value) for value in (declared or ()))
+    if len(levels) != 2 or len(set(levels)) != 2 or not all(levels):
+        return ()
+    return levels
 
 
 def categorical_adjustments(
@@ -1027,6 +1097,7 @@ __all__ = [
     "compile_landmark_categorical_runtime_projection",
     "compile_landmark_spline_runtime_projection",
     "compile_web_scientific_runtime_projection",
+    "exposure_kind_for_dtype",
     "kdigo_observability_authority_missing",
     "export_kdigo_strict_derivation_available",
     "kdigo_strict_derivation_available",
