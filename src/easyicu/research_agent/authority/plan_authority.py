@@ -10,6 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
+from ..planning.cohort_contract import (
+    cohort_concept_id_scope,
+    cohort_definition_concept_ids,
+)
 from ..planning.figure_step_contract import preserve_figure_steps_after_replan
 from ..planning.plan_graph import cap_plan_preserving_figure_steps
 from ..planning import figure_plan_shaping
@@ -191,8 +195,16 @@ def _preserve_completed_step_snapshots_after_replan(
         )
     payload = revised_plan.model_dump(mode="json")
     payload.update(update)
+    # Both plans were validated when they were made.  Their own cohort ids
+    # are the ones re-validating this merge needs: a column the run
+    # materialized is known only inside the run's concept scope.
+    cohort_ids = (
+        *cohort_definition_concept_ids(current_plan.cohort),
+        *cohort_definition_concept_ids(revised_plan.cohort),
+    )
     try:
-        preserved = AnalysisPlan.model_validate(payload)
+        with cohort_concept_id_scope(cohort_ids):
+            preserved = AnalysisPlan.model_validate(payload)
     except (TypeError, ValueError) as exc:
         return current_plan, [_invalid_authority_projection_finding(exc)]
     # Say which of the two things actually happened. The single sentence
@@ -368,7 +380,10 @@ def normalize_replan_candidate(
             substantive=False,
         )
     try:
-        revised = AnalysisPlan.model_validate(revised.model_dump(mode="json"))
+        with cohort_concept_id_scope(
+            cohort_definition_concept_ids(revised.cohort)
+        ):
+            revised = AnalysisPlan.model_validate(revised.model_dump(mode="json"))
         for revised_step in revised.steps:
             bind_table_one_execution_spec(revised_step, context)
             bind_step_declared_levels(revised_step, context)

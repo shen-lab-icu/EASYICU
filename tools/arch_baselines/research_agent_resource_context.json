@@ -1,6 +1,7 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
+      "src/easyicu/research_agent/agents/planner.py",
       "src/easyicu/research_agent/planning/cohort_contract.py"
     ],
     "summary_changes": {}
@@ -559,9 +560,17 @@
         "src/easyicu/research_agent/planning/cohort_contract.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "Run-scoped cohort columns (2026-09-25): planning/cohort_contract.py gains sealed_cohort_concept_ids and a scoped cohort digest, and the Planner parses a plan with the run's sealed roster; Canonical9 resource selections and prompt-size metrics are unchanged, only these source digests move",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/agents/planner.py",
+        "src/easyicu/research_agent/planning/cohort_contract.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Registered-plan re-read (2026-09-25): planning/cohort_contract.py gains cohort_definition_concept_ids so finalization can re-read a plan whose cohort filters a materialized column; Canonical9 resource selections and prompt-size metrics are unchanged, only this source digest moves",
+  "baseline_reason": "Run-scoped cohort columns (2026-09-25): planning/cohort_contract.py gains sealed_cohort_concept_ids and a scoped cohort digest, and the Planner parses a plan with the run's sealed roster; Canonical9 resource selections and prompt-size metrics are unchanged, only these source digests move",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -574,14 +583,14 @@
     "src/easyicu/data/concept-dict.json": "ab4edb8a79388ccbd902001ad6b733d063042a423d7b6507ad0dd3dd3b04b720",
     "src/easyicu/data/sofa2-dict.json": "c53b7d1c5eda51c9e88727e75eebbd93f579d0a297a5fa6f49b646032dc4faa3",
     "src/easyicu/research_agent/agents/core.py": "801fb1fe2a11b3cadc49e79389164f1dbad3477e1e7a8f3e3907a7d5fa06688d",
-    "src/easyicu/research_agent/agents/planner.py": "8658b2b6024a796d28e7dc23d4a46f2542b3322e2b3412c0c5230addc1bcff1d",
+    "src/easyicu/research_agent/agents/planner.py": "24711ca3328a8d012eb58ce8e229ea65304bd69c0a3e8f65ad7eeeeea3bcd5df",
     "src/easyicu/research_agent/graph.py": "7582775c2f126b72ef6b444edcbe35750c3c309c1e459b878e12bba9eb9933b5",
     "src/easyicu/research_agent/know_how/registry.py": "d0e0f233d8f22e76351da6057adde8ca6b87ebdc2ca7c703224716c18c6a72ee",
     "src/easyicu/research_agent/learning/runtime.py": "87743106defc0df92c826bcc5a16e9156c89877517ce1d29ce5be9654840925a",
     "src/easyicu/research_agent/learning/store.py": "2a951e221b413c6e0c251382224acd3bba7bde8e23cca25812def65df0ef26d0",
     "src/easyicu/research_agent/planning/analysis_blueprint.py": "5330a604f9894c879ba400bee3b3ac1b617de1ce24425506139a5a29bb4020b2",
     "src/easyicu/research_agent/planning/analysis_types.py": "090cd53523b66169a81a70797b038798d6e32b62ea233154a11ee72bf33a74d8",
-    "src/easyicu/research_agent/planning/cohort_contract.py": "de7fa458023dbb22e07014ab3e60424b4ff7f9f354b7ec845dabece4364e4b83",
+    "src/easyicu/research_agent/planning/cohort_contract.py": "4c9e01922aa5a10632f2711241242bc212a921f985d8f3d5092f79a06d3e7a54",
     "src/easyicu/research_agent/planning/figure_strategy.py": "f3043fd7ff90e494d6edb3ea3bbd783364eece5e0606c20c3ec805e357528eb4",
     "src/easyicu/research_agent/planning/study_design.py": "84e7d9c0974ca3d1f9deadcc22de065586a9be20fcdf66f101f931469b64cad0",
     "src/easyicu/research_agent/planning/study_design_playbook.py": "fa07ee36a06d560ca9266999516bf1f394c4ac522d5b1436bf689d274b07888d",

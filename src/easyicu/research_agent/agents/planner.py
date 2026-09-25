@@ -13,6 +13,10 @@ from ..planning.analysis_types import (
     planner_analysis_family_authority_guide, validate_host_authorized_analysis_family,
 )
 from ..planning import scientific_action_catalog as _scientific_actions
+from ..planning.cohort_contract import (
+    cohort_concept_id_scope,
+    sealed_cohort_concept_ids,
+)
 from ..planning.prompt_projection import (
     planner_prompt_byte_limit,
     project_plan_revision_prompt,
@@ -1827,7 +1831,11 @@ class PlannerAgent:
             data["research_question"] = context.research_question
         data, dropped = _normalise_plan_payload(data)
         self.last_dropped_plan_keys = dropped
-        plan = AnalysisPlan.model_validate(data)
+        # A cohort may filter on a column the run materialized; the sealed
+        # context is the roster its ids are validated against, for a first
+        # plan and a replan alike.
+        with cohort_concept_id_scope(sealed_cohort_concept_ids(context)):
+            plan = AnalysisPlan.model_validate(data)
         # Resolve the closed family before family-scoped validation.
         declared_family = str(plan.analysis_type or "").strip()
         if not declared_family:

@@ -27,6 +27,10 @@ from ..authority.manuscript_claim_policy import (
 from ..authority.scientific_claim_registry import load_registered_scientific_claims
 from ..authority.manuscript_method_facts import load_manuscript_method_facts
 from ..literature import LiteratureBundle
+from ..planning.cohort_contract import (
+    cohort_concept_id_scope,
+    sealed_cohort_concept_ids,
+)
 from ..research_context.typed import ResearchContextAuthority, parse_research_context_json
 from ..schema import AnalysisPlan, EvidenceRecord
 from .administrative_authority import (
@@ -497,7 +501,10 @@ def prepare_writer_only_migration(
     plan_validation_status = "validated"
     plan_validation_error_sha256 = ""
     try:
-        plan: Optional[AnalysisPlan] = AnalysisPlan.model_validate_json(raw_plan)
+        # A cohort may filter on a column the run materialized; validation
+        # knows it only with the roster of the run's sealed context.
+        with cohort_concept_id_scope(sealed_cohort_concept_ids(context)):
+            plan: Optional[AnalysisPlan] = AnalysisPlan.model_validate_json(raw_plan)
     except Exception as exc:
         try:
             raw_plan_payload = json.loads(raw_plan)

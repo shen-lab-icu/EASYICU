@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 from typing import Any, List, Mapping, Optional, Sequence, Tuple
 
+from ..planning.cohort_contract import cohort_concept_id_scope
 from ..schema import AnalysisPlan, AnalysisStep
 from .planned_role import verified_planned_analysis_role
 from .run_input import (
@@ -153,13 +154,23 @@ def _plan_scope_signatures_match(
     ) == _drop_legacy_empty_literature_design_decisions(expected_payload)
 
 
-def verified_plan_scientific_scope_count(paths: Sequence[Path]) -> int:
-    """Count distinct valid plan-level scopes among immutable candidates."""
+def verified_plan_scientific_scope_count(
+    paths: Sequence[Path],
+    *,
+    cohort_concept_ids: Sequence[str] = (),
+) -> int:
+    """Count distinct valid plan-level scopes among immutable candidates.
+
+    ``cohort_concept_ids`` is the run's sealed cohort roster: a candidate whose
+    cohort filters a column the run materialized is valid only with it.
+    """
 
     scopes = set()
     for path in paths:
         try:
-            plan = AnalysisPlan.model_validate_json(path.read_text(encoding="utf-8"))
+            text = path.read_text(encoding="utf-8")
+            with cohort_concept_id_scope(cohort_concept_ids):
+                plan = AnalysisPlan.model_validate_json(text)
         except (OSError, TypeError, ValueError):
             continue
         scopes.add(tuple(_serializable_plan_scientific_scope_signature(plan)))

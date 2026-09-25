@@ -15,6 +15,7 @@ from typing import Literal, Sequence
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from ..schema import AnalysisPlan, AnalysisStep
+from .cohort_contract import cohort_concept_id_scope, cohort_definition_concept_ids
 
 
 class RuntimePlanSuffixError(ValueError):
@@ -120,8 +121,14 @@ def merge_runtime_plan_suffix(
         ],
     ]
     payload["revision"] = current_plan.revision + 1
+    # The suffix never touches the cohort, which the current plan already
+    # validated; a column the run materialized is known only inside the
+    # run's concept scope, so re-validation needs exactly its own ids.
     try:
-        return AnalysisPlan.model_validate(payload)
+        with cohort_concept_id_scope(
+            cohort_definition_concept_ids(current_plan.cohort)
+        ):
+            return AnalysisPlan.model_validate(payload)
     except ValidationError as exc:
         raise RuntimePlanSuffixError(
             "runtime_suffix_merged_plan_invalid",

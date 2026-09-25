@@ -11,10 +11,14 @@ from ..canonical_json import canonical_sha256
 from ..cohort.schema import (
     COHORT_LOCK_FILENAME,
     _load_locked_cohort_definition,
+    registered_run_cohort_concept_ids,
 )
 from ..planning.cohort_contract import (
+    cohort_concept_id_scope,
+    cohort_definition_concept_ids,
     cohort_definition_sha,
     ensure_cohort_definition,
+    sealed_cohort_concept_ids,
 )
 from ..schema import AnalysisPlan, ResearchContext
 from .evidence_snapshot import load_current_evidence_snapshot
@@ -85,7 +89,10 @@ def _plan_matches_completed_steps(
     # a digest-verified, already executed plan impossible to resume.  A plan
     # that actually drops or changes a non-default cohort still fails because
     # its normalized digest differs from the immutable lock.
-    normalized_plan = ensure_cohort_definition(plan)
+    # The plan was validated when it was read; its own cohort ids stay known
+    # while it is normalized.
+    with cohort_concept_id_scope(cohort_definition_concept_ids(plan.cohort)):
+        normalized_plan = ensure_cohort_definition(plan)
     if locked_cohort_sha256 is not None and (
         cohort_definition_sha(normalized_plan.cohort) != locked_cohort_sha256
     ):
@@ -106,11 +113,31 @@ def _plan_matches_completed_steps(
     )
 
 
-def _read_candidate(path: Path) -> Optional[AnalysisPlan]:
+def _read_candidate(
+    path: Path, cohort_concept_ids: Sequence[str] = ()
+) -> Optional[AnalysisPlan]:
     try:
-        return AnalysisPlan.model_validate(json.loads(path.read_text(encoding="utf-8")))
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        with cohort_concept_id_scope(cohort_concept_ids):
+            return AnalysisPlan.model_validate(payload)
     except (OSError, TypeError, ValueError):
         return None
+
+
+def _run_cohort_concept_ids(
+    run_dir: Path, context: Optional[ResearchContext]
+) -> tuple[str, ...]:
+    """The roster the stored plans of this run are read with.
+
+    A cohort may filter on a column the run materialized, which validation
+    knows only inside the run's concept scope; resume reads the plans after
+    that scope closed.  The roster comes from the run's sealed context: the
+    caller's, or the one the run registered.
+    """
+
+    if context is None:
+        return registered_run_cohort_concept_ids(run_dir)
+    return sealed_cohort_concept_ids(context)
 
 
 def review_bound_plan_sha256(run_dir: Path) -> Optional[str]:
@@ -156,6 +183,7 @@ def load_compatible_resume_plan(
     only if it then matches every successful sealed step exactly.
     """
 
+    cohort_concept_ids = _run_cohort_concept_ids(run_dir, context)
     locked_cohort_sha256 = None
     if (run_dir / COHORT_LOCK_FILENAME).exists():
         locked_cohort_sha256 = cohort_definition_sha(
@@ -173,11 +201,13 @@ def load_compatible_resume_plan(
         run_dir=run_dir,
         resume_state=resume_state,
     )
-    plan_scope_count = verified_plan_scientific_scope_count(candidates)
+    plan_scope_count = verified_plan_scientific_scope_count(
+        candidates, cohort_concept_ids=cohort_concept_ids
+    )
     parsed_candidates = [
         (plan, candidate)
         for candidate in candidates
-        if (plan := _read_candidate(candidate)) is not None
+        if (plan := _read_candidate(candidate, cohort_concept_ids)) is not None
     ]
     reviewed_plan_sha256 = review_bound_plan_sha256(run_dir)
     if reviewed_plan_sha256 is not None:

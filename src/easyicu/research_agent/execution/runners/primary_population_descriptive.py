@@ -23,6 +23,11 @@ from ...contracts.cohort_product_keys import (
     is_closed_cohort_product_key,
     sole_typed_cohort_input,
 )
+from ...planning.cohort_contract import (
+    cohort_concept_id_scope,
+    sealed_cohort_concept_ids,
+)
+from ...research_context.typed import parse_research_context_json
 from ...schema import AnalysisPlan, AnalysisStep
 from ...contracts.runtime_outcomes import RuntimeOutcomeContract
 from ...authority.plausibility import FlagOnlyPlausibilityScope
@@ -47,7 +52,21 @@ def _bound_categorical_plan(run_dir: Path) -> AnalysisPlan:
     plan_path = contained_regular_file(root / plan_name, root)
     if plan_path is None:
         raise ValueError("Primary population plan is not inside the run")
-    return AnalysisPlan.model_validate_json(plan_path.read_text(encoding="utf-8"))
+    text = plan_path.read_text(encoding="utf-8")
+    # A cohort may filter on a column the run materialized, which validation
+    # knows only with the roster of the run's sealed context.  Without a
+    # readable typed context there is no roster, and the plan reads as before.
+    context_path = contained_regular_file(root / "research_context.json", root)
+    cohort_concept_ids: tuple[str, ...] = ()
+    if context_path is not None:
+        try:
+            cohort_concept_ids = sealed_cohort_concept_ids(
+                parse_research_context_json(context_path.read_text(encoding="utf-8"))
+            )
+        except (OSError, TypeError, ValueError):
+            cohort_concept_ids = ()
+    with cohort_concept_id_scope(cohort_concept_ids):
+        return AnalysisPlan.model_validate_json(text)
 
 
 def _categorical_model_population(
