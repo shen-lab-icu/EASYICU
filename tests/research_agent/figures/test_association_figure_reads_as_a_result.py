@@ -172,7 +172,7 @@ def test_observed_risk_is_points_with_intervals_and_events_per_group() -> None:
         title = _draw_absolute_risk_points(
             ax, frame, color="#E28E2C", neutral="#6F6F6F", level_label=str,
         )
-        assert title == "Observed risk by exposure level"
+        assert title == "Absolute risk by exposure level"
         assert not ax.patches  # no bars
         assert [label.get_text() for label in ax.get_xticklabels()] == [
             "All measured\n37/412", "1\n8/140", "2\n12/136", "3\n17/136",
@@ -217,7 +217,7 @@ def test_the_rendered_figure_names_exposure_and_outcome_in_english(tmp_path: Pat
     assert svg.count("Lactate tertile") >= 2
     assert not _CJK.search(svg)
     assert " Vs " not in svg
-    assert contract["panels"][0]["title"] == "Observed risk by exposure level"
+    assert contract["panels"][0]["title"] == "Absolute risk by exposure level"
     assert "events/n" in contract["reader_caption"]
 
 
@@ -226,3 +226,21 @@ def test_audit_status_strips_do_not_take_a_result_panel_height(tmp_path: Path) -
     height, width = mpimg.imread(out_dir / "readmission_figure.png").shape[:2]
 
     assert height / width < 0.85
+
+
+def test_the_risk_panel_carries_the_term_the_article_strategy_reads(tmp_path: Path) -> None:
+    from easyicu.research_agent.figures.contracts import panel_text
+    from easyicu.research_agent.planning.figure_strategy import build_article_figure_strategy
+
+    out_dir = _render(tmp_path)
+    contract = json.loads(
+        (out_dir / "readmission_figure.figure_contract.json").read_text(encoding="utf-8")
+    )
+    context = ra.ResearchContext.model_validate_json(
+        (tmp_path / "research_context.json").read_text(encoding="utf-8")
+    )
+    strategy = build_article_figure_strategy(context, analysis_family="association")
+    [role] = [item for item in strategy.role_strategies if item.role == "descriptive_result"]
+    [panel] = [item for item in contract["panels"] if item.get("role") == "descriptive_result"]
+
+    assert any(term in panel_text(panel) for term in role.required_text_terms)
