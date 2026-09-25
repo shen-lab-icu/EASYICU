@@ -175,6 +175,68 @@ def test_listed_but_unresolvable_optional_pick_is_dropped_not_fatal(tmp_path, mo
     assert not (tmp_path / "blocked").exists()
 
 
+
+def test_a_study_coordinate_the_schema_cannot_carry_stops_before_the_planner(
+    tmp_path, monkeypatch
+):
+    """The study's exposure and outcome must be columns of the planning schema.
+
+    A registry-only name for a concept that the export publishes under a typed
+    column cannot resolve, so it left the schema without a trace. Every plan
+    then failed the primary-result gate, which requires that exact column, and
+    each failure cost a full Planner round. A coordinate is required: the run
+    stops before any Planner call and names it.
+    """
+    import pyarrow.parquet as pq
+
+    from easyicu.research_agent.acquisition import catalog as catalog_module
+
+    typed = [
+        CatalogConcept(
+            "death", file_name="outcome.parquet", typed_metadata=True,
+            column_role="event_status",
+        ),
+        CatalogConcept(
+            "exposure_flag_v2", file_name="flags.parquet", typed_metadata=True,
+            column_role="event_status",
+        ),
+    ]
+    monkeypatch.setattr(
+        catalog_module, "build_database_capability_catalog",
+        lambda _: AvailableCatalog(
+            source="canonical",
+            concepts=[CatalogConcept("exposure_flag"), CatalogConcept("death")],
+        ),
+    )
+    monkeypatch.setattr(
+        catalog_module, "build_available_catalog",
+        lambda _: AvailableCatalog(source="export", concepts=typed),
+    )
+
+    def run(coordinates, output):
+        return owner._metadata_only_planning_acquisition(
+            database="eicu", export_path="/metadata", question="Flag and death.",
+            llm=ScriptedMockLLMClient([json.dumps({
+                "selected_concepts": ["exposure_flag_v2", "death"],
+                "rationale": "Flag and mortality.", "inclusion_exclusion": [],
+            })]),
+            output_dir=tmp_path / output,
+            required_coordinates=coordinates,
+        )
+
+    blocked = run(("exposure_flag", "death"), "blocked")
+    assert blocked.blocked
+    assert blocked.blocked_reason_code == "required_concepts_unavailable"
+    assert blocked.missing_concepts[0] == "exposure_flag"
+    assert not (tmp_path / "blocked").exists()
+
+    carried = run(("exposure_flag_v2", "death"), "carried")
+    assert not carried.blocked
+    assert {"exposure_flag_v2", "death"} <= set(
+        pq.read_schema(carried.universe_path).names
+    )
+
+
 def test_a_cross_concept_reading_is_offered_only_when_its_inputs_are_present(
     monkeypatch,
 ):
@@ -325,3 +387,74 @@ def test_an_offered_cross_concept_reading_can_actually_be_selected(monkeypatch):
     coverage = assess_coverage(["aki_stage_strict", "aki_ascertainment", "death"], menu)
     assert coverage.missing == []
     assert set(coverage.available) == {"aki_stage_strict", "aki_ascertainment", "death"}
+
+
+def test_the_planning_runner_requires_its_exposure_and_outcome_columns(
+    tmp_path, monkeypatch
+):
+    """The runner hands the study's coordinates to the source menu as required."""
+    import pandas as pd
+
+    from easyicu.webserver import provider_adapter
+
+    export = tmp_path / "export"
+    export.mkdir()
+    pd.DataFrame({"stay_id": [1], "age": [65]}).to_parquet(
+        export / "demographics.parquet", index=False
+    )
+    (export / "_manifest.json").write_text(json.dumps({
+        "database": "miiv",
+        "format": "parquet",
+        "concept_selection": {"mode": "explicit", "modules": {"demographics": ["age"]}},
+        "feature_definitions": {"included": False},
+        "files": [{
+            "file": "demographics.parquet", "module": "demographics",
+            "concepts": 1, "concept_ids": ["age"], "rows": 1,
+        }],
+    }), encoding="utf-8")
+    monkeypatch.setattr(
+        provider_adapter,
+        "build_research_agent_provider_client",
+        lambda *_args, **_kwargs: (
+            ScriptedMockLLMClient([]),
+            {"provider": "mock", "model": "metadata-only-test"},
+        ),
+    )
+    captured = {}
+
+    def capture_planning_roster(**kwargs):
+        captured.update(kwargs)
+        raise ResearchPipelineRunError(
+            "test_planning_roster_captured", "stop after the planning roster is bound"
+        )
+
+    monkeypatch.setattr(owner, "_metadata_only_planning_acquisition", capture_planning_roster)
+    runner = owner.make_research_pipeline_run_runner(
+        export_path=str(export),
+        study_context={
+            "id": "study-planning-coordinates",
+            "revision": 1,
+            "question": "How common is Sepsis-3 in adult ICU stays, and is it "
+            "associated with ICU mortality?",
+            "data_source": {"path": str(export), "database": "miiv"},
+        },
+        project_root=str(tmp_path / "projects"),
+        provider={"provider": "openai", "external": True},
+        provider_environment={"OPENAI_API_KEY": "test-key"},
+        credential_source="pi_verified",
+        budget_mode="planner_canary",
+    )
+
+    class Job:
+        id = "job-planning-coordinates"
+        cancel_requested = False
+        events: list = []
+
+        def emit(self, event):
+            self.events.append(dict(event))
+
+    with pytest.raises(ResearchPipelineRunError) as raised:
+        runner(Job())
+
+    assert raised.value.code == "test_planning_roster_captured"
+    assert tuple(captured["required_coordinates"]) == ("sep3", "death")
