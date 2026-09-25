@@ -6,10 +6,13 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from easyicu.research_agent.execution.runners.prediction_figure_executor import (
     PREDICTION_COMPOSITE_FIGURE_INPUTS,
     PREDICTION_FIGURE_ANALYSIS_KIND,
+    prediction_composite_carries_validation,
+    prediction_figure_executor_code,
     prediction_figure_executor_owns_step,
     run_prediction_figure,
 )
@@ -23,6 +26,7 @@ from easyicu.research_agent.execution.runners.prediction_model_executor import (
 )
 from easyicu.research_agent.contracts.figure_plan import (
     STATIC_PREDICTION_FIGURE_PANELS,
+    STATIC_PREDICTION_SPLIT_SURFACE_FIGURE_PANELS,
     STATIC_PREDICTION_VALIDATION_FIGURE_PANELS,
     STATIC_PREDICTION_VALIDATION_FIGURE_SUFFIX,
 )
@@ -201,8 +205,13 @@ def test_prediction_model_roster_stops_at_typed_cohort_boundary() -> None:
     assert static_prediction_model_columns(step) == ("age", "sex", "marker", "death")
 
 
+@pytest.mark.parametrize(
+    "separate_surface",
+    [False, True],
+    ids=["validation_on_composite", "reviewed_separate_surface"],
+)
 def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
-    tmp_path: Path,
+    tmp_path: Path, separate_surface: bool
 ) -> None:
     frame = _frame()
     (tmp_path / "research_context.json").write_text(
@@ -303,9 +312,15 @@ def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
             "table:validation",
             "table:clinical_utility",
         ],
+        # A plan reviewed before the composite carried validation declares the
+        # renderer's separate repeated-split surface; a current plan does not.
         expected_outputs=[
             "figure:prediction_figure",
-            "figure:prediction_figure_validation_stability",
+            *(
+                ["figure:prediction_figure_validation_stability"]
+                if separate_surface
+                else []
+            ),
         ],
         method="visualization",
         input_consumption_contracts=[
@@ -324,6 +339,18 @@ def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
     assert selection is not None
     assert selection.analysis_kind == PREDICTION_FIGURE_ANALYSIS_KIND
     assert selection.host_sealed_renderer is True
+    # The plan-time panel promise projected by shaping for this exact input
+    # set is what the code generator reads and the host renderer implements,
+    # or the end-of-execute join fails closed.
+    shaped, panel_findings = bind_deterministic_figure_panels(
+        plan=AnalysisPlan(research_question="Predict mortality.", steps=[figure_step])
+    )
+    planned = shaped.steps[0]
+    assert prediction_composite_carries_validation(planned) is not separate_surface
+    assert (
+        f"validation_on_composite={not separate_surface!r}"
+        in prediction_figure_executor_code(planned)
+    )
     figure_dir = tmp_path / "figure"
     summary = run_prediction_figure(
         out_dir=figure_dir,
@@ -331,17 +358,18 @@ def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
         resolved_inputs={"step_id": figure_step.step_id, "inputs": figure_bindings},
         step_id=figure_step.step_id,
         figure_product="prediction_figure",
+        validation_on_composite=not separate_surface,
     )
     assert summary["status"] == "ok"
     assert summary["paper_authorization_allowed"] is False
+    surfaces = ["prediction_figure"]
+    if separate_surface:
+        surfaces.append("prediction_figure_validation_stability")
+    else:
+        assert not list(figure_dir.glob("prediction_figure_validation_stability.*"))
     for suffix in ("png", "svg", "pdf", "tiff", "figure_contract.json"):
-        assert (figure_dir / f"prediction_figure.{suffix}").is_file()
-        assert (
-            figure_dir / f"prediction_figure_validation_stability.{suffix}"
-        ).is_file()
-        assert (
-            figure_dir / f"prediction_figure_supplementary_decision_curve.{suffix}"
-        ).is_file()
+        for stem in (*surfaces, "prediction_figure_supplementary_decision_curve"):
+            assert (figure_dir / f"{stem}.{suffix}").is_file()
     contract = json.loads(
         (figure_dir / "prediction_figure.figure_contract.json").read_text("utf-8")
     )
@@ -349,27 +377,36 @@ def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
         "model_performance",
         "model_performance",
         "calibration",
+        *([] if separate_surface else ["validation"]),
     ]
     assert {panel["metadata"]["placement"] for panel in contract["panels"]} == {"main"}
-    validation_contract = json.loads(
-        (
-            figure_dir / "prediction_figure_validation_stability.figure_contract.json"
-        ).read_text("utf-8")
+    # The composite is the figure the article leads with; on its own it must
+    # satisfy the prediction strategy (calibration hero and three roles).
+    from easyicu.research_agent.figures.skill import _contract_primary_strategy_ready
+
+    assert _contract_primary_strategy_ready(_context(len(frame)), contract) is (
+        not separate_surface
     )
-    assert [panel["role"] for panel in validation_contract["panels"]] == [
-        "validation",
-        "validation",
-    ]
-    assert validation_contract["panels"][0]["metadata"]["article_role"] == (
-        "validation_design"
-    )
-    assert validation_contract["panels"][1]["metadata"]["chart_type"] == (
-        "metric_dot_interval"
-    )
-    assert summary["main_figure_paths"] == [
-        "prediction_figure.png",
-        "prediction_figure_validation_stability.png",
-    ]
+    if separate_surface:
+        validation_contract = json.loads(
+            (
+                figure_dir / "prediction_figure_validation_stability.figure_contract.json"
+            ).read_text("utf-8")
+        )
+        assert [panel["role"] for panel in validation_contract["panels"]] == [
+            "validation",
+            "validation",
+        ]
+        assert validation_contract["panels"][0]["metadata"]["article_role"] == (
+            "validation_design"
+        )
+        assert validation_contract["panels"][1]["metadata"]["chart_type"] == (
+            "metric_dot_interval"
+        )
+    else:
+        assert contract["panels"][3]["metadata"]["chart_type"] == "metric_dot_interval"
+    assert summary["main_figure_paths"] == [f"{stem}.png" for stem in surfaces]
+    assert set(summary["output_files"]) == {f"figure:{stem}" for stem in surfaces}
     supplementary_contract = json.loads(
         (
             figure_dir
@@ -400,34 +437,39 @@ def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
     assert "calibration" in contract["statistics_note"].lower()
     assert "clinical benefit" in contract["statistics_note"].lower()
 
-    # The plan-time panel promise projected by shaping for this exact input
-    # set must be what the host renderer implements, or the end-of-execute
-    # join fails closed.
-    shaped, panel_findings = bind_deterministic_figure_panels(
-        plan=AnalysisPlan(research_question="Predict mortality.", steps=[figure_step])
+    templates = (
+        (*STATIC_PREDICTION_SPLIT_SURFACE_FIGURE_PANELS, *STATIC_PREDICTION_VALIDATION_FIGURE_PANELS)
+        if separate_surface
+        else STATIC_PREDICTION_FIGURE_PANELS
     )
-    planned = shaped.steps[0]
     assert [
         (panel.panel_id, panel.article_role, panel.chart_type)
         for panel in planned.figure_panels
     ] == [
         (template.panel_id, template.article_role, template.chart_type)
-        for template in (
-            *STATIC_PREDICTION_FIGURE_PANELS,
-            *STATIC_PREDICTION_VALIDATION_FIGURE_PANELS,
-        )
+        for template in templates
     ]
-    # One exported image is one surface, so the repeated-split validation
-    # panels carry their own product slot instead of joining the composite.
+    # One exported image is one surface: a declared repeated-split surface
+    # carries the validation panels, otherwise they join the composite, and
+    # never both.
     assert {panel.figure_output for panel in planned.figure_panels} == {
-        "figure:prediction_figure",
-        "figure:prediction_figure_validation_stability",
+        f"figure:{stem}" for stem in surfaces
     }
-    assert {
-        panel.article_role
+    assert [
+        panel.figure_output
         for panel in planned.figure_panels
-        if panel.figure_output.endswith(STATIC_PREDICTION_VALIDATION_FIGURE_SUFFIX)
-    } == {"validation_design", "validation"}
+        if panel.article_role == "validation"
+    ] == [
+        "figure:prediction_figure_validation_stability"
+        if separate_surface
+        else "figure:prediction_figure"
+    ]
+    if separate_surface:
+        assert {
+            panel.article_role
+            for panel in planned.figure_panels
+            if panel.figure_output.endswith(STATIC_PREDICTION_VALIDATION_FIGURE_SUFFIX)
+        } == {"validation_design", "validation"}
     assert [finding.detail["reason"] for finding in panel_findings] == [
         "deterministic_figure_panels_bound"
     ]

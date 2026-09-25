@@ -229,7 +229,7 @@ class PublicationFigureSkill:
                 skipped_reason="existing_curated_publication_figure_bundle",
             )
         promoted_bundle = _select_existing_step_publication_figure_bundle(
-            source_evidence
+            source_evidence, context=context
         )
         # A host-owned deterministic renderer has already consumed the exact
         # typed inputs and written the manuscript bundle.  Preserve that richer
@@ -2010,6 +2010,8 @@ def _select_existing_prediction_figure_bundle(
 
 def _select_existing_step_publication_figure_bundle(
     evidence: EvidenceStore,
+    *,
+    context: Optional[ResearchContext] = None,
 ) -> Optional[Dict[str, Any]]:
     groups: Dict[Tuple[str, str], Dict[str, Any]] = {}
     records = evidence.records()
@@ -2146,7 +2148,10 @@ def _select_existing_step_publication_figure_bundle(
     ]
     if not viable:
         return None
-    ranked = sorted(viable, key=_step_publication_bundle_rank)
+    ranked = sorted(
+        viable,
+        key=lambda bundle: _step_publication_bundle_rank(bundle, context=context),
+    )
     return ranked[0]
 
 
@@ -2372,9 +2377,38 @@ def _contract_primary_strategy_ready(
     return len(roles & role_pool) >= minimum
 
 
+def _bundle_is_supplementary_surface(bundle: Dict[str, Any]) -> bool:
+    """Whether the plan placed every panel of this surface in the supplement."""
+
+    payload = bundle.get("contract_payload")
+    panels = payload.get("panels") if isinstance(payload, dict) else None
+    if not isinstance(panels, list) or not panels:
+        return False
+    placements = []
+    for panel in panels:
+        metadata = panel.get("metadata") if isinstance(panel, dict) else None
+        placements.append(
+            str((metadata or {}).get("placement") or "").strip().lower()
+            if isinstance(metadata, dict)
+            else ""
+        )
+    return all(placement == "supplementary" for placement in placements)
+
+
 def _step_publication_bundle_rank(
     bundle: Dict[str, Any],
-) -> Tuple[int, int, int, int, str]:
+    *,
+    context: Optional[ResearchContext] = None,
+) -> Tuple[int, int, int, int, int, int, int, int, str]:
+    """Order step bundles for promotion to the article's main figure.
+
+    A surface the plan placed in the supplement never leads, and a bundle that
+    already satisfies the study family's main-figure strategy (its hero role
+    and enough of its roles) comes first.  The remaining heuristics order the
+    rest; among equals the bundle carrying the family's hero role, then the one
+    covering more of its roles, is preferred.
+    """
+
     roles = _bundle_contract_roles(bundle)
     chart_types = _bundle_contract_chart_types(bundle)
     step_text = str(bundle.get("step_id") or "").lower()
@@ -2409,9 +2443,22 @@ def _step_publication_bundle_rank(
         family_rank = 8
     else:
         family_rank = 9
+    family = str(infer_study_design_family(context)) if context is not None else ""
+    role_pool = _PRIMARY_PUBLICATION_ROLE_POOLS.get(family, set())
+    hero_role = _PRIMARY_PUBLICATION_HERO_ROLES.get(family)
+    payload = bundle.get("contract_payload")
+    strategy_ready = bool(
+        role_pool
+        and isinstance(payload, dict)
+        and _contract_primary_strategy_ready(context, payload)
+    )
     return (
+        1 if _bundle_is_supplementary_surface(bundle) else 0,
+        0 if strategy_ready else 1,
         family_rank,
         1 if supplemental_only else 0,
+        0 if hero_role and hero_role in roles else 1,
+        -len(roles & role_pool),
         generic_penalty,
         -int(bundle.get("order", 0)),
         str(bundle.get("stem") or ""),
@@ -2806,7 +2853,9 @@ def _has_curated_publication_figure_bundle(
     run_dir: Path,
     context: Optional[ResearchContext] = None,
 ) -> bool:
-    preferred_step_bundle = _select_existing_step_publication_figure_bundle(evidence)
+    preferred_step_bundle = _select_existing_step_publication_figure_bundle(
+        evidence, context=context
+    )
     preferred_source_ids = (
         set(_bundle_source_ids(preferred_step_bundle))
         if preferred_step_bundle is not None

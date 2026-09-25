@@ -9417,10 +9417,6 @@
     ],
     [
       "easyicu.research_agent.planning.family_spec.prediction_template",
-      "easyicu.research_agent.contracts.figure_plan"
-    ],
-    [
-      "easyicu.research_agent.planning.family_spec.prediction_template",
       "easyicu.research_agent.planning.design_selection"
     ],
     [
@@ -12924,7 +12920,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3223,
+    "edge_count": 3222,
     "largest_scc_size": 0,
     "module_count": 762,
     "package_count": 36,
