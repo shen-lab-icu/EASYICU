@@ -562,6 +562,30 @@ _NEUTRAL_MATERIALIZATION_ANCHOR = "icu_admission"
 _NEUTRAL_MATERIALIZATION_HOURS = 24.0
 
 
+def _time_window_absent(raw: Any) -> bool:
+    return raw is None or (isinstance(raw, Mapping) and not raw)
+
+
+def launch_materialization_window(study: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """Return the outer window a launch of this StudyContext materializes.
+
+    A declared window is returned as declared, for its owner to validate at
+    launch; a wholly absent one is the standing neutral window that
+    ``_neutral_materialization_scope`` applies to exactly the same studies.
+    ``None`` means a declared value that is not a window object, which the
+    launch refuses.  A caller that must know the window a candidate plan was
+    planned under reads it here instead of restating the default.
+    """
+
+    raw = study.get("time_window")
+    if _time_window_absent(raw):
+        return {
+            "hours": _NEUTRAL_MATERIALIZATION_HOURS,
+            "anchor": _NEUTRAL_MATERIALIZATION_ANCHOR,
+        }
+    return dict(raw) if isinstance(raw, Mapping) else None
+
+
 def _neutral_materialization_scope(
     study: Mapping[str, Any], *, export_path: str
 ) -> Dict[str, Any]:
@@ -604,12 +628,8 @@ def _neutral_materialization_scope(
             patched["modules"] = sorted(dict.fromkeys(available))
             applied.append("modules")
 
-    raw_window = patched.get("time_window")
-    if raw_window is None or (isinstance(raw_window, Mapping) and not raw_window):
-        patched["time_window"] = {
-            "hours": _NEUTRAL_MATERIALIZATION_HOURS,
-            "anchor": _NEUTRAL_MATERIALIZATION_ANCHOR,
-        }
+    if _time_window_absent(patched.get("time_window")):
+        patched["time_window"] = launch_materialization_window(patched)
         applied.append("time_window")
 
     if applied:

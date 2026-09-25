@@ -439,6 +439,26 @@ def _fixed_24h_landmark_candidate(
     return hours == 24.0
 
 
+def _planned_window_for_agent_landmark(
+    study: Mapping[str, Any],
+) -> Dict[str, Any] | None:
+    """The window a study without a declared one was planned on, else ``None``.
+
+    Only the Agent-plan compiler reads this: the researcher's own landmark
+    choice still requires a declared window.  The value is the launch owner's
+    standing window, never a second copy of its default.
+    """
+
+    from easyicu.webserver.research_launch_scientific import (
+        launch_materialization_window,
+    )
+
+    raw = study.get("time_window")
+    if raw is not None and not (isinstance(raw, Mapping) and not raw):
+        return None
+    return launch_materialization_window(study)
+
+
 def plan_decision_context(
     plan: Mapping[str, Any],
     decision_code: str,
@@ -600,12 +620,13 @@ def compile_agent_plan_configuration(
         codes = tuple(
             code for code in codes if code != "REPEATED_STAY_IDENTITY_UNAVAILABLE"
         )
+    clustering_refusal: PlanDecisionError | None = None
     if (
         "REPEATED_STAY_IDENTITY_UNAVAILABLE" in codes
         and not _declared_family_executes_patient_clustering(study)
     ):
         declared = study.get("analysis_design")
-        raise PlanDecisionError(
+        clustering_refusal = PlanDecisionError(
             "agent_plan_family_clustering_unsupported",
             "The study's analysis family executes one model-based fit per ICU stay; patient-clustered inference has no executable owner for it.",
             details={
@@ -616,13 +637,23 @@ def compile_agent_plan_configuration(
                 ),
             },
         )
-    if (
+    elif (
         "REPEATED_STAY_IDENTITY_UNAVAILABLE" in codes
         and not patient_cluster_available
     ):
-        raise PlanDecisionError(
+        clustering_refusal = PlanDecisionError(
             "agent_plan_patient_grouping_unavailable",
             "The selected all-stay analysis cannot be compiled without source-owned patient grouping.",
+        )
+    if clustering_refusal is not None:
+        if codes == ("REPEATED_STAY_IDENTITY_UNAVAILABLE",):
+            raise clustering_refusal
+        # Without an executable patient clustering, the reviewer's own remedy
+        # is to keep every stay, disclose the dependence limitation and keep
+        # paper authority off.  That limitation stays with the review; it does
+        # not stop the plan's other runtime findings from compiling.
+        codes = tuple(
+            code for code in codes if code != "REPEATED_STAY_IDENTITY_UNAVAILABLE"
         )
     if _ONE_STAY_POPULATION_FINDING in codes:
         cohort = study.get("cohort")
@@ -676,9 +707,19 @@ def compile_agent_plan_configuration(
             "The Agent plan must classify the temporal role of every selected covariate.",
         )
 
+    # A study with no declared window was planned on the standing window its
+    # launch materializes.  The Agent's landmark on that window is its
+    # proposal of the analytic window, so it is compiled, and declared, only
+    # together with that landmark.
+    planned_window = _planned_window_for_agent_landmark(study)
+    landmark_study = (
+        {**dict(study), "time_window": planned_window}
+        if planned_window is not None
+        else study
+    )
     fixed_window = (
         "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" in codes
-        and _fixed_24h_landmark_candidate(agent_plan, study)
+        and _fixed_24h_landmark_candidate(agent_plan, landmark_study)
     )
     exposure, aggregation = _agent_primary_source_coordinate(
         coordinates["exposure_materialized"], fixed_window=fixed_window, study=study,
@@ -722,19 +763,20 @@ def compile_agent_plan_configuration(
     )
 
     if "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" in codes:
-        if not _fixed_24h_landmark_candidate(agent_plan, study):
+        if not fixed_window:
+            window = landmark_study.get("time_window")
             raise PlanDecisionError(
                 "agent_plan_landmark_not_compilable",
                 "The Agent-selected temporal design is not a closed 24-hour landmark contract.",
                 details={
                     "design_id": str(selected.get("design_id") or ""),
                     "time_window_hours": (
-                        (study.get("time_window") or {}).get("hours")
-                        if isinstance(study.get("time_window"), Mapping)
-                        else None
+                        window.get("hours") if isinstance(window, Mapping) else None
                     ),
                 },
             )
+        if planned_window is not None:
+            patch["time_window"] = planned_window
         sensitivity = landmark_timing_specification(
             outcome=coordinates["outcome"],
             landmark_hours=24,
