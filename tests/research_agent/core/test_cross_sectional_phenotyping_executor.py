@@ -262,10 +262,13 @@ def test_exact_runtime_action_products_cover_their_published_article_roles() -> 
     assert {"phenotype_structure", "phenotype_profile"} <= covered
 
 
+@pytest.mark.parametrize("storage", ["float64", "float32"])
 def test_phenotyping_workflow_is_outcome_excluding_typed_and_renderable(
-    tmp_path: Path,
+    tmp_path: Path, storage: str
 ) -> None:
-    frame = _frame()
+    # A cohort may store measurements as float32 (Dev9 M3: the sealed figure
+    # refused centroids the fit had accumulated in float32).
+    frame = _frame().astype({"marker_a": storage, "marker_b": storage})
     (tmp_path / "research_context.json").write_text(
         _context(len(frame)).model_dump_json(indent=2), encoding="utf-8"
     )

@@ -211,7 +211,9 @@ def _fit_locked_complete_case_sensitivities(
         # The lock applies complete-case deletion only to its exact variable
         # list. Any remaining primary feature follows the unchanged primary
         # median-imputation policy before scaling.
-        imputed = SimpleImputer(strategy=_POLICY.imputation).fit_transform(complete)
+        imputed = SimpleImputer(strategy=_POLICY.imputation).fit_transform(
+            _feature_values(complete, features)
+        )
         matrix = StandardScaler().fit_transform(imputed)
         candidates, selected_k = _candidate_scores(matrix)
         labels = MiniBatchKMeans(
@@ -310,6 +312,18 @@ def _fit_locked_complete_case_sensitivities(
     return receipts, rows
 
 
+def _feature_values(frame: pd.DataFrame, features: tuple[str, ...]) -> np.ndarray:
+    """The declared features as float64, whatever width the cohort stores.
+
+    A source may store measurements as float32.  The fit, its sealed
+    standardised matrix and the centroids published beside it are computed in
+    float64, the precision every downstream reader (k selection, stability,
+    the figure's centroid check) recomputes them in.
+    """
+
+    return frame.loc[:, list(features)].to_numpy(dtype=np.float64, na_value=np.nan)
+
+
 def _feature_roster(run_dir: Path, declared: tuple[str, ...], frame: pd.DataFrame, feature_columns: tuple[str, ...]) -> tuple[str, ...]:
     context = parse_research_context_json((Path(run_dir) / "research_context.json").read_text("utf-8"))
     features = require_phenotyping_features(
@@ -339,7 +353,9 @@ def run_primary_phenotyping(
 ) -> dict[str, Any]:
     source_digest = sha256_file(Path(source_cohort))
     features = _feature_roster(Path(run_dir), declared_columns, frame, feature_columns)
-    imputed = SimpleImputer(strategy=_POLICY.imputation).fit_transform(frame.loc[:, features])
+    imputed = SimpleImputer(strategy=_POLICY.imputation).fit_transform(
+        _feature_values(frame, features)
+    )
     matrix = StandardScaler().fit_transform(imputed)
     scores, selected_k = _candidate_scores(matrix)
     model = MiniBatchKMeans(
@@ -361,7 +377,9 @@ def run_primary_phenotyping(
     for cluster in sorted(np.unique(labels)):
         mask = labels == cluster
         for index, feature in enumerate(features):
-            raw = pd.to_numeric(frame.loc[mask, feature], errors="coerce")
+            raw = pd.to_numeric(frame.loc[mask, feature], errors="coerce").astype(
+                np.float64
+            )
             profile_rows.append(
                 {
                     "cluster": int(cluster),
