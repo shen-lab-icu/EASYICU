@@ -9493,6 +9493,10 @@
     ],
     [
       "easyicu.research_agent.planning.family_spec.request",
+      "easyicu.research_agent.planning.baseline_requirements"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.request",
       "easyicu.research_agent.planning.dependence_authority"
     ],
     [
@@ -12968,7 +12972,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3234,
+    "edge_count": 3235,
     "largest_scc_size": 0,
     "module_count": 762,
     "package_count": 36,

@@ -39,7 +39,14 @@ from ..progressive_contract import (
     ProgressiveStepMaterialization,
     ProgressiveTableOneVariable,
 )
-from .contract import DESCRIPTIVE_FAMILY_ID, FamilyPlanSpec, FamilySpecError, FamilySpecRequest
+from .contract import (
+    DESCRIPTIVE_FAMILY_ID,
+    FamilyPlanSpec,
+    FamilySpecError,
+    FamilySpecRequest,
+    accepted_baseline_additions,
+    table_one_group_column,
+)
 from .plan_language import listing, plan_language, sentence
 from .landmark_categorical_template import (
     FamilySkeletonDraft,
@@ -321,6 +328,9 @@ def build_descriptive_skeleton(
     outcome = request.outcome
     identity = request.identity_column
     baseline = [str(value).strip() for value in spec.baseline_variables]
+    # An accepted baseline roster keeps its rows beside the Planner's choice.
+    retained_baseline = accepted_baseline_additions(request, [exposure, *baseline])
+    table_one_rows = [*baseline, *(row.columns[0] for row in retained_baseline)]
     candidates = {item.name: item for item in request.adjustment_candidates}
     method_keys = [key for key in request.allowed_literature_citation_keys if _method_card_elements(key)]
     distribution_keys = list(
@@ -372,7 +382,7 @@ def build_descriptive_skeleton(
         _outline_step(
             step_id="baseline_context", role="auxiliary", module_id="table_one",
             objective=objectives["baseline_context"], depends_on=["cohort_accounting"],
-            variable_names=[exposure, *baseline], citations=[], action=TABLE_ONE_ACTION,
+            variable_names=[exposure, *table_one_rows], citations=[], action=TABLE_ONE_ACTION,
         ),
         _outline_step(
             step_id="exposure_outcome_distribution", role="primary",
@@ -416,17 +426,24 @@ def build_descriptive_skeleton(
         ProgressiveSkeletonStep(
             step_id="baseline_context", planned_analysis_role="auxiliary", module_id="table_one",
             objective=objectives["baseline_context"], depends_on=["cohort_accounting"],
-            raw_inputs=list(dict.fromkeys([exposure, *baseline])),
+            raw_inputs=list(dict.fromkeys([exposure, *table_one_rows])),
             scientific_action_id=TABLE_ONE_ACTION,
-            table_one_group_by=exposure, table_one_mode="descriptive_smd_only",
+            table_one_group_by=table_one_group_column(request),
+            table_one_mode="descriptive_smd_only",
             table_one_variables=[
-                ProgressiveTableOneVariable(
-                    name=name,
-                    summary=_table_one_summary(
-                        candidates[name].allowed_codings[0] if name in candidates else "continuous"
-                    ),
-                )
-                for name in baseline
+                *(
+                    ProgressiveTableOneVariable(
+                        name=name,
+                        summary=_table_one_summary(
+                            candidates[name].allowed_codings[0] if name in candidates else "continuous"
+                        ),
+                    )
+                    for name in baseline
+                ),
+                *(
+                    ProgressiveTableOneVariable(name=row.columns[0], summary=row.summary)
+                    for row in retained_baseline
+                ),
             ],
             literature_bindings=[],
         ),
