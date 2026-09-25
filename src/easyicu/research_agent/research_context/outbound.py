@@ -388,28 +388,40 @@ def format_outbound_safe_context(
 
 
 def compact_variable_field_names(payload: dict) -> dict:
-    """Factor repeated keys, retaining every variable value and its position.
+    """Factor repeated keys and repeated variable contracts without loss.
 
     This transport representation is for Writer only. It does not alter the
     ResearchContext or give absent fields the meaning of explicit JSON nulls.
-    Small contexts keep their original representation when it is shorter.
+    Variables that agree on every field except their name share one row that
+    lists the names: the summaries of one source concept, or the measurement
+    companion of each concept, otherwise repeat the same window, unit, range
+    and policy once per column. Rows keep the order in which each contract
+    first appears. Small contexts keep their original representation when it
+    is shorter.
     """
 
     variables = payload.get("variables")
     if "variables_table" in payload or not isinstance(variables, list) or not variables or not all(
-        isinstance(row, dict) for row in variables
+        isinstance(row, dict) and isinstance(row.get("name"), str) for row in variables
     ):
         return payload
     field_sets: list[list[str]] = []
-    rows = []
+    rows: list[list[Any]] = []
+    row_by_contract: dict[str, list[Any]] = {}
     for variable in variables:
-        fields = sorted(variable)
+        fields = sorted(field for field in variable if field != "name")
         if fields not in field_sets:
             field_sets.append(fields)
-        rows.append([field_sets.index(fields), [variable[field] for field in fields]])
+        index = field_sets.index(fields)
+        values = [variable[field] for field in fields]
+        contract = json.dumps([index, values], ensure_ascii=False, sort_keys=True)
+        if contract not in row_by_contract:
+            row_by_contract[contract] = [index, [], values]
+            rows.append(row_by_contract[contract])
+        row_by_contract[contract][1].append(variable["name"])
     candidate = {key: value for key, value in payload.items() if key != "variables"}
     candidate["variables_table"] = {
-        "encoding": "Each row is [column_set_index, values]. Pair values in order with that column set to recover one variable. All fields are binding; absent fields remain absent.",
+        "encoding": "Each row is [column_set_index, names, values]. Every variable in names has exactly these values, paired in order with that column set. All fields are binding; absent fields remain absent.",
         "column_sets": field_sets,
         "rows": rows,
     }
