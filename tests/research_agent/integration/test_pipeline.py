@@ -18,6 +18,10 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
+from tests.support.pipeline_contracts import (
+    disable_article_contract as _disable_article_contract,
+    stable_plan_rules as _stable_plan_rules,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -36,43 +40,6 @@ def _empty_custom_llm_response(user_prompt: str) -> str:
     if "EVERY FINDING MUST INCLUDE" in upper and "RETURN JSON ONLY" in upper:
         return json.dumps({"findings": []})
     return "{}"
-
-
-def _disable_article_contract(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep focused lifecycle fixtures independent of manuscript completeness."""
-
-    import easyicu.research_agent.agents.core as agent_core
-    import easyicu.research_agent.pipeline as pipeline_module
-    import easyicu.research_agent.planning.final_plan_shape as final_plan_module
-    from easyicu.research_agent.agents.core import PlannerAgent
-
-    original_run = PlannerAgent.run
-
-    def run_without_article_contract(self, context, **kwargs):
-        kwargs["enforce_article_contract"] = False
-        return original_run(self, context, **kwargs)
-
-    monkeypatch.setattr(PlannerAgent, "run", run_without_article_contract)
-    monkeypatch.setattr(
-        agent_core,
-        "_validate_required_primary_result",
-        lambda **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        final_plan_module,
-        "_enforce_advanced_plan_contract",
-        lambda *, plan, context, **_kwargs: (plan, []),
-    )
-    monkeypatch.setattr(
-        final_plan_module,
-        "_ensure_publication_figure_step_in_plan",
-        lambda *, plan, context, force: (plan, []),
-    )
-    monkeypatch.setattr(
-        pipeline_module,
-        "_ensure_audit_panel_step_in_plan",
-        lambda *, plan, context, **_kwargs: (plan, []),
-    )
 
 
 def _allow_reportable_capability_for_readiness_unit(
@@ -120,15 +87,6 @@ def _allow_reportable_capability_for_readiness_unit(
             "scientific_maturity_facts": {},
         },
     )
-
-
-def _stable_plan_rules(plan: str):
-    """Return initial and probe-replan routes for a fixed focused test plan."""
-
-    return [
-        ("Produce an ICU-AWARE RESEARCH PLAN as JSON", [plan] * 8),
-        ("REVISE THE ICU-AWARE RESEARCH PLAN", [plan] * 8),
-    ]
 
 
 def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Path):

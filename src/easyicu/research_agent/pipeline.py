@@ -187,6 +187,7 @@ from .planning.adjustment_authority import (
 from .planning.cohort_contract import (
     cohort_concept_id_scope,
     cohort_definition_has_explicit_selection,
+    sealed_cohort_concept_ids,
 )
 from .planning.dependence_authority import (
     DependenceAuthorityError,
@@ -624,6 +625,18 @@ from .orchestration.resume_plan_migration import (  # noqa: F401 — owner modul
     _restore_resume_plan_robustness_lock,
     _resume_completed_records_for_plan_migration,
 )
+
+
+def _read_locked_plan(path: Path, context: ResearchContext) -> AnalysisPlan:
+    """Parse a development locked plan with its run's sealed cohort roster.
+
+    Its cohort may filter on a column the run materialized, which validation
+    knows only with that roster.
+    """
+
+    text = path.read_text(encoding="utf-8")
+    with cohort_concept_id_scope(sealed_cohort_concept_ids(context)):
+        return AnalysisPlan.model_validate_json(text)
 
 
 def _load_resume_state(run_dir: Path) -> Optional[Dict[str, Any]]:
@@ -2357,9 +2370,7 @@ class ResearchAgentPipeline:
                     f"expected={expected_digest} observed={observed_digest}"
                 )
             try:
-                plan = AnalysisPlan.model_validate_json(
-                    locked_plan_path.read_text(encoding="utf-8")
-                )
+                plan = _read_locked_plan(locked_plan_path, agent_context)
             except Exception as exc:
                 raise ValueError("development locked analysis plan is invalid") from exc
             if plan.research_question != agent_context.research_question:

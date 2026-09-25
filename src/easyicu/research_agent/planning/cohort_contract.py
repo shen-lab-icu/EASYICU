@@ -382,6 +382,44 @@ def cohort_definition_concept_ids(
     )
 
 
+def sealed_cohort_concept_ids(
+    context: Any,
+    variable_names: Sequence[str] | None = None,
+) -> tuple[str, ...]:
+    """The cohort concept ids one sealed ``ResearchContext`` makes known.
+
+    Its variable names are physical columns of the run's sealed analysis
+    input, a materialized ``<concept>_max`` among them; the source and
+    derivation concepts of those variables stay eligible as well.  Planning
+    validates a cohort against this roster and the plan lifecycle seals it.
+    Parsing a plan again -- a replan, a stored plan or cohort lock read after
+    the run's scope closed -- must present the same roster
+    (:func:`cohort_concept_id_scope`).  ``variable_names`` narrows it to
+    selected variables; by default every variable of the context counts.
+    """
+
+    variables = tuple(context.variables)
+    names = (
+        tuple(variable.name for variable in variables)
+        if variable_names is None
+        else tuple(variable_names)
+    )
+    selected = set(names)
+    values: list[str] = list(names)
+    for variable in variables:
+        if variable.name not in selected:
+            continue
+        values.extend(
+            str(value).strip()
+            for value in (
+                variable.source_concept,
+                *variable.derived_from_concepts,
+            )
+            if str(value or "").strip()
+        )
+    return tuple(dict.fromkeys(values))
+
+
 def cohort_definition_has_explicit_selection(
     definition: CohortDefinition | None,
 ) -> bool:
@@ -515,7 +553,11 @@ def expand_named_cohort(
 def cohort_definition_sha(definition: CohortDefinition) -> str:
     # Round-trip through the parser so equivalent integer/float time-window
     # literals (``24`` versus ``24.0``) have one durable scientific digest.
-    canonical = CohortDefinition.from_dict(definition.to_dict()).to_dict()
+    # The definition was validated when it was built; its own concept ids (a
+    # column the run materialized among them) stay known for the round trip,
+    # which only normalizes literals.
+    with cohort_concept_id_scope(cohort_definition_concept_ids(definition)):
+        canonical = CohortDefinition.from_dict(definition.to_dict()).to_dict()
     raw = json.dumps(
         canonical,
         sort_keys=True,

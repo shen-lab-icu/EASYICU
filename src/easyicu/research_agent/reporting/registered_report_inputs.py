@@ -24,10 +24,14 @@ from ..authority.runtime_artifacts import (
 from ..schema import EvidenceRecord
 from ..schema import AnalysisPlan
 from ..literature import LiteratureBundle
+from ..planning.cohort_contract import (
+    cohort_concept_id_scope,
+    sealed_cohort_concept_ids,
+)
 from .manuscript_reader import build_manuscript_reader
 from .manuscript_labels import reader_claim_labels, source_bound_manuscript_labels
 from .writer_evidence import _render_writer_evidence_digest_v2
-from ..research_context.typed import parse_research_context_json
+from ..research_context.typed import ResearchContextAuthority, parse_research_context_json
 from .descriptive_report_facts import (
     compile_primary_counts_only_report_facts,
     render_descriptive_report_claims,
@@ -122,6 +126,25 @@ class ReadOnlyReportEvidence:
         return sealed.read_bytes()
 
 
+def _registered_plan_and_context(
+    evidence: ReadOnlyReportEvidence,
+) -> tuple[AnalysisPlan, ResearchContextAuthority]:
+    """The registered plan and context, the plan read with the run's roster.
+
+    A cohort may filter on a column the run materialized, which validation
+    knows only inside the run's concept scope; the sealed context supplies
+    that roster again.
+    """
+
+    plan_bytes = evidence.verify_input("analysis_plan.json", "analysis_plan")
+    context = parse_research_context_json(
+        evidence.verify_input("research_context.json", "research_context")
+    )
+    with cohort_concept_id_scope(sealed_cohort_concept_ids(context)):
+        plan = AnalysisPlan.model_validate_json(plan_bytes)
+    return plan, context
+
+
 def prepare_registered_report_repair(run_dir: Path, *, migration_draft: Path | None = None) -> PreparedWriterOnlyMigration:
     """Require sealed inputs and completed analysis before any Writer call."""
 
@@ -155,8 +178,7 @@ def prepare_registered_report_repair(run_dir: Path, *, migration_draft: Path | N
             code="WRITER_ONLY_COMPLETED_ANALYSIS_REQUIRED",
             detail="Only a completed, validated analysis can enter report-only repair.",
         )
-    plan = AnalysisPlan.model_validate_json(evidence.verify_input("analysis_plan.json", "analysis_plan"))
-    context = parse_research_context_json(evidence.verify_input("research_context.json", "research_context"))
+    plan, context = _registered_plan_and_context(evidence)
     manifest = json.loads((evidence.root / "manifest.json").read_text())
     records = current_step_records(manifest.get("per_step_records", []))
     _require_completed_plan_records(plan, records)
@@ -229,8 +251,7 @@ def bind_registered_report_numbers(run_dir: Path, manuscript: str) -> tuple[str,
         evidence_store=evidence,
     )
     claims = load_registered_scientific_claims(root=run_dir, records=evidence.records())
-    plan = AnalysisPlan.model_validate_json(evidence.verify_input("analysis_plan.json", "analysis_plan"))
-    context = parse_research_context_json(evidence.verify_input("research_context.json", "research_context"))
+    plan, context = _registered_plan_and_context(evidence)
     facts = compile_primary_counts_only_report_facts(
         records, evidence=evidence, reader_display_labels=plan.display_labels,
         context=context,
@@ -271,13 +292,12 @@ def build_registered_report_reader(run_dir: Path, manuscript: str) -> dict:
     """Build the current report reader from unchanged registered source inputs."""
 
     evidence = ReadOnlyReportEvidence(run_dir)
-    plan = AnalysisPlan.model_validate_json(evidence.verify_input("analysis_plan.json", "analysis_plan"))
+    plan, context = _registered_plan_and_context(evidence)
     literature = LiteratureBundle.model_validate_json(evidence.verify_input(
         "preplan_literature_bundle.json", "preplan_literature_bundle",
     ))
     records = json.loads((run_dir / "manifest.json").read_text())["per_step_records"]
     RegisteredOutputEnvelopeConsumer().authoritative_writer_records(records, evidence_store=evidence)
-    context = parse_research_context_json(evidence.verify_input("research_context.json", "research_context"))
     plan = plan.model_copy(update={"display_labels": source_bound_manuscript_labels(context, plan.display_labels, include_unlabeled=True)})
     return build_manuscript_reader(
         manuscript=manuscript, evidence=evidence, plan=plan, literature=literature,

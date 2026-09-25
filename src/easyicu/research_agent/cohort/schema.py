@@ -22,10 +22,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
 
+from ..authority.evidence_snapshot import (
+    EvidenceAuthorityIntegrityError,
+    load_current_evidence_snapshot,
+)
 from ..authority.lock_contract import (
     LockAuthorityError,
     assert_lock_matches_evidence_anchor,
 )
+from ..authority.runtime_artifacts import verified_run_evidence_path
 from ..planning.cohort_contract import (
     ALLOWED_CTAS_AGGREGATIONS,
     Aggregation,
@@ -54,9 +59,11 @@ from ..planning.cohort_contract import (
     register_pattern,
     register_patterns_from_file,
     reset_pattern_registry,
+    sealed_cohort_concept_ids,
     validate_cohort_definition,
     validate_concept_predicate,
 )
+from ..research_context.typed import parse_research_context_json
 
 COHORT_LOCK_FILENAME = "cohort_locked.json"
 _IMPLEMENTED_AGGREGATIONS = set(ALLOWED_CTAS_AGGREGATIONS)
@@ -134,6 +141,37 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def registered_run_cohort_concept_ids(run_dir: Path) -> tuple[str, ...]:
+    """The sealed cohort roster of one run, from the context it registered.
+
+    A stored cohort lock or plan may filter on a column the run materialized,
+    which validation knows only with this roster
+    (:func:`cohort_concept_id_scope`).  A run without a verifiable registered
+    context yields no roster, so reading it behaves as it did before; a
+    damaged evidence authority is reported by the reader's own anchor check.
+    """
+
+    root = Path(run_dir)
+    try:
+        records = list(load_current_evidence_snapshot(root).records)
+    except (EvidenceAuthorityIntegrityError, OSError, ValueError):
+        return ()
+    for record in reversed(records):
+        if not isinstance(record, Mapping) or str(
+            record.get("evidence_id") or ""
+        ) != "research_context":
+            continue
+        path = verified_run_evidence_path(root, record)
+        if path is None:
+            return ()
+        try:
+            context = parse_research_context_json(path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError):
+            return ()
+        return sealed_cohort_concept_ids(context)
+    return ()
+
+
 def _load_locked_cohort_definition(run_dir: Path) -> CohortDefinition:
     path = Path(run_dir) / COHORT_LOCK_FILENAME
     if not path.exists():
@@ -147,10 +185,14 @@ def _load_locked_cohort_definition(run_dir: Path) -> CohortDefinition:
     if not isinstance(payload, dict):
         raise CohortSchemaError("cohort definition lock has an invalid payload")
     raw_cohort = payload.get("cohort")
-    definition = coerce_cohort_definition(raw_cohort)
-    if definition is None:
-        raise CohortSchemaError("cohort definition lock has no cohort payload")
-    validate_cohort_definition(definition)
+    # The lock may filter on a column the run materialized; validation knows
+    # it only with the roster of the run's sealed context.
+    cohort_concept_ids = registered_run_cohort_concept_ids(run_dir)
+    with cohort_concept_id_scope(cohort_concept_ids):
+        definition = coerce_cohort_definition(raw_cohort)
+        if definition is None:
+            raise CohortSchemaError("cohort definition lock has no cohort payload")
+        validate_cohort_definition(definition)
     expected_sha = str(payload.get("cohort_sha256") or "").strip()
     observed_sha = cohort_definition_sha(definition)
     if not expected_sha or expected_sha != observed_sha:
@@ -1740,6 +1782,7 @@ __all__ = [
     "known_concept_ids",
     "materialized_input_column_authority",
     "register_cohort_concept_ids",
+    "registered_run_cohort_concept_ids",
     "register_pattern",
     "register_patterns_from_file",
     "reset_pattern_registry",

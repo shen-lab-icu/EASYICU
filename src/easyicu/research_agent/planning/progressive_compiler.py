@@ -71,6 +71,7 @@ from .cohort_contract import (
     ConceptPredicate,
     TimeWindow,
     cohort_concept_id_scope,
+    sealed_cohort_concept_ids,
     validate_cohort_definition,
 )
 from .dependence_authority import descriptive_counts_only_required
@@ -325,27 +326,11 @@ def progressive_cohort_concept_ids(
     the dictionary exposes them through those selected variables.
     """
 
-    selected = set(variable_names)
-    values: list[str] = list(variable_names)
-    for variable in context.variables:
-        if variable.name not in selected:
-            continue
-        values.extend(
-            str(value).strip()
-            for value in (
-                variable.source_concept,
-                *variable.derived_from_concepts,
-            )
-            if str(value or "").strip()
-        )
-    return tuple(dict.fromkeys(values))
+    return sealed_cohort_concept_ids(context, variable_names)
 
 
 def _context_cohort_concept_ids(context: ResearchContext) -> tuple[str, ...]:
-    return progressive_cohort_concept_ids(
-        context,
-        tuple(variable.name for variable in context.variables),
-    )
+    return sealed_cohort_concept_ids(context)
 
 
 def _require_variables(

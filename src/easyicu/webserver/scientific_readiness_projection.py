@@ -15,8 +15,10 @@ from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from easyicu.research_agent.cohort.schema import registered_run_cohort_concept_ids
 from easyicu.research_agent.planning.cohort_contract import (
     CohortDefinition,
+    cohort_concept_id_scope,
     cohort_definition_sha,
 )
 
@@ -271,6 +273,11 @@ def _data_status(
         analysis_receipt_path is not None and analysis_receipt_path.is_file()
     )
     lock_present = bool(lock_path is not None and lock_path.is_file())
+    # A cohort may filter on a column the run materialized; validation knows
+    # it only with the roster of the run's sealed context.
+    cohort_concept_ids = (
+        registered_run_cohort_concept_ids(run_dir) if run_dir is not None else ()
+    )
 
     cohort_definition = provenance.get("cohort_definition")
     export_authority = provenance.get("export_authority")
@@ -319,9 +326,10 @@ def _data_status(
             )
         )
         try:
-            observed_analysis_sha = cohort_definition_sha(
-                CohortDefinition.from_dict(dict(analysis_definition))
-            )
+            with cohort_concept_id_scope(cohort_concept_ids):
+                observed_analysis_sha = cohort_definition_sha(
+                    CohortDefinition.from_dict(dict(analysis_definition))
+                )
         except (TypeError, ValueError, KeyError):
             observed_analysis_sha = ""
         digest_is_valid = bool(
@@ -330,13 +338,14 @@ def _data_status(
         locked_definition = locked_cohort.get("cohort")
         locked_sha = _text(locked_cohort.get("cohort_sha256"), 64)
         try:
-            observed_locked_sha = (
-                cohort_definition_sha(
-                    CohortDefinition.from_dict(dict(locked_definition))
+            with cohort_concept_id_scope(cohort_concept_ids):
+                observed_locked_sha = (
+                    cohort_definition_sha(
+                        CohortDefinition.from_dict(dict(locked_definition))
+                    )
+                    if isinstance(locked_definition, Mapping)
+                    else ""
                 )
-                if isinstance(locked_definition, Mapping)
-                else ""
-            )
         except (TypeError, ValueError, KeyError):
             observed_locked_sha = ""
         lock_bound = (
