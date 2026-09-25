@@ -1201,3 +1201,59 @@ def test_every_composite_layout_writes_a_legend_for_each_drawn_panel(
     ]
     assert "registered source table" not in caption
     assert caption.endswith("applies no further selection.")
+
+
+_RESTATED_MATRIX = pd.DataFrame(
+    {
+        "spec_id": ["primary", "complete_case"],
+        "point_estimate": [1.4, 1.4],
+        "ci_low": [1.1, 1.1],
+        "ci_high": [1.8, 1.8],
+        "effect_scale": ["OR", "OR"],
+        "converged": [True, True],
+        "independent_variant": [None, False],
+    }
+)
+
+
+@pytest.mark.parametrize(
+    ("frames", "input_keys"),
+    [
+        (_absolute_risk_frames, ABSOLUTE_RISK_ASSOCIATION_COMPOSITE_INPUTS),
+        (
+            _cohort_balance_association_frames,
+            COHORT_BALANCE_ASSOCIATION_COMPOSITE_INPUTS,
+        ),
+        (_balance_association_frames, BALANCE_ASSOCIATION_COMPOSITE_INPUTS),
+    ],
+)
+def test_a_documented_restatement_of_the_primary_is_shown_as_status(
+    tmp_path: Path, frames, input_keys
+) -> None:
+    """A row restating the primary keeps its fit and is shown as status.
+
+    The robustness owner reports the restatement as fitted and flags it as no
+    independent variant; a composite must render it, while a failed fit is
+    still refused.
+    """
+
+    def render(matrix: pd.DataFrame, name: str) -> dict:
+        bound = {**frames(), "table:robustness_matrix": matrix}
+        bindings = {}
+        for key, frame in bound.items():
+            path = tmp_path / f"{name}_{key.partition(':')[2]}.csv"
+            frame.to_csv(path, index=False)
+            bindings[key] = _binding(key, frame, path)
+        return run_composite_descriptive_figure(
+            out_dir=tmp_path / name,
+            run_dir=tmp_path,
+            resolved_inputs={"step_id": "figure_suite", "inputs": bindings},
+            step_id="figure_suite",
+            figure_product="figure_suite",
+            input_keys=input_keys,
+        )
+
+    assert render(_RESTATED_MATRIX, "restated")["status"] == "ok"
+    failed = _RESTATED_MATRIX.assign(converged=[True, False])
+    with pytest.raises(ValueError, match="non-converged rows"):
+        render(failed, "failed")

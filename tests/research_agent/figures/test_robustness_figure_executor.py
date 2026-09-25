@@ -862,3 +862,43 @@ def test_a_specification_reporting_two_contrasts_names_each_row():
         assert 'adjustment, 4.9 vs 2' in rendered
     finally:
         plt.close(fig)
+
+
+def test_a_grid_that_only_restates_the_primary_carries_no_robustness_evidence(tmp_path):
+    """A restatement is drawn as fitted and labelled, but it is no evidence."""
+
+    restated = {
+        **_REAL_ROWS[0],
+        "spec_id": "complete_case_primary_covariates",
+        "axis": "missing",
+        "independent_variant": "False",
+        "estimability_status": "not_independent",
+    }
+    refit = {
+        **_REAL_ROWS[0],
+        "spec_id": "first_stay_only",
+        "axis": "cohort",
+        "point_estimate": "1.4",
+        "ci_low": "1.0",
+        "ci_high": "2.1",
+    }
+
+    def panel_metadata(rows, name):
+        run_dir, manifest = _write_bound_matrix(tmp_path / name, rows)
+        summary = run_robustness_figure(
+            out_dir=tmp_path / name / "out",
+            run_dir=run_dir,
+            resolved_inputs=manifest,
+            step_id="07_robustness_sensitivity_figure",
+            figure_product="robustness_plot",
+        )
+        assert summary["status"] == "ok"
+        contract = json.loads(
+            (tmp_path / name / "out" / "robustness_plot.figure_contract.json").read_text()
+        )
+        return contract["panels"][0]["metadata"]
+
+    assert panel_metadata([_REAL_ROWS[0], restated], "restated")["role_evidence_absent"] is True
+    assert "role_evidence_absent" not in panel_metadata(
+        [_REAL_ROWS[0], restated, refit], "varied"
+    )

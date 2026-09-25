@@ -1,7 +1,7 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/research_context/outbound.py"
+      "src/easyicu/research_agent/planning/figure_strategy.py"
     ],
     "summary_changes": {}
   },
@@ -574,9 +574,16 @@
         "src/easyicu/research_agent/research_context/outbound.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "rob1: planning/figure_strategy.py declines to credit a robustness panel whose own grid shows no independent variant (role_evidence_absent); the Canonical9 prompt and context envelope is unchanged.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/planning/figure_strategy.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "r22: the Writer transport encoding (research_context/outbound.py::compact_variable_field_names) lists variables that share every field except their name in one row. Canonical9 resource selection and every measured Planner/Coder prompt and resource byte count are unchanged; only the outbound.py source digest moves.",
+  "baseline_reason": "rob1: planning/figure_strategy.py declines to credit a robustness panel whose own grid shows no independent variant (role_evidence_absent); the Canonical9 prompt and context envelope is unchanged.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -597,7 +604,7 @@
     "src/easyicu/research_agent/planning/analysis_blueprint.py": "5330a604f9894c879ba400bee3b3ac1b617de1ce24425506139a5a29bb4020b2",
     "src/easyicu/research_agent/planning/analysis_types.py": "090cd53523b66169a81a70797b038798d6e32b62ea233154a11ee72bf33a74d8",
     "src/easyicu/research_agent/planning/cohort_contract.py": "4c9e01922aa5a10632f2711241242bc212a921f985d8f3d5092f79a06d3e7a54",
-    "src/easyicu/research_agent/planning/figure_strategy.py": "f3043fd7ff90e494d6edb3ea3bbd783364eece5e0606c20c3ec805e357528eb4",
+    "src/easyicu/research_agent/planning/figure_strategy.py": "3605bc310bc39b88af0b2140ed270b4bfa24a26b2fe022ec517e10caed72aac9",
     "src/easyicu/research_agent/planning/study_design.py": "84e7d9c0974ca3d1f9deadcc22de065586a9be20fcdf66f101f931469b64cad0",
     "src/easyicu/research_agent/planning/study_design_playbook.py": "fa07ee36a06d560ca9266999516bf1f394c4ac522d5b1436bf689d274b07888d",
     "src/easyicu/research_agent/providers/prompts/v1/system.txt": "cf9212ac318beac1b2690738506b0b9d658bc28db4b98a521022d57a317eb692",

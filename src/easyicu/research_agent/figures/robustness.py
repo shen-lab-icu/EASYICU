@@ -74,6 +74,18 @@ def _independence_flags(frame: pd.DataFrame) -> pd.Series:
     return flags
 
 
+def primary_restatement_rows(frame: pd.DataFrame) -> pd.Series:
+    """Rows documented as restating the primary analysis, not varying it.
+
+    Such a row has no estimate of its own: a display may show its status but
+    must not count it as robustness evidence.
+    """
+
+    if "independent_variant" not in frame.columns:
+        return pd.Series(False, index=frame.index, dtype=bool)
+    return _independence_flags(frame).eq(False).fillna(False).astype(bool)
+
+
 def assess_robustness_effect_comparability(
     frame: pd.DataFrame,
 ) -> RobustnessEffectComparability:
@@ -348,5 +360,6 @@ __all__ = [
     "assess_robustness_effect_comparability",
     "draw_robustness_coverage",
     "prepare_robustness_coverage",
+    "primary_restatement_rows",
     "robustness_matrix_to_coverage",
 ]

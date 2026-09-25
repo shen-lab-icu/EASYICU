@@ -94,7 +94,10 @@ from .deterministic_robustness import (
     _SPECIFICATION_GRID_COLUMNS,
     ROBUSTNESS_REPLAY_OUTPUT_FILES,
 )
-from ...figures.robustness import assess_robustness_effect_comparability
+from ...figures.robustness import (
+    assess_robustness_effect_comparability,
+    primary_restatement_rows,
+)
 from .effect_scale import describe_effect_scale
 from .figure_input_capability import TypedInputCapability
 from ._shared import figure_product as _figure_product, method_head as _method_head
@@ -904,6 +907,18 @@ def _anchor_already_shown(rows, anchor_value) -> bool:
     return False
 
 
+def _variant_evidence_shown(rows: pd.DataFrame) -> bool:
+    """Whether the grid shows at least one estimated, independent variant.
+
+    A grid whose non-primary rows are all gaps, or documented identities with
+    the primary analysis, carries no robustness evidence whatever its role.
+    """
+
+    variant = ~rows["axis"].astype(str).eq("primary")
+    independent = ~primary_restatement_rows(rows)
+    return bool((variant & rows["__drawable"].astype(bool) & independent).any())
+
+
 def _draw_specification_table(ax, rows, effect_scale, anchor_bound, anchor_value):
     """Show each source estimate without implying a common contrast or axis."""
     records = []
@@ -978,6 +993,7 @@ def run_robustness_figure(
         step_id=step_id,
     )
     rows, effect_scale, has_gap = _validated_rows(frame)
+    variant_evidence = _variant_evidence_shown(rows)
     comparability = assess_robustness_effect_comparability(frame)
     if chart_type == "sensitivity_forest" and not comparability.authorized:
         raise ValueError("common robustness effect axis is not authorized: " + comparability.message)
@@ -1218,6 +1234,9 @@ def run_robustness_figure(
                         comparability.missing_columns
                     ),
                     "sub_axis_resolution_rows": list(narrow_rows),
+                    # Declared so the figure strategy does not credit the
+                    # robustness role to a grid with no independent variant.
+                    **({} if variant_evidence else {"role_evidence_absent": True}),
                 },
             }
         ],

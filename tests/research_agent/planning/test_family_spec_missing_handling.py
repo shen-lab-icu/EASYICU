@@ -152,3 +152,32 @@ def test_the_exposure_cannot_keep_its_unmeasured_rows() -> None:
             coding="continuous",
             missing_handling="unmeasured_category",
         )
+
+
+@pytest.mark.parametrize(
+    "shares,refit_varies",
+    [
+        # The primary keeps severity's unmeasured rows; the refit drops them.
+        ({"severity_score_24h": 0.4, "age": 0.02}, True),
+        # The primary already fits complete rows; the refit restates it.
+        ({}, False),
+    ],
+)
+def test_the_complete_case_refit_is_described_for_what_it_is(shares, refit_varies) -> None:
+    context = _measured(**shares)
+    request = _request(context)
+
+    _llm, result = _run(
+        context, [json.dumps(_spec_payload(request, adjustment_set=PLANNER_ROSTER))]
+    )
+
+    plan = result.output
+    replay = next(step for step in plan.steps if step.step_id == "robustness_replay")
+    (spec,) = plan.robustness_specs
+    reviewable = " ".join(plan.design_selection.candidates[0].reviewable_plan)
+    assert ("restates the primary analysis" in replay.intent) is not refit_varies
+    assert ("documents the primary analysis" in spec.description) is not refit_varies
+    assert ("complete-case reanalysis" in reviewable) is refit_varies
+    assert ("itself the complete-case analysis" in reviewable) is not refit_varies
+    if refit_varies:
+        assert "unmeasured for" in replay.intent

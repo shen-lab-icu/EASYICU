@@ -1117,6 +1117,12 @@ def _signed_grid_spec_ids(
     )
 
 
+#: Strategies a signed primary executes as coordinates of its own design: its
+#: landmark, its cluster-robust variance, and the spline form of its exposure.
+#: A linear per-unit refit is an alternative form and stays a sensitivity.
+_PRIMARY_DESIGN_STRATEGIES = frozenset({"landmark", "cluster_robust", "restricted_cubic_spline"})
+
+
 def _sensitivity_facts(
     context: ResearchContext,
     plan: AnalysisPlan,
@@ -1150,6 +1156,9 @@ def _sensitivity_facts(
         if spec_id in unsupported_spec_ids
     } - supported_axes
     executed_spec_ids: set[str] = set()
+    # Specs the signed primary executes as its own design: executed, but they
+    # restate the primary analysis rather than vary it.
+    primary_design_spec_ids: set[str] = set()
     executable: set[str] = set()
     typed_executable: set[str] = set()
     protocol_only: set[str] = set()
@@ -1237,6 +1246,8 @@ def _sensitivity_facts(
                         )
                     if required_inputs.issubset(step_inputs):
                         executed_spec_ids.add(spec_id)
+                        if spec.strategy in _PRIMARY_DESIGN_STRATEGIES:
+                            primary_design_spec_ids.add(spec_id)
             if method == "signed_landmark_categorical_association":
                 signed_refs = {
                     str(ref)
@@ -1269,6 +1280,7 @@ def _sensitivity_facts(
                         }
                         if required_inputs and required_inputs.issubset(cohort_inputs):
                             executed_spec_ids.add(spec_id)
+                            primary_design_spec_ids.add(spec_id)
         else:
             protocol_only.update(axes)
     executed_spec_ids.update(_signed_grid_spec_ids(context, plan, runtime_authority))
@@ -1315,10 +1327,13 @@ def _sensitivity_facts(
         for spec in plan.robustness_specs
         if spec.spec_id in owner_executed_spec_ids
     }
+    # A refit that restates the primary is documented, never evidence.
+    restating = set(_complete_case_specs_restating_primary(plan))
     plan_spec_axes = {
         plan_axis_names[spec.axis]
         for spec in plan.robustness_specs
         if spec.spec_id not in owner_executed_spec_ids
+        and spec.spec_id not in restating
     }
     if len(replay_steps) == 1:
         executable.update(plan_spec_axes)
@@ -1345,6 +1360,8 @@ def _sensitivity_facts(
         }.get(spec.axis, spec.axis)
         for spec_id, spec in typed_specs.items()
         if spec_id in executed_spec_ids
+        and spec_id not in restating
+        and spec_id not in primary_design_spec_ids
     }
     executable.update(typed_axes)
     typed_executable.update(typed_axes)
@@ -1933,6 +1950,88 @@ def _missing_category_complete_case_findings(plan: AnalysisPlan) -> list[PlanSci
                 "covariate kept as unmeasured."
             ),
             remediation_route="agent_plan_revision",
+        )
+    ]
+
+
+def _primary_model_columns(requirement: Any) -> set[str]:
+    """Every column whose missingness removes a row from this model's fit.
+
+    Model terms need no separate reading: the requirement's validator holds
+    them to the exposure and the covariates.
+    """
+
+    columns = {requirement.exposure_source, requirement.outcome}
+    columns.update(requirement.covariates or ())
+    if requirement.dependence is not None:
+        columns.add(requirement.dependence.group_source)
+    return columns
+
+
+def _complete_case_specs_restating_primary(plan: AnalysisPlan) -> tuple[str, ...]:
+    """Locked complete-case refits over exactly the rows the primary fits.
+
+    Restricting to rows complete in columns the primary model already
+    requires, none of them kept as an unmeasured state, drops no row the
+    primary fits, so the refit reproduces the primary estimate.  Judged
+    against every primary model, since the plan does not say which one a
+    replay binds.
+    """
+
+    primaries = [
+        requirement
+        for step in plan.steps
+        for requirement in (step.model_requirements or ())
+        if requirement.analysis_role == "primary"
+    ]
+    if not primaries:
+        return ()
+    return tuple(
+        spec.spec_id
+        for spec in plan.robustness_specs
+        for variables in [complete_case_variables(spec)]
+        if variables
+        and spec.cohort_override is None
+        and not spec.outcome_override
+        and all(
+            set(variables) <= _primary_model_columns(requirement)
+            and not set(variables) & set(requirement.missing_category_covariates())
+            for requirement in primaries
+        )
+    )
+
+
+def _complete_case_repeats_primary_findings(plan: AnalysisPlan) -> list[PlanScientificFinding]:
+    """Say which complete-case refits restate the primary analysis.
+
+    Which covariates keep unmeasured rows is the host's decision from measured
+    missingness, so the Planner cannot see this coming; the review records it
+    and credits no robustness axis to such a refit.
+    """
+
+    repeated = _complete_case_specs_restating_primary(plan)
+    if not repeated:
+        return []
+    return [
+        PlanScientificFinding(
+            code="COMPLETE_CASE_SENSITIVITY_REPEATS_PRIMARY",
+            severity="minor",
+            dimension="robustness",
+            message=(
+                "These complete-case refits keep exactly the rows the primary model "
+                "fits, so each restates the primary estimate; it is documented and "
+                "not counted as robustness evidence: " + ", ".join(repeated)
+            ),
+            evidence_refs=[
+                "analysis_plan.json.model_requirements",
+                "analysis_plan.json.robustness_specs",
+            ],
+            remediation=(
+                "Rely on sensitivity analyses that change an executable coordinate of "
+                "the primary analysis; a complete-case refit differs from the primary "
+                "only when the primary keeps unmeasured covariate rows."
+            ),
+            remediation_route="runtime_capability",
         )
     ]
 
@@ -3107,6 +3206,7 @@ def build_plan_scientific_review(
 
     findings.extend(primary_model_retention_findings(model_retention))
     findings.extend(_missing_category_complete_case_findings(plan))
+    findings.extend(_complete_case_repeats_primary_findings(plan))
     routed_findings = [
         finding.model_copy(
             update={"remediation_route": remediation_route_for_finding(finding)}
