@@ -21,6 +21,7 @@ from easyicu.research_agent.schema import (
     CohortDescriptor,
     ConceptDescriptor,
     ResearchContext,
+    UserPreferences,
     VariableRole,
 )
 
@@ -131,6 +132,67 @@ def test_writer_repair_reserves_feedback_without_shortening_original_inputs() ->
         writer._call_section(**kwargs, evidence_digest=marker, repair_feedback="x" * 8_001)
     assert len(llm.calls) == before
 
+
+
+def _many_predictor_context(concepts: int = 44) -> ResearchContext:
+    """A readmission warning score from first-day physiology and laboratory data.
+
+    Each concept is summarised four ways and keeps its count and measurement
+    status, so the study carries six columns per concept.
+    """
+
+    window = dict(analysis_window="icu_admission[0,24]h", analysis_window_role="outer_observation_window")
+    variables = [
+        ConceptDescriptor(name="stay_id", dtype="object", role=VariableRole.ID),
+        ConceptDescriptor(name="readmitted_72h", dtype="int64", role=VariableRole.OUTCOME),
+    ]
+    predictors = []
+    for index in range(concepts):
+        concept = f"marker_{index:02d}"
+        for summary in ("min", "max", "mean", "first"):
+            predictors.append(f"{concept}_{summary}")
+            variables.append(ConceptDescriptor(
+                name=f"{concept}_{summary}", dtype="float32", role=VariableRole.LAB,
+                source_concept=concept, unit=("mmol/L", "mg/dL", "bpm", "mmHg")[index % 4],
+                valid_range=[0.0, float(10 + index)], allowed_aggregations=["median_only", "first_value"],
+                aggregation_default="median_only", **window,
+            ))
+        variables += [
+            ConceptDescriptor(name=f"{concept}_n", dtype="float64", role=VariableRole.META,
+                              source_concept=concept, allowed_aggregations=["none"], **window),
+            ConceptDescriptor(name=f"{concept}_measured", dtype="int64", role=VariableRole.META,
+                              source_concept=concept, allowed_aggregations=["none"], **window),
+        ]
+    return ResearchContext(
+        research_question="Predict ICU readmission within 72 hours from first-day physiology.",
+        cohort=CohortDescriptor(
+            cohort_name="readmission_warning", database="eicu", n_patients=5000, n_stays=6200,
+            id_columns=["stay_id"], outcome_columns=["readmitted_72h"],
+        ),
+        variables=variables,
+        target_outcome="readmitted_72h",
+        user_preferences=UserPreferences(covariates=predictors, covariate_selection="exact"),
+    )
+
+
+def test_writer_keeps_every_variable_of_a_many_predictor_study_within_budget() -> None:
+    from easyicu.research_agent.agents.core import _coder_prompt_payload_bytes
+
+    context = _many_predictor_context()
+    llm = PatternScriptedMockLLMClient([], default="## Methods\n\nComplete.")
+    WriterAgent(llm)._call_section(
+        section_name="Methods",
+        instruction="Describe the candidate predictors and their first-day summaries.",
+        context=context,
+        evidence_ids=["primary_result"],
+        evidence_digest="## EXECUTED METHOD BOUNDARY\nPenalized logistic regression. {evidence:primary_result}\n",
+    )
+
+    messages = llm.calls[0][0]
+    table = json.loads(messages[1].content.split("RESEARCH CONTEXT:\n", 1)[1])["variables_table"]
+    listed = [name for _index, names, _values in table["rows"] for name in names]
+    assert sorted(listed) == sorted(variable.name for variable in context.variables)
+    assert _coder_prompt_payload_bytes(messages) <= 64_000
 
 def test_writer_non_result_section_uses_role_scoped_evidence_projection() -> None:
     digest = (

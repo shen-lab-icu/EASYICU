@@ -1,8 +1,7 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/agents/planner.py",
-      "src/easyicu/research_agent/planning/cohort_contract.py"
+      "src/easyicu/research_agent/research_context/outbound.py"
     ],
     "summary_changes": {}
   },
@@ -568,9 +567,16 @@
         "src/easyicu/research_agent/planning/cohort_contract.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "r22: the Writer transport encoding (research_context/outbound.py::compact_variable_field_names) lists variables that share every field except their name in one row. Canonical9 resource selection and every measured Planner/Coder prompt and resource byte count are unchanged; only the outbound.py source digest moves.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/research_context/outbound.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Run-scoped cohort columns (2026-09-25): planning/cohort_contract.py gains sealed_cohort_concept_ids and a scoped cohort digest, and the Planner parses a plan with the run's sealed roster; Canonical9 resource selections and prompt-size metrics are unchanged, only these source digests move",
+  "baseline_reason": "r22: the Writer transport encoding (research_context/outbound.py::compact_variable_field_names) lists variables that share every field except their name in one row. Canonical9 resource selection and every measured Planner/Coder prompt and resource byte count are unchanged; only the outbound.py source digest moves.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -596,7 +602,7 @@
     "src/easyicu/research_agent/planning/study_design_playbook.py": "fa07ee36a06d560ca9266999516bf1f394c4ac522d5b1436bf689d274b07888d",
     "src/easyicu/research_agent/providers/prompts/v1/system.txt": "cf9212ac318beac1b2690738506b0b9d658bc28db4b98a521022d57a317eb692",
     "src/easyicu/research_agent/reporting/article_contract.py": "8c71677ee831deb11d5b1fcc1f3d20e7ca7086e10105039a63ef083d5d39688c",
-    "src/easyicu/research_agent/research_context/outbound.py": "5ce4a858b0388749c2163926b02b418c125e19c9d7b9c30f3f1063282b43d433",
+    "src/easyicu/research_agent/research_context/outbound.py": "1177d09e1513e6ebdf4cd5c7c3642717e8ff47b65435a4523acb3157d013cc40",
     "src/easyicu/research_agent/resources/capability.py": "3fc6dea8ffde23a358dfccd02b5f31620069fcccba8012807057a9913c70ca84",
     "src/easyicu/research_agent/resources/capability_runtime.py": "5e707e8a4b3a5f375ae579951b07c3e1f07d635b8db093109c613936c8b3bc71",
     "src/easyicu/research_agent/resources/catalog.py": "d1df9901759c3a323ac6a9bb4998cefa7ca2deb978ddd8409851a68f2beeff2f",
