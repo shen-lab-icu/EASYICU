@@ -1317,6 +1317,18 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
             self._require_rule_ref(step)
 
 
+def _refuse_missing_category_policy(steps: Any) -> None:
+    """The spline estimator fits complete rows; a kept unmeasured state would vanish."""
+
+    for step in steps:
+        for requirement in step.model_requirements or ():
+            if requirement.baseline_missing_handling is not None:
+                raise CurrentCaseScientificAuthorityError(
+                    "missing_category_family_unsupported: the landmark spline "
+                    f"estimator cannot keep unmeasured rows (step {step.step_id!r})"
+                )
+
+
 class LandmarkSplineRuntimeAuthority(_AuthorityBase):
     """Signed fixed-landmark restricted-cubic-spline association contract.
 
@@ -1762,6 +1774,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
         """
 
         self._require_sealed_roster()
+        _refuse_missing_category_policy(plan.steps)
         primary = [
             step for step in plan.steps if step.planned_analysis_role == "primary"
         ]
@@ -2238,6 +2251,7 @@ class LandmarkSplineRuntimeAuthority(_AuthorityBase):
 
     def validate_plan(self, plan: AnalysisPlan) -> None:
         self._require_sealed_roster()
+        _refuse_missing_category_policy(plan.steps)
         primary = self.governed_step(plan)
         for step in plan.steps:
             if step.planned_analysis_role == "sensitivity" and step.robustness_replay_spec is not None:

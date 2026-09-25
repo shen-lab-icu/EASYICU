@@ -442,6 +442,17 @@ def family_template_id_for_context(
     return None
 
 
+def _measured_missing_shares(context: ResearchContext) -> dict[str, float]:
+    """Each variable's measured missing share; absent when nothing was measured."""
+
+    shares: dict[str, float] = {}
+    for variable in context.variables:
+        missingness = variable.missingness
+        if missingness is not None and missingness.n_total > 0:
+            shares[variable.name] = round(float(missingness.fraction_missing), 4)
+    return shares
+
+
 def _candidates(
     context: ResearchContext,
     *,
@@ -460,6 +471,7 @@ def _candidates(
         context,
         [name for name in variable_roster if name not in design_columns],
     )
+    shares = _measured_missing_shares(context)
     candidates: list[AdjustmentCandidate] = []
     if adjustment.selection == "exact":
         roles = dict(adjustment.operational_temporal_roles)
@@ -480,6 +492,7 @@ def _candidates(
                     closed_domain_size=row.get("closed_domain_size") if row else None,
                     selectable=True,
                     boundary="exact user-reviewed roster; timing and rationale are user authority",
+                    missing_share=shares.get(name),
                 )
             )
         return candidates
@@ -498,6 +511,7 @@ def _candidates(
                     if temporal == "baseline_static"
                     else "window-derived measurement bound at or before the landmark"
                 ),
+                missing_share=shares.get(str(row["name"])),
             )
         )
     variables = {item.name: item for item in context.variables}

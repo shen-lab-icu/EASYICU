@@ -62,7 +62,14 @@ def test_first_pass_model_term_example_matches_typed_contract():
     match = re.search(r"model_terms items are exactly (\{[^{}]+\})", prompt)
     assert match is not None
     example = json.loads(match.group(1))
-    assert set(example) == set(ProgressiveModelTermIntent.model_fields)
+    # Exactly the fields a Planner writes: host-owned ones are never offered.
+    assert set(example) == (
+        set(ProgressiveModelTermIntent.model_fields)
+        - ProgressiveModelTermIntent.HOST_OWNED_FIELDS
+    )
+    assert ProgressiveModelTermIntent.HOST_OWNED_FIELDS <= set(
+        ProgressiveModelTermIntent.model_fields
+    )
     example.update(name="age", role="covariate", coding="continuous")
     example["clinical_rationale"] = (
         "Age precedes exposure and is a plausible common cause of exposure and outcome."

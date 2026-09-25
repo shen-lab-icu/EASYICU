@@ -64,6 +64,7 @@ from .landmark_categorical_template import (
     FamilySkeletonDraft,
     build_landmark_association_skeleton,
     build_landmark_categorical_skeleton,
+    keeps_unmeasured_covariate_rows,
 )
 from .descriptive_template import build_descriptive_skeleton
 from .feasibility_template import build_source_feasibility_skeleton
@@ -103,6 +104,7 @@ __all__ = [
     "build_source_feasibility_skeleton",
     "exposure_companion_columns",
     "family_template_id_for_context",
+    "keeps_unmeasured_covariate_rows",
     "sealed_feasibility_coordinates",
     "sealed_survival_suite_coordinates",
     "sealed_trajectory_suite_coordinates",

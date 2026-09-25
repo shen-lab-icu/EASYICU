@@ -78,6 +78,12 @@ class AdjustmentCandidate(BaseModel):
     closed_domain_size: Optional[int] = Field(default=None, ge=2)
     selectable: bool
     boundary: str = Field(min_length=1, max_length=300)
+    #: The measured share of rows without a value, when the context measured
+    #: it; a landmark categorical template keeps frequently unmeasured
+    #: covariates' rows as an explicit unmeasured state.
+    missing_share: Optional[float] = Field(
+        default=None, ge=0.0, le=1.0, exclude_if=lambda value: value is None
+    )
 
 
 class AcceptedFeatureGroup(BaseModel):

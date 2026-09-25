@@ -36,7 +36,7 @@ import json
 import os
 import textwrap
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ...authority.declared_levels import execution_model_requirement
 from ...authority.plausibility import FlagOnlyPlausibilityScope
@@ -62,7 +62,7 @@ from ...contracts.model_tokens import (
     canonical_association_method,
 )
 from ...contracts.ownership_verdict import OwnershipVerdict
-from ..model_matrix import ModelTermCompilationError, compile_model_terms
+from ..model_matrix import ModelTermCompilationError, primary_model_rows
 from ...robustness.estimators import fit_estimator
 from ...schema import (
     PLANNED_MODEL_REQUIREMENTS_OUTPUT,
@@ -210,6 +210,7 @@ MODEL_CONTRACT_FIELDS = (
 #: ``fit_estimator`` drops any row with a missing predictor or outcome before
 #: fitting, which is exactly this policy under the validator's vocabulary.
 _BASELINE_MISSING_POLICY = "drop_missing_baseline"
+_MISSING_CATEGORY_POLICY = "explicit_missing_category"
 
 _FIT_METHODS = {
     "logistic": ASSOCIATION_LOGIT_ESTIMATOR,
@@ -302,6 +303,14 @@ def adjusted_association_executor_scaffold(
     requirement = execution_model_requirement(step, requirement)
     kind = _estimator_kind(requirement)
     typed_cohort_input = sole_typed_cohort_input(step)
+    # Only a declared policy adds a line, so every legacy script is unchanged.
+    missing_handling = requirement.baseline_missing_handling
+    declared_missing = (
+        "\n        declared_model[\"missing_category_covariates\"] = "
+        f"{list(missing_handling.covariates)!r}"
+        if missing_handling is not None
+        else ""
+    )
     receipt_code = (
         render_standard_plausibility_receipt_code(
             plausibility_scope, frame_name="frame"
@@ -336,7 +345,7 @@ def adjusted_association_executor_scaffold(
             "model_terms": {serialise_model_terms(requirement.model_terms or ())!r},
             "primary_contrast_level": {requirement.primary_contrast_level!r},
             "dependence": {requirement.dependence.model_dump(mode="json") if requirement.dependence is not None else None!r},
-        }}
+        }}{declared_missing}
 
         frame, cohort_path = load_step_cohort_frame(
             typed_cohort_input=typed_cohort_input,
@@ -406,6 +415,7 @@ def _coefficient_rows(
     adjustment: Sequence[str],
     effect_scale: str,
     exposure_contrast_columns: Sequence[str] = (),
+    availability_columns: Optional[Mapping[str, str]] = None,
 ) -> list[Dict[str, Any]]:
     """Label each fitted coefficient by the role the plan gave its source.
 
@@ -424,11 +434,18 @@ def _coefficient_rows(
     # declaration, so a column the plan did not declare still has no role and
     # is still refused.
     contrast_columns = {str(name) for name in (exposure_contrast_columns or ())}
+    availability_columns = dict(availability_columns or {})
     rows: list[Dict[str, Any]] = []
     for term in terms:
         source = str(term.source_variable)
         if term.term == "const":
             role = "intercept"
+        elif str(term.term) in availability_columns:
+            # The unmeasured state of a declared covariate: an adjustment
+            # term, but not that covariate's value, so readers can tell them
+            # apart.
+            role = "availability"
+            source = availability_columns[str(term.term)]
         elif source == exposure or source in contrast_columns:
             role = "exposure"
             # A treatment-coded indicator IS the exposure, encoded -- and the
@@ -585,6 +602,8 @@ def run_adjusted_association_from_env(
     method_family: str,
     primary_contrast_level: Optional[str] = None,
     dependence: PlannedDependenceRequirement | Dict[str, Any] | None = None,
+    missing_category_covariates: Sequence[str] = (),
+    missing_category_term_groups: Optional[Mapping[str, str]] = None,
     typed_cohort_input: Optional[str] = None,
     frame: Any = None,
     cohort_path: Any = None,
@@ -666,13 +685,17 @@ def run_adjusted_association_from_env(
         dependence=parsed_dependence,
     )
     try:
-        compiled = compile_model_terms(
+        compiled = primary_model_rows(
             model_frame,
             terms=parsed_terms,
             exposure=exposure,
+            outcome=outcome,
+            missing_category_covariates=missing_category_covariates,
+            term_groups=missing_category_term_groups,
         )
     except ModelTermCompilationError as exc:
         raise AdjustedAssociationError(str(exc)) from exc
+    fitting_rows = compiled.design.index
     contrasts: Optional[_DeclaredContrasts] = None
     if exposure_term.transform == "treatment_contrast":
         contrast_levels = exposure_term.contrast_levels
@@ -696,12 +719,14 @@ def run_adjusted_association_from_env(
     result = fit_estimator(
         cohort=None,
         X=compiled.design,
-        y=model_frame[outcome],
+        y=model_frame.loc[fitting_rows, outcome],
         kind=estimator_kind,
         term=focal_term,
         source_by_design_column=compiled.source_by_design_column,
         variance_estimator=variance_estimator,
-        cluster_groups=cluster_groups,
+        cluster_groups=(
+            cluster_groups.loc[fitting_rows] if cluster_groups is not None else None
+        ),
     )
     estimate = _finite(result.point_estimate)
     ci_low = _finite(result.ci_low)
@@ -779,6 +804,9 @@ def run_adjusted_association_from_env(
         exposure_contrast_columns=(
             compiled.exposure_columns if contrasts is not None else ()
         ),
+        availability_columns={
+            item.indicator: item.covariate for item in compiled.missing_category_terms
+        },
     )
     exposure_terms = [
         item for item in coefficient_rows if item["term_role"] == "exposure"
@@ -842,7 +870,11 @@ def run_adjusted_association_from_env(
         "exposure_role": "primary" if analysis_role == "primary" else "secondary",
         "analysis_role": analysis_role,
         "analysis_set": analysis_set,
-        "baseline_missing_policy": _BASELINE_MISSING_POLICY,
+        "baseline_missing_policy": (
+            _MISSING_CATEGORY_POLICY
+            if missing_category_covariates
+            else _BASELINE_MISSING_POLICY
+        ),
         "n": int(result.n),
         "event_n": n_events,
         "fit_status": "fitted",
@@ -873,6 +905,16 @@ def run_adjusted_association_from_env(
         ),
         "cluster_count": result.cluster_count,
     }
+    if missing_category_covariates:
+        # Declared, so present even when no row happened to be unmeasured:
+        # the policy is the plan's, the terms are what this cohort needed.
+        model_contract["missing_category_covariates"] = list(missing_category_covariates)
+        model_contract["missing_category_terms"] = [
+            item.public() for item in compiled.missing_category_terms
+        ]
+        model_contract["unmeasured_rows_dropped"] = [
+            item.public() for item in compiled.unmeasured_rows_dropped
+        ]
 
     summary: Dict[str, Any] = {
         "status": "ok",
@@ -904,6 +946,10 @@ def run_adjusted_association_from_env(
         "adjustment_covariates": list(adjustment),
         "coefficient_table": coefficient_path.name,
     }
+    if missing_category_covariates:
+        summary["missing_category_covariates"] = list(missing_category_covariates)
+        summary["missing_category_terms"] = model_contract["missing_category_terms"]
+        summary["unmeasured_rows_dropped"] = model_contract["unmeasured_rows_dropped"]
     if contrasts is not None and len(contrasts.contrast_levels) > 1:
         # With several non-reference levels the primary estimate is one
         # contrast among them; the host claim names it from this field.

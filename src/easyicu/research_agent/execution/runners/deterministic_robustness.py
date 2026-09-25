@@ -1829,6 +1829,20 @@ def _verified_complete_case_equivalence(
     if not isinstance(contract, dict):
         error = "primary model contract is unavailable for equivalence proof"
         return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error
+    kept_unmeasured = [
+        str(item.get("covariate"))
+        for item in contract.get("missing_category_terms") or ()
+        if isinstance(item, dict)
+    ]
+    if kept_unmeasured:
+        # Worded as a membership difference so the caller replays the
+        # primary on the complete-case rows instead of reusing this fit.
+        error = (
+            "locked complete-case membership is not identical to the fitted "
+            "primary analysis set: the primary kept unmeasured rows of "
+            + ", ".join(kept_unmeasured)
+        )
+        return _blocked_panel_row(spec.spec_id, spec.axis, error), [], None, error
     exposure = definition["exposure"]
     outcome = definition["outcome"]
     covariates = definition["covariates"]
@@ -1901,6 +1915,10 @@ def _verified_complete_case_equivalence(
             "complete_case_n": complete_case_n,
         }
     )
+    if contract_copy.get("baseline_missing_policy") == "explicit_missing_category":
+        # Reaching here proves the declared fit kept no unmeasured row (the
+        # guard above); legacy contracts keep their exact labels.
+        _drop_missing_labels(contract_copy)
     for item in coefficient_rows:
         item["replay_mode"] = "verified_complete_case_equivalence"
         item["analysis_set"] = "complete_case"
@@ -2215,7 +2233,7 @@ def _replay_primary_model_for_complete_case(
     replay_root = (out_dir / "model_replays" / (replay_slug or "variant")).resolve()
     if replay_root.exists():
         shutil.rmtree(replay_root)
-    return _replay_primary_model_on_frame(
+    replay = _replay_primary_model_on_frame(
         spec=spec,
         source=source,
         variant_cohort=variant_cohort,
@@ -2227,6 +2245,81 @@ def _replay_primary_model_for_complete_case(
         ),
         missing_override=dict(spec.missing_override or {}),
     )
+    return relabel_complete_case_replay(
+        replay,
+        locked_variables=variables,
+        definition=model_summary_analysis_definition(source.get("summary") or {}),
+    )
+
+
+def _drop_missing_labels(contract: Dict[str, Any]) -> None:
+    """Label a fit proved to keep no unmeasured row as the default policy.
+
+    The declared unmeasured-state list belongs to the source analysis; it
+    moves beside the source labels instead of describing a complete-case fit.
+    """
+
+    contract["source_baseline_missing_policy"] = contract.get("baseline_missing_policy")
+    contract["baseline_missing_policy"] = "drop_missing_baseline"
+    listed = contract.pop("missing_category_covariates", None)
+    contract.pop("missing_category_terms", None)
+    contract.pop("unmeasured_rows_dropped", None)
+    if listed:
+        contract["source_missing_category_covariates"] = listed
+
+
+def relabel_complete_case_replay(
+    replay: Dict[str, Any],
+    *,
+    locked_variables: Sequence[str],
+    definition: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Name a complete-case replay for the analysis it fitted, once proved.
+
+    The replay runs the sealed primary script, whose declaration carries the
+    primary's labels.  On a cohort complete in the exposure, the outcome and
+    every covariate, with no unmeasured indicator fitted, that script fitted
+    the complete-case analysis, so its contracts say so and keep the source
+    labels beside them.  Anything short of that proof keeps the replay as it
+    was, and the robustness contract then refuses it.
+    """
+
+    if replay.get("error") or not isinstance(definition, Mapping):
+        return replay
+    needed = {
+        str(value)
+        for value in (
+            definition.get("exposure"),
+            definition.get("outcome"),
+            *(definition.get("covariates") or ()),
+        )
+        if value
+    }
+    if not needed or not needed <= {str(value) for value in locked_variables}:
+        return replay
+    contracts = [dict(item) for item in replay.get("contracts") or ()]
+    coefficients = [dict(item) for item in replay.get("coefficient_rows") or ()]
+    if not contracts or any(item.get("missing_category_terms") for item in contracts):
+        return replay
+    if any(
+        str(item.get("term_role") or "").strip().lower() == "availability"
+        for item in coefficients
+    ):
+        return replay
+    for item in contracts:
+        item.update(
+            {
+                "source_analysis_set": item.get("analysis_set"),
+                "source_analysis_role": item.get("analysis_role"),
+                "analysis_set": "complete_case",
+                "analysis_role": "sensitivity",
+            }
+        )
+        _drop_missing_labels(item)
+    for item in coefficients:
+        item["analysis_set"] = "complete_case"
+        item["analysis_role"] = "sensitivity"
+    return {**replay, "contracts": contracts, "coefficient_rows": coefficients}
 
 
 def _replay_primary_model_for_cohort(
@@ -2428,6 +2521,13 @@ def _matching_primary_contract(
             and str(contract.get("exposure_source") or "") == primary_source
             and str(contract.get("exposure_role") or "primary").lower() == "primary"
             and str(contract.get("analysis_set") or "").lower() == analysis_set
+            and (
+                analysis_set != "complete_case"
+                or str(contract.get("baseline_missing_policy") or "drop_missing_baseline")
+                .strip()
+                .lower()
+                == "drop_missing_baseline"
+            )
         ),
         None,
     )

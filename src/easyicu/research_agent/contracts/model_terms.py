@@ -7,7 +7,7 @@ level ordering, or reference levels from pandas dtypes or column names.
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Literal, Optional, Sequence
+from typing import ClassVar, Dict, Iterable, List, Literal, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -292,6 +292,34 @@ class AdjustmentProposal(BaseModel):
         )
 
 
+class BaselineMissingHandling(BaseModel):
+    """How a model keeps rows whose declared covariate was never measured.
+
+    ``explicit_missing_category`` keeps such a row and models "not measured"
+    as its own state: a continuous or ordinal covariate is filled with its
+    observed median over the fitting rows and gains an unmeasured indicator,
+    and a binary or categorical covariate gains an unmeasured level.  Rows
+    missing the outcome, the exposure, or any covariate not listed here are
+    still dropped, so the complete-case analysis remains a different one.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    policy: Literal["explicit_missing_category"] = "explicit_missing_category"
+    covariates: List[str] = Field(min_length=1)
+    continuous_fill: Literal["observed_median"] = "observed_median"
+
+    @field_validator("covariates")
+    @classmethod
+    def _exact_unique_names(cls, value: List[str]) -> List[str]:
+        names = [str(item or "").strip() for item in value]
+        if any(not name for name in names):
+            raise ValueError("missing-category covariates must not be blank")
+        if len(names) != len(set(names)):
+            raise ValueError("missing-category covariates must not repeat a name")
+        return names
+
+
 class PlannedModelRequirement(BaseModel):
     """Planner-owned obligation for a supported adjusted-association model.
 
@@ -303,6 +331,12 @@ class PlannedModelRequirement(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid")
+
+    #: Declared fields only the host writes: whether a covariate keeps its
+    #: unmeasured rows is decided from measured missingness, never by a
+    #: Planner.  The Planner transport does not offer them, and a Planner
+    #: payload that sets one is refused (``agents/plan_payload.py``).
+    HOST_OWNED_FIELDS: ClassVar[frozenset[str]] = frozenset({"baseline_missing_handling"})
 
     requirement_id: str
     outcome: str
@@ -373,6 +407,15 @@ class PlannedModelRequirement(BaseModel):
             "Exact repeated-unit covariance contract bound from StudyContext "
             "authority. Null means model-based covariance; execution must not "
             "infer clustering from intent text or identifier-like column names."
+        ),
+    )
+    baseline_missing_handling: Optional[BaselineMissingHandling] = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Covariates whose unmeasured rows the model keeps as an explicit "
+            "unmeasured state. Null keeps the default: a row missing any "
+            "declared covariate is not fitted."
         ),
     )
 
@@ -545,6 +588,31 @@ class PlannedModelRequirement(BaseModel):
         self._check_declared_exposure_levels()
         return self
 
+    def missing_category_covariates(self) -> tuple[str, ...]:
+        """The covariates whose unmeasured rows this model keeps; empty if none."""
+
+        handling = self.baseline_missing_handling
+        return tuple(handling.covariates) if handling is not None else ()
+
+    @model_validator(mode="after")
+    def _missing_handling_names_declared_covariates(self) -> "PlannedModelRequirement":
+        handling = self.baseline_missing_handling
+        if handling is None:
+            return self
+        if self.analysis_set != "source_aware":
+            raise ValueError(
+                "an explicit unmeasured category keeps rows a complete-case "
+                "analysis drops; declare it only on a source_aware requirement"
+            )
+        declared = set(self.covariates or ())
+        undeclared = [name for name in handling.covariates if name not in declared]
+        if undeclared:
+            raise ValueError(
+                "missing-category covariates must be declared covariates of "
+                "this requirement: " + ", ".join(repr(name) for name in undeclared)
+            )
+        return self
+
     def _check_declared_exposure_levels(self) -> None:
         """Refuse a partial categorical-exposure contrast declaration."""
 
@@ -592,6 +660,7 @@ __all__ = [
     "ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES",
     "ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES",
     "AdjustmentProposal",
+    "BaselineMissingHandling",
     "PlannedModelRequirement",
     "ModelTermCoding",
     "ModelTermRole",

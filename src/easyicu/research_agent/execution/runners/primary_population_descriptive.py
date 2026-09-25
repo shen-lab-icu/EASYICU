@@ -28,7 +28,7 @@ from ...contracts.runtime_outcomes import RuntimeOutcomeContract
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from .deterministic_descriptive import run_absolute_risk_context
 from .landmark_spline_fit import prepare_landmark_model_population
-from ..model_matrix import compile_model_terms
+from ..model_matrix import primary_model_rows
 from .typed_input_binding import contained_regular_file, load_typed_input
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 
@@ -72,11 +72,15 @@ def _categorical_model_population(
     model = cohort.loc[:, list(dict.fromkeys(needed))]
     if requirement.dependence and model[requirement.dependence.group_source].isna().any():
         raise ValueError("Categorical primary grouping contains missing values")
-    design = compile_model_terms(
-        model, terms=requirement.model_terms or (), exposure=requirement.exposure_source
+    # The primary fit's own rows, under its declared missing-data policy.
+    fitted = primary_model_rows(
+        model,
+        terms=requirement.model_terms or (),
+        exposure=requirement.exposure_source,
+        outcome=requirement.outcome,
+        missing_category_covariates=requirement.missing_category_covariates(),
     ).design
-    complete = design.notna().all(axis=1) & model[requirement.outcome].notna()
-    selected = cohort.loc[complete]
+    selected = cohort.loc[fitted.index]
     events = int(selected[sealed.outcome_column].sum())
     required = {"n", "n_events", "requirement_id", "is_primary_contrast", "analysis_role"}
     if primary_table.empty or not required.issubset(primary_table.columns):

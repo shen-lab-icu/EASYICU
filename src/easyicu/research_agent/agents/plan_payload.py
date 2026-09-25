@@ -477,6 +477,11 @@ def _planner_transport_schema(
             "items": label_entry,
         }
         model_requirement = definitions["PlannedModelRequirement"]["properties"]
+        # Host-owned fields (keeping unmeasured rows is decided from measured
+        # missingness) are never Planner transport fields.
+        for field in PlannedModelRequirement.HOST_OWNED_FIELDS:
+            model_requirement.pop(field, None)
+        definitions.pop("BaselineMissingHandling", None)
         for field in ("covariate_rationales", "covariate_temporal_roles"):
             value_schema = copy.deepcopy(model_requirement[field]["additionalProperties"])
             model_requirement[field] = {
@@ -762,7 +767,7 @@ def decode_planner_transport_payload(data: Mapping[str, Any]) -> Dict[str, Any]:
     # cited key; an extra citation with no binding still fails downstream.
     raw_steps = decoded.get("steps")
     if isinstance(raw_steps, list):
-        for raw_step in raw_steps:
+        for step_index, raw_step in enumerate(raw_steps):
             if not isinstance(raw_step, dict):
                 continue
             stability_spec = raw_step.get("trajectory_stability_spec")
@@ -770,8 +775,15 @@ def decode_planner_transport_payload(data: Mapping[str, Any]) -> Dict[str, Any]:
                 _decode_trajectory_stability_decisions(stability_spec)
             requirements = raw_step.get("model_requirements")
             if isinstance(requirements, list):
-                for requirement in requirements:
+                for requirement_index, requirement in enumerate(requirements):
                     if isinstance(requirement, dict):
+                        _refuse_host_owned_requirement_fields(
+                            requirement,
+                            path=(
+                                f"steps[{step_index}]"
+                                f".model_requirements[{requirement_index}]"
+                            ),
+                        )
                         _decode_model_covariate_decisions(requirement)
             citations = raw_step.get("literature_citation_keys")
             bindings = raw_step.get("literature_design_bindings")
@@ -797,6 +809,23 @@ def parse_runtime_plan_suffix(raw: str) -> RuntimePlanSuffixRevision:
             {"steps": [payload["replacement_step"]]}
         )["steps"][0]
     return RuntimePlanSuffixRevision.model_validate(payload)
+
+
+def _refuse_host_owned_requirement_fields(
+    requirement: Dict[str, Any], *, path: str
+) -> None:
+    """A Planner may not set what the host decides; an explicit null is the default.
+
+    Both Planner transports (a plan and a runtime suffix step) decode here, so
+    neither can write a host-owned model field even without strict output.
+    """
+
+    host_owned = PlannedModelRequirement.HOST_OWNED_FIELDS
+    written = [field for field in host_owned if requirement.get(field) is not None]
+    if written:
+        raise PlannerHostOwnedFieldError(path=path, fields=written)
+    for field in host_owned:
+        requirement.pop(field, None)
 
 
 def _decode_model_covariate_decisions(requirement: Dict[str, Any]) -> None:
@@ -1482,6 +1511,22 @@ class PlannerScientificProjectionError(ValueError):
         )
 
 
+class PlannerHostOwnedFieldError(ValueError):
+    """The Planner set a declared field that only the host may write."""
+
+    issue_code = "planner_host_owned_field_written"
+    owner = "easyicu.planning.plan_payload_projection_v1"
+
+    def __init__(self, *, path: str, fields: Sequence[str]) -> None:
+        self.path = path
+        self.fields = tuple(sorted(fields))
+        super().__init__(
+            f"{self.issue_code}: {path} sets host-owned field(s) "
+            + ", ".join(repr(field) for field in self.fields)
+            + "; omit them: the host decides them from the measured data"
+        )
+
+
 def _require_exact_scientific_keys(
     raw: Dict[str, Any],
     *,
@@ -1961,6 +2006,7 @@ __all__ = [
     "_declared_field_names",
     "_is_untyped_figure_alias_output",
     "_normalise_plan_payload",
+    "PlannerHostOwnedFieldError",
     "PlannerScientificProjectionError",
     "PlannerStructuredOutputSchemaError",
     "decode_planner_transport_payload",

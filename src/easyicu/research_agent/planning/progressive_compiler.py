@@ -1585,6 +1585,15 @@ def _compile_adjusted_association(
         if step.outcome_type == "binary"
         else ASSOCIATION_OLS_ESTIMATOR
     )
+    # Only a family template sets this (the transport never carries it): the
+    # covariates whose unmeasured rows the model keeps as their own state.
+    unmeasured_category = [
+        term.name
+        for term in step.model_terms
+        if term.role == "covariate"
+        and term.missing_handling == "unmeasured_category"
+        and term.name in covariates
+    ]
     try:
         requirement = PlannedModelRequirement(
             requirement_id=f"{step.step_id}_primary",
@@ -1602,6 +1611,9 @@ def _compile_adjusted_association(
             exposure_levels=exposure_levels or None,
             exposure_reference_level=reference or None,
             primary_contrast_level=primary_contrast or None,
+            baseline_missing_handling=(
+                {"covariates": unmeasured_category} if unmeasured_category else None
+            ),
         )
     except ValidationError as exc:
         issue = exc.errors(include_input=False)[0]

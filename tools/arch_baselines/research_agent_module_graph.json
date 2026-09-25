@@ -729,6 +729,10 @@
     ],
     [
       "easyicu.research_agent.agents.family_spec_planner",
+      "easyicu.research_agent.contracts.model_retention"
+    ],
+    [
+      "easyicu.research_agent.agents.family_spec_planner",
       "easyicu.research_agent.planning.family_spec"
     ],
     [
@@ -1426,6 +1430,10 @@
     [
       "easyicu.research_agent.audits.cross_step",
       "easyicu.research_agent.contracts.model_contract_match"
+    ],
+    [
+      "easyicu.research_agent.audits.cross_step",
+      "easyicu.research_agent.contracts.model_retention"
     ],
     [
       "easyicu.research_agent.audits.cross_step",
@@ -4001,6 +4009,10 @@
     ],
     [
       "easyicu.research_agent.execution.model_matrix",
+      "easyicu.research_agent.contracts.model_retention"
+    ],
+    [
+      "easyicu.research_agent.execution.model_matrix",
       "easyicu.research_agent.contracts.model_terms"
     ],
     [
@@ -4670,6 +4682,42 @@
     [
       "easyicu.research_agent.execution.phase_support",
       "easyicu.research_agent.viability"
+    ],
+    [
+      "easyicu.research_agent.execution.primary_model_retention",
+      "easyicu.research_agent.authority.current_case_scientific_runtime"
+    ],
+    [
+      "easyicu.research_agent.execution.primary_model_retention",
+      "easyicu.research_agent.authority.declared_levels"
+    ],
+    [
+      "easyicu.research_agent.execution.primary_model_retention",
+      "easyicu.research_agent.cohort.schema"
+    ],
+    [
+      "easyicu.research_agent.execution.primary_model_retention",
+      "easyicu.research_agent.contracts.model_retention"
+    ],
+    [
+      "easyicu.research_agent.execution.primary_model_retention",
+      "easyicu.research_agent.contracts.model_terms"
+    ],
+    [
+      "easyicu.research_agent.execution.primary_model_retention",
+      "easyicu.research_agent.execution.model_matrix"
+    ],
+    [
+      "easyicu.research_agent.execution.primary_model_retention",
+      "easyicu.research_agent.execution.runners.landmark_categorical_association_executor"
+    ],
+    [
+      "easyicu.research_agent.execution.primary_model_retention",
+      "easyicu.research_agent.execution.runners.landmark_spline_fit"
+    ],
+    [
+      "easyicu.research_agent.execution.primary_model_retention",
+      "easyicu.research_agent.schema"
     ],
     [
       "easyicu.research_agent.execution.provider_budget_runtime",
@@ -8337,6 +8385,10 @@
     ],
     [
       "easyicu.research_agent.orchestration.scientific_plan_review_gate",
+      "easyicu.research_agent.contracts.model_retention"
+    ],
+    [
+      "easyicu.research_agent.orchestration.scientific_plan_review_gate",
       "easyicu.research_agent.contracts.runtime"
     ],
     [
@@ -8550,6 +8602,10 @@
     [
       "easyicu.research_agent.pipeline",
       "easyicu.research_agent.execution.phase"
+    ],
+    [
+      "easyicu.research_agent.pipeline",
+      "easyicu.research_agent.execution.primary_model_retention"
     ],
     [
       "easyicu.research_agent.pipeline",
@@ -9286,6 +9342,10 @@
     [
       "easyicu.research_agent.planning.family_spec.landmark_categorical_template",
       "easyicu.research_agent.canonical_json"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.landmark_categorical_template",
+      "easyicu.research_agent.contracts.model_retention"
     ],
     [
       "easyicu.research_agent.planning.family_spec.landmark_categorical_template",
@@ -10097,6 +10157,10 @@
     ],
     [
       "easyicu.research_agent.planning.scientific_review",
+      "easyicu.research_agent.contracts.model_retention"
+    ],
+    [
+      "easyicu.research_agent.planning.scientific_review",
       "easyicu.research_agent.contracts.ordered_stratified"
     ],
     [
@@ -10174,6 +10238,10 @@
     [
       "easyicu.research_agent.planning.scientific_review",
       "easyicu.research_agent.planning.publication_readiness"
+    ],
+    [
+      "easyicu.research_agent.planning.scientific_review",
+      "easyicu.research_agent.planning.robustness_contract"
     ],
     [
       "easyicu.research_agent.planning.scientific_review",
@@ -12836,9 +12904,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3201,
+    "edge_count": 3218,
     "largest_scc_size": 0,
-    "module_count": 759,
+    "module_count": 761,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -13018,6 +13086,7 @@
     "easyicu.research_agent.contracts.method_packages": "contracts/method_packages.py",
     "easyicu.research_agent.contracts.model_contract_match": "contracts/model_contract_match.py",
     "easyicu.research_agent.contracts.model_covariates": "contracts/model_covariates.py",
+    "easyicu.research_agent.contracts.model_retention": "contracts/model_retention.py",
     "easyicu.research_agent.contracts.model_terms": "contracts/model_terms.py",
     "easyicu.research_agent.contracts.model_tokens": "contracts/model_tokens.py",
     "easyicu.research_agent.contracts.ordered_stratified": "contracts/ordered_stratified.py",
@@ -13112,6 +13181,7 @@
     "easyicu.research_agent.execution.owner_declaration": "execution/owner_declaration.py",
     "easyicu.research_agent.execution.phase": "execution/phase.py",
     "easyicu.research_agent.execution.phase_support": "execution/phase_support.py",
+    "easyicu.research_agent.execution.primary_model_retention": "execution/primary_model_retention.py",
     "easyicu.research_agent.execution.provider_budget_runtime": "execution/provider_budget_runtime.py",
     "easyicu.research_agent.execution.publication_figure": "execution/publication_figure.py",
     "easyicu.research_agent.execution.repair_reservation": "execution/repair_reservation.py",

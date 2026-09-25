@@ -13,7 +13,7 @@ into the shared schema or prompt.
 from __future__ import annotations
 
 import re
-from typing import Any, Literal, Mapping, Optional, Sequence
+from typing import Any, ClassVar, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -292,6 +292,12 @@ class ProgressiveTableOneVariable(BaseModel):
 class ProgressiveModelTermIntent(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    #: Declared fields only the host writes: a family template keeps a
+    #: covariate's unmeasured rows as an explicit state from measured
+    #: missingness.  The Planner transport never offers them and the provider
+    #: parsers strip them (``agents/progressive_payload.py``).
+    HOST_OWNED_FIELDS: ClassVar[frozenset[str]] = frozenset({"missing_handling"})
+
     name: str = Field(min_length=1, max_length=128)
     role: Literal["exposure", "covariate"]
     coding: ModelTermCoding
@@ -304,6 +310,11 @@ class ProgressiveModelTermIntent(BaseModel):
             "Agent-authored clinical confounding rationale; required for a "
             "covariate and omitted for the exposure."
         ),
+    )
+    #: Host-owned (``HOST_OWNED_FIELDS``).
+    missing_handling: Optional[Literal["unmeasured_category"]] = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
     )
 
     @model_validator(mode="after")
@@ -319,6 +330,8 @@ class ProgressiveModelTermIntent(BaseModel):
                 "covariate terms require an Agent-authored clinical_rationale; "
                 "exposure terms must omit it"
             )
+        if self.role == "exposure" and self.missing_handling is not None:
+            raise ValueError("the exposure cannot keep its unmeasured rows as a state")
         return self
 
 

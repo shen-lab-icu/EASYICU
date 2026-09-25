@@ -32,7 +32,9 @@ from ..planning.family_spec import (
     build_landmark_survival_skeleton,
     build_prediction_skeleton,
     build_source_feasibility_skeleton,
+    keeps_unmeasured_covariate_rows,
 )
+from ..contracts.model_retention import MISSING_CATEGORY_SHARE_THRESHOLD
 from ..planning.family_spec.contract import (
     FAMILY_SPEC_SCHEMA_VERSION,
     LANDMARK_FAMILY_IDS,
@@ -95,8 +97,9 @@ Return exactly one JSON object and nothing else, in the response contract attach
 
 
 def _candidate_rows(request: FamilySpecRequest) -> list[dict[str, Any]]:
-    return [
-        {
+    rows: list[dict[str, Any]] = []
+    for item in request.adjustment_candidates:
+        row: dict[str, Any] = {
             "name": item.name,
             "semantic_role": item.semantic_role,
             "host_temporal_role": item.host_temporal_role,
@@ -105,8 +108,10 @@ def _candidate_rows(request: FamilySpecRequest) -> list[dict[str, Any]]:
             "selectable": item.selectable,
             "boundary": item.boundary,
         }
-        for item in request.adjustment_candidates
-    ]
+        if item.missing_share is not None:
+            row["missing_share"] = item.missing_share
+        rows.append(row)
+    return rows
 
 
 def family_spec_user_prompt(
@@ -184,6 +189,13 @@ def family_spec_user_prompt(
         )
         + json.dumps(_candidate_rows(request), ensure_ascii=False)
     )
+    if keeps_unmeasured_covariate_rows(request):
+        sections.append(
+            "Unmeasured covariates: the host keeps the unmeasured rows of a selected covariate "
+            f"whose missing_share is at least {MISSING_CATEGORY_SHARE_THRESHOLD:g} as an explicit "
+            "unmeasured state in the model, so do not drop a confounder because it is often "
+            "unmeasured."
+        )
     if request.family_id in {PHENOTYPING_FAMILY_ID, PREDICTION_FAMILY_ID}:
         sections.append(
             (
