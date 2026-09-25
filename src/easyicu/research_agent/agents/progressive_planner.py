@@ -90,7 +90,9 @@ from ..planning.progressive_contract import (
     ProgressivePlannerCheckpoint,
     ProgressivePlanSkeleton,
     ProgressiveStepMaterialization,
+    outline_step_products,
     progressive_module_ids_for_analysis_types,
+    validate_primary_population_owner,
     validate_progressive_module_action_compatibility,
 )
 from ..planning.progressive_host_materialization import (
@@ -866,8 +868,10 @@ def _bind_runtime_action_dependencies(
     consumes and emits. Requiring the Planner to repeat that same mechanical
     edge in ``depends_on`` adds no scientific choice and makes a valid design
     depend on redundant model bookkeeping. Add only edges with one preceding
-    runtime-contract owner; ambiguous or unavailable owners remain untouched
-    so the ordinary fail-closed validators can report them.
+    owner: a runtime-contract action, or a host-compiled module whose fixed
+    products (the analysis cohort among them) no action declares. Ambiguous
+    or unavailable owners remain untouched so the ordinary fail-closed
+    validators can report them.
     """
 
     actions = {
@@ -893,12 +897,12 @@ def _bind_runtime_action_dependencies(
             else step.model_copy(update={"depends_on": dependencies})
         )
         bound_steps.append(bound_step)
-        if contract is not None:
-            for product_id, _semantic_role in contract.outputs:
-                prior_owners.setdefault(product_id, []).append(step.step_id)
+        for product_id in outline_step_products(step, actions):
+            prior_owners.setdefault(product_id, []).append(step.step_id)
     if bound_steps == outline.steps:
         return outline
     return outline.model_copy(update={"steps": bound_steps})
+
 
 
 def _complete_case_variable_roster(
@@ -2338,6 +2342,15 @@ class ProgressivePlannerAgent:
                 path="steps",
                 findings=findings,
             )
+        validate_primary_population_owner(
+            outline,
+            actions={
+                action.action_id: action
+                for action in scientific_actions_for_analysis_type(
+                    outline.analysis_type
+                ).actions
+            },
+        )
         if required_visualization_step and not any(
             step.module_id == "visualization" for step in outline.steps
         ):
