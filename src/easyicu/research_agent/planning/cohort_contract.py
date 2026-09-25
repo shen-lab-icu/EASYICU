@@ -361,6 +361,27 @@ def validate_cohort_definition(definition: CohortDefinition) -> None:
         validate_concept_predicate(pred)
 
 
+def cohort_definition_concept_ids(
+    definition: CohortDefinition | None,
+) -> tuple[str, ...]:
+    """The concept ids a definition's predicates name, in declared order.
+
+    These are the ids validating the definition needs to know.  A predicate
+    may name a materialized column (``<concept>_max``) that only a run-scoped
+    registration makes known, so re-reading a plan outside that run's scope
+    needs exactly these ids.
+    """
+
+    if definition is None:
+        return ()
+    return tuple(
+        dict.fromkeys(
+            str(predicate.concept_id)
+            for predicate in (*definition.inclusion, *definition.exclusion)
+        )
+    )
+
+
 def cohort_definition_has_explicit_selection(
     definition: CohortDefinition | None,
 ) -> bool:
