@@ -3,13 +3,22 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.cohort import materializer
 from easyicu.research_agent.cohort.materializer import _hash_df, _sha256_file
+from easyicu.research_agent.intake.legacy_materialization import (
+    legacy_first_icu_stay_restriction,
+    load_verified_legacy_materialization_provenance,
+)
 from easyicu.research_agent.intake.materialized_metadata import (
     MaterializedMetadataError,
+)
+from easyicu.research_agent.planning.dependence_authority import (
+    repeat_units_possible,
 )
 from easyicu.research_agent.planning.scientific_review import (
     patient_identity_available,
@@ -258,3 +267,206 @@ def test_verified_composite_patient_grouping_reaches_scientific_review(
         "mapping_file_sha256"
     ] == "a" * 64
     assert patient_identity_available(context) is True
+
+
+def _materialize_legacy_universe(
+    tmp_path: Path, monkeypatch, *, first_stay_flags: dict | None
+) -> Path:
+    """Write a universe the way an untyped export package does: no typed
+    authority, only the materializer's ``<stem>_provenance.json`` receipt."""
+
+    tmp_path.mkdir()
+    wide = pd.DataFrame(
+        {
+            "stay_id": [11, 12, 13, 14, 15],
+            "age": [60.0, 61.0, 70.0, 45.0, 52.0],
+            "death": [0, 1, 0, 0, 1],
+        }
+    )
+    provenance = {
+        "schema_version": "easyicu.cohort_materializer/1",
+        "source_mode": "export",
+        "export_authority": None,
+        "database": "synthetic",
+        "cohort_window_hours": [0.0, 24.0],
+        "feature_concepts": [],
+        "outcome_concepts": ["death"],
+        "static_concepts": ["age"],
+        "cohort_definition": None,
+        "n_stays_extracted": len(wide),
+        "n_stays_after_inclusion_exclusion": len(wide),
+        "unavailable_concepts": [],
+        "event_indicator_columns_normalized": [],
+        "declared_positive_only_event_concepts": [],
+        "host_derivations": [],
+        "source_bounds_violation_policy": "reject",
+        "source_bounds_exclusions": {},
+        "columns": list(wide.columns),
+        "cohort_sha256": _hash_df(wide),
+    }
+    untyped = SimpleNamespace(enabled=False, seal_existing_cohort=lambda **_kw: None)
+    monkeypatch.setattr(
+        materializer,
+        "_materialize_cohort_with_metadata",
+        lambda **_kwargs: (wide.copy(), dict(provenance), untyped),
+    )
+    first_stay: dict = {}
+    if first_stay_flags is not None:
+        coordinate = tmp_path / "first_icu_stay.parquet"
+        pd.DataFrame(
+            {
+                "stay_id": list(first_stay_flags),
+                "first_icu_stay": list(first_stay_flags.values()),
+            }
+        ).to_parquet(coordinate, index=False)
+        digest = _sha256_file(coordinate)
+        first_stay = {
+            "first_icu_stay_path": coordinate.absolute(),
+            "first_icu_stay_sha256": digest,
+            "first_icu_stay_authority_coordinates": {
+                "coordinate_sha256": digest,
+                "provider_visible_values": False,
+            },
+        }
+    paths = materializer.materialize_to_parquet(
+        tmp_path / "universe",
+        stem="cohort",
+        feature_concepts=[],
+        database="synthetic",
+        data_path=str(tmp_path),
+        outcome_concepts=["death"],
+        static_concepts=["age"],
+        **first_stay,
+    )
+    assert "cohort_authority" not in paths
+    return paths["parquet"]
+
+
+def test_first_icu_stay_restriction_in_a_legacy_receipt_rules_out_repeats(
+    ra, tmp_path: Path, monkeypatch
+) -> None:
+    """A stay-keyed universe restricted to first ICU stays has one row per
+    patient; the context must say so even when no typed authority exists."""
+
+    flags = {11: True, 12: True, 13: False, 14: True, 15: True, 16: False}
+    universe = _materialize_legacy_universe(
+        tmp_path / "restricted", monkeypatch, first_stay_flags=flags
+    )
+    unrestricted = _materialize_legacy_universe(
+        tmp_path / "unrestricted", monkeypatch, first_stay_flags=None
+    )
+
+    def context(cohort: Path):
+        return ra.build_research_context(
+            research_question="Describe the association of age with death.",
+            cohort=cohort,
+            cohort_name="stay_keyed",
+            database="synthetic",
+            target_outcome="death",
+        )
+
+    restricted_context = context(universe)
+    digest = load_verified_legacy_materialization_provenance(universe)[
+        "first_icu_stay_restriction"
+    ]["coordinate_sha256"]
+    assert restricted_context.cohort.n_stays == 4
+    assert restricted_context.cohort.provenance["first_icu_stay_restriction"] == {
+        "schema_version": "easyicu.first_icu_stay_restriction/1",
+        "coordinate_sha256": digest,
+        "stays_after": 4,
+    }
+    assert patient_identity_available(restricted_context) is False
+    assert repeat_units_possible(restricted_context) is False
+
+    unrestricted_context = context(unrestricted)
+    assert "first_icu_stay_restriction" not in unrestricted_context.cohort.provenance
+    assert repeat_units_possible(unrestricted_context) is True
+
+
+def _restricted_legacy_receipt(tmp_path: Path) -> Path:
+    source = tmp_path / "cohort.parquet"
+    frame = _write_legacy_materialization(source)
+    provenance_path = tmp_path / "cohort_provenance.json"
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    provenance["first_icu_stay_restriction"] = {
+        "schema_version": "easyicu.first_icu_stay_restriction/1",
+        "coordinate_sha256": "c" * 64,
+        "stays_before": len(frame) + 2,
+        "stays_after": len(frame),
+        "non_first_icu_stays_removed": 2,
+        "authority_coordinates": {
+            "coordinate_sha256": "c" * 64,
+            "provider_visible_values": False,
+        },
+    }
+    provenance_path.write_text(json.dumps(provenance), encoding="utf-8")
+    return source
+
+
+def test_verified_legacy_restriction_projects_only_aggregate_fields(
+    tmp_path: Path,
+) -> None:
+    verified = load_verified_legacy_materialization_provenance(
+        _restricted_legacy_receipt(tmp_path)
+    )
+
+    assert legacy_first_icu_stay_restriction(verified) == {
+        "schema_version": "easyicu.first_icu_stay_restriction/1",
+        "coordinate_sha256": "c" * 64,
+        "stays_after": 3,
+    }
+    verified.pop("first_icu_stay_restriction")
+    assert legacy_first_icu_stay_restriction(verified) is None
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda r: "restricted",
+        lambda r: {**r, "schema_version": "easyicu.first_icu_stay_restriction/0"},
+        lambda r: {**r, "coordinate_sha256": "C" * 64, "authority_coordinates": {}},
+        lambda r: {**r, "coordinate_sha256": "c" * 63, "authority_coordinates": {}},
+        lambda r: {key: value for key, value in r.items() if key != "coordinate_sha256"},
+        lambda r: {**r, "stays_before": 4, "stays_after": 2, "non_first_icu_stays_removed": 2},
+        lambda r: {**r, "non_first_icu_stays_removed": 1},
+        lambda r: {**r, "stays_before": 4, "non_first_icu_stays_removed": True},
+        lambda r: {**r, "non_first_icu_stays_removed": 2.0},
+        lambda r: {**r, "stays_before": 1, "non_first_icu_stays_removed": -2},
+        lambda r: {**r, "authority_coordinates": None},
+        lambda r: {**r, "authority_coordinates": {"coordinate_sha256": "d" * 64}},
+        lambda r: {**r, "authority_coordinates": {"provider_visible_values": True}},
+    ],
+    ids=[
+        "not_an_object",
+        "schema",
+        "coordinate_case",
+        "coordinate_length",
+        "coordinate_missing",
+        "stays_after_not_the_rows",
+        "removed_count",
+        "boolean_count",
+        "float_count",
+        "negative_count",
+        "coordinates_not_an_object",
+        "coordinates_name_another_digest",
+        "values_visible_to_provider",
+    ],
+)
+def test_malformed_legacy_restriction_fails_closed(
+    ra, tmp_path: Path, mutate
+) -> None:
+    source = _restricted_legacy_receipt(tmp_path)
+    provenance_path = tmp_path / "cohort_provenance.json"
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    provenance["first_icu_stay_restriction"] = mutate(
+        provenance["first_icu_stay_restriction"]
+    )
+    provenance_path.write_text(json.dumps(provenance), encoding="utf-8")
+
+    with pytest.raises(MaterializedMetadataError, match="first ICU stay restriction"):
+        ra.build_research_context(
+            research_question="Evaluate a marker.",
+            cohort=source,
+            cohort_name="malformed_restriction",
+            database="synthetic",
+        )
