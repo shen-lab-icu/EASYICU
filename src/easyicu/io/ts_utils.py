@@ -1253,8 +1253,13 @@ def fill_gaps(
                             _known = ~np.isnan(_offsets_raw) & ~np.isnan(_starts_per_row)
                             if not _known.all():
                                 # The per-group path infers an observation range
-                                # for IDs absent from limits. Never discard them.
-                                raise _OffGridFallback
+                                # for IDs absent from limits. Invalid *supplied*
+                                # limits, however, omit that group in both paths;
+                                # they must not force every valid group into the
+                                # much slower per-patient implementation.
+                                unknown_ids = pd.unique(_data_id[~_known])
+                                if any(key not in limits_lookup for key in unknown_ids):
+                                    raise _OffGridFallback
                             _within_f = (_data_time - _starts_per_row) / step_hours
                             # Off-grid observations must not be silently
                             # rounded onto the grid: the per-group path
