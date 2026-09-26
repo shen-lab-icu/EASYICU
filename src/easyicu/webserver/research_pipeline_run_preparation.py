@@ -62,6 +62,7 @@ from easyicu.webserver.research_launch_scientific import (
     _target_outcome,
     _validate_analysis_design,
     _validate_primary_concept_selection,
+    _validate_trajectory_design,
 )
 
 _RUNNER_IMAGE_ENV = "EASYICU_RUNNER_IMAGE"
@@ -232,6 +233,9 @@ def _prepare_scientific_launch(
     validated_analysis_design = (
         {} if metadata_only_planning else _validate_analysis_design(study)
     )
+    # A declared trajectory design is validated before anything is spent, in
+    # a candidate run as well: its concepts join the planning catalog.
+    trajectory_design = _validate_trajectory_design(study)
     patient_grouping = (
         _patient_grouping_for_analysis_design(study)
         if metadata_only_planning
@@ -300,6 +304,11 @@ def _prepare_scientific_launch(
             require_primary_exposure=bool(configured_primary_exposure),
             covariates=covariates,
             sensitivity_specs=sensitivity_specs,
+            trajectory_concepts=(
+                trajectory_design.required_concepts
+                if trajectory_design is not None
+                else ()
+            ),
         )
         try:
             package_receipt = dataio.validate_research_pipeline_source(

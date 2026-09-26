@@ -96,7 +96,8 @@ def _panel(tmp_path, *, n: int = 120, concepts=_COORDINATES, window=(0.0, 48.0))
                 "trajectory_concepts_materialized": [*concepts, "sofa2"],
                 "available_unobserved_concepts": [],
                 "unavailable_concepts": [],
-                "window": list(window),
+                # The key the cohort materializer records the window under.
+                "trajectory_window_hours": list(window),
             }
         ),
         encoding="utf-8",

@@ -16,6 +16,12 @@ name when they cannot.  It reads the long panel's *provenance*, never a patient
 row, and it never invents a coordinate, a window or a cluster grid: an
 undeclared design is not a trajectory study, and a declared design that cannot
 execute is a blocker rather than a substituted default.
+
+A planner-only candidate has no long panel: it plans on a zero-row catalog and
+cannot execute.  The sealed authority is built from the design and host policy
+alone, so the candidate is admitted on the catalog's columns and plans on the
+same contract that the formal run re-signs after materialization, where the
+panel checks apply.
 """
 
 from __future__ import annotations
@@ -23,6 +29,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+import pyarrow.parquet as pq
 
 from easyicu.research_agent.contracts.trajectory_design import (
     FixedWindowTrajectoryDesign,
@@ -56,6 +64,9 @@ _SUPPORTED_VARIANCE_ESTIMATOR = "model_based"
 # with owner-available SOFA-2 evidence, and reports exclusions under that
 # name. A design with no SOFA-2 coordinate cannot state eligibility at all.
 _ELIGIBILITY_COORDINATE_PREFIX = "sofa2"
+#: The long panel's window as the cohort materializer records it
+#: (``_build_trajectory_long_from_resolved_source``).
+_MATERIALIZED_WINDOW_KEY = "trajectory_window_hours"
 
 
 def _design_field(study: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -163,12 +174,30 @@ def _panel_provenance(universe_path: Path) -> Mapping[str, Any]:
 def _require_materialized_window(
     design: FixedWindowTrajectoryDesign, provenance: Mapping[str, Any]
 ) -> None:
-    window = provenance.get("window")
-    if not isinstance(window, Sequence) or isinstance(window, (str, bytes)):
-        return
-    bounds = [value for value in window if isinstance(value, (int, float))]
-    if len(bounds) != 2:
-        return
+    window = provenance.get(_MATERIALIZED_WINDOW_KEY)
+    bounds = (
+        [
+            value
+            for value in window
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        ]
+        if isinstance(window, Sequence) and not isinstance(window, (str, bytes))
+        else []
+    )
+    if len(bounds) != 2 or len(window) != 2:
+        _fail(
+            "web_trajectory_materialized_window_unproven",
+            (
+                "The long panel's provenance does not record the window it was "
+                "materialized over, so it cannot show that the reviewed "
+                "trajectory window lies inside it."
+            ),
+            expected_field=_MATERIALIZED_WINDOW_KEY,
+            trajectory_window_hours=[
+                design.window_start_hours,
+                design.window_end_hours,
+            ],
+        )
     start, end = float(bounds[0]), float(bounds[1])
     if design.window_start_hours < start or design.window_end_hours > end:
         _fail(
@@ -216,6 +245,46 @@ def _require_materialized_concepts(
                 names("available_unobserved_concepts")
             ),
             unavailable_concepts=sorted(names("unavailable_concepts")),
+        )
+
+
+def _require_planning_catalog_concepts(
+    design: FixedWindowTrajectoryDesign, catalog_path: Path
+) -> None:
+    """Admit a planner-only candidate on the zero-row catalog's columns."""
+
+    try:
+        metadata = pq.read_metadata(catalog_path)
+        columns = set(metadata.schema.to_arrow_schema().names)
+    except (OSError, ValueError) as exc:
+        _fail(
+            "web_trajectory_planning_catalog_unreadable",
+            "The planner-only run has no readable planning catalog to admit the design on.",
+            expected_artifact=catalog_path.name,
+            cause=type(exc).__name__,
+        )
+        raise  # pragma: no cover - _fail always raises
+    if metadata.num_rows:
+        # Only a catalog that holds no patient row is a planning catalog; a
+        # materialized universe must pass the long-panel checks instead.
+        _fail(
+            "web_trajectory_planning_catalog_not_empty",
+            "Planning-catalog admission applies only to a zero-row catalog.",
+            expected_artifact=catalog_path.name,
+        )
+    missing = [
+        concept for concept in design.required_concepts if concept not in columns
+    ]
+    if missing:
+        _fail(
+            "web_trajectory_concepts_unavailable",
+            (
+                "Every declared trajectory concept must be a column the planning "
+                "catalog carries; a concept the selected source cannot provide "
+                "can never reach the longitudinal panel."
+            ),
+            missing_concepts=sorted(missing),
+            admission="planning_catalog",
         )
 
 
@@ -289,19 +358,25 @@ def compile_web_trajectory_runtime_projection(
     study: Mapping[str, Any],
     universe_path: Path,
     scientific_configuration_sha256: str,
+    planning_catalog: bool = False,
 ) -> WebScientificRuntimeProjection | None:
     """Seal the reviewed trajectory design, or refuse it by name.
 
     Returns ``None`` when the study is not a trajectory study at all, so the
     ordinary association and survival routes are untouched.
+    ``planning_catalog`` is the caller's planner-only flag: ``universe_path``
+    is then the zero-row catalog, not a materialized universe.
     """
 
     design = validate_trajectory_design_declaration(study)
     if design is None:
         return None
-    provenance = _panel_provenance(universe_path)
-    _require_materialized_window(design, provenance)
-    _require_materialized_concepts(design, provenance)
+    if planning_catalog:
+        _require_planning_catalog_concepts(design, universe_path)
+    else:
+        provenance = _panel_provenance(universe_path)
+        _require_materialized_window(design, provenance)
+        _require_materialized_concepts(design, provenance)
 
     authority = build_trajectory_scientific_runtime_authority(
         sealed_trajectory_authority_body(

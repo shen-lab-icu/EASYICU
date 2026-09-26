@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from easyicu.research_agent.acquisition.first_icu_stay import FirstIcuStayBinding
 from easyicu.research_agent.acquisition.patient_grouping import PatientGroupingBinding
+from easyicu.research_agent.contracts.trajectory_design import FixedWindowTrajectoryDesign
 from easyicu.research_agent.icu_rules import VariableKind
 from easyicu.webserver import dataio, primary_cohort, source_identity_authority
 from easyicu.webserver import study_contexts as study_context_owner
@@ -315,12 +316,15 @@ def resolve_study_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
     return design
 
 
-def _validate_trajectory_design(study: Mapping[str, Any]) -> None:
+def _validate_trajectory_design(
+    study: Mapping[str, Any],
+) -> Optional[FixedWindowTrajectoryDesign]:
     """Surface a contradictory trajectory declaration before spending anything.
 
     The trajectory projection owns this policy; calling it here only moves the
     same refusal earlier, to the point where the user can still fix the study
-    without having paid for a materialization.
+    without having paid for a materialization.  Returns the typed design, or
+    ``None`` for a study that declares no trajectory.
     """
 
     from easyicu.webserver.scientific_runtime_projection import (
@@ -331,7 +335,7 @@ def _validate_trajectory_design(study: Mapping[str, Any]) -> None:
     )
 
     try:
-        validate_trajectory_design_declaration(study)
+        return validate_trajectory_design_declaration(study)
     except WebScientificRuntimeProjectionError as exc:
         raise ResearchPipelineRunError(
             exc.code, str(exc), details=exc.details
@@ -870,12 +874,16 @@ def _data_foundation_profile(
     sensitivity_specs: tuple[Any, ...] = (),
     additional_outcomes: tuple[str, ...] = (),
     analysis_inputs: tuple[str, ...] = (),
+    trajectory_concepts: tuple[str, ...] = (),
 ) -> Dict[str, Any]:
     """Compile StudyContext modules into one typed materialization request.
 
     ``analysis_inputs`` are an accepted candidate's primary-analysis concepts
     (``planning.accepted_analysis_inputs``); they are materialized like any
     declared scientific input so the package-bound plan can keep them.
+    ``trajectory_concepts`` are a declared trajectory design's concepts; the
+    long panel is cut from the materialized concepts, so they must be among
+    them.
     """
 
     from easyicu.research_agent.acquisition.catalog import build_available_catalog
@@ -996,7 +1004,11 @@ def _data_foundation_profile(
         dict.fromkeys(
             value
             for value in (
-                primary_exposure, *covariates, *sensitivity_variables, *analysis_inputs,
+                primary_exposure,
+                *covariates,
+                *sensitivity_variables,
+                *analysis_inputs,
+                *trajectory_concepts,
             )
             if value and value != target
         )
@@ -1042,16 +1054,17 @@ def _data_foundation_profile(
                 else "sensitivity_variable"
                 if concept_id in sensitivity_variables
                 else "analysis_input"
+                if concept_id in analysis_inputs
+                else "trajectory_concept"
             )
             raise ResearchPipelineRunError(
                 f"research_pipeline_{role}_outside_configured_modules",
                 f"The configured {role.replace('_', ' ')} is not available in the selected feature modules.",
                 details={
-                    "field": (
-                        "candidate_plan.steps.inputs"
-                        if role == "analysis_input"
-                        else f"execution_concepts.{role}"
-                    ),
+                    "field": {
+                        "analysis_input": "candidate_plan.steps.inputs",
+                        "trajectory_concept": "trajectory_design",
+                    }.get(role, f"execution_concepts.{role}"),
                     "concept_id": concept_id,
                 },
             )
