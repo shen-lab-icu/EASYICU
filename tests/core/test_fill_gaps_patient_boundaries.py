@@ -41,6 +41,16 @@ def test_missing_limit_id_uses_its_own_observation_range():
     assert result.loc[result.stay_id.eq(2), "score"].iloc[[0, 2]].tolist() == [3., 4.]
 
 
+def test_invalid_supplied_limits_do_not_change_other_patients():
+    frame = pd.DataFrame({'stay_id': [1, 1, 2, 2], 'charttime': [10., 12., 0., 3.], 'score': [4., 4., 1., 2.]})
+    limits = pd.DataFrame({'stay_id': [1, 2], 'start': [10., 0.], 'end': [2., 3.]})
+    result = fill(frame, limits)
+    # Preserve the established invalid-limit contract (omit that group),
+    # without transferring either of its records to a valid group.
+    assert result.stay_id.eq(2).all()
+    pd.testing.assert_frame_equal(result, fill(frame[frame.stay_id.eq(2)], limits[limits.stay_id.eq(2)]))
+
+
 def test_fast_grid_matches_independent_union_reindex_for_shuffled_stays():
     rng = np.random.default_rng(90627)
     frames, limits, expected = [], [], []
