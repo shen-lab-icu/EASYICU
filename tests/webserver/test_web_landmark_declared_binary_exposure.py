@@ -27,7 +27,6 @@ from easyicu.research_agent.planning.sensitivity_authority import (
 )
 from easyicu.research_agent.schema import ConceptDescriptor
 from easyicu.webserver.research_launch_scientific import (
-    _materialized_column_dtype,
     _runtime_projection_sensitivity_specs,
 )
 from easyicu.webserver.scientific_runtime_projection import (
@@ -86,8 +85,8 @@ def _signed(universe):
     specs = _runtime_projection_sensitivity_specs(
         (_LANDMARK,),
         primary_exposure_source="abx",
-        primary_exposure_dtype=_materialized_column_dtype(universe, "abx"),
         primary_exposure="abx",
+        universe_path=universe,
     )
     # A binary exposure never receives the continuous spline safeguard.
     assert specs == (_LANDMARK,)
@@ -165,7 +164,6 @@ def test_an_operationalized_column_does_not_inherit_its_concepts_domain():
     specs = _runtime_projection_sensitivity_specs(
         (_LANDMARK,),
         primary_exposure_source="lact",
-        primary_exposure_dtype="double",
         primary_exposure="lact_max",
     )
     assert [spec.spec_id for spec in specs] == [

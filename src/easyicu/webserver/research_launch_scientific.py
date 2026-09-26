@@ -112,8 +112,8 @@ def _runtime_projection_sensitivity_specs(
     sensitivity_specs: tuple[Any, ...],
     *,
     primary_exposure_source: str,
-    primary_exposure_dtype: str = "",
     primary_exposure: str = "",
+    universe_path: Optional[Path] = None,
 ) -> tuple[Any, ...]:
     """Add only the deterministic runtime's automatic nonlinear safeguard.
 
@@ -122,28 +122,44 @@ def _runtime_projection_sensitivity_specs(
     form sensitivity, the signed landmark runtime supplies its standard RCS
     primary plus linear sensitivity as a plan-owned automatic remediation.  It
     is not written back to StudyContext or projected as a user request.  The
-    exposure's kind comes from the projection's own rule, so an exposure the
-    projection binds as binary never receives the continuous safeguard.
+    exposure's kind comes from the projection's own rule, read on the universe
+    the projection signs (its schema and published column metadata), so an
+    exposure the projection binds as binary never receives the continuous
+    safeguard.  Without a universe only the names are read.  The universe is
+    read only for a landmark design that could receive the safeguard, and a
+    universe that cannot be read keeps the projection's reason code.
     """
 
     if not primary_exposure_source:
-        return sensitivity_specs
-    from easyicu.webserver.scientific_runtime_projection import (
-        exposure_kind_for_dtype,
-    )
-
-    exposure_kind, _levels = exposure_kind_for_dtype(
-        primary_exposure=primary_exposure,
-        primary_exposure_source=primary_exposure_source,
-        dtype=primary_exposure_dtype,
-    )
-    if exposure_kind != VariableKind.CONTINUOUS:
         return sensitivity_specs
     strategies = {
         str(getattr(item, "strategy", "") or "") for item in sensitivity_specs
     }
     axes = {str(getattr(item, "axis", "") or "") for item in sensitivity_specs}
     if "landmark" not in strategies or "functional_form" in axes:
+        return sensitivity_specs
+    from easyicu.webserver.scientific_runtime_projection import (
+        WebScientificRuntimeProjectionError,
+        exposure_kind_for_dtype,
+        primary_exposure_kind,
+    )
+
+    try:
+        if universe_path is not None:
+            exposure_kind, _levels = primary_exposure_kind(
+                universe_path=Path(universe_path),
+                primary_exposure=primary_exposure,
+                primary_exposure_source=primary_exposure_source,
+            )
+        else:
+            exposure_kind, _levels = exposure_kind_for_dtype(
+                primary_exposure=primary_exposure,
+                primary_exposure_source=primary_exposure_source,
+                dtype="",
+            )
+    except WebScientificRuntimeProjectionError as exc:
+        raise ResearchPipelineRunError(exc.code, str(exc), details=exc.details) from exc
+    if exposure_kind != VariableKind.CONTINUOUS:
         return sensitivity_specs
     from easyicu.research_agent.planning.sensitivity_authority import (
         PrespecifiedSensitivitySpec,
@@ -156,20 +172,6 @@ def _runtime_projection_sensitivity_specs(
         execution_variables=(primary_exposure_source,),
     )
     return (*sensitivity_specs, automatic)
-
-
-def _materialized_column_dtype(path: Path, column: str | None) -> str:
-    """Return one schema dtype without reading patient rows."""
-
-    if not column:
-        return ""
-    try:
-        import pyarrow.parquet as pq
-
-        schema = pq.read_schema(path)
-    except Exception:
-        return ""
-    return str(schema.field(column).type) if column in schema.names else ""
 
 
 def _patient_grouping_for_analysis_design(

@@ -38,6 +38,10 @@ from easyicu.research_agent.authority.current_case_scientific_runtime import (
 from easyicu.research_agent.contracts.dependence import PlannedDependenceRequirement
 from easyicu.research_agent.contracts.model_terms import level_spelling
 from easyicu.research_agent.icu_rules import VariableKind, classify_variable
+from easyicu.research_agent.intake.materialized_metadata import (
+    MaterializedMetadataError,
+    load_verified_materialized_cohort_authority,
+)
 from easyicu.research_agent.planning.sensitivity_authority import (
     PrespecifiedSensitivitySpec,
 )
@@ -316,6 +320,7 @@ def primary_exposure_kind(
     """Classify a physical exposure without reading patient rows."""
 
     dtype = ""
+    published: tuple[object, ...] = ()
     if primary_exposure:
         try:
             import pyarrow.parquet as pq
@@ -329,11 +334,40 @@ def primary_exposure_kind(
                 "The materialized universe schema could not be read for exposure routing.",
                 details={"artifact": Path(universe_path).name, "reason": str(exc)[:500]},
             ) from exc
+        published = _published_column_domain(universe_path, primary_exposure)
     return exposure_kind_for_dtype(
         primary_exposure=primary_exposure,
         primary_exposure_source=primary_exposure_source,
         dtype=dtype,
+        published_levels=published,
     )
+
+
+def _published_column_domain(universe_path: Path, column: str) -> tuple[object, ...]:
+    """The closed domain the materializer published for one physical column.
+
+    A window maximum, minimum or first value of an event status keeps the
+    status's two values, and the materializer says so in the universe's
+    verified column metadata; a fraction, a count or a time publishes no
+    domain.  A zero-row planning catalog has no materialized authority, so
+    planning keeps the concept owner's rule.
+    """
+
+    try:
+        verified = load_verified_materialized_cohort_authority(Path(universe_path))
+    except MaterializedMetadataError as exc:
+        raise WebScientificRuntimeProjectionError(
+            "web_scientific_runtime_metadata_unverified",
+            "The materialized universe's column metadata could not be verified for exposure routing.",
+            details={"artifact": Path(universe_path).name, "reason": str(exc)[:500]},
+        ) from exc
+    if verified is None:
+        return ()
+    for file_binding in verified.sidecar.files:
+        binding = file_binding.columns.get(column)
+        if binding is not None:
+            return tuple(binding.metadata.allowed_values or ())
+    return ()
 
 
 def exposure_kind_for_dtype(
@@ -341,11 +375,15 @@ def exposure_kind_for_dtype(
     primary_exposure: str | None,
     primary_exposure_source: str | None,
     dtype: str,
+    published_levels: Sequence[object] = (),
 ) -> tuple[VariableKind, tuple[str, ...]]:
     """Classify an exposure from its names, schema dtype, and declared domain.
 
     Every Web consumer that routes on the exposure's kind (the signed runtimes
     and the launch's automatic functional-form safeguard) calls this one rule.
+    ``published_levels`` is the domain the materializer published for the
+    physical column itself; a published two-level domain makes an
+    operationalized column (a window maximum of an event status) binary.
     """
 
     hint = classify_variable(
@@ -359,6 +397,9 @@ def exposure_kind_for_dtype(
         # The type fixes this column's domain, and its values bind as
         # ``false``/``true`` whatever encoding the concept declares.
         return VariableKind.BINARY, (level_spelling(False), level_spelling(True))
+    published = tuple(level_spelling(value) for value in published_levels)
+    if len(published) == 2 and len(set(published)) == 2 and all(published):
+        return VariableKind.BINARY, published
     declared = _declared_binary_levels(
         primary_exposure=primary_exposure,
         primary_exposure_source=primary_exposure_source,
