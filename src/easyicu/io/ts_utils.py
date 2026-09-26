@@ -62,11 +62,28 @@ def _fast_groupby_agg(df: pd.DataFrame, group_cols: list, agg_dict: dict) -> pd.
         if len(df) == 0:
             return df
 
+        # Integer packing is lossless only for integral, representable keys.
+        # In particular 30-minute bins 8.0 and 8.5 must not both become 8.
+        key_min, key_max = -(1 << 63), (1 << 63) - 1
+        packable = all(
+            np.equal(values, np.floor(values)).all()
+            and key_min <= values.min().item() <= key_max
+            and key_min <= values.max().item() <= key_max
+            for values in (g0, g1)
+        )
+        if not packable:
+            return df.groupby(group_cols, sort=False, as_index=False).agg(agg_dict)
+        time_span = int(g1.max()) - int(g1.min())
+        stride = time_span + 2
+        if (time_span > key_max or stride > key_max
+                or int(g0.min()) * stride < key_min
+                or int(g0.max()) * stride + time_span > key_max):
+            return df.groupby(group_cols, sort=False, as_index=False).agg(agg_dict)
+
         # Compute combined int64 key: pid * stride + (time - time_min)
         g1_int = g1.astype(np.int64)
         g1_min = int(g1_int.min())
         g1_offset = g1_int - g1_min
-        stride = int(g1_offset.max()) + 2
         combined_key = g0.astype(np.int64) * stride + g1_offset
 
         # Add group cols to agg_dict so they survive groupby

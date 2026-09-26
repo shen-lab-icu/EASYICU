@@ -16000,6 +16000,8 @@
      "table": "outputevents",
      "sub_var": "itemid",
      "callback": "mimic_urine_output",
+     "bounds_stage": "post_sum",
+     "bounds_contract": "SIGNED_SUM_THEN_BOUNDS_V1",
      "_comment": "Exact MIT-LCP/mimic-code mimic-iv/concepts/measurement/urine_output.sql item IDs. The pre-aggregation callback negates positive 227488 GU irrigant-in and sums it with 227489 urine/irrigant-out."
     }
    ],
@@ -16051,6 +16053,8 @@
      "table": "outputevents",
      "sub_var": "itemid",
      "callback": "mimic_urine_output",
+     "bounds_stage": "post_sum",
+     "bounds_contract": "SIGNED_SUM_THEN_BOUNDS_V1",
      "_comment": "MIMIC-III CareVue urine channels plus the exact MIT-LCP MIMIC-IV MetaVision urine-output IDs; GU irrigation is netted before hourly summation."
     }
    ],
@@ -16102,6 +16106,8 @@
      "table": "outputevents",
      "sub_var": "itemid",
      "callback": "mimic_urine_output",
+     "bounds_stage": "post_sum",
+     "bounds_contract": "SIGNED_SUM_THEN_BOUNDS_V1",
      "_comment": "MIMIC-III CareVue urine channels plus the exact MIT-LCP MIMIC-IV MetaVision urine-output IDs; GU irrigation is netted before hourly summation."
     }
    ],

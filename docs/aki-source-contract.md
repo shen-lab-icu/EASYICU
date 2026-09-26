@@ -66,6 +66,37 @@ remain available for appropriately timed case-level compatibility analyses.
 - SICdb event offsets are anchored to ICU admission; urine and CRRT use the
   pinned native identifiers.
 
+### Signed irrigation aggregation correction
+
+The maintained loader now applies `SIGNED_SUM_THEN_BOUNDS_V1` to sources using
+`mimic_urine_output` (MIMIC-IV and MIMIC-III, including inherited/demo sources).
+Positive item 227488 values become negative summands. All selected channels
+are summed within the same patient and requested time bin **before** applying
+the existing urine range of 0–5000mL. Without a requested grid, simultaneous
+native timestamps are summed. Observed zero remains zero; negative,
+nonfinite or excessive totals become unavailable, never clipped to zero or
+moved to another time. A non-sum aggregation request is rejected.
+
+This is an extraction correction, not a new KDIGO threshold. Individual
+irrigation channels may legitimately exceed 5000mL while their net is within
+range. Other numeric concepts retain their existing pre-aggregation bounds.
+The source definition records the new bounds contract, changing the concept
+dictionary cache signature; old disk-cache results must not be reused.
+
+The sealed `full6_native_v6_clean_rebuild_97f508c6_20260921` predates this repair.
+A raw-source audit confirmed that its published irrigation-hour urine values
+omit the negative irrigant term. Fixing the maintained loader does not repair
+that release in place or establish corrected KDIGO, fluid balance or clinical
+outcomes. Raw negative net, collection duration and downstream window
+semantics still require explicit study-level review.
+
+Full-path regression tests cover Python/DuckDB, MIMIC-IV/MIMIC-III,
+timestamp/string storage, native/hourly/half-hour grids, multiple patients,
+large cancelling channels, genuine zero and invalid totals. Fractional time
+keys now bypass the integer-packing optimization to avoid merging adjacent
+half-hour bins; integer packing also checks overflow. MIMIC DuckDB timestamps
+are explicitly parsed, supporting the original string-valued Parquet source.
+
 HiRID's rate-source flag and extraction-bin width must reach **both** the
 public-reference phenotype and the quality receipts. The rate is integrated
 over its preceding observed chart interval before normalization by weight and
