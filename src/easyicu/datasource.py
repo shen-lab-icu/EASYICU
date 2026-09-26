@@ -3652,7 +3652,7 @@ def load_bucketed_table_aggregated(
 
         # Compute hours from admission: FLOOR(EPOCH(charttime - intime) / 3600)
         _interval_hours = interval_minutes / 60.0
-        time_round_expr = f"FLOOR(EPOCH(o.{time_col} - CAST(a.intime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
+        time_round_expr = f"FLOOR(EPOCH(TRY_CAST(o.{time_col} AS TIMESTAMP) - CAST(a.intime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
         output_time_expr = f"{time_round_expr} as charttime"
 
         # Alias value references for JOIN query

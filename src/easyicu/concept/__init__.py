@@ -2247,6 +2247,18 @@ class ConceptResolver:
                 value_column=concept_name,
             )
 
+        # GU irrigant input is a signed summand, not a negative urine volume.
+        # Bounds belong to the combined patient/time total in both loaders.
+        signed_sum_bounds = any(
+            source.callback == "mimic_urine_output" for source in sources
+        )
+        if signed_sum_bounds:
+            signed_aggregator = self._coerce_final_aggregator(aggregator)
+            if signed_aggregator in (None, "auto"):
+                signed_aggregator = self._coerce_final_aggregator(definition.aggregate)
+            if signed_aggregator != "sum":
+                raise ValueError("Signed irrigation volumes require sum aggregation")
+
         frames: List[pd.DataFrame] = []
         id_columns: List[str] = []
         index_column: Optional[str] = None
@@ -2723,6 +2735,9 @@ class ConceptResolver:
                         # 让 change_interval 做一次性跨源 MEDIAN（匹配 R ricu 的 pooled 行为）
                         if _block_duckdb_same_table or _block_duckdb_multi_numeric:
                             _can_inline_callback = False
+                        if signed_sum_bounds and interval is None:
+                            # Preserve native timestamps when no grid is requested.
+                            _can_inline_callback = False
                         # 🚀 id_tbl DuckDB 快速路径：per-patient 聚合（MEDIAN）代替全表加载
                         # 例如 height/weight 从 chartevents(5.7GB) 只需 ≤500 行
                         if has_sub_var and _can_inline_callback and _effective_ids and _target == 'id_tbl' and not _skip_db_duckdb:
@@ -2955,8 +2970,13 @@ class ConceptResolver:
                             table_cfg = data_source.config.get_table(source.table)
                             value_col = table_cfg.defaults.val_var or 'value'
                         
-                        interval = kwargs.get('interval', pd.Timedelta(hours=1))
-                        interval_minutes = interval.total_seconds() / 60.0 if isinstance(interval, pd.Timedelta) else 60.0
+                        duckdb_interval = (
+                            interval if signed_sum_bounds
+                            else kwargs.get('interval', pd.Timedelta(hours=1))
+                        )
+                        if not signed_sum_bounds:
+                            interval = duckdb_interval
+                        interval_minutes = duckdb_interval.total_seconds() / 60.0 if isinstance(duckdb_interval, pd.Timedelta) else 60.0
                         
                         # 🔧 获取患者ID列表 (关键: 处理dict和list两种格式)
                         # patient_ids 可能是 dict 格式 {'patientid': [1,2,3]} 或 list 格式 [1,2,3]
@@ -3049,8 +3069,8 @@ class ConceptResolver:
                             # R ricu 流程: load_id → callback → filter_bounds → change_interval → aggregate
                             # 对于 value_transform 内联回调，min/max 应用于转换后的值（在聚合表达式内部）
                             # 对于无回调概念，min/max 直接在 WHERE 子句过滤 raw value
-                            value_min=definition.minimum,
-                            value_max=definition.maximum,
+                            value_min=None if signed_sum_bounds else definition.minimum,
+                            value_max=None if signed_sum_bounds else definition.maximum,
                             include_unit=False,  # unit 不再通过 ANY_VALUE 获取
                             # 🚀 convert_unit 内联参数：在DuckDB中直接做单位转换
                             convert_unit_op=_convert_unit_op if _convert_unit_callback_for_duckdb else None,
@@ -5687,7 +5707,7 @@ class ConceptResolver:
             # easyicu's change_interval DOES aggregate, so filter_bounds must go BEFORE it.
             # Previously filter_bounds was incorrectly placed AFTER change_interval, causing
             # outlier values to participate in median aggregation (e.g. SIC epi_rate 1.9% error).
-            if concept_name in combined.columns:
+            if concept_name in combined.columns and not signed_sum_bounds:
                 if definition.minimum is not None or definition.maximum is not None:
                     combined[concept_name] = pd.to_numeric(combined[concept_name], errors='coerce')
                 if definition.minimum is not None:
@@ -5771,7 +5791,23 @@ class ConceptResolver:
                 ),
             )
         
-        # NOTE: filter_bounds已移至change_interval之前（见上方FIX 2026-03-10注释）
+        if signed_sum_bounds and concept_name in combined.columns:
+            from .signed_volume import bound_signed_total
+
+            if interval is None:
+                # Native-time requests still net simultaneous channels before
+                # assessing urine bounds; do not return individual signed terms.
+                keys = [*id_columns, index_column]
+                if not index_column or any(key not in combined for key in keys):
+                    raise ValueError("Signed irrigation sum requires patient and time keys")
+                combined = combined.groupby(keys, as_index=False, dropna=False)[
+                    concept_name
+                ].sum(min_count=1)
+            combined = bound_signed_total(
+                combined, concept_name, definition.minimum, definition.maximum
+            )
+
+        # Other numeric concepts retain pre-aggregation bounds.
         
         # 🔧 NOTE: 不过滤负时间（入ICU前的数据），ricu 保留这些数据
         # 例如：AUMC esr measuredat=-2 表示入院前2小时的数据，ricu 也保留
