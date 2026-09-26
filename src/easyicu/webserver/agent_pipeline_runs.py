@@ -126,6 +126,7 @@ from easyicu.webserver.research_launch_scientific import (
     _primary_exposure_aggregation,
     _runtime_projection_sensitivity_specs,
     _target_outcome,
+    _validate_trajectory_design,
     resolve_study_analysis_design,
     validate_analysis_design_for_execution,
 )
@@ -4981,6 +4982,9 @@ def make_research_pipeline_run_runner(
         metadata_operationalized_columns = scientific.metadata_operationalized_columns
         prepared_package_binding = scientific.prepared_package_binding
         foundation_profile = scientific.foundation_profile
+        # Validated by the launch preparation; its concepts and window shape
+        # the materialization below, and its owner signs the projection.
+        trajectory_design = _validate_trajectory_design(study)
         selected_credential_source = authority.credential_source
         development_resume_binding = execution.development_resume_binding
         development_resume_acquisition = execution.development_resume_acquisition
@@ -5262,6 +5266,13 @@ def make_research_pipeline_run_runner(
                             for variable in spec.source_materialization_variables
                         ),
                         *primary_cohort.cohort_required_concepts(study.get("cohort")),
+                        # A declared trajectory design is admitted on the
+                        # catalog's columns, so its concepts must be on it.
+                        *(
+                            trajectory_design.required_concepts
+                            if trajectory_design is not None
+                            else ()
+                        ),
                     ),
                     patient_grouping=patient_grouping,
                     operationalized_columns=metadata_operationalized_columns,
@@ -5304,7 +5315,17 @@ def make_research_pipeline_run_runner(
                         else "agent_selectable"
                     ),
                     cohort_window=window,
-                    trajectory_window=window,
+                    # The long panel spans the declared trajectory window,
+                    # which the design owner reviewed; otherwise the outer
+                    # materialization window.
+                    trajectory_window=(
+                        (
+                            float(trajectory_design.window_start_hours),
+                            float(trajectory_design.window_end_hours),
+                        )
+                        if trajectory_design is not None
+                        else window
+                    ),
                     database=database,
                     require_outcome=foundation_profile["require_outcome"],
                     emit_trajectory=(
@@ -5643,6 +5664,7 @@ def make_research_pipeline_run_runner(
                     scientific_configuration_sha256=(
                         study_context_owner.scientific_configuration_sha256(study)
                     ),
+                    planning_catalog=metadata_only_planning,
                 )
             except WebScientificRuntimeProjectionError as exc:
                 raise ResearchPipelineRunError(

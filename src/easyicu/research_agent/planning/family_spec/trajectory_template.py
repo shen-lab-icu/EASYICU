@@ -77,7 +77,12 @@ _AUDIT_OUTPUTS = (
     ("table:measurement_missingness", "measurement_missingness"),
     ("table:measurement_process_audit", "measurement_process"),
 )
-_PRIMARY_DESIGN_ELEMENTS = ("estimand", "missing_data", "reporting", "robustness", "time_zero")
+# ``dependence`` is sourced here as in the landmark template's primary: each
+# row is one ICU stay, and when repeated stays of one patient are possible the
+# plan must cite how that dependence is handled and reported.
+_PRIMARY_DESIGN_ELEMENTS = (
+    "dependence", "estimand", "missing_data", "reporting", "robustness", "time_zero",
+)
 
 
 def _bindings(
