@@ -120,7 +120,6 @@ from easyicu.webserver.research_launch_scientific import (
     _data_foundation_profile,
     _first_icu_stay_for_cohort,
     _metadata_only_planning_coordinates,
-    _materialized_column_dtype,
     _normalized_metadata_planning_operationalized_columns,
     _primary_exposure,
     _primary_exposure_aggregation,
@@ -5580,11 +5579,8 @@ def make_research_pipeline_run_runner(
             runtime_projection_specs = _runtime_projection_sensitivity_specs(
                 sensitivity_specs,
                 primary_exposure_source=runtime_primary_exposure_source,
-                primary_exposure_dtype=_materialized_column_dtype(
-                    Path(acquisition.universe_path),
-                    resolved_primary_exposure,
-                ),
                 primary_exposure=str(resolved_primary_exposure or ""),
+                universe_path=Path(acquisition.universe_path),
             )
             runtime_literature_keys = manuscript_citable_keys(runtime_literature)
             runtime_direct_comparator_keys = tuple(
