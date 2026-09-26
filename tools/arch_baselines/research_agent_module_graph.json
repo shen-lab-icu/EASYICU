@@ -10249,6 +10249,10 @@
     ],
     [
       "easyicu.research_agent.planning.scientific_review",
+      "easyicu.research_agent.contracts.trajectory_design"
+    ],
+    [
+      "easyicu.research_agent.planning.scientific_review",
       "easyicu.research_agent.gates.plan_declared_inputs"
     ],
     [
@@ -10318,6 +10322,18 @@
     [
       "easyicu.research_agent.planning.scientific_review",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.planning.scientific_review",
+      "easyicu.research_agent.trajectory.contract"
+    ],
+    [
+      "easyicu.research_agent.planning.scientific_review",
+      "easyicu.research_agent.trajectory.plan_contract"
+    ],
+    [
+      "easyicu.research_agent.planning.scientific_review",
+      "easyicu.research_agent.trajectory.runtime_validation"
     ],
     [
       "easyicu.research_agent.planning.sensitivity_authority",
@@ -12972,7 +12988,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3235,
+    "edge_count": 3239,
     "largest_scc_size": 0,
     "module_count": 762,
     "package_count": 36,

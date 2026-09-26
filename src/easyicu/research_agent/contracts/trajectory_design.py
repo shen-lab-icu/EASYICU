@@ -23,16 +23,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 __all__ = [
+    "ELIGIBILITY_COORDINATE_PREFIX",
     "FIXED_WINDOW_TRAJECTORY_DEFAULTS",
     "TRAJECTORY_HOST_POLICY",
+    "TRAJECTORY_PRIMARY_ACTION",
     "FixedWindowTrajectoryDesign",
     "TrajectoryDesignError",
+    "eligibility_coordinates",
+    "executable_trajectory_coordinates",
     "load_trajectory_design",
     "normalize_trajectory_design",
+    "proposed_trajectory_coordinates",
     "sealed_trajectory_authority_body",
+    "time_varying_role",
+    "trajectory_coordinate_proposal",
 ]
 
 _CONCEPT_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
@@ -83,7 +90,16 @@ FIXED_WINDOW_TRAJECTORY_DEFAULTS = MappingProxyType(
     }
 )
 
+#: The Planner's primary scientific action for longitudinal trajectory
+#: phenotyping.  Cross-sectional phenotype discovery shares the analysis
+#: family, so this declaration is what claims classes of trajectories.
+TRAJECTORY_PRIMARY_ACTION = "phenotyping.trajectory_feature_clustering"
 _MAX_COORDINATE_CONCEPTS = 16
+#: The signed representation owner counts a stay's eligible windows on
+#: owner-available SOFA-2 evidence, the only coordinates that publish an
+#: availability receipt beside each value; a design without a SOFA-2
+#: coordinate would exclude every stay instead of measuring it.
+ELIGIBILITY_COORDINATE_PREFIX = "sofa2"
 _MAX_CANDIDATE_CLUSTERS = 12
 _MAX_WINDOWS = 48
 
@@ -342,6 +358,128 @@ def load_trajectory_design(value: Any) -> FixedWindowTrajectoryDesign | None:
             },
         )
     )
+
+
+def _field(item: Any, name: str) -> Any:
+    return item.get(name) if isinstance(item, Mapping) else getattr(item, name, None)
+
+
+def proposed_trajectory_coordinates(
+    plan: Any, *, excluded: Iterable[str] = ()
+) -> tuple[str, ...]:
+    """The concepts a trajectory plan's primary step clusters on, in plan order.
+
+    Reads typed plan fields only (a plan object or its JSON): the primary
+    step's inputs that name a bare concept, never a product reference such as
+    ``artifact:`` or ``table:``, minus the identity and outcome columns the
+    caller names.  A plan whose primary is not one step proposes nothing.
+    """
+
+    steps = _field(plan, "steps") or ()
+    primaries = [
+        step for step in steps if _field(step, "planned_analysis_role") == "primary"
+    ]
+    if len(primaries) != 1:
+        return ()
+    skip = {str(value) for value in excluded}
+    concepts: list[str] = []
+    for value in _field(primaries[0], "inputs") or ():
+        name = str(value or "").strip()
+        if not name or ":" in name or name in skip or name in concepts:
+            continue
+        concepts.append(name)
+    return tuple(concepts)
+
+
+def executable_trajectory_coordinates(concepts: Sequence[str]) -> bool:
+    """Whether a proposed coordinate set can be a signed trajectory design."""
+
+    try:
+        coordinates = _concepts(
+            list(concepts), field="trajectory_design.coordinate_concepts", minimum=2
+        )
+    except TrajectoryDesignError:
+        return False
+    return any(
+        concept.startswith(ELIGIBILITY_COORDINATE_PREFIX) for concept in coordinates
+    )
+
+
+#: Variable roles whose values change within a stay and can be read in fixed
+#: windows.  Identity, demographics, outcomes and other one-per-stay values
+#: cannot be trajectory coordinates.
+_TIME_VARYING_ROLES = frozenset(
+    {"vital", "lab", "intervention", "ordinal_score", "composite_score"}
+)
+
+
+def time_varying_role(role: Any) -> bool:
+    """Whether a variable role (enum or its value) changes within a stay."""
+
+    return str(getattr(role, "value", role) or "").strip().lower() in _TIME_VARYING_ROLES
+
+
+def eligibility_coordinates(variables: Iterable[Any]) -> tuple[str, ...]:
+    """A study's time-varying SOFA-2 variables, the owner's eligibility basis."""
+
+    return tuple(
+        sorted(
+            name
+            for variable in variables
+            if (name := str(_field(variable, "name") or "")).startswith(
+                ELIGIBILITY_COORDINATE_PREFIX
+            )
+            and time_varying_role(_field(variable, "role"))
+        )
+    )
+
+
+def trajectory_coordinate_proposal(
+    plan: Any,
+    *,
+    variables: Iterable[Any],
+    outcomes: Iterable[str],
+    excluded: Iterable[str] = (),
+) -> dict[str, Any]:
+    """What a trajectory plan's primary step clusters, under the owner's rule.
+
+    The coordinates are the primary step's inputs that are study variables,
+    minus ``excluded`` identity columns.  They are executable when there are
+    at least two, one is a SOFA-2 component, and the step clusters no outcome
+    and no one-per-stay variable; otherwise the plan's own set is not a
+    design, and the remaining coordinates are never compiled on their own.
+    """
+
+    catalogue = list(variables)
+    roles = {str(_field(variable, "name")): _field(variable, "role") for variable in catalogue}
+    outcome_names = {str(value) for value in outcomes}
+    proposed = [
+        name for name in proposed_trajectory_coordinates(plan, excluded=excluded)
+        if name in roles
+    ]
+    outcome_inputs = [name for name in proposed if name in outcome_names]
+    one_per_stay_inputs = [
+        name
+        for name in proposed
+        if name not in outcome_names and not time_varying_role(roles[name])
+    ]
+    coordinates = [
+        name
+        for name in proposed
+        if name not in outcome_inputs and name not in one_per_stay_inputs
+    ]
+    return {
+        "proposed_coordinates": coordinates,
+        "outcome_inputs": outcome_inputs,
+        "one_per_stay_inputs": one_per_stay_inputs,
+        "eligibility_coordinate_prefix": ELIGIBILITY_COORDINATE_PREFIX,
+        "study_eligibility_coordinates": list(eligibility_coordinates(catalogue)),
+        "executable": bool(
+            not outcome_inputs
+            and not one_per_stay_inputs
+            and executable_trajectory_coordinates(coordinates)
+        ),
+    }
 
 
 def _fail(code: str, message: str, *, field: str) -> None:

@@ -1114,6 +1114,19 @@ def _repeated_stays_decided(study: Mapping[str, Any]) -> bool:
     )
 
 
+def _scientific_review_facts(review: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """The facts of the exact scientific review shown with this plan."""
+
+    payloads = review.get("artifact_payloads")
+    scientific = (
+        payloads.get("scientific_plan_review.json")
+        if isinstance(payloads, Mapping)
+        else None
+    )
+    facts = scientific.get("facts") if isinstance(scientific, Mapping) else None
+    return facts if isinstance(facts, Mapping) else None
+
+
 def _enrich_plan_review(
     snapshot: ResearchWorkflowSnapshot,
     *,
@@ -1209,6 +1222,7 @@ def _enrich_plan_review(
             study=study,
             agent_plan=agent_plan,
             runtime_finding_codes=runtime_codes,
+            review_facts=_scientific_review_facts(review),
         )
     ):
         # The plan has already made a typed scientific selection and the

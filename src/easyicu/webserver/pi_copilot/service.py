@@ -3421,6 +3421,7 @@ class PiCopilotService:
                 runtime_finding_codes=runtime_codes,
                 patient_cluster_available=grouping is not None,
                 first_stay_coordinate_available=first_stay is not None,
+                review_facts=facts if isinstance(facts, Mapping) else None,
             )
             updated = study_contexts.upsert_context(
                 {"id": context_id, **compiled.patch},
