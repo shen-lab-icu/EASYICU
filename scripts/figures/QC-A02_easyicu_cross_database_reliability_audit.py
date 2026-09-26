@@ -911,17 +911,58 @@ def _string_list(value: Any) -> list[str]:
     return [item for item in value if isinstance(item, str)]
 
 
-def _concept_metadata_complete(entry: dict[str, Any]) -> bool:
-    """Require one unique metadata binding for every selected source concept."""
+def _concept_metadata_complete(
+    entry: dict[str, Any], *, sidecar: dict[str, Any], parquet_names: list[str],
+    sidecar_sha_matches: bool,
+) -> bool:
+    """Verify primary bindings and typed companions against the sealed sidecar.
 
+    Selection names concepts, whereas column metadata also bind event times and
+    measurement-status columns. Equality of those inventories falsely rejects
+    complete outcome/SOFA2 exports. Extra names alone are not sufficient evidence:
+    each must have a physical column and a non-primary role for a selected source.
+    """
     selected = _string_list(entry.get("concept_ids"))
     metadata_columns = _string_list(entry.get("column_metadata_columns"))
-    return (
-        bool(selected)
+    if not (
+        sidecar_sha_matches and selected
+        and selected == entry.get("concept_ids")
         and len(selected) == len(set(selected))
-        and set(selected) == set(metadata_columns)
+        and metadata_columns == entry.get("column_metadata_columns")
         and len(metadata_columns) == len(set(metadata_columns))
-    )
+        and set(selected) <= set(metadata_columns)
+    ):
+        return False
+    files = sidecar.get("files")
+    if not isinstance(files, list):
+        return False
+    bindings = [f for f in files if isinstance(f, dict) and f.get("module") == entry.get("module")]
+    if len(bindings) != 1:
+        return False
+    binding = bindings[0]
+    if binding.get("relative_path") != f"{entry['module']}.parquet":
+        return False
+    columns = binding.get("columns")
+    if not isinstance(columns, dict) or set(columns) != set(metadata_columns):
+        return False
+    companion_roles = {
+        "measurement_status", "event_time", "count", "first_observation_time",
+        "last_observation_time", "numeric_aggregate", "event_fraction",
+    }
+    for name, value in columns.items():
+        metadata = value.get("metadata") if isinstance(value, dict) else None
+        if not isinstance(metadata, dict) or name not in parquet_names or name in INDEX_COLUMNS:
+            return False
+        source = metadata.get("source_concept")
+        if metadata.get("column_name") != name or source not in selected:
+            return False
+        role = metadata.get("role")
+        if name in selected:
+            if source != name or role not in {"value", "event_status"}:
+                return False
+        elif role not in companion_roles:
+            return False
+    return True
 
 
 def _structural_placeholder_checks(
@@ -2240,7 +2281,13 @@ def main() -> None:
                 and _sha256(sidecar_path) == recorded_sidecar_sha
             )
             manifest_schema_matches_parquet = recorded_schema == types
-            concept_metadata_complete = _concept_metadata_complete(entry)
+            sidecar_payload = (
+                json.loads(sidecar_path.read_text()) if sidecar_sha_matches else {}
+            )
+            concept_metadata_complete = _concept_metadata_complete(
+                entry, sidecar=sidecar_payload, parquet_names=names,
+                sidecar_sha_matches=sidecar_sha_matches,
+            )
             structural_checks = _structural_placeholder_checks(
                 module=module,
                 entry=entry,
