@@ -11,6 +11,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Sequence
 
+from easyicu.research_agent.contracts.trajectory_design import (
+    TrajectoryDesignError,
+    executable_trajectory_coordinates,
+    normalize_trajectory_design,
+)
 from easyicu.research_agent.icu_rules import classify_variable
 from easyicu.research_agent.schema import AggregationRule
 from easyicu.webserver import primary_cohort
@@ -50,12 +55,17 @@ _AGENT_COMPILED_RUNTIME_FINDINGS = frozenset(
         "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
         "REPEATED_STAY_IDENTITY_UNAVAILABLE",
         "REPEATED_STAY_METHOD_NOT_DECLARED",
+        "TRAJECTORY_LONGITUDINAL_OWNER_NOT_SEALED",
     }
 )
 #: The reviewer hands this finding to the host only for a plan with no
 #: estimator that could carry patient dependence; its closure is a population
 #: of one first ICU stay per patient, not a plan coordinate.
 _ONE_STAY_POPULATION_FINDING = "REPEATED_STAY_METHOD_NOT_DECLARED"
+#: The reviewer hands this finding to the host only for a trajectory plan that
+#: clusters one value per stay of coordinates the signed fixed-window owner can
+#: model; its closure is the study's declared trajectory design.
+_TRAJECTORY_OWNER_FINDING = "TRAJECTORY_LONGITUDINAL_OWNER_NOT_SEALED"
 
 
 _AGGREGATION_SUFFIXES = ("_first", "_last", "_min", "_max", "_mean", "_sum")
@@ -564,6 +574,94 @@ def _one_stay_population_patch(study: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _trajectory_design_configuration(
+    study: Mapping[str, Any],
+    *,
+    codes: tuple[str, ...],
+    review_facts: Mapping[str, Any] | None,
+) -> CompiledAgentPlanConfiguration:
+    """Declare the reviewed coordinates as the study's trajectory design.
+
+    The coordinates are the reviewer's published facts for this exact plan,
+    not a second reading of it here.  Window, grid and stability knobs keep
+    the design owner's defaults; the web owner validates the declaration.
+    """
+
+    from easyicu.webserver.trajectory_runtime_projection import (
+        WebScientificRuntimeProjectionError,
+        trajectory_inference_supported,
+        validate_trajectory_design_declaration,
+    )
+
+    remaining = set(codes) - {_TRAJECTORY_OWNER_FINDING}
+    if not trajectory_inference_supported(_PATIENT_CLUSTERED_DESIGN):
+        # The trajectory owners fit one model-based row per ICU stay, so the
+        # reviewer's remedy is to keep every stay and disclose the dependence
+        # limitation, which stays with the review.
+        remaining.discard("REPEATED_STAY_IDENTITY_UNAVAILABLE")
+    if remaining:
+        raise PlanDecisionError(
+            "agent_plan_runtime_finding_unsupported",
+            "A trajectory design cannot be compiled together with other runtime coordinates.",
+            details={"finding_codes": sorted(remaining)},
+        )
+    if study.get("trajectory_design"):
+        raise PlanDecisionError(
+            "agent_plan_trajectory_design_already_declared",
+            "The study already declares a trajectory design; a plan that does not use it needs a fresh plan, not a second design.",
+        )
+    representation = (
+        review_facts.get("trajectory_representation")
+        if isinstance(review_facts, Mapping)
+        else None
+    )
+    coordinates = (
+        representation.get("proposed_coordinates")
+        if isinstance(representation, Mapping)
+        and representation.get("executable") is True
+        else None
+    )
+    if not isinstance(coordinates, list) or not executable_trajectory_coordinates(
+        [str(value) for value in coordinates]
+    ):
+        raise PlanDecisionError(
+            "agent_plan_trajectory_coordinates_unavailable",
+            "The review publishes no executable trajectory coordinates for this plan.",
+        )
+    try:
+        design = normalize_trajectory_design(
+            {"coordinate_concepts": [str(value) for value in coordinates]}
+        )
+    except TrajectoryDesignError as exc:
+        raise PlanDecisionError(
+            "agent_plan_trajectory_design_invalid",
+            str(exc),
+            details={"field": exc.field, "design_error_code": exc.code},
+        ) from exc
+    patch: Dict[str, Any] = {
+        "analysis_design": {
+            "analysis_family": "trajectory_clustering",
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "model_based",
+        },
+        "trajectory_design": design,
+        "confirmations": ScientificConfiguration.inspect(study).merge_confirmations(
+            agent_plan_configuration_compiled=True,
+        ),
+    }
+    try:
+        validate_trajectory_design_declaration({**dict(study), **patch})
+    except WebScientificRuntimeProjectionError as exc:
+        raise PlanDecisionError(
+            "agent_plan_trajectory_design_invalid",
+            str(exc),
+            details={"design_error_code": exc.code},
+        ) from exc
+    return CompiledAgentPlanConfiguration(
+        patch=patch, runtime_finding_codes=(_TRAJECTORY_OWNER_FINDING,),
+    )
+
+
 def compile_agent_plan_configuration(
     *,
     study: Mapping[str, Any],
@@ -571,6 +669,7 @@ def compile_agent_plan_configuration(
     runtime_finding_codes: Sequence[str],
     patient_cluster_available: bool,
     first_stay_coordinate_available: bool | None = None,
+    review_facts: Mapping[str, Any] | None = None,
 ) -> CompiledAgentPlanConfiguration:
     """Compile structured Agent decisions into executable study coordinates.
 
@@ -578,7 +677,9 @@ def compile_agent_plan_configuration(
     by the scientific reviewer, reads only typed fields from the immutable
     Agent plan, and leaves the researcher's natural-language question intact.
     Unsupported or incomplete coordinates fail closed instead of being guessed
-    from prose or repaired with a more detailed prompt.
+    from prose or repaired with a more detailed prompt.  ``review_facts`` are
+    the same review's facts; the trajectory route compiles the coordinates
+    they publish.
     """
 
     codes = tuple(
@@ -619,6 +720,10 @@ def compile_agent_plan_configuration(
     if "REPEATED_STAY_IDENTITY_UNAVAILABLE" in codes and first_stay_restricted:
         codes = tuple(
             code for code in codes if code != "REPEATED_STAY_IDENTITY_UNAVAILABLE"
+        )
+    if _TRAJECTORY_OWNER_FINDING in codes:
+        return _trajectory_design_configuration(
+            study, codes=codes, review_facts=review_facts
         )
     clustering_refusal: PlanDecisionError | None = None
     if (
@@ -837,6 +942,7 @@ def agent_plan_configuration_available(
     study: Mapping[str, Any],
     agent_plan: Mapping[str, Any],
     runtime_finding_codes: Sequence[str],
+    review_facts: Mapping[str, Any] | None = None,
 ) -> bool:
     """Return structural availability; the mutation path rechecks source facts."""
 
@@ -845,6 +951,7 @@ def agent_plan_configuration_available(
             study=study,
             agent_plan=agent_plan,
             runtime_finding_codes=runtime_finding_codes,
+            review_facts=review_facts,
             patient_cluster_available=True,
             first_stay_coordinate_available=(
                 True

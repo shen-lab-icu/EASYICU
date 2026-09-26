@@ -33,6 +33,7 @@ from typing import Any, Mapping, Sequence
 import pyarrow.parquet as pq
 
 from easyicu.research_agent.contracts.trajectory_design import (
+    ELIGIBILITY_COORDINATE_PREFIX,
     FixedWindowTrajectoryDesign,
     TrajectoryDesignError,
     load_trajectory_design,
@@ -63,7 +64,7 @@ _SUPPORTED_VARIANCE_ESTIMATOR = "model_based"
 # The sealed representation owner defines eligibility as a count of windows
 # with owner-available SOFA-2 evidence, and reports exclusions under that
 # name. A design with no SOFA-2 coordinate cannot state eligibility at all.
-_ELIGIBILITY_COORDINATE_PREFIX = "sofa2"
+_ELIGIBILITY_COORDINATE_PREFIX = ELIGIBILITY_COORDINATE_PREFIX
 #: The long panel's window as the cohort materializer records it
 #: (``_build_trajectory_long_from_resolved_source``).
 _MATERIALIZED_WINDOW_KEY = "trajectory_window_hours"

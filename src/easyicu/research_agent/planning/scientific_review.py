@@ -58,6 +58,10 @@ from ..contracts.phenotype_comparison import (
     COMPARISON_ACTION, comparison_cohort_input, validate_comparison_step,
 )
 from ..contracts.scientific_runtime_ownership import declared_runtime_outcomes
+from ..contracts.trajectory_design import (
+    TRAJECTORY_PRIMARY_ACTION,
+    trajectory_coordinate_proposal,
+)
 from ..contracts.source_feasibility_validation import (
     context_declares_source_feasibility_scope,
 )
@@ -69,6 +73,9 @@ from ..research_context.temporal_semantics import (
 )
 from ..research_context.typed import declared_domain_for_variable
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
+from ..trajectory.contract import trajectory_phenotyping_contract_applies
+from ..trajectory.plan_contract import trajectory_context_is_bound
+from ..trajectory.runtime_validation import signed_trajectory_plan_claimed
 from .figure_strategy import ArticleFigureStrategy
 from .adjustment_authority import AdjustmentSetAuthority, owner_declared_baseline_static
 from .analysis_types import canonical_analysis_family
@@ -2036,6 +2043,152 @@ def _complete_case_repeats_primary_findings(plan: AnalysisPlan) -> list[PlanScie
     ]
 
 
+def trajectory_representation_facts(
+    context: ResearchContext, plan: AnalysisPlan
+) -> Optional[dict[str, Any]]:
+    """What a plan claiming trajectory classes actually clusters.
+
+    ``None`` unless the plan claims the signed trajectory owners or its
+    primary step declares the longitudinal trajectory action: cross-sectional
+    phenotype discovery shares this analysis family and is not a trajectory
+    claim.  A plan whose per-timepoint representation has an owner -- the
+    signed fixed-window suite, the fixed-window contract over ordered windows
+    of one concept, or the run-level contract of a bound long trajectory --
+    is left to that owner's gates.  Otherwise the primary clusters one value
+    per ICU stay, and the facts name what the signed owner could model
+    instead, under the design owner's rule
+    (``contracts.trajectory_design.trajectory_coordinate_proposal``): the
+    Host compiles exactly these coordinates.
+    """
+
+    if canonical_analysis_family(plan.analysis_type) != "trajectory_clustering":
+        return None
+    primaries = [step for step in plan.steps if step.planned_analysis_role == "primary"]
+    signed = signed_trajectory_plan_claimed(plan)
+    if not signed and not any(
+        step.scientific_action_id == TRAJECTORY_PRIMARY_ACTION for step in primaries
+    ):
+        return None
+    longitudinal_owner = (
+        "signed_fixed_window_suite"
+        if signed
+        else "fixed_window_columns"
+        if any(
+            trajectory_phenotyping_contract_applies(context=context, step=step)
+            for step in primaries
+        )
+        else "bound_long_trajectory"
+        if trajectory_context_is_bound(context)
+        else None
+    )
+    outcomes = (
+        *context.cohort.outcome_columns,
+        *([context.target_outcome] if context.target_outcome else []),
+    )
+    return {
+        "longitudinal_owner": longitudinal_owner,
+        **trajectory_coordinate_proposal(
+            plan,
+            variables=context.variables,
+            outcomes=outcomes,
+            excluded=context.cohort.id_columns,
+        ),
+    }
+
+
+def trajectory_representation_findings(
+    facts: Optional[Mapping[str, Any]],
+) -> list[PlanScientificFinding]:
+    """Say when claimed trajectory classes are built from one value per stay.
+
+    The Host can seal the signed owner over the plan's own coordinates, so
+    that case blocks until it does.  Otherwise the finding does not push the
+    plan toward other coordinates: a question about variables the owner
+    cannot model keeps them, with the limitation stated.
+    """
+
+    if facts is None or facts["longitudinal_owner"] is not None:
+        return []
+    coordinates = list(facts["proposed_coordinates"])
+    prefix = str(facts["eligibility_coordinate_prefix"])
+    refs = ["analysis_plan.json.steps", "research_context.json.variables"]
+    if facts["executable"]:
+        return [
+            PlanScientificFinding(
+                code="TRAJECTORY_LONGITUDINAL_OWNER_NOT_SEALED",
+                severity="blocker",
+                dimension="statistical_design",
+                message=(
+                    "The trajectory plan clusters one value per ICU stay of "
+                    + ", ".join(coordinates)
+                    + "; no step builds a per-timepoint representation, so its "
+                    "classes would not describe trajectories. The signed "
+                    "fixed-window trajectory owner can model these coordinates."
+                ),
+                evidence_refs=refs,
+                remediation=(
+                    "Compile these coordinates into the study's fixed-window "
+                    "trajectory design and replan on the signed trajectory suite. "
+                    "Keep the question and the coordinates; the researcher does "
+                    "not choose the method."
+                ),
+                remediation_route="runtime_capability",
+            )
+        ]
+    reasons = []
+    if facts["outcome_inputs"]:
+        reasons.append(
+            "it clusters on outcomes (" + ", ".join(facts["outcome_inputs"]) + ")"
+        )
+    if facts["one_per_stay_inputs"]:
+        reasons.append(
+            "it clusters on one-per-stay variables ("
+            + ", ".join(facts["one_per_stay_inputs"])
+            + ")"
+        )
+    if len(coordinates) < 2:
+        reasons.append("it names fewer than two time-varying coordinates")
+    if not any(name.startswith(prefix) for name in coordinates):
+        available = list(facts["study_eligibility_coordinates"])
+        reasons.append(
+            "none of its coordinates is a SOFA-2 component ("
+            + (
+                "this study provides " + ", ".join(available)
+                if available
+                else "this study's variables include none"
+            )
+            + ")"
+        )
+    if not reasons:
+        reasons.append("its coordinates are not a valid trajectory design")
+    return [
+        PlanScientificFinding(
+            code="TRAJECTORY_REPRESENTATION_NOT_LONGITUDINAL",
+            severity="major",
+            dimension="statistical_design",
+            message=(
+                "The trajectory plan clusters one value per ICU stay, so its "
+                "classes summarize stays rather than describe trajectories, and "
+                "the signed fixed-window owner cannot model its coordinates: "
+                + "; ".join(reasons)
+                + "."
+            ),
+            evidence_refs=refs,
+            remediation=(
+                "Where the question's own coordinates allow it, revise the "
+                "primary step to cluster at least two time-varying variables of "
+                "this study, including a SOFA-2 component (a variable whose name "
+                f"starts with {prefix!r}) on which the signed owner counts each "
+                "stay's eligible windows, and no outcome or one-per-stay "
+                "variable. Do not substitute another variable or score version "
+                "for the one the question names; otherwise state that the "
+                "classes summarize per-stay values."
+            ),
+            remediation_route="agent_plan_revision",
+        )
+    ]
+
+
 def build_plan_scientific_review(
     *,
     context: ResearchContext,
@@ -2189,6 +2342,8 @@ def build_plan_scientific_review(
                 remediation="Declare the exact non-outcome fitting roster separately from readable profile inputs, then review a fresh plan.",
                 remediation_route="agent_plan_revision",
             ))
+    trajectory_representation = trajectory_representation_facts(context, plan)
+    findings.extend(trajectory_representation_findings(trajectory_representation))
     required_source_columns = {
         context.primary_exposure, context.target_outcome,
         *context.cohort.outcome_columns,
@@ -3307,6 +3462,7 @@ def build_plan_scientific_review(
                 if descriptive_only_step(step)
             ],
             "repeated_unit_design_executable": repeated_unit_design_closed(context, plan),
+            "trajectory_representation": trajectory_representation,
             "primary_covariates": list(covariates),
             "requested_outcomes": list(expected_outcomes),
             "model_covered_outcomes": list(covered_outcomes),
@@ -3388,4 +3544,6 @@ __all__ = [
     "required_method_layers_for_plan",
     "scientific_steps",
     "timing_design_closed",
+    "trajectory_representation_facts",
+    "trajectory_representation_findings",
 ]
