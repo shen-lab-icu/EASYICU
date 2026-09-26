@@ -25,6 +25,7 @@ reality.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Union
 
@@ -259,6 +260,23 @@ def _concept_dict_meta() -> Dict[str, Dict[str, str]]:
     return meta
 
 
+@lru_cache(maxsize=1)
+def _methodology_dictionary() -> Optional[object]:
+    """The dictionary scope the catalog's categories come from, or ``None``.
+
+    Categories fall back to the concept catalog, which includes the SOFA-2
+    overlay. Whether a concept is computed must be read from the same scope:
+    SOFA-2 scores are filed under ``outcome`` like SOFA, and judged against a
+    dictionary without them they read as endpoints instead of derived scores.
+    """
+    try:
+        from easyicu.concept.loader import load_dictionary
+
+        return load_dictionary(include_sofa2=True)
+    except Exception:
+        return None
+
+
 def _methodology_tag(concept_id: str, category: str) -> str:
     """Compact advisory methodology tag for a concept (best-effort).
 
@@ -268,7 +286,9 @@ def _methodology_tag(concept_id: str, category: str) -> str:
     try:
         from ..icu_rules import concept_methodology_tag
 
-        return concept_methodology_tag(concept_id, category=category)
+        return concept_methodology_tag(
+            concept_id, category=category, dictionary=_methodology_dictionary()
+        )
     except Exception:
         return ""
 
