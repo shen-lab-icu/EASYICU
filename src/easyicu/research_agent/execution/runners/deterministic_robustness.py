@@ -1615,6 +1615,10 @@ def _find_structured_primary_model_source(
             "record": record,
             "summary": summary,
             "primary_contract": primary_contract,
+            "raw_input_contracts": _registered_raw_input_contracts(
+                record=record,
+                run_root=run_root,
+            ),
             "script_path": script_path,
             "script_sha256": script_sha256,
             "code_evidence_id": code_evidence_id,
@@ -1624,6 +1628,38 @@ def _find_structured_primary_model_source(
             "coefficient_path": coefficient_path,
         }
     return None
+
+
+def _registered_raw_input_contracts(
+    *,
+    record: Dict[str, Any],
+    run_root: Path,
+) -> Optional[Dict[str, Any]]:
+    """Return the raw-input contracts the primary step was sealed against.
+
+    A standard executor's script checks its plausibility receipt against the
+    digest of the contracts in its own resolved-input manifest.  A replay of
+    that script must be handed those contracts -- read from the manifest the
+    step record registered, at the digest it recorded -- and never another
+    step's.  ``None`` when they cannot be verified: a replay that needs them
+    then fails closed inside the script.
+    """
+
+    relative_path = str(record.get("resolved_inputs_path") or "").strip()
+    expected_sha256 = str(record.get("resolved_inputs_sha256") or "").strip()
+    if not relative_path or not expected_sha256:
+        return None
+    manifest_path = contained_regular_file(run_root / relative_path, run_root)
+    if manifest_path is None or _sha256_file(manifest_path) != expected_sha256:
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(manifest, dict):
+        return None
+    contracts = manifest.get("raw_input_contracts")
+    return dict(contracts) if isinstance(contracts, dict) else None
 
 
 def _fit_structured_robustness_rows(
@@ -2031,15 +2067,13 @@ def _variant_typed_manifest_path(
         "step_id": source["step_id"],
         "inputs": {cohort_key: binding},
     }
-    current_manifest_path = os.environ.get("EASYICU_RESOLVED_INPUTS_JSON")
-    if current_manifest_path:
-        try:
-            current_manifest = _load_json_object(Path(current_manifest_path))
-        except Exception:
-            current_manifest = {}
-        raw_input_contracts = current_manifest.get("raw_input_contracts")
-        if isinstance(raw_input_contracts, dict):
-            replay_manifest["raw_input_contracts"] = raw_input_contracts
+    # The replayed script verifies its plausibility receipt against the
+    # contracts its own step was sealed with.  The robustness step's contracts
+    # (the current environment's manifest) belong to another step, so they
+    # are never substituted.
+    raw_input_contracts = source.get("raw_input_contracts")
+    if isinstance(raw_input_contracts, dict):
+        replay_manifest["raw_input_contracts"] = raw_input_contracts
     replay_manifest_path = replay_root / "resolved_inputs.json"
     replay_manifest_path.write_text(
         json.dumps(replay_manifest, indent=2, ensure_ascii=False, allow_nan=False),
