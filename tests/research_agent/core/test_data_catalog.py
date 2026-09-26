@@ -393,6 +393,33 @@ def test_catalog_annotates_methodology_for_hazard_concepts():
     assert "methodological cautions" in rendered
 
 
+def test_capability_catalog_tags_every_computed_score_as_derived_not_an_endpoint():
+    # The dictionary files computed severity scores (SOFA, SOFA-2 and their
+    # components) under "outcome" beside true endpoints. Whichever dictionary
+    # layer defines a computed concept, the menu must tag it a derived score;
+    # only a non-computed "outcome" concept is an endpoint whose use as a
+    # predictor is leakage.
+    dictionary = load_dictionary(include_sofa2=True)
+    catalog = build_database_capability_catalog("mimiciv")
+    computed, endpoints = [], []
+    for concept in catalog.concepts:
+        if concept.category.lower() != "outcome":
+            continue
+        definition = dictionary.get(concept.concept_id)
+        if definition is not None and (
+            getattr(definition, "callback", None) or getattr(definition, "depends_on", None)
+        ):
+            computed.append(concept)
+        else:
+            endpoints.append(concept)
+
+    assert {"sofa", "sofa2", "sofa2_resp"} <= {c.concept_id for c in computed}
+    assert [c.concept_id for c in computed if "leakage" in c.methodology] == []
+    assert all("derived" in c.methodology for c in computed)
+    assert "death" in {c.concept_id for c in endpoints}
+    assert all("leakage" in c.methodology for c in endpoints)
+
+
 def test_build_available_catalog_populates_methodology(tmp_path, monkeypatch):
     import pandas as pd
 
