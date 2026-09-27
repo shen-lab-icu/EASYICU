@@ -2835,6 +2835,17 @@ def _apply_callback(
             rate_var = source.params.get("rate_var")
         unit_var = source.unit_var or unit_column
         val_var = source.value_var or concept_name
+
+        required_unit = source.params.get("required_volume_unit")
+        if required_unit is not None:
+            if not unit_var or unit_var not in frame.columns:
+                raise ValueError("aumc_rate requires its declared volume-unit column")
+            compatible = frame[unit_var].astype("string").str.strip().str.casefold().eq(
+                str(required_unit).strip().casefold()
+            ).fillna(False)
+            if (~compatible).any():
+                logger.warning("aumc_rate excluded %d rows without the required volume unit", int((~compatible).sum()))
+            frame = frame.loc[compatible].copy()
         
         if rate_var and rate_var in frame.columns:
             frame = frame.copy()
@@ -3529,7 +3540,7 @@ def _apply_callback(
             duration_col = end_col
         
         if not duration_col or duration_col not in frame.columns:
-            return frame
+            raise ValueError("mimv_rate requires a source duration column")
         # 🔧 FIX: amount_col 应优先使用 'amount' 列（inputevents 表的默认列）
         # R ricu mimv_rate 使用 amount 列来计算 rate = amount / duration
         # concept_name (如 'dex') 在回调执行时还不存在
@@ -3545,7 +3556,7 @@ def _apply_callback(
             elif concept_name in frame.columns:
                 amount_col = concept_name
         if not amount_col or amount_col not in frame.columns:
-            return frame
+            raise ValueError("mimv_rate requires a source amount column")
         unit_col = unit_column or source.unit_var
         if not unit_col:
             if "rateuom" in frame.columns:
@@ -3573,6 +3584,7 @@ def _apply_callback(
             dur_var=duration_col,
             amount_var=amount_col,
             auom_var=auom_col,
+            status_var=str(source.params.get("status_var", "statusdescription")),
         )
 
     match = re.fullmatch(r"dex_to_10\((.+)\)", expr, flags=re.DOTALL)
