@@ -12093,7 +12093,9 @@
       21214
      ],
      "table": "numericitems",
-     "sub_var": "itemid"
+     "sub_var": "itemid",
+     "callback": "convert_unit(binary_op(`*`, 7.50061683), 'mmHg', '^kpa$')",
+     "_comment": "AUMC official legacy pO2_FiO2_estimated.sql converts kPa (unitid 152) to mmHg before evaluation. Convert labelled kPa rows before bounds and pooling; preserve labelled mmHg values. This changes the loader, not sealed historical exports."
     }
    ],
    "eicu": [

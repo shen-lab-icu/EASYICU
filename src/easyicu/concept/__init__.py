@@ -3466,19 +3466,22 @@ class ConceptResolver:
                     # - aumc_rate_kg: 先median再/kg ≠ 先/kg再median
                     # 🔧 FIX 2026-02: 对所有有callback的源都跳过预降采样
                     has_callback = getattr(source, 'callback', None) is not None
-                    # AUMC tidal_vol and fio2 obey raw pooled/bounds contracts.
+                    # AUMC tidal_vol, fio2 and po2 obey pooled/bounds contracts.
                     # Otherwise crossing 1,000
                     # source rows changes results: [0, 2849] becomes 1424.5
                     # before the 2,000-mL upper bound can reject the outlier.
                     # Per-source medians also cannot be pooled into a median.
                     # FiO2 additionally requires admission-relative binning;
                     # absolute-hour preaggregation shifts non-hour admissions.
+                    # PO2 can already arrive on an ICU-relative DuckDB grid.
+                    # Rounding that grid again on the absolute clock shifts it
+                    # backwards for non-hour admissions and corrupts P/F pairs.
                     # Keep this repair scoped to the independently reproduced
                     # source contract; do not silently reprofile other modules
                     # by changing every high-frequency fallback here.
                     skip_resample = (
                         has_callback
-                        or (db_name == "aumc" and concept_name in {"tidal_vol", "fio2"})
+                        or (db_name == "aumc" and concept_name in {"tidal_vol", "fio2", "po2"})
                     )
                     
                     if is_high_freq_db and table.index_column and len(frame) > 1000 and not skip_resample:
