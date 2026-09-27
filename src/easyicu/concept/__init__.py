@@ -2889,7 +2889,8 @@ class ConceptResolver:
                                             table = ICUTable(
                                                 data=frame,
                                                 id_columns=[_idtbl_id_col],
-                                                index_column=_idtbl_id_col,
+                                                # Static aggregates have no event-time axis.
+                                                index_column=None,
                                                 value_column=concept_name,
                                             )
                                             table._pre_aggregated = True
