@@ -1,5 +1,7 @@
 """AUMC raw pooling must preserve bounds, patient clocks and source weights."""
 
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -31,7 +33,8 @@ class RawSource:
         for spec in filters or []:
             frame = spec.apply(frame)
         return ICUTable(frame, id_columns=["admissionid"],
-                        index_column="measuredat", value_column="value")
+                        index_column="measuredat", value_column="value",
+                        unit_column="unit" if "unit" in frame else None)
 
 
 def extract(frame, *, bounded, multi_source):
@@ -119,3 +122,47 @@ def test_fio2_preserves_raw_clock_bounds_and_source_weights(
     pd.testing.assert_frame_equal(*outputs)
     assert outputs[0].measuredat.tolist() == [0.]
     assert outputs[0].fio2.tolist() == [expected]
+
+
+def test_po2_keeps_the_patient_hour_when_other_stays_trigger_resampling():
+    definition = ConceptDefinition(
+        name="po2", minimum=20, maximum=600,
+        sources={"aumc": [ConceptSource(table="events", sub_var="itemid", ids=[1])]},
+    )
+    target = pd.DataFrame({"admissionid": [1, 1], "measuredat": [50., 70.],
+                           "itemid": [1, 1], "value": [80., 100.]})
+    padding = pd.DataFrame({"admissionid": [2] * 1001, "measuredat": [1.] * 1001,
+                            "itemid": [1] * 1001, "value": [90.] * 1001})
+    outputs = []
+    for frame in [target, pd.concat([target, padding], ignore_index=True)]:
+        result = ConceptResolver(ConceptDictionary({"po2": definition})).load_concepts(
+            ["po2"], RawSource(frame, admittedat=(20., 0.)), aggregate="min",
+            merge=False, r_compatible=False, interval=pd.Timedelta(hours=1),
+            verbose=False, concept_workers=1,
+        )["po2"].data
+        outputs.append(result[result.admissionid == 1].reset_index(drop=True))
+    pd.testing.assert_frame_equal(*outputs)
+    assert outputs[0].measuredat.tolist() == [0.]
+    assert outputs[0].po2.tolist() == [80.]
+
+
+def test_builtin_aumc_po2_converts_kpa_before_bounds_and_pooling():
+    dictionary = ConceptDictionary.from_json(
+        Path(__file__).resolve().parents[2] / "src/easyicu/data/concept-dict.json"
+    )
+    raw = pd.DataFrame({"admissionid": [1, 1], "measuredat": [1., 2.],
+                        "itemid": [7433, 21214], "value": [100., 10.],
+                        "unit": ["mmHg", "kPa"]})
+    source = RawSource(raw)
+    source.config = DataSourceConfig(
+        name="aumc", tables={"numericitems": {"defaults": {
+            "id_var": "admissionid", "index_var": "measuredat",
+            "val_var": "value", "unit_var": "unit",
+        }}},
+    )
+    result = ConceptResolver(dictionary).load_concepts(
+        ["po2"], source, aggregate="min", merge=False, r_compatible=False,
+        interval=pd.Timedelta(hours=1), verbose=False, concept_workers=1,
+    )["po2"].data
+    assert result.measuredat.tolist() == [0.]
+    assert result.po2.tolist() == pytest.approx([75.0061683])
