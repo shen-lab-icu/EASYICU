@@ -1,0 +1,9 @@
+# AUMC FiO2 raw pooling repair
+
+The high-frequency fallback previously reduced a no-callback FiO2 source to absolute-clock hourly medians before admission alignment, bounds and requested aggregation. Results could therefore depend on unrelated stays crossing the 1,000-row threshold. A P/F dependency requesting FiO2 max also lost the original maximum.
+
+Skip this premature reduction for AUMC FiO2, as already done for tidal volume. Conversion, bounds, patient-relative clocks and final requested aggregation continue through the existing pipeline. Other concepts and databases retain their existing behavior.
+
+Regression cases cover non-hour admission, outlier bounds, mixed callback/source weights and explicit max aggregation. The first three failed before the repair and passed afterward. Final targeted file: 7 passed. Complete core suite before the additional max case: 2,504 passed, 52 skipped, 1 deselected. Repository-wide optional suite was interrupted after 1,902 passed, 63 skipped and 373 deselected when the user requested closure; this is not a complete repository-wide pass. Repository lint has 16 existing findings in unchanged files; changed Python files pass.
+
+A separate M2 fixed-onset audit replayed sealed source97f508c6 plus only this conditional change for12,978 AUMC stays. Candidate FiO2 median values exactly matched independent raw pooling for270,708 hours. P/F changes were widespread because its dependency requests max FiO2. Source comparison and actual-loader differences are recorded in M2-A143/FIO2_SOURCE_RESULTS.md. A separate full raw P/F reconstruction remained discrepant and is explicitly unresolved; mixed PO2 units were recorded for later investigation. This patch does not certify P/F definitions, change a sealed export, refresh study models or authorize a scientific release. No 8GB extraction benchmark was performed.
