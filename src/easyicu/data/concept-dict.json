@@ -3246,6 +3246,8 @@
      "sub_var": "itemid",
      "dur_var": "stop",
      "rate_var": "doserateunit",
+     "required_volume_unit": "ml",
+     "extra_vars": ["doseunit", "doserateunit"],
      "callback": "combine_callbacks(\n                           aumc_rate,\n                           dex_to_10(list(7255L, 7256L, c(8940L, 9571L)),\n                                     c(2, 3, 4))\n                         )"
     }
    ],
@@ -3318,6 +3320,8 @@
      "dur_var": "endtime",
      "amount_var": "amount",
      "auom_var": "amountuom",
+     "status_var": "statusdescription",
+     "extra_vars": ["statusdescription"],
      "callback": "combine_callbacks(\n               mimv_rate,\n               dex_to_10(c(228140L, 220952L), c(2, 5))\n             )"
     }
    ],
@@ -3333,6 +3337,8 @@
      "dur_var": "endtime",
      "amount_var": "amount",
      "auom_var": "amountuom",
+     "status_var": "statusdescription",
+     "extra_vars": ["statusdescription"],
      "callback": "combine_callbacks(\n               mimv_rate,\n               dex_to_10(c(228140L, 220952L), c(2, 5))\n             )"
     },
     {
@@ -3362,6 +3368,8 @@
      "dur_var": "endtime",
      "amount_var": "amount",
      "auom_var": "amountuom",
+     "status_var": "statusdescription",
+     "extra_vars": ["statusdescription"],
      "callback": "combine_callbacks(\n               mimv_rate,\n               dex_to_10(c(228140L, 220952L), c(2, 5))\n             )"
     },
     {
