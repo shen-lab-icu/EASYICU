@@ -11229,6 +11229,10 @@
     ],
     [
       "easyicu.research_agent.reporting.descriptive_report_facts",
+      "easyicu.research_agent.contracts.primary_cohort"
+    ],
+    [
+      "easyicu.research_agent.reporting.descriptive_report_facts",
       "easyicu.research_agent.reporting.manuscript_labels"
     ],
     [
@@ -13032,7 +13036,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3250,
+    "edge_count": 3251,
     "largest_scc_size": 0,
     "module_count": 762,
     "package_count": 36,
