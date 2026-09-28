@@ -12,6 +12,7 @@ import re
 from typing import Any, Mapping, Sequence
 
 from ..contracts.cohort_product_keys import is_closed_cohort_product_key
+from ..contracts.primary_cohort import STUDY_POPULATION_PRODUCTS
 from ..contracts.descriptive_execution import exposure_outcome_distribution_result_receipt_valid
 from ..authority.scientific_claims import ScientificClaim
 
@@ -250,11 +251,122 @@ def _compile_grouped_table_one_cohort_report_facts(projected, evidence):
     return tuple(facts)
 
 
+def _recorded_share(row: Mapping[str, Any], count: int, denominator: int):
+    """Return a level's recorded share and, when recorded, its interval.
+
+    The values are copied, never recomputed; arithmetic only checks that the
+    share is the count over its denominator and that the interval holds it.
+    """
+    value = row.get("estimate_pct")
+    if (
+        type(value) not in {float, int} or not math.isfinite(value)
+        or not 0 <= value <= 100
+        or abs(value - 100 * count / denominator) > 1e-5
+    ):
+        raise ValueError("Occurrence fact contradicts its recorded share")
+    bounds = tuple(row.get(key) for key in ("ci_low_pct", "ci_high_pct", "confidence_level"))
+    if row.get("interval_method") == "none_counts_only":
+        if any(bound is not None for bound in bounds):
+            raise ValueError("A counts-only occurrence share cannot carry an interval")
+        return float(value), None
+    if any(type(bound) not in {float, int} or not math.isfinite(bound) for bound in bounds):
+        raise ValueError("Occurrence share lacks its recorded interval")
+    low, high, level = (float(bound) for bound in bounds)
+    if not (0 <= low <= value <= high <= 100 and 0 < level < 1):
+        raise ValueError("Occurrence interval does not hold its recorded share")
+    return float(value), (low, high, level)
+
+
+def _compile_study_population_occurrence_report_facts(projected, evidence, reader_display_labels):
+    """Copy how often each exposure level occurs in the study cohort.
+
+    A plan that asks how often its exposure occurs answers it on the host's
+    republished study cohort (``STUDY_POPULATION_PRODUCTS``), not the narrower
+    analysis cohort.  Each level's recorded count, share and interval become
+    one Abstract and Results sentence, so the answer does not depend on the
+    Writer quoting a secondary table.
+    """
+
+    from .writer_evidence import _verified_evidence_json
+
+    facts = []
+    for row in projected:
+        summary = row.get("step_summary", {})
+        if not (
+            row.get("status") == "ok"
+            and isinstance(summary, dict)
+            and summary.get("status") == "ok"
+            and summary.get("interpretation_class") == "exposure_outcome_distribution"
+            and summary.get("typed_cohort_input") in STUDY_POPULATION_PRODUCTS
+        ):
+            continue
+        source_id = str(row.get("step_summary_evidence_id") or "")
+        source = _verified_evidence_json(
+            evidence, source_id, exact_evidence_id=True, expected_kind="statistic",
+        )
+        record = evidence.get(source_id)
+        if record is None or record.produced_by_step != row.get("step_id"):
+            raise ValueError("Occurrence source does not belong to the verified step")
+        if source.get("typed_cohort_input") not in STUDY_POPULATION_PRODUCTS:
+            raise ValueError("Occurrence source lost its study-cohort binding")
+        estimates = source.get("descriptive_estimates")
+        if not isinstance(estimates, dict) or estimates.get("schema_version") != (
+            "easyicu.exposure_outcome_descriptive_estimates/1"
+        ):
+            raise ValueError("Occurrence source lacks its descriptive estimates")
+        prevalence = estimates.get("exposure_prevalence")
+        if not isinstance(prevalence, list) or not prevalence:
+            raise ValueError("Occurrence source reports no exposure level")
+        exposure = str(source.get("exposure") or "")
+        levels: set[str] = set()
+        counts: list[int] = []
+        denominators: set[int] = set()
+        for position, level_row in enumerate(prevalence):
+            if not isinstance(level_row, dict) or _count(level_row.get("level_index")) != position:
+                raise ValueError("Occurrence levels are not in their recorded order")
+            level = _level(level_row.get("level"))
+            if level in levels:
+                raise ValueError("Duplicate distribution fact level")
+            levels.add(level)
+            count = _count(level_row.get("n"))
+            denominator = _count(level_row.get("denominator"), positive=True)
+            if count > denominator:
+                raise ValueError("Occurrence count exceeds its denominator")
+            counts.append(count)
+            denominators.add(denominator)
+            share, interval = _recorded_share(level_row, count, denominator)
+            label = _quoted(reader_display_labels.get(f"{exposure}={level}", f"{exposure}={level}"))
+            prefix = f"descriptive_estimates.exposure_prevalence[{position}]"
+            fields = ("level", "n", "denominator", "estimate_pct")
+            recorded = f"{share:.2f}%"
+            if interval is not None:
+                low, high, confidence = interval
+                recorded += f"; {100 * confidence:g}% CI, {low:.2f}% to {high:.2f}%"
+                fields += ("ci_low_pct", "ci_high_pct", "confidence_level")
+            facts.append(DescriptiveReportFact(
+                subsection="Cohort characteristics",
+                text=(
+                    f"In the study cohort, {count:,} of {denominator:,} observations "
+                    f"({recorded}) were in the {label} group"
+                ),
+                evidence_id=record.evidence_id, source_sha256=record.sha256,
+                source_fields=tuple(f"{prefix}.{key}" for key in fields),
+            ))
+        if len(denominators) != 1 or sum(counts) != denominators.pop():
+            raise ValueError("Occurrence counts do not partition the study cohort")
+    return tuple(facts)
+
+
 def compile_primary_counts_only_report_facts(records, *, evidence, reader_display_labels,
                                            context=None, manuscript_language="en"):
-    """Shared full-run/report-only admission; loose wrapper counts are not facts."""
+    """Shared full-run/report-only admission; loose wrapper counts are not facts.
+
+    Admits the grouped Table 1 cohort count, the primary counts-only
+    distribution and the study population's exposure occurrence.
+    """
     from ..audits.envelope_consumers import RegisteredOutputEnvelopeConsumer
     from ..authority.scientific_claim_registry import load_registered_scientific_claims
+    from .manuscript_labels import source_bound_manuscript_labels
 
     projected = RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
         records, evidence_store=evidence,
@@ -268,6 +380,12 @@ def compile_primary_counts_only_report_facts(records, *, evidence, reader_displa
     return (
         *_compile_grouped_table_one_cohort_report_facts(projected, evidence),
         *descriptive_facts,
+        *_compile_study_population_occurrence_report_facts(
+            projected, evidence,
+            source_bound_manuscript_labels(
+                context, reader_display_labels, language=manuscript_language,
+            ),
+        ),
     )
 
 
