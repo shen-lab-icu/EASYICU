@@ -29,6 +29,11 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...authority.planned_role import unique_verified_primary_record
+from ...authority.step_capsule import (
+    StepAuthorityCapsuleRef,
+    load_verified_step_authority_capsule,
+    read_verified_content,
+)
 from ...cohort.schema import build_cohort, coerce_cohort_definition
 from ...robustness.estimators import (
     _data_with_predicate_aliases,
@@ -1639,21 +1644,39 @@ def _registered_raw_input_contracts(
 
     A standard executor's script checks its plausibility receipt against the
     digest of the contracts in its own resolved-input manifest.  A replay of
-    that script must be handed those contracts -- read from the manifest the
-    step record registered, at the digest it recorded -- and never another
-    step's.  ``None`` when they cannot be verified: a replay that needs them
-    then fails closed inside the script.
+    that script must be handed those contracts and never another step's.
+
+    They are read from the manifest sealed in the step's own executed
+    authority capsule: content-addressed, bound to the executed code and to
+    the digest the record keeps.  A resumed run drops the record's mutable
+    manifest path, and a later attempt may overwrite that file, so neither
+    is consulted.  ``None`` when the contracts cannot be verified; a replay
+    that needs them then fails closed inside the script.
     """
 
-    relative_path = str(record.get("resolved_inputs_path") or "").strip()
+    step_id = str(record.get("step_id") or "").strip()
+    raw_ref = record.get("step_authority_capsule_ref")
     expected_sha256 = str(record.get("resolved_inputs_sha256") or "").strip()
-    if not relative_path or not expected_sha256:
-        return None
-    manifest_path = contained_regular_file(run_root / relative_path, run_root)
-    if manifest_path is None or _sha256_file(manifest_path) != expected_sha256:
+    if not step_id or not isinstance(raw_ref, Mapping) or not expected_sha256:
         return None
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        capsule = load_verified_step_authority_capsule(
+            run_root,
+            ref=StepAuthorityCapsuleRef.model_validate(dict(raw_ref)),
+            expected_step_id=step_id,
+        ).capsule
+        execution = capsule.execution
+        if (
+            execution is None
+            or execution.returncode != 0
+            or capsule.candidate_code.sha256
+            != str(record.get("executed_code_sha256") or "").strip()
+            or capsule.resolved_inputs.sha256 != expected_sha256
+        ):
+            return None
+        manifest = json.loads(
+            read_verified_content(run_root, capsule.resolved_inputs).decode("utf-8")
+        )
     except Exception:
         return None
     if not isinstance(manifest, dict):
