@@ -89,6 +89,8 @@ from .workflow import (
 )
 
 MAX_SESSIONS = 100
+# Bounds the Pi/model side of one turn; its host tools are bounded separately
+# (gateway.HOST_TOOL_SIDECAR_TIMEOUT_SECONDS).
 COPILOT_MESSAGE_TIMEOUT_SECONDS = 90
 MAX_RESEARCH_ARTIFACT_PREVIEW_BYTES = 2 * 1024 * 1024
 ALLOWED_TURN_ACTIONS = frozenset(
