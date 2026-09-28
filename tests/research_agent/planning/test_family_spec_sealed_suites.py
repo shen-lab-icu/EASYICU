@@ -37,6 +37,9 @@ from easyicu.research_agent.orchestration.scientific_runtime import (
 )
 from easyicu.research_agent.planning import figure_plan_shaping as _figure_plan
 from easyicu.research_agent.planning import final_plan_shape as _final_plan
+from easyicu.research_agent.planning.baseline_requirements import (
+    bind_baseline_requirements,
+)
 from easyicu.research_agent.planning.dependence_authority import (
     bind_context_dependence_authority,
 )
@@ -366,6 +369,91 @@ H3_LABELS = {
     "lact": "Lactate (mmol/L)",
     "sofa2": "Total SOFA-2 score",
 }
+
+
+def _sealed_suite(suite: str) -> tuple[ResearchContext, str]:
+    if suite == "survival":
+        _projection, authority = _h1_authority()
+        authorities = ScientificRuntimeAuthorities(trajectory=None, current_case=authority)
+        return _h1_context(authority), authorities.planning_contract_context()
+    projection = build_runtime_scientific_projection(
+        load_default_case_protocol("h3_trajectory_clustering")
+    )
+    traj = load_trajectory_scientific_runtime_authority(
+        projection.deterministic_execution_contract
+    )
+    authorities = ScientificRuntimeAuthorities(trajectory=traj, current_case=None)
+    return _h3_context(traj), authorities.planning_contract_context()
+
+
+@pytest.mark.parametrize(
+    ("suite", "family_id"),
+    [
+        ("survival", LANDMARK_SURVIVAL_FAMILY_ID),
+        ("trajectory", FIXED_WINDOW_TRAJECTORY_FAMILY_ID),
+    ],
+)
+def test_a_sealed_suite_refuses_an_accepted_baseline_roster_before_the_provider(
+    suite: str, family_id: str
+) -> None:
+    """Its signed owner replaces the plan's steps, so no Table 1 could keep the roster.
+
+    The outline's baseline gate refused such a plan only after the Planner's
+    Provider call; the request now refuses it while it is sealed.
+    """
+
+    context, disclosure = _sealed_suite(suite)
+    types = candidate_analysis_types(context)
+    assert (
+        family_template_id_for_context(
+            context, analysis_types=types, planning_contract_context=disclosure
+        )
+        == family_id
+    )
+    accepting = bind_baseline_requirements(
+        context,
+        {
+            "schema_version": "easyicu.accepted_baseline_requirements/2",
+            "source_plan_sha256": "c" * 64,
+            "tables": [
+                {
+                    "source_step_id": "baseline_context",
+                    "group_by": None,
+                    "variables": [
+                        {"name": "age", "source_concept": None},
+                        {"name": "sex", "source_concept": None},
+                    ],
+                }
+            ],
+        },
+    )
+
+    request_kwargs = dict(
+        analysis_types=types,
+        variable_roster=select_progressive_variables(accepting),
+        allowed_literature_citation_keys=ALLOWED,
+        required_primary_cohort_selection_mode="all_input_rows",
+        planning_contract_context=disclosure,
+    )
+    with pytest.raises(FamilySpecError) as caught:
+        build_family_spec_request(accepting, **request_kwargs)
+    assert caught.value.reason_code == "family_spec_accepted_baseline_unsatisfiable"
+    assert build_family_spec_request(context, **request_kwargs).family_id == family_id
+
+    # The scripted client holds no answer: the planner refuses while sealing
+    # the request, before any Provider call.
+    llm = ScriptedMockLLMClient([])
+    with pytest.raises(FamilySpecError) as planned:
+        ProgressivePlannerAgent(llm).run_attempt(
+            accepting, planner_strategy=FAMILY_SPEC_STRATEGY,
+            allowed_literature_citation_keys=ALLOWED,
+            direct_comparator_literature_keys=[],
+            enforce_article_contract=True, article_contract_context=accepting,
+            planning_contract_context=disclosure,
+            required_primary_cohort_selection_mode="all_input_rows",
+        )
+    assert planned.value.reason_code == "family_spec_accepted_baseline_unsatisfiable"
+    assert llm.calls == []
 
 
 def test_sealed_trajectory_suite_is_planned_in_one_call_and_bound_to_the_four_signed_owners() -> None:

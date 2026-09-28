@@ -42,6 +42,7 @@ from .contract import (
     PHENOTYPING_FAMILY_ID,
     PREDICTION_FAMILY_ID,
     MAX_FIT_FEATURES,
+    SEALED_SUITE_FAMILY_IDS,
     SOURCE_FEASIBILITY_FAMILY_ID,
     AcceptedBaselineRow,
     AcceptedFeatureGroup,
@@ -706,12 +707,27 @@ def _bind_accepted_baseline_rows(
     columns the owner accepts for it, named column first, with the summary its
     closed domain implies.  A roster grouped by another column, or a row with
     no prepared column, is a host contradiction refused before any Provider
-    call.  A family without a Table 1 is left to the existing gates.
+    call.  So is any roster for a sealed suite: its signed owner replaces the
+    plan's steps when the plan is bound, so no Table 1 could keep it, and the
+    outline's baseline gate would refuse it only after the Provider call.  Any
+    other family without a Table 1 is left to the existing gates.
     """
 
     projection = baseline_requirement_projection(context)
+    if projection["status"] != "bound":
+        return request
+    if request.family_id in SEALED_SUITE_FAMILY_IDS and any(
+        table["variables"] for table in projection["tables"]
+    ):
+        raise FamilySpecError(
+            "family_spec_accepted_baseline_unsatisfiable",
+            "the accepted baseline roster cannot be kept: this family's sealed "
+            "suite replaces the plan's steps when the plan is bound and has no "
+            "Table 1",
+            path="accepted_baseline_rows",
+        )
     group_column = table_one_group_column(request)
-    if projection["status"] != "bound" or group_column is None:
+    if group_column is None:
         return request
     rows: dict[str, AcceptedBaselineRow] = {}
     for table in projection["tables"]:
