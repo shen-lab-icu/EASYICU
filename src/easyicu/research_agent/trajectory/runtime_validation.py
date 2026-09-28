@@ -21,20 +21,95 @@ _KINDS = {
 }
 _CONTRACT_REF = re.compile(r"^scientific_runtime_contract:([0-9a-f]{64})$")
 
+#: The four signed owners, in execution order.
+SIGNED_TRAJECTORY_OWNER_METHODS = (_REPRESENTATION, _CANDIDATES, _STABILITY, _FIGURE)
+#: Exact public inputs of the owners after the representation.  The host
+#: projection is built from these, so the plan it emits and the contract it is
+#: validated against cannot drift apart.
+SIGNED_TRAJECTORY_CANDIDATE_INPUTS = (
+    "artifact:trajectory_representation",
+    "manifest:trajectory_representation_schema",
+)
+SIGNED_TRAJECTORY_STABILITY_INPUTS = (
+    "artifact:trajectory_representation",
+    "artifact:candidate_cluster_assignments",
+    "manifest:cluster_selection",
+    "manifest:trajectory_representation_schema",
+    "manifest:candidate_cluster_solution_schema",
+)
+SIGNED_TRAJECTORY_FIGURE_INPUTS = (
+    "table:trajectory_candidate_selection",
+    "table:feature_availability",
+    "table:trajectory_profiles",
+    "table:cluster_sizes",
+    "table:cluster_stability",
+)
+
 
 def signed_trajectory_plan_claimed(plan: object) -> bool:
     methods = [str(getattr(step, "method", "") or "") for step in getattr(plan, "steps", ()) or ()]
     return _REPRESENTATION in methods and _CANDIDATES in methods
 
 
-def signed_trajectory_plan_contract_errors(plan: object) -> list[str]:
-    """Require one closed representation -> selection -> stability -> figure DAG."""
+def _owner_steps(plan: object) -> tuple[Any, ...] | None:
+    """The four owner steps in plan order, or None unless each occurs once, in order."""
 
     steps = tuple(getattr(plan, "steps", ()) or ())
-    methods = tuple(str(getattr(step, "method", "") or "") for step in steps)
-    expected = (_REPRESENTATION, _CANDIDATES, _STABILITY, _FIGURE)
-    if methods != expected:
+    owners = tuple(
+        step
+        for step in steps
+        if str(getattr(step, "method", "") or "") in SIGNED_TRAJECTORY_OWNER_METHODS
+    )
+    methods = tuple(str(getattr(step, "method", "") or "") for step in owners)
+    return owners if methods == SIGNED_TRAJECTORY_OWNER_METHODS else None
+
+
+def _companion_errors(plan: object, owners: Sequence[Any]) -> list[str]:
+    """A companion may only render the owners' tables.
+
+    The host appends deterministic renderers after binding, such as the cohort
+    flow figure over the representation's ``table:cohort_flow``.  Such a step
+    reads no row-level artifact, publishes no product an owner publishes, and
+    claims no scientific role, so the signed decision stays closed.
+    """
+
+    owner_ids = {id(step) for step in owners}
+    owner_outputs = {
+        str(value) for step in owners for value in getattr(step, "expected_outputs", ()) or ()
+    }
+    owner_tables = {value for value in owner_outputs if value.startswith("table:")}
+    errors: list[str] = []
+    for step in tuple(getattr(plan, "steps", ()) or ()):
+        if id(step) in owner_ids:
+            continue
+        inputs = {str(value) for value in getattr(step, "inputs", ()) or ()}
+        outputs = [str(value) for value in getattr(step, "expected_outputs", ()) or ()]
+        if (
+            getattr(step, "planned_analysis_role", None) != "auxiliary"
+            or getattr(step, "trajectory_stability_spec", None) is not None
+            or not inputs
+            or not inputs <= owner_tables
+            or not outputs
+            or any(not value.startswith("figure:") for value in outputs)
+            or any(value in owner_outputs for value in outputs)
+        ):
+            errors.append(
+                "signed trajectory companion step "
+                f"{getattr(step, 'step_id', '')!r} is not a render-only view of owner tables"
+            )
+    return errors
+
+
+def signed_trajectory_plan_contract_errors(plan: object) -> list[str]:
+    """Require one closed representation -> selection -> stability -> figure DAG.
+
+    Host companions that only render the owners' tables may sit beside it.
+    """
+
+    owners = _owner_steps(plan)
+    if owners is None:
         return ["signed trajectory plan does not contain the four ordered owners"]
+    steps = owners
     errors: list[str] = []
     roles = tuple(getattr(step, "planned_analysis_role", None) for step in steps)
     if roles != ("auxiliary", "primary", "auxiliary", "auxiliary"):
@@ -51,28 +126,17 @@ def signed_trajectory_plan_contract_errors(plan: object) -> list[str]:
     ) != 1:
         errors.append("signed trajectory owners do not share one runtime contract")
     candidate_inputs = tuple(getattr(steps[1], "inputs", ()) or ())
-    if candidate_inputs != (
-        "artifact:trajectory_representation",
-        "manifest:trajectory_representation_schema",
-    ):
+    if candidate_inputs != SIGNED_TRAJECTORY_CANDIDATE_INPUTS:
         errors.append("signed trajectory candidate owner has invalid inputs")
     stability_inputs = tuple(getattr(steps[2], "inputs", ()) or ())
-    if stability_inputs != (
-        "artifact:trajectory_representation",
-        "artifact:candidate_cluster_assignments",
-        "manifest:cluster_selection",
-        "manifest:trajectory_representation_schema",
-        "manifest:candidate_cluster_solution_schema",
-    ):
+    if stability_inputs != SIGNED_TRAJECTORY_STABILITY_INPUTS:
         errors.append("signed trajectory stability owner has invalid inputs")
     if getattr(steps[2], "trajectory_stability_spec", None) is None:
         errors.append("signed trajectory stability design is absent")
     figure_inputs = tuple(getattr(steps[3], "inputs", ()) or ())
-    if figure_inputs != (
-        "table:trajectory_candidate_selection",
-        "table:feature_availability",
-    ):
+    if figure_inputs != SIGNED_TRAJECTORY_FIGURE_INPUTS:
         errors.append("signed trajectory diagnostic figure has invalid inputs")
+    errors.extend(_companion_errors(plan, owners))
     return errors
 
 
@@ -142,7 +206,8 @@ def signed_trajectory_runtime_bundle_errors(
     errors = signed_trajectory_plan_contract_errors(plan)
     if errors:
         return errors
-    steps = tuple(getattr(plan, "steps", ()) or ())
+    steps = _owner_steps(plan)
+    assert steps is not None
     by_kind: dict[str, list[Mapping[str, Any]]] = {kind: [] for kind in _KINDS.values()}
     for record in records:
         kind = str(record.get("deterministic_standard_analysis") or "")
@@ -298,6 +363,10 @@ def signed_trajectory_runtime_bundle_errors(
 
 
 __all__ = [
+    "SIGNED_TRAJECTORY_CANDIDATE_INPUTS",
+    "SIGNED_TRAJECTORY_FIGURE_INPUTS",
+    "SIGNED_TRAJECTORY_OWNER_METHODS",
+    "SIGNED_TRAJECTORY_STABILITY_INPUTS",
     "signed_trajectory_plan_claimed",
     "signed_trajectory_plan_contract_errors",
     "signed_trajectory_runtime_bundle_errors",

@@ -13032,6 +13032,10 @@
       "easyicu.research_agent.trajectory.plan_contract"
     ],
     [
+      "easyicu.research_agent.trajectory.scientific_runtime_authority",
+      "easyicu.research_agent.trajectory.runtime_validation"
+    ],
+    [
       "easyicu.research_agent.validity_signals",
       "easyicu.research_agent.authority.runtime_artifacts"
     ]
@@ -13040,7 +13044,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3252,
+    "edge_count": 3253,
     "largest_scc_size": 0,
     "module_count": 762,
     "package_count": 36,

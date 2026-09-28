@@ -8,6 +8,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.contracts.capability_ids import (
+    SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID,
+)
 from easyicu.research_agent.execution.runners.trajectory_scientific_candidate_executor import (
     run_trajectory_scientific_candidate_selection,
 )
@@ -20,11 +23,21 @@ from easyicu.research_agent.execution.runners.trajectory_stability_executor impo
 from easyicu.research_agent.execution.runners.selection import (
     select_standard_executor,
 )
+from easyicu.research_agent.execution.runners.trajectory_selection_figure_executor import (
+    TRAJECTORY_SELECTION_FIGURE_INPUTS,
+)
+from easyicu.research_agent.planning.capability_registry import (
+    assess_scientific_capability,
+)
+from easyicu.research_agent.planning.figure_plan_shaping import (
+    apply_runtime_bound_figure_contracts,
+)
 from easyicu.research_agent.orchestration.scientific_runtime import (
     ScientificRuntimeAuthorities,
 )
 from easyicu.research_agent.schema import (
     AnalysisPlan,
+    AnalysisStep,
     CohortDescriptor,
     ResearchContext,
     TrajectoryStabilitySpec,
@@ -32,6 +45,11 @@ from easyicu.research_agent.schema import (
 from easyicu.research_agent.trajectory.plan_contract import (
     evaluate_trajectory_plan_dag,
     trajectory_step_roles,
+)
+from easyicu.research_agent.trajectory.runtime_validation import (
+    SIGNED_TRAJECTORY_FIGURE_INPUTS,
+    SIGNED_TRAJECTORY_OWNER_METHODS,
+    signed_trajectory_plan_contract_errors,
 )
 from easyicu.research_agent.trajectory.scientific_runtime_authority import (
     TrajectoryScientificAuthorityError,
@@ -348,6 +366,222 @@ def test_signed_trajectory_authority_projects_and_rebinds_execution_only_plan() 
     assert rebuild_findings[0].detail["reason_code"] == (
         "trajectory_development_execution_only_authority_compiled"
     )
+
+
+def _reviewed_signed_plan(authority) -> AnalysisPlan:
+    """The plan a signed run reviews: the bound projection after host figure shaping."""
+
+    authorities = ScientificRuntimeAuthorities(trajectory=authority, current_case=None)
+    bound, _findings = authorities.bind_plan(
+        authority.development_execution_only_plan(
+            research_question="Assess fixed-window trajectory phenotypes."
+        )
+    )
+    return apply_runtime_bound_figure_contracts(bound, [])
+
+
+def _companions(plan: AnalysisPlan) -> list:
+    return [
+        step for step in plan.steps if step.method not in SIGNED_TRAJECTORY_OWNER_METHODS
+    ]
+
+
+def test_the_reviewed_signed_plan_satisfies_the_contract_that_gates_it() -> None:
+    """The capability verdict and the end-of-run bundle check share this contract.
+
+    A plan the host itself projects, then shapes, must pass it: the projection's
+    figure reads five owner tables, and the host appends a cohort-flow figure
+    over the representation's cohort ledger.
+    """
+
+    authority = _authority()
+    projection = authority.development_execution_only_plan(
+        research_question="Assess fixed-window trajectory phenotypes."
+    )
+    assert signed_trajectory_plan_contract_errors(projection) == []
+
+    plan = _reviewed_signed_plan(authority)
+    assert [step.inputs for step in _companions(plan)] == [["table:cohort_flow"]]
+    assert signed_trajectory_plan_contract_errors(plan) == []
+    assessment = assess_scientific_capability(
+        analysis_type=plan.analysis_type,
+        context=ResearchContext(
+            research_question=plan.research_question,
+            variables=[],
+            cohort=CohortDescriptor(
+                cohort_name="trajectory",
+                database="synthetic",
+                n_patients=120,
+                n_stays=120,
+            ),
+        ),
+        plan=plan,
+    )
+    assert assessment.capability_id == SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID
+    assert assessment.claim_ceiling == "reportable"
+
+
+def test_the_figure_renderer_reads_exactly_the_signed_figure_inputs() -> None:
+    assert tuple(TRAJECTORY_SELECTION_FIGURE_INPUTS) == SIGNED_TRAJECTORY_FIGURE_INPUTS
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"planned_analysis_role": "primary"},
+        {"inputs": ["artifact:candidate_cluster_assignments"]},
+        {"inputs": []},
+        {"expected_outputs": []},
+        {"expected_outputs": ["table:outcome_by_cluster"]},
+        {"expected_outputs": ["figure:trajectory_selection_diagnostics"]},
+        {"trajectory_stability_spec": "signed"},
+    ],
+    ids=[
+        "primary_role",
+        "row_level_artifact",
+        "no_input",
+        "no_output",
+        "new_table",
+        "owner_figure",
+        "stability_design",
+    ],
+)
+def test_a_companion_that_does_more_than_render_owner_tables_is_refused(
+    update: dict,
+) -> None:
+    authority = _authority()
+    plan = _reviewed_signed_plan(authority)
+    if update.get("trajectory_stability_spec") == "signed":
+        update = {"trajectory_stability_spec": authority.stability_spec}
+    steps = [
+        step.model_copy(update=update) if step in _companions(plan) else step
+        for step in plan.steps
+    ]
+
+    errors = signed_trajectory_plan_contract_errors(
+        plan.model_copy(update={"steps": steps})
+    )
+
+    assert len(errors) == 1
+    assert "is not a render-only view of owner tables" in errors[0]
+
+
+def test_owner_order_duplication_and_figure_input_drift_are_refused() -> None:
+    plan = _reviewed_signed_plan(_authority())
+    owners = [step for step in plan.steps if step not in _companions(plan)]
+    companion = _companions(plan)[0]
+
+    swapped = [owners[0], owners[2], owners[1], owners[3], companion]
+    second_figure = owners[3].model_copy(update={"step_id": "99_second_figure"})
+    narrowed = owners[3].model_copy(
+        update={"inputs": list(SIGNED_TRAJECTORY_FIGURE_INPUTS[:2])}
+    )
+
+    for steps, message in (
+        (swapped, "does not contain the four ordered owners"),
+        ([*plan.steps, second_figure], "does not contain the four ordered owners"),
+        ([*owners[:3], narrowed, companion], "diagnostic figure has invalid inputs"),
+    ):
+        errors = signed_trajectory_plan_contract_errors(
+            plan.model_copy(update={"steps": steps})
+        )
+        assert len(errors) == 1
+        assert message in errors[0]
+
+
+def test_binding_a_draft_keeps_the_sources_it_bound_to_each_owner() -> None:
+    """The projection replaces the draft's coordinates, not its citations.
+
+    The review requires the screened comparison sources on the primary step,
+    so compiling a template draft must not strip them from the candidate owner.
+    """
+
+    authority = _authority()
+    authorities = ScientificRuntimeAuthorities(trajectory=authority, current_case=None)
+    projection = authority.development_execution_only_plan(
+        research_question="Assess fixed-window trajectory phenotypes."
+    )
+    citation = {
+        "citation_key": "trajectory_gmm_2020",
+        "design_elements": ["estimand", "robustness"],
+        "application": "Selects the number of classes by BIC over a prespecified grid.",
+    }
+    renamed = [
+        step.model_copy(
+            update={
+                "step_id": f"draft_{index}",
+                "intent": "Draft prose the projection does not keep.",
+            }
+        )
+        for index, step in enumerate(projection.steps)
+    ]
+    renamed[1] = AnalysisStep.model_validate(
+        {
+            **renamed[1].model_dump(mode="python"),
+            "literature_citation_keys": ["trajectory_gmm_2020", "strobe_2007"],
+            "literature_design_bindings": [citation],
+        }
+    )
+    report = renamed[3].model_copy(
+        update={
+            "step_id": "draft_report",
+            "method": "report",
+            "expected_outputs": ["report:manuscript"],
+        }
+    )
+    draft = projection.model_copy(update={"steps": [*renamed, report]})
+
+    bound, findings = authorities.bind_plan(draft)
+
+    authority.validate_plan(bound)
+    assert [step.step_id for step in bound.steps] == list(
+        authority.development_execution_step_ids
+    )
+    candidate = bound.steps[1]
+    assert candidate.planned_analysis_role == "primary"
+    assert candidate.intent == projection.steps[1].intent
+    assert candidate.literature_citation_keys == ["trajectory_gmm_2020", "strobe_2007"]
+    assert [
+        binding.model_dump(mode="json") for binding in candidate.literature_design_bindings
+    ] == [{**citation, "divergence": None}]
+    assert all(
+        not step.literature_citation_keys
+        for index, step in enumerate(bound.steps)
+        if index != 1
+    )
+    assert findings[0].detail["literature_carried_step_ids"] == [candidate.step_id]
+
+    rebound, _ = authorities.bind_plan(bound)
+    assert rebound.steps[1].literature_citation_keys == candidate.literature_citation_keys
+
+    cited_stability = AnalysisStep.model_validate(
+        {
+            **renamed[2].model_dump(mode="python"),
+            "literature_citation_keys": ["strobe_2007"],
+        }
+    )
+    ambiguous = draft.model_copy(
+        update={
+            "steps": [
+                *renamed[:2],
+                cited_stability,
+                cited_stability.model_copy(update={"step_id": "draft_second_stability"}),
+                *renamed[3:],
+            ]
+        }
+    )
+    unambiguous, _ = authorities.bind_plan(
+        draft.model_copy(update={"steps": [*renamed[:2], cited_stability, *renamed[3:]]})
+    )
+    assert unambiguous.steps[2].literature_citation_keys == ["strobe_2007"]
+    rebound_ambiguous, ambiguous_findings = authorities.bind_plan(ambiguous)
+    assert rebound_ambiguous.steps[2].literature_citation_keys == []
+    assert rebound_ambiguous.steps[1].literature_citation_keys == (
+        candidate.literature_citation_keys
+    )
+    assert ambiguous_findings[0].detail["literature_carried_step_ids"] == [
+        candidate.step_id
+    ]
 
 
 def test_signed_representation_excludes_owner_unavailable_zero(tmp_path: Path) -> None:
