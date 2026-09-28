@@ -247,12 +247,49 @@ def _declared_design(frame: pd.DataFrame) -> dict[str, Any]:
     return design
 
 
+#: The host-bound patient grouping behind every clustered interval.
+_DEPENDENCE_FIELDS = (
+    "dependence_variance_estimator",
+    "dependence_cluster_unit",
+    "dependence_group_source",
+    "dependence_group_derivation",
+    "dependence_delimiter",
+)
+
+
+def _declared_patient_dependence(design: Mapping[str, Any]) -> bool:
+    """Whether the table declares a closed host-bound patient grouping.
+
+    The host binds this grouping to every distribution on a cohort with
+    repeated patients, whether or not a contrast is declared. It governs every
+    marginal interval and, when declared, the risk-difference covariance, so
+    it is checked here once, as a whole: a partial declaration is refused.
+    """
+
+    if all(_absent(design[key]) for key in _DEPENDENCE_FIELDS):
+        return False
+    derivation = str(design["dependence_group_derivation"])
+    if (
+        str(design["dependence_variance_estimator"]) != "cluster_robust"
+        or str(design["dependence_cluster_unit"]) != "patient"
+        or _absent(design["dependence_group_source"])
+        or derivation not in {"identity", "prefix_before_delimiter"}
+    ):
+        raise ValueError("dependence metadata lacks a closed patient grouping design")
+    if _absent(design["dependence_delimiter"]) != (derivation == "identity"):
+        raise ValueError(
+            "the patient grouping delimiter contradicts its declared derivation"
+        )
+    return True
+
+
 def _declared_risk_difference(
     frame: pd.DataFrame,
     *,
     levels: pd.DataFrame,
     design: Mapping[str, Any],
     confidence_level: float | None,
+    has_dependence: bool,
 ) -> dict[str, Any] | None:
     """Validate the optional descriptive contrast without refitting a model.
 
@@ -278,17 +315,6 @@ def _declared_risk_difference(
         if any(not _absent(value) for value in result.values()):
             raise ValueError(
                 "risk-difference numbers are present without a declared contrast"
-            )
-        dependence_fields = (
-            "dependence_variance_estimator",
-            "dependence_cluster_unit",
-            "dependence_group_source",
-            "dependence_group_derivation",
-            "dependence_delimiter",
-        )
-        if any(not _absent(design[key]) for key in dependence_fields):
-            raise ValueError(
-                "dependence metadata is present without a declared risk difference"
             )
         return None
     if any(_absent(value) for value in declaration.values()) or any(
@@ -360,11 +386,8 @@ def _declared_risk_difference(
 
     covariance = str(result["risk_difference_covariance"])
     cluster_count = result["risk_difference_cluster_count"]
-    dependence = str(design["dependence_variance_estimator"])
     if covariance == "hc1":
-        if not _absent(design["dependence_variance_estimator"]) or not _absent(
-            cluster_count
-        ):
+        if has_dependence or not _absent(cluster_count):
             raise ValueError("HC1 contrast carries contradictory dependence metadata")
     elif covariance == "cluster_robust":
         count = _finite(cluster_count)
@@ -373,11 +396,7 @@ def _declared_risk_difference(
             _finite(comparison["outcome_interval_cluster_count"]),
         ]
         if (
-            dependence != "cluster_robust"
-            or str(design["dependence_cluster_unit"]) != "patient"
-            or _absent(design["dependence_group_source"])
-            or str(design["dependence_group_derivation"])
-            not in {"identity", "prefix_before_delimiter"}
+            not has_dependence
             or count is None
             or not count.is_integer()
             or count < 2
@@ -390,12 +409,6 @@ def _declared_risk_difference(
         ):
             raise ValueError(
                 "cluster-robust contrast lacks a closed patient grouping design"
-            )
-        if str(
-            design["dependence_group_derivation"]
-        ) == "prefix_before_delimiter" and _absent(design["dependence_delimiter"]):
-            raise ValueError(
-                "prefix-derived patient grouping lacks its declared delimiter"
             )
     else:
         raise ValueError("risk-difference covariance is unsupported")
@@ -568,7 +581,7 @@ def _validate(
         raise ValueError(
             "distribution table does not carry the closed marginal-interval projection"
         )
-    has_dependence = not _absent(design["dependence_variance_estimator"])
+    has_dependence = _declared_patient_dependence(design)
     expected_effective_method = (
         str(design["repeated_unit_interval_method"])
         if has_dependence
@@ -714,6 +727,7 @@ def _validate(
         levels=levels,
         design=design,
         confidence_level=confidence_level,
+        has_dependence=has_dependence,
     )
     return levels, total, design, contrast
 
