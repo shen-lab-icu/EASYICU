@@ -41,6 +41,10 @@ from .tools import MUTATING_HOST_TOOLS, execute_tool
 MAX_PROTOCOL_LINE_BYTES = 1024 * 1024
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 15 * 60
 STARTUP_READY_TIMEOUT_SECONDS = 15.0
+# The sidecar bounds every host tool itself (pi_host_tool_timeout in
+# node_app/src/main.mjs).  A request's timeout bounds the Pi/model side of a
+# turn; the time its own host tools take is not charged to it, up to this limit.
+HOST_TOOL_SIDECAR_TIMEOUT_SECONDS = 10 * 60
 _LOG = logging.getLogger(__name__)
 MIN_NODE_VERSION = (22, 19, 0)
 _CHILD_ENV_KEYS = frozenset(
@@ -79,6 +83,57 @@ _CHILD_ENV_KEYS = frozenset(
 EventSink = Callable[[Dict[str, Any]], None]
 
 
+class _HostToolClock:
+    """Wall time one request spends waiting on its own host tools.
+
+    A queued tool counts as well as a running one (the model is idle either
+    way), overlapping tools count once, and a tool counts only up to the
+    sidecar's own deadline for it.
+    """
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._spans: Dict[str, list[Optional[float]]] = {}
+
+    def now(self) -> float:
+        return self._clock()
+
+    def start(self, tool_request_id: str) -> None:
+        with self._lock:
+            self._spans[tool_request_id] = [self._clock(), None]
+
+    def finish(self, tool_request_id: str) -> None:
+        with self._lock:
+            span = self._spans.get(tool_request_id)
+            if span is not None and span[1] is None:
+                span[1] = self._clock()
+
+    def seconds(self, now: float) -> float:
+        limit = HOST_TOOL_SIDECAR_TIMEOUT_SECONDS
+        with self._lock:
+            spans = sorted(
+                (start, min(now if end is None else end, start + limit))
+                for start, end in self._spans.values()
+                if start is not None
+            )
+        total = 0.0
+        open_start: Optional[float] = None
+        open_end: Optional[float] = None
+        for start, end in spans:
+            if end <= start:
+                continue
+            if open_end is None or start > open_end:
+                if open_start is not None and open_end is not None:
+                    total += open_end - open_start
+                open_start, open_end = start, end
+            else:
+                open_end = max(open_end, end)
+        if open_start is not None and open_end is not None:
+            total += open_end - open_start
+        return total
+
+
 @dataclass
 class _PendingRequest:
     done: threading.Event = field(default_factory=threading.Event)
@@ -87,6 +142,7 @@ class _PendingRequest:
     result: Optional[Dict[str, Any]] = None
     error: Optional[PiCopilotError] = None
     process: Optional[subprocess.Popen[str]] = None
+    host_tools: _HostToolClock = field(default_factory=_HostToolClock)
 
 
 class PiGatewayClient:
@@ -621,11 +677,13 @@ class PiGatewayClient:
                 expected_process=expected_process, require_ready=require_ready,
                 deadline=deadline,
             )
-            wait_timeout = (
-                self._remaining_before_deadline(deadline)
-                if deadline is not None else max(0.1, float(timeout))
-            )
-            if not pending.done.wait(timeout=wait_timeout):
+            if deadline is not None:
+                completed = pending.done.wait(
+                    timeout=self._remaining_before_deadline(deadline)
+                )
+            else:
+                completed = self._wait_outside_host_tools(pending, timeout)
+            if not completed:
                 if method == "session.prompt":
                     session_id = str((params or {}).get("session_id") or "")
                     if session_id:
@@ -644,6 +702,20 @@ class PiGatewayClient:
         finally:
             with self._pending_lock:
                 self._pending.pop(request_id, None)
+
+    @staticmethod
+    def _wait_outside_host_tools(pending: _PendingRequest, timeout: float) -> bool:
+        """Wait for the response; the request's own host tools pause its budget."""
+
+        budget = max(0.1, float(timeout))
+        started = pending.host_tools.now()
+        while True:
+            now = pending.host_tools.now()
+            remaining = budget - (now - started) + pending.host_tools.seconds(now)
+            if remaining <= 0:
+                return pending.done.is_set()
+            if pending.done.wait(timeout=remaining):
+                return True
 
     def _recover_timed_out_prompt(self, session_id: str) -> None:
         """Best-effort stop and state refresh after the host prompt deadline."""
@@ -906,8 +978,10 @@ class PiGatewayClient:
             return self._tool_executor(tool_name, tool_arguments, tool_context)
 
         def respond(outcome: HostToolOutcome) -> None:
+            pending.host_tools.finish(request_id)
             self._write_tool_outcome(request_id, outcome)
 
+        pending.host_tools.start(request_id)
         try:
             dispatcher.submit(
                 session_id=session_id,
@@ -917,6 +991,7 @@ class PiGatewayClient:
                 respond=respond,
             )
         except HostToolDispatchRejected as exc:
+            pending.host_tools.finish(request_id)
             self._send_tool_error(request_id, exc.code, exc.message)
 
     def _write_tool_outcome(
