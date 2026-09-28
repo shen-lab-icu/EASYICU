@@ -152,7 +152,7 @@ class _AumcSource:
         )
 
 
-def test_dispatcher_uses_larger_aumc_fluid_or_solution_total():
+def test_aumc_fluidin_already_includes_solution_total():
     frame = pd.DataFrame(
         {
             "admissionid": [9],
@@ -162,16 +162,17 @@ def test_dispatcher_uses_larger_aumc_fluid_or_solution_total():
             "solutionadministered": [120.0],
         }
     )
-    source = ConceptSource.from_mapping(
-        {
-            "table": "drugitems",
-            "val_var": "fluidin",
-            "index_var": "start",
-            "callback": "distribute_volume_hourly",
-            "end_var": "stop",
-            "alternate_value_var": "solutionadministered",
-        }
+    dictionary_path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "easyicu"
+        / "data"
+        / "concept-dict.json"
     )
+    source_mapping = json.loads(dictionary_path.read_text(encoding="utf-8"))[
+        "total_input_ml"
+    ]["sources"]["aumc"][0]
+    source = ConceptSource.from_mapping(source_mapping)
 
     result = _apply_callback(
         frame,
@@ -181,7 +182,43 @@ def test_dispatcher_uses_larger_aumc_fluid_or_solution_total():
     )
 
     assert result["charttime"].tolist() == [1000.0]
-    assert result["total_input_ml"].tolist() == [120.0]
+    assert result["total_input_ml"].tolist() == [100.0]
+
+
+def test_aumc_fluidin_ml_is_not_filtered_by_drug_dose_unit():
+    dictionary_path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "easyicu"
+        / "data"
+        / "concept-dict.json"
+    )
+    source_mapping = json.loads(dictionary_path.read_text(encoding="utf-8"))[
+        "total_input_ml"
+    ]["sources"]["aumc"][0]
+    source = ConceptSource.from_mapping(source_mapping)
+    assert source.params["value_unit"] == "mL"
+
+    frame = pd.DataFrame(
+        {
+            "admissionid": [9, 9],
+            "start": [1000.0, 1060.0],
+            "stop": [1060.0, 1120.0],
+            "total_input_ml": [100.0, 75.0],
+            "solutionadministered": [80.0, 50.0],
+            "doseunit": ["mg", "ml"],
+        }
+    )
+    result = _apply_callback(
+        frame,
+        source,
+        concept_name="total_input_ml",
+        unit_column="doseunit",
+        data_source=_AumcSource(),
+    )
+
+    assert result["charttime"].tolist() == [1000.0, 1060.0]
+    assert result["total_input_ml"].tolist() == [100.0, 75.0]
 
 
 def test_loader_preserves_canonical_time_metadata_after_callback_renames_index():
@@ -310,7 +347,8 @@ def test_total_input_dictionary_declares_interval_semantics():
     for database in ("miiv", "mimic", "mimic_demo"):
         assert sources[database][0]["unit_var"] == "amountuom"
 
-    assert sources["aumc"][0]["alternate_value_var"] == "solutionadministered"
+    assert sources["aumc"][0]["value_unit"] == "mL"
+    assert "alternate_value_var" not in sources["aumc"][0]
 
 
 def test_cumulative_balance_starts_at_hour_zero_without_hidden_prehistory():
