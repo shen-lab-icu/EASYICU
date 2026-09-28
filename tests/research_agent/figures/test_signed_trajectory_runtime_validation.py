@@ -23,6 +23,7 @@ from easyicu.research_agent.schema import (
     ValidationFinding,
 )
 from easyicu.research_agent.trajectory.runtime_validation import (
+    SIGNED_TRAJECTORY_FIGURE_INPUTS,
     signed_trajectory_runtime_bundle_errors,
 )
 
@@ -93,10 +94,7 @@ def _plan() -> AnalysisPlan:
                     "step_id": "04_figure",
                     "planned_analysis_role": "auxiliary",
                     "intent": "Render the signed selection diagnostic.",
-                    "inputs": [
-                        "table:trajectory_candidate_selection",
-                        "table:feature_availability",
-                    ],
+                    "inputs": list(SIGNED_TRAJECTORY_FIGURE_INPUTS),
                     "expected_outputs": ["figure:trajectory_selection_diagnostics"],
                     "method": "signed_trajectory_selection_diagnostic_figure",
                     "icu_rule_refs": [rule],
@@ -258,6 +256,47 @@ def test_signed_boundary_optimum_is_a_validated_non_solution(tmp_path: Path) -> 
     assert gates["execution_complete"] is True
     assert gates["analysis_validated"] is True
     assert gates["paper_authorized"] is False
+
+
+def test_a_host_cohort_figure_beside_the_owners_does_not_change_the_bundle(
+    tmp_path: Path,
+) -> None:
+    """Owner receipts are matched by method, not by position in the plan."""
+
+    plan = _plan()
+    records = _records(tmp_path, plan)
+    representation = plan.steps[0].model_copy(
+        update={
+            "expected_outputs": [
+                *plan.steps[0].expected_outputs,
+                "table:cohort_flow",
+            ]
+        }
+    )
+    cohort_figure = plan.steps[3].model_copy(
+        update={
+            "step_id": "05_cohort_accounting_figure",
+            "method": "visualization",
+            "intent": "Render the cohort ledger.",
+            "inputs": ["table:cohort_flow"],
+            "expected_outputs": ["figure:cohort_flow"],
+            "icu_rule_refs": [],
+        }
+    )
+    shaped = plan.model_copy(
+        update={
+            "steps": [cohort_figure, representation, *plan.steps[1:]],
+        }
+    )
+
+    assert signed_trajectory_runtime_bundle_errors(
+        plan=shaped, records=records, run_dir=tmp_path
+    ) == []
+    tampered = deepcopy(records)
+    tampered[2]["step_summary"]["outcome_binding_received_by_executor"] = True
+    assert signed_trajectory_runtime_bundle_errors(
+        plan=shaped, records=tampered, run_dir=tmp_path
+    ) == ["signed trajectory failed-closed decision is incoherent"]
 
 
 def test_signed_trajectory_non_solution_tampering_fails_closed(tmp_path: Path) -> None:

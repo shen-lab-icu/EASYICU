@@ -22,6 +22,11 @@ from .plan_contract import (
     TRAJECTORY_STABILITY_CHARACTERIZATION_METHOD_HEAD,
     trajectory_step_roles,
 )
+from .runtime_validation import (
+    SIGNED_TRAJECTORY_CANDIDATE_INPUTS,
+    SIGNED_TRAJECTORY_FIGURE_INPUTS,
+    SIGNED_TRAJECTORY_STABILITY_INPUTS,
+)
 
 #: Exact panels of the signed selection-diagnostics renderer
 #: (``execution/runners/trajectory_selection_figure_executor.py``): the
@@ -254,10 +259,7 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
                         "step_id": candidate_id,
                         "planned_analysis_role": "primary",
                         "intent": "Fit every signed candidate and select by BIC.",
-                        "inputs": [
-                            "artifact:trajectory_representation",
-                            "manifest:trajectory_representation_schema",
-                        ],
+                        "inputs": list(SIGNED_TRAJECTORY_CANDIDATE_INPUTS),
                         "expected_outputs": [
                             "artifact:candidate_cluster_assignments",
                             "manifest:cluster_selection",
@@ -271,13 +273,7 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
                         "step_id": stability_id,
                         "planned_analysis_role": "auxiliary",
                         "intent": "Execute the signed stability design.",
-                        "inputs": [
-                            "artifact:trajectory_representation",
-                            "artifact:candidate_cluster_assignments",
-                            "manifest:cluster_selection",
-                            "manifest:trajectory_representation_schema",
-                            "manifest:candidate_cluster_solution_schema",
-                        ],
+                        "inputs": list(SIGNED_TRAJECTORY_STABILITY_INPUTS),
                         "expected_outputs": sorted(
                             STABILITY_CHARACTERIZATION_EXECUTOR_OUTPUTS
                         ),
@@ -295,13 +291,7 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
                             "availability without presenting candidate labels as "
                             "validated phenotypes."
                         ),
-                        "inputs": [
-                            "table:trajectory_candidate_selection",
-                            "table:feature_availability",
-                            "table:trajectory_profiles",
-                            "table:cluster_sizes",
-                            "table:cluster_stability",
-                        ],
+                        "inputs": list(SIGNED_TRAJECTORY_FIGURE_INPUTS),
                         "expected_outputs": [
                             "figure:trajectory_selection_diagnostics",
                             "figure:trajectory_phenotype_characterization",
@@ -472,14 +462,7 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
                 figure.step_id
                 != "03_authority_compiled_trajectory_selection_figure"
                 or figure.method != "signed_trajectory_selection_diagnostic_figure"
-                or tuple(figure.inputs)
-                != (
-                    "table:trajectory_candidate_selection",
-                    "table:feature_availability",
-                    "table:trajectory_profiles",
-                    "table:cluster_sizes",
-                    "table:cluster_stability",
-                )
+                or tuple(figure.inputs) != SIGNED_TRAJECTORY_FIGURE_INPUTS
                 or tuple(figure.expected_outputs)
                 != (
                     "figure:trajectory_selection_diagnostics",

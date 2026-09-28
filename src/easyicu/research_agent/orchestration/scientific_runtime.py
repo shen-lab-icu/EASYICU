@@ -167,6 +167,43 @@ def _compile_current_case_plan(
     return bound, spec
 
 
+def _carry_owner_literature(
+    *, draft: AnalysisPlan, bound: AnalysisPlan
+) -> tuple[AnalysisPlan, list[str]]:
+    """Keep the sources a draft bound to each signed owner.
+
+    The projection owns every scientific coordinate. The draft contributes only
+    the citations, and their typed design bindings, that justify the owner it
+    named; the review requires them on the primary step. A method the draft
+    uses more than once is ambiguous, so its citations are not moved.
+    """
+
+    by_method: dict[str, list[Any]] = {}
+    for step in draft.steps:
+        by_method.setdefault(str(step.method or "").strip(), []).append(step)
+    steps = []
+    carried: list[str] = []
+    for step in bound.steps:
+        sources = by_method.get(str(step.method or "").strip(), [])
+        if len(sources) == 1 and sources[0].literature_citation_keys:
+            source = sources[0]
+            step = type(step).model_validate(
+                {
+                    **step.model_dump(mode="python"),
+                    "literature_citation_keys": list(source.literature_citation_keys),
+                    "literature_design_bindings": [
+                        binding.model_dump(mode="python")
+                        for binding in source.literature_design_bindings
+                    ],
+                }
+            )
+            carried.append(step.step_id)
+        steps.append(step)
+    if not carried:
+        return bound, []
+    return bound.model_copy(update={"steps": steps}), carried
+
+
 def _compilation_finding(
     authority: CurrentCaseScientificRuntimeAuthority,
     plan: AnalysisPlan,
@@ -350,9 +387,13 @@ class ScientificRuntimeAuthorities:
             # A Planner draft that names the signed owners is compiled the
             # same way as the development projection: every scientific
             # coordinate comes from the digest-bound authority, never from
-            # the draft's inputs, outputs or prose.
-            bound = trajectory_authority.development_execution_only_plan(
-                research_question=plan.research_question
+            # the draft's inputs, outputs or prose. Only the sources the
+            # draft bound to each owner are kept.
+            bound, literature_step_ids = _carry_owner_literature(
+                draft=plan,
+                bound=trajectory_authority.development_execution_only_plan(
+                    research_question=plan.research_question
+                ),
             )
             return bound, [
                 ValidationFinding(
@@ -367,6 +408,7 @@ class ScientificRuntimeAuthorities:
                             "trajectory_development_execution_only_authority_compiled"
                         ),
                         "step_ids": [step.step_id for step in bound.steps],
+                        "literature_carried_step_ids": literature_step_ids,
                         "execution_contract_sha256": (
                             trajectory_authority.execution_contract_sha256
                         ),
