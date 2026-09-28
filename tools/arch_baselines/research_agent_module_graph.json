@@ -5465,6 +5465,10 @@
     ],
     [
       "easyicu.research_agent.execution.runners.deterministic_robustness",
+      "easyicu.research_agent.authority.step_capsule"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.deterministic_robustness",
       "easyicu.research_agent.canonical_json"
     ],
     [
@@ -13036,7 +13040,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3251,
+    "edge_count": 3252,
     "largest_scc_size": 0,
     "module_count": 762,
     "package_count": 36,
