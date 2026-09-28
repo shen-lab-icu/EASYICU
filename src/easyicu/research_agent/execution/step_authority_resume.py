@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, Mapping, MutableMapping, Optional, Sequence
 
 from ..authority.coder_authority import HostCoderAuthority
 from ..authority.evidence_store import sha256_of_file
@@ -43,6 +43,13 @@ from ..orchestration.resume import (
 from .concept_audit import (
     verified_capsule_concept_audit_replay as _verified_capsule_concept_audit_replay,
 )
+
+
+#: Set on an explicit retry whose failed candidate was sealed under another
+#: research-agent engine than the one retrying it.
+EXPLICIT_RETRY_ENGINE_CHANGED = "explicit_failed_execution_retry_engine_changed"
+#: Set when that retry runs the host's regenerated code instead of the candidate.
+EXPLICIT_RETRY_HOST_REGENERATED = "explicit_failed_execution_retry_host_regenerated"
 
 
 @dataclass(frozen=True)
@@ -219,6 +226,8 @@ def _select_resume_candidate(
     # startup failure; replaying that capsule after the runtime is repaired
     # makes the product's "retry from failed step" action a no-op.  Successful
     # execution followed by a later contract/audit failure remains replayable.
+    # When the engine changed since the candidate was sealed, code the host
+    # owns is generated again instead (``explicit_retry_host_owned_code``).
     selected = step_attempt_state.selected_resume_capsule
     execution = selected.capsule.execution if selected is not None else None
     if (
@@ -232,6 +241,8 @@ def _select_resume_candidate(
         )
     ):
         step_record["explicit_failed_execution_retry"] = True
+        if selected.capsule.engine_code_sha256 != request.engine_code_sha256:
+            step_record[EXPLICIT_RETRY_ENGINE_CHANGED] = True
 
 
 def _recover_pending_repair(
@@ -512,7 +523,38 @@ def prepare_step_authority_resume(
     return coder_context
 
 
+def explicit_retry_host_owned_code(
+    step_record: MutableMapping[str, Any],
+    host_owned_code: Iterable[Callable[[], Optional[str]]],
+) -> Optional[str]:
+    """The host's own code for an explicit retry under a changed engine.
+
+    An explicit retry of a failed execution reruns the failed candidate's
+    exact bytes, which is what a runtime or image repair needs.  When the
+    research-agent engine changed since that candidate was sealed, a step
+    whose code the host generates is generated again instead, so the host fix
+    reaches the step; a model repair of the old host code is not replayed.
+    ``host_owned_code`` are the step's deterministic generators in preflight
+    order.  A step none of them owns keeps its candidate.
+    """
+
+    if not (
+        step_record.get("explicit_failed_execution_retry")
+        and step_record.get(EXPLICIT_RETRY_ENGINE_CHANGED)
+    ):
+        return None
+    for generate in host_owned_code:
+        code = generate()
+        if code is not None:
+            step_record[EXPLICIT_RETRY_HOST_REGENERATED] = True
+            return code
+    return None
+
+
 __all__ = [
+    "EXPLICIT_RETRY_ENGINE_CHANGED",
+    "EXPLICIT_RETRY_HOST_REGENERATED",
     "StepAuthorityResumeRequest",
+    "explicit_retry_host_owned_code",
     "prepare_step_authority_resume",
 ]

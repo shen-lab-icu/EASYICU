@@ -161,11 +161,24 @@ def earns_fresh_budget(
     return bool(used) and all(current.changes_since(identity) for identity in used)
 
 
-def checkpoint_capsule_identity(run_dir: Path, step_id: str) -> Optional[AttemptIdentity]:
-    """The identity the step's checkpoint-selected capsule ran on, if readable."""
+def checkpoint_capsule_identity(
+    run_dir: Path,
+    step_id: str,
+    *,
+    checkpoint: Optional[Mapping[str, Any]] = None,
+) -> Optional[AttemptIdentity]:
+    """The identity the step's checkpoint-selected capsule ran on, if readable.
+
+    ``checkpoint`` is the checkpoint a resume started from.  A resumed run
+    flushes a ledger of only the records it restored, so once it is retrying a
+    failed step the newest checkpoint on disk no longer selects that step's
+    capsule; the resume's own checkpoint still does.
+    """
 
     try:
-        verified = load_checkpoint_selected_step_capsule(run_dir, step_id=step_id)
+        verified = load_checkpoint_selected_step_capsule(
+            run_dir, step_id=step_id, checkpoint=checkpoint
+        )
     except (StepAuthorityRuntimeError, RunArtifactAuthorityError):
         return None
     if verified is None:
@@ -425,6 +438,7 @@ def select_budget_epoch(
     attempt_id: str,
     reserved_final_category: Optional[str],
     commit: bool,
+    checkpoint: Optional[Mapping[str, Any]] = None,
 ) -> BudgetEpoch:
     """Choose the epoch a new attempt of ``step_id`` spends from.
 
@@ -434,7 +448,9 @@ def select_budget_epoch(
     every identity already granted or used, and only when the identity the
     original budget was spent under can be proved.  With ``commit`` the grant
     is written to the ledger before anything spends from it; without it (a
-    read-only assessment) nothing is written.
+    read-only assessment) nothing is written.  ``checkpoint`` is the resume's
+    own checkpoint, which selects the failed capsule whose identity the
+    original budget was spent under.
     """
 
     run_dir = Path(run_dir)
@@ -459,7 +475,9 @@ def select_budget_epoch(
     if grants:
         epoch_zero_identity: Optional[AttemptIdentity] = grants[0].superseded_identity
     elif explicit_rerun or not commit:
-        epoch_zero_identity = checkpoint_capsule_identity(run_dir, step_id)
+        epoch_zero_identity = checkpoint_capsule_identity(
+            run_dir, step_id, checkpoint=checkpoint
+        )
     else:
         epoch_zero_identity = None
     used: list[AttemptIdentity] = []

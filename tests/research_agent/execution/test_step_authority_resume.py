@@ -36,7 +36,9 @@ def test_explicit_resume_reruns_failed_execution_capsule(
     execution,
     requires_rerun: bool,
 ) -> None:
-    selected = SimpleNamespace(capsule=SimpleNamespace(execution=execution))
+    selected = SimpleNamespace(
+        capsule=SimpleNamespace(execution=execution, engine_code_sha256="e" * 64)
+    )
     monkeypatch.setattr(
         step_authority_resume,
         "load_checkpoint_selected_step_capsule",
@@ -53,6 +55,7 @@ def test_explicit_resume_reruns_failed_execution_capsule(
         prior_attempt_records=(),
         step_attempt_state=state,
         step_record=record,
+        engine_code_sha256="e" * 64,
     )
 
     step_authority_resume._select_resume_candidate(
