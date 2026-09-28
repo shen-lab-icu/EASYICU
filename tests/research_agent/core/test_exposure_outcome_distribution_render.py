@@ -625,6 +625,137 @@ def test_tampered_patient_cluster_uncertainty_is_refused(
         _render(run_dir, manifest, tmp_path / "out")
 
 
+_STAYS = ["p01:s1", "p01:s2", "p02:s1", "p02:s2", "p03:s1", "p03:s2", "p04:s1", "p04:s2"]
+
+
+def _clustered_table(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    derivation: str = "prefix_before_delimiter",
+    delimiter: str | None = ":s",
+    contrast: bool = False,
+) -> Path:
+    """A repeated-stay cohort: the host binds patient grouping to its table."""
+
+    keys = (
+        _STAYS
+        if derivation == "prefix_before_delimiter"
+        else [stay.split(":")[0] for stay in _STAYS]
+    )
+    frame = pd.DataFrame(
+        {
+            EXPOSURE: [0, 0, 1, 1, 0, 1, 0, 1],
+            OUTCOME: [0, 1, 0, 1, 0, 1, 1, 1],
+            "stay_key": keys,
+        }
+    )
+    spec_updates: dict = {
+        "dependence": {
+            "variance_estimator": "cluster_robust",
+            "cluster_unit": "patient",
+            "group_source": "stay_key",
+            "group_derivation": derivation,
+            "delimiter": delimiter,
+        }
+    }
+    if contrast:
+        spec_updates["risk_difference_contrast"] = {
+            "reference_exposure_level": 0,
+            "comparison_exposure_level": 1,
+        }
+    return _produced_table(
+        tmp_path, monkeypatch, frame=frame, spec_updates=spec_updates
+    )
+
+
+@pytest.mark.parametrize(
+    ("derivation", "delimiter"),
+    [("prefix_before_delimiter", ":s"), ("identity", None)],
+)
+def test_patient_cluster_intervals_render_without_a_declared_contrast(
+    tmp_path: Path, monkeypatch, derivation: str, delimiter: str | None
+) -> None:
+    """A descriptive table on repeated stays carries the grouping and no contrast.
+
+    The grouping governs every marginal interval, so the renderer re-derives
+    those intervals under it rather than asking for a contrast to justify it.
+    """
+
+    table = _clustered_table(
+        tmp_path, monkeypatch, derivation=derivation, delimiter=delimiter
+    )
+    produced = pd.read_csv(table)
+    assert produced["risk_difference_effect_measure"].isna().all()
+    assert (produced["dependence_cluster_unit"] == "patient").all()
+    run_dir, manifest = _bound(tmp_path, table)
+    out = tmp_path / "out"
+
+    summary = _render(run_dir, manifest, out)
+
+    assert summary["declared_design"]["interval_method"] == (
+        "patient_cluster_robust_wald"
+    )
+    assert not (out / f"{PRODUCT}_risk_difference_source_data.csv").exists()
+    contract = json.loads((out / f"{PRODUCT}.figure_contract.json").read_text())
+    caption = contract["reader_caption"]
+    assert "patient-cluster-robust Wald confidence intervals" in caption
+    assert "risk difference" not in caption
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "message"),
+    [
+        ("dependence_variance_estimator", None, "closed patient grouping design"),
+        ("dependence_cluster_unit", "hospital", "closed patient grouping design"),
+        ("dependence_group_source", None, "closed patient grouping design"),
+        (
+            "dependence_group_derivation",
+            "suffix_after_delimiter",
+            "closed patient grouping design",
+        ),
+        ("dependence_delimiter", None, "delimiter contradicts"),
+        ("dependence_group_derivation", "identity", "delimiter contradicts"),
+    ],
+)
+def test_a_partial_patient_grouping_declaration_is_refused(
+    tmp_path: Path, monkeypatch, column: str, value: object, message: str
+) -> None:
+    table = _clustered_table(tmp_path, monkeypatch)
+    produced = pd.read_csv(table)
+    produced[column] = value
+    produced.to_csv(table, index=False)
+    run_dir, manifest = _bound(tmp_path, table)
+
+    with pytest.raises(ValueError, match=message):
+        _render(run_dir, manifest, tmp_path / "out")
+
+
+def test_a_grouping_field_on_an_independent_table_is_refused(
+    tmp_path: Path, monkeypatch
+) -> None:
+    def mutate(frame: pd.DataFrame) -> None:
+        frame["dependence_cluster_unit"] = "patient"
+
+    run_dir, manifest = _tampered(tmp_path, monkeypatch, mutate)
+    with pytest.raises(ValueError, match="closed patient grouping design"):
+        _render(run_dir, manifest, tmp_path / "out")
+
+
+def test_an_hc1_contrast_on_a_patient_grouped_table_is_refused(
+    tmp_path: Path, monkeypatch
+) -> None:
+    table = _clustered_table(tmp_path, monkeypatch, contrast=True)
+    produced = pd.read_csv(table)
+    produced["risk_difference_covariance"] = "hc1"
+    produced["risk_difference_cluster_count"] = None
+    produced.to_csv(table, index=False)
+    run_dir, manifest = _bound(tmp_path, table)
+
+    with pytest.raises(ValueError, match="HC1 contrast carries contradictory"):
+        _render(run_dir, manifest, tmp_path / "out")
+
+
 # --------------------------------------------------------------------------
 # What must fail closed: the binding
 # --------------------------------------------------------------------------
