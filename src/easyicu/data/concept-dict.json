@@ -15304,11 +15304,10 @@
      "val_var": "fluidin",
      "index_var": "start",
      "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
      "end_var": "stop",
-     "alternate_value_var": "solutionadministered",
      "extra_vars": [
-      "stop",
-      "solutionadministered"
+      "stop"
      ]
     }
    ],

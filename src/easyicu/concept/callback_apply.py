@@ -3457,7 +3457,15 @@ def _apply_callback(
                 axis=1,
             ).max(axis=1, skipna=True)
 
-        volume_unit_col = source.unit_var or unit_column
+        # Some source values are already volumes in mL even when the table's
+        # default unit column describes a different quantity. AmsterdamUMCdb
+        # drugitems.fluidin is mL; drugitems.doseunit is the prescribed dose
+        # unit (often mg), so applying it to fluidin silently drops fluids.
+        # https://github.com/AmsterdamUMC/AmsterdamUMCdb/wiki/drugitems
+        value_unit = params.get("value_unit")
+        if value_unit not in (None, "mL"):
+            raise ValueError(f"Unsupported volume value_unit: {value_unit!r}")
+        volume_unit_col = None if value_unit == "mL" else source.unit_var or unit_column
         if volume_unit_col and volume_unit_col in frame.columns:
             frame = frame.copy()
             frame[concept_name] = normalize_volume_to_ml(
