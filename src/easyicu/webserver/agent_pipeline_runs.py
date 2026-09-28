@@ -4313,8 +4313,29 @@ class _ExecutionResumeInputs:
     scientific_identity: Dict[str, Any]
 
 
+def _execution_retry_source_dir(wrapper_dir: Path, file_name: str) -> Path:
+    """The declared input directory holding an approved run's source authority.
+
+    A run normally declares the input it materialized under its own wrapper.
+    A fresh plan revision instead declares the prepared input of the run it
+    revises, in that run's wrapper, and its capsule keeps only the source
+    authority's content-addressed name and digest.  That name is looked up in
+    the wrapper's own input directory first, then in the other run wrappers
+    of the same study, never beyond it; the caller verifies the digest.
+    """
+
+    own = wrapper_dir / "pipeline_input"
+    if (own / file_name).is_file():
+        return own
+    for sibling in sorted(wrapper_dir.parent.iterdir()):
+        candidate = sibling / "pipeline_input"
+        if sibling != wrapper_dir and (candidate / file_name).is_file():
+            return candidate
+    return own
+
+
 def _execution_retry_source_cohort(
-    source_dir: Path, raw_ref: Any
+    wrapper_dir: Path, raw_ref: Any
 ) -> tuple[Path, Path, Dict[str, Any]]:
     """The typed source cohort the approved run declared, verified again."""
 
@@ -4327,6 +4348,7 @@ def _execution_retry_source_cohort(
 
     try:
         ref = MaterializedCohortAuthorityRef.from_dict(raw_ref)
+        source_dir = _execution_retry_source_dir(wrapper_dir, ref.file)
         authority_path = source_dir / ref.file
         authority = MaterializedCohortAuthority.from_dict(
             json.loads(authority_path.read_text(encoding="utf-8"))
@@ -4349,7 +4371,7 @@ def _execution_retry_source_cohort(
 
 
 def _execution_retry_source_trajectory(
-    source_dir: Path, raw_ref: Any
+    wrapper_dir: Path, raw_ref: Any
 ) -> tuple[Path, Path, Dict[str, Any]]:
     """The typed source trajectory the approved run declared, verified again."""
 
@@ -4362,6 +4384,7 @@ def _execution_retry_source_trajectory(
 
     try:
         ref = MaterializedTrajectoryAuthorityRef.from_dict(raw_ref)
+        source_dir = _execution_retry_source_dir(wrapper_dir, ref.file)
         authority_path = source_dir / ref.file
         authority = MaterializedTrajectoryAuthority.from_dict(
             json.loads(authority_path.read_text(encoding="utf-8"))
@@ -4418,11 +4441,10 @@ def _verified_execution_resume_inputs(
     # declares those sources again, exactly as the approved run did, and the
     # pipeline proves each staged copy still descends from its source.  The
     # staged copy's own authority can never pass that proof.
-    source_dir = target.wrapper_dir / "pipeline_input"
     if isinstance(capsule, RunInputCapsuleV2):
         cohort_path, cohort_authority_path, cohort_authority_ref = (
             _execution_retry_source_cohort(
-                source_dir,
+                target.wrapper_dir,
                 scientific_identity.get("materialized_cohort_authority_ref"),
             )
         )
@@ -4437,7 +4459,7 @@ def _verified_execution_resume_inputs(
     if isinstance(capsule, RunInputCapsuleV3):
         trajectory_path, trajectory_authority_path, trajectory_authority_ref = (
             _execution_retry_source_trajectory(
-                source_dir,
+                target.wrapper_dir,
                 scientific_identity.get(
                     "materialized_trajectory_authority_ref"
                 ),
