@@ -21,6 +21,7 @@ from ..planning.progressive_contract import (
     ProgressivePlanSkeleton,
     ProgressiveStepMaterialization,
     ProgressiveSuffixRevision,
+    STUDY_COHORT_SCOPE,
     progressive_module_ids_for_analysis_types,
 )
 from ..providers.protocol import StructuredOutputRequest
@@ -33,6 +34,52 @@ from ..providers.strict_json_schema import (
 
 class ProgressiveTransportSchemaError(ValueError):
     """The run-bound progressive schema drifted from its contract model."""
+
+
+def _strip_enum_value(node: Any, value: str) -> None:
+    if isinstance(node, dict):
+        enum = node.get("enum")
+        if isinstance(enum, list) and value in enum:
+            node["enum"] = [item for item in enum if item != value]
+        for child in node.values():
+            _strip_enum_value(child, value)
+    elif isinstance(node, list):
+        for child in node:
+            _strip_enum_value(child, value)
+
+
+def _without_host_population_scopes(schema: Any) -> Any:
+    """Keep the host-only study-cohort scope out of every provider schema.
+
+    Only a host template publishes the study population; the Planner's schema
+    stays exactly what it was before that scope existed.
+    """
+
+    if isinstance(schema, dict):
+        for key, value in schema.items():
+            if key == "population_scope":
+                _strip_enum_value(value, STUDY_COHORT_SCOPE)
+            else:
+                _without_host_population_scopes(value)
+    elif isinstance(schema, list):
+        for item in schema:
+            _without_host_population_scopes(item)
+    return schema
+
+
+def _reject_host_population_scope(payload: Any) -> None:
+    """A provider response may not claim the host-only study-cohort scope."""
+
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key == "population_scope" and value == STUDY_COHORT_SCOPE:
+                raise ValueError(
+                    "population_scope=study_cohort is published only by a host template"
+                )
+            _reject_host_population_scope(value)
+    elif isinstance(payload, list):
+        for item in payload:
+            _reject_host_population_scope(item)
 
 
 _TYPED_PRODUCT_TOKEN = re.compile(
@@ -139,6 +186,7 @@ def parse_progressive_model(raw: str, model: type[Any]) -> Any:
     if not isinstance(payload, dict):
         raise ValueError("progressive Planner response root must be an object")
     payload = _without_host_term_fields(payload)
+    _reject_host_population_scope(payload)
     if model is ProgressivePlanOutline:
         payload = _canonicalize_outline_coordinates(payload)
     parsed = model.model_validate(payload)
@@ -320,6 +368,7 @@ def parse_progressive_step_materialization(
         # Host-compiled modules advertise outputs.maxItems=0. Provider output
         # aliases cannot extend that exact owner roster.
         payload = {**payload, "step": {**step, "outputs": []}}
+    _reject_host_population_scope(payload)
     materialization = ProgressiveStepMaterialization.model_validate(payload)
     if materialization.step.module_id == "absolute_risk_context" and materialization.step.population_scope is None:
         raise ValueError("absolute_risk_context requires an explicit population_scope: analysis_cohort or primary_model")
@@ -1155,7 +1204,9 @@ def progressive_outline_structured_output_request(
         raise ProgressiveTransportSchemaError(
             "progressive outline transport requires analysis-type and variable rosters"
         )
-    schema = copy.deepcopy(ProgressivePlanOutline.model_json_schema(mode="validation"))
+    schema = _without_host_population_scopes(
+        copy.deepcopy(ProgressivePlanOutline.model_json_schema(mode="validation"))
+    )
     definitions = schema.get("$defs")
     if not isinstance(definitions, dict):
         raise ProgressiveTransportSchemaError("progressive outline schema has no $defs")
@@ -1374,8 +1425,8 @@ def progressive_step_materialization_request(
         coordinate = (producer_id, product_id)
         if coordinate not in normalized_products:
             normalized_products.append(coordinate)
-    schema = copy.deepcopy(
-        ProgressiveStepMaterialization.model_json_schema(mode="validation")
+    schema = _without_host_population_scopes(
+        copy.deepcopy(ProgressiveStepMaterialization.model_json_schema(mode="validation"))
     )
     definitions = schema.get("$defs")
     if not isinstance(definitions, dict):
@@ -1451,7 +1502,9 @@ def _request_cached(
     know_how_authority: tuple[tuple[str, str, str, str, tuple[str, ...]], ...],
 ) -> StructuredOutputRequest:
     model = ProgressivePlanSkeleton if kind == "initial" else ProgressiveSuffixRevision
-    schema = copy.deepcopy(model.model_json_schema(mode="validation"))
+    schema = _without_host_population_scopes(
+        copy.deepcopy(model.model_json_schema(mode="validation"))
+    )
     definitions = schema.get("$defs")
     if not isinstance(definitions, dict):
         raise ProgressiveTransportSchemaError("progressive schema has no $defs")

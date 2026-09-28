@@ -90,6 +90,7 @@ from ..planning.progressive_contract import (
     ProgressivePlannerCheckpoint,
     ProgressivePlanSkeleton,
     ProgressiveStepMaterialization,
+    duplicated_host_singletons,
     outline_step_products,
     progressive_module_ids_for_analysis_types,
     validate_primary_population_owner,
@@ -2110,8 +2111,8 @@ class ProgressivePlannerAgent:
             from ..planning.population_requirements import validate_population_choice
 
             for step_index, step in enumerate(outline.steps):
-                if step.population_scope is None:
-                    continue  # Legacy restored outlines have no typed choice.
+                if step.population_scope is None or step.module_id != "absolute_risk_context":
+                    continue  # Legacy outlines have no typed choice; only absolute risk is sourced.
                 try:
                     validate_population_choice(
                         article_context, product="table:absolute_risk_context",
@@ -2313,15 +2314,7 @@ class ProgressivePlannerAgent:
                     path="steps",
                     findings=({"required_article_roles": missing_roles},),
                 )
-        singleton_owners: dict[str, list[str]] = {}
-        for step in outline.steps:
-            if step.module_id in PROGRESSIVE_HOST_COMPILED_OUTPUTS:
-                singleton_owners.setdefault(step.module_id, []).append(step.step_id)
-        duplicated_singletons = {
-            module_id: step_ids
-            for module_id, step_ids in singleton_owners.items()
-            if len(step_ids) > 1
-        }
+        duplicated_singletons = duplicated_host_singletons(outline.steps)
         if duplicated_singletons:
             findings = tuple(
                 {
@@ -2330,7 +2323,7 @@ class ProgressivePlannerAgent:
                     "host_products": [
                         product_id
                         for product_id, _role in PROGRESSIVE_HOST_COMPILED_OUTPUTS[
-                            module_id
+                            module_id.partition(":")[0]
                         ]
                     ],
                 }

@@ -15,6 +15,10 @@ from typing import Any, Literal, Mapping, Optional, Sequence
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ...canonical_json import canonical_sha256
+from ...contracts.primary_cohort import (
+    STUDY_POPULATION_PRODUCTS,
+    study_population_product_for,
+)
 from ..adjustment_authority import HostTemporalRole
 from ..design_selection import ResearchDesignCandidate
 from ..progressive_contract import ModelTermCoding
@@ -253,6 +257,44 @@ class SealedFeasibilityCoordinates(BaseModel):
         return self
 
 
+class StudyPopulationOccurrence(BaseModel):
+    """How often the exposure occurs in the population the study selected.
+
+    A landmark primary analysis keeps only the stays alive and observed at the
+    landmark, so it cannot say how often the exposure occurs among all the
+    stays the study selected.  When the question asks for that, the host seals
+    this coordinate and the template estimates it on the run's study cohort,
+    republished unchanged under ``product_id``.  The missing-value policies
+    follow the sealed variables' known missingness.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    product_id: str
+    requested_cues: list[str] = Field(min_length=1, max_length=32)
+    denominator_policy: Literal["all_declared_rows", "observed_outcome_rows"]
+    missing_exposure_policy: Literal["fail_closed", "exclude_from_denominator"]
+    missing_outcome_policy: Literal["fail_closed", "exclude_from_denominator"]
+
+    @field_validator("product_id")
+    @classmethod
+    def _study_population_product(cls, value: str) -> str:
+        if value not in STUDY_POPULATION_PRODUCTS:
+            raise ValueError("the occurrence reads a host study-population product")
+        return value
+
+    @model_validator(mode="after")
+    def _denominator_follows_outcome_policy(self) -> "StudyPopulationOccurrence":
+        if (self.missing_outcome_policy == "exclude_from_denominator") != (
+            self.denominator_policy == "observed_outcome_rows"
+        ):
+            raise ValueError(
+                "rows without an observed outcome leave the denominator exactly "
+                "when it counts observed-outcome rows"
+            )
+        return self
+
+
 class FamilySpecRequest(BaseModel):
     """Sealed host authority for one family-spec planning attempt."""
 
@@ -327,6 +369,11 @@ class FamilySpecRequest(BaseModel):
     comparison_literature_keys: list[str] = Field(default_factory=list)
     comparator_titles: dict[str, str] = Field(default_factory=dict)
     variable_roster: list[str] = Field(min_length=1)
+    #: Omitted from the digest when absent, so requests sealed before it
+    #: existed keep their identity.
+    study_population_occurrence: Optional[StudyPopulationOccurrence] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @field_validator(
         "exposure_levels",
@@ -493,6 +540,17 @@ class FamilySpecRequest(BaseModel):
             if self.alternate_exposures:
                 raise ValueError(
                     "alternate exposure definitions are not projected for the spline family"
+                )
+        occurrence = self.study_population_occurrence
+        if occurrence is not None:
+            if self.family_id != LANDMARK_CATEGORICAL_FAMILY_ID:
+                raise ValueError(
+                    "a study-population occurrence belongs to the categorical landmark family"
+                )
+            if occurrence.product_id != study_population_product_for(self.cohort_name):
+                raise ValueError(
+                    "the study population is published under the product the locked "
+                    "cohort cannot claim"
                 )
         return self
 
@@ -903,6 +961,8 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
         # the request cannot list them because it is sealed before selection.
         *(spec.feature_variables if request.family_id in {PHENOTYPING_FAMILY_ID, PREDICTION_FAMILY_ID} else []),
         *(spec.baseline_variables if request.family_id == PHENOTYPING_FAMILY_ID else []),
+        # The study-population distribution names each exposure level.
+        *(request.level_label_keys if request.study_population_occurrence is not None else []),
     ]
     for key in dict.fromkeys(selected_label_keys):
         value = labels.get(key, "")
@@ -912,6 +972,14 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
                 f"a concise clinical reader label is required for {key!r}",
                 path="reader_display_labels",
             )
+    if request.study_population_occurrence is not None and len(
+        {" ".join(labels[key].split()).casefold() for key in request.level_label_keys}
+    ) != len(request.level_label_keys):
+        raise FamilySpecError(
+            "family_spec_level_labels_not_distinct",
+            "each exposure level needs its own reader label",
+            path="reader_display_labels",
+        )
     unknown_labels = sorted(
         set(labels) - set(request.variable_roster) - set(request.level_label_keys)
     )
@@ -971,6 +1039,7 @@ __all__ = [
     "SpecComparatorApplication",
     "SpecCovariateDecision",
     "SpecReaderLabel",
+    "StudyPopulationOccurrence",
     "accepted_baseline_additions",
     "spec_from_mapping",
     "table_one_group_column",

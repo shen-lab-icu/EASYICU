@@ -34,6 +34,11 @@ from ..contracts.model_tokens import (
     ASSOCIATION_LOGIT_ESTIMATOR,
     ASSOCIATION_OLS_ESTIMATOR,
 )
+from ..contracts.primary_cohort import (
+    HOST_BOUND_COHORT_METHOD,
+    STUDY_POPULATION_PRODUCTS,
+    locked_primary_cohort_product,
+)
 from ..contracts.product_identity import typed_product
 from ..schema import (
     AnalysisPlan,
@@ -89,6 +94,8 @@ from .progressive_contract import (
     ProgressivePlanFoundation,
     ProgressivePlanSkeleton,
     ProgressiveSkeletonStep,
+    STUDY_COHORT_SCOPE,
+    is_study_population_root,
     progressive_module_ids_for_analysis_types,
     validate_progressive_module_action_compatibility,
 )
@@ -599,6 +606,11 @@ def _is_ungrouped_baseline_summary(step: ProgressiveSkeletonStep) -> bool:
 def _canonical_outputs(step: ProgressiveSkeletonStep) -> list[tuple[str, str]]:
     if _is_ungrouped_baseline_summary(step):
         return [("table:cohort_summary", "custom")]
+    if is_study_population_root(step):
+        # The study population is the host's republished run cohort, not the
+        # primary cohort: merging the module's standard outputs would give the
+        # primary cohort and its flow table a second owner.
+        return [(item.product_id, item.semantic_role) for item in step.outputs]
     standard = list(PROGRESSIVE_HOST_COMPILED_OUTPUTS.get(step.module_id, ()))
     declared = [(item.product_id, item.semantic_role) for item in step.outputs]
     by_product: dict[str, str] = {}
@@ -1173,6 +1185,7 @@ def _compile_distribution(
     step: ProgressiveSkeletonStep,
     step_index: int,
     counts_only: bool = False,
+    study_population: bool = False,
 ) -> ExposureOutcomeDistributionSpec:
     exposure = str(step.primary_exposure or "")
     outcome = str(step.outcome or "")
@@ -1239,7 +1252,12 @@ def _compile_distribution(
             "schema_version": "easyicu.exposure_outcome_distribution/2",
             "interval_method": "wilson",
             "repeated_unit_interval_method": "patient_cluster_robust_wald",
-            "risk_difference_contrast": ExposureOutcomeRiskDifferenceContrast(
+            # On the study population the exposure-level contrast would be a
+            # crude comparison beside the plan's own primary estimate; the step
+            # reports how often the exposure occurs and the outcome by level.
+            "risk_difference_contrast": None
+            if study_population
+            else ExposureOutcomeRiskDifferenceContrast(
                 reference_exposure_level=reference,
                 comparison_exposure_level=comparison,
             ),
@@ -1667,6 +1685,62 @@ def _compile_robustness_spec(
         ) from exc
 
 
+def _require_study_population_binding(
+    *,
+    skeleton: ProgressivePlanSkeleton,
+    step: ProgressiveSkeletonStep,
+    step_index: int,
+    refs: Sequence[Any],
+    producers: Mapping[str, str],
+) -> None:
+    """Bind a study-cohort consumer to exactly one preceding host root.
+
+    A step estimating on the study population reads that one product and
+    nothing else as its cohort; any other step naming it would read a
+    population its own scope does not declare.
+    """
+
+    study_refs = [ref for ref in refs if ref.product_id in STUDY_POPULATION_PRODUCTS]
+    if step.population_scope != STUDY_COHORT_SCOPE or is_study_population_root(step):
+        if study_refs:
+            raise _fail(
+                "progressive_study_population_scope_mismatch",
+                "only a study-cohort step may read the study-population product",
+                step=step,
+                step_index=step_index,
+                path="product_inputs",
+                detail={"product_ids": [ref.product_id for ref in study_refs]},
+            )
+        return
+    roots = {
+        source.step_id: source
+        for source in skeleton.steps
+        if is_study_population_root(source)
+    }
+    owner = producers.get(study_refs[0].product_id) if len(study_refs) == 1 else None
+    if (
+        len(refs) != 1
+        or len(study_refs) != 1
+        or owner is None
+        or owner not in roots
+        or study_refs[0].producer_step_id != owner
+        or owner not in step.depends_on
+    ):
+        raise _fail(
+            "progressive_study_population_binding_invalid",
+            "a study-cohort step reads exactly one study-population product, "
+            "published by a preceding host root it depends on",
+            step=step,
+            step_index=step_index,
+            path="product_inputs",
+            detail={
+                "product_ids": [ref.product_id for ref in refs],
+                "registered_owner": owner,
+                "depends_on": list(step.depends_on),
+            },
+        )
+
+
 def _compile_inputs(
     *,
     context: ResearchContext,
@@ -1784,6 +1858,7 @@ def _compile_inputs(
     inputs = list(raw)
     if (
         step.module_id not in {"cohort_definition", "visualization"}
+        and step.population_scope != STUDY_COHORT_SCOPE
         and not (
             runtime_contract is not None and runtime_contract.required_product_inputs
         )
@@ -1791,6 +1866,9 @@ def _compile_inputs(
     ):
         inputs.append("artifact:analysis_cohort")
     refs = list(step.product_inputs)
+    _require_study_population_binding(
+        skeleton=skeleton, step=step, step_index=step_index, refs=refs, producers=producers
+    )
     if (
         step.module_id == "visualization"
         and len(refs) > _MAX_VISUALIZATION_SOURCE_PRODUCTS
@@ -1865,7 +1943,15 @@ def _compile_inputs(
                 for source in skeleton.steps
             )
         )
-        if (step.module_id not in _COHORT_FRAME_ONLY_MODULES or primary_population_reference) and not (
+        study_population_reference = (
+            step.population_scope == STUDY_COHORT_SCOPE
+            and reference.product_id in STUDY_POPULATION_PRODUCTS
+        )
+        if (
+            step.module_id not in _COHORT_FRAME_ONLY_MODULES
+            or primary_population_reference
+            or study_population_reference
+        ) and not (
             step.module_id == "report"
             and parsed_reference is not None
             and parsed_reference[0] == "figure"
@@ -2269,6 +2355,22 @@ def _compile_one_step(
     )
     if step.module_id == "absolute_risk_context" and "table:adjusted_association_estimates" in inputs:
         method = "primary_population_absolute_risk_context"
+    study_root = is_study_population_root(step)
+    if study_root:
+        product = output_pairs[0][0]
+        if (
+            locked_primary_cohort_product(product, locked_cohort_name=skeleton.cohort.name)
+            is not None
+        ):
+            raise _fail(
+                "progressive_study_population_product_is_locked_cohort",
+                "the study-population product must not name the plan's locked cohort",
+                step=step,
+                step_index=step_index,
+                path="outputs",
+                detail={"product_id": product, "cohort_name": skeleton.cohort.name},
+            )
+        method = HOST_BOUND_COHORT_METHOD
     sensitivity_spec_ids = list(step.sensitivity_spec_ids)
     if step.module_id == "robustness_replay":
         # Foundation robustness intents are already validated, typed host
@@ -2299,6 +2401,7 @@ def _compile_one_step(
         "population_scope_change_reason": step.population_scope_change_reason,
         "population_scope": (
             "primary_model" if method == "primary_population_absolute_risk_context"
+            else None if step.population_scope == STUDY_COHORT_SCOPE
             else step.population_scope
         ),
         "phenotyping_feature_columns": step.phenotyping_feature_columns,
@@ -2307,7 +2410,7 @@ def _compile_one_step(
         "literature_design_bindings": literature,
         "input_consumption_contracts": consumption,
     }
-    if step.module_id == "cohort_definition":
+    if step.module_id == "cohort_definition" and not study_root:
         kwargs["cohort_definition_spec"] = CohortDefinitionSpec(
             identity_column=_identity_column(
                 context=context,
@@ -2341,13 +2444,14 @@ def _compile_one_step(
             counts_only=descriptive_counts_only_required(
                 context, analysis_type=skeleton.analysis_type,
             ),
+            study_population=step.population_scope == STUDY_COHORT_SCOPE,
         )
         kwargs["exposure_outcome_distribution_spec"] = spec
         kwargs["scientific_capability"] = "descriptive_exposure_outcome_distribution_v1"
         if (
             step.planned_analysis_role == "primary"
-            and post_baseline_exposure(context)[0]
-        ):
+            or step.population_scope == STUDY_COHORT_SCOPE
+        ) and post_baseline_exposure(context)[0]:
             kwargs["descriptive_claim"] = DescriptiveClaimContract(
                 unresolved_limitations=(
                     "post_baseline_exposure_opportunity_unresolved",

@@ -23,6 +23,7 @@ from typing import Any, Literal, Mapping, Optional, Sequence
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..canonical_json import canonical_sha256
+from ..authority.declared_levels import closed_planning_levels_for
 from ..authority.current_case_scientific_runtime import (
     CurrentCaseScientificRuntimeAuthority,
     LandmarkCategoricalAssociationRuntimeAuthority,
@@ -44,6 +45,7 @@ from ..contracts.descriptive_execution import (
     exposure_outcome_distribution_execution_verdict,
 )
 from ..contracts.ordered_stratified import is_ordered_stratified_analysis_step
+from ..contracts.primary_cohort import step_cohort_population
 from ..contracts.functional_form import functional_form_products
 from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
 from ..contracts.prediction_execution import (
@@ -78,7 +80,10 @@ from ..trajectory.plan_contract import trajectory_context_is_bound
 from ..trajectory.runtime_validation import signed_trajectory_plan_claimed
 from .figure_strategy import ArticleFigureStrategy
 from .adjustment_authority import AdjustmentSetAuthority, owner_declared_baseline_static
-from .analysis_types import canonical_analysis_family
+from .analysis_types import (
+    canonical_analysis_family,
+    requested_exposure_occurrence_cues,
+)
 from .population_requirements import context_population_requirements
 from .baseline_requirements import (
     baseline_requirement_coverage,
@@ -299,6 +304,69 @@ def requested_outcomes(context: ResearchContext) -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
+def requested_exposure_occurrence(
+    context: ResearchContext, plan: Optional[AnalysisPlan]
+) -> tuple[str, ...]:
+    """Words by which the question asks how often its exposure occurs.
+
+    Empty unless a step could answer it: an association or descriptive plan,
+    an exposure with at least two closed levels, and a two-level target.
+    """
+
+    if plan is None or not (
+        association_study(plan)
+        or canonical_analysis_family(plan.analysis_type) == "descriptive_epidemiology"
+    ):
+        return ()
+    exposure = str(context.primary_exposure or "").strip()
+    outcome = str(context.target_outcome or "").strip()
+    variables = {item.name: item for item in context.variables}
+    if (
+        not exposure
+        or not outcome
+        or len(closed_planning_levels_for(name=exposure, variables=variables)) < 2
+        or len(closed_planning_levels_for(name=outcome, variables=variables)) != 2
+    ):
+        return ()
+    return requested_exposure_occurrence_cues(context)
+
+
+def exposure_occurrence_steps(
+    plan: Optional[AnalysisPlan], context: ResearchContext
+) -> tuple[str, ...]:
+    """Steps that report how often the primary exposure occurs in the study cohort.
+
+    A claimed exposure/outcome distribution of the primary exposure counts, as
+    does a two-column prevalence table naming it.  Either must read the
+    population the study selected: a landmark analysis cohort keeps only the
+    stays alive and observed at the landmark, so its level counts answer a
+    different question.
+    """
+
+    if plan is None:
+        return ()
+    exposure = str(context.primary_exposure or "").strip()
+    covering: list[str] = []
+    for step in plan.steps:
+        if exposure_outcome_distribution_execution_verdict(step).claimed:
+            spec = step.exposure_outcome_distribution_spec
+            reports = spec is not None and spec.exposure == exposure
+        else:
+            declared = [
+                str(value).strip()
+                for value in step.inputs
+                if str(value).strip() and ":" not in str(value)
+            ]
+            reports = (
+                (_method_head(step), tuple(step.expected_outputs)) in _PREVALENCE_STEP_SHAPES
+                and exposure in declared
+                and len(set(declared)) == 2
+            )
+        if reports and step_cohort_population(step=step, plan=plan) == "study_cohort":
+            covering.append(step.step_id)
+    return tuple(covering)
+
+
 def model_covariate_plan_authority(
     plan: Optional[AnalysisPlan],
 ) -> tuple[dict[str, str], dict[str, str]]:
@@ -417,6 +485,12 @@ _DESCRIPTIVE_ONLY_STEP_SHAPES = frozenset(
 )
 _POST_BASELINE_OPPORTUNITY_LIMITATION = (
     "post_baseline_exposure_opportunity_unresolved"
+)
+#: Two-column prevalence tables that name the exposure among their inputs.
+_PREVALENCE_STEP_SHAPES = frozenset(
+    shape
+    for shape in _DESCRIPTIVE_ONLY_STEP_SHAPES
+    if shape[1] == ("table:distribution_prevalence",)
 )
 
 
@@ -2458,6 +2532,8 @@ def build_plan_scientific_review(
     missing_model_outcomes = tuple(
         outcome for outcome in expected_outcomes if outcome not in covered_outcomes
     )
+    occurrence_cues = requested_exposure_occurrence(context, plan)
+    occurrence_step_ids = exposure_occurrence_steps(plan, context)
     selected_design = (
         plan.design_selection.selected if plan.design_selection is not None else None
     )
@@ -2721,6 +2797,32 @@ def build_plan_scientific_review(
                     "Readable inputs, baseline tables and figure labels alone do "
                     "not answer an endpoint. Do not reduce a multi-outcome question "
                     "to its primary endpoint."
+                ),
+                remediation_route="agent_plan_revision",
+            )
+        )
+    if occurrence_cues and not occurrence_step_ids:
+        findings.append(
+            PlanScientificFinding(
+                code="REQUESTED_OCCURRENCE_COVERAGE_INCOMPLETE",
+                severity="blocker",
+                dimension="content_completeness",
+                message=(
+                    "The research question asks how often the primary exposure "
+                    f"occurs ({', '.join(occurrence_cues)}), but no step reports the "
+                    "exposure's level distribution in the study cohort."
+                ),
+                evidence_refs=[
+                    "research_context.json.research_question",
+                    "analysis_plan.json.steps",
+                ],
+                remediation=(
+                    "Add a step that reports each exposure level's count and "
+                    "proportion, with denominators, among the stays the study "
+                    "selected. When the primary analysis runs on a narrower "
+                    "cohort (a landmark cohort, for example), that step reads the "
+                    "study cohort itself; counts on the narrower cohort answer a "
+                    "different question."
                 ),
                 remediation_route="agent_plan_revision",
             )
@@ -3465,6 +3567,13 @@ def build_plan_scientific_review(
             "trajectory_representation": trajectory_representation,
             "primary_covariates": list(covariates),
             "requested_outcomes": list(expected_outcomes),
+            "requested_estimate_coverage": {
+                "schema_version": "easyicu.requested_estimate_coverage/1",
+                "exposure_occurrence": {
+                    "requested_cues": list(occurrence_cues),
+                    "covering_step_ids": list(occurrence_step_ids),
+                },
+            },
             "model_covered_outcomes": list(covered_outcomes),
             "missing_model_outcomes": list(missing_model_outcomes),
             "covariate_selection": covariate_selection,
@@ -3529,6 +3638,8 @@ __all__ = [
     "model_covariates",
     "planned_model_outcomes",
     "requested_outcomes",
+    "requested_exposure_occurrence",
+    "exposure_occurrence_steps",
     "method_source_facts",
     "patient_identity_available",
     "post_baseline_exposure",

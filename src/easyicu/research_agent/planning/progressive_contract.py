@@ -18,6 +18,7 @@ from typing import Any, ClassVar, Literal, Mapping, Optional, Sequence
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..canonical_json import canonical_sha256
+from ..contracts.primary_cohort import STUDY_POPULATION_PRODUCTS
 from ..contracts.product_identity import is_canonical_typed_product_token
 from ..contracts.functional_form import FunctionalFormSpec
 from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
@@ -260,6 +261,22 @@ class ProgressiveRobustnessIntent(BaseModel):
         return self
 
 
+#: The population the study selected, published by a host root for a step
+#: whose question is asked of it rather than of the primary analysis's
+#: narrower cohort.  Host templates set it; a Planner cannot.
+STUDY_COHORT_SCOPE = "study_cohort"
+_STUDY_COHORT_MODULES = frozenset({"cohort_definition", "exposure_outcome_distribution"})
+
+
+def _require_study_cohort_owner(module_id: object, change_reason: object) -> None:
+    if module_id not in _STUDY_COHORT_MODULES:
+        raise ValueError(
+            "the study-cohort population belongs to its host root and one distribution"
+        )
+    if change_reason is not None:
+        raise ValueError("the study-cohort population is not an amendment of another population")
+
+
 class ProgressiveOutputIntent(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -404,7 +421,7 @@ class ProgressiveOutlineStep(BaseModel):
         default=None,
         pattern=r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$",
     )
-    population_scope: Optional[Literal["analysis_cohort", "primary_model"]] = Field(
+    population_scope: Optional[Literal["analysis_cohort", "primary_model", "study_cohort"]] = Field(
         default=None, exclude_if=lambda value: value is None,
         description="Absolute-risk population chosen with the complete study design; executable detail must preserve it.",
     )
@@ -420,6 +437,9 @@ class ProgressiveOutlineStep(BaseModel):
 
     @model_validator(mode="after")
     def _population_owner(self):
+        if self.population_scope == STUDY_COHORT_SCOPE:
+            _require_study_cohort_owner(self.module_id, self.population_scope_change_reason)
+            return self
         if self.population_scope is not None or self.population_scope_change_reason is not None:
             if self.module_id != "absolute_risk_context":
                 raise ValueError("population_scope belongs only to absolute_risk_context")
@@ -542,7 +562,7 @@ class ProgressiveSkeletonStep(BaseModel):
         ]
     ] = None
     confidence_level: Optional[float] = Field(default=None, gt=0.0, lt=1.0)
-    population_scope: Optional[Literal["analysis_cohort", "primary_model"]] = Field(
+    population_scope: Optional[Literal["analysis_cohort", "primary_model", "study_cohort"]] = Field(
         default=None, exclude_if=lambda value: value is None,
         description="Explicit population for absolute-risk context; primary_model reuses the preceding primary model's exact eligibility and complete cases.",
     )
@@ -602,7 +622,22 @@ class ProgressiveSkeletonStep(BaseModel):
             self.primary_exposure and self.outcome
         ):
             raise ValueError("absolute_risk_context requires exposure and outcome")
-        if (self.population_scope is not None or self.population_scope_change_reason is not None) and self.module_id != "absolute_risk_context":
+        if self.population_scope == STUDY_COHORT_SCOPE:
+            _require_study_cohort_owner(self.module_id, self.population_scope_change_reason)
+            if self.module_id == "cohort_definition" and (
+                self.planned_analysis_role != "auxiliary"
+                or self.depends_on
+                or self.raw_inputs
+                or self.product_inputs
+                or len(self.outputs) != 1
+                or self.outputs[0].semantic_role != "analysis_cohort"
+                or self.outputs[0].product_id not in STUDY_POPULATION_PRODUCTS
+            ):
+                raise ValueError(
+                    "the study-population root reads nothing and publishes one "
+                    "host study-population product"
+                )
+        elif (self.population_scope is not None or self.population_scope_change_reason is not None) and self.module_id != "absolute_risk_context":
             raise ValueError("population_scope belongs only to absolute_risk_context")
         if self.module_id == "exposure_outcome_distribution":
             required = (
@@ -1045,6 +1080,11 @@ def outline_step_products(
     custom step declares its products only at step materialization.
     """
 
+    if is_study_population_root(step):
+        # The root's product is fixed at materialization; advertising the
+        # module's standard cohort products here would give the primary cohort
+        # a second owner.
+        return ()
     action = actions.get(str(step.scientific_action_id or ""))
     contract = action.runtime_contract if action is not None else None
     return tuple(
@@ -1057,6 +1097,36 @@ def outline_step_products(
 
 
 PRIMARY_POPULATION_PRODUCT = "table:adjusted_association_estimates"
+
+
+def is_study_population_root(step: Any) -> bool:
+    """Whether an outline or skeleton step is the host study-population root."""
+
+    return (
+        getattr(step, "module_id", None) == "cohort_definition"
+        and getattr(step, "population_scope", None) == STUDY_COHORT_SCOPE
+    )
+
+
+def host_singleton_module_key(step: Any) -> str:
+    """The key under which a host module may appear at most once in a plan.
+
+    The study-population root shares the cohort-definition module with the
+    primary cohort step; each is still singular.
+    """
+
+    module_id = str(getattr(step, "module_id", "") or "")
+    return f"{module_id}:{STUDY_COHORT_SCOPE}" if is_study_population_root(step) else module_id
+
+
+def duplicated_host_singletons(steps: Sequence[Any]) -> dict[str, list[str]]:
+    """Host-compiled modules a plan declares more than once, by singleton key."""
+
+    owners: dict[str, list[str]] = {}
+    for step in steps:
+        if getattr(step, "module_id", None) in PROGRESSIVE_HOST_COMPILED_OUTPUTS:
+            owners.setdefault(host_singleton_module_key(step), []).append(step.step_id)
+    return {key: step_ids for key, step_ids in owners.items() if len(step_ids) > 1}
 
 
 def validate_primary_population_owner(
@@ -1137,6 +1207,10 @@ __all__ = [
     "ProgressiveSuffixRevision",
     "ProgressiveTableOneVariable",
     "PRIMARY_POPULATION_PRODUCT",
+    "STUDY_COHORT_SCOPE",
+    "duplicated_host_singletons",
+    "host_singleton_module_key",
+    "is_study_population_root",
     "outline_step_products",
     "progressive_module_ids_for_analysis_types",
     "validate_primary_population_owner",
