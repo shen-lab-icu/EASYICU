@@ -284,7 +284,9 @@ def _compile_study_population_occurrence_report_facts(projected, evidence, reade
     republished study cohort (``STUDY_POPULATION_PRODUCTS``), not the narrower
     analysis cohort.  Each level's recorded count, share and interval become
     one Abstract and Results sentence, so the answer does not depend on the
-    Writer quoting a secondary table.
+    Writer quoting a secondary table.  The Writer's projection keeps typed
+    scalars only, so the executor's interpretation class is read from the
+    digest-verified source summary.
     """
 
     from .writer_evidence import _verified_evidence_json
@@ -296,7 +298,7 @@ def _compile_study_population_occurrence_report_facts(projected, evidence, reade
             row.get("status") == "ok"
             and isinstance(summary, dict)
             and summary.get("status") == "ok"
-            and summary.get("interpretation_class") == "exposure_outcome_distribution"
+            and "descriptive_estimates" in summary
             and summary.get("typed_cohort_input") in STUDY_POPULATION_PRODUCTS
         ):
             continue
@@ -304,6 +306,8 @@ def _compile_study_population_occurrence_report_facts(projected, evidence, reade
         source = _verified_evidence_json(
             evidence, source_id, exact_evidence_id=True, expected_kind="statistic",
         )
+        if source.get("interpretation_class") != "exposure_outcome_distribution":
+            continue
         record = evidence.get(source_id)
         if record is None or record.produced_by_step != row.get("step_id"):
             raise ValueError("Occurrence source does not belong to the verified step")

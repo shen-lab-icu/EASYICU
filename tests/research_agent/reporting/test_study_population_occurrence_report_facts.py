@@ -17,6 +17,10 @@ from typing import Any
 import pytest
 
 from easyicu.research_agent.authority.evidence_store import EvidenceEnforcementMode, EvidenceStore
+from easyicu.research_agent.contracts.result_envelope import (
+    normalize_step_result_shadow,
+    rebuild_observed_scalar_tree,
+)
 from easyicu.research_agent.execution.runners.exposure_outcome_distribution_executor import (
     percentage,
     wilson_interval,
@@ -228,6 +232,56 @@ def test_the_placed_sentences_bind_every_number_under_strict_evidence(tmp_path) 
     assert all(fact.scaffold in abstract and fact.scaffold in results for fact in facts)
     assert bindings and not untraced
     assert missing_primary_result_facts(bound, facts) == {}
+
+
+def test_the_occurrence_survives_the_canonical_writer_projection(tmp_path) -> None:
+    """The Writer reads each summary through its sealed envelope's scalar tree.
+
+    That tree keeps only typed strings, so the executor's interpretation class
+    is absent from it; the occurrence must still be recognised, from the
+    digest-verified source summary.
+    """
+
+    store, records = _registered(tmp_path, _summary())
+    output_dir = tmp_path / "outputs"
+    output_dir.mkdir()
+    envelope = normalize_step_result_shadow(
+        step_id="exposure_occurrence",
+        step_summary=records[0]["step_summary"],
+        output_dir=output_dir,
+        status="ok",
+    )
+    canonical = rebuild_observed_scalar_tree(envelope.observed_scalars)
+    assert "interpretation_class" not in canonical
+    assert canonical["typed_cohort_input"] == "cohort:study_population"
+    projected = [{**records[0], "step_summary": canonical}]
+
+    facts = _compile_study_population_occurrence_report_facts(projected, store, LABELS)
+
+    assert [fact.text for fact in facts] == [
+        fact.text
+        for fact in _compile_study_population_occurrence_report_facts(records, store, LABELS)
+    ]
+    assert len(facts) == 2
+
+
+def test_a_study_cohort_summary_of_another_class_is_not_an_occurrence(tmp_path) -> None:
+    summary = _summary()
+    summary["interpretation_class"] = "ordered_stratified_description"
+    store, records = _registered(tmp_path, summary)
+
+    assert _compile_study_population_occurrence_report_facts(records, store, LABELS) == ()
+
+
+def test_a_study_cohort_step_without_distribution_estimates_is_not_read(tmp_path) -> None:
+    store, _ = _registered(tmp_path, _summary())
+    other = {
+        "step_id": "study_cohort_table_one", "status": "ok",
+        "step_summary_evidence_id": "not_registered",
+        "step_summary": {"status": "ok", "typed_cohort_input": "cohort:study_population"},
+    }
+
+    assert _compile_study_population_occurrence_report_facts([other], store, LABELS) == ()
 
 
 def test_the_shared_report_admission_carries_the_occurrence(tmp_path, monkeypatch) -> None:
