@@ -163,6 +163,7 @@ def prepare_step_attempt_bootstrap(
         attempt_id=attempt_id,
         reserved_final_category="concept_audit" if reserve_concept_audit else None,
         commit=True,
+        checkpoint=resume_state if isinstance(resume_state, Mapping) else None,
     )
     budget_epoch.tag(step_record, current_identity)
     if budget_epoch.opened is not None:

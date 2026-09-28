@@ -10,8 +10,8 @@
       "shim_bypass_violations": []
     },
     "execution/phase_support.py": {
-      "loc": 3780,
-      "sha256": "1715b24d1b81683587438379e619933bd0e37c4da36605a8d037f02c8a50fcc0",
+      "loc": 3798,
+      "sha256": "da7dceed75303f87c742b09aa99dbdf2c07fd0845fc56e57cbac2267481d4892",
       "intra_package_import_edges": 59,
       "shim_bypass_violations": []
     },
@@ -412,19 +412,11 @@
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Method-family closure 2026-09-22 (family_spec_v1 lane), reviewed growth: pipeline.py +31 (planner-strategy dispatch and sealed trajectory/survival/feasibility authority hooks; _run_plan_phase +11 stays under its 900-line hard gate, _generate_or_resume_plan +5); schema.py +34 (figure panels scoped and unique per figure output); agents/progressive_planner.py +193 (the family-spec attempt is delegated to agents/family_spec_planner.py while Planner-private binders stay in-module; +2 intra-package import edges). Targeted move of these three files only: the four regressions already present at HEAD b81c04ad6 (gates/preflight.py, audits/cross_step.py, numeric_scalars.py, discovery/idea_mining.py) are not absorbed here and remain for their owners.",
+  "baseline_reason": "Explicit retry after an engine change (2026-09-26), reviewed growth: execution/phase_support.py +18 (one branch in _step_resolve_initial_code, before the resume-capsule branch, that asks the step's existing deterministic host generators for code when the failed candidate was sealed under another engine; the policy itself lives in execution/step_authority_resume.py). No import edge added. Targeted move of this file only: the regressions already present in other files are not absorbed here and remain for their owners.",
   "baseline_accepted_growth": {
-    "pipeline.py": {
-      "loc_was": 7364,
-      "loc_now": 7395
-    },
-    "schema.py": {
-      "loc_was": 3131,
-      "loc_now": 3165
-    },
-    "agents/progressive_planner.py": {
-      "loc_was": 4867,
-      "loc_now": 5060
+    "execution/phase_support.py": {
+      "loc_was": 3780,
+      "loc_now": 3798
     }
   },
   "baseline_history": [
@@ -1277,6 +1269,15 @@
         }
       },
       "scope": "targeted:pipeline.py,schema.py,agents/progressive_planner.py"
+    },
+    {
+      "reason": "Explicit retry after an engine change (2026-09-26), reviewed growth: execution/phase_support.py +18 (one branch in _step_resolve_initial_code, before the resume-capsule branch, that asks the step's existing deterministic host generators for code when the failed candidate was sealed under another engine; the policy itself lives in execution/step_authority_resume.py). No import edge added. Targeted move of this file only: the regressions already present in other files are not absorbed here and remain for their owners.",
+      "accepted_growth": {
+        "execution/phase_support.py": {
+          "loc_was": 3780,
+          "loc_now": 3798
+        }
+      }
     }
   ]
 }

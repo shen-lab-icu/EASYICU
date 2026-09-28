@@ -119,6 +119,7 @@ from ..authority.step_runtime import (
 )
 from .step_authority_resume import (
     StepAuthorityResumeRequest,
+    explicit_retry_host_owned_code,
     prepare_step_authority_resume,
 )
 from .publication_figure import (
@@ -2216,6 +2217,23 @@ def _step_resolve_initial_code(
             )
     elif resume_deterministic_repair_code is not None:
         code = resume_deterministic_repair_code
+    elif (
+        _retry_host_code := explicit_retry_host_owned_code(
+            step_record,
+            (
+                lambda: _deterministic_absolute_risk_context_code(
+                    "absolute_risk_context_preflight", preflight=True
+                ),
+                lambda: _deterministic_robustness_sensitivity_code(
+                    "robustness_sensitivity_preflight", preflight=True
+                ),
+                lambda: _deterministic_missingness_audit_code(
+                    "missingness_audit_preflight", preflight=True
+                ),
+            ),
+        )
+    ) is not None:
+        code = _retry_host_code
     elif step_attempt_state.selected_resume_capsule is not None:
         code = step_attempt_state.selected_resume_capsule.candidate_code
         worker_progress.resumed_code_reuse_used = True
