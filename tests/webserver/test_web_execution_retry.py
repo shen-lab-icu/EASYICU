@@ -326,14 +326,94 @@ def test_execution_retry_refuses_when_the_source_is_gone(tmp_path: Path) -> None
     assert raised.value.code == "research_pipeline_execution_retry_input_invalid"
 
 
-def test_execution_retry_redeclares_the_source_trajectory(tmp_path: Path) -> None:
+def _revision_run(tmp_path: Path, *, source_wrapper: Path) -> tuple[Path, dict]:
+    """A fresh plan revision: its own wrapper, the revised run's prepared input."""
+
+    wrapper = tmp_path / "projects" / "study" / "run-revision"
+    run_dir = wrapper / "pipeline" / "run-analysis"
+    run_dir.mkdir(parents=True)
+    capsule = seal_test_run_input_capsule(
+        run_dir=run_dir,
+        evidence=EvidenceStore(root=run_dir),
+        research_question="Does lactate predict mortality?",
+        primary_exposure="lact_max",
+        target_outcome="death",
+        source_dir=source_wrapper / "pipeline_input",
+    )
+    return wrapper, capsule.scientific_identity["materialized_cohort_authority_ref"]
+
+
+def _retry_inputs(wrapper: Path):
+    return agent_pipeline_runs._verified_execution_resume_inputs(
+        agent_pipeline_runs._ExecutionResumeTarget(
+            wrapper_dir=wrapper.resolve(),
+            pipeline_run_id="run-analysis",
+            pipeline_config_sha256="b" * 64,
+        )
+    )
+
+
+def test_a_plan_revision_retries_on_the_prepared_input_it_declared(
+    tmp_path: Path,
+) -> None:
+    """A fresh plan revision declares the revised run's input, in that run's wrapper.
+
+    Its own wrapper holds no prepared input; the capsule names the source by
+    content, so the retry finds that exact content beside it in the study.
+    """
+
+    prepared = tmp_path / "projects" / "study" / "run-prepared"
+    wrapper, source_ref = _revision_run(tmp_path, source_wrapper=prepared)
+    assert not (wrapper / "pipeline_input").exists()
+
+    inputs = _retry_inputs(wrapper)
+
+    assert inputs.cohort_authority_ref == source_ref
+    assert inputs.cohort_authority_path == (
+        prepared.resolve() / "pipeline_input" / source_ref["file"]
+    )
+    assert inputs.cohort_path.parent == prepared.resolve() / "pipeline_input"
+
+
+def test_a_plan_revision_retry_refuses_a_source_it_cannot_verify(
+    tmp_path: Path,
+) -> None:
+    prepared = tmp_path / "projects" / "study" / "run-prepared"
+    wrapper, source_ref = _revision_run(tmp_path, source_wrapper=prepared)
+    authority = prepared / "pipeline_input" / source_ref["file"]
+    authority.write_text(authority.read_text(encoding="utf-8") + " ", encoding="utf-8")
+
+    with pytest.raises(ResearchPipelineRunError) as raised:
+        _retry_inputs(wrapper)
+
+    assert raised.value.code == "research_pipeline_execution_retry_input_invalid"
+
+
+def test_a_retry_never_takes_its_source_from_another_study(tmp_path: Path) -> None:
+    other = tmp_path / "projects" / "other-study" / "run-prepared"
+    wrapper, _source_ref = _revision_run(tmp_path, source_wrapper=other)
+    # Present only outside this study's own run wrappers.
+    assert (other / "pipeline_input").is_dir()
+
+    with pytest.raises(ResearchPipelineRunError) as raised:
+        _retry_inputs(wrapper)
+
+    assert raised.value.code == "research_pipeline_execution_retry_input_invalid"
+
+
+@pytest.mark.parametrize(
+    "run_wrapper", ["run-wrapper", "run-revision"], ids=["own_input", "plan_revision"]
+)
+def test_execution_retry_redeclares_the_source_trajectory(
+    tmp_path: Path, run_wrapper: str
+) -> None:
     wrapper = tmp_path / "projects" / "study" / "run-wrapper"
     wrapper.mkdir(parents=True)
     paths, source_cohort, source_trajectory = typed_trajectory_bundle(wrapper)
     (wrapper / "materialized").rename(wrapper / "pipeline_input")
     universe = wrapper / "pipeline_input" / Path(paths["parquet"]).name
     trajectory = wrapper / "pipeline_input" / Path(paths["trajectory"]).name
-    run_dir = wrapper / "pipeline" / "run-analysis"
+    run_dir = wrapper.parent / run_wrapper / "pipeline" / "run-analysis"
     run_dir.mkdir(parents=True)
     cohort_path = run_dir / "cohort.parquet"
     staged_cohort = stage_materialized_cohort_authority(
@@ -380,7 +460,7 @@ def test_execution_retry_redeclares_the_source_trajectory(tmp_path: Path) -> Non
 
     inputs = agent_pipeline_runs._verified_execution_resume_inputs(
         agent_pipeline_runs._ExecutionResumeTarget(
-            wrapper_dir=wrapper.resolve(),
+            wrapper_dir=(wrapper.parent / run_wrapper).resolve(),
             pipeline_run_id="run-analysis",
             pipeline_config_sha256="b" * 64,
         )
