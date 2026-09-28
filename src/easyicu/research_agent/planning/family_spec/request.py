@@ -15,8 +15,10 @@ from typing import Any, Mapping, Optional, Sequence
 from ...authority.declared_levels import closed_planning_levels_for
 from ...concept_availability import variable_source_unavailability
 from ...contracts.model_terms import level_spelling
+from ...contracts.primary_cohort import study_population_product_for
 from ...schema import ResearchContext
 from ..accepted_analysis_inputs import analysis_input_value_columns
+from ..analysis_types import requested_exposure_occurrence_cues
 from ..baseline_requirements import baseline_requirement_projection
 from ..adjustment_authority import (
     AdjustmentSetAuthority,
@@ -30,6 +32,7 @@ from ..dependence_authority import (
     descriptive_counts_only_required,
 )
 from ..ordinal_multi_outcome import resolve_ordinal_multi_outcome_contract
+from ..scientific_review import post_baseline_exposure
 from .contract import (
     DESCRIPTIVE_FAMILY_ID,
     FIXED_WINDOW_TRAJECTORY_FAMILY_ID,
@@ -50,6 +53,7 @@ from .contract import (
     SealedSuiteCoordinates,
     SealedTrajectoryCoordinates,
     SensitivityAxisBinding,
+    StudyPopulationOccurrence,
     table_one_group_column,
 )
 
@@ -999,6 +1003,11 @@ def _family_spec_request(
     )
     reference_index = 0
     contrast_index = len(exposure_levels) - 1 if exposure_levels else 0
+    occurrence = (
+        _study_population_occurrence(context, exposure=exposure, outcome=outcome)
+        if family_id == LANDMARK_CATEGORICAL_FAMILY_ID
+        else None
+    )
     return FamilySpecRequest(
         family_id=family_id,
         research_question=str(context.research_question or "").strip() or "(no question text)",
@@ -1048,6 +1057,47 @@ def _family_spec_request(
             if str(value or "").strip()
         },
         variable_roster=roster,
+        level_label_keys=(
+            _binary_level_label_keys(context, exposure) if occurrence is not None else []
+        ),
+        study_population_occurrence=occurrence,
+    )
+
+
+def _study_population_occurrence(
+    context: ResearchContext, *, exposure: str, outcome: str
+) -> Optional[StudyPopulationOccurrence]:
+    """Seal the exposure occurrence the question asks of the study population.
+
+    The landmark analysis keeps only the stays alive and observed at the
+    landmark, so it cannot answer how often an exposure ascertained after ICU
+    admission occurs among all the stays the study selected.  Rows with a
+    known missing exposure or outcome leave the denominator with their count
+    reported; without known missing values any missing row stops the step.
+    """
+
+    cues = requested_exposure_occurrence_cues(context)
+    if not cues or not post_baseline_exposure(context)[0]:
+        return None
+
+    def known_missing(name: str) -> bool:
+        descriptor = context.variable(name)
+        missingness = getattr(descriptor, "missingness", None)
+        return bool(getattr(missingness, "n_missing", 0))
+
+    outcome_complete_case = known_missing(outcome)
+    return StudyPopulationOccurrence(
+        product_id=study_population_product_for(context.cohort.cohort_name),
+        requested_cues=list(cues),
+        denominator_policy=(
+            "observed_outcome_rows" if outcome_complete_case else "all_declared_rows"
+        ),
+        missing_exposure_policy=(
+            "exclude_from_denominator" if known_missing(exposure) else "fail_closed"
+        ),
+        missing_outcome_policy=(
+            "exclude_from_denominator" if outcome_complete_case else "fail_closed"
+        ),
     )
 
 

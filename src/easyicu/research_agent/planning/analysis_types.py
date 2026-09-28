@@ -777,6 +777,94 @@ def _keyword_present(text: str, keyword: str) -> bool:
     return re.search(pattern, text) is not None
 
 
+#: Words by which a question asks how often its exposure occurs in the study
+#: population.  A question can ask that beside an association ("the proportion
+#: of stays with X, and outcome Y by X"); the association may run on a narrower
+#: population than the one the proportion is asked of, so the review checks
+#: that this part of the question has its own step.  Latin cues match whole
+#: words, so "proportional" never reads as "proportion".
+_OCCURRENCE_CUES = (
+    "proportion",
+    "proportions",
+    "percentage",
+    "percentages",
+    "prevalence",
+    "incidence",
+    "occurrence",
+    "how common",
+    "how frequent",
+    "how frequently",
+    "share of",
+    "比例",
+    "占比",
+    "百分比",
+    "构成比",
+    "患病率",
+    "发生率",
+    "发病率",
+    "检出率",
+    "流行率",
+)
+#: Phrases that contain a cue but ask something else -- a model assumption
+#: (proportional hazards or odds), a share of variance or of a mediated effect,
+#: missingness, a matching, sampling or splitting ratio, a person-time rate, or
+#: a time-to-event estimand.  They are removed before the cues are read.
+_OCCURRENCE_GUARD_PATTERNS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"proportions?\s+(?:of\s+)?(?:the\s+)?(?:variance|variation|variability|effect|missing(?:ness)?)",
+        r"proportions?\s+(?:mediated|explained|missing)",
+        r"missing(?:ness)?\s+(?:proportion|percentage)s?",
+        r"percentages?\s+of\s+missing",
+        r"percentage\s+points?",
+        r"cumulative\s+incidence",
+        r"incidence\s+(?:rates?|density|densities|ratios?)",
+        r"prevalence\s+ratios?",
+    )
+)
+_OCCURRENCE_GUARD_PHRASES = (
+    "比例风险",
+    "等比例",
+    "比例优势",
+    "非比例",
+    "比例假设",
+    "缺失值比例",
+    "缺失比例",
+    "方差比例",
+    "解释比例",
+    "中介比例",
+    "匹配比例",
+    "比例匹配",
+    "抽样比例",
+    "划分比例",
+    "比例划分",
+    "累积发生率",
+    "累积发病率",
+)
+
+
+def requested_exposure_occurrence_cues(context: ResearchContext) -> Tuple[str, ...]:
+    """Return the words by which the question asks how often its exposure occurs.
+
+    Only the research question and the requested outputs are read: covariate
+    names, timing notes and data constraints describe the design, not what the
+    question asks.  An empty result means the question does not ask for an
+    occurrence estimate.  Whether one can be made -- a closed-level exposure, a
+    family that reports it -- is the consumer's typed check, not this one.
+    """
+
+    prefs = context.user_preferences
+    parts = [context.research_question or ""]
+    if prefs is not None:
+        parts.append(prefs.must_have_outputs or "")
+    text = " ".join(part.lower() for part in parts if part)
+    for pattern in _OCCURRENCE_GUARD_PATTERNS:
+        text = pattern.sub(" ", text)
+    for phrase in _OCCURRENCE_GUARD_PHRASES:
+        text = text.replace(phrase, " ")
+    return tuple(cue for cue in _OCCURRENCE_CUES if _keyword_present(text, cue))
+
+
 _CLUSTERING_NUISANCE_PATTERNS = (
     re.compile(r"\bcluster[-\s]+robust\b", flags=re.IGNORECASE),
     re.compile(
@@ -1666,6 +1754,7 @@ __all__ = [
     "optional_analysis_type_for_capability",
     "analysis_type_for_capability",
     "required_endpoint_kind_for_family",
+    "requested_exposure_occurrence_cues",
     "infer_analysis_type",
     "strong_trajectory_clustering_framing",
     "planner_analysis_type_guide",

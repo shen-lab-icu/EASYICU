@@ -549,7 +549,13 @@ class PipelineConfig:
     # run still completes and still scores. A cap that binds in normal
     # operation quietly shrinks the science instead of reporting a limit, so
     # the guard is set where only a runaway reaches it.
-    max_total_steps: int = 16
+    #
+    # It was 16. A landmark plan whose question also asks how often the
+    # exposure occurs gains three host-owned steps (the study-population root,
+    # its distribution and that distribution's figure), so 16 + 3 plus one
+    # spare keeps every plan that fitted before unchanged; 20 is still well
+    # below the 30 the runaway reached.
+    max_total_steps: int = 20
     # --- replanning convergence guards (2026-06-11) ---------------------
     # The replanner runs after the probe, after an agent-authored progressive
     # step, or when a clean deterministic step explicitly requests revision. A

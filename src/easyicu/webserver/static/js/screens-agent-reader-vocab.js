@@ -54,6 +54,7 @@
     REPEATED_STAY_DEDUP_UNDECLARED: ['重复入住的处理规则未声明', '可能存在同一患者多次入住，但没有步骤写明是只取首次入住，还是按患者聚类或混合模型处理。'],
     REPEATED_STAY_IDENTITY_UNAVAILABLE: ['无法识别同一患者的多次入住', '数据源没有给出患者身份，无法排除同一患者多次入住；可以继续做开发性分析，但不能按患者独立处理，也不能作论文结论。'],
     REPEATED_STAY_METHOD_NOT_DECLARED: ['重复入住没有对应的统计方法', '有患者身份，但没有可执行的方法处理同一患者的多次入住；由 Agent 选定方法。'],
+    REQUESTED_OCCURRENCE_COVERAGE_INCOMPLETE: ['暴露发生比例没有分析步骤', '问题问到暴露的发生比例，但没有步骤在研究队列上报告它。'],
     REQUESTED_OUTCOME_COVERAGE_INCOMPLETE: ['部分结局没有分析步骤', '问题里提到的结局并非都有可执行的分析。'],
     REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY: ['要求的敏感性分析只写在文字里', '你要求的敏感性分析缺失，或只有描述、没有可执行步骤。'],
     REVIEWABLE_PLAN_SPECIFICATION_MISSING: ['缺少完整的推荐设定', '所选设计没有给出完整、可审阅的推荐设定。'],

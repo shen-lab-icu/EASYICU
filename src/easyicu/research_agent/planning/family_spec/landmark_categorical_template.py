@@ -20,6 +20,10 @@ functional forms, figure, report — is identical.
 
 Step layout (mirrors the family's reference workflow):
 
+0. ``study_population`` / ``exposure_occurrence`` -- only when the question
+   asks how often a categorical exposure occurs: the host republishes the
+   study cohort and the exposure's level distribution is reported on it,
+   before the landmark restriction
 1. ``cohort_definition``      landmark analysis cohort + cohort flow
 2. ``table_one``              baseline by exposure level, SMD only
 3. ``measurement_audit``      source / completeness / missingness / process / denominators
@@ -57,6 +61,7 @@ from ..progressive_contract import (
     ProgressiveSkeletonStep,
     ProgressiveStepMaterialization,
     ProgressiveTableOneVariable,
+    STUDY_COHORT_SCOPE,
 )
 from .contract import (
     LANDMARK_CATEGORICAL_FAMILY_ID,
@@ -101,6 +106,7 @@ _MODULE_DESIGN_ELEMENTS: dict[str, tuple[str, ...]] = {
     "robustness_replay": ("robustness", "missing_data", "time_zero", "exposure", "estimand"),
     "functional_form": ("adjustment", "robustness", "estimand"),
     "ordinal_trend": ("estimand", "exposure", "outcome", "reporting", "time_zero"),
+    "exposure_outcome_distribution": ("dependence", "exposure", "outcome", "reporting"),
 }
 
 
@@ -398,6 +404,18 @@ def _design_selection(
     comparator_keys = [
         key for key in request.comparison_literature_keys if key in request.allowed_literature_citation_keys
     ]
+    occurrence = request.study_population_occurrence is not None
+    occurrence_text = (
+        f"; how often each level occurs is reported among all stays of the study cohort, "
+        f"before the landmark, with {outcome} by level as description only"
+        if occurrence
+        else ""
+    )
+    occurrence_text_zh = (
+        f"；各水平在研究队列全部入住中的发生比例（landmark 之前）单独报告，{outcome} 按水平仅作描述"
+        if occurrence
+        else ""
+    )
     exposure_clause = (
         f"{exposure} (continuous, modelled as a restricted cubic spline with a per-unit linear sensitivity) measured"
         if continuous_exposure
@@ -456,7 +474,12 @@ def _design_selection(
             f"the {hours} h landmark, with its functional form and adjusted absolute risks along the range."
             if continuous_exposure
             else f"A prespecified adjusted observational association and ordered gradient between {exposure} "
-            f"and {outcome} after the {hours} h landmark, with level-specific absolute risks."
+            f"and {outcome} after the {hours} h landmark, with level-specific absolute risks"
+            + (
+                f", and how often each {exposure} level occurs in the study cohort."
+                if occurrence
+                else "."
+            )
         ),
         cannot_prove=(
             "No causal effect, no transportability beyond the source population, no recoding of an "
@@ -474,7 +497,7 @@ def _design_selection(
                     if continuous_exposure
                     else f"{exposure} 按 0–{hours} h 窗口分级，水平为 "
                     f"{listing(request.exposure_levels, language)}；无法评估的行保留为单独的未知状态，"
-                    "不重编码为参照水平。"
+                    f"不重编码为参照水平{occurrence_text_zh}。"
                 ),
                 (
                     f"{outcome}，自 landmark 起至 {_label(spec, request.observation_duration_column)} "
@@ -506,7 +529,7 @@ def _design_selection(
                     if continuous_exposure
                     else f"{exposure} classified from the 0–{hours} h window with levels "
                     f"{', '.join(request.exposure_levels)}; unevaluable rows stay a separate unknown state "
-                    "and are never recoded to the reference level."
+                    f"and are never recoded to the reference level{occurrence_text}."
                 ),
                 sentence(
                     f"{outcome} from the landmark to the end of "
@@ -746,6 +769,12 @@ def build_landmark_categorical_skeleton(
             ]
         )
     )[:12]
+    occurrence = request.study_population_occurrence
+    occurrence_keys = [
+        k
+        for k in method_keys
+        if _method_card_elements(k) & set(_MODULE_DESIGN_ELEMENTS["exposure_outcome_distribution"])
+    ][:12]
 
     cohort_variables = [
         identity,
@@ -881,6 +910,17 @@ def build_landmark_categorical_skeleton(
             "interpretation boundary."
         ),
     }
+    if occurrence is not None:
+        objectives["study_population"] = (
+            "Publish the study cohort selected by the typed eligibility bound, before the "
+            f"{hours} h landmark, as the population in which the exposure occurrence is reported."
+        )
+        objectives["exposure_occurrence"] = (
+            f"Report how often each {exposure_label} level occurs among all stays of the study "
+            f"cohort, and {outcome_label} by level as description only, with denominators and "
+            "confidence intervals; rows whose level could not be classified are counted, never "
+            "assigned a level."
+        )
     for name in continuous:
         objectives[f"{name}_functional_form"] = (
             f"Refit the primary model with {_label(spec, name)} as a restricted cubic spline instead of a "
@@ -888,7 +928,29 @@ def build_landmark_categorical_skeleton(
             "is retained regardless of the result."
         )
 
+    # The study-population pair runs first, so the landmark cohort stays the
+    # latest cohort count every later step is reconciled against.
+    study_population_outline: list[ProgressiveOutlineStep] = (
+        [
+            _outline_step(
+                step_id="study_population", role="auxiliary", module_id="cohort_definition",
+                objective=objectives["study_population"], depends_on=[],
+                variable_names=[identity], citations=[],
+                population_scope=STUDY_COHORT_SCOPE,
+            ),
+            _outline_step(
+                step_id="exposure_occurrence", role="secondary",
+                module_id="exposure_outcome_distribution",
+                objective=objectives["exposure_occurrence"], depends_on=["study_population"],
+                variable_names=[exposure, outcome], citations=occurrence_keys,
+                population_scope=STUDY_COHORT_SCOPE,
+            ),
+        ]
+        if occurrence is not None
+        else []
+    )
     outline_steps: list[ProgressiveOutlineStep] = [
+        *study_population_outline,
         _outline_step(
             step_id="cohort_definition", role="auxiliary", module_id="cohort_definition",
             objective=objectives["cohort_definition"], depends_on=[],
@@ -996,7 +1058,45 @@ def build_landmark_categorical_skeleton(
         request.complete_case_spec_id or "complete_case_primary_covariates",
         request.landmark_spec_id,
     ]
+    study_population_steps: list[ProgressiveSkeletonStep] = (
+        [
+            ProgressiveSkeletonStep(
+                step_id="study_population", planned_analysis_role="auxiliary",
+                module_id="cohort_definition", objective=objectives["study_population"],
+                depends_on=[], raw_inputs=[], population_scope=STUDY_COHORT_SCOPE,
+                outputs=[
+                    ProgressiveOutputIntent(
+                        product_id=occurrence.product_id, semantic_role="analysis_cohort"
+                    )
+                ],
+                literature_bindings=[],
+            ),
+            ProgressiveSkeletonStep(
+                step_id="exposure_occurrence", planned_analysis_role="secondary",
+                module_id="exposure_outcome_distribution",
+                objective=objectives["exposure_occurrence"], depends_on=["study_population"],
+                raw_inputs=[exposure, outcome],
+                product_inputs=[_ref("study_population", occurrence.product_id)],
+                primary_exposure=exposure, outcome=outcome, outcome_type="binary",
+                event_level_index=request.event_level_index,
+                reference_exposure_level_index=request.reference_level_index,
+                comparison_exposure_level_index=request.primary_contrast_level_index,
+                denominator_policy=occurrence.denominator_policy,
+                missing_exposure_policy=occurrence.missing_exposure_policy,
+                missing_outcome_policy=occurrence.missing_outcome_policy,
+                confidence_level=0.95,
+                population_scope=STUDY_COHORT_SCOPE,
+                literature_bindings=bindings(
+                    "exposure_occurrence", "exposure_outcome_distribution",
+                    "study-population exposure occurrence",
+                ),
+            ),
+        ]
+        if occurrence is not None
+        else []
+    )
     steps: list[ProgressiveSkeletonStep] = [
+        *study_population_steps,
         ProgressiveSkeletonStep(
             step_id="cohort_definition", planned_analysis_role="auxiliary", module_id="cohort_definition",
             objective=objectives["cohort_definition"], depends_on=[],
@@ -1169,6 +1269,11 @@ def build_landmark_categorical_skeleton(
                     for step_id in functional_step_ids
                 ),
                 *([_ref("ordinal_trend", "table:ordinal_trend")] if ordinal_present else []),
+                *(
+                    [_ref("exposure_occurrence", "table:exposure_outcome_distribution")]
+                    if occurrence is not None
+                    else []
+                ),
                 _ref("visualization", "figure:visualization"),
             ],
             outputs=[ProgressiveOutputIntent(product_id="report:report", semantic_role="report")],
@@ -1190,7 +1295,8 @@ def build_landmark_categorical_skeleton(
             display_labels=[
                 ProgressiveDisplayLabel(key=key, value=value)
                 for key, value in spec.labels.items()
-                if key in set(request.variable_roster)
+                # Level labels are sealed only for the study-population distribution.
+                if key in {*request.variable_roster, *request.level_label_keys}
             ],
             robustness_intents=[
                 ProgressiveRobustnessIntent(

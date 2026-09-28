@@ -48,6 +48,7 @@ from easyicu.research_agent.authority.plan_scope import (
     _serializable_plan_scientific_scope_signature,
 )
 from easyicu.research_agent.planning.cohort_contract import CohortDefinition
+from easyicu.research_agent.contracts.primary_cohort import STUDY_POPULATION_PRODUCTS
 from easyicu.research_agent.contracts.declared_product import (
     _primary_analysis_cohort_product_matches_plan,
     locked_primary_cohort_product,
@@ -223,6 +224,21 @@ def test_a_cohort_named_something_else_is_not_substituted(tmp_path: Path) -> Non
     binding, sample, producer_output = _binding(
         tmp_path, "cohort:a_different_population", locked_cohort_name=LOCKED
     )
+
+    assert binding is not None
+    assert binding["evidence_id"] == producer_output.evidence_id
+    assert binding["sha256"] != sample.sample_sha256
+
+
+@pytest.mark.parametrize("product", STUDY_POPULATION_PRODUCTS)
+def test_the_study_population_binds_its_own_producer_exactly(
+    tmp_path: Path, product: str
+) -> None:
+    """The host root republishes the run cohort -- in development, the sample
+    itself -- under a name that is never the locked cohort, so its consumer
+    reads that producer's bytes and is never handed a substituted sample."""
+
+    binding, sample, producer_output = _binding(tmp_path, product, locked_cohort_name=LOCKED)
 
     assert binding is not None
     assert binding["evidence_id"] == producer_output.evidence_id

@@ -2,25 +2,40 @@
 
 from __future__ import annotations
 
+import json
 import textwrap
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
+from ...contracts.primary_cohort import (
+    HOST_BOUND_COHORT_METHOD,
+    HOST_BOUND_COHORT_PRODUCT,
+    STUDY_POPULATION_PRODUCTS,
+)
 from ...schema import AnalysisStep
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 
 HOST_BOUND_COHORT_ANALYSIS_KIND = "host_bound_analysis_cohort"
-HOST_BOUND_COHORT_METHOD = "host_materialized_locked_cohort"
-HOST_BOUND_COHORT_PRODUCT = "table:analysis_cohort"
+_PUBLISHED_PRODUCTS = (HOST_BOUND_COHORT_PRODUCT, *STUDY_POPULATION_PRODUCTS)
+
+
+def _published_filename(product: str) -> str:
+    return f"{product.partition(':')[2]}.parquet"
 
 
 def host_bound_cohort_executor_owns_step(step: AnalysisStep) -> bool:
-    """Own only the exact interpretation-free root-product declaration."""
+    """Own only the exact interpretation-free root-product declaration.
 
+    The root publishes one product: the legacy primary cohort, or the study
+    population a narrower primary analysis cannot supply.
+    """
+
+    outputs = list(step.expected_outputs)
     return bool(
         step.method == HOST_BOUND_COHORT_METHOD
         and step.planned_analysis_role == "auxiliary"
         and not step.inputs
-        and list(step.expected_outputs) == [HOST_BOUND_COHORT_PRODUCT]
+        and len(outputs) == 1
+        and outputs[0] in _PUBLISHED_PRODUCTS
         and not step.model_requirements
         and step.table_one_spec is None
         and step.family_primary_result_requirement is None
@@ -36,6 +51,7 @@ def host_bound_cohort_executor_code(
 
     if not host_bound_cohort_executor_owns_step(step):
         raise ValueError("step is not owned by the host-bound cohort executor")
+    product = str(step.expected_outputs[0])
     if plausibility_scope is not None:
         plausibility_scope.require_step(step.step_id)
     receipt_code = (
@@ -64,7 +80,7 @@ def host_bound_cohort_executor_code(
         source = Path(os.environ["COHORT_PARQUET"]).resolve()
         out_dir = Path(os.environ["STEP_OUT_DIR"]).resolve()
         out_dir.mkdir(parents=True, exist_ok=True)
-        destination = out_dir / "analysis_cohort.parquet"
+        destination = out_dir / {json.dumps(_published_filename(product))}
         frame = pd.read_parquet(source)
         shutil.copyfile(source, destination)
         source_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
@@ -92,7 +108,7 @@ def host_bound_cohort_executor_code(
                 "row_order_preserved": True,
             }},
             "output_files": {{
-                {HOST_BOUND_COHORT_PRODUCT!r}: destination.name,
+                {product!r}: destination.name,
             }},
         }}
         {receipt_assignment}

@@ -3,13 +3,32 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from ..schema import AnalysisStep, ValidationFinding
+from .cohort_product_keys import sole_typed_cohort_input
 from .product_identity import (
     normalize_product_token as _normalise,
     typed_product,
 )
+from .scientific_runtime_ownership import has_scientific_runtime_owner
+
+#: The host's interpretation-free root step: it publishes the cohort the run
+#: already selected, byte for byte.  Its legacy product is the reserved
+#: ``table:analysis_cohort``.
+HOST_BOUND_COHORT_METHOD = "host_materialized_locked_cohort"
+HOST_BOUND_COHORT_PRODUCT = "table:analysis_cohort"
+#: The same bytes published under a name that is never the primary analysis
+#: cohort, for a plan whose primary analysis runs on a narrower population
+#: (a landmark cohort, say) but which must also estimate on the population the
+#: study selected.  Two spellings, because a plan may name its own locked
+#: cohort after the first; :func:`study_population_product_for` picks the one
+#: that cannot be read as that cohort.
+STUDY_POPULATION_PRODUCTS = (
+    "cohort:study_population",
+    "cohort:eligible_study_population",
+)
+StepCohortPopulation = Literal["study_cohort", "restricted", "unbound", "ambiguous"]
 
 _PRIMARY_ANALYSIS_COHORT_METHODS = frozenset(
     {
@@ -392,10 +411,86 @@ def primary_analysis_cohort_plan_findings(*, plan: Any) -> list[ValidationFindin
             findings.append(finding)
     return findings
 
+def study_population_product_for(locked_cohort_name: object) -> str:
+    """Return the study-population product the locked cohort cannot claim.
+
+    A product that normalises to the plan's own cohort name *is* the locked
+    primary cohort to every binding surface (:func:`locked_primary_cohort_
+    product`), so publishing the study population under it would give the plan
+    two locked producers.  At most one of the two spellings can collide.
+    """
+
+    for product in STUDY_POPULATION_PRODUCTS:
+        if (
+            locked_primary_cohort_product(product, locked_cohort_name=locked_cohort_name)
+            is None
+        ):
+            return product
+    raise ValueError("no study-population product is distinct from the locked cohort")
+
+
+def is_host_bound_cohort_publisher(step: AnalysisStep) -> bool:
+    """Whether a step is the host root that republishes the run's cohort."""
+
+    outputs = list(step.expected_outputs or [])
+    return bool(
+        step.method == HOST_BOUND_COHORT_METHOD
+        and not step.inputs
+        and len(outputs) == 1
+        and outputs[0] in (HOST_BOUND_COHORT_PRODUCT, *STUDY_POPULATION_PRODUCTS)
+    )
+
+
+def step_cohort_population(*, step: AnalysisStep, plan: Any) -> StepCohortPopulation:
+    """Name the population a step's one typed cohort input carries.
+
+    ``study_cohort``: the cohort the study selected, as its producer publishes
+    it -- the host root that republishes the run cohort, or an unsigned
+    cohort+attrition step that applies the Planner's eligibility to the raw
+    universe.  ``restricted``: any other producer, including a signed runtime's
+    cohort (a landmark cohort keeps only the stays alive and observed at the
+    landmark).  ``unbound``: no typed cohort input, or no producer of it.
+    ``ambiguous``: more than one producer.
+
+    The answer comes from the producer's typed declaration and runtime owner
+    only.  It never reads a compiler-attached cohort definition, which a signed
+    rebind keeps, nor the product's spelling, which any ``cohort:`` name
+    satisfies.
+    """
+
+    key = sole_typed_cohort_input(step)
+    if not key:
+        return "unbound"
+    producers = [
+        candidate
+        for candidate in getattr(plan, "steps", ())
+        if key in (candidate.expected_outputs or [])
+    ]
+    if not producers:
+        return "unbound"
+    if len(producers) != 1:
+        return "ambiguous"
+    producer = producers[0]
+    if is_host_bound_cohort_publisher(producer):
+        return "study_cohort"
+    if primary_analysis_cohort_producer_uses_universe(
+        step=producer, plan=plan
+    ) and not has_scientific_runtime_owner(producer):
+        return "study_cohort"
+    return "restricted"
+
+
 __all__ = [
+    "HOST_BOUND_COHORT_METHOD",
+    "HOST_BOUND_COHORT_PRODUCT",
+    "STUDY_POPULATION_PRODUCTS",
+    "StepCohortPopulation",
+    "is_host_bound_cohort_publisher",
     "is_primary_analysis_cohort_method",
     "locked_primary_cohort_product",
     "primary_analysis_cohort_plan_findings",
     "primary_analysis_cohort_producer_uses_universe",
     "reserved_primary_cohort_product",
+    "step_cohort_population",
+    "study_population_product_for",
 ]
