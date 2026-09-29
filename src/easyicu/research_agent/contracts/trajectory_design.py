@@ -31,10 +31,12 @@ __all__ = [
     "TRAJECTORY_HOST_POLICY",
     "TRAJECTORY_PRIMARY_ACTION",
     "FixedWindowTrajectoryDesign",
+    "TRAJECTORY_OWNER_PLANNER_RULE",
     "TrajectoryDesignError",
     "eligibility_coordinates",
     "executable_trajectory_coordinates",
     "load_trajectory_design",
+    "longitudinal_capability_note",
     "normalize_trajectory_design",
     "proposed_trajectory_coordinates",
     "sealed_trajectory_authority_body",
@@ -403,6 +405,55 @@ def executable_trajectory_coordinates(concepts: Sequence[str]) -> bool:
     return any(
         concept.startswith(ELIGIBILITY_COORDINATE_PREFIX) for concept in coordinates
     )
+
+
+def longitudinal_capability_note(offered_components: Iterable[str]) -> str:
+    """State the signed owner's rule to an agent that chooses concepts.
+
+    ``offered_components`` are the offered concepts that carry the per-window
+    observed/available receipts on which the owner counts eligible windows.
+    The note is a host fact: it names the rule and those concepts and leaves
+    the question-faithful choice to the agent.  It is empty when nothing
+    offered can satisfy the rule.
+    """
+
+    offered = sorted(
+        {
+            name
+            for concept in offered_components
+            if (name := str(concept or "").strip()).startswith(
+                ELIGIBILITY_COORDINATE_PREFIX
+            )
+        }
+    )
+    if not offered:
+        return ""
+    return (
+        "LONGITUDINAL CAPABILITY (a host fact, not a recommendation): for a "
+        "question about trajectories over ICU time, the host's signed "
+        "fixed-window trajectory owner models per-window values of at least two "
+        "time-varying concepts. It counts each stay's eligible windows on SOFA-2 "
+        "components, which carry per-window observed/available receipts, so its "
+        "design needs at least one of: "
+        + ", ".join(offered)
+        + ". Outcomes and one-value-per-stay concepts are never trajectory "
+        "coordinates. If such a question names a score without its version and "
+        "this catalog offers several versions, each is a faithful reading: "
+        "select one version and say which, and why, in the rationale. Keep a "
+        "version the question names, even when the owner cannot model it."
+    )
+
+
+#: The same rule as the Planner reads it before it chooses a primary step.
+TRAJECTORY_OWNER_PLANNER_RULE = (
+    "The host executes a phenotyping.trajectory_feature_clustering primary with "
+    "its signed fixed-window owner only when the primary's inputs are at least "
+    "two time-varying study variables, one of them a SOFA-2 component (a name "
+    f"starting with {ELIGIBILITY_COORDINATE_PREFIX!r}), and no outcome or "
+    "one-value-per-stay variable; otherwise its classes summarize per-stay "
+    "values. When the question names a score without its version, the "
+    "primary's intent says which version its coordinates use."
+)
 
 
 #: Variable roles whose values change within a stay and can be read in fixed

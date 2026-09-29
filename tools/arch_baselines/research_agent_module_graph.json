@@ -345,6 +345,10 @@
     ],
     [
       "easyicu.research_agent.acquisition.foundation",
+      "easyicu.research_agent.contracts.trajectory_design"
+    ],
+    [
+      "easyicu.research_agent.acquisition.foundation",
       "easyicu.research_agent.intake.materialized_metadata"
     ],
     [
@@ -1186,6 +1190,10 @@
     [
       "easyicu.research_agent.agents.progressive_planner",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.agents.progressive_prompt_contracts",
+      "easyicu.research_agent.contracts.trajectory_design"
     ],
     [
       "easyicu.research_agent.agents.progressive_prompt_contracts",
@@ -13100,7 +13108,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3267,
+    "edge_count": 3269,
     "largest_scc_size": 0,
     "module_count": 764,
     "package_count": 36,
