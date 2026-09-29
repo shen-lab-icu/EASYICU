@@ -9,6 +9,18 @@ from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
 
+from ..contracts.phenotype_comparison import (
+    COMPARISON_ACTION,
+    COMPARISON_PRODUCT,
+    TRAJECTORY_ASSIGNMENTS_PRODUCT,
+    comparison_cohort_input,
+    comparison_label_source,
+)
+from ..contracts.primary_cohort import (
+    HOST_BOUND_COHORT_METHOD,
+    is_host_bound_cohort_publisher,
+)
+
 _REPRESENTATION = "signed_fixed_window_trajectory_representation"
 _CANDIDATES = "observed_data_diagonal_gaussian_mixture_candidate_selection"
 _STABILITY = "trajectory_cluster_stability_characterization"
@@ -44,6 +56,9 @@ SIGNED_TRAJECTORY_FIGURE_INPUTS = (
     "table:cluster_sizes",
     "table:cluster_stability",
 )
+#: The long trajectory's stay identity.  The representation keys its rows by
+#: it, so the stability owner's frozen labels carry it too.
+SIGNED_TRAJECTORY_IDENTITY_COLUMN = "stay_id"
 
 
 def signed_trajectory_plan_claimed(plan: object) -> bool:
@@ -64,13 +79,53 @@ def _owner_steps(plan: object) -> tuple[Any, ...] | None:
     return owners if methods == SIGNED_TRAJECTORY_OWNER_METHODS else None
 
 
+def _frozen_class_description_errors(
+    descriptions: Sequence[Any], roots: Sequence[Any]
+) -> list[str]:
+    """Admit one description of the frozen classes on the host-bound run cohort.
+
+    The host wires it (``bind_plan``): it reads the cohort the run selected,
+    republished byte for byte by the interpretation-free root, and the
+    stability owner's labels and freeze record, and it feeds no owner.
+    """
+
+    if len(descriptions) != 1 or len(roots) != 1:
+        return [
+            "signed trajectory plan may describe the frozen classes once, "
+            "on one host-bound run cohort"
+        ]
+    description, root = descriptions[0], roots[0]
+    spec = getattr(description, "phenotype_comparison_spec", None)
+    try:
+        cohort_key = comparison_cohort_input(description)
+        label_source = comparison_label_source(description)
+    except ValueError:
+        cohort_key = label_source = None
+    if not (
+        is_host_bound_cohort_publisher(root)
+        and getattr(root, "planned_analysis_role", None) == "auxiliary"
+        and label_source == TRAJECTORY_ASSIGNMENTS_PRODUCT
+        and cohort_key == root.expected_outputs[0]
+        and getattr(description, "planned_analysis_role", None) == "secondary"
+        and list(getattr(description, "expected_outputs", ()) or ()) == [COMPARISON_PRODUCT]
+        and getattr(spec, "identity_column", None) == SIGNED_TRAJECTORY_IDENTITY_COLUMN
+    ):
+        return [
+            "signed trajectory description step "
+            f"{getattr(description, 'step_id', '')!r} is not wired to the host-bound "
+            "run cohort and the frozen trajectory labels"
+        ]
+    return []
+
+
 def _companion_errors(plan: object, owners: Sequence[Any]) -> list[str]:
-    """A companion may only render the owners' tables.
+    """A companion may only render the owners' tables or describe their classes.
 
     The host appends deterministic renderers after binding, such as the cohort
     flow figure over the representation's ``table:cohort_flow``.  Such a step
     reads no row-level artifact, publishes no product an owner publishes, and
-    claims no scientific role, so the signed decision stays closed.
+    claims no scientific role, so the signed decision stays closed.  The one
+    description of the frozen classes is checked by its own wiring.
     """
 
     owner_ids = {id(step) for step in owners}
@@ -78,9 +133,27 @@ def _companion_errors(plan: object, owners: Sequence[Any]) -> list[str]:
         str(value) for step in owners for value in getattr(step, "expected_outputs", ()) or ()
     }
     owner_tables = {value for value in owner_outputs if value.startswith("table:")}
-    errors: list[str] = []
-    for step in tuple(getattr(plan, "steps", ()) or ()):
-        if id(step) in owner_ids:
+    companions = [
+        step for step in tuple(getattr(plan, "steps", ()) or ()) if id(step) not in owner_ids
+    ]
+    descriptions = [
+        step
+        for step in companions
+        if getattr(step, "scientific_action_id", None) == COMPARISON_ACTION
+    ]
+    roots = [
+        step
+        for step in companions
+        if str(getattr(step, "method", "") or "") == HOST_BOUND_COHORT_METHOD
+    ]
+    errors: list[str] = (
+        _frozen_class_description_errors(descriptions, roots)
+        if descriptions or roots
+        else []
+    )
+    described = {id(step) for step in (*descriptions, *roots)}
+    for step in companions:
+        if id(step) in described:
             continue
         inputs = {str(value) for value in getattr(step, "inputs", ()) or ()}
         outputs = [str(value) for value in getattr(step, "expected_outputs", ()) or ()]
@@ -365,6 +438,7 @@ def signed_trajectory_runtime_bundle_errors(
 __all__ = [
     "SIGNED_TRAJECTORY_CANDIDATE_INPUTS",
     "SIGNED_TRAJECTORY_FIGURE_INPUTS",
+    "SIGNED_TRAJECTORY_IDENTITY_COLUMN",
     "SIGNED_TRAJECTORY_OWNER_METHODS",
     "SIGNED_TRAJECTORY_STABILITY_INPUTS",
     "signed_trajectory_plan_claimed",

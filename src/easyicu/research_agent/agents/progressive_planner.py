@@ -124,6 +124,7 @@ from ..planning.progressive_resume import (
 from ..planning.robustness_contract import validate_planner_robustness_specs
 from ..planning.scientific_action_catalog import scientific_actions_for_analysis_type
 from ..planning.scientific_review import required_method_layers_for_context, requested_outcomes
+from ..planning.phenotype_outline_rules import validate_outline_phenotype_comparison
 from ..providers.capabilities import llm_supports_strict_json_schema
 from ..providers.llm import llm_is_mockish
 from ..planning.prompt_projection import (
@@ -2083,31 +2084,13 @@ class ProgressivePlannerAgent:
                     "change the variance ceiling or the scientific question.",
                     path="analysis_type",
                 )
-        primary_clusters = [
-            step.step_id for step in outline.steps
-            if step.scientific_action_id == "phenotyping.cluster_solution"
-            and step.planned_analysis_role == "primary"
-        ]
-        required_cluster_outcomes = set(
-            requested_outcomes(article_context) if article_context is not None
-            else ([target_outcome] if target_outcome else [])
+        validate_outline_phenotype_comparison(
+            outline,
+            requested_outcomes=(
+                requested_outcomes(article_context) if article_context is not None
+                else ([target_outcome] if target_outcome else [])
+            ),
         )
-        if primary_clusters and required_cluster_outcomes:
-            comparisons = [step for step in outline.steps if step.scientific_action_id == "phenotyping.outcome_by_cluster"]
-            if not (
-                len(primary_clusters) == 1 and len(comparisons) == 1
-                and comparisons[0].planned_analysis_role == "secondary"
-                and comparisons[0].module_id == "custom_analysis"
-                and primary_clusters[0] in comparisons[0].depends_on
-                and required_cluster_outcomes.issubset(comparisons[0].variable_names)
-            ):
-                raise ProgressivePlanCompileError(
-                    "progressive_outline_phenotype_comparison_incomplete",
-                    "Requested post-clustering outcomes require one separate secondary phenotyping.outcome_by_cluster step, "
-                    "directly dependent on the primary cluster solution and naming every requested outcome. "
-                    "A fit/profile/figure step is not the comparison owner.", path="steps",
-                    findings=({"required_outcomes": sorted(required_cluster_outcomes), "primary_step_ids": primary_clusters},),
-                )
         if article_context is not None:
             from ..planning.population_requirements import validate_population_choice
 

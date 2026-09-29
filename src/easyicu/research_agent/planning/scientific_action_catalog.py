@@ -79,21 +79,35 @@ class ScientificActionRuntimeContract:
 
     outputs: Tuple[Tuple[str, str], ...]
     required_product_inputs: Tuple[str, ...] = ()
+    #: Other complete product-input sets the same executor accepts.  Only a
+    #: host template emits one today, so Planner prompts keep showing the
+    #: required set alone.
+    alternative_product_inputs: Tuple[Tuple[str, ...], ...] = ()
     article_roles: Tuple[str, ...] = ()
     standard_executor: str = ""
     display_name: str = ""
     purpose: str = ""
     execution_parameters: Tuple[Tuple[str, object], ...] = ()
 
+    @property
+    def accepted_product_inputs(self) -> Tuple[Tuple[str, ...], ...]:
+        return (self.required_product_inputs, *self.alternative_product_inputs)
+
 
 _RUNTIME_CONTRACTS: dict[str, ScientificActionRuntimeContract] = {
     "phenotyping.outcome_by_cluster": ScientificActionRuntimeContract(
         outputs=(("table:outcome_by_cluster", "custom"),),
         required_product_inputs=("artifact:analysis_cohort", "table:phenotype_assignments"),
+        # The signed trajectory suite's frozen labels and freeze record.
+        alternative_product_inputs=(
+            ("artifact:analysis_cohort", "table:cluster_assignments", "artifact:stability_freeze"),
+        ),
         article_roles=("phenotype_profile",),
         standard_executor="phenotype_comparison",
         display_name="Clinical and outcome descriptions by frozen cluster",
-        purpose="Describe the explicitly selected clinical/outcome roster on exactly the primary clustering cohort, with observed denominators and missing counts; no refit, inferential tests or causal claim.",
+        purpose=("Describe the explicitly selected clinical/outcome roster on exactly the primary clustering cohort "
+                 "(for frozen trajectory labels, the run cohort, counting the stays not clustered), with observed "
+                 "denominators and missing counts; no refit, inferential tests or causal claim."),
         execution_parameters=(("grouping", "frozen_primary_assignments"), ("join", "exact_unique_source_identity"),
                               ("missingness", "observed_per_variable_with_missing_counts"), ("inference", "none_data_derived_groups")),
     ),

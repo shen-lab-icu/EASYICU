@@ -772,21 +772,26 @@ def _migrate_installed_runtime_contract(
     contract = action.runtime_contract
     if contract is None:
         return materialization
-    references: list[ProgressiveProductRef] = []
-    for product_id in contract.required_product_inputs:
-        owners = [
-            producer
-            for producer, available_product in available_product_refs
-            if available_product == product_id
-        ]
-        if len(owners) != 1 or owners[0] not in step.depends_on:
-            return materialization
-        references.append(
-            ProgressiveProductRef(
-                producer_step_id=owners[0],
-                product_id=product_id,
+    declared = tuple(reference.product_id for reference in step.product_inputs)
+    if declared in contract.alternative_product_inputs:
+        # An accepted alternative set is already the owner's own coordinate.
+        references = list(step.product_inputs)
+    else:
+        references = []
+        for product_id in contract.required_product_inputs:
+            owners = [
+                producer
+                for producer, available_product in available_product_refs
+                if available_product == product_id
+            ]
+            if len(owners) != 1 or owners[0] not in step.depends_on:
+                return materialization
+            references.append(
+                ProgressiveProductRef(
+                    producer_step_id=owners[0],
+                    product_id=product_id,
+                )
             )
-        )
     outputs = [
         ProgressiveOutputIntent(product_id=product_id, semantic_role=semantic_role)
         for product_id, semantic_role in contract.outputs

@@ -17,8 +17,9 @@ Step layout (before the host binds the authority):
 3. ``trajectory_representation``  the sealed representation owner
 4. ``candidate_selection``        the sealed candidate-grid owner (primary)
 5. ``cluster_stability``          the signed stability design
-6. ``selection_figure``           candidate-grid and availability diagnostics
-7. ``report``                     zero-patient-row plan report
+6. ``outcome_by_class``           the outcome by frozen class (when the study has one)
+7. ``selection_figure``           candidate-grid and availability diagnostics
+8. ``report``                     zero-patient-row plan report
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ from ..progressive_contract import (
     ProgressiveProductRef,
     ProgressiveSkeletonStep,
     ProgressiveStepMaterialization,
+    ProgressiveTableOneVariable,
 )
 from .contract import (
     FIXED_WINDOW_TRAJECTORY_FAMILY_ID,
@@ -56,6 +58,7 @@ from .landmark_categorical_template import (
     _method_card_elements,
     _method_card_ids,
 )
+from .phenotyping_template import OUTCOME_BY_CLUSTER_ACTION, OUTCOME_BY_CLUSTER_METHOD
 from .plan_language import listing, plan_language, sentence
 
 #: Products the signed candidate owner registers (``trajectory/plan_contract``).
@@ -83,14 +86,18 @@ _AUDIT_OUTPUTS = (
 _PRIMARY_DESIGN_ELEMENTS = (
     "dependence", "estimand", "missing_data", "reporting", "robustness", "time_zero",
 )
+#: What a method card must cover to support describing the frozen classes, as
+#: for the cross-sectional template's characterization step.
+_DESCRIPTION_DESIGN_ELEMENTS = ("estimand", "outcome", "reporting")
 
 
 def _bindings(
     outline_step: ProgressiveOutlineStep,
     *,
     comparator_applications: dict[str, str],
+    elements: tuple[str, ...] = _PRIMARY_DESIGN_ELEMENTS,
 ) -> list[ProgressiveLiteratureBinding]:
-    desired = set(_PRIMARY_DESIGN_ELEMENTS)
+    desired = set(elements)
     bindings: list[ProgressiveLiteratureBinding] = []
     for key in outline_step.literature_citation_keys:
         if key in comparator_applications:
@@ -260,6 +267,7 @@ def _outline_step(
     depends_on: list[str],
     variable_names: list[str],
     citations: list[str],
+    scientific_action_id: str | None = None,
 ) -> ProgressiveOutlineStep:
     return ProgressiveOutlineStep(
         step_id=step_id,
@@ -269,7 +277,7 @@ def _outline_step(
         depends_on=depends_on,
         variable_names=list(dict.fromkeys(variable_names)),
         literature_citation_keys=list(dict.fromkeys(citations))[:12],
-        scientific_action_id=None,
+        scientific_action_id=scientific_action_id,
     )
 
 
@@ -310,6 +318,9 @@ def build_fixed_window_trajectory_skeleton(
             ]
         )
     )[:12]
+    description_keys = [
+        k for k in method_keys if _method_card_elements(k) & set(_DESCRIPTION_DESIGN_ELEMENTS)
+    ][:12]
     design = _design_selection(request, spec, method_keys=[k for k in method_keys if k in set(primary_keys)][:6])
     window = f"{sealed.window_hours[0]}–{sealed.window_hours[1]} h"
     objectives = {
@@ -332,6 +343,11 @@ def build_fixed_window_trajectory_skeleton(
         "cluster_stability": (
             "Execute the signed resampling stability design and characterize the frozen "
             "partition; an unstable or boundary solution is a formal no-solution result."
+        ),
+        "outcome_by_class": (
+            "Describe the outcome by frozen class after the stability freeze; stays with too "
+            "few observed windows are counted, not described as a class; no inference or "
+            "causal claim, and nothing is described when no class was frozen."
         ),
         "selection_figure": (
             "Render the candidate-grid criterion and coordinate availability diagnostics "
@@ -369,6 +385,19 @@ def build_fixed_window_trajectory_skeleton(
             objective=objectives["cluster_stability"],
             depends_on=["trajectory_representation", "candidate_selection"],
             variable_names=[identity, outcome], citations=[],
+        ),
+        *(
+            [
+                _outline_step(
+                    step_id="outcome_by_class", role="secondary", module_id="custom_analysis",
+                    objective=objectives["outcome_by_class"],
+                    depends_on=["cohort_accounting", "cluster_stability"],
+                    variable_names=[identity, outcome], citations=description_keys,
+                    scientific_action_id=OUTCOME_BY_CLUSTER_ACTION,
+                )
+            ]
+            if outcome
+            else []
         ),
         _outline_step(
             step_id="selection_figure", role="auxiliary", module_id="visualization",
@@ -467,6 +496,44 @@ def build_fixed_window_trajectory_skeleton(
             custom_method=TRAJECTORY_STABILITY_CHARACTERIZATION_METHOD_HEAD,
             literature_bindings=[],
         ),
+        *(
+            [
+                # The signed owners never read the outcome; it is described
+                # only after the freeze, on the stability owner's frozen labels.
+                ProgressiveSkeletonStep(
+                    step_id="outcome_by_class", planned_analysis_role="secondary",
+                    module_id="custom_analysis", objective=objectives["outcome_by_class"],
+                    depends_on=["cohort_accounting", "cluster_stability"],
+                    raw_inputs=[outcome],
+                    product_inputs=[
+                        _ref("cohort_accounting", "artifact:analysis_cohort"),
+                        _ref("cluster_stability", "table:cluster_assignments"),
+                        _ref("cluster_stability", "artifact:stability_freeze"),
+                    ],
+                    outputs=[
+                        ProgressiveOutputIntent(
+                            product_id="table:outcome_by_cluster", semantic_role="custom"
+                        )
+                    ],
+                    scientific_action_id=OUTCOME_BY_CLUSTER_ACTION,
+                    custom_method=OUTCOME_BY_CLUSTER_METHOD,
+                    phenotyping_comparison_variables=[
+                        ProgressiveTableOneVariable(
+                            name=outcome,
+                            summary=(
+                                "count_percent" if len(request.outcome_levels) == 2 else "median_iqr"
+                            ),
+                        )
+                    ],
+                    literature_bindings=_bindings(
+                        bound["outcome_by_class"], comparator_applications={},
+                        elements=_DESCRIPTION_DESIGN_ELEMENTS,
+                    ),
+                )
+            ]
+            if outcome
+            else []
+        ),
         ProgressiveSkeletonStep(
             step_id="selection_figure", planned_analysis_role="auxiliary", module_id="visualization",
             objective=objectives["selection_figure"],
@@ -494,6 +561,7 @@ def build_fixed_window_trajectory_skeleton(
                     if product.startswith("table:")
                 ),
                 _ref("selection_figure", SELECTION_FIGURE),
+                *([_ref("outcome_by_class", "table:outcome_by_cluster")] if outcome else []),
             ],
             outputs=[ProgressiveOutputIntent(product_id="report:report", semantic_role="report")],
             literature_bindings=[],

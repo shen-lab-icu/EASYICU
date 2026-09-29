@@ -1097,6 +1097,10 @@
     ],
     [
       "easyicu.research_agent.agents.progressive_planner",
+      "easyicu.research_agent.planning.phenotype_outline_rules"
+    ],
+    [
+      "easyicu.research_agent.agents.progressive_planner",
       "easyicu.research_agent.planning.planner_output_contract"
     ],
     [
@@ -8501,7 +8505,19 @@
     ],
     [
       "easyicu.research_agent.orchestration.scientific_runtime",
+      "easyicu.research_agent.contracts.phenotype_comparison"
+    ],
+    [
+      "easyicu.research_agent.orchestration.scientific_runtime",
+      "easyicu.research_agent.contracts.primary_cohort"
+    ],
+    [
+      "easyicu.research_agent.orchestration.scientific_runtime",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.orchestration.scientific_runtime",
+      "easyicu.research_agent.trajectory.runtime_validation"
     ],
     [
       "easyicu.research_agent.orchestration.scientific_runtime",
@@ -9585,6 +9601,10 @@
     ],
     [
       "easyicu.research_agent.planning.family_spec.trajectory_template",
+      "easyicu.research_agent.planning.family_spec.phenotyping_template"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.trajectory_template",
       "easyicu.research_agent.planning.family_spec.plan_language"
     ],
     [
@@ -9758,6 +9778,18 @@
     [
       "easyicu.research_agent.planning.ordinal_multi_outcome",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.planning.phenotype_outline_rules",
+      "easyicu.research_agent.contracts.phenotype_comparison"
+    ],
+    [
+      "easyicu.research_agent.planning.phenotype_outline_rules",
+      "easyicu.research_agent.contracts.trajectory_design"
+    ],
+    [
+      "easyicu.research_agent.planning.phenotype_outline_rules",
+      "easyicu.research_agent.planning.progressive_contract"
     ],
     [
       "easyicu.research_agent.planning.plan_graph",
@@ -12993,6 +13025,10 @@
     ],
     [
       "easyicu.research_agent.trajectory.bundle",
+      "easyicu.research_agent.contracts.phenotype_comparison"
+    ],
+    [
+      "easyicu.research_agent.trajectory.bundle",
       "easyicu.research_agent.schema"
     ],
     [
@@ -13017,7 +13053,19 @@
     ],
     [
       "easyicu.research_agent.trajectory.plan_contract",
+      "easyicu.research_agent.contracts.phenotype_comparison"
+    ],
+    [
+      "easyicu.research_agent.trajectory.plan_contract",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.trajectory.runtime_validation",
+      "easyicu.research_agent.contracts.phenotype_comparison"
+    ],
+    [
+      "easyicu.research_agent.trajectory.runtime_validation",
+      "easyicu.research_agent.contracts.primary_cohort"
     ],
     [
       "easyicu.research_agent.trajectory.scientific_runtime_authority",
@@ -13044,9 +13092,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3253,
+    "edge_count": 3265,
     "largest_scc_size": 0,
-    "module_count": 762,
+    "module_count": 763,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -13588,6 +13636,7 @@
     "easyicu.research_agent.planning.method_vocabulary": "planning/method_vocabulary.py",
     "easyicu.research_agent.planning.novelty_contract": "planning/novelty_contract.py",
     "easyicu.research_agent.planning.ordinal_multi_outcome": "planning/ordinal_multi_outcome.py",
+    "easyicu.research_agent.planning.phenotype_outline_rules": "planning/phenotype_outline_rules.py",
     "easyicu.research_agent.planning.plan_graph": "planning/plan_graph.py",
     "easyicu.research_agent.planning.planner_output_contract": "planning/planner_output_contract.py",
     "easyicu.research_agent.planning.population_requirements": "planning/population_requirements.py",

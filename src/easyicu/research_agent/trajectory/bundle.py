@@ -29,6 +29,7 @@ from ..authority.runtime_artifacts import (
     current_successful_step_records,
     verified_run_evidence_path,
 )
+from ..contracts.phenotype_comparison import is_host_comparison_step
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
 from .contract import (
     trajectory_phenotyping_artifact_findings,
@@ -236,6 +237,10 @@ def resolve_trajectory_bundle_plan_authority(
 
     declared: dict[str, list[str]] = {filename: [] for filename in _CANONICAL_FILES}
     for step in plan.steps or []:
+        if is_host_comparison_step(step):
+            # Its own host contract validates this description; the bundle
+            # neither claims nor replays it.
+            continue
         for output in step.expected_outputs or []:
             filename = _declared_canonical_file(output)
             if filename is not None and step.step_id not in declared[filename]:
@@ -434,11 +439,14 @@ def trajectory_bundle_findings(
     }
     required_files = list(owners)
     current_records = current_evidence_records(evidence.records(), per_step_records)
+    host_comparisons = {
+        step.step_id for step in plan.steps or [] if is_host_comparison_step(step)
+    }
     candidates: dict[str, list[Any]] = {filename: [] for filename in required_files}
     unexpected_canonical: list[tuple[str, Any]] = []
     for record in current_records:
         filename = _registered_basename(record)
-        if filename is None:
+        if filename is None or _record_field(record, "produced_by_step") in host_comparisons:
             continue
         if filename in candidates:
             candidates[filename].append(record)

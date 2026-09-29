@@ -11,7 +11,19 @@ from ..authority.current_case_scientific_runtime import (
     load_current_case_scientific_runtime_authority,
 )
 from ..contracts.endpoint import EndpointSpec
-from ..schema import AnalysisPlan, ValidationFinding
+from ..contracts.phenotype_comparison import (
+    COMPARISON_ACTION,
+    COMPARISON_PRODUCT,
+    TRAJECTORY_ASSIGNMENTS_PRODUCT,
+    TRAJECTORY_FREEZE_PRODUCT,
+    validate_comparison_step,
+)
+from ..contracts.primary_cohort import (
+    HOST_BOUND_COHORT_METHOD,
+    HOST_BOUND_COHORT_PRODUCT,
+)
+from ..schema import AnalysisPlan, AnalysisStep, ValidationFinding
+from ..trajectory.runtime_validation import signed_trajectory_plan_contract_errors
 from ..trajectory.scientific_runtime_authority import (
     TrajectoryScientificRuntimeAuthority,
     load_trajectory_scientific_runtime_authority,
@@ -204,6 +216,90 @@ def _carry_owner_literature(
     return bound.model_copy(update={"steps": steps}), carried
 
 
+#: Host step ids for the frozen-class description beside the signed owners.
+FROZEN_CLASS_COHORT_STEP_ID = "04_host_bound_analysis_cohort"
+FROZEN_CLASS_DESCRIPTION_STEP_ID = "05_frozen_class_description"
+
+
+def _carry_frozen_class_description(
+    *, draft: AnalysisPlan, bound: AnalysisPlan
+) -> tuple[AnalysisPlan, dict[str, Any]]:
+    """Keep a draft's description of the frozen classes, wired by the host.
+
+    The signed owners never read an outcome.  A draft may still ask to
+    describe the frozen classes with one ``phenotyping.outcome_by_cluster``
+    step.  The draft owns that step's roster, intent, method label and
+    sources; the host owns its wiring: the run's selected cohort, republished
+    byte for byte by the interpretation-free root, and the stability owner's
+    labels and freeze record.  A draft with several such steps is ambiguous,
+    and a step the signed contract refuses is not carried; both are reported.
+    """
+
+    sources = [
+        step
+        for step in draft.steps
+        if step.scientific_action_id == COMPARISON_ACTION
+    ]
+    if not sources:
+        return bound, {"carried": False, "reason": "not_requested"}
+    if len(sources) != 1 or sources[0].phenotype_comparison_spec is None:
+        return bound, {
+            "carried": False,
+            "reason": "ambiguous_or_unspecified",
+            "draft_step_ids": [step.step_id for step in sources],
+        }
+    source = sources[0]
+    spec = source.phenotype_comparison_spec
+    root = AnalysisStep(
+        step_id=FROZEN_CLASS_COHORT_STEP_ID,
+        planned_analysis_role="auxiliary",
+        intent=(
+            "Publish the run's selected cohort, byte for byte, as the population "
+            "on which the frozen classes are described."
+        ),
+        inputs=[],
+        expected_outputs=[HOST_BOUND_COHORT_PRODUCT],
+        method=HOST_BOUND_COHORT_METHOD,
+    )
+    description = AnalysisStep(
+        step_id=FROZEN_CLASS_DESCRIPTION_STEP_ID,
+        planned_analysis_role="secondary",
+        intent=source.intent,
+        method=source.method,
+        scientific_action_id=COMPARISON_ACTION,
+        inputs=[
+            spec.identity_column,
+            *(variable.name for variable in spec.variables),
+            HOST_BOUND_COHORT_PRODUCT,
+            TRAJECTORY_ASSIGNMENTS_PRODUCT,
+            TRAJECTORY_FREEZE_PRODUCT,
+        ],
+        expected_outputs=[COMPARISON_PRODUCT],
+        phenotype_comparison_spec=spec,
+        literature_citation_keys=list(source.literature_citation_keys),
+        literature_design_bindings=list(source.literature_design_bindings),
+    )
+    plan = bound.model_copy(update={"steps": [*bound.steps, root, description]})
+    try:
+        validate_comparison_step(description)
+    except ValueError as exc:
+        errors = [str(exc)]
+    else:
+        errors = signed_trajectory_plan_contract_errors(plan)
+    if errors:
+        return bound, {
+            "carried": False,
+            "reason": "signed_contract_refused",
+            "draft_step_ids": [source.step_id],
+            "errors": errors,
+        }
+    return plan, {
+        "carried": True,
+        "draft_step_ids": [source.step_id],
+        "step_ids": [root.step_id, description.step_id],
+    }
+
+
 def _compilation_finding(
     authority: CurrentCaseScientificRuntimeAuthority,
     plan: AnalysisPlan,
@@ -388,27 +484,39 @@ class ScientificRuntimeAuthorities:
             # same way as the development projection: every scientific
             # coordinate comes from the digest-bound authority, never from
             # the draft's inputs, outputs or prose. Only the sources the
-            # draft bound to each owner are kept.
+            # draft bound to each owner, and its description of the frozen
+            # classes, are kept.
             bound, literature_step_ids = _carry_owner_literature(
                 draft=plan,
                 bound=trajectory_authority.development_execution_only_plan(
                     research_question=plan.research_question
                 ),
             )
+            bound, description = _carry_frozen_class_description(
+                draft=plan, bound=bound
+            )
+            message = (
+                "Removed generic article-shaping additions and compiled "
+                "the four signed trajectory execution owners"
+                + (
+                    ", and wired the draft's description of the frozen "
+                    "classes to the run cohort and the stability owner."
+                    if description["carried"]
+                    else "."
+                )
+            )
             return bound, [
                 ValidationFinding(
                     validator="scientific_runtime_plan_compiler",
                     severity="warning",
-                    message=(
-                        "Removed generic article-shaping additions and compiled "
-                        "the four signed trajectory execution owners."
-                    ),
+                    message=message,
                     detail={
                         "reason_code": (
                             "trajectory_development_execution_only_authority_compiled"
                         ),
                         "step_ids": [step.step_id for step in bound.steps],
                         "literature_carried_step_ids": literature_step_ids,
+                        "frozen_class_description": description,
                         "execution_contract_sha256": (
                             trajectory_authority.execution_contract_sha256
                         ),

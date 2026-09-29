@@ -1,8 +1,6 @@
 {
   "baseline_change_summary": {
-    "source_digest_changes": [
-      "src/easyicu/research_agent/planning/analysis_types.py"
-    ],
+    "source_digest_changes": [],
     "summary_changes": {}
   },
   "baseline_history": [
@@ -588,9 +586,14 @@
         "src/easyicu/research_agent/planning/analysis_types.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "T (frozen trajectory class description): planning/scientific_action_catalog.py states that phenotyping.outcome_by_cluster describes frozen trajectory labels on the run cohort and counts the stays not clustered (+81 bytes in Canonical9 task H3's Planner contract); resource selections and every other task are unchanged.",
+      "source_digest_changes": [],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "fixB: planning/analysis_types.py reads whether the question asks how often its exposure occurs (requested_exposure_occurrence_cues, used by the review and the landmark family request); the Canonical9 prompt and context envelope is unchanged.",
+  "baseline_reason": "T (frozen trajectory class description): planning/scientific_action_catalog.py states that phenotyping.outcome_by_cluster describes frozen trajectory labels on the run cohort and counts the stays not clustered (+81 bytes in Canonical9 task H3's Planner contract); resource selections and every other task are unchanged.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -1558,15 +1561,15 @@
       "know_how_prompt_bytes": 3872,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15096,
+        "approx_input_tokens": 15116,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47437,
+            "bytes": 47518,
             "included": true,
             "required": true,
-            "sha256": "0e5d6924a58da644fb5f4d77a65fff48f696a2a9abfade0d3b6031480013190d"
+            "sha256": "8d92abc079e1eaaeea198b28514fecfbace0568ebc317c94c0630514cfb47ec6"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -1577,27 +1580,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 60381,
+        "total_bytes": 60462,
         "truncated_strings": false,
-        "user_bytes": 51937
+        "user_bytes": 52018
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13971,
+        "approx_input_tokens": 13991,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 47437,
+            "bytes": 47518,
             "included": true,
             "required": true,
-            "sha256": "0e5d6924a58da644fb5f4d77a65fff48f696a2a9abfade0d3b6031480013190d"
+            "sha256": "8d92abc079e1eaaeea198b28514fecfbace0568ebc317c94c0630514cfb47ec6"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 55881,
+        "total_bytes": 55962,
         "truncated_strings": false,
-        "user_bytes": 47437
+        "user_bytes": 47518
       },
       "planning_contract_bytes": 6791,
       "planning_contract_sha256": "62e1d3ad93ceab51cf7fcb9c872658398efcd2b4de7fe3d55fe660a6d87aaeb2",
