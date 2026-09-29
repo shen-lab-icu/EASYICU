@@ -165,6 +165,26 @@ def test_outcome_or_one_per_stay_inputs_are_never_compiled(extra: str, reason: s
     # The remaining coordinates are not a proposal on their own: the plan
     # clustered on more than them, so the Host must not compile them.
     assert facts["proposed_coordinates"] == ["sofa2_resp", "sofa2_cardio"]
+    # They would be a design, so one Planner revision reaches the owner: the
+    # plan is revised before approval instead of disclosing a limitation.
+    assert facts["coordinates_executable"] is True
+    assert finding.severity == "blocker"
+    assert remediation_route_for_finding(finding) == "agent_plan_revision"
+    assert finding.code not in plan_revision_blocker_codes(review.findings)
+    assert not review.approval_allowed
+    assert "inputs are only sofa2_resp, sofa2_cardio" in finding.remediation
+    assert "describes the requested outcomes on its frozen classes" in finding.remediation
+
+
+def test_an_outcome_input_beside_coordinates_the_owner_cannot_model_states_the_limitation() -> None:
+    review, findings = _review(
+        _context(), _plan(_step(("sofa_resp", "sofa_cardio", "death")))
+    )
+
+    [finding] = findings
+    assert finding.code == "TRAJECTORY_REPRESENTATION_NOT_LONGITUDINAL"
+    assert finding.severity == "major"
+    assert review.facts["trajectory_representation"]["coordinates_executable"] is False
 
 
 def _cross_sectional_step(inputs: tuple[str, ...]) -> AnalysisStep:

@@ -24,6 +24,7 @@ from easyicu.research_agent.agents.progressive_planner import (
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.contracts.endpoint import EndpointSpec
 from easyicu.research_agent.contracts.trajectory_design import (
+    TRAJECTORY_OUTCOME_DESCRIPTION_RULE,
     load_trajectory_design,
     sealed_trajectory_authority_body,
 )
@@ -619,3 +620,7 @@ def test_a_model_coded_trajectory_primary_is_refused_the_comparison_action():
             target_outcome="death",
         )
     assert caught.value.reason_code == "progressive_outline_trajectory_comparison_unowned"
+    # The refusal says where the outcomes are described instead, in the words
+    # of the Planner's own outline contract, so a retry does not move them
+    # into the primary's inputs.
+    assert TRAJECTORY_OUTCOME_DESCRIPTION_RULE in caught.value.details["message"]

@@ -2187,9 +2187,13 @@ def trajectory_representation_findings(
     """Say when claimed trajectory classes are built from one value per stay.
 
     The Host can seal the signed owner over the plan's own coordinates, so
-    that case blocks until it does.  Otherwise the finding does not push the
-    plan toward other coordinates: a question about variables the owner
-    cannot model keeps them, with the limitation stated.
+    that case blocks until it does.  When the primary's time-varying
+    coordinates alone would be such a design and only the outcomes or
+    one-per-stay variables it also clusters on stand in the way, one Planner
+    revision reaches the owner, and an outcome in the clustering is leakage:
+    that case blocks until the plan is revised.  Otherwise the finding does
+    not push the plan toward other coordinates: a question about variables
+    the owner cannot model keeps them, with the limitation stated.
     """
 
     if facts is None or facts["longitudinal_owner"] is not None:
@@ -2246,6 +2250,32 @@ def trajectory_representation_findings(
         )
     if not reasons:
         reasons.append("its coordinates are not a valid trajectory design")
+    if facts.get("coordinates_executable"):
+        return [
+            PlanScientificFinding(
+                code="TRAJECTORY_REPRESENTATION_NOT_LONGITUDINAL",
+                severity="blocker",
+                dimension="statistical_design",
+                message=(
+                    "The trajectory plan's primary step clusters one value per "
+                    "ICU stay and the signed fixed-window owner cannot take it "
+                    "over: "
+                    + "; ".join(reasons)
+                    + ". Its time-varying coordinates "
+                    + ", ".join(coordinates)
+                    + " alone are a design the owner can model."
+                ),
+                evidence_refs=refs,
+                remediation=(
+                    "Revise the primary step so its inputs are only "
+                    + ", ".join(coordinates)
+                    + ". The host then replaces it with the signed fixed-window "
+                    "suite, which describes the requested outcomes on its frozen "
+                    "classes. Keep the question and these coordinates."
+                ),
+                remediation_route="agent_plan_revision",
+            )
+        ]
     return [
         PlanScientificFinding(
             code="TRAJECTORY_REPRESENTATION_NOT_LONGITUDINAL",
