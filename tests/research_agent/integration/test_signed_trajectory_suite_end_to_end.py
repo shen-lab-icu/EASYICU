@@ -1,0 +1,381 @@
+"""The signed trajectory suite runs through its figure and class description.
+
+End to end without a Provider: a typed synthetic export is materialized by the
+host, the signed owners run on the long panel, the selection figure reads the
+owners' published tables, and the frozen classes are described on the run
+cohort.  Unit fixtures had drifted from the stability owner's real columns, so
+the figure failed on every real run while its own tests passed; this module
+runs the owners themselves.  Synthetic stays only.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from easyicu.concept.export_metadata import build_export_file_metadata_binding
+from easyicu.concept.metadata_projection import ConceptColumnRole
+from easyicu.concept.metadata_sidecar import (
+    EXPORT_PHYSICAL_SCOPE,
+    ColumnMetadataFileBinding,
+    ColumnMetadataSidecar,
+    write_content_addressed_sidecar,
+)
+from easyicu.research_agent.cohort import materializer as cohort_materializer
+from easyicu.research_agent.contracts.phenotype_comparison import (
+    TRAJECTORY_FROZEN_STATUS,
+    TRAJECTORY_NO_SOLUTION_REASON,
+)
+from easyicu.research_agent.intake import export_package as intake
+from easyicu.research_agent.orchestration.config import PipelineConfig
+from easyicu.research_agent.orchestration.scientific_runtime import (
+    ScientificRuntimeAuthorities,
+)
+from easyicu.research_agent.orchestration.services import PipelineServices
+from easyicu.research_agent.pipeline import ResearchAgentPipeline
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+from easyicu.research_agent.schema import AnalysisPlan, TrajectoryStabilitySpec
+from easyicu.research_agent.trajectory.scientific_runtime_authority import (
+    build_trajectory_scientific_runtime_authority,
+)
+from easyicu.resources import load_dictionary
+from tests.support.typed_export import metadata_binding
+
+pytestmark = [pytest.mark.integration, pytest.mark.slow]
+
+QUESTION = (
+    "Which respiratory and cardiovascular SOFA-2 trajectory classes emerge over "
+    "the first 24 h, and how does hospital mortality differ by class?"
+)
+COORDINATES = ("sofa2_resp", "sofa2_cardio")
+N_STAYS = 150
+#: Ten stays have no window value and ten have one window only; the owner
+#: needs two, so twenty stays are counted but never clustered.
+N_NOT_CLUSTERED = 20
+#: The Coder writes the host's cohort accounting figure; this run has none.
+CODER_FIGURE_STEP = "07_cohort_accounting_figure"
+SIGNED_AND_DESCRIPTION_STEPS = (
+    "00_authority_compiled_trajectory_representation",
+    "01_authority_compiled_trajectory_candidates",
+    "02_authority_compiled_trajectory_stability",
+    "03_authority_compiled_trajectory_selection_figure",
+    "04_host_bound_analysis_cohort",
+    "05_frozen_class_description",
+)
+
+
+def _typed_export(root: Path, *, structured: bool) -> Path:
+    """Write a native typed export whose SOFA-2 values carry owner receipts."""
+
+    rng = np.random.default_rng(7)
+    stays = np.arange(1001, 1001 + N_STAYS)
+    classes = np.repeat([0, 1, 2], N_STAYS // 3)
+    levels = {
+        "sofa2_resp": [(0, 1), (2, 2), (3, 4)],
+        "sofa2_cardio": [(0, 0), (1, 2), (3, 4)],
+    }
+    rows = []
+    for index, stay in enumerate(stays):
+        age = float(np.round(rng.normal(62, 12), 1))
+        times: tuple[float, ...] = (2.0, 8.0, 14.0, 20.0)
+        if index % 15 == 0:
+            times = ()
+        elif index % 15 == 1:
+            times = (2.0, 8.0)
+        for time in times:
+            row = {"stay_id": int(stay), "charttime": time, "age": age}
+            for concept in COORDINATES:
+                low, high = levels[concept][classes[index]] if structured else (0, 4)
+                spread = 0.15 if structured else 1.2
+                row[concept] = float(np.clip(rng.normal((low + high) / 2, spread), 0, 4))
+                row[f"{concept}_observed"] = 1
+                row[f"{concept}_available"] = 1
+            rows.append(row)
+        if not times:
+            # Outside the 0-24 h window: the stay exists but has no window value.
+            rows.append(
+                {
+                    "stay_id": int(stay), "charttime": 30.0, "age": age,
+                    "sofa2_resp": 1.0, "sofa2_cardio": 0.0,
+                    "sofa2_resp_observed": 1, "sofa2_resp_available": 1,
+                    "sofa2_cardio_observed": 1, "sofa2_cardio_available": 1,
+                }
+            )
+    labs = pd.DataFrame(rows)
+    outcomes = pd.DataFrame(
+        {
+            "stay_id": stays.astype(int),
+            "death": rng.random(N_STAYS) < np.array([0.1, 0.3, 0.6])[classes],
+        }
+    )
+    export = root / "export"
+    export.mkdir()
+    labs.to_parquet(export / "labs.parquet", index=False)
+    outcomes.to_parquet(export / "outcomes.parquet", index=False)
+    lab_concepts = ("age", "sofa2_cardio", "sofa2_resp")
+    lab_binding = build_export_file_metadata_binding(
+        relative_path="labs.parquet",
+        module="labs",
+        frame=labs,
+        concept_ids=lab_concepts,
+        database="miiv",
+        database_class_prefixes=(),
+        dictionary=load_dictionary(include_sofa2=True),
+    )
+    reference = write_content_addressed_sidecar(
+        export,
+        ColumnMetadataSidecar(
+            source_database="miiv",
+            source_database_class_prefixes=(),
+            scope=EXPORT_PHYSICAL_SCOPE,
+            files=(
+                lab_binding,
+                ColumnMetadataFileBinding(
+                    relative_path="outcomes.parquet",
+                    module="outcomes",
+                    identity_column="stay_id",
+                    time_coordinates=(),
+                    columns={
+                        "death": metadata_binding(
+                            "death", "death", ConceptColumnRole.EVENT_STATUS
+                        )
+                    },
+                ),
+            ),
+        ),
+    )
+    (export / intake.NATIVE_MANIFEST).write_text(
+        json.dumps(
+            {
+                "schema_version": intake.NATIVE_MANIFEST_SCHEMA_V2,
+                "database": "miiv",
+                "format": "parquet",
+                "concept_selection": {
+                    "mode": "explicit",
+                    "modules": {"labs": list(lab_concepts), "outcomes": ["death"]},
+                },
+                "files": [
+                    {
+                        "file": "labs.parquet", "module": "labs",
+                        "concepts": len(lab_concepts), "concept_ids": list(lab_concepts),
+                        "rows": len(labs),
+                        "column_metadata_columns": sorted(lab_binding.columns),
+                    },
+                    {
+                        "file": "outcomes.parquet", "module": "outcomes",
+                        "concepts": 1, "concept_ids": ["death"], "rows": len(outcomes),
+                        "column_metadata_columns": ["death"],
+                    },
+                ],
+                "feature_definitions": {"included": False},
+                "column_metadata": reference.to_dict(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    return export
+
+
+def _authority():
+    columns = [f"{c}__h{s}_{s + 12}" for c in COORDINATES for s in (0, 12)]
+    stability = TrajectoryStabilitySpec(
+        n_resamples=6,
+        sample_fraction=0.8,
+        base_seed=11,
+        minimum_successful_resamples=6,
+        refit_max_iter=300,
+        refit_tolerance=1e-5,
+        refit_regularization=1e-6,
+        minimum_mean_stability=0.6,
+        decision_mode="minimum_mean_threshold",
+    )
+    return build_trajectory_scientific_runtime_authority(
+        {
+            "schema_version": "easyicu.trajectory_scientific_runtime_authority/1",
+            "protocol_content_sha256": "1" * 64,
+            "coordinate_concepts": list(COORDINATES),
+            "descriptive_only_concepts": [],
+            "window_start_hours": 0,
+            "window_end_hours": 24,
+            "grid_width_hours": 12,
+            "aggregation": "max",
+            "representation_columns": columns,
+            "minimum_available_windows": 2,
+            "coordinate_scaling": {
+                "method": "pooled_coordinate_wise_z_score",
+                "ddof": 0,
+                "observed_value_policy": "direct_or_owner_locf_available",
+                "missing_value_policy": "preserve_missing_exclude_from_likelihood",
+                "zero_variance_action": "fail_closed",
+            },
+            "evidence_state_policy": {
+                "direct_observed": "include",
+                "owner_locf_available": "include_and_audit",
+                "unavailable": "exclude",
+                "additional_clustering_stage_imputation": "none",
+            },
+            "representation_plan_method": "signed_fixed_window_trajectory_representation",
+            "representation_plan_intent": (
+                "Build the digest-bound fixed-window trajectory representation exactly as declared."
+            ),
+            "representation_plan_inputs": [],
+            "representation_required_outputs": [
+                "artifact:trajectory_representation",
+                "table:trajectory_membership",
+                "manifest:trajectory_representation_schema",
+            ],
+            "model_family": "latent_class_diagonal_gaussian_mixture",
+            "fit_method": "observed_data_em_diagonal_gaussian_mixture",
+            "covariance_type": "diag",
+            "candidate_cluster_counts": [2, 3, 4],
+            "selection_criterion": "bic",
+            "selection_rule": "minimum",
+            "candidate_fit_base_seed": 1729,
+            "candidate_fit_max_iter": 500,
+            "candidate_fit_tolerance": 1e-5,
+            "candidate_fit_regularization": 1e-6,
+            "bic_sample_size": "frozen_population_rows",
+            "bic_parameter_count": "mixture_weights_k_minus_1_plus_2_k_per_coordinate",
+            "bic_tie_break": "smaller_k",
+            "upper_boundary_action": "fail_closed_if_selected_at_upper_boundary",
+            "upper_boundary_reason_code": "NO_INTERIOR_BIC_OPTIMUM",
+            "minimum_cluster_fraction": 0.05,
+            "minimum_cluster_fraction_reason_code": "MINIMUM_CLUSTER_FRACTION_NOT_MET",
+            "stability_spec": stability.model_dump(mode="json"),
+        }
+    )
+
+
+def _run(tmp_path: Path, *, structured: bool):
+    export = _typed_export(tmp_path, structured=structured)
+    paths = cohort_materializer.materialize_to_parquet(
+        tmp_path / "materialized",
+        stem="universe",
+        data_path=export,
+        database="miiv",
+        static_concepts=("age",),
+        feature_concepts=COORDINATES,
+        outcome_concepts=("death",),
+        emit_trajectory=True,
+        trajectory_concepts=COORDINATES,
+        trajectory_window=(0.0, 24.0),
+    )
+    authority = _authority()
+    owners = authority.development_execution_only_plan(research_question=QUESTION)
+    description = {
+        "step_id": "outcome_by_class",
+        "planned_analysis_role": "secondary",
+        "intent": "Describe hospital mortality and age by frozen class.",
+        "method": "descriptive_outcome_by_cluster",
+        "scientific_action_id": "phenotyping.outcome_by_cluster",
+        "inputs": ["stay_id", "death", "age", "artifact:analysis_cohort",
+                   "table:cluster_assignments", "artifact:stability_freeze"],
+        "expected_outputs": ["table:outcome_by_cluster"],
+        "phenotype_comparison_spec": {
+            "identity_column": "stay_id",
+            "outcome_columns": ["death"],
+            "variables": [
+                {"name": "death", "variable_kind": "categorical", "summary": "count_percent",
+                 "test": "none_descriptive_smd_only", "levels": [0, 1]},
+                {"name": "age", "variable_kind": "continuous", "summary": "median_iqr",
+                 "test": "none_descriptive_smd_only"},
+            ],
+        },
+    }
+    draft_payload = owners.model_dump(mode="json")
+    draft = AnalysisPlan.model_validate(
+        {**draft_payload, "steps": [*draft_payload["steps"], description]}
+    )
+    bound, findings = ScientificRuntimeAuthorities(
+        trajectory=authority, current_case=None
+    ).bind_plan(draft)
+    carried = findings[0].detail["frozen_class_description"]
+    locked = tmp_path / "locked_plan.json"
+    locked.write_text(bound.model_dump_json(indent=2), encoding="utf-8")
+    pipeline = ResearchAgentPipeline(
+        config=PipelineConfig(
+            workdir=tmp_path / "pipeline",
+            development_diagnostic=True,
+            development_locked_analysis_plan_path=locked,
+            development_locked_analysis_plan_sha256=hashlib.sha256(
+                locked.read_bytes()
+            ).hexdigest(),
+            trajectory_scientific_runtime_authority=authority.model_dump(mode="json"),
+            scientific_runtime_projection_sha256="2" * 64,
+            enable_memory=False,
+            enable_replanning=False,
+        ),
+        services=PipelineServices(llm=ScriptedMockLLMClient([])),
+    )
+    pipeline.run(
+        question=QUESTION,
+        cohort=paths["parquet"],
+        trajectory_path=paths["trajectory"],
+        database="miiv",
+        target_outcome="death",
+        id_columns=["stay_id"],
+        stop_after_analysis=True,
+    )
+    (run_dir,) = sorted((tmp_path / "pipeline").glob("run_*"))
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    return carried, run_dir, manifest
+
+
+def _records(manifest: dict) -> dict[str, dict]:
+    return {record["step_id"]: record for record in manifest["per_step_records"]}
+
+
+def _assert_only_the_coder_figure_is_unexercised(manifest: dict) -> None:
+    readiness = manifest["readiness"]
+    assert [step["step_id"] for step in readiness["failed_steps"]] == [CODER_FIGURE_STEP]
+    for finding in manifest["findings"]:
+        if finding.get("severity") == "error":
+            assert CODER_FIGURE_STEP in json.dumps(finding), finding
+
+
+def test_frozen_classes_are_rendered_and_described_on_the_run_cohort(tmp_path):
+    carried, run_dir, manifest = _run(tmp_path, structured=True)
+
+    assert carried["carried"] is True
+    records = _records(manifest)
+    assert all(records[step]["status"] == "ok" for step in SIGNED_AND_DESCRIPTION_STEPS)
+    freeze = records["02_authority_compiled_trajectory_stability"]["step_summary"]
+    assert freeze["freeze_status"] == TRAJECTORY_FROZEN_STATUS
+    description = records["05_frozen_class_description"]["step_summary"]
+    assert description["n_not_clustered"] == N_NOT_CLUSTERED
+    assert description["n_rows"] == N_STAYS - N_NOT_CLUSTERED
+    assert len(description["cluster_counts"]) == freeze["selected_n_clusters"]
+    table = pd.read_csv(
+        run_dir / "steps" / "05_frozen_class_description" / "outputs" / "outcome_by_cluster.csv"
+    )
+    assert table.group_missing_excluded_n.eq(N_NOT_CLUSTERED).all()
+    stability_source = pd.read_csv(
+        run_dir / "steps" / "03_authority_compiled_trajectory_selection_figure"
+        / "outputs" / "trajectory_cluster_stability_source_data.csv"
+    )
+    assert not stability_source.empty
+    _assert_only_the_coder_figure_is_unexercised(manifest)
+
+
+def test_a_suite_without_a_stable_solution_describes_no_class(tmp_path):
+    carried, run_dir, manifest = _run(tmp_path, structured=False)
+
+    assert carried["carried"] is True
+    records = _records(manifest)
+    assert all(records[step]["status"] == "ok" for step in SIGNED_AND_DESCRIPTION_STEPS)
+    freeze = records["02_authority_compiled_trajectory_stability"]["step_summary"]
+    assert freeze["freeze_status"] != TRAJECTORY_FROZEN_STATUS
+    description = records["05_frozen_class_description"]["step_summary"]
+    assert description["scientific_status"] == "failed_closed"
+    assert description["reason_code"] == TRAJECTORY_NO_SOLUTION_REASON
+    assert pd.read_csv(
+        run_dir / "steps" / "05_frozen_class_description" / "outputs" / "outcome_by_cluster.csv"
+    ).empty
+    figure = records["03_authority_compiled_trajectory_selection_figure"]["step_summary"]
+    assert figure["reportable_phenotype_solution"] is False
+    _assert_only_the_coder_figure_is_unexercised(manifest)

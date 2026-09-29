@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, 
 import pandas as pd
 
 from ..canonical_json import sha256_file as _sha256_file
+from .figure_empty_sources import empty_source_data_outcome
 from ..planning.analysis_method_suite import figure_product_source_obligations
 from ..contracts.declared_product import (
     effect_adjustment_family,
@@ -2680,21 +2681,13 @@ class FigureSourceDataValidator:
                 )
                 continue
             if source_df.empty:
-                findings.append(
-                    ValidationFinding(
-                        validator=self.name,
-                        severity="error",
-                        message=(
-                            f"Figure source-data table {source_path.name} is "
-                            "empty and cannot authenticate a rendered result."
-                        ),
-                        detail={
-                            "step_id": step.step_id,
-                            "source_table": source_path.name,
-                            "reason": "source_data_empty",
-                        },
-                    )
+                verified, empty_findings = empty_source_data_outcome(
+                    validator=self.name, step_id=step.step_id, source_path=source_path,
+                    source_df=source_df, step_summary=step_summary,
+                    table_frames=table_frames, parent_paths=required_table_paths,
                 )
+                matched_table_paths.update(verified)
+                findings.extend(empty_findings)
                 continue
             unsafe_declared_tables = sorted(
                 {

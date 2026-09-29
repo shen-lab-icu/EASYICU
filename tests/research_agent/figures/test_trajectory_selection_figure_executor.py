@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.audits.figure_empty_sources import empty_parent_projection
 from easyicu.research_agent.audits.figures import FigureSourceDataValidator
 from easyicu.research_agent.execution.runners.trajectory_selection_figure_executor import (
     run_trajectory_selection_figure,
@@ -121,18 +122,45 @@ def _cluster_sizes(*, empty: bool = False) -> pd.DataFrame:
     return pd.DataFrame({"cluster": [0, 1], "n": [55, 45]}, columns=columns)
 
 
+#: The stability owner's resample table as it publishes it: the drawn columns
+#: interleaved with each refit's provenance, and a convergence trace after a
+#: successful observed-data refit.
+_STABILITY_OWNER_COLUMNS = [
+    "resample_id",
+    "n_overlap",
+    "adjusted_rand_index",
+    "clustering_method",
+    "refit_model_id",
+    "seed",
+    "sampling_method",
+    "sample_n",
+    "sample_id_hash",
+    "selected_n_clusters",
+]
+_STABILITY_REFIT_TRACE = ["converged", "n_iter", "final_log_likelihood", "parameter_sha256"]
+
+
 def _cluster_stability(*, empty: bool = False) -> pd.DataFrame:
-    columns = ["resample_id", "n_overlap", "adjusted_rand_index", "selected_n_clusters"]
     if empty:
-        return pd.DataFrame(columns=columns)
+        return pd.DataFrame(columns=_STABILITY_OWNER_COLUMNS)
     return pd.DataFrame(
         {
-            "resample_id": list(range(12)),
+            "resample_id": [f"stability_resample_{index:03}" for index in range(12)],
             "n_overlap": [80] * 12,
             "adjusted_rand_index": [0.70 + 0.01 * index for index in range(12)],
+            "clustering_method": ["latent_class_diagonal_gaussian_mixture"] * 12,
+            "refit_model_id": [f"refit_{index}" for index in range(12)],
+            "seed": list(range(12)),
+            "sampling_method": ["subsample_without_replacement"] * 12,
+            "sample_n": [80] * 12,
+            "sample_id_hash": [f"{index:064x}" for index in range(12)],
             "selected_n_clusters": [2] * 12,
+            "converged": [True] * 12,
+            "n_iter": [20] * 12,
+            "final_log_likelihood": [-100.0 - index for index in range(12)],
+            "parameter_sha256": [f"{index + 1:064x}" for index in range(12)],
         },
-        columns=columns,
+        columns=[*_STABILITY_OWNER_COLUMNS, *_STABILITY_REFIT_TRACE],
     )
 
 
@@ -454,3 +482,244 @@ def test_characterization_states_the_sealed_decision_when_no_solution_is_reporta
         )
         == []
     )
+
+
+def test_the_characterization_draws_only_its_columns_of_the_owner_table(
+    tmp_path: Path,
+) -> None:
+    step_id, summary = _run_characterization(
+        tmp_path, empty=False, selection=_selected()
+    )
+    assert summary["status"] == "ok"
+    stability = pd.read_csv(
+        tmp_path / "figure" / "trajectory_cluster_stability_source_data.csv"
+    )
+    assert list(stability.columns) == [
+        "resample_id",
+        "n_overlap",
+        "adjusted_rand_index",
+        "selected_n_clusters",
+        "source_row_index",
+        "source_table",
+        "source_step_id",
+    ]
+
+
+def test_a_stability_table_without_a_drawn_column_fails_closed(
+    tmp_path: Path,
+) -> None:
+    step_id = "trajectory_selection_figure"
+    bindings = {
+        "table:trajectory_candidate_selection": _binding(
+            tmp_path,
+            step_id=step_id,
+            input_key="table:trajectory_candidate_selection",
+            frame=_selected(),
+        ),
+        "table:feature_availability": _binding(
+            tmp_path,
+            step_id=step_id,
+            input_key="table:feature_availability",
+            frame=_availability(),
+        ),
+        **_characterization_bindings(tmp_path, step_id=step_id, empty=False),
+        "table:cluster_stability": _binding(
+            tmp_path,
+            step_id=step_id,
+            input_key="table:cluster_stability",
+            frame=_cluster_stability().drop(columns=["adjusted_rand_index"]),
+        ),
+    }
+    with pytest.raises(ValueError, match="lacks the drawn columns"):
+        run_trajectory_selection_figure(
+            out_dir=tmp_path / "figure",
+            run_dir=tmp_path,
+            resolved_inputs={"step_id": step_id, "inputs": bindings},
+            step_id=step_id,
+        )
+    assert not (tmp_path / "figure").exists()
+
+
+def test_the_signed_figure_is_a_host_sealed_renderer() -> None:
+    from easyicu.research_agent.execution.runners.selection import (
+        select_standard_executor,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan
+
+    step = _signed_figure_step("03_selection_figure")
+    selection = select_standard_executor(
+        step,
+        plan=AnalysisPlan(
+            research_question="Render the signed trajectory diagnostics.",
+            steps=[step],
+        ),
+    )
+    assert selection is not None
+    assert selection.analysis_kind == "trajectory_selection_diagnostic_figure"
+    assert selection.host_sealed_renderer is True
+
+
+def test_an_empty_parent_projection_verifies_only_in_a_failed_closed_step(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "cluster_sizes.csv"
+    frames = {parent: pd.DataFrame(columns=["cluster", "n"])}
+    projection = pd.DataFrame(
+        columns=["cluster", "n", "source_row_index", "source_table", "source_step_id"]
+    )
+    failed_closed = {"scientific_status": "failed_closed"}
+
+    assert empty_parent_projection(
+        projection,
+        step_summary=failed_closed,
+        table_frames=frames,
+        parent_paths={parent},
+    ) == {parent}
+    # A step that reports a result must authenticate every drawn value.
+    assert not empty_parent_projection(
+        projection,
+        step_summary={"scientific_status": "selected"},
+        table_frames=frames,
+        parent_paths={parent},
+    )
+    # A projection of columns the empty parent does not have names no parent.
+    assert not empty_parent_projection(
+        pd.DataFrame(columns=["cluster", "mortality"]),
+        step_summary=failed_closed,
+        table_frames=frames,
+        parent_paths={parent},
+    )
+    # A parent with rows is never verified by an empty projection.
+    assert not empty_parent_projection(
+        projection,
+        step_summary=failed_closed,
+        table_frames={parent: pd.DataFrame({"cluster": [0], "n": [3]})},
+        parent_paths={parent},
+    )
+
+
+#: Which signed owner publishes each table the figure binds.
+_SIGNED_PARENT_STEPS = {
+    "trajectory_candidate_selection": "01_candidates",
+    "feature_availability": "00_representation",
+    "trajectory_profiles": "02_stability",
+    "cluster_sizes": "02_stability",
+    "cluster_stability": "02_stability",
+}
+
+
+def _signed_run(tmp_path: Path, *, empty: bool):
+    """Render the signed figure inside a run laid out as the host records it."""
+
+    run_dir = tmp_path / "run"
+    evidence_dir = run_dir / "evidence"
+    evidence_dir.mkdir(parents=True)
+    frames = {
+        "trajectory_candidate_selection": _selection() if empty else _selected(),
+        "feature_availability": _availability(),
+        "trajectory_profiles": _profiles(empty=empty),
+        "cluster_sizes": _cluster_sizes(empty=empty),
+        "cluster_stability": _cluster_stability(empty=empty),
+    }
+    evidence: list[dict] = []
+    bindings: dict[str, dict] = {}
+    parent_evidence: dict[str, list[str]] = {}
+    for product, frame in frames.items():
+        producer = _SIGNED_PARENT_STEPS[product]
+        output = run_dir / "steps" / producer / "outputs" / f"{product}.csv"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        frame.to_csv(output, index=False)
+        digest = hashlib.sha256(output.read_bytes()).hexdigest()
+        evidence_id = f"table_step_artifact_{product}"
+        copy = evidence_dir / f"{evidence_id}__{product}.csv"
+        copy.write_bytes(output.read_bytes())
+        evidence.append(
+            {
+                "evidence_id": evidence_id,
+                "kind": "table",
+                "relative_path": f"evidence/{copy.name}",
+                "sha256": digest,
+                "produced_by_step": producer,
+            }
+        )
+        parent_evidence.setdefault(producer, []).append(evidence_id)
+        key = f"table:{product}"
+        bindings[key] = {
+            "declared_kind": "table",
+            "evidence_kind": "table",
+            "product": product,
+            "evidence_id": evidence_id,
+            "produced_by_step": producer,
+            "sha256": digest,
+            "relative_path": f"evidence/{copy.name}",
+            "absolute_path": str(copy),
+            "product_contract": {"columns": list(frame.columns), "row_count": len(frame)},
+            "consumption_contract": {
+                "input_key": key,
+                "mode": "all_rows",
+                "artifact_sha256": digest,
+            },
+            "identity_row": {
+                "input_key": key,
+                "declared_kind": "table",
+                "product": product,
+                "evidence_id": evidence_id,
+                "sha256": digest,
+            },
+        }
+    records = [
+        {"step_id": producer, "status": "ok", "evidence_ids": evidence_ids}
+        for producer, evidence_ids in parent_evidence.items()
+    ]
+    (run_dir / "manifest.json").write_text(
+        json.dumps({"evidence": evidence, "per_step_records": records}),
+        encoding="utf-8",
+    )
+    step_id = "03_selection_figure"
+    out_dir = run_dir / "steps" / step_id / "outputs"
+    summary = run_trajectory_selection_figure(
+        out_dir=out_dir,
+        run_dir=run_dir,
+        resolved_inputs={"step_id": step_id, "inputs": bindings},
+        step_id=step_id,
+    )
+    return step_id, run_dir, out_dir, bindings, records, summary
+
+
+def _source_audit(signed_run, *, summary: dict | None = None) -> list:
+    step_id, run_dir, out_dir, bindings, records, rendered = signed_run
+    return FigureSourceDataValidator().audit(
+        step=_signed_figure_step(step_id),
+        out_dir=out_dir,
+        run_dir=run_dir,
+        step_summary=rendered if summary is None else summary,
+        completed_step_records=records,
+        resolved_input_bindings=bindings,
+    )
+
+
+@pytest.mark.parametrize("empty", [False, True], ids=["frozen", "no_solution"])
+def test_the_signed_figure_passes_the_source_audit_with_or_without_a_solution(
+    tmp_path: Path, empty: bool
+) -> None:
+    signed_run = _signed_run(tmp_path, empty=empty)
+    assert signed_run[-1]["scientific_status"] == (
+        "failed_closed" if empty else "selected"
+    )
+    assert _source_audit(signed_run) == []
+
+
+def test_empty_projections_authenticate_nothing_for_a_reported_solution(
+    tmp_path: Path,
+) -> None:
+    signed_run = _signed_run(tmp_path, empty=True)
+    claimed = {**signed_run[-1], "scientific_status": "selected"}
+    reasons = {
+        (finding.detail.get("reason"), finding.detail.get("source_table"))
+        for finding in _source_audit(signed_run, summary=claimed)
+    }
+    assert {
+        ("source_data_empty", "trajectory_profiles_source_data.csv"),
+        ("source_data_empty", "trajectory_cluster_sizes_source_data.csv"),
+        ("source_data_empty", "trajectory_cluster_stability_source_data.csv"),
+    } <= reasons

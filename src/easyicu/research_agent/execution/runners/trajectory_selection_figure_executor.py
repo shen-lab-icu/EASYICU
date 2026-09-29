@@ -544,6 +544,10 @@ def run_trajectory_selection_figure(
     # The characterization tables are empty by design when the sealed
     # reportability rule returns no stable solution, so they bind with no row
     # floor; the renderer states that outcome instead of drawing a phenotype.
+    # The stability owner follows the drawn columns with each resample's
+    # refit provenance (engine, seed, sample digest, convergence trace), which
+    # differs by refit engine, so that table is bound as published and only
+    # the drawn columns are required.
     profile_bound, size_bound, stability_bound = (
         load_typed_input(
             input_key=key,
@@ -559,9 +563,16 @@ def run_trajectory_selection_figure(
         for key, columns in (
             (TRAJECTORY_PROFILE_TABLE, _PROFILE_COLUMNS),
             (TRAJECTORY_CLUSTER_SIZE_TABLE, _CLUSTER_SIZE_COLUMNS),
-            (TRAJECTORY_STABILITY_TABLE, _STABILITY_COLUMNS),
+            (TRAJECTORY_STABILITY_TABLE, None),
         )
     )
+    missing_stability = [
+        column for column in _STABILITY_COLUMNS if column not in stability_bound.frame.columns
+    ]
+    if missing_stability:
+        raise ValueError(
+            f"trajectory stability table lacks the drawn columns: {missing_stability}"
+        )
     selection, failed_closed, reason_code = _validated_selection(selection_bound.frame)
     availability = _validated_availability(availability_bound.frame)
     out_dir = Path(out_dir)
