@@ -269,11 +269,20 @@ def _message_explicitly_selects_primary_outcome(
     if _message_directly_names_label(message, proposed):
         return True
 
-    normalized = str(message or "").casefold()
+    # Protocols call the primary outcome the primary endpoint (主要终点).
+    # Both words designate this one slot; recognizing only one kept a user
+    # who answered in endpoint wording in a confirmation loop.
+    normalized = re.sub(
+        r"\bend[\s_-]?points?\b",
+        "outcome",
+        str(message or "").casefold().replace("终点", "结局"),
+    )
     return any(
         re.search(pattern, normalized)
         for pattern in (
             r"主要结局.*?(?:使用|采用|设为|定义为|改为|替换为)",
+            # A label-value line designates the slot and fills it at once.
+            r"主要结局\s*[:：]\s*(?!待定|未定|不确定)[^\s？?]",
             r"(?:确认|同意).*?主要结局.*?(?:为|是|采用|使用)",
             r"(?:使用|采用|设为|改为|替换为).*?(?:死亡|mortality).*?(?:主要)?结局",
             r"结局.*?(?:使用|采用|设为|定义为|改为|替换为).*?(?:死亡|mortality)",
@@ -283,6 +292,10 @@ def _message_explicitly_selects_primary_outcome(
             # decision even though the button text avoids repeating the long
             # clinical definition.
             r"^(?:是|确认)[，,\s]*(?:采用|使用|确认)?(?:该|此|上述)?(?:定义|主要结局定义)[。.]?$",
+            # The same affirmative may name the proposed outcome itself and the
+            # secondary items proposed with it.
+            r"^(?:是|确认)[，,、\s]*(?:采用|使用|确认)?(?:该|此|上述)(?:主要)?结局(?:定义)?"
+            r"(?:(?:和|及|与|以及)[^？?]*)?[。.]?$",
             # A rendered next-step choice is itself an explicit selection even
             # when its button label is a compact noun phrase.  Requiring the
             # user to add a verb after clicking the option makes the same
@@ -290,6 +303,7 @@ def _message_explicitly_selects_primary_outcome(
             r"^(?:icu\s*(?:stay\s*)?(?:住院期间|期间|内)?死亡|icu\s*mortality)(?:\s*[（(]推荐[）)])?$",
             r"^(?:hospital|in[\s_-]*hospital|28[\s_-]*day|30[\s_-]*day|90[\s_-]*day)[\s_-]*(?:death|mortality)$",
             r"\bprimary[\s_-]+outcome[\s_-]+(?:is|uses?|will[\s_-]+be)\b",
+            r"\bprimary[\s_-]+outcome\s*:\s*(?!tbd\b|unknown\b|undecided\b)\w",
             r"\buse[\s_-]+.+?[\s_-]+(?:as[\s_-]+the[\s_-]+)?primary[\s_-]+outcome\b",
             r"\bdo[\s_-]+not[\s_-]+change[\s_-]+(?:it[\s_-]+)?to\b",
         )
@@ -968,7 +982,12 @@ def update_study_context(
                 code="study_primary_outcome_confirmation_required",
                 summary=(
                     "Mentioning an outcome in the research question records candidate "
-                    "intent but does not confirm the primary outcome definition."
+                    "intent but does not confirm the primary outcome definition. "
+                    "This message selects it only by containing the exact label "
+                    "saved, by designating the primary outcome or endpoint "
+                    "(主要结局/主要终点：X, use X as the primary outcome), or by "
+                    "affirming the one proposal just shown. Save the user's own "
+                    "label, or offer that exact label as a choice."
                 ),
                 owner="easyicu.webserver.study_contexts",
                 details={"field": "outcome"},
