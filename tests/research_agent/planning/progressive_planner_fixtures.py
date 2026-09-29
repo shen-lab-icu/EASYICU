@@ -468,6 +468,24 @@ def _outline_payload(payload: dict | None = None) -> dict:
     }
 
 
+def _cox_outline_payload() -> dict:
+    """The outline fixture as a survival study with a custom Cox primary.
+
+    The fixture's custom sensitivity inherits the adjusted model this replaces.
+    Without that model it could never compile, and the outline contract refuses
+    it, so it leaves with the model.
+    """
+
+    payload = _outline_payload()
+    payload["analysis_type"] = "survival"
+    for candidate in payload["design_selection"]["candidates"]:
+        candidate["analysis_type"] = "survival"
+    primary = next(step for step in payload["steps"] if step["step_id"] == "05_primary")
+    primary.update(module_id="custom_analysis", scientific_action_id="time_to_event.cox_hr")
+    payload["steps"] = [step for step in payload["steps"] if step["step_id"] != "06_sensitivity"]
+    return payload
+
+
 def _materialization_payloads(payload: dict | None = None) -> list[dict]:
     source = payload or _payload()
     outline = ProgressivePlanOutline.model_validate(_outline_payload(source))

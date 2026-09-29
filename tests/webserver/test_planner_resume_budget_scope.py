@@ -267,3 +267,61 @@ def test_full_scope_does_not_bypass_prepared_source_validation(submit_source, mo
     with pytest.raises(submission.ResearchRunSubmissionError, match="manifest_required"):
         submit()
     assert events == []
+
+
+@pytest.fixture
+def refused_chain(submit_source, monkeypatch):
+    def refuse(**kwargs):
+        raise owner.ResearchPipelineRunError(
+            "research_pipeline_development_resume_checkpoint_invalid",
+            "The prior canary checkpoint chain did not pass integrity validation.",
+            details={"reason_code": "progressive_checkpoint_contract_invalid"},
+        )
+
+    audit = []
+    monkeypatch.setattr(owner, "_development_progressive_resume_binding", refuse)
+    monkeypatch.setattr(
+        submission.capabilities, "record_tool_event", lambda kind, detail: audit.append((kind, detail))
+    )
+    return submit_source, audit
+
+
+def test_an_automatic_seed_the_current_contract_refuses_plans_anew(refused_chain):
+    (_, save, submit, events), audit = refused_chain
+    save("planner_canary")
+
+    receipt = submit(start="auto")
+
+    runner = next(event[1] for event in events if isinstance(event, tuple))
+    assert receipt.resume_source_job_id is None
+    assert "development_resume_source_job_id" not in runner
+    assert receipt.budget_mode == runner["budget_mode"] == "planner_canary"
+    assert events[-2:] == ["authorize", "job"]
+    [(kind, detail)] = audit
+    assert kind == "agent_run_submitted"
+    assert detail["development_resume_source_job_id"] is None
+    assert detail["development_resume_seed_rejected"] == {
+        "source_job_id": "prior",
+        "reason_code": "progressive_checkpoint_contract_invalid",
+    }
+
+
+def test_an_explicit_checkpoint_resume_still_reports_the_refusal(refused_chain):
+    (_, save, submit, events), audit = refused_chain
+    save("planner_canary")
+
+    with pytest.raises(submission.ResearchRunSubmissionError, match="resume_checkpoint_invalid"):
+        submit(start="resume_checkpoint")
+
+    assert events == []
+    assert audit == []
+
+
+def test_an_automatic_seed_with_an_invalid_launch_scope_is_still_refused(submit_source):
+    _, save, submit, events = submit_source
+    save("planner_canary").write_text("{}")
+
+    with pytest.raises(submission.ResearchRunSubmissionError, match="resume_scope_"):
+        submit(start="auto")
+
+    assert events == []

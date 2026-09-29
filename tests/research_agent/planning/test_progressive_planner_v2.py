@@ -123,6 +123,7 @@ from easyicu.research_agent.reporting.article_contract import (
 
 from tests.research_agent.planning.progressive_planner_fixtures import (
     _context as _context,
+    _cox_outline_payload as _cox_outline_payload,
     _foundation_payload as _foundation_payload,
     _materialization_payloads as _materialization_payloads,
     _outline_payload as _outline_payload,
@@ -4643,13 +4644,7 @@ def test_outline_rejects_survival_action_on_binary_association_owner() -> None:
 
 
 def test_outline_rejects_new_estimand_action_on_robustness_replay_owner() -> None:
-    payload = _outline_payload()
-    payload["analysis_type"] = "survival"
-    for candidate in payload["design_selection"]["candidates"]:
-        candidate["analysis_type"] = "survival"
-    next(
-        step for step in payload["steps"] if step["module_id"] == "adjusted_association"
-    ).update(module_id="custom_analysis", scientific_action_id="time_to_event.cox_hr")
+    payload = _cox_outline_payload()
     replay = {
         "step_id": "08_robustness",
         "planned_analysis_role": "sensitivity",

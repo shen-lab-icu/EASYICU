@@ -13,6 +13,7 @@ from easyicu.research_agent.planning.progressive_contract import (
 )
 from tests.research_agent.planning.progressive_planner_fixtures import (
     _context,
+    _cox_outline_payload,
     _outline_payload,
     _payload,
 )
@@ -65,9 +66,7 @@ def test_compiler_rejects_saved_null_action_primary_from_another_family() -> Non
 
 
 def test_outline_counts_module_cannot_claim_kaplan_meier() -> None:
-    payload = _family_payload(outline=True)
-    primary = next(step for step in payload["steps"] if step["step_id"] == "05_primary")
-    primary.update(module_id="custom_analysis", scientific_action_id="time_to_event.cox_hr")
+    payload = _cox_outline_payload()
     risk = next(step for step in payload["steps"] if step["step_id"] == "03_distribution")
     risk.update(module_id="absolute_risk_context", scientific_action_id="time_to_event.km_logrank")
 
@@ -121,9 +120,8 @@ def test_compiler_binary_module_cannot_claim_cox() -> None:
 
 
 def test_registered_custom_survival_actions_remain_available_in_the_outline() -> None:
-    payload = _family_payload(outline=True)
+    payload = _cox_outline_payload()
     primary = next(step for step in payload["steps"] if step["step_id"] == "05_primary")
-    primary.update(module_id="custom_analysis", scientific_action_id="time_to_event.cox_hr")
     risk = next(step for step in payload["steps"] if step["step_id"] == "03_distribution")
     risk.update(module_id="custom_analysis", scientific_action_id="time_to_event.km_logrank")
     payload["steps"].remove(risk)

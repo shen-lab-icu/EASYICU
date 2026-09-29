@@ -37,6 +37,7 @@ from easyicu.webserver.research_plan_revision import load_prepared_plan_revision
 
 
 _DEVELOPMENT_REVIEWED_EXECUTION_ENV = "EASYICU_DEVELOPMENT_REVIEWED_EXECUTION"
+_RESUME_CHECKPOINT_INVALID = "research_pipeline_development_resume_checkpoint_invalid"
 
 _NEXT_STEP_SUMMARIES = {
     "research_pipeline_manifest_required": (
@@ -382,6 +383,7 @@ def submit_research_run(
         plan_revision_source_run_id = request.plan_revision_source_run_id.strip()
         execution_resume_source_run_id = request.execution_resume_source_run_id.strip()
         development_resume_source_job_id = ""
+        rejected_resume_seed: dict[str, str] | None = None
         if planner_start_mode == "fresh" and (
             development_resume_source_job_id
             or plan_revision_source_run_id
@@ -428,18 +430,35 @@ def submit_research_run(
         ):
             _reject({"error": "planner_checkpoint_not_available"})
         if development_resume_source_job_id:
-            resume_scope = _development_resume_launch_scope(
-                project_root=project_root,
-                study=study_context,
-                source_job_id=development_resume_source_job_id,
-            )
-            budget_mode = resume_scope.budget_mode
-            if budget_mode == "full_reviewed" and prepared_manifest is None:
-                dataio.validate_research_pipeline_source(path, database=database)
-            runner_kwargs["budget_mode"] = budget_mode
-            runner_kwargs["development_resume_source_job_id"] = (
-                development_resume_source_job_id
-            )
+            try:
+                resume_scope = _development_resume_launch_scope(
+                    project_root=project_root,
+                    study=study_context,
+                    source_job_id=development_resume_source_job_id,
+                )
+            except agent_pipeline_runs.ResearchPipelineRunError as exc:
+                # A seed only saves Provider work; it carries no authority. An
+                # automatic seed whose checkpoint chain the current contract no
+                # longer accepts cannot continue, so this attempt plans anew.
+                # An explicit checkpoint resume still reports the refusal.
+                if (
+                    planner_start_mode != "auto"
+                    or exc.code != _RESUME_CHECKPOINT_INVALID
+                ):
+                    raise
+                rejected_resume_seed = {
+                    "source_job_id": development_resume_source_job_id,
+                    "reason_code": str(exc.details.get("reason_code") or exc.code),
+                }
+                development_resume_source_job_id = ""
+            else:
+                budget_mode = resume_scope.budget_mode
+                if budget_mode == "full_reviewed" and prepared_manifest is None:
+                    dataio.validate_research_pipeline_source(path, database=database)
+                runner_kwargs["budget_mode"] = budget_mode
+                runner_kwargs["development_resume_source_job_id"] = (
+                    development_resume_source_job_id
+                )
         if request.report_only:
             from easyicu.webserver.manuscript_repair import make_report_only_run_runner
             from easyicu.research_agent.reporting.writer_only_migration import WriterOnlyMigrationError
@@ -552,6 +571,7 @@ def submit_research_run(
                 "development_resume_source_job_id": (
                     development_resume_source_job_id or None
                 ),
+                "development_resume_seed_rejected": rejected_resume_seed,
             },
         )
     except Exception:

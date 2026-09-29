@@ -496,26 +496,39 @@ class ProgressivePlanOutline(BaseModel):
         ]
         if len(primary) > 1:
             raise ValueError("progressive outline may declare at most one primary step")
-        if self.analysis_type == "association_study":
-            primary_adjusted = [
-                step.step_id
-                for step in self.steps
-                if step.planned_analysis_role == "primary"
-                and step.module_id == "adjusted_association"
-            ]
-            for step in self.steps:
-                if not (
-                    step.planned_analysis_role == "sensitivity"
-                    and step.module_id == "custom_analysis"
-                ):
-                    continue
-                if len(primary_adjusted) != 1 or primary_adjusted[0] not in set(
-                    step.depends_on
-                ):
-                    raise ValueError(
-                        "association custom sensitivity steps must follow and "
-                        "depend directly on the primary adjusted_association step"
-                    )
+        primary_adjusted = [
+            step.step_id
+            for step in self.steps
+            if step.planned_analysis_role == "primary"
+            and step.module_id == "adjusted_association"
+        ]
+        for step in self.steps:
+            if not (
+                step.planned_analysis_role == "sensitivity"
+                and step.module_id == "custom_analysis"
+            ):
+                continue
+            if len(primary_adjusted) == 1 and primary_adjusted[0] in set(step.depends_on):
+                continue
+            if self.analysis_type == "association_study":
+                raise ValueError(
+                    "association custom sensitivity steps must follow and "
+                    "depend directly on the primary adjusted_association step"
+                )
+            # Without an action, a custom sensitivity is materialized in the
+            # scientific-sensitivity shape, which the compiler binds only to the
+            # adjusted-association contract: it inherits the primary model the
+            # step depends on. Any other sensitivity keeps its own action's
+            # execution boundary, and step materialization cannot add the
+            # action later.
+            if step.scientific_action_id is None:
+                raise ValueError(
+                    f"custom sensitivity step {step.step_id!r} names no "
+                    "scientific_action_id, so it can only be an adjusted-association "
+                    "sensitivity, but it does not depend directly on a primary "
+                    "adjusted_association step; bind the retrieved action that "
+                    "owns this sensitivity in the selected family"
+                )
         return self
 
 
