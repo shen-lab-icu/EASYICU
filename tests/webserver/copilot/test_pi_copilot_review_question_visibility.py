@@ -102,6 +102,23 @@ def test_a_method_choice_never_becomes_a_question(code):
     assert NO_ANSWER_NEEDED in html
 
 
+def test_the_endpoint_question_offers_the_projected_endpoints():
+    html = _card(_review(
+        [{"code": "OUTCOME_DEFINITION_UNRESOLVED", "question": "Confirm the endpoint.",
+          "decision_context": {"endpoint_options": [
+              {"concept": "mort_90d", "label_en": "90-day Mortality", "label_zh": "90天死亡率"},
+              {"concept": "death", "label_en": "In-hospital Mortality", "label_zh": "院内死亡"},
+          ]}}],
+        study_authority_change=["OUTCOME_DEFINITION_UNRESOLVED"],
+    ))
+
+    assert "请选择本研究的主要结局" in html
+    assert 'data-gpi-plan-decision-option="mort_90d"' in html
+    assert 'data-gpi-plan-decision-option="death"' in html
+    assert "90天死亡率" in html and "院内死亡" in html
+    assert "选择其他方案" in html
+
+
 def test_without_a_question_the_revision_is_offered():
     html = _card(_review([], agent_plan_revision=["FIGURE_ROLE_COVERAGE_INCOMPLETE"]))
 

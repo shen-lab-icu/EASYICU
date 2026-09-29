@@ -785,7 +785,11 @@ def _bound_source_column(export_path: Optional[str]):
 
 
 def _metadata_only_planning_coordinates(
-    *, question: str, database: str, export_path: Optional[str] = None
+    *,
+    question: str,
+    database: str,
+    export_path: Optional[str] = None,
+    configured_outcome: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Project only concepts the researcher explicitly named into planning.
 
@@ -799,6 +803,10 @@ def _metadata_only_planning_coordinates(
     the column that source publishes for them; both callers -- the planning
     launch and the candidate-upgrade check -- must pass the same source so the
     proposal is reproducible.
+
+    ``configured_outcome`` is the StudyContext's typed outcome concept, which
+    the researcher confirmed; it takes precedence over a question-named one,
+    and its binary endpoint follows the same concept-owner rule.
     """
 
     from easyicu.research_agent.acquisition.catalog import (
@@ -838,11 +846,20 @@ def _metadata_only_planning_coordinates(
     endpoint = None
     outcome_type = slots.get("outcome_type")
     outcome_type = outcome_type if isinstance(outcome_type, Mapping) else {}
+    configured = _clean_text(configured_outcome, 160)
+    configured_catalog = catalog_by_id.get(configured) if configured else None
+    if configured_catalog is not None:
+        target_outcome = configured
     target_catalog = catalog_by_id.get(str(target_outcome or ""))
     if (
         target_outcome
-        and str(outcome_type.get("value") or "") == "binary"
-        and str(outcome_type.get("provenance") or "") == "user_text"
+        and (
+            configured_catalog is not None
+            or (
+                str(outcome_type.get("value") or "") == "binary"
+                and str(outcome_type.get("provenance") or "") == "user_text"
+            )
+        )
         and target_catalog is not None
         and target_catalog.column_role == "event_status"
     ):

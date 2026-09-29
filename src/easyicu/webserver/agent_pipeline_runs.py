@@ -4092,6 +4092,7 @@ def _load_candidate_plan_materialization_authority(
         question=_clean_text(study.get("question"), 1_200),
         database=database,
         export_path=export_path,
+        configured_outcome=_target_outcome(study),
     )
     primary_exposure = _clean_text(identity.get("primary_exposure"), 160)
     target_outcome = _clean_text(identity.get("target_outcome"), 160)

@@ -775,6 +775,32 @@
           },
         ],
       };
+      // The host lists only the outcomes this source can bind as a typed
+      // endpoint; a free-text answer stays available through "choose another".
+      const endpointOptions = code === 'OUTCOME_DEFINITION_UNRESOLVED'
+        && item && item.decision_context && Array.isArray(item.decision_context.endpoint_options)
+        ? item.decision_context.endpoint_options.filter(row => row && row.concept)
+        : [];
+      if (endpointOptions.length) return {
+        cardTitle: tr('Choose the primary endpoint', '请选择本研究的主要结局'),
+        context: localizedAuthorizationQuestion(item),
+        evidenceLabel: tr('Current review evidence', '当前审阅证据'),
+        evidenceStatus: tr('The plan has no bound endpoint yet', '计划尚未绑定主要结局'),
+        evidenceDetail: String((item && item.evidence) || localizedAuthorizationQuestion(item)),
+        guidance: tr(
+          'Only endpoints this data source can bind are listed. Your choice is saved to the study and a revised candidate plan is generated; analysis stays paused for review.',
+          '这里只列出当前数据源能绑定的结局。选择后写入研究配置并重新生成候选计划；分析仍会停下供你审核。',
+        ),
+        technicalEvidence: String((item && item.evidence) || ''),
+        technicalRemediation: String((item && item.remediation) || ''),
+        allowEdit: true,
+        options: endpointOptions.map(row => ({
+          optionId: String(row.concept),
+          label: tr(String(row.label_en || row.concept), String(row.label_zh || row.label_en || row.concept)),
+          effect: tr('Saved as the study endpoint', '写入研究配置的主要结局'),
+          requirement: String(row.concept),
+        })),
+      };
       return {
         cardTitle: tr('The plan needs one answer before it can be revised', '计划还需回答 1 个问题才能修订'),
         context: localizedAuthorizationQuestion(item),

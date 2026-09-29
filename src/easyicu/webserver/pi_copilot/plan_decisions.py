@@ -469,6 +469,40 @@ def _planned_window_for_agent_landmark(
     return launch_materialization_window(study)
 
 
+_ENDPOINT_DECISION = "OUTCOME_DEFINITION_UNRESOLVED"
+
+
+def endpoint_decision_options(study: Mapping[str, Any]) -> list[Dict[str, str]]:
+    """Outcome concepts the study's source can bind as its typed endpoint.
+
+    Planning gives an endpoint contract only to an outcome whose concept owner
+    declares event-status semantics, so only those concepts can close the
+    review's endpoint question; a reader label alone never does.
+    """
+
+    from easyicu.concept.catalog import CONCEPT_GROUPS_INTERNAL
+    from easyicu.research_agent.acquisition.catalog import (
+        build_database_capability_catalog,
+    )
+
+    source = study.get("data_source")
+    database = str(source.get("database") or "").strip() if isinstance(source, Mapping) else ""
+    if not database:
+        return []
+    try:
+        catalog = build_database_capability_catalog(database)
+    except (KeyError, ValueError):
+        return []
+    roles = {item.concept_id: item.column_role for item in catalog.concepts}
+    options: list[Dict[str, str]] = []
+    for concept in CONCEPT_GROUPS_INTERNAL.get("outcome", ()):
+        if roles.get(concept) != "event_status":
+            continue
+        label_en, label_zh = _reader_labels(concept)
+        options.append({"concept": concept, "label_en": label_en, "label_zh": label_zh})
+    return options
+
+
 def plan_decision_context(
     plan: Mapping[str, Any],
     decision_code: str,
@@ -477,6 +511,9 @@ def plan_decision_context(
     """Project plan-bound coordinates needed to render one host decision."""
 
     code = str(decision_code or "").strip()
+    if code == _ENDPOINT_DECISION:
+        options = endpoint_decision_options(study or {})
+        return {"endpoint_options": options} if options else {}
     if code != "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED":
         return {}
     coordinates = _timing_coordinates(plan)
@@ -976,6 +1013,30 @@ def compile_plan_decision(
     code = str(decision_code or "").strip()
     option = str(option_id or "").strip()
     configuration = ScientificConfiguration.inspect(study)
+    if code == _ENDPOINT_DECISION:
+        chosen = next(
+            (row for row in endpoint_decision_options(study) if row["concept"] == option),
+            None,
+        )
+        if chosen is None:
+            raise PlanDecisionError(
+                "plan_decision_option_unknown",
+                "The selected option is not available for this scientific review decision.",
+                details={"decision_code": code, "option_id": option},
+            )
+        execution = study.get("execution_concepts")
+        return CompiledPlanDecision(
+            patch={
+                "outcome": f"{chosen['label_en']} ({chosen['concept']})",
+                "execution_concepts": {
+                    **(dict(execution) if isinstance(execution, Mapping) else {}),
+                    "outcome": chosen["concept"],
+                },
+            },
+            display_label_en=f"Primary endpoint: {chosen['label_en']}",
+            display_label_zh=f"主要结局：{chosen['label_zh']}",
+            next_action="replan",
+        )
     if code == "REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY":
         if option != "keep_executable_sensitivities":
             raise PlanDecisionError(
@@ -1381,6 +1442,7 @@ __all__ = [
     "compile_agent_plan_configuration",
     "compile_plan_decision",
     "decision_is_resolved",
+    "endpoint_decision_options",
     "pending_authorization_questions",
     "plan_decision_context",
     "proposed_adjustment_set",

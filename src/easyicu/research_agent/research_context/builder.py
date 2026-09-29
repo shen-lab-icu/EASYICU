@@ -1395,9 +1395,12 @@ def _enrich_target_outcome_descriptor(
             or requested_semantic != "declared_primary_outcome"
         ):
             descriptor.source_concept = requested_semantic
+        # A question that leaves mortality unspecified, or names no endpoint
+        # at all (a bare declared column), requests no definition; neither can
+        # conflict with the owner-issued one.
         if (
             owner_metadata_present
-            and requested_semantic != "mortality_unspecified"
+            and requested_semantic not in {"mortality_unspecified", "declared_primary_outcome"}
             and owner_semantic != requested_semantic
         ):
             explicit_note = (
@@ -1412,6 +1415,12 @@ def _enrich_target_outcome_descriptor(
                 f"The research question leaves mortality setting and horizon "
                 f"unspecified; '{target_outcome}' therefore retains its "
                 f"owner-issued clinical definition ({descriptor.description!r})."
+            )
+        elif owner_metadata_present and requested_semantic == "declared_primary_outcome":
+            explicit_note = (
+                f"The research question names no endpoint definition; the declared "
+                f"'{target_outcome}' retains its owner-issued clinical definition "
+                f"({descriptor.description!r})."
             )
         elif owner_metadata_present:
             explicit_note = (
