@@ -54,6 +54,10 @@ FamilyId = Literal[
     "source_feasibility_fail_closed",
 ]
 ExposureKind = Literal["categorical", "continuous", "none"]
+#: The most levels one categorical exposure may carry in a request.  The
+#: router reads the same bound, so it never offers a template an exposure
+#: this contract refuses.
+MAX_EXPOSURE_LEVELS = 24
 
 _RATIONALE_MIN = 16
 _RATIONALE_MAX = 500
@@ -326,7 +330,7 @@ class FamilySpecRequest(BaseModel):
     cluster_unit: Optional[Literal["patient"]] = None
     primary_exposure: str = Field(max_length=128)
     exposure_kind: ExposureKind = "categorical"
-    exposure_levels: list[str] = Field(default_factory=list, max_length=24)
+    exposure_levels: list[str] = Field(default_factory=list, max_length=MAX_EXPOSURE_LEVELS)
     reference_level_index: int = Field(ge=0)
     primary_contrast_level_index: int = Field(ge=0)
     exposure_is_ordered: bool

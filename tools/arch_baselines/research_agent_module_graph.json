@@ -9576,6 +9576,10 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.planning.family_spec.request",
+      "easyicu.research_agent.trajectory.plan_contract"
+    ],
+    [
       "easyicu.research_agent.planning.family_spec.survival_template",
       "easyicu.research_agent.canonical_json"
     ],
@@ -13108,7 +13112,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3269,
+    "edge_count": 3270,
     "largest_scc_size": 0,
     "module_count": 764,
     "package_count": 36,
