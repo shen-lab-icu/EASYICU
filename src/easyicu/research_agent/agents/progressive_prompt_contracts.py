@@ -375,6 +375,50 @@ _COORDINATE_OWNED_FIELD_GUIDANCE = {
 }
 
 
+_CUSTOM_ANALYSIS_STEP_KEYS = (
+    "step_id",
+    "planned_analysis_role",
+    "module_id",
+    "objective",
+    "depends_on",
+    "raw_inputs",
+    "product_inputs",
+    "outputs",
+    "scientific_action_id",
+    "custom_method",
+    "sensitivity_spec_ids",
+)
+
+
+def custom_analysis_step_shape(outline_step: ProgressiveOutlineStep) -> str:
+    """The closed key roster a custom-analysis step may return.
+
+    It names the coordinate-owned fields this step's outline lets it carry,
+    and no others, like the step's shape template.
+    """
+
+    owned = coordinate_owned_step_fields(
+        module_id=outline_step.module_id,
+        scientific_action_id=outline_step.scientific_action_id,
+        planned_analysis_role=outline_step.planned_analysis_role,
+    )
+    keys = (
+        *_CUSTOM_ANALYSIS_STEP_KEYS,
+        *(field for field in COORDINATE_OWNED_STEP_FIELDS if field in owned),
+    )
+    return (
+        "Custom-analysis step shape: custom_method must be one concise "
+        "non-empty string no longer than 128 characters (prefer a "
+        "snake_case method identifier such as "
+        "prespecified_scientific_sensitivity). Never return an object, "
+        "array, or prose paragraph in custom_method. The step object "
+        f"must contain only {', '.join(keys)}, "
+        "and literature_bindings. Do not emit Table 1, association, "
+        "contrast, denominator, missingness-policy, or confidence "
+        "fields, even as null or empty values."
+    )
+
+
 def step_materialization_shape_contract(
     *,
     outline_step: ProgressiveOutlineStep,
@@ -452,6 +496,7 @@ def step_materialization_shape_contract(
 
 
 __all__ = [
+    "custom_analysis_step_shape",
     "foundation_shape_contract",
     "outline_shape_contract",
     "selected_counts_only_inference_coordinate",
