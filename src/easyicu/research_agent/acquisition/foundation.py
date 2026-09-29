@@ -38,6 +38,7 @@ from .catalog import (
 from .first_icu_stay import FirstIcuStayBinding
 from .patient_grouping import PatientGroupingBinding
 from ..canonical_json import extract_json_object as _extract_json_object
+from ..contracts.trajectory_design import longitudinal_capability_note
 from ..providers.protocol import LLMClient, LLMMessage
 from ..providers.factory import authorized_complete
 from ..contracts.endpoint import EndpointSpec
@@ -51,6 +52,7 @@ from ..intake.materialized_trajectory import (
     MaterializedTrajectoryError,
     load_verified_materialized_trajectory_authority,
 )
+from ...scores.sofa2_aggregate import SOFA2_COMPONENT_NAMES
 
 _SELECTION_SYSTEM = (
     "You are the data-foundation step of an ICU research agent. You are given "
@@ -151,6 +153,13 @@ class DataFoundationAgent:
         target_outcome: Optional[str] = None,
         planning_context: str = "",
     ) -> ConceptSelection:
+        # Only the SOFA-2 components carry the per-window receipts that the
+        # signed trajectory owner counts; the aggregate and its receipt or
+        # sensitivity variants share the prefix but not the receipts.
+        offered = set(catalog.ids())
+        capability = longitudinal_capability_note(
+            concept for concept in SOFA2_COMPONENT_NAMES if concept in offered
+        )
         user = (
             f"RESEARCH QUESTION:\n{question}\n\n"
             + (
@@ -161,6 +170,7 @@ class DataFoundationAgent:
             + (f"PLAN REVISION CONTEXT (not execution authority):\n{planning_context}\n\n"
                if planning_context else "")
             + catalog.render_for_prompt()
+            + (f"\n\n{capability}" if capability else "")
             + '\n\nReturn JSON: {"selected_concepts": [concept_id, ...], '
             '"inclusion_exclusion": ["plain-text criterion", ...], '
             '"rationale": "why these concepts"}. '

@@ -13,6 +13,7 @@ from ..planning.progressive_contract import (
     ProgressivePlanOutline,
     coordinate_owned_step_fields,
 )
+from ..contracts.trajectory_design import TRAJECTORY_OWNER_PLANNER_RULE
 from ..planning.literature_design_authority import LITERATURE_DESIGN_DIMENSIONS
 
 
@@ -209,7 +210,8 @@ def outline_shape_contract(
         "phenotyping.outcome_by_cluster step, directly dependent on the cluster solution. Its variable_names must include "
         "all requested outcomes and the selected clinical descriptions; inputs to fitting, profiles or figures do not substitute for that analysis. "
         "Do not add that step after phenotyping.trajectory_feature_clustering: it describes only cross-sectional assignments "
-        "or the signed fixed-window suite's frozen trajectory labels, which the host wires."
+        "or the signed fixed-window suite's frozen trajectory labels, which the host wires. "
+        + TRAJECTORY_OWNER_PLANNER_RULE
         + (
             " Every candidate literature_design_decisions array must preserve "
             "the seven exact dimension strings shown in the template, use only "
