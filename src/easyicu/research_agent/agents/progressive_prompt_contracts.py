@@ -7,9 +7,11 @@ import re
 from typing import Mapping, Sequence
 
 from ..planning.progressive_contract import (
+    COORDINATE_OWNED_STEP_FIELDS,
     ProgressiveCohortIntent,
     ProgressiveOutlineStep,
     ProgressivePlanOutline,
+    coordinate_owned_step_fields,
 )
 from ..planning.literature_design_authority import LITERATURE_DESIGN_DIMENSIONS
 
@@ -355,12 +357,36 @@ def selected_counts_only_inference_coordinate(
     return None
 
 
+_COORDINATE_OWNED_FIELD_GUIDANCE = {
+    "functional_form_spec": (
+        "An RCS-versus-linear sensitivity must set functional_form_spec to "
+        '{"target_column":"<exact continuous primary model term>","knot_quantiles":[0.1,0.5,0.9]}; '
+        "choose and declare the three ordered quantiles before execution. This contract is null for other analyses, including timing checks. "
+    ),
+    "phenotyping_feature_columns": (
+        "For phenotyping.cluster_solution set phenotyping_feature_columns to the exact fit roster from raw_inputs; "
+        "profile-only variables, identifiers and outcomes must not enter that roster. Other actions use null. "
+        "When outcomes are requested after phenotyping.cluster_solution, include a separate secondary phenotyping.outcome_by_cluster step. "
+    ),
+    "phenotyping_comparison_variables": (
+        "Set phenotyping_comparison_variables using the same name/summary item shape as table_one_variables, including the requested outcomes and selected clinical descriptions. "
+        "This action joins the exact source cohort to frozen assignments, never refits, reports observed-variable denominators and missing counts, and performs no inferential tests. Other actions use null. "
+    ),
+}
+
+
 def step_materialization_shape_contract(
     *,
     outline_step: ProgressiveOutlineStep,
     outline_step_sha256: str,
 ) -> str:
-    """Project the exact current-step envelope and closed step key roster."""
+    """Project the exact current-step envelope and closed step key roster.
+
+    A field that only one module, action and role may carry is shown, with
+    its instructions, only to a step whose outline coordinates own it: a
+    JSON-mode Planner copies the keys it is shown, and the step contract
+    refuses the field on every other step.
+    """
 
     step = {
         "step_id": outline_step.step_id,
@@ -382,6 +408,14 @@ def step_materialization_shape_contract(
         "phenotyping_comparison_variables": None,
         "literature_bindings": [],
     }
+    owned = coordinate_owned_step_fields(
+        module_id=outline_step.module_id,
+        scientific_action_id=outline_step.scientific_action_id,
+        planned_analysis_role=outline_step.planned_analysis_role,
+    )
+    for field in COORDINATE_OWNED_STEP_FIELDS:
+        if field not in owned:
+            del step[field]
     # JSON-mode providers use this same template on initial and repair calls.
     # Do not advertise a population choice to modules that cannot own it.
     if outline_step.module_id == "absolute_risk_context":
@@ -406,15 +440,13 @@ def step_materialization_shape_contract(
         "clinical_rationale must be 16-500 characters explaining the clinical "
         "confounding rationale for a covariate, and null for the exposure. "
         "reference_level_index must be a sealed level index for binary/categorical "
-        "terms and null for continuous/ordinal_linear terms. An RCS-versus-linear sensitivity must set functional_form_spec to "
-        '{"target_column":"<exact continuous primary model term>","knot_quantiles":[0.1,0.5,0.9]}; '
-        "choose and declare the three ordered quantiles before execution. This contract is null for other analyses, including timing checks. "
-        "For phenotyping.cluster_solution set phenotyping_feature_columns to the exact fit roster from raw_inputs; "
-        "profile-only variables, identifiers and outcomes must not enter that roster. Other actions use null. "
-        "When outcomes are requested after phenotyping.cluster_solution, include a separate secondary phenotyping.outcome_by_cluster step. "
-        "Set phenotyping_comparison_variables using the same name/summary item shape as table_one_variables, including the requested outcomes and selected clinical descriptions. "
-        "This action joins the exact source cohort to frozen assignments, never refits, reports observed-variable denominators and missing counts, and performs no inferential tests. Other actions use null. "
-        "literature_bindings items are exactly "
+        "terms and null for continuous/ordinal_linear terms. "
+        + "".join(
+            _COORDINATE_OWNED_FIELD_GUIDANCE[field]
+            for field in COORDINATE_OWNED_STEP_FIELDS
+            if field in owned
+        )
+        + "literature_bindings items are exactly "
         '{"citation_key":"<sealed key>","design_elements":["<allowed element>"],"application":"<8-1200 characters>","divergence":null}.'
     )
 

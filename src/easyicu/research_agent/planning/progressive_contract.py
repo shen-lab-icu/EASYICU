@@ -519,6 +519,36 @@ class ProgressivePlanOutline(BaseModel):
         return self
 
 
+#: Step fields that only one outline coordinate may carry.  The step contract
+#: refuses them elsewhere, so a transport must not offer them elsewhere either.
+COORDINATE_OWNED_STEP_FIELDS = (
+    "functional_form_spec",
+    "phenotyping_feature_columns",
+    "phenotyping_comparison_variables",
+)
+
+
+def coordinate_owned_step_fields(
+    *,
+    module_id: str,
+    scientific_action_id: Optional[str],
+    planned_analysis_role: str,
+) -> frozenset[str]:
+    """The coordinate-owned fields a step with this module, action and role may carry."""
+
+    owned: set[str] = set()
+    if module_id == "custom_analysis" and planned_analysis_role == "sensitivity":
+        owned.add("functional_form_spec")
+    if scientific_action_id == PHENOTYPING_PRIMARY_ACTION and planned_analysis_role == "primary":
+        owned.add("phenotyping_feature_columns")
+    if (
+        scientific_action_id == "phenotyping.outcome_by_cluster"
+        and planned_analysis_role == "secondary"
+    ):
+        owned.add("phenotyping_comparison_variables")
+    return frozenset(owned)
+
+
 class ProgressiveSkeletonStep(BaseModel):
     """Strict detail for only the step currently being materialized by the host."""
 
@@ -660,16 +690,19 @@ class ProgressiveSkeletonStep(BaseModel):
             raise ValueError("custom_analysis requires custom_method")
         if self.module_id != "custom_analysis" and self.custom_method is not None:
             raise ValueError("custom_method belongs only to custom_analysis")
-        if self.functional_form_spec is not None and (
-            self.module_id != "custom_analysis" or self.planned_analysis_role != "sensitivity"
-        ):
+        owned = coordinate_owned_step_fields(
+            module_id=self.module_id,
+            scientific_action_id=self.scientific_action_id,
+            planned_analysis_role=self.planned_analysis_role,
+        )
+        if self.functional_form_spec is not None and "functional_form_spec" not in owned:
             raise ValueError("functional_form_spec belongs only to a custom sensitivity")
         if self.phenotyping_feature_columns is not None:
-            if self.scientific_action_id != PHENOTYPING_PRIMARY_ACTION or self.planned_analysis_role != "primary":
+            if "phenotyping_feature_columns" not in owned:
                 raise ValueError("phenotyping_feature_columns belongs only to the primary cluster solution")
             require_phenotyping_features(self.phenotyping_feature_columns, inputs=self.raw_inputs)
         if self.phenotyping_comparison_variables is not None:
-            if self.scientific_action_id != "phenotyping.outcome_by_cluster" or self.planned_analysis_role != "secondary":
+            if "phenotyping_comparison_variables" not in owned:
                 raise ValueError("phenotyping_comparison_variables belongs only to a secondary outcome-by-cluster step")
             names = [v.name for v in self.phenotyping_comparison_variables]
             if len(names) != len(set(names)) or not set(names).issubset(self.raw_inputs):
@@ -1206,8 +1239,10 @@ __all__ = [
     "ProgressiveStepMaterialization",
     "ProgressiveSuffixRevision",
     "ProgressiveTableOneVariable",
+    "COORDINATE_OWNED_STEP_FIELDS",
     "PRIMARY_POPULATION_PRODUCT",
     "STUDY_COHORT_SCOPE",
+    "coordinate_owned_step_fields",
     "duplicated_host_singletons",
     "host_singleton_module_key",
     "is_study_population_root",

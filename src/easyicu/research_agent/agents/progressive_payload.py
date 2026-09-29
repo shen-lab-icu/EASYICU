@@ -11,6 +11,7 @@ from typing import Any, Mapping, Sequence, get_args
 from ..planning.method_literature import METHOD_CARDS
 from ..contracts.declared_product import PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS
 from ..planning.progressive_contract import (
+    COORDINATE_OWNED_STEP_FIELDS,
     PROGRESSIVE_HOST_COMPILED_OUTPUTS,
     ProgressiveCohortIntent,
     ProgressiveFoundationMaterialization,
@@ -22,6 +23,7 @@ from ..planning.progressive_contract import (
     ProgressiveStepMaterialization,
     ProgressiveSuffixRevision,
     STUDY_COHORT_SCOPE,
+    coordinate_owned_step_fields,
     progressive_module_ids_for_analysis_types,
 )
 from ..providers.protocol import StructuredOutputRequest
@@ -924,6 +926,16 @@ def _bind_materialization_coordinate(
         if outline_step.scientific_action_id is not None
         else {"type": "null"}
     )
+    # The run's action roster offers these fields when any step may use them;
+    # the pinned coordinates decide whether this step may.
+    owned = coordinate_owned_step_fields(
+        module_id=outline_step.module_id,
+        scientific_action_id=outline_step.scientific_action_id,
+        planned_analysis_role=outline_step.planned_analysis_role,
+    )
+    for field in COORDINATE_OWNED_STEP_FIELDS:
+        if field not in owned:
+            step_properties[field] = {"type": "null"}
     product_inputs = step_properties["product_inputs"]
     if not available_product_refs:
         product_inputs["maxItems"] = 0
