@@ -240,7 +240,12 @@ def _parse_concept_dict_meta(
         description, _description_zh = CONCEPT_DESCRIPTIONS.get(cid, ("", ""))
         row.setdefault("description", str(description or name or ""))
         row.setdefault("category", "")
-        row.setdefault("column_role", "")
+        # The same event-status policy as native export metadata: a derived
+        # Boolean output such as fixed-horizon mortality is an event status.
+        row.setdefault(
+            "column_role",
+            "event_status" if concept_declares_event_status(str(cid)) else "",
+        )
     return meta
 
 

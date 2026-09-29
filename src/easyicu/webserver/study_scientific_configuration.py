@@ -244,6 +244,10 @@ class ScientificConfiguration:
     def decision_is_resolved(self, decision_code: str) -> bool:
         confirmations = _mapping(self.study.get("confirmations"))
         code = str(decision_code or "").strip()
+        if code == "OUTCOME_DEFINITION_UNRESOLVED":
+            # Only a typed source concept gives planning an endpoint contract;
+            # a reader label leaves the review's endpoint question open.
+            return self.executable_target_outcome() is not None
         if code == "ADJUSTMENT_SET_NOT_USER_CONFIRMED":
             # A complete Agent Plan may own the exact adjustment proposal. It
             # is reviewed with the whole plan; it must not be relabelled as a
