@@ -375,6 +375,7 @@ _COORDINATE_OWNED_FIELD_GUIDANCE = {
     ),
     "phenotyping_comparison_variables": (
         "Set phenotyping_comparison_variables using the same name/summary item shape as table_one_variables, including the requested outcomes and selected clinical descriptions. "
+        "Each name appears once and is also listed in raw_inputs. "
         "This action joins the exact source cohort to frozen assignments, never refits, reports observed-variable denominators and missing counts, and performs no inferential tests. Other actions use null. "
     ),
 }
