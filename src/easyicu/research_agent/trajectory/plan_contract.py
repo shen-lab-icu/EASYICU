@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
+from ..contracts.phenotype_comparison import is_host_comparison_step
 from ..schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -1101,6 +1102,10 @@ def evaluate_trajectory_plan_dag(
                 )
             )
     for step in steps:
+        if is_host_comparison_step(step):
+            # The host comparison contract owns this description of the frozen
+            # classes; it is not an agent-coded characterization product.
+            continue
         for kind, product in sorted(products_by_step[step.step_id]):
             if kind in _FIGURE_KINDS or _is_window_manifest_product((kind, product)):
                 continue

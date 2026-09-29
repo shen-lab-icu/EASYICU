@@ -797,7 +797,9 @@ _PHENOTYPING = MethodSuite(
             produces="outcome_by_cluster.csv with clinical/outcome rows, observed denominators and missing counts",
             runner="phenotype_comparison",
             reporting_items=("internal_phenotype P8",),
-            notes="Source-bound descriptions on frozen cross-sectional assignments; no refit, inference or causal-entity claim. Figures remain separately planned result consumers.",
+            notes=("Source-bound descriptions on frozen cross-sectional assignments, or on the signed fixed-window suite's "
+                   "frozen trajectory labels when its stability owner froze a class; no refit, inference or causal-entity claim. "
+                   "Figures remain separately planned result consumers."),
         ),
         # --- Longitudinal trajectory sub-suite ---
         AnalysisMethod(

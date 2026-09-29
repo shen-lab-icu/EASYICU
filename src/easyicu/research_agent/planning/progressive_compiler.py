@@ -813,11 +813,11 @@ def _validate_scientific_action_runtime_contract(
             path="outputs",
         )
     declared_inputs = tuple(reference.product_id for reference in step.product_inputs)
-    if declared_inputs != contract.required_product_inputs:
+    if declared_inputs not in contract.accepted_product_inputs:
         raise _fail(
             "progressive_scientific_action_inputs_mismatch",
             f"{action.action_id} requires exact product inputs "
-            f"{list(contract.required_product_inputs)!r}",
+            f"{' or '.join(repr(list(inputs)) for inputs in contract.accepted_product_inputs)}",
             step=step,
             step_index=step_index,
             path="product_inputs",

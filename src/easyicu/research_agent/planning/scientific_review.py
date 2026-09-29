@@ -57,7 +57,8 @@ from ..contracts.prediction_execution import (
     static_prediction_owns_step,
 )
 from ..contracts.phenotype_comparison import (
-    COMPARISON_ACTION, comparison_cohort_input, validate_comparison_step,
+    ASSIGNMENTS_PRODUCT, COMPARISON_ACTION, comparison_cohort_input, comparison_label_source,
+    validate_comparison_step,
 )
 from ..contracts.scientific_runtime_ownership import declared_runtime_outcomes
 from ..contracts.trajectory_design import (
@@ -77,7 +78,10 @@ from ..research_context.typed import declared_domain_for_variable
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
 from ..trajectory.contract import trajectory_phenotyping_contract_applies
 from ..trajectory.plan_contract import trajectory_context_is_bound
-from ..trajectory.runtime_validation import signed_trajectory_plan_claimed
+from ..trajectory.runtime_validation import (
+    signed_trajectory_plan_claimed,
+    signed_trajectory_plan_contract_errors,
+)
 from .figure_strategy import ArticleFigureStrategy
 from .adjustment_authority import AdjustmentSetAuthority, owner_declared_baseline_static
 from .analysis_types import (
@@ -2375,24 +2379,31 @@ def build_plan_scientific_review(
         ))
     variables = {variable.name: variable for variable in context.variables}
     primary_clusters = [step for step in plan.steps if step.scientific_action_id == PHENOTYPING_PRIMARY_ACTION]
+    # The signed suite freezes its classes in the stability owner, and the
+    # signed contract checks how a description of them is wired.
+    signed_suite = signed_trajectory_plan_claimed(plan)
     compared_outcomes: set[str] = set()
     for step in plan.steps:
         if step.scientific_action_id != COMPARISON_ACTION:
             continue
         try:
             validate_comparison_step(step, context)
-            if len(primary_clusters) != 1 or comparison_cohort_input(step) != sole_typed_cohort_input(primary_clusters[0]):
-                raise ValueError("phenotype_comparison_primary_source_invalid")
+            if comparison_label_source(step) == ASSIGNMENTS_PRODUCT:
+                if len(primary_clusters) != 1 or comparison_cohort_input(step) != sole_typed_cohort_input(primary_clusters[0]):
+                    raise ValueError("phenotype_comparison_primary_source_invalid")
+            elif not signed_suite or signed_trajectory_plan_contract_errors(plan):
+                raise ValueError("phenotype_comparison_trajectory_source_invalid")
             compared_outcomes.update(step.phenotype_comparison_spec.outcome_columns)
         except ValueError as exc:
             findings.append(PlanScientificFinding(
                 code="PHENOTYPING_COMPARISON_CONTRACT_INVALID", severity="blocker", dimension="statistical_design",
                 message=f"Step {step.step_id!r}: {exc}", evidence_refs=[f"analysis_plan.json.steps.{step.step_id}.phenotype_comparison_spec"],
-                remediation="Bind a separate descriptive comparison to the exact primary cluster cohort, frozen assignments and explicitly selected clinical/outcome summaries.",
+                remediation=("Bind a separate descriptive comparison to the exact primary cluster cohort, frozen assignments and explicitly selected clinical/outcome summaries; "
+                             "frozen trajectory classes are described only through the signed suite's stability owner."),
                 remediation_route="agent_plan_revision",
             ))
     missing_cluster_outcomes = set(requested_outcomes(context)) - compared_outcomes
-    if primary_clusters and missing_cluster_outcomes:
+    if (primary_clusters or signed_suite) and missing_cluster_outcomes:
         findings.append(PlanScientificFinding(
             code="PHENOTYPING_OUTCOME_COMPARISON_INCOMPLETE", severity="blocker", dimension="statistical_design",
             message="No executable post-clustering descriptive comparison covers the requested outcomes: " + ", ".join(sorted(missing_cluster_outcomes)),
