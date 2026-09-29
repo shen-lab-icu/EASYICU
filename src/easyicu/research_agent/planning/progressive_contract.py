@@ -718,8 +718,18 @@ class ProgressiveSkeletonStep(BaseModel):
             if "phenotyping_comparison_variables" not in owned:
                 raise ValueError("phenotyping_comparison_variables belongs only to a secondary outcome-by-cluster step")
             names = [v.name for v in self.phenotyping_comparison_variables]
-            if len(names) != len(set(names)) or not set(names).issubset(self.raw_inputs):
-                raise ValueError("phenotype_comparison_roster_invalid")
+            repeated = sorted({name for name in names if names.count(name) > 1})
+            unlisted = sorted(set(names) - set(self.raw_inputs))
+            if repeated or unlisted:
+                # The Planner repairs from this message alone, so it names the
+                # rule and the offending sealed variables, not only the code.
+                raise ValueError(
+                    "phenotype_comparison_roster_invalid: each "
+                    "phenotyping_comparison_variables name must appear once and "
+                    "also be listed in raw_inputs"
+                    + (f"; not in raw_inputs: {', '.join(unlisted)}" if unlisted else "")
+                    + (f"; repeated: {', '.join(repeated)}" if repeated else "")
+                )
         if self.module_id == "visualization" and not (
             self.product_inputs or self.depends_on
         ):
