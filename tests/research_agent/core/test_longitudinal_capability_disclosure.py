@@ -15,6 +15,7 @@ from easyicu.research_agent.agents.progressive_prompt_contracts import (
 )
 from easyicu.research_agent.contracts.trajectory_design import (
     ELIGIBILITY_COORDINATE_PREFIX,
+    TRAJECTORY_OUTCOME_DESCRIPTION_RULE,
     TRAJECTORY_OWNER_PLANNER_RULE,
     executable_trajectory_coordinates,
     longitudinal_capability_note,
@@ -113,3 +114,12 @@ def test_the_planner_reads_the_same_rule():
     assert TRAJECTORY_OWNER_PLANNER_RULE in text
     assert repr(ELIGIBILITY_COORDINATE_PREFIX) in TRAJECTORY_OWNER_PLANNER_RULE
     assert "no outcome or one-value-per-stay variable" in TRAJECTORY_OWNER_PLANNER_RULE
+    # Where the outcomes go: the suite describes them, so they stay out of a
+    # primary the host can replace; only a primary it cannot replace
+    # describes them in its own products.
+    assert TRAJECTORY_OUTCOME_DESCRIPTION_RULE in TRAJECTORY_OWNER_PLANNER_RULE
+    assert "describes the requested outcomes on its frozen" in TRAJECTORY_OUTCOME_DESCRIPTION_RULE
+    assert (
+        "Only a primary whose coordinates cannot meet the rule describes requested "
+        "outcomes in its own characterization products" in TRAJECTORY_OUTCOME_DESCRIPTION_RULE
+    )

@@ -29,6 +29,7 @@ __all__ = [
     "ELIGIBILITY_COORDINATE_PREFIX",
     "FIXED_WINDOW_TRAJECTORY_DEFAULTS",
     "TRAJECTORY_HOST_POLICY",
+    "TRAJECTORY_OUTCOME_DESCRIPTION_RULE",
     "TRAJECTORY_PRIMARY_ACTION",
     "FixedWindowTrajectoryDesign",
     "TRAJECTORY_OWNER_PLANNER_RULE",
@@ -445,6 +446,21 @@ def longitudinal_capability_note(offered_components: Iterable[str]) -> str:
 
 
 #: The same rule as the Planner reads it before it chooses a primary step.
+#: Where a trajectory question's outcomes are described, and so what a
+#: model-coded trajectory primary leaves out of its inputs.  The Planner reads
+#: it in its outline contract and when an outline adds an outcome comparison
+#: after that primary (``planning.phenotype_outline_rules``).
+TRAJECTORY_OUTCOME_DESCRIPTION_RULE = (
+    "When a phenotyping.trajectory_feature_clustering primary's coordinates "
+    "meet the signed owner's rule (at least two time-varying study variables, "
+    "one of them a SOFA-2 component, a name starting with "
+    f"{ELIGIBILITY_COORDINATE_PREFIX!r}), the host replaces it with the signed "
+    "fixed-window suite, which describes the requested outcomes on its frozen "
+    "classes: keep outcomes and one-value-per-stay characteristics out of that "
+    "primary's inputs. Only a primary whose coordinates cannot meet the rule "
+    "describes requested outcomes in its own characterization products."
+)
+
 TRAJECTORY_OWNER_PLANNER_RULE = (
     "The host executes a phenotyping.trajectory_feature_clustering primary with "
     "its signed fixed-window owner only when the primary's inputs are at least "
@@ -452,7 +468,8 @@ TRAJECTORY_OWNER_PLANNER_RULE = (
     f"starting with {ELIGIBILITY_COORDINATE_PREFIX!r}), and no outcome or "
     "one-value-per-stay variable; otherwise its classes summarize per-stay "
     "values. When the question names a score without its version, the "
-    "primary's intent says which version its coordinates use."
+    "primary's intent says which version its coordinates use. "
+    + TRAJECTORY_OUTCOME_DESCRIPTION_RULE
 )
 
 
@@ -525,6 +542,9 @@ def trajectory_coordinate_proposal(
         "one_per_stay_inputs": one_per_stay_inputs,
         "eligibility_coordinate_prefix": ELIGIBILITY_COORDINATE_PREFIX,
         "study_eligibility_coordinates": list(eligibility_coordinates(catalogue)),
+        # The time-varying coordinates alone would be a design; they are never
+        # compiled while the step also clusters on anything else.
+        "coordinates_executable": executable_trajectory_coordinates(coordinates),
         "executable": bool(
             not outcome_inputs
             and not one_per_stay_inputs

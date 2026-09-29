@@ -15,7 +15,10 @@ from __future__ import annotations
 from typing import Iterable
 
 from ..contracts.phenotype_comparison import COMPARISON_ACTION
-from ..contracts.trajectory_design import TRAJECTORY_PRIMARY_ACTION
+from ..contracts.trajectory_design import (
+    TRAJECTORY_OUTCOME_DESCRIPTION_RULE,
+    TRAJECTORY_PRIMARY_ACTION,
+)
 from .progressive_contract import ProgressivePlanCompileError, ProgressivePlanOutline
 
 __all__ = ["validate_outline_phenotype_comparison"]
@@ -62,7 +65,7 @@ def validate_outline_phenotype_comparison(
             "progressive_outline_trajectory_comparison_unowned",
             "phenotyping.outcome_by_cluster describes only frozen cross-sectional assignments or the "
             "signed fixed-window suite's frozen trajectory labels, which the host wires. A model-coded "
-            "phenotyping.trajectory_feature_clustering primary has neither; describe requested outcomes "
-            "in its own characterization products.", path="steps",
+            "phenotyping.trajectory_feature_clustering primary has neither. "
+            + TRAJECTORY_OUTCOME_DESCRIPTION_RULE, path="steps",
             findings=({"primary_step_ids": trajectory_primaries},),
         )
