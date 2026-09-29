@@ -22,8 +22,10 @@
     // These are implementation choices the Agent plan must make.  Keep the
     // guard here as well as in the server projection so archived review
     // artifacts cannot turn them back into user-facing method questions.
+    // The endpoint is not one of them: it belongs to the estimand, the server
+    // already migrates a legacy endpoint finding to the Planner, and a review
+    // that routes it to the user blocks the revision until it is answered.
     const systemOwnedPlanFindingCodes = new Set([
-      'OUTCOME_DEFINITION_UNRESOLVED',
       'POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED',
       'REPEATED_STAY_IDENTITY_UNAVAILABLE',
       'REPEATED_STAY_METHOD_NOT_DECLARED',
