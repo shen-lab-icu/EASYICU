@@ -86,6 +86,7 @@ from .figure_strategy import ArticleFigureStrategy
 from .adjustment_authority import AdjustmentSetAuthority, owner_declared_baseline_static
 from .analysis_types import (
     canonical_analysis_family,
+    longitudinal_trajectory_requested,
     requested_exposure_occurrence_cues,
 )
 from .population_requirements import context_population_requirements
@@ -2126,25 +2127,31 @@ def trajectory_representation_facts(
 ) -> Optional[dict[str, Any]]:
     """What a plan claiming trajectory classes actually clusters.
 
-    ``None`` unless the plan claims the signed trajectory owners or its
-    primary step declares the longitudinal trajectory action: cross-sectional
-    phenotype discovery shares this analysis family and is not a trajectory
-    claim.  A plan whose per-timepoint representation has an owner -- the
-    signed fixed-window suite, the fixed-window contract over ordered windows
-    of one concept, or the run-level contract of a bound long trajectory --
-    is left to that owner's gates.  Otherwise the primary clusters one value
-    per ICU stay, and the facts name what the signed owner could model
-    instead, under the design owner's rule
-    (``contracts.trajectory_design.trajectory_coordinate_proposal``): the
-    Host compiles exactly these coordinates.
+    ``None`` unless the plan claims the signed trajectory owners, its primary
+    step declares the longitudinal trajectory action, or the question asks for
+    trajectories (``analysis_types.longitudinal_trajectory_requested``, the
+    cue the family router reads).  Cross-sectional phenotype discovery shares
+    this analysis family and is not a trajectory claim by itself; answering a
+    trajectory question with it is one.  A plan whose per-timepoint
+    representation has an owner -- the signed fixed-window suite, the
+    fixed-window contract over ordered windows of one concept, or the
+    run-level contract of a bound long trajectory -- is left to that owner's
+    gates.  Otherwise the primary clusters one value per ICU stay, and the
+    facts name what the signed owner could model instead, under the design
+    owner's rule (``contracts.trajectory_design.trajectory_coordinate_proposal``):
+    the Host compiles exactly these coordinates.
     """
 
     if canonical_analysis_family(plan.analysis_type) != "trajectory_clustering":
         return None
     primaries = [step for step in plan.steps if step.planned_analysis_role == "primary"]
     signed = signed_trajectory_plan_claimed(plan)
-    if not signed and not any(
-        step.scientific_action_id == TRAJECTORY_PRIMARY_ACTION for step in primaries
+    if (
+        not signed
+        and not any(
+            step.scientific_action_id == TRAJECTORY_PRIMARY_ACTION for step in primaries
+        )
+        and not longitudinal_trajectory_requested(context)
     ):
         return None
     longitudinal_owner = (

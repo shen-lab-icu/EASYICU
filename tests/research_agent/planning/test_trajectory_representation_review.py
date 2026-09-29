@@ -2,13 +2,15 @@
 
 Cross-sectional phenotype discovery and longitudinal trajectory clustering
 share one analysis family, so a plan claims trajectories by declaring the
-longitudinal trajectory action on its primary step.  When no owner builds a
-per-timepoint representation, its classes summarize one value per ICU stay.
-The review hands such a plan to the Host when the signed fixed-window owner
-can model the plan's own coordinates; otherwise it states the limitation and
-does not steer the plan to other variables.  The 9/25 H3 candidate clustered
-0-24 h values under a trajectory claim and the review never said so.  The
-fixtures are generic variables, not that study.
+longitudinal trajectory action on its primary step, or by answering a
+question that asks for trajectories.  When no owner builds a per-timepoint
+representation, its classes summarize one value per ICU stay.  The review
+hands such a plan to the Host when the signed fixed-window owner can model the
+plan's own coordinates; otherwise it states the limitation and does not steer
+the plan to other variables.  The 9/25 H3 candidate clustered 0-24 h values
+under a trajectory claim and the review never said so; the 9/29 candidate
+answered the trajectory question with cross-sectional clustering and scored
+89.  The fixtures are generic variables, not that study.
 """
 
 from __future__ import annotations
@@ -40,6 +42,9 @@ from easyicu.research_agent.trajectory.contract import (
 )
 
 _QUESTION = "Which organ-dysfunction trajectory classes emerge early in the ICU stay?"
+_CROSS_SECTIONAL_QUESTION = (
+    "Which organ-dysfunction phenotypes emerge from first-day values in the ICU?"
+)
 _ROLES = {
     "stay_id": VariableRole.ID,
     "age": VariableRole.DEMOGRAPHIC,
@@ -162,17 +167,64 @@ def test_outcome_or_one_per_stay_inputs_are_never_compiled(extra: str, reason: s
     assert facts["proposed_coordinates"] == ["sofa2_resp", "sofa2_cardio"]
 
 
-def test_cross_sectional_phenotype_discovery_is_not_a_trajectory_claim() -> None:
-    step = _step(
-        ("sofa2_resp", "sofa2_cardio"),
+def _cross_sectional_step(inputs: tuple[str, ...]) -> AnalysisStep:
+    return _step(
+        inputs,
         method="cross_sectional_phenotyping",
         scientific_action_id="phenotyping.cluster_solution",
-        phenotyping_feature_columns=["sofa2_resp", "sofa2_cardio"],
+        phenotyping_feature_columns=list(inputs),
     )
-    review, findings = _review(_context(), _plan(step))
+
+
+def _asking(question: str) -> ResearchContext:
+    return _context().model_copy(update={"research_question": question})
+
+
+def test_cross_sectional_phenotype_discovery_is_not_a_trajectory_claim() -> None:
+    step = _cross_sectional_step(("sofa2_resp", "sofa2_cardio"))
+    review, findings = _review(_asking(_CROSS_SECTIONAL_QUESTION), _plan(step))
 
     assert findings == []
     assert review.facts["trajectory_representation"] is None
+
+
+@pytest.mark.parametrize(
+    "question",
+    [_QUESTION, "基于纵向 SOFA 分项轨迹进行聚类，并描述各类别的 28 天死亡。"],
+)
+def test_a_trajectory_question_answered_by_stay_level_clusters_is_handed_to_the_host(
+    question: str,
+) -> None:
+    step = _cross_sectional_step(("sofa2_resp", "sofa2_cardio"))
+    review, findings = _review(_asking(question), _plan(step))
+
+    [finding] = findings
+    assert finding.code == "TRAJECTORY_LONGITUDINAL_OWNER_NOT_SEALED"
+    assert finding.severity == "blocker"
+    assert not review.approval_allowed
+    facts = review.facts["trajectory_representation"]
+    assert facts["executable"] is True
+    assert facts["proposed_coordinates"] == ["sofa2_resp", "sofa2_cardio"]
+
+
+def test_the_trajectory_action_is_a_claim_whatever_the_question_says() -> None:
+    review, findings = _review(
+        _asking(_CROSS_SECTIONAL_QUESTION), _plan(_step(("sofa2_resp", "sofa2_cardio")))
+    )
+
+    [finding] = findings
+    assert finding.code == "TRAJECTORY_LONGITUDINAL_OWNER_NOT_SEALED"
+    assert review.facts["trajectory_representation"]["executable"] is True
+
+
+def test_a_trajectory_question_on_other_measurements_states_the_limitation() -> None:
+    step = _cross_sectional_step(("sofa_resp", "sofa_cardio"))
+    review, findings = _review(_asking(_QUESTION), _plan(step))
+
+    [finding] = findings
+    assert finding.code == "TRAJECTORY_REPRESENTATION_NOT_LONGITUDINAL"
+    assert finding.severity == "major"
+    assert review.facts["trajectory_representation"]["executable"] is False
 
 
 class _BoundTrajectory(BaseModel):
