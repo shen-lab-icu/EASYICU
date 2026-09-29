@@ -865,6 +865,47 @@ def requested_exposure_occurrence_cues(context: ResearchContext) -> Tuple[str, .
     return tuple(cue for cue in _OCCURRENCE_CUES if _keyword_present(text, cue))
 
 
+
+#: Words by which a question asks how its variables change over ICU time.
+#: Trajectory clustering and cross-sectional phenotype discovery share one
+#: analysis family; before a fixed-window design is compiled, only these words
+#: tell a longitudinal question apart.  Latin cues match whole words, so
+#: "haemodynamic" never reads as "dynamic".
+_LONGITUDINAL_TRAJECTORY_CUES = (
+    "trajectory",
+    "trajectories",
+    "longitudinal",
+    "repeated measures",
+    "repeated measurements",
+    "time series",
+    "time varying",
+    "over time",
+    "dynamic",
+    "growth mixture",
+    "latent class growth",
+    "轨迹",
+    "纵向",
+    "重复测量",
+    "时间序列",
+    "随时间",
+    "动态",
+)
+
+
+def longitudinal_trajectory_requested(context: ResearchContext) -> bool:
+    """Whether the research question asks how its variables change over time.
+
+    Only the question is read.  A cue does not make a design longitudinal; it
+    keeps a template that clusters one feature vector per stay from claiming
+    the question.  Reading a cue where none was meant only yields to the
+    general planner, while missing one would answer a trajectory question
+    with stay-level classes, so the cues are broad.
+    """
+
+    text = str(context.research_question or "").lower()
+    return any(_keyword_present(text, cue) for cue in _LONGITUDINAL_TRAJECTORY_CUES)
+
+
 _CLUSTERING_NUISANCE_PATTERNS = (
     re.compile(r"\bcluster[-\s]+robust\b", flags=re.IGNORECASE),
     re.compile(
@@ -1756,6 +1797,7 @@ __all__ = [
     "required_endpoint_kind_for_family",
     "requested_exposure_occurrence_cues",
     "infer_analysis_type",
+    "longitudinal_trajectory_requested",
     "strong_trajectory_clustering_framing",
     "planner_analysis_type_guide",
     "planner_analysis_type_switch_guide",

@@ -17,8 +17,12 @@ from ...concept_availability import variable_source_unavailability
 from ...contracts.model_terms import level_spelling
 from ...contracts.primary_cohort import study_population_product_for
 from ...schema import ResearchContext
+from ...trajectory.plan_contract import trajectory_context_is_bound
 from ..accepted_analysis_inputs import analysis_input_value_columns
-from ..analysis_types import requested_exposure_occurrence_cues
+from ..analysis_types import (
+    longitudinal_trajectory_requested,
+    requested_exposure_occurrence_cues,
+)
 from ..baseline_requirements import baseline_requirement_projection
 from ..adjustment_authority import (
     AdjustmentSetAuthority,
@@ -41,6 +45,7 @@ from .contract import (
     LANDMARK_SURVIVAL_FAMILY_ID,
     PHENOTYPING_FAMILY_ID,
     PREDICTION_FAMILY_ID,
+    MAX_EXPOSURE_LEVELS,
     MAX_FIT_FEATURES,
     SEALED_SUITE_FAMILY_IDS,
     SOURCE_FEASIBILITY_FAMILY_ID,
@@ -325,12 +330,20 @@ def _structurally_available_roster(
 
 
 def _exposure_kind(context: ResearchContext, exposure: str) -> ExposureKind | None:
-    """Classify the exposure from its closed domain and typed descriptor only."""
+    """Classify the exposure from its closed domain and typed descriptor only.
+
+    A closed domain of two to ``MAX_EXPOSURE_LEVELS`` levels is categorical.  A
+    larger one, such as a total score's integer range, fits no template: it is
+    discrete by declaration, so it is not read as continuous either.
+    """
 
     variable = context.variable(exposure)
     if variable is None:
         return None
-    if len(_levels(context, exposure)) >= 2:
+    level_count = len(_levels(context, exposure))
+    if level_count > MAX_EXPOSURE_LEVELS:
+        return None
+    if level_count >= 2:
         return "categorical"
     role = str(getattr(variable.role, "value", variable.role) or "")
     dtype = str(variable.dtype or "").lower()
@@ -375,8 +388,9 @@ def family_template_id_for_context(
     Both landmark association families need a 0/1 endpoint, a typed landmark,
     a prespecified landmark timing spec naming the event-time and
     observation-duration columns, and one identity column. The categorical
-    family additionally needs a closed exposure with at least two levels; the
-    spline family a numeric, non-ordinal exposure. Anything less is not a
+    family additionally needs a closed exposure with two to
+    ``MAX_EXPOSURE_LEVELS`` levels; the spline family a numeric, non-ordinal
+    exposure. Anything less is not a
     template gap to guess around; the caller falls back to Progressive v2.
     """
 
@@ -422,11 +436,7 @@ def family_template_id_for_context(
     if headline == "prediction_model":
         # A static binary prediction model has predictors and an outcome but
         # no primary exposure; longitudinal designs are not templated.
-        return (
-            PREDICTION_FAMILY_ID
-            if getattr(context, "fixed_window_trajectory", None) is None
-            else None
-        )
+        return PREDICTION_FAMILY_ID if not trajectory_context_is_bound(context) else None
     if not exposure or context.variable(exposure) is None:
         return None
     kind = _exposure_kind(context, exposure)
@@ -441,11 +451,13 @@ def family_template_id_for_context(
     if (
         headline == "trajectory_clustering"
         and kind == "categorical"
-        and getattr(context, "fixed_window_trajectory", None) is None
+        and not trajectory_context_is_bound(context)
+        and not longitudinal_trajectory_requested(context)
     ):
         # Cross-sectional phenotyping: one feature vector per row inside the
-        # sealed observation window. Longitudinal trajectory clustering carries
-        # fixed-window trajectory metadata and is not templated.
+        # sealed observation window. A bound fixed-window trajectory, or a
+        # question that asks for trajectories before any design is compiled,
+        # is longitudinal and not templated here.
         return PHENOTYPING_FAMILY_ID
     return None
 
