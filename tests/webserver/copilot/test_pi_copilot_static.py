@@ -2430,7 +2430,6 @@ def test_scientific_review_hides_system_owned_method_questions() -> None:
     assert "选择其他调整变量" not in confirmation
     assert "const systemOwnedPlanFindingCodes = new Set([" in confirmation
     for code in (
-        "OUTCOME_DEFINITION_UNRESOLVED",
         "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
         "REPEATED_STAY_IDENTITY_UNAVAILABLE",
         "REPEATED_STAY_METHOD_NOT_DECLARED",
@@ -4085,11 +4084,8 @@ def test_scientific_plan_review_defaults_to_actions_not_scores() -> None:
         "score": 68,
         "approval_allowed": False,
         "findings": [
-            {
-                "code": "OUTCOME_DEFINITION_UNRESOLVED",
-                "remediation_route": "study_authority_change",
-                "requires_user_authorization": True,
-            },
+            # A legacy endpoint finding without a route stays a Planner proposal.
+            {"code": "OUTCOME_DEFINITION_UNRESOLVED", "requires_user_authorization": True},
             {
                 "code": "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED",
                 "remediation_route": "study_authority_change",

@@ -632,11 +632,21 @@
     };
     return known[code] || String(row && (row.authorization_question || row.message) || '');
   }
+  function scientificDecisionTitle(row) {
+    const code = String(row && row.code || '');
+    const known = {
+      OUTCOME_DEFINITION_UNRESOLVED: t('Confirm the primary endpoint and horizon', '确认主要结局与观察时间'),
+    };
+    return known[code] || scientificFindingCopy(row).title;
+  }
+  // Sensitivity design is always Planner work.  The endpoint belongs to the
+  // estimand: a review that routes it to the user asks the user, and only a
+  // legacy finding without a route is read as a Planner proposal, as the
+  // workflow projection does.
   function plannerOwnedScientificFinding(row) {
-    return new Set([
-      'OUTCOME_DEFINITION_UNRESOLVED',
-      'ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED',
-    ]).has(String(row && row.code || ''));
+    const code = String(row && row.code || '');
+    return code === 'ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED'
+      || (code === 'OUTCOME_DEFINITION_UNRESOLVED' && !(row && row.remediation_route));
   }
   function scientificPlanReviewView(payload) {
     const p = payload && typeof payload === 'object' ? payload : {};
@@ -646,7 +656,7 @@
     const evidence = findings.filter(row => row && !decisions.includes(row) && !automatic.includes(row) && (row.remediation_route === 'external_evidence' || row.remediation_route === 'independent_review'));
     const remainder = findings.filter(row => !decisions.includes(row) && !automatic.includes(row) && !evidence.includes(row));
     const firstDecision = decisions[0] || null;
-    const firstDecisionCopy = firstDecision ? scientificFindingCopy(firstDecision) : null;
+    const firstDecisionTitle = firstDecision ? scientificDecisionTitle(firstDecision) : '';
     const laterDecisions = decisions.slice(1);
     const findingList = rows => rows.map(row => {
       const copy = scientificFindingCopy(row);
@@ -683,7 +693,7 @@
           : t('Endpoint, sensitivity design, plan structure, and evidence follow-up are system-owned proposal work. Review the revised complete plan instead of designing them here.', '结局定义、敏感性分析、计划结构和补证都属于系统的方案工作；你应审阅修订后的完整计划，不必在这里替系统设计。'))}</p>${reviewMeta}</div>
         <span class="ag-science-review-state ${approvalAllowed ? 'is-ready' : 'is-waiting'}">${esc(approvalAllowed ? t('Ready', '可批准') : t('Analysis paused', '分析已暂停'))}</span>
       </header>
-      ${firstDecision ? `<section class="ag-science-review-section is-current"><div class="ag-science-review-heading"><div><span>${esc(t('Do this now', '现在只做这一步'))}</span><strong>${esc(firstDecisionCopy.title)}</strong></div><em>1</em></div><div class="ag-science-current-question"><p>${esc(scientificDecisionQuestion(firstDecision))}</p><span>${esc(t('Use “Answer decision 1” in the conversation to reply.', '在左侧对话中点击「回答第 1 项」。'))}</span></div>${laterDecisions.length ? `<div class="ag-science-later"><span>${esc(t('Later', '稍后'))}</span><strong>${esc(scientificFindingCopy(laterDecisions[0]).title)}</strong><small>${esc(t('EasyICU will ask after the first answer is saved.', '第 1 项保存后，EasyICU 再询问这一项。'))}</small></div>` : ''}</section>` : ''}
+      ${firstDecision ? `<section class="ag-science-review-section is-current"><div class="ag-science-review-heading"><div><span>${esc(t('Do this now', '现在只做这一步'))}</span><strong>${esc(firstDecisionTitle)}</strong></div><em>1</em></div><div class="ag-science-current-question"><p>${esc(scientificDecisionQuestion(firstDecision))}</p><span>${esc(t('Answer it in the conversation on the left.', '请在左侧对话中回答。'))}</span></div>${laterDecisions.length ? `<div class="ag-science-later"><span>${esc(t('Later', '稍后'))}</span><strong>${esc(scientificDecisionTitle(laterDecisions[0]))}</strong><small>${esc(t('EasyICU will ask after the first answer is saved.', '第 1 项保存后，EasyICU 再询问这一项。'))}</small></div>` : ''}</section>` : ''}
       <details class="ag-science-review-details"><summary><span>${esc(t('EasyICU will handle', 'EasyICU 会自动处理'))}</span><strong>${esc(t(`${automatic.length + evidence.length + remainder.length} plan, evidence and runtime items`, `${automatic.length + evidence.length + remainder.length} 项计划、证据与运行问题`))}</strong><em>${esc(t('No action needed now', '现在不需你处理'))}</em></summary><div class="ag-science-lanes">
         <article><div><strong>${esc(t('Plan revision', '计划修订'))}</strong><span>${esc(t(`${automatic.length} items`, `${automatic.length} 项`))}</span></div><ul>${findingList(automatic)}</ul></article>
         <article><div><strong>${esc(t('Evidence follow-up', '证据补充'))}</strong><span>${esc(t(`${evidence.length} items`, `${evidence.length} 项`))}</span></div><ul>${findingList(evidence)}</ul></article>
