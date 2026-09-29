@@ -13,16 +13,21 @@ import pytest
 from easyicu.research_agent.agents.progressive_payload import (
     progressive_step_materialization_request,
 )
+from easyicu.research_agent.agents.progressive_planner import ProgressivePlannerAgent
 from easyicu.research_agent.agents.progressive_prompt_contracts import (
+    custom_analysis_step_shape,
     step_materialization_shape_contract,
 )
 from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.planning.progressive_contract import (
     COORDINATE_OWNED_STEP_FIELDS,
     ProgressiveOutlineStep,
+    ProgressivePlanOutline,
     ProgressiveSkeletonStep,
     coordinate_owned_step_fields,
 )
+
+from .scientific_review_fixtures import _context
 
 _ROSTER = (
     "phenotyping.cluster_solution",
@@ -101,13 +106,48 @@ def test_every_transport_offers_exactly_what_the_contract_accepts(name):
     step, text = _template(outline)
     branches = _schema_branches(outline)
 
+    shape = custom_analysis_step_shape(outline)
+
     for field in COORDINATE_OWNED_STEP_FIELDS:
         accepted = _accepts(action, role, field)
         assert (field in owned) is accepted, field
         assert (field in step) is accepted, field
         assert (f"set {field}" in text or f"Set {field}" in text) is accepted, field
+        assert (field in shape) is accepted, field
         if not accepted:
             assert not _offered(branches, field), field
+
+
+@pytest.mark.parametrize("name", sorted(_COORDINATES))
+def test_the_planner_prompt_names_exactly_the_fields_the_step_owns(name):
+    action, role = _COORDINATES[name]
+    outline_step = ProgressiveOutlineStep(
+        step_id="cluster_fit", module_id="custom_analysis", planned_analysis_role=role,
+        objective="Fit the prespecified clusters.", variable_names=["exposure", "age"],
+        scientific_action_id=action,
+    )
+    outline = ProgressivePlanOutline(
+        analysis_type="trajectory_clustering", cohort_objective="Describe the sealed cohort.",
+        steps=[outline_step], rationale="Cluster the prespecified trajectories.",
+    )
+    owned = coordinate_owned_step_fields(
+        module_id="custom_analysis", scientific_action_id=action, planned_analysis_role=role,
+    )
+
+    prompt = ProgressivePlannerAgent._materialization_prompt(
+        context=_context(), outline=outline, outline_step=outline_step,
+        outline_step_sha256=canonical_sha256(outline_step.model_dump(mode="json")),
+        variables=["exposure", "age"], action_rows=[], allowed_literature_citation_keys=[],
+        know_how_context="", planning_contract_context="", prefix_summary=[],
+        available_product_refs=[("cohort_definition", "artifact:analysis_cohort")],
+    )
+    shape = next(
+        block for block in prompt.split("\n\n") if block.startswith("Custom-analysis step shape")
+    )
+
+    for field in COORDINATE_OWNED_STEP_FIELDS:
+        assert (field in shape) is (field in owned), field
+        assert (field in prompt) is (field in owned), field
 
 
 @pytest.mark.parametrize(("module", "action", "role", "expected"), [

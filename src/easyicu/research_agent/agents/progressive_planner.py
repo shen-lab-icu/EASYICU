@@ -157,6 +157,7 @@ from .progressive_payload import (
 from .plan_payload import bind_literature_citation_authority
 from .family_spec_planner import FAMILY_SPEC_STRATEGY, run_family_spec_attempt
 from .progressive_prompt_contracts import (
+    custom_analysis_step_shape as _custom_analysis_step_shape,
     foundation_shape_contract as _foundation_shape_contract,
     outline_shape_contract as _outline_shape_contract,
     selected_counts_only_inference_coordinate as _selected_counts_only_inference_coordinate,
@@ -3483,19 +3484,7 @@ class ProgressivePlannerAgent:
                         separators=(",", ":"),
                     )
                 )
-            blocks.append(
-                "Custom-analysis step shape: custom_method must be one concise "
-                "non-empty string no longer than 128 characters (prefer a "
-                "snake_case method identifier such as "
-                "prespecified_scientific_sensitivity). Never return an object, "
-                "array, or prose paragraph in custom_method. The step object "
-                "must contain only step_id, planned_analysis_role, module_id, "
-                "objective, depends_on, raw_inputs, product_inputs, outputs, "
-                "scientific_action_id, custom_method, sensitivity_spec_ids, functional_form_spec, phenotyping_feature_columns, "
-                "and literature_bindings. Do not emit Table 1, association, "
-                "contrast, denominator, missingness-policy, or confidence "
-                "fields, even as null or empty values."
-            )
+            blocks.append(_custom_analysis_step_shape(outline_step))
             if (
                 outline_step.planned_analysis_role == "sensitivity"
                 and "functional_form" in outline_step.step_id.casefold()
