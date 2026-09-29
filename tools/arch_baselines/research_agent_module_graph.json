@@ -1500,6 +1500,14 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.audits.figure_empty_sources",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.audits.figures",
+      "easyicu.research_agent.audits.figure_empty_sources"
+    ],
+    [
       "easyicu.research_agent.audits.figures",
       "easyicu.research_agent.authority.runtime_artifacts"
     ],
@@ -13092,9 +13100,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3265,
+    "edge_count": 3267,
     "largest_scc_size": 0,
-    "module_count": 763,
+    "module_count": 764,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -13143,6 +13151,7 @@
     "easyicu.research_agent.audits.cross_step": "audits/cross_step.py",
     "easyicu.research_agent.audits.envelope_consumers": "audits/envelope_consumers.py",
     "easyicu.research_agent.audits.envelope_shadow": "audits/envelope_shadow.py",
+    "easyicu.research_agent.audits.figure_empty_sources": "audits/figure_empty_sources.py",
     "easyicu.research_agent.audits.figures": "audits/figures.py",
     "easyicu.research_agent.audits.manuscript_claims": "audits/manuscript_claims.py",
     "easyicu.research_agent.audits.model_contrast_reporting": "audits/model_contrast_reporting.py",

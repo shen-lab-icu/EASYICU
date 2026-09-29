@@ -984,6 +984,7 @@ def _build_registry() -> StepExecutorRegistry:
             selection_reason="signed_trajectory_selection_figure_contract",
             progress_message="Rendering signed trajectory selection diagnostics",
             consumed_input_keys=lambda _c: TRAJECTORY_SELECTION_FIGURE_INPUTS,
+            host_sealed_renderer=True,
         ),
         StepExecutor(
             key=SURVIVAL_PRIMARY_ANALYSIS_KIND,
