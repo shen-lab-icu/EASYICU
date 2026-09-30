@@ -1,7 +1,7 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/planning/analysis_types.py"
+      "src/easyicu/research_agent/schema.py"
     ],
     "summary_changes": {}
   },
@@ -600,9 +600,16 @@
         "src/easyicu/research_agent/planning/analysis_types.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "AA (best-of-10 trajectory fit engine): schema.py's TrajectoryStabilitySpec.refit_engine admits the best-of-10 engine, which the host's signed trajectory policy names; a spec naming no engine keeps the single-start default. Only schema.py's source digest changes; the Canonical9 planner/resource envelope is unchanged. Precedent: B, U.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/schema.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "U (family router bound): planning/analysis_types.py reads whether the research question asks how its variables change over time (longitudinal_trajectory_requested, used by the family router so the cross-sectional phenotyping template never claims a trajectory question); the Canonical9 prompt and context envelope is unchanged.",
+  "baseline_reason": "AA (best-of-10 trajectory fit engine): schema.py's TrajectoryStabilitySpec.refit_engine admits the best-of-10 engine, which the host's signed trajectory policy names; a spec naming no engine keeps the single-start default. Only schema.py's source digest changes; the Canonical9 planner/resource envelope is unchanged. Precedent: B, U.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -636,7 +643,7 @@
     "src/easyicu/research_agent/resources/context.py": "8ce42accd83398ff9972b8e50f2f64f9ac926ad610d2c386f2b763adf77af2e1",
     "src/easyicu/research_agent/resources/scheduler.py": "50d836934c0f079c35265004495a067a543ed575e2ed1757319fe619c9c7a280",
     "src/easyicu/research_agent/resources/schema.py": "456053a9d96a8ee5fe0b3e8b2cfa22187f6bb0d8cc81b43d28569ffd311fd288",
-    "src/easyicu/research_agent/schema.py": "6f4dac943f6b0baa40c60ab713286b380719a72597054819a9b173174a423c77",
+    "src/easyicu/research_agent/schema.py": "ab7902501555b94283c4a244c385911bff855d2c5868dc8fde8d992a6b6d1e86",
     "tools/research_agent_resource_baseline.py": "4f3fe0d9c859ff713fe1cbdaa9dc47ebe5041b60b2be08fd8b8087d115bd3712"
   },
   "summary": {

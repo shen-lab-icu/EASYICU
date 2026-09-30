@@ -32,6 +32,8 @@ from ...schema import (
     TrajectoryStabilitySpec,
 )
 from ...trajectory.plan_contract import (
+    DIAG_GMM_BEST_OF_10_ENGINE,
+    DIAG_GMM_SINGLE_START_ENGINE,
     OBSERVED_DATA_DIAG_GMM_FIT_METHOD,
     OBSERVED_DATA_DIAG_GMM_MODEL_FAMILY,
     STABILITY_EXECUTOR_INPUTS,
@@ -547,6 +549,81 @@ def _fit_observed_data_diag_gmm(
         "n_iter": iteration + 1,
         "final_log_likelihood": likelihood,
         "parameter_sha256": parameter_digest.hexdigest(),
+    }
+
+
+#: Deterministic EM starts per fit for each refit engine.
+_ENGINE_STARTS = {DIAG_GMM_SINGLE_START_ENGINE: 1, DIAG_GMM_BEST_OF_10_ENGINE: 10}
+
+
+def _fit_with_engine(
+    x: np.ndarray,
+    *,
+    engine: str,
+    n_components: int,
+    seed: int,
+    max_iter: int,
+    tolerance: float,
+    regularization: float,
+) -> tuple[np.ndarray, Mapping[str, Any], Mapping[str, Any] | None]:
+    """Fit one observed-data diagonal GMM with the named engine.
+
+    Return the labels, the chosen fit's trace (the single-start keys), and, for
+    a multi-start engine, the start record.  The first start uses ``seed``
+    itself, so a multi-start fit is never worse than the single-start fit; the
+    others are derived from it.  A start that fails is recorded; the fit fails
+    only when every start does.
+    """
+
+    if engine not in _ENGINE_STARTS:
+        raise ValueError(f"unsupported observed-data GMM engine: {engine!r}")
+    n_starts = _ENGINE_STARTS[engine]
+    fit = dict(
+        n_components=n_components,
+        max_iter=max_iter,
+        tolerance=tolerance,
+        regularization=regularization,
+    )
+    if n_starts == 1:
+        labels, trace = _fit_observed_data_diag_gmm(x, seed=seed, **fit)
+        return labels, trace, None
+    seeds = [int(seed)] + [
+        int(child.generate_state(1, dtype=np.uint32)[0])
+        for child in np.random.SeedSequence(int(seed)).spawn(n_starts - 1)
+    ]
+    best: tuple[np.ndarray, Mapping[str, Any], int] | None = None
+    starts: list[dict[str, Any]] = []
+    for index, start_seed in enumerate(seeds):
+        try:
+            labels, trace = _fit_observed_data_diag_gmm(x, seed=start_seed, **fit)
+        except ValueError as exc:
+            starts.append({"seed": start_seed, "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        likelihood = float(trace["final_log_likelihood"])
+        starts.append({"seed": start_seed, "final_log_likelihood": likelihood})
+        if best is None or likelihood > float(best[1]["final_log_likelihood"]):
+            best = (labels, trace, index)
+    if best is None:
+        raise ValueError(
+            f"no start of {engine} produced a converged fit that realizes every "
+            f"cluster; first start: {starts[0]['error']}"
+        )
+    labels, trace, best_index = best
+    best_likelihood = float(trace["final_log_likelihood"])
+    reached = sum(
+        1
+        for start in starts
+        if "final_log_likelihood" in start
+        and abs(start["final_log_likelihood"] - best_likelihood)
+        <= tolerance * (1.0 + abs(best_likelihood))
+    )
+    return labels, trace, {
+        "engine": engine,
+        "n_starts": n_starts,
+        "n_successful_starts": sum("final_log_likelihood" in start for start in starts),
+        "best_start_index": best_index,
+        "n_starts_reaching_best": reached,
+        "starts": starts,
     }
 
 
@@ -1330,7 +1407,7 @@ def run_trajectory_stability(
         executor_code_sha256 = _sha256(Path(__file__).resolve())
         resolved_spec = {
             "schema_version": "easyicu.cluster_stability_spec/1",
-            "executor_version": "easyicu_observed_data_diag_gmm_v1",
+            "executor_version": spec.refit_engine,
             "scientific_design_owner": "planner_agent",
             "trajectory_stability_spec": spec_payload,
             "trajectory_stability_spec_sha256": spec_digest,
@@ -1387,8 +1464,9 @@ def run_trajectory_stability(
                     raise ValueError(
                         "sampled reference assignments contain fewer than two clusters"
                     )
-                refit_labels, fit_trace = _fit_observed_data_diag_gmm(
+                refit_labels, fit_trace, fit_starts = _fit_with_engine(
                     x[positions],
+                    engine=spec.refit_engine,
                     n_components=selected_n_clusters,
                     seed=seed,
                     max_iter=spec.refit_max_iter,
@@ -1427,6 +1505,7 @@ def run_trajectory_stability(
                         "representation_sha256": inputs[
                             "artifact:trajectory_representation"
                         ].get("sha256"),
+                        **({"engine_starts": fit_starts} if fit_starts else {}),
                     }
                 )
                 assignment_frame = pd.DataFrame(

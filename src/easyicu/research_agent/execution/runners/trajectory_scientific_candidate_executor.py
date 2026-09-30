@@ -11,13 +11,16 @@ import numpy as np
 import pandas as pd
 
 from ...schema import AnalysisPlan, AnalysisStep
-from ...trajectory.plan_contract import trajectory_step_roles
+from ...trajectory.plan_contract import (
+    DIAG_GMM_SINGLE_START_ENGINE,
+    trajectory_step_roles,
+)
 from ...trajectory.scientific_runtime_authority import (
     TrajectoryScientificRuntimeAuthority,
     load_trajectory_scientific_runtime_authority,
 )
 from .trajectory_stability_executor import (
-    _fit_observed_data_diag_gmm,
+    _fit_with_engine,
     _load_resolved_inputs,
     _loaded_input_receipt,
     _read_bound,
@@ -144,9 +147,13 @@ def run_trajectory_scientific_candidate_selection(
     n_rows, n_coordinates = scaled.shape
     candidate_rows: list[dict[str, Any]] = []
     labels_by_k: dict[int, np.ndarray] = {}
+    # Candidates are fit with the engine the stability refits use, so a refit
+    # disagrees with the frozen solution only through resampling.
+    engine = sealed.stability_spec.refit_engine
     for k, seed in zip(sealed.candidate_cluster_counts, seeds, strict=True):
-        labels, fit = _fit_observed_data_diag_gmm(
+        labels, fit, fit_starts = _fit_with_engine(
             scaled,
+            engine=engine,
             n_components=k,
             seed=seed,
             max_iter=sealed.candidate_fit_max_iter,
@@ -173,6 +180,7 @@ def run_trajectory_scientific_candidate_selection(
                 "seed": seed,
                 "n_iter": int(fit["n_iter"]),
                 "parameter_sha256": str(fit["parameter_sha256"]),
+                **({"engine_starts": fit_starts} if fit_starts else {}),
             }
         )
     selected = min(candidate_rows, key=lambda item: (item["bic"], item["n_clusters"]))
@@ -284,6 +292,7 @@ def run_trajectory_scientific_candidate_selection(
             "model_family": sealed.model_family,
             "fit_method": sealed.fit_method,
             "covariance_type": sealed.covariance_type,
+            **({"fit_engine": engine} if engine != DIAG_GMM_SINGLE_START_ENGINE else {}),
             "candidates": candidate_rows,
             "scientific_runtime_authority": authority_binding,
         },

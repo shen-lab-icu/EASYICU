@@ -923,17 +923,17 @@ class TrajectoryStabilitySpec(BaseModel):
     count, representation, and missing-data fit are inherited from the typed
     upstream trajectory manifests rather than repeated here.
 
-    Sixteen of these fields are ``Literal`` types with exactly one legal value:
+    Fifteen of these fields are ``Literal`` types with exactly one legal value:
     v1 of this calculator implements one resampling scheme, one comparison
     metric and one label-alignment rule, so there is nothing to choose between.
     They carry that single value as their default, which is the convention the
     other Planner-owned specs in this module already follow.  The ``Literal``
     still rejects every other spelling, the value is still serialised into the
     spec and still hashed into ``trajectory_stability_spec_sha256`` -- the
-    Planner simply no longer has to retype sixteen constants correctly for the
-    plan to validate at all.  If a second implementation is ever added to any
-    of them, the field becomes a real choice and its default must be removed
-    (``test_planner_spec_constants.py`` enforces exactly that).
+    Planner simply no longer has to retype fifteen constants correctly for the
+    plan to validate at all.  A second implementation that is a real choice
+    loses its default; ``refit_engine``'s second value is named by the host's
+    signed policy, and a spec naming none keeps its recorded contract.
 
     ``minimum_successful_resamples`` is likewise not a choice: the validator
     below requires it to equal ``n_resamples``.  Leave it null and it is filled
@@ -975,9 +975,9 @@ class TrajectoryStabilitySpec(BaseModel):
     )
     minimum_successful_resamples: Optional[int] = Field(default=None, ge=2)
     failed_refit_policy: Literal["record_once_no_retry"] = "record_once_no_retry"
-    refit_engine: Literal["easyicu_observed_data_diag_gmm_v1"] = (
-        "easyicu_observed_data_diag_gmm_v1"
-    )
+    refit_engine: Literal[
+        "easyicu_observed_data_diag_gmm_v1", "easyicu_observed_data_diag_gmm_best_of_10_v2"
+    ] = "easyicu_observed_data_diag_gmm_v1"
     refit_initialization: Literal["random_balanced_assignments"] = (
         "random_balanced_assignments"
     )

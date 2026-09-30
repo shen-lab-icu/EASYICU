@@ -89,6 +89,15 @@ OBSERVED_DATA_DIAG_GMM_METHOD = (
 )
 OBSERVED_DATA_DIAG_GMM_MODEL_FAMILY = "latent_class_diagonal_gaussian_mixture"
 OBSERVED_DATA_DIAG_GMM_FIT_METHOD = "observed_data_em_diagonal_gaussian_mixture"
+#: One EM run from one random balanced start.  It can stop in a poor local
+#: optimum, so a refit may disagree with the frozen solution through
+#: optimisation alone.  A spec that names no engine keeps it, so recorded and
+#: reviewed contracts keep their exact digests.
+DIAG_GMM_SINGLE_START_ENGINE = "easyicu_observed_data_diag_gmm_v1"
+#: Ten deterministic EM starts, the first exactly the single-start fit, keeping
+#: the highest observed-data likelihood.  The signed candidate fit and every
+#: stability refit use it.
+DIAG_GMM_BEST_OF_10_ENGINE = "easyicu_observed_data_diag_gmm_best_of_10_v2"
 
 STABILITY_EXECUTOR_OUTPUTS = frozenset(
     {
