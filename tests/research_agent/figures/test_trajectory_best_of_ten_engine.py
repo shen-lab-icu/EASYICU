@@ -185,9 +185,11 @@ def test_a_spec_naming_no_engine_keeps_its_recorded_contract():
 
 
 def _signed_body() -> dict:
+    # Continuous coordinates keep the Gaussian mixture; declared ordinal ones
+    # (SOFA-2 components) seal the mixed-mode latent class model instead.
     design = load_trajectory_design(
         {
-            "coordinate_concepts": ["sofa2_resp", "sofa2_cardio"],
+            "coordinate_concepts": ["lactate", "map"],
             "window_start_hours": 0,
             "window_end_hours": 24,
             "grid_width_hours": 12,

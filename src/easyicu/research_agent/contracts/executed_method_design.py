@@ -54,8 +54,12 @@ class LatentClassModelDesign(_ExecutedDesign):
     """The class model, its coordinate scale, and its selection rule."""
 
     design_kind: Literal["latent_class_model"]
-    model_family: Literal["latent_class_diagonal_gaussian_mixture"]
-    coordinate_scaling: Literal["pooled_coordinate_wise_z_score"]
+    model_family: Literal[
+        "latent_class_diagonal_gaussian_mixture", "latent_class_mixed_mode"
+    ]
+    coordinate_scaling: Literal[
+        "pooled_coordinate_wise_z_score", "continuous_coordinate_wise_z_score"
+    ]
     candidate_class_counts: list[int]
     selection_criterion: Literal["bic"]
     minimum_class_fraction: float = Field(gt=0.0, lt=1.0)
@@ -69,6 +73,12 @@ class LatentClassModelDesign(_ExecutedDesign):
             or any(later <= earlier for earlier, later in zip(counts, counts[1:]))
         ):
             raise ValueError("candidate class counts must be an increasing grid from 2")
+        # The mixed-mode model keeps ordinal levels; only a Gaussian-only model
+        # z-scores every coordinate.
+        if (self.model_family == "latent_class_mixed_mode") != (
+            self.coordinate_scaling == "continuous_coordinate_wise_z_score"
+        ):
+            raise ValueError("the class model and its coordinate scaling disagree")
         return self
 
 

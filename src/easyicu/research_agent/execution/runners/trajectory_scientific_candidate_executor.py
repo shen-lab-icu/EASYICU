@@ -23,6 +23,10 @@ from ...contracts.executed_method_design import (
     validate_executed_method_design,
 )
 from ...schema import AnalysisPlan, AnalysisStep
+from ...trajectory.mixed_mode_latent_class import (
+    mixed_mode_parameter_count,
+    representation_column_levels,
+)
 from ...trajectory.plan_contract import (
     DIAG_GMM_SINGLE_START_ENGINE,
     trajectory_step_roles,
@@ -146,7 +150,17 @@ def run_trajectory_scientific_candidate_selection(
     x = representation[columns].apply(pd.to_numeric, errors="coerce").to_numpy()
     if not np.isfinite(x).any(axis=1).all():
         raise ValueError("a trajectory row has no observed model coordinate")
-    scaled, scaling_manifest = _scale_coordinates(x, columns=columns)
+    # Declared measurement scales keep ordinal levels and z-score only the
+    # continuous coordinates; without them every coordinate is z-scored.
+    measurement = sealed.measurement_payload
+    scaled, scaling_manifest = _scale_coordinates(
+        x, columns=columns, measurement=measurement
+    )
+    column_levels = (
+        representation_column_levels(columns, measurement)
+        if measurement is not None
+        else None
+    )
     _write_json(
         out_dir / "trajectory_coordinate_scaling_manifest.json", scaling_manifest
     )
@@ -171,8 +185,13 @@ def run_trajectory_scientific_candidate_selection(
             max_iter=sealed.candidate_fit_max_iter,
             tolerance=sealed.candidate_fit_tolerance,
             regularization=sealed.candidate_fit_regularization,
+            column_levels=column_levels,
         )
-        parameter_count = (k - 1) + 2 * k * n_coordinates
+        parameter_count = (
+            mixed_mode_parameter_count(column_levels, k)
+            if column_levels is not None
+            else (k - 1) + 2 * k * n_coordinates
+        )
         final_log_likelihood = float(fit["final_log_likelihood"])
         bic = -2.0 * final_log_likelihood + parameter_count * math.log(n_rows)
         # AIC is an explicitly diagnostic second criterion.  The signed
@@ -182,7 +201,11 @@ def run_trajectory_scientific_candidate_selection(
         labels_by_k[k] = labels
         candidate_rows.append(
             {
-                "model_id": f"signed-observed-data-diag-gmm-k{k}",
+                "model_id": (
+                    f"signed-observed-data-mixed-mode-lca-k{k}"
+                    if column_levels is not None
+                    else f"signed-observed-data-diag-gmm-k{k}"
+                ),
                 "n_clusters": k,
                 "criterion_value": bic,
                 "bic": bic,
@@ -227,7 +250,11 @@ def run_trajectory_scientific_candidate_selection(
     }
     base_summary: dict[str, Any] = {
         "status": "ok",
-        "clustering_method": "observed_data_diagonal_gaussian_mixture",
+        "clustering_method": (
+            "observed_data_mixed_mode_latent_class"
+            if column_levels is not None
+            else "observed_data_diagonal_gaussian_mixture"
+        ),
         "n_clusters": selected_k,
         "cluster_selection": selection,
         "diagnostic_criteria": ["bic", "aic"],

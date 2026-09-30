@@ -105,11 +105,22 @@ def _design_text(design: object) -> str:
     # as readily as to the fraction 0.05 in the same summary.
     places = max(2, 1 - math.floor(math.log10(design.minimum_class_fraction)))
     proportion = f"{design.minimum_class_fraction:.{places}f}"
+    if design.model_family == "latent_class_mixed_mode":
+        model = (
+            "a mixed-mode latent class model with categorical indicators "
+            "(class-specific level probabilities) for the declared ordinal "
+            "coordinates and Gaussian indicators for the pooled z-scores of any "
+            f"continuous coordinate, fitted for {grid} classes"
+        )
+    else:
+        model = (
+            "a diagonal Gaussian latent class mixture fitted to pooled "
+            f"coordinate-wise z-scores for {grid} classes"
+        )
     return (
-        "Executed class model: a diagonal Gaussian latent class mixture fitted to "
-        f"pooled coordinate-wise z-scores for {grid} classes, with the class count "
-        "chosen by the minimum Bayesian information criterion and a prespecified "
-        f"minimum class proportion of {proportion} of records"
+        f"Executed class model: {model}, with the class count chosen by the minimum "
+        "Bayesian information criterion and a prespecified minimum class proportion "
+        f"of {proportion} of records"
     )
 
 

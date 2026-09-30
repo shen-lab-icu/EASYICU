@@ -301,6 +301,13 @@ def run_trajectory_scientific_representation(
             "profile_summaries_ignore_missing": True,
         },
         "coordinate_scaling": sealed.scaling_payload,
+        # Only the mixed-mode contract declares measurement; a Gaussian
+        # contract's schema keeps its exact fields.
+        **(
+            {"coordinate_measurement": sealed.measurement_payload}
+            if sealed.measurement_payload is not None
+            else {}
+        ),
         "evidence_state_policy": sealed.evidence_payload,
         "representation_columns": list(sealed.representation_columns),
         "frozen_population_n": len(model_matrix),

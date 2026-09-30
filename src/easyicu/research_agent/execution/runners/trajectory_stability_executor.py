@@ -17,7 +17,7 @@ import math
 import os
 import re
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -31,11 +31,18 @@ from ...schema import (
     ClusterSelectionManifest,
     TrajectoryStabilitySpec,
 )
+from ...trajectory.mixed_mode_latent_class import (
+    fit_observed_data_mixed_mode_lca,
+    representation_column_levels,
+)
 from ...trajectory.plan_contract import (
     DIAG_GMM_BEST_OF_10_ENGINE,
     DIAG_GMM_SINGLE_START_ENGINE,
+    MIXED_MODE_LCA_BEST_OF_10_ENGINE,
     OBSERVED_DATA_DIAG_GMM_FIT_METHOD,
     OBSERVED_DATA_DIAG_GMM_MODEL_FAMILY,
+    OBSERVED_DATA_MIXED_MODE_LCA_FIT_METHOD,
+    OBSERVED_DATA_MIXED_MODE_LCA_MODEL_FAMILY,
     STABILITY_EXECUTOR_INPUTS,
     STABILITY_EXECUTOR_OUTPUTS,
     STABILITY_CHARACTERIZATION_EXECUTOR_OUTPUTS,
@@ -62,9 +69,22 @@ __all__ = [
 ]
 
 
-_SUPPORTED_MODEL_FAMILY = OBSERVED_DATA_DIAG_GMM_MODEL_FAMILY
-_SUPPORTED_FIT_METHOD = OBSERVED_DATA_DIAG_GMM_FIT_METHOD
+#: Model family -> its fit method and the refit engines that implement it.
+_SUPPORTED_MODELS = {
+    OBSERVED_DATA_DIAG_GMM_MODEL_FAMILY: (
+        OBSERVED_DATA_DIAG_GMM_FIT_METHOD,
+        frozenset({DIAG_GMM_SINGLE_START_ENGINE, DIAG_GMM_BEST_OF_10_ENGINE}),
+    ),
+    OBSERVED_DATA_MIXED_MODE_LCA_MODEL_FAMILY: (
+        OBSERVED_DATA_MIXED_MODE_LCA_FIT_METHOD,
+        frozenset({MIXED_MODE_LCA_BEST_OF_10_ENGINE}),
+    ),
+}
 _SUPPORTED_COVARIANCE = "diag"
+#: The scaling policy for a representation that declares each coordinate's
+#: measurement: continuous coordinates take the pooled z-score, ordinal ones
+#: keep their levels.
+_CONTINUOUS_ONLY_SCALING = "continuous_coordinate_wise_z_score"
 _SUPPORTED_REPRESENTATION_SCHEMA = TRAJECTORY_REPRESENTATION_SCHEMA_VERSION
 _SUPPORTED_SOLUTION_SCHEMA = TRAJECTORY_CANDIDATE_SOLUTION_SCHEMA_VERSION
 _NATIVE_MATH_THREAD_ENV = (
@@ -553,7 +573,11 @@ def _fit_observed_data_diag_gmm(
 
 
 #: Deterministic EM starts per fit for each refit engine.
-_ENGINE_STARTS = {DIAG_GMM_SINGLE_START_ENGINE: 1, DIAG_GMM_BEST_OF_10_ENGINE: 10}
+_ENGINE_STARTS = {
+    DIAG_GMM_SINGLE_START_ENGINE: 1,
+    DIAG_GMM_BEST_OF_10_ENGINE: 10,
+    MIXED_MODE_LCA_BEST_OF_10_ENGINE: 10,
+}
 
 
 def _fit_with_engine(
@@ -565,8 +589,12 @@ def _fit_with_engine(
     max_iter: int,
     tolerance: float,
     regularization: float,
+    column_levels: Sequence[tuple[int, ...] | None] | None = None,
 ) -> tuple[np.ndarray, Mapping[str, Any], Mapping[str, Any] | None]:
-    """Fit one observed-data diagonal GMM with the named engine.
+    """Fit one observed-data latent class model with the named engine.
+
+    The Gaussian engines fit z-scored coordinates; the mixed-mode engine needs
+    each column's declared levels (None for a continuous column).
 
     Return the labels, the chosen fit's trace (the single-start keys), and, for
     a multi-start engine, the start record.  The first start uses ``seed``
@@ -578,14 +606,24 @@ def _fit_with_engine(
     if engine not in _ENGINE_STARTS:
         raise ValueError(f"unsupported observed-data GMM engine: {engine!r}")
     n_starts = _ENGINE_STARTS[engine]
-    fit = dict(
+    fit: dict[str, Any] = dict(
         n_components=n_components,
         max_iter=max_iter,
         tolerance=tolerance,
         regularization=regularization,
     )
+    mixed_mode = engine == MIXED_MODE_LCA_BEST_OF_10_ENGINE
+    if mixed_mode != (column_levels is not None):
+        raise ValueError(
+            "the mixed-mode engine, and only it, fits columns with declared levels"
+        )
+    fit_start = (
+        fit_observed_data_mixed_mode_lca if mixed_mode else _fit_observed_data_diag_gmm
+    )
+    if mixed_mode:
+        fit["column_levels"] = column_levels
     if n_starts == 1:
-        labels, trace = _fit_observed_data_diag_gmm(x, seed=seed, **fit)
+        labels, trace = fit_start(x, seed=seed, **fit)
         return labels, trace, None
     seeds = [int(seed)] + [
         int(child.generate_state(1, dtype=np.uint32)[0])
@@ -595,7 +633,7 @@ def _fit_with_engine(
     starts: list[dict[str, Any]] = []
     for index, start_seed in enumerate(seeds):
         try:
-            labels, trace = _fit_observed_data_diag_gmm(x, seed=start_seed, **fit)
+            labels, trace = fit_start(x, seed=start_seed, **fit)
         except ValueError as exc:
             starts.append({"seed": start_seed, "error": f"{type(exc).__name__}: {exc}"})
             continue
@@ -759,6 +797,11 @@ def _validate_representation_policy(schema: Mapping[str, Any]) -> None:
         "missing_value_policy": "preserve_missing_exclude_from_likelihood",
         "zero_variance_action": "fail_closed",
     }
+    measurement = schema.get("coordinate_measurement")
+    if measurement is not None:
+        # Declared measurement scales: only continuous coordinates are scaled.
+        required_scaling["method"] = _CONTINUOUS_ONLY_SCALING
+        representation_column_levels(observation_columns, measurement)
     if not isinstance(scaling, Mapping) or dict(scaling) != required_scaling:
         raise ValueError("coordinate_scaling does not match the frozen policy")
     evidence = schema.get("evidence_state_policy")
@@ -834,13 +877,21 @@ def validate_trajectory_stability_schema_pair(
         minimum=2,
     )
     _validate_representation_policy(representation_schema)
-    if _normalise(solution_schema.get("model_family")) != _SUPPORTED_MODEL_FAMILY:
+    family = _normalise(solution_schema.get("model_family"))
+    if family not in _SUPPORTED_MODELS:
         raise ValueError(
             "selected candidate model family is unsupported by this executor"
         )
-    if _normalise(solution_schema.get("fit_method")) != _SUPPORTED_FIT_METHOD:
+    if _normalise(solution_schema.get("fit_method")) != _SUPPORTED_MODELS[family][0]:
         raise ValueError(
             "selected candidate fit method is unsupported by this executor"
+        )
+    if (family == OBSERVED_DATA_MIXED_MODE_LCA_MODEL_FAMILY) != (
+        representation_schema.get("coordinate_measurement") is not None
+    ):
+        raise ValueError(
+            "the mixed-mode model family requires, and only it uses, declared "
+            "coordinate measurement"
         )
     if _normalise(solution_schema.get("covariance_type")) != _SUPPORTED_COVARIANCE:
         raise ValueError(
@@ -909,17 +960,43 @@ def _scale_coordinates(
     x: np.ndarray,
     *,
     columns: list[str],
+    measurement: Sequence[Mapping[str, Any]] | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
-    """Apply the frozen observed-value z-score policy and return its manifest."""
+    """Apply the frozen observed-value z-score policy and return its manifest.
+
+    With declared measurement scales, an ordinal coordinate keeps its levels
+    (each observed value must be one of them) and only continuous coordinates
+    are z-scored.
+    """
 
     values = np.asarray(x, dtype=float)
     stats: list[dict[str, Any]] = []
     scaled = values.copy()
+    levels = (
+        representation_column_levels(columns, measurement)
+        if measurement is not None
+        else [None] * len(columns)
+    )
     for index, column in enumerate(columns):
         observed = np.isfinite(values[:, index])
         count = int(observed.sum())
         if count == 0:
             raise ValueError(f"scaling coordinate {column!r} has no observed values")
+        if levels[index] is not None:
+            if not np.isin(values[observed, index], levels[index]).all():
+                raise ValueError(
+                    f"ordinal coordinate {column!r} has a value outside its declared "
+                    f"levels {list(levels[index])}"
+                )
+            stats.append(
+                {
+                    "coordinate": column,
+                    "observed_n": count,
+                    "measurement": "ordinal",
+                    "levels": list(levels[index]),
+                }
+            )
+            continue
         center = float(np.mean(values[observed, index]))
         scale = float(np.std(values[observed, index], ddof=0))
         if not math.isfinite(center) or not math.isfinite(scale) or scale <= 0:
@@ -937,7 +1014,11 @@ def _scale_coordinates(
         )
     body = {
         "schema_version": "easyicu.trajectory_coordinate_scaling/1",
-        "method": "pooled_coordinate_wise_z_score",
+        "method": (
+            _CONTINUOUS_ONLY_SCALING
+            if measurement is not None
+            else "pooled_coordinate_wise_z_score"
+        ),
         "ddof": 0,
         "observed_value_policy": "direct_or_owner_locf_available",
         "missing_value_policy": "preserve_missing_exclude_from_likelihood",
@@ -1349,10 +1430,24 @@ def run_trajectory_stability(
             )
             _write_json(out_dir / "step_summary.json", summary)
             return summary
+        measurement = representation_schema.get("coordinate_measurement")
         x, scaling_manifest = _scale_coordinates(
             x,
             columns=representation_columns,
+            measurement=measurement,
         )
+        column_levels = (
+            representation_column_levels(representation_columns, measurement)
+            if measurement is not None
+            else None
+        )
+        if spec.refit_engine not in _SUPPORTED_MODELS[
+            _normalise(solution_schema.get("model_family"))
+        ][1]:
+            raise ValueError(
+                "the stability refit engine does not implement the selected "
+                "candidate model family"
+            )
         if sealed_authority is not None:
             if tuple(representation_columns) != sealed_authority.representation_columns:
                 raise ValueError(
@@ -1472,6 +1567,7 @@ def run_trajectory_stability(
                     max_iter=spec.refit_max_iter,
                     tolerance=spec.refit_tolerance,
                     regularization=spec.refit_regularization,
+                    column_levels=column_levels,
                 )
                 aligned = _aligned_labels(
                     reference_sample,

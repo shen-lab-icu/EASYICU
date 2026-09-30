@@ -3241,6 +3241,10 @@
     ],
     [
       "easyicu.research_agent.contracts.trajectory_design",
+      "easyicu.research_agent.icu_rules"
+    ],
+    [
+      "easyicu.research_agent.contracts.trajectory_design",
       "easyicu.research_agent.schema"
     ],
     [
@@ -6665,6 +6669,10 @@
     ],
     [
       "easyicu.research_agent.execution.runners.trajectory_scientific_candidate_executor",
+      "easyicu.research_agent.trajectory.mixed_mode_latent_class"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.trajectory_scientific_candidate_executor",
       "easyicu.research_agent.trajectory.plan_contract"
     ],
     [
@@ -6718,6 +6726,10 @@
     [
       "easyicu.research_agent.execution.runners.trajectory_stability_executor",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.trajectory_stability_executor",
+      "easyicu.research_agent.trajectory.mixed_mode_latent_class"
     ],
     [
       "easyicu.research_agent.execution.runners.trajectory_stability_executor",
@@ -13160,9 +13172,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3282,
+    "edge_count": 3285,
     "largest_scc_size": 0,
-    "module_count": 766,
+    "module_count": 767,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -13926,6 +13938,7 @@
     "easyicu.research_agent.trajectory": "trajectory/__init__.py",
     "easyicu.research_agent.trajectory.bundle": "trajectory/bundle.py",
     "easyicu.research_agent.trajectory.contract": "trajectory/contract.py",
+    "easyicu.research_agent.trajectory.mixed_mode_latent_class": "trajectory/mixed_mode_latent_class.py",
     "easyicu.research_agent.trajectory.panel": "trajectory/panel.py",
     "easyicu.research_agent.trajectory.plan_contract": "trajectory/plan_contract.py",
     "easyicu.research_agent.trajectory.runtime_validation": "trajectory/runtime_validation.py",

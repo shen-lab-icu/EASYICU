@@ -634,6 +634,20 @@ def _dictionary_measurement_hint(name: str, dtype: str) -> Optional[ConceptHint]
     return None
 
 
+def declared_ordinal_levels(name: str) -> Optional[Tuple[int, ...]]:
+    """The levels of a concept the curated hints declare ordinal, else None.
+
+    Only a curated hint with explicit levels answers (a SOFA-2 organ score:
+    0-4; a KDIGO stage: 0-3).  A column that merely holds few integers is not
+    declared ordinal here.
+    """
+
+    hint = _lookup_hint(name)
+    if hint is None or not hint.is_ordinal or not hint.ordinal_levels:
+        return None
+    return tuple(int(level) for level in hint.ordinal_levels)
+
+
 def classify_variable(
     name: str,
     dtype: str,
@@ -1992,6 +2006,7 @@ __all__ = [
     "ConceptMethodologyProfile",
     "companion_count_column_for_measured",
     "classify_variable",
+    "declared_ordinal_levels",
     "aggregation_rule_for",
     "default_time_windows",
     "GENERAL_ICU_ANALYSIS_PRINCIPLES",

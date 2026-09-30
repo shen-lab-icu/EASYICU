@@ -8,7 +8,11 @@ window and grid, how many clusters are admissible, and what counts as a stable
 solution.  Everything else the sealed trajectory authority needs -- the model
 family, the fit engine, the selection criterion, seeds, tolerances, boundary
 actions and reason codes -- is host policy with exactly one implementation, so
-it lives here as a constant rather than as a slot someone has to fill in.
+it lives here as a constant rather than as a slot someone has to fill in.  The
+model follows the coordinates' declared measurement, not a reviewer's choice:
+a coordinate the host declares ordinal (an organ score's levels) enters a
+mixed-mode latent class model as a categorical indicator; a design whose
+coordinates are all continuous keeps the Gaussian mixture.
 
 Keeping both halves in one dependency-neutral owner is what stops the two
 routes to the same executor from drifting: the benchmark protocol compiler and
@@ -29,6 +33,7 @@ __all__ = [
     "ELIGIBILITY_COORDINATE_PREFIX",
     "FIXED_WINDOW_TRAJECTORY_DEFAULTS",
     "TRAJECTORY_HOST_POLICY",
+    "TRAJECTORY_MIXED_MODE_POLICY",
     "TRAJECTORY_OUTCOME_DESCRIPTION_RULE",
     "TRAJECTORY_PRIMARY_ACTION",
     "FixedWindowTrajectoryDesign",
@@ -42,6 +47,7 @@ __all__ = [
     "proposed_trajectory_coordinates",
     "sealed_trajectory_authority_body",
     "time_varying_role",
+    "trajectory_coordinate_measurement",
     "trajectory_coordinate_proposal",
 ]
 
@@ -75,6 +81,22 @@ TRAJECTORY_HOST_POLICY = MappingProxyType(
         "minimum_cluster_fraction_reason_code": (
             "TRAJECTORY_MINIMUM_CLUSTER_FRACTION_NOT_MET"
         ),
+    }
+)
+
+#: The host policy entries that change when a coordinate is declared ordinal:
+#: ordinal levels are categorical indicators and only continuous coordinates
+#: are z-scored.  A Gaussian mixture on tied integer levels keeps adding
+#: narrow components, so its BIC keeps falling with the class count.
+TRAJECTORY_MIXED_MODE_POLICY = MappingProxyType(
+    {
+        "scaling_method": "continuous_coordinate_wise_z_score",
+        "model_family": "latent_class_mixed_mode",
+        "fit_method": "observed_data_em_mixed_mode_latent_class",
+        "bic_parameter_count": (
+            "mixture_weights_k_minus_1_plus_k_per_indicator_free_parameters"
+        ),
+        "fit_engine": "easyicu_observed_data_mixed_mode_lca_best_of_10_v1",
     }
 )
 
@@ -675,6 +697,28 @@ def _validate(design: FixedWindowTrajectoryDesign) -> FixedWindowTrajectoryDesig
     return replace(design)
 
 
+def trajectory_coordinate_measurement(
+    concepts: Sequence[str],
+) -> tuple[dict[str, Any], ...]:
+    """Each coordinate's measurement, from the host's declared concept scales.
+
+    A concept the host declares ordinal with explicit levels (a SOFA-2 organ
+    score: 0-4) is ordinal; every other coordinate is continuous.
+    """
+
+    from ..icu_rules import declared_ordinal_levels
+
+    measurement: list[dict[str, Any]] = []
+    for concept in concepts:
+        levels = declared_ordinal_levels(concept)
+        measurement.append(
+            {"concept": concept, "scale": "ordinal", "levels": list(levels)}
+            if levels is not None
+            else {"concept": concept, "scale": "continuous"}
+        )
+    return tuple(measurement)
+
+
 def sealed_trajectory_authority_body(
     design: FixedWindowTrajectoryDesign,
     *,
@@ -689,7 +733,12 @@ def sealed_trajectory_authority_body(
 
     from ..schema import TrajectoryStabilitySpec
 
-    policy = TRAJECTORY_HOST_POLICY
+    measurement = trajectory_coordinate_measurement(design.coordinate_concepts)
+    mixed_mode = any(entry["scale"] == "ordinal" for entry in measurement)
+    policy = {
+        **TRAJECTORY_HOST_POLICY,
+        **(TRAJECTORY_MIXED_MODE_POLICY if mixed_mode else {}),
+    }
     stability = TrajectoryStabilitySpec(
         n_resamples=design.stability_resamples,
         sample_fraction=design.stability_sample_fraction,
@@ -703,7 +752,11 @@ def sealed_trajectory_authority_body(
         decision_mode="minimum_mean_threshold",
     )
     return {
-        "schema_version": "easyicu.trajectory_scientific_runtime_authority/1",
+        "schema_version": (
+            "easyicu.trajectory_scientific_runtime_authority/2"
+            if mixed_mode
+            else "easyicu.trajectory_scientific_runtime_authority/1"
+        ),
         "protocol_content_sha256": protocol_content_sha256,
         "coordinate_concepts": list(design.coordinate_concepts),
         "descriptive_only_concepts": list(design.descriptive_only_concepts),
@@ -720,6 +773,7 @@ def sealed_trajectory_authority_body(
             "missing_value_policy": "preserve_missing_exclude_from_likelihood",
             "zero_variance_action": policy["scaling_zero_variance_action"],
         },
+        **({"coordinate_measurement": list(measurement)} if mixed_mode else {}),
         "evidence_state_policy": {
             "direct_observed": "include",
             "owner_locf_available": "include_and_audit",
