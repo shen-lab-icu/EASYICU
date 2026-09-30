@@ -22,6 +22,12 @@ import re
 import textwrap
 from typing import Any, Mapping
 
+from ...authority.prespecified_rule_outcomes import (
+    RULE_OUTCOME_SCHEMA_VERSION,
+    RULE_OUTCOMES_KEY,
+    rule_outcome_payload,
+    validate_rule_outcome,
+)
 from ...contracts.declared_product import RUNTIME_BINDABLE_TYPED_INPUT_KINDS
 from ...schema import AnalysisStep
 from .report_input_authority import verify_report_input_authorities
@@ -218,6 +224,21 @@ def run_feasibility_protocol(
         "output_files": {f"report:{report_product}": report_path.name},
         "contract_files": [receipt_path.name],
     }
+    if planned_analysis_role in {"secondary", "sensitivity"}:
+        # A planned result the report must account for; an auxiliary
+        # protocol owns no Results subsection.
+        summary[RULE_OUTCOMES_KEY] = [
+            rule_outcome_payload(
+                validate_rule_outcome(
+                    {
+                        "schema_version": RULE_OUTCOME_SCHEMA_VERSION,
+                        "rule": "planned_analysis_feasibility",
+                        "disposition": "not_executable_from_sealed_inputs",
+                        "planned_analysis_role": planned_analysis_role,
+                    }
+                )
+            )
+        ]
     (out_dir / "step_summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
         encoding="utf-8",

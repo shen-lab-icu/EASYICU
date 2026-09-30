@@ -560,14 +560,26 @@ def repair_reader_structure_from_existing_prose(
 
     section_map = _sections(repaired)
     conclusion = section_map.get("Conclusion")
-    if conclusion is not None and not _has_prose(conclusion):
+    conclusion_caveat_only = bool(conclusion) and bool(re.fullmatch(
+        r"Independent validation is required\s*\.?",
+        _strip_audit_markup(conclusion or "").strip(), flags=re.I,
+    ))
+    if conclusion is not None and (not _has_prose(conclusion) or conclusion_caveat_only):
         results = section_map.get("Results", "")
-        primary = _subsections(results).get("Primary association", "")
+        # The family's primary subsection answers the question; a cohort
+        # claim placed before it is not the study's conclusion.
+        subsections = _subsections(results)
+        primary = next(
+            (subsections[heading] for heading in PRIMARY_RESULT_HEADINGS
+             if heading in subsections and _CLAIM_PLACEHOLDER_RE.search(subsections[heading])),
+            "",
+        )
         source = primary or results
         candidate = next(
             (
                 sentence.strip()
-                for sentence in re.split(r"(?<=[.!?])\s+", source)
+                # Placed host tokens are paragraphs without a full stop.
+                for sentence in re.split(r"(?<=[.!?])\s+|\n\s*\n", source)
                 if _has_prose(sentence)
                 and (
                     _CLAIM_PLACEHOLDER_RE.fullmatch(sentence.rstrip(".!?"))
@@ -576,6 +588,8 @@ def repair_reader_structure_from_existing_prose(
             None,
         )
         if candidate is not None:
+            if conclusion_caveat_only:
+                candidate = f"{candidate}\n\n{conclusion.strip()}"
             repaired = _replace_section_body(repaired, "Conclusion", candidate)
             repairs.append(
                 {

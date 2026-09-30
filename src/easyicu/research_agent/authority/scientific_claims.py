@@ -17,6 +17,12 @@ import re
 from typing import Literal, Mapping, Sequence
 
 from .claim_coordinates import contrast_exposure_coordinate
+from .prespecified_rule_outcomes import (
+    RULE_OUTCOME_CLAIM_SCHEMA_VERSION,
+    RULE_OUTCOMES_KEY,
+    PrespecifiedRuleOutcome,
+    derive_rule_outcome_claim_payloads,
+)
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -192,13 +198,14 @@ class ScientificClaimDraft(BaseModel):
 
     schema_version: Literal[
         "easyicu.scientific_claim/1", "easyicu.scientific_claim/2",
-        "easyicu.scientific_claim/3",
+        "easyicu.scientific_claim/3", "easyicu.scientific_claim/4",
     ] = "easyicu.scientific_claim/1"
     claim_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     claim_type: Literal[
         "association",
         "descriptive_absolute_risk",
         "descriptive_risk_difference",
+        "prespecified_rule_outcome",
     ]
     exposure: str
     outcome: str
@@ -223,6 +230,7 @@ class ScientificClaimDraft(BaseModel):
         "wilson", "patient_cluster_robust_wald", "linear_probability_wald"
     ] | None = None
     effect_scale: Literal["percent", "percentage_points"] | None = None
+    rule_outcome: PrespecifiedRuleOutcome | None = None
 
     @model_serializer(mode="wrap")
     def _preserve_legacy_payload(self, handler):
@@ -232,6 +240,8 @@ class ScientificClaimDraft(BaseModel):
             # optional fields must not change those persisted bytes on replay.
             for field in ("confidence_level", "interval_method", "effect_scale"):
                 payload.pop(field, None)
+        if self.schema_version != RULE_OUTCOME_CLAIM_SCHEMA_VERSION:
+            payload.pop("rule_outcome", None)
         return payload
 
     @field_validator("exposure", "outcome", "estimand", "population")
@@ -259,6 +269,31 @@ class ScientificClaimDraft(BaseModel):
         interval_metadata = (
             self.confidence_level, self.interval_method, self.effect_scale
         )
+        rule_claim = self.schema_version == RULE_OUTCOME_CLAIM_SCHEMA_VERSION
+        if rule_claim != (self.claim_type == "prespecified_rule_outcome") or (
+            rule_claim != (self.rule_outcome is not None)
+        ):
+            raise ValueError(
+                "prespecified rule outcomes require scientific_claim/4 and its typed outcome"
+            )
+        if rule_claim:
+            # The typed outcome is the whole result; nothing numeric or
+            # inferential sits beside it.
+            if (
+                self.direction != "descriptive_only"
+                or self.adjusted_for
+                or any(value is not None for value in interval_metadata)
+                or any(
+                    value is not None
+                    for value in (
+                        self.point_estimate, self.interval_lower, self.interval_upper,
+                    )
+                )
+            ):
+                raise ValueError(
+                    "a prespecified rule outcome carries no estimate, interval or adjustment"
+                )
+            return self
         if self.schema_version == "easyicu.scientific_claim/3":
             if any(value is None for value in interval_metadata):
                 raise ValueError("scientific_claim/3 requires complete interval semantics")
@@ -338,6 +373,11 @@ class ScientificClaim(ScientificClaimDraft):
     def render_text(self) -> str:
         """Render the only manuscript sentence authorized by this contract."""
 
+        if self.rule_outcome is not None:
+            return (
+                f"{self.rule_outcome.result_sentence()[:-1]} (prespecified rule "
+                f"outcome; analysis role: {self.analysis_role})."
+            )
         if self.claim_type != "association":
             return (
                 f"In {self.population}, the {self.estimand} for {self.outcome} at "
@@ -388,6 +428,13 @@ class ScientificClaim(ScientificClaimDraft):
         ``_reader_coordinate``).  Every caller that renders a claim and every
         caller that checks the rendered sentence must pass the same labels.
         """
+
+        if self.rule_outcome is not None:
+            # The rule's own typed fields carry the whole sentence; it names
+            # no study variable, so reader labels do not apply.
+            if include_estimate:
+                return self.rule_outcome.result_sentence()
+            return self.rule_outcome.conclusion_sentence()
 
         labels = _unambiguous_labels(
             labels, [self.exposure, self.outcome, *self.adjusted_for]
@@ -514,6 +561,10 @@ def scientific_claim_compilation_requested(summary: object) -> bool:
         )
     if "reportable_model_contrasts" in summary:
         return True
+    if RULE_OUTCOMES_KEY in summary:
+        # A signed owner's formal rule outcome; it may sit beside any other
+        # envelope in the same summary.
+        return True
     interpretation_class = str(summary.get("interpretation_class") or "").strip()
     if interpretation_class == "adjusted_association":
         return True
@@ -552,6 +603,17 @@ def derive_scientific_claim_drafts(
     if not scientific_claim_compilation_requested(summary):
         return []
     assert isinstance(summary, dict)
+
+    if RULE_OUTCOMES_KEY in summary:
+        rule_drafts = [
+            ScientificClaimDraft.model_validate(payload)
+            for payload in derive_rule_outcome_claim_payloads(summary)
+        ]
+        others = {key: value for key, value in summary.items() if key != RULE_OUTCOMES_KEY}
+        return [
+            *rule_drafts,
+            *derive_scientific_claim_drafts(others, legacy_descriptive=legacy_descriptive),
+        ]
 
     if "reportable_model_contrasts" in summary:
         from .model_contrast_scientific_claims import derive_model_contrast_claim_payloads

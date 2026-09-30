@@ -10,6 +10,18 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 
+from ...authority.prespecified_rule_outcomes import (
+    RULE_OUTCOME_SCHEMA_VERSION,
+    RULE_OUTCOMES_KEY,
+    rule_outcome_payload,
+    validate_rule_outcome,
+)
+from ...contracts.executed_method_design import (
+    EXECUTED_METHOD_DESIGN_KEY,
+    EXECUTED_METHOD_DESIGN_SCHEMA_VERSION,
+    executed_method_design_payload,
+    validate_executed_method_design,
+)
 from ...schema import AnalysisPlan, AnalysisStep
 from ...trajectory.plan_contract import trajectory_step_roles
 from ...trajectory.scientific_runtime_authority import (
@@ -293,6 +305,34 @@ def run_trajectory_scientific_representation(
         str(key): int(value)
         for key, value in trajectory["evidence_state"].value_counts().items()
     }
+    # The executed grid and its eligibility rule, as the report must state
+    # them; the run context's window describes the cohort, not this panel.
+    time_design = {
+        "anchor": schema["anchor"],
+        "window_start_hours": sealed.window_start_hours,
+        "window_end_hours": sealed.window_end_hours,
+        "window_width_hours": sealed.grid_width_hours,
+        "n_windows": n_windows,
+        "minimum_observed_windows": sealed.minimum_available_windows,
+    }
+    eligibility_outcome = validate_rule_outcome(
+        {
+            "schema_version": RULE_OUTCOME_SCHEMA_VERSION,
+            "rule": "minimum_observed_windows",
+            **time_design,
+            "input_n": len(matrix),
+            "included_n": int(eligible.sum()),
+            "excluded_n": int((~eligible).sum()),
+        }
+    )
+    representation_design = validate_executed_method_design(
+        {
+            "schema_version": EXECUTED_METHOD_DESIGN_SCHEMA_VERSION,
+            "design_kind": "fixed_window_representation",
+            **time_design,
+            "window_aggregation": sealed.aggregation,
+        }
+    )
     summary = {
         "status": "ok",
         "id_column": "stay_id",
@@ -317,6 +357,10 @@ def run_trajectory_scientific_representation(
         "runtime_projection_sha256": runtime_projection_sha256,
         "representation_sha256": schema["representation_sha256"],
         "sofa_coordinate_columns": sofa_columns,
+        RULE_OUTCOMES_KEY: [rule_outcome_payload(eligibility_outcome)],
+        EXECUTED_METHOD_DESIGN_KEY: executed_method_design_payload(
+            representation_design
+        ),
         "output_files": {
             "artifact:trajectory_representation": (
                 "trajectory_representation.parquet"

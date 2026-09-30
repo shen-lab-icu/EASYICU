@@ -597,6 +597,13 @@ def _executed_method_boundary_rows(
             value = summary.get(key)
             if isinstance(value, (str, int, float, bool)) and str(value).strip():
                 row[key] = value
+        design = summary.get("executed_method_design")
+        if isinstance(design, Mapping) and design:
+            # The owner's own design receipt: its time grid, eligibility rule
+            # or model, which a planning window does not describe.
+            row["executed_method_design"] = {
+                key: value for key, value in design.items() if key != "schema_version"
+            }
         if (
             record.get("deterministic_standard_analysis") == "grouped_table_one"
             and summary.get("analysis_family") == "grouped_table_one"
@@ -692,7 +699,16 @@ def _render_writer_evidence_digest(
             lines.append("  {}")
             continue
         digest_row: Dict[str, Any] = {}
-        for key in WRITER_DIGEST_PREFERRED_KEYS:
+        formal_rejection = summary.get("scientific_status") == "failed_closed"
+        if formal_rejection:
+            # The owner ran and its prespecified rule rejected the result.  Its
+            # scalars (a criterion's minimum, a candidate count) are not
+            # findings; the formal outcome is, and a host claim states it.
+            for key in ("scientific_status", "reason_code", "reportable_result"):
+                value = summary.get(key)
+                if isinstance(value, str) and value.strip():
+                    digest_row[key] = value
+        for key in () if formal_rejection else WRITER_DIGEST_PREFERRED_KEYS:
             if (
                 has_panel_primary
                 and key in _PRIMARY_EFFECT_DIGEST_KEYS_WHEN_PANEL_PRESENT
@@ -835,7 +851,10 @@ def _render_writer_evidence_digest(
         [
             "## EXECUTED METHOD BOUNDARY",
             "Only the verified current-run methods listed below were executed. "
-            "A planned or cited method absent from this block was not executed.",
+            "A planned or cited method absent from this block was not executed. "
+            "Where a row carries executed_method_design, describe that step's "
+            "time grid, eligibility rule and model from it; a run-context time "
+            "window does not describe it.",
         ]
     )
     if method_rows:

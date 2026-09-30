@@ -5,7 +5,9 @@ host, the signed owners run on the long panel, the selection figure reads the
 owners' published tables, the host draws the owner's cohort flow, and the
 frozen classes are described on the run cohort.  Unit fixtures had drifted from the stability owner's real columns, so
 the figure failed on every real run while its own tests passed; this module
-runs the owners themselves.  Synthetic stays only.
+runs the owners themselves.  The run's evidence then holds each rule's formal
+outcome as a host claim and each owner's executed design as a Methods fact.
+Synthetic stays only.
 """
 
 from __future__ import annotations
@@ -26,6 +28,10 @@ from easyicu.concept.metadata_sidecar import (
     ColumnMetadataSidecar,
     write_content_addressed_sidecar,
 )
+from easyicu.research_agent.authority.evidence_store import (
+    EvidenceEnforcementMode,
+    EvidenceStore,
+)
 from easyicu.research_agent.cohort import materializer as cohort_materializer
 from easyicu.research_agent.contracts.phenotype_comparison import (
     TRAJECTORY_FROZEN_STATUS,
@@ -39,6 +45,7 @@ from easyicu.research_agent.orchestration.scientific_runtime import (
 from easyicu.research_agent.orchestration.services import PipelineServices
 from easyicu.research_agent.pipeline import ResearchAgentPipeline
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 from easyicu.research_agent.schema import AnalysisPlan, TrajectoryStabilitySpec
 from easyicu.research_agent.trajectory.plan_contract import DIAG_GMM_BEST_OF_10_ENGINE
 from easyicu.research_agent.trajectory.scientific_runtime_authority import (
@@ -364,6 +371,35 @@ def _assert_the_host_drew_the_cohort_flow(manifest: dict, run_dir: Path) -> None
     assert dict(zip(table.metric, table.n)) == dict(zip(owner.metric, owner.n))
 
 
+def _assert_rule_outcomes_and_designs_reach_the_report(
+    manifest: dict, run_dir: Path, *, claims: dict[str, str],
+) -> None:
+    """Each rule's outcome is a host claim; each executed design binds in Methods."""
+
+    records = manifest["per_step_records"]
+    store = EvidenceStore(run_dir, enforcement_mode=EvidenceEnforcementMode.STRICT)
+    found = {
+        claim.claim_ref: getattr(claim.rule_outcome, "disposition", claim.rule_outcome.rule)
+        for claim in store.authoritative_scientific_claims(records)
+    }
+    assert found == claims
+    facts = store.manuscript_method_facts(records)
+    design_facts = [fact for fact in facts if fact.text.startswith("Executed ")]
+    assert [fact.source_field for fact in design_facts] == [
+        "00_authority_compiled_trajectory_representation.executed_method_design",
+        "01_authority_compiled_trajectory_candidates.executed_method_design",
+    ]
+    assert "12-hour windows from 0 to 24 hours after ICU admission" in design_facts[0].text
+    scaffold = "## Methods\n\n### Variables\n\n" + "\n\n".join(
+        fact.scaffold for fact in design_facts
+    )
+    safe, removed = store.enforce_evidence_bound_scaffold(scaffold, per_step_records=records)
+    assert not removed
+    bound = store.bind_manuscript(safe, per_step_records=records)
+    _, _, untraced = bind_numeric_values(bound, evidence=store, per_step_records=records)
+    assert not untraced
+
+
 def _assert_every_step_ran_without_a_script(manifest: dict, run_dir: Path) -> None:
     assert manifest["readiness"]["failed_steps"] == []
     assert [
@@ -406,6 +442,12 @@ def test_frozen_classes_are_rendered_and_described_on_the_run_cohort(tmp_path):
     )
     assert not stability_source.empty
     _assert_every_step_ran_without_a_script(manifest, run_dir)
+    _assert_rule_outcomes_and_designs_reach_the_report(manifest, run_dir, claims={
+        "00_authority_compiled_trajectory_representation.observed_window_rule": (
+            "minimum_observed_windows"
+        ),
+        "01_authority_compiled_trajectory_candidates.class_count_rule": "minimum_selected",
+    })
 
 
 def test_a_suite_without_an_interior_solution_describes_no_class(tmp_path):
@@ -428,6 +470,16 @@ def test_a_suite_without_an_interior_solution_describes_no_class(tmp_path):
     figure = records["03_authority_compiled_trajectory_selection_figure"]["step_summary"]
     assert figure["reportable_phenotype_solution"] is False
     _assert_every_step_ran_without_a_script(manifest, run_dir)
+    # The formal no-solution result is reportable: each rule states its outcome.
+    _assert_rule_outcomes_and_designs_reach_the_report(manifest, run_dir, claims={
+        "00_authority_compiled_trajectory_representation.observed_window_rule": (
+            "minimum_observed_windows"
+        ),
+        "01_authority_compiled_trajectory_candidates.class_count_rule": (
+            "minimum_at_upper_boundary"
+        ),
+        "05_frozen_class_description.class_description_rule": "no_frozen_solution",
+    })
 
 
 def test_noise_stops_at_the_stability_gate_and_describes_no_class(tmp_path):
