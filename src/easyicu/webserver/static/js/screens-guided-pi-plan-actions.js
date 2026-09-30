@@ -401,29 +401,19 @@
         if (startedTransitions.has(transitionKey(actionCode))) return false;
         return startFormalPlanGeneration(actionCode, {automatic: true});
       }
-      const questions = workflow.plan_review_summary
-        && Array.isArray(workflow.plan_review_summary.authorization_questions)
-        ? workflow.plan_review_summary.authorization_questions
-        : [];
-      const plannerOwnedFindings = workflow.plan_review_summary
-        && workflow.plan_review_summary.remediation_buckets
-        && Array.isArray(workflow.plan_review_summary.remediation_buckets.agent_plan_revision)
-        ? workflow.plan_review_summary.remediation_buckets.agent_plan_revision
-        : [];
-      if (
-        actionCode !== 'plan_scientific_changes_required'
-        || automaticRevisionBlocked()
-        || questions.length
-        || !plannerOwnedFindings.length
-        || startedTransitions.has(transitionKey(actionCode))
-      ) return false;
+      if (!plannerRevisionCanStart()) return false;
       return startFormalPlanGeneration(
         'plan_scientific_changes_required', {automatic: true},
       );
     }
 
-    async function continueUserRequestedSystemProgression(text) {
-      const message = String(text || '').trim();
+    // Every condition under which the planner-owned revision of a reviewed
+    // plan starts. A bare continuation claims the researcher's message only
+    // when the revision can start; otherwise (an unconfirmed data source, a
+    // failed last run, a revision already started) the message goes to the
+    // conversation once, as any other message does.
+    function plannerRevisionCanStart() {
+      const actionCode = 'plan_scientific_changes_required';
       const workflow = host.workflow() || {};
       const questions = workflow.plan_review_summary
         && Array.isArray(workflow.plan_review_summary.authorization_questions)
@@ -434,19 +424,27 @@
         && Array.isArray(workflow.plan_review_summary.remediation_buckets.agent_plan_revision)
         ? workflow.plan_review_summary.remediation_buckets.agent_plan_revision
         : [];
-      if (
-        !BARE_CONTINUATION.test(message)
-        || String(workflow.next_action_code || '') !== 'plan_scientific_changes_required'
-        || automaticRevisionBlocked()
-        || questions.length
-        || !repairs.length
-      ) return false;
+      return String(workflow.next_action_code || '') === actionCode
+        && !unavailable()
+        && !latestArchivedAgentRunFailed()
+        && !automaticRevisionBlocked()
+        && !questions.length
+        && repairs.length > 0
+        && !startedTransitions.has(transitionKey(actionCode));
+    }
+
+    async function continueUserRequestedSystemProgression(text) {
+      const message = String(text || '').trim();
+      if (!BARE_CONTINUATION.test(message) || !plannerRevisionCanStart()) return false;
       host.appendMessage({
         id: 'user-' + Date.now(), role: 'user', text: message, complete: true,
       });
       if (typeof host.setDraft === 'function') host.setDraft('');
       host.render();
-      return continueSystemOwnedPlanProgression();
+      // The message is claimed and shown once. A start that then fails reports
+      // its own error; it must not also reach the conversation as a copy.
+      await continueSystemOwnedPlanProgression();
+      return true;
     }
 
     function regenerationAuthority(text, regenerationIntent) {
