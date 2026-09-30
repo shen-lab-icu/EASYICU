@@ -7,7 +7,9 @@ frozen classes are described on the run cohort.  Unit fixtures had drifted from 
 the figure failed on every real run while its own tests passed; this module
 runs the owners themselves.  The run's evidence then holds each rule's formal
 outcome as a host claim and each owner's executed design as a Methods fact.
-Synthetic stays only.
+SOFA-2 components are 0-4 levels, so the contract the host seals for them fits
+a mixed-mode latent class model; the Gaussian contract stays verifiable for
+recorded runs.  Synthetic stays only.
 """
 
 from __future__ import annotations
@@ -47,7 +49,12 @@ from easyicu.research_agent.pipeline import ResearchAgentPipeline
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 from easyicu.research_agent.schema import AnalysisPlan, TrajectoryStabilitySpec
-from easyicu.research_agent.trajectory.plan_contract import DIAG_GMM_BEST_OF_10_ENGINE
+from easyicu.research_agent.trajectory.plan_contract import (
+    DIAG_GMM_BEST_OF_10_ENGINE,
+    MIXED_MODE_LCA_BEST_OF_10_ENGINE,
+    OBSERVED_DATA_MIXED_MODE_LCA_FIT_METHOD,
+    OBSERVED_DATA_MIXED_MODE_LCA_MODEL_FAMILY,
+)
 from easyicu.research_agent.trajectory.scientific_runtime_authority import (
     build_trajectory_scientific_runtime_authority,
 )
@@ -93,8 +100,11 @@ LAYOUTS = {
 }
 
 
-def _typed_export(root: Path, *, layout: str) -> Path:
-    """Write a native typed export whose SOFA-2 values carry owner receipts."""
+def _typed_export(root: Path, *, layout: str, integer_levels: bool = False) -> Path:
+    """Write a native typed export whose SOFA-2 values carry owner receipts.
+
+    ``integer_levels`` writes the whole 0-4 levels a SOFA-2 component takes.
+    """
 
     rng = np.random.default_rng(7)
     stays = np.arange(1001, 1001 + N_STAYS)
@@ -114,7 +124,8 @@ def _typed_export(root: Path, *, layout: str) -> Path:
             for concept in COORDINATES:
                 low, high = levels[concept][classes[index]]
                 spread = 1.2 if layout == "noise" else 0.15
-                row[concept] = float(np.clip(rng.normal((low + high) / 2, spread), 0, 4))
+                value = float(np.clip(rng.normal((low + high) / 2, spread), 0, 4))
+                row[concept] = float(np.rint(value)) if integer_levels else value
                 row[f"{concept}_observed"] = 1
                 row[f"{concept}_available"] = 1
             rows.append(row)
@@ -203,7 +214,7 @@ def _typed_export(root: Path, *, layout: str) -> Path:
     return export
 
 
-def _authority():
+def _authority(*, mixed_mode: bool = False):
     columns = [f"{c}__h{s}_{s + 12}" for c in COORDINATES for s in (0, 12)]
     stability = TrajectoryStabilitySpec(
         n_resamples=6,
@@ -215,67 +226,86 @@ def _authority():
         refit_regularization=1e-6,
         minimum_mean_stability=0.6,
         decision_mode="minimum_mean_threshold",
-        refit_engine=DIAG_GMM_BEST_OF_10_ENGINE,
+        refit_engine=(
+            MIXED_MODE_LCA_BEST_OF_10_ENGINE if mixed_mode else DIAG_GMM_BEST_OF_10_ENGINE
+        ),
     )
-    return build_trajectory_scientific_runtime_authority(
-        {
-            "schema_version": "easyicu.trajectory_scientific_runtime_authority/1",
-            "protocol_content_sha256": "1" * 64,
-            "coordinate_concepts": list(COORDINATES),
-            "descriptive_only_concepts": [],
-            "window_start_hours": 0,
-            "window_end_hours": 24,
-            "grid_width_hours": 12,
-            "aggregation": "max",
-            "representation_columns": columns,
-            "minimum_available_windows": 2,
-            "coordinate_scaling": {
-                "method": "pooled_coordinate_wise_z_score",
-                "ddof": 0,
-                "observed_value_policy": "direct_or_owner_locf_available",
-                "missing_value_policy": "preserve_missing_exclude_from_likelihood",
-                "zero_variance_action": "fail_closed",
+    body = {
+        "schema_version": "easyicu.trajectory_scientific_runtime_authority/1",
+        "protocol_content_sha256": "1" * 64,
+        "coordinate_concepts": list(COORDINATES),
+        "descriptive_only_concepts": [],
+        "window_start_hours": 0,
+        "window_end_hours": 24,
+        "grid_width_hours": 12,
+        "aggregation": "max",
+        "representation_columns": columns,
+        "minimum_available_windows": 2,
+        "coordinate_scaling": {
+            "method": "pooled_coordinate_wise_z_score",
+            "ddof": 0,
+            "observed_value_policy": "direct_or_owner_locf_available",
+            "missing_value_policy": "preserve_missing_exclude_from_likelihood",
+            "zero_variance_action": "fail_closed",
+        },
+        "evidence_state_policy": {
+            "direct_observed": "include",
+            "owner_locf_available": "include_and_audit",
+            "unavailable": "exclude",
+            "additional_clustering_stage_imputation": "none",
+        },
+        "representation_plan_method": "signed_fixed_window_trajectory_representation",
+        "representation_plan_intent": (
+            "Build the digest-bound fixed-window trajectory representation exactly as declared."
+        ),
+        "representation_plan_inputs": [],
+        "representation_required_outputs": [
+            "artifact:trajectory_representation",
+            "table:trajectory_membership",
+            "manifest:trajectory_representation_schema",
+        ],
+        "model_family": "latent_class_diagonal_gaussian_mixture",
+        "fit_method": "observed_data_em_diagonal_gaussian_mixture",
+        "covariance_type": "diag",
+        "candidate_cluster_counts": [2, 3, 4],
+        "selection_criterion": "bic",
+        "selection_rule": "minimum",
+        "candidate_fit_base_seed": 1729,
+        "candidate_fit_max_iter": 500,
+        "candidate_fit_tolerance": 1e-5,
+        "candidate_fit_regularization": 1e-6,
+        "bic_sample_size": "frozen_population_rows",
+        "bic_parameter_count": "mixture_weights_k_minus_1_plus_2_k_per_coordinate",
+        "bic_tie_break": "smaller_k",
+        "upper_boundary_action": "fail_closed_if_selected_at_upper_boundary",
+        "upper_boundary_reason_code": "NO_INTERIOR_BIC_OPTIMUM",
+        "minimum_cluster_fraction": 0.05,
+        "minimum_cluster_fraction_reason_code": "MINIMUM_CLUSTER_FRACTION_NOT_MET",
+        "stability_spec": stability.model_dump(mode="json"),
+    }
+    if mixed_mode:
+        # The contract the host seals for declared ordinal coordinates.
+        body.update(
+            schema_version="easyicu.trajectory_scientific_runtime_authority/2",
+            coordinate_scaling={
+                **body["coordinate_scaling"],
+                "method": "continuous_coordinate_wise_z_score",
             },
-            "evidence_state_policy": {
-                "direct_observed": "include",
-                "owner_locf_available": "include_and_audit",
-                "unavailable": "exclude",
-                "additional_clustering_stage_imputation": "none",
-            },
-            "representation_plan_method": "signed_fixed_window_trajectory_representation",
-            "representation_plan_intent": (
-                "Build the digest-bound fixed-window trajectory representation exactly as declared."
-            ),
-            "representation_plan_inputs": [],
-            "representation_required_outputs": [
-                "artifact:trajectory_representation",
-                "table:trajectory_membership",
-                "manifest:trajectory_representation_schema",
+            coordinate_measurement=[
+                {"concept": concept, "scale": "ordinal", "levels": [0, 1, 2, 3, 4]}
+                for concept in COORDINATES
             ],
-            "model_family": "latent_class_diagonal_gaussian_mixture",
-            "fit_method": "observed_data_em_diagonal_gaussian_mixture",
-            "covariance_type": "diag",
-            "candidate_cluster_counts": [2, 3, 4],
-            "selection_criterion": "bic",
-            "selection_rule": "minimum",
-            "candidate_fit_base_seed": 1729,
-            "candidate_fit_max_iter": 500,
-            "candidate_fit_tolerance": 1e-5,
-            "candidate_fit_regularization": 1e-6,
-            "bic_sample_size": "frozen_population_rows",
-            "bic_parameter_count": "mixture_weights_k_minus_1_plus_2_k_per_coordinate",
-            "bic_tie_break": "smaller_k",
-            "upper_boundary_action": "fail_closed_if_selected_at_upper_boundary",
-            "upper_boundary_reason_code": "NO_INTERIOR_BIC_OPTIMUM",
-            "minimum_cluster_fraction": 0.05,
-            "minimum_cluster_fraction_reason_code": "MINIMUM_CLUSTER_FRACTION_NOT_MET",
-            "stability_spec": stability.model_dump(mode="json"),
-        }
-    )
+            model_family=OBSERVED_DATA_MIXED_MODE_LCA_MODEL_FAMILY,
+            fit_method=OBSERVED_DATA_MIXED_MODE_LCA_FIT_METHOD,
+            bic_parameter_count=(
+                "mixture_weights_k_minus_1_plus_k_per_indicator_free_parameters"
+            ),
+        )
+    return build_trajectory_scientific_runtime_authority(body)
 
 
-def _run(tmp_path: Path, *, layout: str):
-    export = _typed_export(tmp_path, layout=layout)
+def _run(tmp_path: Path, *, layout: str, mixed_mode: bool = False):
+    export = _typed_export(tmp_path, layout=layout, integer_levels=mixed_mode)
     paths = cohort_materializer.materialize_to_parquet(
         tmp_path / "materialized",
         stem="universe",
@@ -288,7 +318,7 @@ def _run(tmp_path: Path, *, layout: str):
         trajectory_concepts=COORDINATES,
         trajectory_window=(0.0, 24.0),
     )
-    authority = _authority()
+    authority = _authority(mixed_mode=mixed_mode)
     owners = authority.development_execution_only_plan(research_question=QUESTION)
     description = {
         "step_id": "outcome_by_class",
@@ -381,7 +411,7 @@ def _assert_the_host_drew_the_cohort_flow(manifest: dict, run_dir: Path) -> None
 
 def _assert_rule_outcomes_and_designs_reach_the_report(
     manifest: dict, run_dir: Path, *, claims: dict[str, str],
-) -> None:
+) -> list:
     """Each rule's outcome is a host claim; each executed design binds in Methods."""
 
     records = manifest["per_step_records"]
@@ -406,6 +436,7 @@ def _assert_rule_outcomes_and_designs_reach_the_report(
     bound = store.bind_manuscript(safe, per_step_records=records)
     _, _, untraced = bind_numeric_values(bound, evidence=store, per_step_records=records)
     assert not untraced
+    return design_facts
 
 
 def _assert_every_step_ran_without_a_script(manifest: dict, run_dir: Path) -> None:
@@ -456,6 +487,64 @@ def test_frozen_classes_are_rendered_and_described_on_the_run_cohort(tmp_path):
         ),
         "01_authority_compiled_trajectory_candidates.class_count_rule": "minimum_selected",
     })
+
+
+def test_ordinal_levels_freeze_classes_with_the_mixed_mode_model(tmp_path):
+    """Whole SOFA-2 levels are fitted as levels, in the candidate fit and every refit."""
+
+    carried, run_dir, manifest = _run(tmp_path, layout="three_classes", mixed_mode=True)
+
+    assert carried["carried"] is True
+    records = _records(manifest)
+    assert all(records[step]["status"] == "ok" for step in SIGNED_AND_DESCRIPTION_STEPS)
+    candidate_out = run_dir / "steps" / "01_authority_compiled_trajectory_candidates" / "outputs"
+    models = json.loads(
+        (candidate_out / "candidate_cluster_models.json").read_text(encoding="utf-8")
+    )
+    assert models["model_family"] == OBSERVED_DATA_MIXED_MODE_LCA_MODEL_FAMILY
+    assert models["fit_engine"] == MIXED_MODE_LCA_BEST_OF_10_ENGINE
+    # Four indicators (two coordinates x two windows) of five levels each.
+    assert [row["parameter_count"] for row in models["candidates"]] == [
+        (k - 1) + k * 4 * 4 for k in (2, 3, 4)
+    ]
+    scaling = json.loads(
+        (candidate_out / "trajectory_coordinate_scaling_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert scaling["method"] == "continuous_coordinate_wise_z_score"
+    assert {entry["measurement"] for entry in scaling["coordinates"]} == {"ordinal"}
+    freeze = records["02_authority_compiled_trajectory_stability"]["step_summary"]
+    assert freeze["freeze_status"] == TRAJECTORY_FROZEN_STATUS
+    assert freeze["selected_n_clusters"] == 3
+    stability_out = run_dir / "steps" / "02_authority_compiled_trajectory_stability" / "outputs"
+    spec = json.loads((stability_out / "cluster_stability_spec.json").read_text(encoding="utf-8"))
+    assert spec["executor_version"] == MIXED_MODE_LCA_BEST_OF_10_ENGINE
+    attempts = json.loads(
+        (stability_out / "cluster_stability_refit_attempts.json").read_text(encoding="utf-8")
+    )["attempts"]
+    assert attempts and all(
+        attempt["executor_version"] == MIXED_MODE_LCA_BEST_OF_10_ENGINE
+        and attempt["engine_starts"]["n_starts"] == 10
+        for attempt in attempts
+    )
+    description = records["05_frozen_class_description"]["step_summary"]
+    assert description["n_not_clustered"] == N_NOT_CLUSTERED
+    _assert_every_step_ran_without_a_script(manifest, run_dir)
+    design_facts = _assert_rule_outcomes_and_designs_reach_the_report(
+        manifest, run_dir, claims={
+            "00_authority_compiled_trajectory_representation.observed_window_rule": (
+                "minimum_observed_windows"
+            ),
+            "01_authority_compiled_trajectory_candidates.class_count_rule": (
+                "minimum_selected"
+            ),
+        },
+    )
+    assert "mixed-mode latent class model with categorical indicators" in (
+        design_facts[1].text
+    )
+    assert "Gaussian mixture" not in design_facts[1].text
 
 
 def test_a_suite_without_an_interior_solution_describes_no_class(tmp_path):

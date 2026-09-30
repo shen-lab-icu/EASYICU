@@ -932,13 +932,12 @@ class TrajectoryStabilitySpec(BaseModel):
     spec and still hashed into ``trajectory_stability_spec_sha256`` -- the
     Planner simply no longer has to retype fifteen constants correctly for the
     plan to validate at all.  A second implementation that is a real choice
-    loses its default; ``refit_engine``'s second value is named by the host's
+    loses its default; ``refit_engine``'s other values are named by the host's
     signed policy, and a spec naming none keeps its recorded contract.
 
     ``minimum_successful_resamples`` is likewise not a choice: the validator
     below requires it to equal ``n_resamples``.  Leave it null and it is filled
-    in from ``n_resamples``; declare it and a disagreeing value is still
-    rejected.
+    in from ``n_resamples``; declare it and a disagreeing value is rejected.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -976,7 +975,8 @@ class TrajectoryStabilitySpec(BaseModel):
     minimum_successful_resamples: Optional[int] = Field(default=None, ge=2)
     failed_refit_policy: Literal["record_once_no_retry"] = "record_once_no_retry"
     refit_engine: Literal[
-        "easyicu_observed_data_diag_gmm_v1", "easyicu_observed_data_diag_gmm_best_of_10_v2"
+        "easyicu_observed_data_diag_gmm_v1", "easyicu_observed_data_diag_gmm_best_of_10_v2",
+        "easyicu_observed_data_mixed_mode_lca_best_of_10_v1",
     ] = "easyicu_observed_data_diag_gmm_v1"
     refit_initialization: Literal["random_balanced_assignments"] = (
         "random_balanced_assignments"

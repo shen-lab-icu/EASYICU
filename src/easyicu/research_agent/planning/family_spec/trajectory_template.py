@@ -28,6 +28,7 @@ from typing import Callable
 
 from ...canonical_json import canonical_sha256
 from ...trajectory.plan_contract import (
+    OBSERVED_DATA_MIXED_MODE_LCA_METHOD,
     STABILITY_CHARACTERIZATION_EXECUTOR_OUTPUTS,
     TRAJECTORY_STABILITY_CHARACTERIZATION_METHOD_HEAD,
 )
@@ -153,6 +154,8 @@ def _design_selection(
         else "每行为一次 ICU 入住，不假定各行来自不同患者"
     )
     window_zh = f"ICU 入院后 {sealed.window_hours[0]}–{sealed.window_hours[1]} h"
+    # The sealed candidate owner names the model the authority executes.
+    mixed_mode = sealed.candidate_owner == OBSERVED_DATA_MIXED_MODE_LCA_METHOD
     comparator_keys = [
         key for key in request.comparison_literature_keys if key in request.allowed_literature_citation_keys
     ]
@@ -170,8 +173,15 @@ def _design_selection(
         observation_window=f"{window} in {grid} windows; rows outside the window are not observed.",
         primary_method=(
             "Sealed fixed-window trajectory suite: fixed-grid representation with an explicit "
-            "missingness policy, observed-data diagonal Gaussian-mixture candidates, minimum-BIC "
-            "selection with fail-closed boundary rules, and resampling stability."
+            "missingness policy, "
+            + (
+                "mixed-mode latent class candidates (ordinal coordinates as categorical "
+                "indicators)"
+                if mixed_mode
+                else "observed-data diagonal Gaussian-mixture candidates"
+            )
+            + ", minimum-BIC selection with fail-closed boundary rules, and resampling "
+            "stability."
         ),
         required_variables=required_variables,
         assumptions=[
@@ -207,7 +217,12 @@ def _design_selection(
                 f"在 {window_zh} 内按 {grid} 窗口汇总。",
                 f"分区冻结后才按类别描述 {outcome}。",
                 f"{listing([str(value) for value in sealed.candidate_cluster_counts], language)} "
-                "类的对角高斯混合模型；以最小 BIC 选择；不设调整变量。",
+                + (
+                    "类的混合型潜在类别模型（有序坐标为分类指标，连续坐标为高斯指标）；"
+                    if mixed_mode
+                    else "类的对角高斯混合模型；"
+                )
+                + "以最小 BIC 选择；不设调整变量。",
                 "按封印的可得性规则纳入观测窗口数足够的行；逐坐标、逐窗口审计可得性。",
                 "任何类别冻结前，签名的重抽样稳定性设计必须成立；边界解或不稳定解按正式的无解结果报告。",
             ]
@@ -216,8 +231,13 @@ def _design_selection(
                 f"The study cohort; {unit_text}.",
                 sentence(f"{concept_text} aggregated per {grid} window over {window}."),
                 sentence(f"{outcome} is described by class only after the partition is frozen."),
-                f"Diagonal Gaussian mixtures with {candidates} classes; minimum BIC selects; no "
-                "adjustment set.",
+                (
+                    f"Mixed-mode latent class models (categorical indicators for ordinal "
+                    f"coordinates, Gaussian for continuous ones) with {candidates} classes; "
+                    if mixed_mode
+                    else f"Diagonal Gaussian mixtures with {candidates} classes; "
+                )
+                + "minimum BIC selects; no adjustment set.",
                 "The sealed availability rule admits rows with enough observed windows; availability is "
                 "audited per coordinate and window.",
                 "The signed resampling stability design must hold before any class is frozen; a boundary "

@@ -98,6 +98,29 @@ DIAG_GMM_SINGLE_START_ENGINE = "easyicu_observed_data_diag_gmm_v1"
 #: the highest observed-data likelihood.  The signed candidate fit and every
 #: stability refit use it.
 DIAG_GMM_BEST_OF_10_ENGINE = "easyicu_observed_data_diag_gmm_best_of_10_v2"
+#: The signed candidate method for coordinates the host declares ordinal: a
+#: mixed-mode latent class model (categorical indicators for ordinal levels,
+#: Gaussian indicators for continuous z-scores), host-owned and never written
+#: by a Planner.
+OBSERVED_DATA_MIXED_MODE_LCA_METHOD = (
+    "observed_data_mixed_mode_latent_class_candidate_selection"
+)
+OBSERVED_DATA_MIXED_MODE_LCA_MODEL_FAMILY = "latent_class_mixed_mode"
+OBSERVED_DATA_MIXED_MODE_LCA_FIT_METHOD = "observed_data_em_mixed_mode_latent_class"
+#: Ten deterministic starts of the mixed-mode EM, seeded as the Gaussian
+#: best-of-10 engine is; the engine version fixes its category prior.
+MIXED_MODE_LCA_BEST_OF_10_ENGINE = "easyicu_observed_data_mixed_mode_lca_best_of_10_v1"
+#: Signed candidate method -> the model family and fit method its schema states.
+SIGNED_CANDIDATE_MODEL_METHODS = {
+    OBSERVED_DATA_DIAG_GMM_METHOD: (
+        OBSERVED_DATA_DIAG_GMM_MODEL_FAMILY,
+        OBSERVED_DATA_DIAG_GMM_FIT_METHOD,
+    ),
+    OBSERVED_DATA_MIXED_MODE_LCA_METHOD: (
+        OBSERVED_DATA_MIXED_MODE_LCA_MODEL_FAMILY,
+        OBSERVED_DATA_MIXED_MODE_LCA_FIT_METHOD,
+    ),
+}
 
 STABILITY_EXECUTOR_OUTPUTS = frozenset(
     {
@@ -696,7 +719,13 @@ def _trajectory_representation_schema_findings(
         issues.append("trailing_na_policy is not the structured missingness contract")
     scaling = payload.get("coordinate_scaling")
     required_scaling = {
-        "method": "pooled_coordinate_wise_z_score",
+        # A schema that declares each coordinate's measurement keeps ordinal
+        # levels and z-scores only its continuous coordinates.
+        "method": (
+            "continuous_coordinate_wise_z_score"
+            if payload.get("coordinate_measurement") is not None
+            else "pooled_coordinate_wise_z_score"
+        ),
         "ddof": 0,
         "observed_value_policy": "direct_or_owner_locf_available",
         "missing_value_policy": "preserve_missing_exclude_from_likelihood",
@@ -760,10 +789,11 @@ def _trajectory_candidate_schema_findings(
     issues: List[str] = []
     if payload.get("schema_version") != TRAJECTORY_CANDIDATE_SOLUTION_SCHEMA_VERSION:
         issues.append("schema_version is missing or unsupported")
-    if _normalise_token(step.method) == OBSERVED_DATA_DIAG_GMM_METHOD:
+    declared = SIGNED_CANDIDATE_MODEL_METHODS.get(_normalise_token(step.method))
+    if declared is not None:
         expected = {
-            "model_family": OBSERVED_DATA_DIAG_GMM_MODEL_FAMILY,
-            "fit_method": OBSERVED_DATA_DIAG_GMM_FIT_METHOD,
+            "model_family": declared[0],
+            "fit_method": declared[1],
             "covariance_type": "diag",
         }
         for field, value in expected.items():

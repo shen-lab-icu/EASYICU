@@ -538,6 +538,9 @@ def test_the_suite_template_describes_the_requested_outcome_through_the_host_pat
     assert [step.inputs[-3:] for step in drafted] == [
         ["artifact:analysis_cohort", LABELS, FREEZE]
     ]
+    # SOFA-2 components are declared ordinal, so the reviewed design names the
+    # mixed-mode class model the sealed candidate owner fits.
+    assert "mixed-mode latent class" in plan.design_selection.selected.primary_method
     findings: list = []
     plan = _pipeline._shape_fresh_plan(
         pipeline=SimpleNamespace(

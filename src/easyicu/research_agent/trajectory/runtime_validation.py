@@ -23,6 +23,9 @@ from ..contracts.primary_cohort import (
 
 _REPRESENTATION = "signed_fixed_window_trajectory_representation"
 _CANDIDATES = "observed_data_diagonal_gaussian_mixture_candidate_selection"
+#: The signed candidate owner for declared ordinal coordinates; it fills the
+#: same role as the Gaussian candidate owner.
+_MIXED_MODE_CANDIDATES = "observed_data_mixed_mode_latent_class_candidate_selection"
 _STABILITY = "trajectory_cluster_stability_characterization"
 _FIGURE = "signed_trajectory_selection_diagnostic_figure"
 _KINDS = {
@@ -63,7 +66,9 @@ SIGNED_TRAJECTORY_IDENTITY_COLUMN = "stay_id"
 
 def signed_trajectory_plan_claimed(plan: object) -> bool:
     methods = [str(getattr(step, "method", "") or "") for step in getattr(plan, "steps", ()) or ()]
-    return _REPRESENTATION in methods and _CANDIDATES in methods
+    return _REPRESENTATION in methods and bool(
+        {_CANDIDATES, _MIXED_MODE_CANDIDATES} & set(methods)
+    )
 
 
 def _owner_steps(plan: object) -> tuple[Any, ...] | None:
@@ -73,9 +78,13 @@ def _owner_steps(plan: object) -> tuple[Any, ...] | None:
     owners = tuple(
         step
         for step in steps
-        if str(getattr(step, "method", "") or "") in SIGNED_TRAJECTORY_OWNER_METHODS
+        if str(getattr(step, "method", "") or "")
+        in {*SIGNED_TRAJECTORY_OWNER_METHODS, _MIXED_MODE_CANDIDATES}
     )
-    methods = tuple(str(getattr(step, "method", "") or "") for step in owners)
+    methods = tuple(
+        _CANDIDATES if method == _MIXED_MODE_CANDIDATES else method
+        for method in (str(getattr(step, "method", "") or "") for step in owners)
+    )
     return owners if methods == SIGNED_TRAJECTORY_OWNER_METHODS else None
 
 

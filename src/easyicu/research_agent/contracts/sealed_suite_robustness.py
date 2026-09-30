@@ -53,6 +53,9 @@ SEALED_SUITE_ROBUSTNESS_AXES = MappingProxyType(
         "observed_data_diagonal_gaussian_mixture_candidate_selection": (
             "model_specification",
         ),
+        "observed_data_mixed_mode_latent_class_candidate_selection": (
+            "model_specification",
+        ),
         # Subsampling with a sealed seed derivation, a mean adjusted-Rand
         # threshold, and no post-hoc rescue.
         "trajectory_cluster_stability_characterization": ("resampling_stability",),

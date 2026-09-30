@@ -10,14 +10,22 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Literal, Mapping
+from typing import Any, Literal, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..contracts.figure_plan import DeterministicFigurePanelTemplate
 from ..schema import AnalysisPlan, TrajectoryStabilitySpec
 from .plan_contract import (
+    DIAG_GMM_BEST_OF_10_ENGINE,
+    DIAG_GMM_SINGLE_START_ENGINE,
+    MIXED_MODE_LCA_BEST_OF_10_ENGINE,
+    OBSERVED_DATA_DIAG_GMM_FIT_METHOD,
     OBSERVED_DATA_DIAG_GMM_METHOD,
+    OBSERVED_DATA_DIAG_GMM_MODEL_FAMILY,
+    OBSERVED_DATA_MIXED_MODE_LCA_FIT_METHOD,
+    OBSERVED_DATA_MIXED_MODE_LCA_METHOD,
+    OBSERVED_DATA_MIXED_MODE_LCA_MODEL_FAMILY,
     STABILITY_CHARACTERIZATION_EXECUTOR_OUTPUTS,
     TRAJECTORY_STABILITY_CHARACTERIZATION_METHOD_HEAD,
     trajectory_step_roles,
@@ -117,11 +125,61 @@ def _normalise(value: Any) -> str:
 class CoordinateScalingAuthority(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    method: Literal["pooled_coordinate_wise_z_score"]
+    method: Literal[
+        "pooled_coordinate_wise_z_score", "continuous_coordinate_wise_z_score"
+    ]
     ddof: Literal[0]
     observed_value_policy: Literal["direct_or_owner_locf_available"]
     missing_value_policy: Literal["preserve_missing_exclude_from_likelihood"]
     zero_variance_action: Literal["fail_closed"]
+
+
+class CoordinateMeasurementAuthority(BaseModel):
+    """How one coordinate concept is measured: ordinal levels or continuous."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    concept: str = Field(min_length=1)
+    scale: Literal["ordinal", "continuous"]
+    levels: Optional[tuple[int, ...]] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def _levels_follow_the_scale(self) -> "CoordinateMeasurementAuthority":
+        if self.scale == "continuous":
+            if self.levels is not None:
+                raise ValueError("a continuous coordinate declares no levels")
+            return self
+        if (
+            self.levels is None
+            or len(self.levels) < 2
+            or list(self.levels) != sorted(set(self.levels))
+        ):
+            raise ValueError("an ordinal coordinate declares two or more increasing levels")
+        return self
+
+
+#: Contract version -> (model family, fit method, BIC parameter rule, scaling,
+#: refit engines).  /1 is the Gaussian mixture on z-scored coordinates and
+#: keeps its exact bytes; /2 is the mixed-mode latent class model for declared
+#: ordinal coordinates.
+_MODEL_BY_VERSION = {
+    "easyicu.trajectory_scientific_runtime_authority/1": (
+        OBSERVED_DATA_DIAG_GMM_MODEL_FAMILY,
+        OBSERVED_DATA_DIAG_GMM_FIT_METHOD,
+        "mixture_weights_k_minus_1_plus_2_k_per_coordinate",
+        "pooled_coordinate_wise_z_score",
+        frozenset({DIAG_GMM_SINGLE_START_ENGINE, DIAG_GMM_BEST_OF_10_ENGINE}),
+    ),
+    "easyicu.trajectory_scientific_runtime_authority/2": (
+        OBSERVED_DATA_MIXED_MODE_LCA_MODEL_FAMILY,
+        OBSERVED_DATA_MIXED_MODE_LCA_FIT_METHOD,
+        "mixture_weights_k_minus_1_plus_k_per_indicator_free_parameters",
+        "continuous_coordinate_wise_z_score",
+        frozenset({MIXED_MODE_LCA_BEST_OF_10_ENGINE}),
+    ),
+}
 
 
 class EvidenceStateAuthority(BaseModel):
@@ -138,7 +196,10 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    schema_version: Literal["easyicu.trajectory_scientific_runtime_authority/1"]
+    schema_version: Literal[
+        "easyicu.trajectory_scientific_runtime_authority/1",
+        "easyicu.trajectory_scientific_runtime_authority/2",
+    ]
     protocol_content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     coordinate_concepts: tuple[str, ...]
     descriptive_only_concepts: tuple[str, ...]
@@ -149,6 +210,10 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
     representation_columns: tuple[str, ...]
     minimum_available_windows: int = Field(ge=1)
     coordinate_scaling: CoordinateScalingAuthority
+    #: /2 only: each coordinate concept's measurement, in coordinate order.
+    coordinate_measurement: Optional[tuple[CoordinateMeasurementAuthority, ...]] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     evidence_state_policy: EvidenceStateAuthority
     representation_plan_method: Literal[
         "signed_fixed_window_trajectory_representation"
@@ -156,8 +221,13 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
     representation_plan_intent: str
     representation_plan_inputs: tuple[str, ...]
     representation_required_outputs: tuple[str, ...]
-    model_family: Literal["latent_class_diagonal_gaussian_mixture"]
-    fit_method: Literal["observed_data_em_diagonal_gaussian_mixture"]
+    model_family: Literal[
+        "latent_class_diagonal_gaussian_mixture", "latent_class_mixed_mode"
+    ]
+    fit_method: Literal[
+        "observed_data_em_diagonal_gaussian_mixture",
+        "observed_data_em_mixed_mode_latent_class",
+    ]
     covariance_type: Literal["diag"]
     candidate_cluster_counts: tuple[int, ...]
     selection_criterion: Literal["bic"]
@@ -167,7 +237,10 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
     candidate_fit_tolerance: float = Field(gt=0.0, le=0.1)
     candidate_fit_regularization: float = Field(gt=0.0, le=1.0)
     bic_sample_size: Literal["frozen_population_rows"]
-    bic_parameter_count: Literal["mixture_weights_k_minus_1_plus_2_k_per_coordinate"]
+    bic_parameter_count: Literal[
+        "mixture_weights_k_minus_1_plus_2_k_per_coordinate",
+        "mixture_weights_k_minus_1_plus_k_per_indicator_free_parameters",
+    ]
     bic_tie_break: Literal["smaller_k"]
     upper_boundary_action: Literal["fail_closed_if_selected_at_upper_boundary"]
     upper_boundary_reason_code: str = Field(pattern=r"^[A-Z][A-Z0-9_]{2,79}$")
@@ -211,6 +284,33 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
             raise ValueError(
                 "candidate cluster counts must be a unique increasing grid"
             )
+        family, fit_method, parameter_rule, scaling, engines = _MODEL_BY_VERSION[
+            self.schema_version
+        ]
+        if (
+            self.model_family != family
+            or self.fit_method != fit_method
+            or self.bic_parameter_count != parameter_rule
+            or self.coordinate_scaling.method != scaling
+            or self.stability_spec.refit_engine not in engines
+        ):
+            raise ValueError(
+                "trajectory model family, fit, scaling, BIC rule and refit engine "
+                "must be those of the contract version"
+            )
+        measured = self.coordinate_measurement
+        if self.model_family == OBSERVED_DATA_MIXED_MODE_LCA_MODEL_FAMILY:
+            if measured is None or tuple(
+                entry.concept for entry in measured
+            ) != self.coordinate_concepts:
+                raise ValueError(
+                    "the mixed-mode model declares one measurement per coordinate, "
+                    "in coordinate order"
+                )
+            if not any(entry.scale == "ordinal" for entry in measured):
+                raise ValueError("the mixed-mode model needs an ordinal coordinate")
+        elif measured is not None:
+            raise ValueError("only the mixed-mode model declares coordinate measurement")
         body = self.model_dump(mode="json", exclude={"execution_contract_sha256"})
         if hashlib.sha256(_canonical_bytes(body)).hexdigest() != (
             self.execution_contract_sha256
@@ -225,6 +325,22 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
     @property
     def evidence_payload(self) -> dict[str, Any]:
         return self.evidence_state_policy.model_dump(mode="json")
+
+    @property
+    def measurement_payload(self) -> list[dict[str, Any]] | None:
+        """Declared coordinate measurement (/2), or None for the Gaussian model."""
+
+        if self.coordinate_measurement is None:
+            return None
+        return [entry.model_dump(mode="json") for entry in self.coordinate_measurement]
+
+    @property
+    def candidate_plan_method(self) -> str:
+        """The signed candidate owner's method for this contract's model."""
+
+        if self.model_family == OBSERVED_DATA_MIXED_MODE_LCA_MODEL_FAMILY:
+            return OBSERVED_DATA_MIXED_MODE_LCA_METHOD
+        return OBSERVED_DATA_DIAG_GMM_METHOD
 
     @property
     def plan_rule_ref(self) -> str:
@@ -280,7 +396,7 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
                             "manifest:candidate_cluster_solution_schema",
                             "table:trajectory_candidate_selection",
                         ],
-                        "method": OBSERVED_DATA_DIAG_GMM_METHOD,
+                        "method": self.candidate_plan_method,
                         "icu_rule_refs": [self.plan_rule_ref],
                     },
                     {
@@ -342,7 +458,7 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
 
         A draft cannot carry this authority's digest before the host binds it,
         so the rule ref is not required here; the closed ``signed_*`` and
-        observed-data GMM method names are only executable through this
+        signed candidate method names are only executable through this
         sealed authority, and ``bind_plan`` replaces the draft with the four
         signed owners rather than trusting any of its other coordinates.
         """
@@ -351,9 +467,9 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
         return (
             str(plan.analysis_type or "") == "trajectory_clustering"
             and methods.count(self.representation_plan_method) == 1
-            and methods.count(OBSERVED_DATA_DIAG_GMM_METHOD) == 1
+            and methods.count(self.candidate_plan_method) == 1
             and methods.index(self.representation_plan_method)
-            < methods.index(OBSERVED_DATA_DIAG_GMM_METHOD)
+            < methods.index(self.candidate_plan_method)
         )
 
     def planning_contract_context(self) -> str:
@@ -361,7 +477,7 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
 
         coordinates = {
             "sealed_representation_owner": self.representation_plan_method,
-            "sealed_candidate_owner": OBSERVED_DATA_DIAG_GMM_METHOD,
+            "sealed_candidate_owner": self.candidate_plan_method,
             "coordinate_concepts": list(self.coordinate_concepts),
             "descriptive_only_concepts": list(self.descriptive_only_concepts),
             "window_hours": [self.window_start_hours, self.window_end_hours],
@@ -389,7 +505,7 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
         # this authority's digest, then reconstruct all four owners.
         expected_methods = (
             self.representation_plan_method,
-            OBSERVED_DATA_DIAG_GMM_METHOD,
+            self.candidate_plan_method,
         )
         signed_prefix = [
             step
@@ -448,9 +564,9 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
                 "trajectory representation plan drifted from signed authority: "
                 + ", ".join(representation_issues)
             )
-        if _normalise(candidate.method) != OBSERVED_DATA_DIAG_GMM_METHOD:
+        if _normalise(candidate.method) != self.candidate_plan_method:
             raise TrajectoryScientificAuthorityError(
-                "candidate-selection method drifted from signed observed-data GMM"
+                "candidate-selection method drifted from the signed model"
             )
         observed_spec = stability.trajectory_stability_spec
         if observed_spec is None or observed_spec.model_dump(mode="json") != (
@@ -517,6 +633,8 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
             issues.append("min_observed_windows")
         if schema.get("coordinate_scaling") != self.scaling_payload:
             issues.append("coordinate_scaling")
+        if schema.get("coordinate_measurement") != self.measurement_payload:
+            issues.append("coordinate_measurement")
         if schema.get("evidence_state_policy") != self.evidence_payload:
             issues.append("evidence_state_policy")
         expected_window = {
@@ -632,6 +750,7 @@ def build_trajectory_scientific_runtime_authority(
 
 
 __all__ = [
+    "CoordinateMeasurementAuthority",
     "CoordinateScalingAuthority",
     "EvidenceStateAuthority",
     "SIGNED_TRAJECTORY_POPULATION",
