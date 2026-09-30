@@ -199,7 +199,7 @@ class ObservedWindowEligibilityOutcome(_RuleOutcome):
 
     def result_sentence(self) -> str:
         return (
-            f"Of {_reader_count(self.input_n)} records in the longitudinal panel, "
+            f"Of {_reader_count(self.input_n)} records in the study cohort, "
             f"{_reader_count(self.included_n)} had at least "
             f"{self.minimum_observed_windows} of the {self.n_windows} prespecified "
             f"{self.window_width_hours}-hour windows from {self._span()} observed "

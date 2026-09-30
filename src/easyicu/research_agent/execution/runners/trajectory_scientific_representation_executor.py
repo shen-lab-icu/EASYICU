@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from ...authority.prespecified_rule_outcomes import (
     RULE_OUTCOME_SCHEMA_VERSION,
@@ -30,6 +31,8 @@ from ...trajectory.scientific_runtime_authority import (
 )
 from ._shared import write_json as _write_json
 
+_IDENTITY_COLUMN = "stay_id"
+
 
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -37,6 +40,24 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _study_cohort_ids(cohort_path: Path) -> pd.Series:
+    """Return the locked study cohort's stay identities in cohort order.
+
+    The panel holds rows only for stays with a value inside its window, and
+    its bound universe may be wider than the analysis cohort, so the cohort,
+    not the panel, decides who is counted.
+    """
+
+    if _IDENTITY_COLUMN not in pq.read_schema(cohort_path).names:
+        raise ValueError(
+            f"study cohort lacks the trajectory identity column {_IDENTITY_COLUMN}"
+        )
+    ids = pd.read_parquet(cohort_path, columns=[_IDENTITY_COLUMN])[_IDENTITY_COLUMN]
+    if ids.empty or bool(ids.isna().any()) or bool(ids.duplicated().any()):
+        raise ValueError("study cohort stay identities must be present and unique")
+    return ids.reset_index(drop=True)
 
 
 def trajectory_scientific_representation_executor_owns_step(
@@ -73,6 +94,7 @@ def trajectory_scientific_representation_executor_code(
         "authority=authority, "
         f"runtime_projection_sha256={runtime_projection_sha256!r}, "
         "trajectory_path=Path(os.environ['TRAJECTORY_PARQUET']), "
+        "cohort_path=Path(os.environ['COHORT_PARQUET']), "
         "out_dir=Path(os.environ['STEP_OUT_DIR']))\n"
     )
 
@@ -82,9 +104,15 @@ def run_trajectory_scientific_representation(
     authority: TrajectoryScientificRuntimeAuthority | Mapping[str, Any],
     runtime_projection_sha256: str,
     trajectory_path: Path,
+    cohort_path: Path,
     out_dir: Path,
 ) -> dict[str, Any]:
-    """Build the exact signed concept-by-window matrix without model imputation."""
+    """Build the exact signed concept-by-window matrix without model imputation.
+
+    Every study-cohort stay is counted: a stay without an owner-available
+    value in the window has no observed window and is excluded by the
+    window rule, and a panel stay outside the cohort is not in the study.
+    """
 
     sealed = load_trajectory_scientific_runtime_authority(authority)
     if len(str(runtime_projection_sha256)) != 64:
@@ -103,6 +131,15 @@ def run_trajectory_scientific_representation(
     missing = sorted(required - set(trajectory.columns))
     if missing:
         raise ValueError(f"signed trajectory input lacks columns: {missing}")
+    cohort_ids = _study_cohort_ids(cohort_path)
+    # Match on the identity text, as the frozen class description does.
+    cohort_keys = pd.Index(cohort_ids.astype(str), name=_IDENTITY_COLUMN)
+    stay_keys = trajectory[_IDENTITY_COLUMN].astype(str)
+    in_cohort = stay_keys.isin(cohort_keys)
+    if not bool(in_cohort.any()):
+        raise ValueError("signed trajectory panel shares no stay with the study cohort")
+    panel_stays_outside_cohort_n = int(stay_keys.loc[~in_cohort].nunique())
+    trajectory = trajectory.loc[in_cohort].assign(stay_key=stay_keys.loc[in_cohort])
     frame = trajectory.loc[
         trajectory["concept"].isin(sealed.coordinate_concepts)
         & trajectory["charttime"].ge(sealed.window_start_hours)
@@ -148,16 +185,16 @@ def run_trajectory_scientific_representation(
         f"{sealed.window_start_hours + (int(index) + 1) * sealed.grid_width_hours}"
         for concept, index in zip(frame["concept"], frame["window_index"], strict=True)
     ]
-    universe_ids = pd.Index(pd.unique(trajectory["stay_id"]), name="stay_id")
     matrix = (
-        frame.groupby(["stay_id", "representation_column"], sort=False)["value_num"]
+        frame.groupby(["stay_key", "representation_column"], sort=False)["value_num"]
         .max()
         .unstack("representation_column")
         .reindex(
-            index=universe_ids,
+            index=cohort_keys,
             columns=list(sealed.representation_columns),
         )
     )
+    matrix.index = pd.Index(cohort_ids.to_numpy(), name=_IDENTITY_COLUMN)
     sofa_concepts = tuple(
         concept for concept in sealed.coordinate_concepts if concept.startswith("sofa2")
     )
@@ -352,6 +389,7 @@ def run_trajectory_scientific_representation(
         "frozen_population_n": len(model_matrix),
         "eligible_n": int(eligible.sum()),
         "excluded_n": int((~eligible).sum()),
+        "panel_stays_outside_study_cohort_n": panel_stays_outside_cohort_n,
         "owner_evidence_state_counts": state_counts,
         "scientific_runtime_authority": authority_binding,
         "runtime_projection_sha256": runtime_projection_sha256,

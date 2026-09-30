@@ -96,10 +96,10 @@ def _authority(grid=(2, 3, 4, 5)):
     })
 
 
-def test_the_panel_owner_states_its_window_rule_and_grid(tmp_path: Path) -> None:
+def _panel_rows(stays) -> list[dict]:
     rng = np.random.default_rng(3)
     rows = []
-    for stay in range(1, 41):
+    for stay in stays:
         # Stays 1-6 have renal scores in two windows only; lactate in every
         # window does not make them eligible.
         renal_windows = STARTS[:2] if stay <= 6 else STARTS
@@ -114,12 +114,18 @@ def test_the_panel_owner_states_its_window_rule_and_grid(tmp_path: Path) -> None
                          "value_num": float(rng.gamma(2.0, 1.0)),
                          "evidence_state": "direct_observed",
                          "owner_observed": 1, "owner_available": 1})
+    return rows
+
+
+def test_the_panel_owner_states_its_window_rule_and_grid(tmp_path: Path) -> None:
     panel = tmp_path / "panel.parquet"
-    pd.DataFrame(rows).to_parquet(panel, index=False)
+    pd.DataFrame(_panel_rows(range(1, 41))).to_parquet(panel, index=False)
+    cohort = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": range(1, 41)}).to_parquet(cohort, index=False)
 
     summary = run_trajectory_scientific_representation(
         authority=_authority(), runtime_projection_sha256="4" * 64,
-        trajectory_path=panel, out_dir=tmp_path / "out",
+        trajectory_path=panel, cohort_path=cohort, out_dir=tmp_path / "out",
     )
 
     flow = dict(pd.read_csv(tmp_path / "out" / "cohort_flow.csv").itertuples(index=False))
@@ -153,6 +159,75 @@ def test_the_panel_owner_states_its_window_rule_and_grid(tmp_path: Path) -> None
     [draft] = derive_scientific_claim_drafts(written)
     assert draft.claim_id == "observed_window_rule"
 
+
+def test_the_window_rule_counts_every_study_cohort_stay(tmp_path: Path) -> None:
+    """The panel holds rows only for stays with a value in its window, and its
+    bound universe may be wider than the analysis cohort; the cohort decides
+    who is counted."""
+
+    frame = pd.DataFrame(_panel_rows([*range(1, 41), *range(101, 106)]))
+    # Stays 101-105 are in the panel's universe but not in the study cohort.
+    frame["stay_id"] = frame["stay_id"].astype("int32")
+    panel = tmp_path / "panel.parquet"
+    frame.to_parquet(panel, index=False)
+    cohort = tmp_path / "cohort.parquet"
+    # Stays 41-50 are in the study cohort with no value in the window.
+    pd.DataFrame({"stay_id": range(50, 0, -1), "age": 60.0}).to_parquet(cohort, index=False)
+
+    summary = run_trajectory_scientific_representation(
+        authority=_authority(), runtime_projection_sha256="4" * 64,
+        trajectory_path=panel, cohort_path=cohort, out_dir=tmp_path / "out",
+    )
+
+    flow = dict(pd.read_csv(tmp_path / "out" / "cohort_flow.csv").itertuples(index=False))
+    assert flow == {
+        "input_cohort": 50,
+        "meets_min_observed_windows": 34,
+        "excluded_insufficient_windows": 16,
+        "included_in_clustering": 34,
+    }
+    membership = pd.read_csv(tmp_path / "out" / "trajectory_membership.csv")
+    assert membership["stay_id"].tolist() == list(range(50, 0, -1))
+    assert membership.loc[membership["stay_id"].gt(40), "observed_window_count"].eq(0).all()
+    clustered = pd.read_parquet(tmp_path / "out" / "trajectory_representation.parquet")
+    assert set(clustered["stay_id"]) == set(range(7, 41))
+    assert summary["panel_stays_outside_study_cohort_n"] == 5
+    assert summary["owner_evidence_state_counts"] == {
+        "direct_observed": int(frame["stay_id"].le(40).sum())
+    }
+    [outcome] = summary["reportable_rule_outcomes"]
+    assert (outcome["input_n"], outcome["included_n"], outcome["excluded_n"]) == (50, 34, 16)
+    [draft] = derive_scientific_claim_drafts(summary)
+    assert draft.rule_outcome.result_sentence().startswith(
+        "Of 50 records in the study cohort, 34 had at least 3 of the 6 prespecified "
+        "8-hour windows from 0 to 48 hours after ICU admission observed"
+    )
+
+
+@pytest.mark.parametrize(
+    ("cohort", "message"),
+    [
+        pytest.param(pd.DataFrame({"patient_id": range(1, 41)}),
+                     "lacks the trajectory identity column", id="no_stay_identity"),
+        pytest.param(pd.DataFrame({"stay_id": [*range(1, 41), 7]}),
+                     "present and unique", id="duplicated_stay"),
+        pytest.param(pd.DataFrame({"stay_id": [f"s{stay}" for stay in range(1, 41)]}),
+                     "shares no stay with the study cohort", id="another_identity_space"),
+    ],
+)
+def test_the_panel_owner_refuses_a_cohort_it_cannot_count(
+    tmp_path: Path, cohort: pd.DataFrame, message: str,
+) -> None:
+    panel = tmp_path / "panel.parquet"
+    pd.DataFrame(_panel_rows(range(1, 41))).to_parquet(panel, index=False)
+    cohort.to_parquet(tmp_path / "cohort.parquet", index=False)
+
+    with pytest.raises(ValueError, match=message):
+        run_trajectory_scientific_representation(
+            authority=_authority(), runtime_projection_sha256="4" * 64,
+            trajectory_path=panel, cohort_path=tmp_path / "cohort.parquet",
+            out_dir=tmp_path / "out",
+        )
 
 def _candidate_inputs(run_dir: Path, authority, matrix: np.ndarray) -> dict:
     upstream = run_dir / "upstream"

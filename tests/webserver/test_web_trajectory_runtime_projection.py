@@ -145,6 +145,7 @@ def test_trajectory_design_compiles_the_sealed_suite_and_executes(tmp_path):
         authority=projection.authority,
         runtime_projection_sha256=projection.projection_sha256,
         trajectory_path=tmp_path / "web_research_universe_trajectory.parquet",
+        cohort_path=universe,
         out_dir=tmp_path / "out",
     )
     assert summary["status"] == "ok"

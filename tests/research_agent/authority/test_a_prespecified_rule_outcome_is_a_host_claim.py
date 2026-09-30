@@ -143,7 +143,7 @@ def test_the_eligibility_rule_states_its_window_and_counts() -> None:
     assert claim.analysis_role == "auxiliary"
     assert claim.rule_outcome.report_section == "cohort"
     assert claim.render_reader_text() == (
-        "Of 1,402 records in the longitudinal panel, 1,240 had at least 3 of the 6 "
+        "Of 1,402 records in the study cohort, 1,240 had at least 3 of the 6 "
         "prespecified 8-hour windows from 0 to 48 hours after ICU admission observed "
         "and entered the class model; 162 were excluded."
     )
