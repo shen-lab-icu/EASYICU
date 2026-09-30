@@ -10,6 +10,12 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 
+from ...authority.prespecified_rule_outcomes import (
+    RULE_OUTCOME_SCHEMA_VERSION,
+    RULE_OUTCOMES_KEY,
+    rule_outcome_payload,
+    validate_rule_outcome,
+)
 from ...contracts.phenotype_comparison import (
     ASSIGNMENTS_PRODUCT,
     COMPARISON_ACTION,
@@ -334,6 +340,17 @@ def _no_frozen_solution(
         "output_sha256": sha256_file(result_path),
         "limitations": [
             "The signed stability owner froze no trajectory class, so no class is described."
+        ],
+        RULE_OUTCOMES_KEY: [
+            rule_outcome_payload(
+                validate_rule_outcome(
+                    {
+                        "schema_version": RULE_OUTCOME_SCHEMA_VERSION,
+                        "rule": "frozen_class_description",
+                        "disposition": "no_frozen_solution",
+                    }
+                )
+            )
         ],
     }
     (out_dir / "step_summary.json").write_text(

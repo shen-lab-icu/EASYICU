@@ -1945,6 +1945,10 @@
     ],
     [
       "easyicu.research_agent.authority.manuscript_method_facts",
+      "easyicu.research_agent.contracts.executed_method_design"
+    ],
+    [
+      "easyicu.research_agent.authority.manuscript_method_facts",
       "easyicu.research_agent.schema"
     ],
     [
@@ -2422,6 +2426,10 @@
     [
       "easyicu.research_agent.authority.scientific_claims",
       "easyicu.research_agent.authority.model_contrast_scientific_claims"
+    ],
+    [
+      "easyicu.research_agent.authority.scientific_claims",
+      "easyicu.research_agent.authority.prespecified_rule_outcomes"
     ],
     [
       "easyicu.research_agent.authority.scientific_claims",
@@ -5629,6 +5637,10 @@
     ],
     [
       "easyicu.research_agent.execution.runners.feasibility_protocol_executor",
+      "easyicu.research_agent.authority.prespecified_rule_outcomes"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.feasibility_protocol_executor",
       "easyicu.research_agent.contracts.declared_product"
     ],
     [
@@ -5990,6 +6002,10 @@
     [
       "easyicu.research_agent.execution.runners.ordered_stratified_executor",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.phenotype_comparison_executor",
+      "easyicu.research_agent.authority.prespecified_rule_outcomes"
     ],
     [
       "easyicu.research_agent.execution.runners.phenotype_comparison_executor",
@@ -6625,6 +6641,14 @@
     ],
     [
       "easyicu.research_agent.execution.runners.trajectory_scientific_candidate_executor",
+      "easyicu.research_agent.authority.prespecified_rule_outcomes"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.trajectory_scientific_candidate_executor",
+      "easyicu.research_agent.contracts.executed_method_design"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.trajectory_scientific_candidate_executor",
       "easyicu.research_agent.execution.runners._shared"
     ],
     [
@@ -6642,6 +6666,14 @@
     [
       "easyicu.research_agent.execution.runners.trajectory_scientific_candidate_executor",
       "easyicu.research_agent.trajectory.scientific_runtime_authority"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.trajectory_scientific_representation_executor",
+      "easyicu.research_agent.authority.prespecified_rule_outcomes"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.trajectory_scientific_representation_executor",
+      "easyicu.research_agent.contracts.executed_method_design"
     ],
     [
       "easyicu.research_agent.execution.runners.trajectory_scientific_representation_executor",
@@ -13112,9 +13144,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3270,
+    "edge_count": 3278,
     "largest_scc_size": 0,
-    "module_count": 764,
+    "module_count": 766,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -13210,6 +13242,7 @@
     "easyicu.research_agent.authority.prediction_model_fit_revalidation": "authority/prediction_model_fit_revalidation.py",
     "easyicu.research_agent.authority.prediction_model_fit_runtime": "authority/prediction_model_fit_runtime.py",
     "easyicu.research_agent.authority.prediction_validation_evidence": "authority/prediction_validation_evidence.py",
+    "easyicu.research_agent.authority.prespecified_rule_outcomes": "authority/prespecified_rule_outcomes.py",
     "easyicu.research_agent.authority.provenance": "authority/provenance.py",
     "easyicu.research_agent.authority.provider_budget": "authority/provider_budget.py",
     "easyicu.research_agent.authority.provider_hard_stop": "authority/provider_hard_stop.py",
@@ -13276,6 +13309,7 @@
     "easyicu.research_agent.contracts.dependence": "contracts/dependence.py",
     "easyicu.research_agent.contracts.descriptive_execution": "contracts/descriptive_execution.py",
     "easyicu.research_agent.contracts.endpoint": "contracts/endpoint.py",
+    "easyicu.research_agent.contracts.executed_method_design": "contracts/executed_method_design.py",
     "easyicu.research_agent.contracts.execution_result": "contracts/execution_result.py",
     "easyicu.research_agent.contracts.exposure_outcome_distribution": "contracts/exposure_outcome_distribution.py",
     "easyicu.research_agent.contracts.family_primary": "contracts/family_primary.py",

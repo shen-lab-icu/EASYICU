@@ -16,7 +16,9 @@ from .reader_numeric_display import round_reader_numeric_display
 from .scientific_claims import ScientificClaim
 from .manuscript_method_facts import ManuscriptMethodFact, is_method_fact_candidate
 from ..contracts.manuscript_result_structure import (
+    COHORT_RESULT_HEADING,
     PLAN_RESULT_HEADINGS,
+    PRIMARY_RESULT_HEADINGS,
     RESULT_HEADINGS_BY_ROLE,
 )
 from ..contracts.manuscript_sentence_context import contextual_sentence_deletion
@@ -545,6 +547,21 @@ def _claim_target_position(
             return heading.end()
         if role == "sensitivity":
             return 0
+    if claim.rule_outcome is not None:
+        # A rule outcome reports where its rule belongs: eligibility with the
+        # cohort, a solution rule under the family's primary heading.
+        headings = (
+            (COHORT_RESULT_HEADING,)
+            if claim.rule_outcome.report_section == "cohort"
+            else PRIMARY_RESULT_HEADINGS
+        )
+        for name in headings:
+            heading = re.search(
+                rf"^###\s+{re.escape(name)}[ \t]*$", results_section, re.I | re.MULTILINE,
+            )
+            if heading is not None:
+                return heading.end()
+        return 0
     if claim.claim_type == "association":
         pattern = r"^###\s+.*(?:primary\s+association|association|primary\s+model).*$"
     else:

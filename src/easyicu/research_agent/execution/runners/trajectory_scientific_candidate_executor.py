@@ -10,6 +10,18 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 
+from ...authority.prespecified_rule_outcomes import (
+    RULE_OUTCOME_SCHEMA_VERSION,
+    RULE_OUTCOMES_KEY,
+    rule_outcome_payload,
+    validate_rule_outcome,
+)
+from ...contracts.executed_method_design import (
+    EXECUTED_METHOD_DESIGN_KEY,
+    EXECUTED_METHOD_DESIGN_SCHEMA_VERSION,
+    executed_method_design_payload,
+    validate_executed_method_design,
+)
 from ...schema import AnalysisPlan, AnalysisStep
 from ...trajectory.plan_contract import (
     DIAG_GMM_SINGLE_START_ENGINE,
@@ -239,7 +251,9 @@ def run_trajectory_scientific_candidate_selection(
     counts = pd.Series(labels).value_counts().sort_index()
     minimum_fraction = float(counts.min() / len(labels))
     scientific_rejection: dict[str, str] | None = None
+    disposition = "minimum_selected"
     if selected_k == max(sealed.candidate_cluster_counts):
+        disposition = "minimum_at_upper_boundary"
         scientific_rejection = {
             "reason_code": sealed.upper_boundary_reason_code,
             "reportable_result": (
@@ -247,10 +261,37 @@ def run_trajectory_scientific_candidate_selection(
             ),
         }
     elif minimum_fraction < sealed.minimum_cluster_fraction:
+        disposition = "smallest_class_below_minimum"
         scientific_rejection = {
             "reason_code": sealed.minimum_cluster_fraction_reason_code,
             "reportable_result": "no_stable_phenotype_solution",
         }
+    # The formal outcome of both prespecified rules, stated for the report
+    # whether or not a solution survives them.
+    class_count_outcome = validate_rule_outcome(
+        {
+            "schema_version": RULE_OUTCOME_SCHEMA_VERSION,
+            "rule": "information_criterion_class_count",
+            "criterion": sealed.selection_criterion,
+            "candidate_class_counts": list(sealed.candidate_cluster_counts),
+            "criterion_minimum_class_count": selected_k,
+            "n_records": n_rows,
+            "smallest_class_fraction": minimum_fraction,
+            "minimum_class_fraction": sealed.minimum_cluster_fraction,
+            "disposition": disposition,
+        }
+    )
+    model_design = validate_executed_method_design(
+        {
+            "schema_version": EXECUTED_METHOD_DESIGN_SCHEMA_VERSION,
+            "design_kind": "latent_class_model",
+            "model_family": sealed.model_family,
+            "coordinate_scaling": sealed.coordinate_scaling.method,
+            "candidate_class_counts": list(sealed.candidate_cluster_counts),
+            "selection_criterion": sealed.selection_criterion,
+            "minimum_class_fraction": sealed.minimum_cluster_fraction,
+        }
+    )
     selection_table = pd.DataFrame(
         [
             {
@@ -360,6 +401,8 @@ def run_trajectory_scientific_candidate_selection(
             "failed_closed" if scientific_rejection else "selected"
         ),
         "stability_authorized": scientific_rejection is None,
+        RULE_OUTCOMES_KEY: [rule_outcome_payload(class_count_outcome)],
+        EXECUTED_METHOD_DESIGN_KEY: executed_method_design_payload(model_design),
         "output_files": {
             "artifact:candidate_cluster_assignments": (
                 "candidate_cluster_assignments.csv"
