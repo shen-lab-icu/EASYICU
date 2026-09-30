@@ -68,6 +68,13 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   assert.match(runFailure('data_foundation_blocked', { code: 'outcome_concept_undeclared' }), /No executable outcome variable/);
   assert.equal(runFailure('data_foundation_blocked', { code: 'unknown_detail_code' }), runFailure('data_foundation_blocked'));
 
+  // A typed compile stop names its own cause; the generic compile sentence
+  // would name one that did not happen.
+  const unwritable = runFailure('research_pipeline_progressive_compile_failed', { code: 'progressive_family_result_contract_unwritable' });
+  assert.match(unwritable, /causal or survival question/);
+  assert.doesNotMatch(unwritable, /variable level or model term/);
+  assert.match(runFailure('research_pipeline_progressive_compile_failed'), /variable level or model term/);
+
   // A runner image built from other EasyICU source needs a rebuild; telling the
   // researcher to start Docker would send them to a runtime that is already up.
   const stale = live({ code: 'research_pipeline_runner_image_mismatch' });

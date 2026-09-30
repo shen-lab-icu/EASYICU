@@ -139,3 +139,52 @@ def test_existing_typed_owner_takes_precedence_over_transport_cause():
         "owner": "easyicu.planning.progressive_compiler_v1",
         "reason_code": "progressive_step_invalid",
     }
+
+
+def test_a_typed_compile_stop_reaches_the_run_record_as_its_gate_detail(tmp_path):
+    """The run record names the owner's reason, not the generic compile wording."""
+    from easyicu.research_agent.planning.progressive_contract import (
+        ProgressivePlanCompileError,
+    )
+    from easyicu.webserver.pi_copilot.workflow import gate_detail_projection
+
+    stop = ProgressivePlanCompileError(
+        "progressive_family_result_contract_unwritable",
+        "no host owner can write the primary result contract for survival",
+        path="analysis_type",
+    )
+    code = agent_pipeline_runs._pipeline_failure_code(stop)
+    assert code == "research_pipeline_progressive_compile_failed"
+
+    typed_dir, untyped_dir = tmp_path / "typed", tmp_path / "untyped"
+    for wrapper_dir, exc, failure_code in (
+        (typed_dir, stop, code),
+        (untyped_dir, RuntimeError("boom"), "research_pipeline_execution_failed"),
+    ):
+        wrapper_dir.mkdir()
+        agent_pipeline_runs._record_pipeline_failure(
+            wrapper_dir=wrapper_dir,
+            study={"id": "study_synthetic"},
+            provider={},
+            exc=exc,
+            code=failure_code,
+            execution_retry_id=None,
+        )
+
+    gate = json.loads((typed_dir / "quality_gate.json").read_text())["gate"]
+    assert gate["reason"] == code
+    assert gate["detail"] == {"reason_code": "progressive_family_result_contract_unwritable"}
+    assert gate_detail_projection(gate["detail"]) == {
+        "gate_detail_code": "progressive_family_result_contract_unwritable",
+        "gate_missing_concepts": [],
+    }
+    assert "no host owner" not in json.dumps(gate)
+    assert "detail" not in json.loads((untyped_dir / "quality_gate.json").read_text())["gate"]
+    assert "planning stopped before a plan was drafted" in (
+        agent_pipeline_runs._progressive_compile_failure_message(stop)
+    )
+    assert "rejected the bounded Planner repairs" in (
+        agent_pipeline_runs._progressive_compile_failure_message(
+            ProgressivePlanCompileError("progressive_typed_product_specs_invalid", "x")
+        )
+    )

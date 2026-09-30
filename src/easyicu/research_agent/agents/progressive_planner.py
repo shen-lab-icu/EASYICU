@@ -63,7 +63,10 @@ from ..planning.planner_output_contract import (
     validate_fresh_planner_typed_product_specs,
 )
 from ..planning.preplan_know_how import verify_know_how_decisions
-from ..planning.primary_result_contract import validate_required_primary_result
+from ..planning.primary_result_contract import (
+    families_requiring_family_result_contract,
+    validate_required_primary_result,
+)
 from ..planning.progressive_compiler import (
     compile_progressive_plan,
     progressive_cohort_concept_ids,
@@ -72,7 +75,7 @@ from ..planning.progressive_compiler import (
     required_reader_display_label_keys,
     validate_progressive_foundation,
 )
-from ..planning.family_spec import family_template_id_for_context
+from ..planning.family_spec import family_template_id_for_context, sealed_survival_suite_coordinates
 from ..planning.dependence_authority import (
     context_counts_only_authority,
     descriptive_counts_only_required,
@@ -4400,6 +4403,25 @@ class ProgressivePlannerAgent:
             )
             if family_spec_fallback_reason is None:
                 scientific_authority["planner_strategy"] = FAMILY_SPEC_STRATEGY
+        # The Progressive v2 compiler never writes a family result contract, so
+        # a final plan whose every candidate family needs one cannot pass
+        # acceptance: stop before any Provider call instead of spending.
+        v2_compiles_final_plan = resume_checkpoint is None and not stop_after_outline and (
+            planner_strategy != FAMILY_SPEC_STRATEGY or family_spec_fallback_reason is not None
+        )
+        unwritable = v2_compiles_final_plan and families_requiring_family_result_contract(
+            context,
+            analysis_types=analysis_types,
+            sealed_survival_suite=(
+                sealed_survival_suite_coordinates(planning_contract_context) is not None
+            ),
+        )
+        if unwritable:
+            raise ProgressivePlanCompileError(
+                "progressive_family_result_contract_unwritable",
+                f"no host owner can write the primary result contract for {', '.join(unwritable)}",
+                path="analysis_type",
+            )
         checkpoint_authorities = build_progressive_checkpoint_authorities(
             context=context,
             article_context=article_context,

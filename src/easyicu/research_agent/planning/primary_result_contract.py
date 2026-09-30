@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Sequence
 
 from ..schema import (
     SURVIVAL_ANALYSIS_RECEIPT_PRODUCT,
@@ -105,6 +106,41 @@ def model_terms_retry_guide() -> str:
     )
 
 
+#: Families whose headline is the primary step's Planner-declared
+#: ``family_primary_result_requirement`` once the context declares an exposure
+#: and an outcome.
+FAMILY_RESULT_CONTRACT_FAMILIES = frozenset({"causal_inference", "survival"})
+
+
+def families_requiring_family_result_contract(
+    context: ResearchContext,
+    *,
+    analysis_types: Sequence[str],
+    sealed_survival_suite: bool,
+) -> tuple[str, ...]:
+    """The candidate families, when final acceptance needs that contract from each.
+
+    Returns ``()`` unless every candidate family is causal or survival, the
+    context declares its exposure and outcome, and no sealed fail-closed
+    source-feasibility scope replaces the effect step.  A host-sealed landmark
+    survival suite (``sealed_survival_suite``) is accepted by its primary
+    method instead, so a survival candidate beside it is not counted.
+    """
+
+    families = tuple(str(value).strip() for value in analysis_types)
+    if (
+        not families
+        or context_declares_source_feasibility_scope(context)
+        or not str(context.primary_exposure or "").strip()
+        or not str(context.target_outcome or "").strip()
+    ):
+        return ()
+    required = FAMILY_RESULT_CONTRACT_FAMILIES - (
+        {"survival"} if sealed_survival_suite else set()
+    )
+    return families if all(family in required for family in families) else ()
+
+
 def validate_required_primary_result(
     *,
     plan: AnalysisPlan,
@@ -125,7 +161,7 @@ def validate_required_primary_result(
     association_required = declared_family == "association_study" or (
         inferred_family == "association_study" and question_requires_association
     )
-    family_result_required = declared_family in {"causal_inference", "survival"}
+    family_result_required = declared_family in FAMILY_RESULT_CONTRACT_FAMILIES
     if not association_required and not family_result_required:
         return
     if context_declares_source_feasibility_scope(context):
@@ -382,6 +418,8 @@ def family_primary_result_execution_guide(step: AnalysisStep) -> str:
 
 
 __all__ = [
+    "FAMILY_RESULT_CONTRACT_FAMILIES",
+    "families_requiring_family_result_contract",
     "family_primary_result_execution_guide",
     "model_terms_retry_guide",
     "primary_result_contract_guide",
