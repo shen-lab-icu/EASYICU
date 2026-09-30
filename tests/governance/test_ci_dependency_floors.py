@@ -180,6 +180,19 @@ def test_agent_ci_installs_the_provider_boundary_test_runtime() -> None:
     )
 
 
+def test_agent_ci_installs_the_webserver_owner_runtime() -> None:
+    """Agent tests import WebApp owners whose Copilot gateway imports psutil."""
+
+    declared = _declared_floors()
+    workflow = _workflow_floors()
+
+    assert workflow.get("psutil") == declared["psutil"], (
+        "research_agent CI collects tests that import easyicu.webserver owners "
+        "under --no-deps; the Copilot gateway imports psutil at module load, so "
+        "the explicit list must install the declared psutil floor"
+    )
+
+
 def test_optional_sksurv_adapter_does_not_break_python_310_resolution() -> None:
     """scikit-survival 0.28 requires Python 3.11, while core supports 3.10."""
 

@@ -143,6 +143,7 @@ jobs:
             "openai>=1.40.0" \
             "mcp>=1.28,<2" \
             "fastapi>=0.115" \
+            "psutil>=5.9" \
             "lifelines>=0.27" \
             "shap>=0.44" \
             "xgboost>=2.0" \
