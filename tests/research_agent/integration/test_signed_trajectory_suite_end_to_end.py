@@ -2,8 +2,8 @@
 
 End to end without a Provider: a typed synthetic export is materialized by the
 host, the signed owners run on the long panel, the selection figure reads the
-owners' published tables, and the frozen classes are described on the run
-cohort.  Unit fixtures had drifted from the stability owner's real columns, so
+owners' published tables, the host draws the owner's cohort flow, and the
+frozen classes are described on the run cohort.  Unit fixtures had drifted from the stability owner's real columns, so
 the figure failed on every real run while its own tests passed; this module
 runs the owners themselves.  Synthetic stays only.
 """
@@ -58,8 +58,8 @@ N_STAYS = 150
 #: Ten stays have no window value and ten have one window only; the owner
 #: needs two, so twenty stays are counted but never clustered.
 N_NOT_CLUSTERED = 20
-#: The Coder writes the host's cohort accounting figure; this run has none.
-CODER_FIGURE_STEP = "07_cohort_accounting_figure"
+#: The host draws the owner's cohort flow, so no step needs a generated script.
+COHORT_FLOW_FIGURE_STEP = "07_cohort_accounting_figure"
 SIGNED_AND_DESCRIPTION_STEPS = (
     "00_authority_compiled_trajectory_representation",
     "01_authority_compiled_trajectory_candidates",
@@ -346,12 +346,30 @@ def _records(manifest: dict) -> dict[str, dict]:
     return {record["step_id"]: record for record in manifest["per_step_records"]}
 
 
-def _assert_only_the_coder_figure_is_unexercised(manifest: dict) -> None:
-    readiness = manifest["readiness"]
-    assert [step["step_id"] for step in readiness["failed_steps"]] == [CODER_FIGURE_STEP]
-    for finding in manifest["findings"]:
-        if finding.get("severity") == "error":
-            assert CODER_FIGURE_STEP in json.dumps(finding), finding
+def _assert_the_host_drew_the_cohort_flow(manifest: dict, run_dir: Path) -> None:
+    record = _records(manifest)[COHORT_FLOW_FIGURE_STEP]
+    assert record["status"] == "ok"
+    assert record["step_summary"]["method"] == "deterministic_cohort_flow_figure"
+    assert record["step_summary"]["source_rows_consumed"] == 4
+    # The figure exports exactly the representation owner's four flow rows.
+    owner = pd.read_csv(
+        run_dir / "steps" / "00_authority_compiled_trajectory_representation"
+        / "outputs" / "cohort_flow.csv"
+    )
+    (source,) = (run_dir / "steps" / COHORT_FLOW_FIGURE_STEP / "outputs").glob(
+        "*_source_data.csv"
+    )
+    table = pd.read_csv(source)
+    assert len(owner) == 4
+    assert dict(zip(table.metric, table.n)) == dict(zip(owner.metric, owner.n))
+
+
+def _assert_every_step_ran_without_a_script(manifest: dict, run_dir: Path) -> None:
+    assert manifest["readiness"]["failed_steps"] == []
+    assert [
+        finding for finding in manifest["findings"] if finding.get("severity") == "error"
+    ] == []
+    _assert_the_host_drew_the_cohort_flow(manifest, run_dir)
 
 
 def test_frozen_classes_are_rendered_and_described_on_the_run_cohort(tmp_path):
@@ -387,7 +405,7 @@ def test_frozen_classes_are_rendered_and_described_on_the_run_cohort(tmp_path):
         / "outputs" / "trajectory_cluster_stability_source_data.csv"
     )
     assert not stability_source.empty
-    _assert_only_the_coder_figure_is_unexercised(manifest)
+    _assert_every_step_ran_without_a_script(manifest, run_dir)
 
 
 def test_a_suite_without_an_interior_solution_describes_no_class(tmp_path):
@@ -409,7 +427,7 @@ def test_a_suite_without_an_interior_solution_describes_no_class(tmp_path):
     ).empty
     figure = records["03_authority_compiled_trajectory_selection_figure"]["step_summary"]
     assert figure["reportable_phenotype_solution"] is False
-    _assert_only_the_coder_figure_is_unexercised(manifest)
+    _assert_every_step_ran_without_a_script(manifest, run_dir)
 
 
 def test_noise_stops_at_the_stability_gate_and_describes_no_class(tmp_path):
@@ -432,3 +450,5 @@ def test_noise_stops_at_the_stability_gate_and_describes_no_class(tmp_path):
     assert not (
         run_dir / "steps" / "05_frozen_class_description" / "outputs" / "outcome_by_cluster.csv"
     ).exists()
+    # The flow does not depend on the stability gate; the host still draws it.
+    _assert_the_host_drew_the_cohort_flow(manifest, run_dir)
