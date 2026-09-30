@@ -227,6 +227,23 @@ def test_a_study_without_a_trajectory_declaration_is_not_a_trajectory_study(tmp_
             "web_trajectory_eligibility_coordinate_missing",
             "required_coordinate_prefix",
         ),
+        # The signed owners cluster every stay of the host-restricted source
+        # universe; a stated population filter is one they would not apply.
+        (
+            {
+                "analysis_design": {
+                    "analysis_family": "trajectory_clustering",
+                    "analysis_unit": "icu_stay",
+                    "variance_estimator": "model_based",
+                },
+                "trajectory_design": study_context_owner.normalize_trajectory_design(
+                    _design()
+                ),
+                "cohort": {"preset": "adult_first"},
+            },
+            "web_trajectory_population_filter_unsupported",
+            "stated_selection_mode",
+        ),
     ],
 )
 def test_declaration_fails_closed_before_any_materialization(study, code, detail_key):
@@ -239,6 +256,37 @@ def test_declaration_fails_closed_before_any_materialization(study, code, detail
     with pytest.raises(ResearchPipelineRunError) as launch:
         validate_analysis_design_for_execution(study)
     assert launch.value.code == code
+
+
+@pytest.mark.parametrize(
+    "cohort",
+    [
+        pytest.param({"age_min": 18}, id="age_bound"),
+        pytest.param({"min_icu_los_hours": 24}, id="icu_stay_length_bound"),
+    ],
+)
+def test_every_stated_population_filter_is_refused_by_name(cohort):
+    with pytest.raises(WebScientificRuntimeProjectionError) as excinfo:
+        validate_trajectory_design_declaration(_study(cohort=cohort))
+    assert excinfo.value.code == "web_trajectory_population_filter_unsupported"
+    assert excinfo.value.details["stated_selection_mode"] == "predicate_filtered"
+    assert excinfo.value.details["supported_selection_mode"] == "all_input_rows"
+
+
+@pytest.mark.parametrize(
+    "cohort",
+    [
+        pytest.param(None, id="no_stated_population"),
+        pytest.param({}, id="empty"),
+        pytest.param({"preset": "all_icu"}, id="all_icu_stays"),
+        # The first-ICU-stay restriction is applied to the source universe
+        # itself, so it is not a filter the owners would have to apply.
+        pytest.param({"exclude_readmissions": True}, id="first_stay_only"),
+    ],
+)
+def test_a_study_whose_population_the_owners_analyze_is_admitted(cohort):
+    study = _study(**({} if cohort is None else {"cohort": cohort}))
+    assert validate_trajectory_design_declaration(study) is not None
 
 
 def test_projection_requires_the_materialized_panel(tmp_path):

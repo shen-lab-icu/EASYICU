@@ -52,6 +52,7 @@ from easyicu.research_agent.trajectory.runtime_validation import (
     signed_trajectory_plan_contract_errors,
 )
 from easyicu.research_agent.trajectory.scientific_runtime_authority import (
+    SIGNED_TRAJECTORY_POPULATION,
     TrajectoryScientificAuthorityError,
     build_trajectory_scientific_runtime_authority,
 )
@@ -157,6 +158,7 @@ def _signed_plan(authority) -> AnalysisPlan:
         {
             "research_question": "Assess fixed-window trajectory phenotypes.",
             "analysis_type": "trajectory_clustering",
+            "cohort": dict(SIGNED_TRAJECTORY_POPULATION),
             "steps": [
                 {
                     "step_id": "01_representation",

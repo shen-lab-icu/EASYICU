@@ -40,9 +40,11 @@ from easyicu.research_agent.contracts.trajectory_design import (
     sealed_trajectory_authority_body,
 )
 from easyicu.research_agent.trajectory.scientific_runtime_authority import (
+    SIGNED_TRAJECTORY_POPULATION,
     build_trajectory_scientific_runtime_authority,
 )
 
+from . import primary_cohort
 from .scientific_runtime_projection import (
     WebScientificRuntimeProjection,
     WebScientificRuntimeProjectionError,
@@ -144,6 +146,31 @@ def _require_supported_inference(study: Mapping[str, Any]) -> None:
             variance_estimator=variance_estimator or None,
             supported_analysis_unit=_SUPPORTED_ANALYSIS_UNIT,
             supported_variance_estimator=_SUPPORTED_VARIANCE_ESTIMATOR,
+        )
+
+
+def _require_supported_population(study: Mapping[str, Any]) -> None:
+    # The same stated scope the candidate and package-bound runs are held to
+    # (``agent_pipeline_runs``); the first-ICU-stay restriction is applied to
+    # the source universe itself and is not a stated filter.
+    stated_mode = primary_cohort.planning_selection_mode(
+        primary_cohort.planner_selectable_cohort(study.get("cohort"))
+    )
+    supported_mode = SIGNED_TRAJECTORY_POPULATION["selection_mode"]
+    if stated_mode is not None and stated_mode != supported_mode:
+        _fail(
+            "web_trajectory_population_filter_unsupported",
+            (
+                "The signed trajectory owners cluster every stay of the "
+                "host-restricted source universe: the representation reads the "
+                "whole staged panel and excludes a stay only under its SOFA-2 "
+                "window rule. The study states a population filter these owners "
+                "do not apply, so the design is refused here rather than "
+                "analyzing a population other than the one stated."
+            ),
+            field="cohort",
+            stated_selection_mode=stated_mode,
+            supported_selection_mode=supported_mode,
         )
 
 
@@ -335,6 +362,7 @@ def validate_trajectory_design_declaration(
 
     design = _typed_design(study)
     _require_supported_inference(study)
+    _require_supported_population(study)
     if not any(
         concept.startswith(_ELIGIBILITY_COORDINATE_PREFIX)
         for concept in design.coordinate_concepts

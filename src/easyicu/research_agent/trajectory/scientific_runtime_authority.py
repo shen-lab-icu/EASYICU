@@ -28,6 +28,19 @@ from .runtime_validation import (
     SIGNED_TRAJECTORY_STABILITY_INPUTS,
 )
 
+#: The population the signed owners analyze, stated on every plan they own.
+#: The representation reads the whole staged long panel, which is bound to the
+#: host-restricted source universe, and excludes a stay only under the signed
+#: SOFA-2 window rule; the candidate and stability owners read its products.
+#: The plan therefore selects every input row. A predicate here would describe
+#: a population these owners do not analyze, so none is ever carried.
+SIGNED_TRAJECTORY_POPULATION: Mapping[str, Any] = {
+    "name": "primary",
+    "selection_mode": "all_input_rows",
+    "inclusion": [],
+    "exclusion": [],
+}
+
 #: Exact panels of the signed selection-diagnostics renderer
 #: (``execution/runners/trajectory_selection_figure_executor.py``): the
 #: candidate-grid criterion curve and observed coordinate availability. The
@@ -240,6 +253,7 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
             {
                 "research_question": str(research_question),
                 "analysis_type": "trajectory_clustering",
+                "cohort": dict(SIGNED_TRAJECTORY_POPULATION),
                 "steps": [
                     {
                         "step_id": representation_id,
@@ -473,6 +487,19 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
                 raise TrajectoryScientificAuthorityError(
                     "trajectory selection-figure plan drifted from signed authority"
                 )
+        population = plan.cohort
+        if (
+            population is None
+            or getattr(population, "selection_mode", None)
+            != SIGNED_TRAJECTORY_POPULATION["selection_mode"]
+            or getattr(population, "inclusion", ())
+            or getattr(population, "exclusion", ())
+        ):
+            raise TrajectoryScientificAuthorityError(
+                "trajectory population drifted from signed authority: the owners "
+                "analyze every input row, so the plan must select all input rows "
+                "without inclusion or exclusion predicates"
+            )
 
     def validate_representation_schema(self, schema: Mapping[str, Any]) -> None:
         issues: list[str] = []
@@ -607,6 +634,7 @@ def build_trajectory_scientific_runtime_authority(
 __all__ = [
     "CoordinateScalingAuthority",
     "EvidenceStateAuthority",
+    "SIGNED_TRAJECTORY_POPULATION",
     "TrajectoryScientificAuthorityError",
     "TRAJECTORY_CHARACTERIZATION_FIGURE_PANELS",
     "TrajectoryScientificRuntimeAuthority",
