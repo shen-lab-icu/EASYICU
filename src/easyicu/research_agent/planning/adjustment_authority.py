@@ -38,9 +38,12 @@ HostTemporalRole = Literal["baseline_static", "at_or_before_time_zero"]
 # ``first_24h``, ``0-24h``, ``0_24h``, ``24h``: the trailing hour bound of a
 # named window is the only fact this owner reads from a window label.
 _WINDOW_END_HOURS = re.compile(r"(?:^|[^0-9])(\d+(?:\.\d+)?)\s*h(?:ours?)?\s*$", re.IGNORECASE)
-#: The research-context builder's own label form, ``icu_admission[start,end]h``.
+#: The typed label form, ``<anchor>[start,end]h``; the research-context
+#: builder writes ``icu_admission[start,end]h``, and concept metadata may name
+#: another anchor (``event_onset[0,72]h``).
 _WINDOW_INTERVAL_HOURS = re.compile(
-    r"icu_admission\[\s*-?\d+(?:\.\d+)?\s*,\s*(\d+(?:\.\d+)?)\s*\]\s*h(?:ours?)?\s*$",
+    r"(?:^|[^a-z0-9_])(?P<anchor>[a-z][a-z0-9_]*)\[\s*-?\d+(?:\.\d+)?\s*,\s*"
+    r"(?P<end>-?\d+(?:\.\d+)?)\s*\]\s*h(?:ours?)?\s*$",
     re.IGNORECASE,
 )
 
@@ -88,12 +91,21 @@ def host_outer_feature_window_end_hours(context: Any) -> Optional[float]:
 
 
 def _analysis_window_end_hours(label: Any) -> Optional[float]:
+    """The window's end in hours after ICU admission, or None if it names none.
+
+    A typed interval anchored elsewhere (``event_onset[0,72]h``) cannot be
+    placed on the ICU-admission axis without the event time, so it proves no
+    timing here; neither does a label this owner cannot read.
+    """
+
     text = str(label or "").strip()
     if not text:
         return None
     interval = _WINDOW_INTERVAL_HOURS.search(text)
     if interval:
-        return float(interval.group(1))
+        if interval.group("anchor").lower() != "icu_admission":
+            return None
+        return float(interval.group("end"))
     match = _WINDOW_END_HOURS.search(text)
     return float(match.group(1)) if match else None
 
@@ -124,8 +136,9 @@ def host_window_bound_roles(
     An owner-declared baseline demographic is static. A window-derived variable
     with one of ``dynamic_roles`` is available at or before the reference time
     only when its materialization window ends at or before it: its own
-    ``analysis_window`` label, or -- for the clinical roles listed in
-    ``outer_window_fallback_roles`` -- the outer host-bound feature window.
+    ``analysis_window`` label, or -- only when it declares none, and only for
+    the clinical roles listed in ``outer_window_fallback_roles`` -- the outer
+    host-bound feature window.
     Every other variable is absent from the mapping. With no reference time
     only the demographics are provable.
     """
@@ -142,10 +155,12 @@ def host_window_bound_roles(
             continue
         if role not in dynamic_roles or reference_hours is None:
             continue
-        window_end = _analysis_window_end_hours(
-            getattr(variable, "analysis_window", None)
-        )
-        if window_end is None and role in outer_window_fallback_roles:
+        label = str(getattr(variable, "analysis_window", None) or "").strip()
+        window_end = _analysis_window_end_hours(label)
+        # Only a variable without its own window inherits the outer one. A
+        # declared window this owner cannot place before the reference time
+        # proves nothing; the outer window is not a stand-in for it.
+        if not label and role in outer_window_fallback_roles:
             window_end = outer_end
         if window_end is not None and window_end <= reference_hours:
             roles[name] = "at_or_before_time_zero"
