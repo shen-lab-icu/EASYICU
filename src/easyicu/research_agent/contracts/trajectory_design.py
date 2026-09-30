@@ -65,6 +65,9 @@ TRAJECTORY_HOST_POLICY = MappingProxyType(
         ),
         "bic_tie_break": "smaller_k",
         "candidate_fit_base_seed": 1729,
+        # Every candidate fit and stability refit keeps the best of ten
+        # deterministic EM starts; one start can stop in a poor local optimum.
+        "fit_engine": "easyicu_observed_data_diag_gmm_best_of_10_v2",
         "candidate_fit_max_iter": 200,
         "candidate_fit_tolerance": 1e-6,
         "candidate_fit_regularization": 1e-6,
@@ -692,6 +695,7 @@ def sealed_trajectory_authority_body(
         sample_fraction=design.stability_sample_fraction,
         base_seed=int(policy["candidate_fit_base_seed"]),
         minimum_successful_resamples=design.stability_resamples,
+        refit_engine=policy["fit_engine"],
         refit_max_iter=int(policy["candidate_fit_max_iter"]),
         refit_tolerance=float(policy["candidate_fit_tolerance"]),
         refit_regularization=float(policy["candidate_fit_regularization"]),

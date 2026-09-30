@@ -40,6 +40,7 @@ from easyicu.research_agent.orchestration.services import PipelineServices
 from easyicu.research_agent.pipeline import ResearchAgentPipeline
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.schema import AnalysisPlan, TrajectoryStabilitySpec
+from easyicu.research_agent.trajectory.plan_contract import DIAG_GMM_BEST_OF_10_ENGINE
 from easyicu.research_agent.trajectory.scientific_runtime_authority import (
     build_trajectory_scientific_runtime_authority,
 )
@@ -69,16 +70,30 @@ SIGNED_AND_DESCRIPTION_STEPS = (
 )
 
 
-def _typed_export(root: Path, *, structured: bool) -> Path:
+#: Per class, the (low, high) level of each coordinate.  Three classes sit
+#: inside the candidate grid (2-4); five separated classes lie beyond it, so
+#: the minimum BIC falls on the grid's upper boundary; noise has no classes.
+LAYOUTS = {
+    "three_classes": {
+        "sofa2_resp": [(0, 1), (2, 2), (3, 4)],
+        "sofa2_cardio": [(0, 0), (1, 2), (3, 4)],
+    },
+    "five_classes": {
+        "sofa2_resp": [(0, 0), (0, 0), (4, 4), (4, 4), (2, 2)],
+        "sofa2_cardio": [(0, 0), (4, 4), (0, 0), (4, 4), (2, 2)],
+    },
+    "noise": {"sofa2_resp": [(0, 4)], "sofa2_cardio": [(0, 4)]},
+}
+
+
+def _typed_export(root: Path, *, layout: str) -> Path:
     """Write a native typed export whose SOFA-2 values carry owner receipts."""
 
     rng = np.random.default_rng(7)
     stays = np.arange(1001, 1001 + N_STAYS)
-    classes = np.repeat([0, 1, 2], N_STAYS // 3)
-    levels = {
-        "sofa2_resp": [(0, 1), (2, 2), (3, 4)],
-        "sofa2_cardio": [(0, 0), (1, 2), (3, 4)],
-    }
+    levels = LAYOUTS[layout]
+    n_classes = len(levels["sofa2_resp"])
+    classes = np.repeat(np.arange(n_classes), N_STAYS // n_classes)
     rows = []
     for index, stay in enumerate(stays):
         age = float(np.round(rng.normal(62, 12), 1))
@@ -90,8 +105,8 @@ def _typed_export(root: Path, *, structured: bool) -> Path:
         for time in times:
             row = {"stay_id": int(stay), "charttime": time, "age": age}
             for concept in COORDINATES:
-                low, high = levels[concept][classes[index]] if structured else (0, 4)
-                spread = 0.15 if structured else 1.2
+                low, high = levels[concept][classes[index]]
+                spread = 1.2 if layout == "noise" else 0.15
                 row[concept] = float(np.clip(rng.normal((low + high) / 2, spread), 0, 4))
                 row[f"{concept}_observed"] = 1
                 row[f"{concept}_available"] = 1
@@ -110,7 +125,7 @@ def _typed_export(root: Path, *, structured: bool) -> Path:
     outcomes = pd.DataFrame(
         {
             "stay_id": stays.astype(int),
-            "death": rng.random(N_STAYS) < np.array([0.1, 0.3, 0.6])[classes],
+            "death": rng.random(N_STAYS) < np.linspace(0.1, 0.6, n_classes)[classes],
         }
     )
     export = root / "export"
@@ -193,6 +208,7 @@ def _authority():
         refit_regularization=1e-6,
         minimum_mean_stability=0.6,
         decision_mode="minimum_mean_threshold",
+        refit_engine=DIAG_GMM_BEST_OF_10_ENGINE,
     )
     return build_trajectory_scientific_runtime_authority(
         {
@@ -251,8 +267,8 @@ def _authority():
     )
 
 
-def _run(tmp_path: Path, *, structured: bool):
-    export = _typed_export(tmp_path, structured=structured)
+def _run(tmp_path: Path, *, layout: str):
+    export = _typed_export(tmp_path, layout=layout)
     paths = cohort_materializer.materialize_to_parquet(
         tmp_path / "materialized",
         stem="universe",
@@ -339,13 +355,25 @@ def _assert_only_the_coder_figure_is_unexercised(manifest: dict) -> None:
 
 
 def test_frozen_classes_are_rendered_and_described_on_the_run_cohort(tmp_path):
-    carried, run_dir, manifest = _run(tmp_path, structured=True)
+    carried, run_dir, manifest = _run(tmp_path, layout="three_classes")
 
     assert carried["carried"] is True
     records = _records(manifest)
     assert all(records[step]["status"] == "ok" for step in SIGNED_AND_DESCRIPTION_STEPS)
     freeze = records["02_authority_compiled_trajectory_stability"]["step_summary"]
     assert freeze["freeze_status"] == TRAJECTORY_FROZEN_STATUS
+    # Every refit keeps the best of ten starts, like the candidate fit it checks.
+    stability_out = run_dir / "steps" / "02_authority_compiled_trajectory_stability" / "outputs"
+    spec = json.loads((stability_out / "cluster_stability_spec.json").read_text(encoding="utf-8"))
+    assert spec["executor_version"] == DIAG_GMM_BEST_OF_10_ENGINE
+    attempts = json.loads(
+        (stability_out / "cluster_stability_refit_attempts.json").read_text(encoding="utf-8")
+    )["attempts"]
+    assert attempts and all(
+        attempt["executor_version"] == DIAG_GMM_BEST_OF_10_ENGINE
+        and attempt["engine_starts"]["n_starts"] == 10
+        for attempt in attempts
+    )
     description = records["05_frozen_class_description"]["step_summary"]
     assert description["n_not_clustered"] == N_NOT_CLUSTERED
     assert description["n_rows"] == N_STAYS - N_NOT_CLUSTERED
@@ -362,12 +390,15 @@ def test_frozen_classes_are_rendered_and_described_on_the_run_cohort(tmp_path):
     _assert_only_the_coder_figure_is_unexercised(manifest)
 
 
-def test_a_suite_without_a_stable_solution_describes_no_class(tmp_path):
-    carried, run_dir, manifest = _run(tmp_path, structured=False)
+def test_a_suite_without_an_interior_solution_describes_no_class(tmp_path):
+    carried, run_dir, manifest = _run(tmp_path, layout="five_classes")
 
     assert carried["carried"] is True
     records = _records(manifest)
     assert all(records[step]["status"] == "ok" for step in SIGNED_AND_DESCRIPTION_STEPS)
+    candidates = records["01_authority_compiled_trajectory_candidates"]["step_summary"]
+    assert candidates["n_clusters"] == 4
+    assert candidates["reason_code"] == "NO_INTERIOR_BIC_OPTIMUM"
     freeze = records["02_authority_compiled_trajectory_stability"]["step_summary"]
     assert freeze["freeze_status"] != TRAJECTORY_FROZEN_STATUS
     description = records["05_frozen_class_description"]["step_summary"]
@@ -379,3 +410,25 @@ def test_a_suite_without_a_stable_solution_describes_no_class(tmp_path):
     figure = records["03_authority_compiled_trajectory_selection_figure"]["step_summary"]
     assert figure["reportable_phenotype_solution"] is False
     _assert_only_the_coder_figure_is_unexercised(manifest)
+
+
+def test_noise_stops_at_the_stability_gate_and_describes_no_class(tmp_path):
+    """Noise can still minimise BIC inside the grid; its refits then disagree."""
+
+    _carried, run_dir, manifest = _run(tmp_path, layout="noise")
+
+    records = _records(manifest)
+    candidates = records["01_authority_compiled_trajectory_candidates"]["step_summary"]
+    assert candidates["scientific_status"] == "selected"
+    freeze = records["02_authority_compiled_trajectory_stability"]["step_summary"]
+    assert freeze["reason_code"] == "TRAJECTORY_STABILITY_BELOW_THRESHOLD"
+    assert freeze["mean_adjusted_rand_index"] < 0.6
+    assert freeze["freeze_status"] == "not_frozen_stability_threshold_failed"
+    for step in (
+        "03_authority_compiled_trajectory_selection_figure",
+        "05_frozen_class_description",
+    ):
+        assert records[step]["status"] == "skipped_dependency_failed"
+    assert not (
+        run_dir / "steps" / "05_frozen_class_description" / "outputs" / "outcome_by_cluster.csv"
+    ).exists()
