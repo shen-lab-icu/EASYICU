@@ -642,12 +642,15 @@ def test_signed_representation_excludes_owner_unavailable_zero(tmp_path: Path) -
         )
     trajectory_path = tmp_path / "trajectory.parquet"
     pd.DataFrame(rows).to_parquet(trajectory_path, index=False)
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": range(1, 10)}).to_parquet(cohort_path, index=False)
     out_dir = tmp_path / "representation"
 
     summary = run_trajectory_scientific_representation(
         authority=authority,
         runtime_projection_sha256="2" * 64,
         trajectory_path=trajectory_path,
+        cohort_path=cohort_path,
         out_dir=out_dir,
     )
 

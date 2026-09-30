@@ -369,6 +369,14 @@ def _assert_the_host_drew_the_cohort_flow(manifest: dict, run_dir: Path) -> None
     table = pd.read_csv(source)
     assert len(owner) == 4
     assert dict(zip(table.metric, table.n)) == dict(zip(owner.metric, owner.n))
+    # The flow starts from the whole study cohort: stays with no value in the
+    # window are counted and excluded, as the class description counts them.
+    assert dict(zip(owner.metric, owner.n)) == {
+        "input_cohort": N_STAYS,
+        "meets_min_observed_windows": N_STAYS - N_NOT_CLUSTERED,
+        "excluded_insufficient_windows": N_NOT_CLUSTERED,
+        "included_in_clustering": N_STAYS - N_NOT_CLUSTERED,
+    }
 
 
 def _assert_rule_outcomes_and_designs_reach_the_report(
