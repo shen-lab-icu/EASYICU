@@ -1764,8 +1764,18 @@ def _compile_inputs(
         materialized_input_column_authority(context).reserved_navigation_coordinates
     )
     raw_names = list(step.raw_inputs)
-    if step.scientific_action_id == "phenotyping.outcome_by_cluster":
-        raw_names.append(_identity_column(context=context, step=step, step_index=step_index))
+    # An outcome-by-cluster comparison joins class labels to the cohort on its
+    # row identity, and its typed spec names that identity among the inputs.
+    # In a materialized run the identity is a reserved navigation coordinate;
+    # it stays an input of this step (read from the typed cohort product), not
+    # an analysis field of any other.
+    comparison_identity = (
+        _identity_column(context=context, step=step, step_index=step_index)
+        if step.scientific_action_id == "phenotyping.outcome_by_cluster"
+        else None
+    )
+    if comparison_identity is not None:
+        raw_names.append(comparison_identity)
     if step.module_id == "absolute_risk_context":
         raw_names.extend(
             value for value in (step.primary_exposure, step.outcome) if value
@@ -1830,7 +1840,11 @@ def _compile_inputs(
             ):
                 raw_names.extend(upstream.raw_inputs)
     raw = _require_variables(
-        [name for name in raw_names if name not in reserved_coordinates],
+        [
+            name
+            for name in raw_names
+            if name not in reserved_coordinates or name == comparison_identity
+        ],
         variables=variables,
         step=step,
         step_index=step_index,

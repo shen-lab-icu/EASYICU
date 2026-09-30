@@ -697,7 +697,16 @@ def _raw_typed_plan_reference_issues(
 
     for step_index, step in enumerate(getattr(plan, "steps", ()) or ()):
         step_id = str(getattr(step, "step_id", "") or step_index)
+        # An outcome-by-cluster comparison names its row identity among its
+        # inputs and reads it from the typed cohort product: the one reserved
+        # navigation coordinate a step may declare, and only as that identity.
+        comparison_spec = getattr(step, "phenotype_comparison_spec", None)
+        comparison_identity = str(
+            getattr(comparison_spec, "identity_column", "") or ""
+        )
         for input_index, value in enumerate(getattr(step, "inputs", ()) or ()):
+            if comparison_identity and value == comparison_identity and value in reserved:
+                continue
             require_column(f"steps[{step_id}].inputs[{input_index}]", value)
         for requirement_index, requirement in enumerate(
             getattr(step, "model_requirements", ()) or ()
