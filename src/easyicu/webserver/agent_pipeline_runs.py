@@ -488,6 +488,24 @@ def _pipeline_failure_code(
     return "research_pipeline_execution_failed"
 
 
+def _progressive_compile_failure_message(exc: BaseException) -> str:
+    """Say what stopped planning; the typed reason decides which sentence is true."""
+
+    if (
+        _safe_pipeline_typed_failure(exc).get("reason_code")
+        == "progressive_family_result_contract_unwritable"
+    ):
+        return (
+            "No executable EasyICU method can yet produce the primary result this "
+            "causal or survival question needs, so planning stopped before a plan "
+            "was drafted. No analysis was run."
+        )
+    return (
+        "The deterministic host compiler rejected the bounded Planner repairs. A "
+        "local replay artifact was preserved; no analysis was run."
+    )
+
+
 def _pipeline_exception_chain(exc: BaseException) -> List[BaseException]:
     """Return one bounded exception chain without following cycles."""
 
@@ -862,8 +880,14 @@ def _write_pipeline_failure_projection(
     code: str,
     failure_type: str,
     diagnostic: Optional[str],
+    detail_reason_code: Optional[str] = None,
 ) -> bool:
-    """Write a fail-closed terminal receipt that Project Monitor can index."""
+    """Write a fail-closed terminal receipt that Project Monitor can index.
+
+    ``detail_reason_code`` is the owner's typed reason beneath ``code``; the
+    gate carries it as its detail so the run record can name what stopped the
+    run instead of the generic wording for ``code``.
+    """
 
     run_id = wrapper_dir.name
     provider_public = {
@@ -890,6 +914,7 @@ def _write_pipeline_failure_projection(
                 "reason_code": code,
             }
         ],
+        **({"detail": {"reason_code": detail_reason_code}} if detail_reason_code else {}),
     }
     payloads: Dict[str, Dict[str, Any]] = {
         "run_context.json": {
@@ -975,6 +1000,8 @@ def _record_pipeline_failure(
         execution_retry_id=execution_retry_id,
     )
     if execution_retry_id is None:
+        # The allowlisted owner projection has already validated the code.
+        reason_code = _safe_pipeline_typed_failure(exc).get("reason_code")
         _write_pipeline_failure_projection(
             wrapper_dir=wrapper_dir,
             study=study,
@@ -982,6 +1009,7 @@ def _record_pipeline_failure(
             code=code,
             failure_type=_pipeline_failure_category(exc),
             diagnostic=diagnostic,
+            detail_reason_code=reason_code if isinstance(reason_code, str) else None,
         )
     return diagnostic
 
@@ -6138,10 +6166,7 @@ def make_research_pipeline_run_runner(
                     "preserved; no analysis was run."
                 )
             elif code == "research_pipeline_progressive_compile_failed":
-                message = (
-                    "The deterministic host compiler rejected the bounded Planner "
-                    "repairs. A local replay artifact was preserved; no analysis was run."
-                )
+                message = _progressive_compile_failure_message(exc)
             elif code == "research_pipeline_execution_runtime_unavailable":
                 # A host-environment failure, not a scientific one. Saying so
                 # is the whole point: the generic wording sent the researcher

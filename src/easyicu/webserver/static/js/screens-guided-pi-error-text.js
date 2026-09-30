@@ -153,6 +153,7 @@
           : tr('The outcome variable is not in this data.', '结局变量不在这份数据里。'),
         concept_selection_failed: tr('The model did not return a usable variable selection; retry or narrow the question.', '模型没有给出可用的变量选择；请重试或收窄问题。'),
         no_available_concepts: tr('None of the selected variables is available in this data.', '所选变量在这份数据里都不可用。'),
+        progressive_family_result_contract_unwritable: tr('No executable EasyICU method can yet produce the primary result this causal or survival question needs, so planning stopped before a plan was drafted. Ask an association question, or choose a design EasyICU can execute.', 'EasyICU 目前没有能给出这个因果或生存问题所需主结果的可执行方法，规划在起草计划之前停止。可以改为关联性问题，或选用 EasyICU 能执行的设计。'),
       };
       return detailCopy[code] || '';
     }
@@ -208,6 +209,9 @@
           'EasyICU 无法自动为已审阅的计划完成执行配置。',
         ),
       };
+      // A typed compile reason explains the stop itself; the generic compile
+      // sentence would name a cause that did not happen.
+      if (value === 'research_pipeline_progressive_compile_failed' && suffix) return suffix;
       if (known[value]) return withDetail(known[value]);
       // An unlisted code stays visible for diagnosis, after a plain sentence.
       return withDetail(tr(`The run stopped before finishing (code: ${value}).`, `运行在完成前停止（代码：${value}）。`));
