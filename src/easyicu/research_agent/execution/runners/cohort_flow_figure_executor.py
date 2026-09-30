@@ -53,6 +53,30 @@ _MODEL_FLOW_REQUIRED_COLUMNS = (
     "excluded_from_previous",
     "population_rule",
 )
+#: The trajectory representation owner's window-eligibility flow is ``metric,n``:
+#: the input cohort, the rows meeting the minimum of observed windows and the
+#: rows clustered are its stages, and one row counts the rows excluded for too
+#: few windows (trajectory/contract.py, ``cohort_flow.csv``).
+_TRAJECTORY_FLOW_COLUMNS = ("metric", "n")
+_TRAJECTORY_FLOW_STAGES = (
+    "input_cohort",
+    "meets_min_observed_windows",
+    "included_in_clustering",
+)
+_TRAJECTORY_FLOW_EXCLUSION = "excluded_insufficient_windows"
+
+
+def _is_trajectory_flow_contract(contract: Mapping[str, Any]) -> bool:
+    """Does the typed contract name exactly the trajectory flow's rows?"""
+
+    categories = contract.get("categorical_values")
+    metrics = categories.get("metric") if isinstance(categories, Mapping) else None
+    return bool(
+        list(contract.get("columns") or []) == list(_TRAJECTORY_FLOW_COLUMNS)
+        and isinstance(metrics, list)
+        and sorted(metrics)
+        == sorted((*_TRAJECTORY_FLOW_STAGES, _TRAJECTORY_FLOW_EXCLUSION))
+    )
 
 
 def _population_flow_input(step: AnalysisStep) -> str | None:
@@ -79,6 +103,7 @@ def _binding_is_cohort_flow(binding: Any, *, input_key: str) -> bool:
         and (
             set(_REQUIRED_COLUMNS).issubset(set(columns))
             or set(_MODEL_FLOW_REQUIRED_COLUMNS).issubset(set(columns))
+            or _is_trajectory_flow_contract(contract)
         )
     )
     return bool(
@@ -204,6 +229,40 @@ def _load_binding(
     return path, binding
 
 
+def _trajectory_flow_stages(frame: pd.DataFrame) -> pd.DataFrame:
+    """The trajectory eligibility flow as a three-stage ledger.
+
+    The exclusion row is the one exclusion between the first two stages.  The
+    trajectory contract's identities must hold: input minus excluded is the
+    eligible count, and every eligible row is clustered.  Stage rows keep their
+    CSV row coordinates; the exclusion row stays out of the ledger.
+    """
+
+    metrics = frame["metric"].fillna("").astype(str).str.strip()
+    counts = pd.to_numeric(frame["n"], errors="coerce")
+    if (
+        metrics.duplicated().any()
+        or set(metrics) != {*_TRAJECTORY_FLOW_STAGES, _TRAJECTORY_FLOW_EXCLUSION}
+        or counts.isna().any()
+        or (counts < 0).any()
+        or not (counts % 1 == 0).all()
+    ):
+        raise ValueError("trajectory eligibility flow contains invalid rows")
+    count = dict(zip(metrics, counts.astype("int64")))
+    source, eligible, clustered = (int(count[name]) for name in _TRAJECTORY_FLOW_STAGES)
+    excluded = int(count[_TRAJECTORY_FLOW_EXCLUSION])
+    if source - excluded != eligible or clustered != eligible:
+        raise ValueError("trajectory eligibility flow denominator arithmetic failed")
+    rows = [metrics.index[metrics == name][0] for name in _TRAJECTORY_FLOW_STAGES]
+    return frame.loc[rows].assign(
+        step_order=range(len(rows)),
+        predicate_kind=list(_TRAJECTORY_FLOW_STAGES),
+        n_before=[source, source, eligible],
+        n_excluded=[0, excluded, 0],
+        n_remaining=[source, eligible, clustered],
+    )
+
+
 def _verified_flow(path: Path, binding: Mapping[str, Any]) -> pd.DataFrame:
     frame = pd.read_csv(path)
     contract = binding["product_contract"]
@@ -216,6 +275,8 @@ def _verified_flow(path: Path, binding: Mapping[str, Any]) -> pd.DataFrame:
         or len(frame) != expected_rows
     ):
         raise ValueError("cohort-flow bytes disagree with their contract")
+    if list(frame.columns) == list(_TRAJECTORY_FLOW_COLUMNS):
+        frame = _trajectory_flow_stages(frame)
     if set(_MODEL_FLOW_REQUIRED_COLUMNS).issubset(frame.columns):
         counts = pd.to_numeric(frame["n"], errors="coerce")
         excluded = pd.to_numeric(frame["excluded_from_previous"], errors="coerce")
@@ -831,6 +892,18 @@ def run_cohort_flow_figure(
     source.insert(0, "source_step_id", binding.get("produced_by_step"))
     source.insert(0, "source_table", path.name)
     source.insert(0, "source_row_index", frame.index.tolist())
+    # A bound row drawn as no stage is an exclusion count (the trajectory
+    # flow's); export it too, so the drawn exclusion verifies against its row.
+    exclusions = pd.read_csv(path).drop(index=frame.index)
+    if len(exclusions):
+        excluded_rows = exclusions.loc[:, list(binding["product_contract"]["columns"])]
+        excluded_rows = excluded_rows.assign(row_role="exclusion")
+        excluded_rows.insert(0, "accounting_completeness", completeness)
+        excluded_rows.insert(0, "display_label", "Excluded")
+        excluded_rows.insert(0, "source_step_id", binding.get("produced_by_step"))
+        excluded_rows.insert(0, "source_table", path.name)
+        excluded_rows.insert(0, "source_row_index", exclusions.index.tolist())
+        source = pd.concat([source, excluded_rows], ignore_index=True)
     source_path = out_dir / f"{figure_product}_source_data.csv"
     source.to_csv(source_path, index=False)
 
@@ -946,7 +1019,7 @@ def run_cohort_flow_figure(
         "source_step_id": binding.get("produced_by_step"),
         "source_evidence_id": binding.get("evidence_id"),
         "source_sha256": binding.get("sha256"),
-        "source_rows_consumed": len(frame),
+        "source_rows_consumed": len(frame) + len(exclusions),
         "cohort_accounting_completeness": completeness,
         "paper_grade_cohort_accounting": complete,
         "upstream_attrition_available": complete,
@@ -959,7 +1032,7 @@ def run_cohort_flow_figure(
                 "evidence_id": binding.get("evidence_id"),
                 "sha256": binding.get("sha256"),
                 "loaded": True,
-                "row_count": len(frame),
+                "row_count": len(frame) + len(exclusions),
             }
         ],
         "source_data_files": [source_path.name],

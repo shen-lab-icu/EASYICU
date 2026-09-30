@@ -389,7 +389,7 @@ def _render_characterization_figure(
             label=f"Mean ARI = {mean_ari:.3f}",
         )
         ax_stability.legend(frameon=False, fontsize=5.8, loc="upper left")
-        ax_stability.set_xlabel("Adjusted Rand index per prespecified resample")
+        ax_stability.set_xlabel("Adjusted Rand index\nper prespecified resample")
         ax_stability.set_ylabel("Resamples")
     else:
         _no_solution_axis(
@@ -398,8 +398,10 @@ def _render_characterization_figure(
             reason_code=reason_code or "no completed resample",
         )
     ax_stability.set_title("Resampling stability", loc="left", pad=5)
+    # Letters sit left of the left-aligned titles, as in the selection figure;
+    # at the title's own position they overlapped it.
     for index, axis in enumerate((ax_profile, ax_structure, ax_stability)):
-        add_panel_label(axis, "abc"[index])
+        add_panel_label(axis, "abc"[index], x=-0.16, y=1.05, fontsize=8.0)
     fig.tight_layout()
 
     solution_claim = (

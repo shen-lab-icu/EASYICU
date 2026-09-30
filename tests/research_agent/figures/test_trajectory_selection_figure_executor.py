@@ -484,6 +484,32 @@ def test_characterization_states_the_sealed_decision_when_no_solution_is_reporta
     )
 
 
+@pytest.mark.parametrize("reportable", [True, False], ids=["solution", "no_solution"])
+def test_both_signed_figures_pass_the_host_text_layout_audit(
+    tmp_path: Path, reportable: bool
+) -> None:
+    """The publication export audits every figure's text and blocks on overlap.
+
+    The characterization's panel letters sat on their left-aligned titles, and
+    its stability axis label ran past the canvas, with or without a solution.
+    """
+    from easyicu.research_agent.gates.visual_qa import audit_svg_text_layout
+
+    _run_characterization(
+        tmp_path,
+        empty=not reportable,
+        selection=_selected() if reportable else _selection(),
+    )
+    svgs = sorted((tmp_path / "figure").glob("*.svg"))
+    assert [svg.name for svg in svgs] == [
+        "trajectory_phenotype_characterization.svg",
+        "trajectory_selection_diagnostics.svg",
+    ]
+    for svg in svgs:
+        findings = audit_svg_text_layout(svg, validator="publication_figure_export")
+        assert findings == [], (svg.name, [finding.message for finding in findings])
+
+
 def test_the_characterization_draws_only_its_columns_of_the_owner_table(
     tmp_path: Path,
 ) -> None:
