@@ -233,7 +233,7 @@ def _design_selection(
             "Each analysis row is one ICU stay; rows are not assumed to be distinct patients.",
         ],
         literature_citation_keys=[*method_keys, *comparator_keys][:8],
-        literature_design_decisions=[],
+        literature_design_decisions=list(spec.literature_design_decisions),
         novelty_positioning=(
             "No novelty is claimed before completion; the candidate phenotypes are positioned "
             "against each screened comparator on population, features, time zero, and estimand."

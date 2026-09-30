@@ -169,7 +169,7 @@ def _design_selection(
             "The exposure classification uses only the sealed observation window.",
         ],
         literature_citation_keys=[*method_keys, *comparator_keys][:8],
-        literature_design_decisions=[],
+        literature_design_decisions=list(spec.literature_design_decisions),
         novelty_positioning=(
             "No novelty is claimed before completion; the description is positioned against each "
             "screened comparator on population, exposure definition, time zero, and estimand."

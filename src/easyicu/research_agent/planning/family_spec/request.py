@@ -35,6 +35,10 @@ from ..dependence_authority import (
     context_dependence_authority,
     descriptive_counts_only_required,
 )
+from ..literature_design_authority import (
+    LITERATURE_DESIGN_DIMENSIONS,
+    LiteratureDesignEvidenceCard,
+)
 from ..ordinal_multi_outcome import resolve_ordinal_multi_outcome_contract
 from ..scientific_review import post_baseline_exposure
 from .contract import (
@@ -635,6 +639,7 @@ def build_family_spec_request(
     comparator_titles: Mapping[str, str] | None = None,
     required_primary_cohort_selection_mode: str | None = None,
     planning_contract_context: str = "",
+    literature_design_cards: Sequence[LiteratureDesignEvidenceCard] = (),
 ) -> FamilySpecRequest:
     """Seal the host authority for one family attempt, before any Planner call."""
 
@@ -651,8 +656,50 @@ def build_family_spec_request(
     )
     request = _bind_accepted_feature_groups(context, request)
     request = _bind_accepted_baseline_rows(context, request)
+    request = _bind_literature_design_cards(request, literature_design_cards)
     _refuse_eligibility_after_time_zero(request)
     return request
+
+
+def _bind_literature_design_cards(
+    request: FamilySpecRequest, cards: Sequence[LiteratureDesignEvidenceCard]
+) -> FamilySpecRequest:
+    """Seal the reviewed design cards the selected design must resolve.
+
+    Final plan acceptance requires, whenever reviewed cards are supplied, one
+    decision per design dimension citing an included comparison source whose
+    card states that dimension.  The spec is the only Planner output on this
+    path, so the cards' facts travel in the request.  Cards that cannot
+    support every dimension fail here, before a Provider call.
+    """
+
+    if not cards:
+        return request
+    authorized = set(request.comparison_literature_keys) & set(
+        request.allowed_literature_citation_keys
+    )
+    bound = [card for card in cards if card.citation_key in authorized]
+    if len({card.citation_key for card in bound}) != len(bound):
+        raise FamilySpecError(
+            "family_spec_literature_design_card_duplicate",
+            "reviewed design cards must have unique citation keys",
+            path="literature_design_cards",
+        )
+    covered = {item.dimension for card in bound for item in card.evidence}
+    missing = [item for item in LITERATURE_DESIGN_DIMENSIONS if item not in covered]
+    if missing:
+        raise FamilySpecError(
+            "family_spec_literature_design_dimensions_unsupported",
+            "the included comparison sources' reviewed cards state no fact for: "
+            + ", ".join(missing),
+            path="literature_design_cards",
+        )
+    return FamilySpecRequest.model_validate(
+        {
+            **request.model_dump(mode="json"),
+            "literature_design_cards": [card.model_dump(mode="json") for card in bound],
+        }
+    )
 
 
 def _bind_accepted_feature_groups(

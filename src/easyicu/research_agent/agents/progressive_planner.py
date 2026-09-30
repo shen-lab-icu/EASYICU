@@ -4157,6 +4157,7 @@ class ProgressivePlannerAgent:
             allowed_citations=allowed_citations,
             direct_keys=direct_keys,
             comparison_keys=comparison_keys,
+            design_cards=design_cards,
             allowed_know_how_decisions=allowed_know_how_decisions,
             know_how_context=know_how_context,
             planning_contract_context=planning_contract_context,
