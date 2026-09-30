@@ -203,7 +203,7 @@ def _design_selection(
             f"{unit_text[0].upper()}{unit_text[1:]}.",
         ],
         literature_citation_keys=[*method_keys, *comparator_keys][:8],
-        literature_design_decisions=[],
+        literature_design_decisions=list(spec.literature_design_decisions),
         novelty_positioning=(
             "No novelty is claimed before completion; the model is positioned against each screened "
             "comparator on population, predictors, time zero, and outcome."

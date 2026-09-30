@@ -19,10 +19,11 @@ Step layout (before the host binds the authority):
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, Sequence
 
 from ...canonical_json import canonical_sha256
 from ..design_selection import ResearchDesignCandidate, ResearchDesignSelection
+from ..literature_design_authority import CandidateLiteratureDesignDecision
 from ..progressive_contract import (
     ProgressiveDisplayLabel,
     ProgressiveFoundationMaterialization,
@@ -111,6 +112,7 @@ def _design_selection(
     request: FamilySpecRequest,
     *,
     method_keys: list[str],
+    literature_design_decisions: Sequence[CandidateLiteratureDesignDecision],
 ) -> ResearchDesignSelection:
     sealed = request.sealed_feasibility
     assert sealed is not None
@@ -142,7 +144,7 @@ def _design_selection(
             "for the audited window.",
         ],
         literature_citation_keys=[*method_keys, *comparator_keys][:8],
-        literature_design_decisions=[],
+        literature_design_decisions=list(literature_design_decisions),
         novelty_positioning=(
             "No novelty is claimed; the result states a source-specific identifiability "
             "boundary against the screened comparators."
@@ -277,7 +279,9 @@ def build_source_feasibility_skeleton(
         )
     )[:12]
     design = _design_selection(
-        request, method_keys=[k for k in method_keys if k in set(decision_keys)][:6]
+        request,
+        method_keys=[k for k in method_keys if k in set(decision_keys)][:6],
+        literature_design_decisions=spec.literature_design_decisions,
     )
     design_variables = design.selected.required_variables
     table_product = next(value for value in sealed.plan_outputs if value.startswith("table:"))

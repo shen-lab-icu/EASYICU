@@ -5,7 +5,9 @@ Planner may fill, sealed and hashed before any provider call.  ``FamilyPlanSpec`
 is the Planner's whole output for one attempt.  ``validate_family_plan_spec``
 is the fail-closed boundary between the two; it rejects any name, coding,
 level index, label, or citation outside the sealed request, and a rationale
-never widens the host's timing authority.
+never widens the host's timing authority.  When reviewed comparator design
+cards are sealed into the request, the spec resolves every design dimension
+from them and cites only a card that states that dimension.
 """
 
 from __future__ import annotations
@@ -21,6 +23,11 @@ from ...contracts.primary_cohort import (
 )
 from ..adjustment_authority import HostTemporalRole
 from ..design_selection import ResearchDesignCandidate
+from ..literature_design_authority import (
+    LITERATURE_DESIGN_DIMENSIONS,
+    CandidateLiteratureDesignDecision,
+    LiteratureDesignEvidenceCard,
+)
 from ..progressive_contract import ModelTermCoding
 
 FAMILY_SPEC_SCHEMA_VERSION = "easyicu.family_plan_spec/1"
@@ -372,6 +379,12 @@ class FamilySpecRequest(BaseModel):
     direct_comparator_literature_keys: list[str] = Field(default_factory=list)
     comparison_literature_keys: list[str] = Field(default_factory=list)
     comparator_titles: dict[str, str] = Field(default_factory=dict)
+    #: Reviewed design cards of the included comparison sources.  Omitted
+    #: from the digest when absent, so requests sealed before it existed keep
+    #: their identity.
+    literature_design_cards: list[LiteratureDesignEvidenceCard] = Field(
+        default_factory=list, exclude_if=lambda value: not value
+    )
     variable_roster: list[str] = Field(min_length=1)
     #: Omitted from the digest when absent, so requests sealed before it
     #: existed keep their identity.
@@ -709,6 +722,13 @@ class FamilyPlanSpec(BaseModel):
     comparator_applications: list[SpecComparatorApplication] = Field(
         default_factory=list, max_length=8
     )
+    #: One decision per design dimension when the request carries reviewed
+    #: design cards; omitted from the spec digest when absent.
+    literature_design_decisions: list[CandidateLiteratureDesignDecision] = Field(
+        default_factory=list,
+        max_length=len(LITERATURE_DESIGN_DIMENSIONS),
+        exclude_if=lambda value: not value,
+    )
     roster_decision_note: str = Field(min_length=8, max_length=1200)
 
     @field_validator("reader_display_labels", mode="before")
@@ -1012,6 +1032,60 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
             + ", ".join(missing),
             path="comparator_applications",
         )
+    _validate_literature_design_decisions(spec, request)
+
+
+def literature_design_card_keys_by_dimension(
+    request: FamilySpecRequest,
+) -> dict[str, list[str]]:
+    """The sealed card keys that state each design dimension, in card order."""
+
+    return {
+        dimension: [
+            card.citation_key
+            for card in request.literature_design_cards
+            if any(item.dimension == dimension for item in card.evidence)
+        ]
+        for dimension in LITERATURE_DESIGN_DIMENSIONS
+    }
+
+
+def _validate_literature_design_decisions(
+    spec: FamilyPlanSpec, request: FamilySpecRequest
+) -> None:
+    decisions = spec.literature_design_decisions
+    path = "literature_design_decisions"
+    if not request.literature_design_cards:
+        if decisions:
+            raise FamilySpecError(
+                "family_spec_literature_decision_unrequested",
+                "no reviewed design card is sealed into this request",
+                path=path,
+            )
+        return
+    dimensions = [item.dimension for item in decisions]
+    missing = [item for item in LITERATURE_DESIGN_DIMENSIONS if item not in dimensions]
+    if missing or len(dimensions) != len(set(dimensions)):
+        raise FamilySpecError(
+            "family_spec_literature_decision_missing",
+            "give exactly one decision for each design dimension; missing: "
+            + ", ".join(missing),
+            path=path,
+        )
+    stated = literature_design_card_keys_by_dimension(request)
+    unsupported = sorted(
+        (item.dimension, key)
+        for item in decisions
+        for key in item.citation_keys
+        if key not in stated[item.dimension]
+    )
+    if unsupported:
+        raise FamilySpecError(
+            "family_spec_literature_decision_source_unsupported",
+            "each decision cites only a sealed card that states its dimension: "
+            f"{unsupported!r}",
+            path=path,
+        )
 
 
 def spec_from_mapping(payload: Mapping[str, Any]) -> FamilyPlanSpec:
@@ -1045,6 +1119,7 @@ __all__ = [
     "SpecReaderLabel",
     "StudyPopulationOccurrence",
     "accepted_baseline_additions",
+    "literature_design_card_keys_by_dimension",
     "spec_from_mapping",
     "table_one_group_column",
     "validate_family_plan_spec",

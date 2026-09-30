@@ -456,7 +456,7 @@ def _design_selection(
             "Estimates are observational associations under the analysis-only claim ceiling.",
         ],
         literature_citation_keys=[*method_keys, *comparator_keys][:8],
-        literature_design_decisions=[],
+        literature_design_decisions=list(spec.literature_design_decisions),
         novelty_positioning=(
             "No novelty is claimed before completion; the study is compared with each screened "
             "direct comparator on population, exposure, time zero, estimand, analysis path, and "

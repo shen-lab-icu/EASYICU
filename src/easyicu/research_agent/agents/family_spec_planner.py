@@ -2,7 +2,8 @@
 
 The Planner sees one compact request (the question, the sealed candidate
 roster with the host's timing verdicts, the labels it must write, the screened
-comparators it must apply) and returns one :class:`FamilyPlanSpec`.  The
+comparators it must apply, and any reviewed comparator design cards it must
+resolve) and returns one :class:`FamilyPlanSpec`.  The
 strict JSON schema is run-bound: covariate names, label keys, and citation keys
 are closed enums taken from the sealed request, so a provider that honors
 strict schemas cannot spell a coordinate the host did not offer.  A route
@@ -40,9 +41,15 @@ from ..planning.family_spec.contract import (
     LANDMARK_FAMILY_IDS,
     FamilyPlanSpec,
     FamilySpecRequest,
+    literature_design_card_keys_by_dimension,
     validate_family_plan_spec,
 )
 from ..planning.literature_bindings import missing_required_method_layers
+from ..planning.literature_design_authority import (
+    LITERATURE_DESIGN_DIMENSIONS,
+    LiteratureDesignEvidenceCard,
+    render_literature_design_card_facts,
+)
 from ..planning.progressive_artifacts import ProgressivePlannerCheckpointEmitter
 from ..planning.progressive_compiler import (
     required_binary_display_label_scopes,
@@ -258,6 +265,22 @@ def family_spec_user_prompt(
             sort_keys=True,
         )
     )
+    if request.literature_design_cards:
+        sections.append(
+            "\n".join(
+                [
+                    *render_literature_design_card_facts(request.literature_design_cards),
+                    "Design decisions: one literature_design_decisions entry for each of "
+                    + json.dumps(list(LITERATURE_DESIGN_DIMENSIONS))
+                    + ". State whether this study adopts, adapts, diverges from, or finds "
+                    "not applicable the reviewed choice, cite only cards that state that "
+                    "dimension "
+                    + json.dumps(literature_design_card_keys_by_dimension(request))
+                    + ", and give a rationale specific to this question and the sealed "
+                    "design without copying card text.",
+                ]
+            )
+        )
     if know_how_context:
         sections.append("Know-how context:\n" + know_how_context)
     if planning_contract_context:
@@ -320,6 +343,7 @@ def family_spec_structured_output_request(
     citation_keys = list(request.direct_comparator_literature_keys) or [
         "__no_direct_comparator__"
     ]
+    design_cards = bool(request.literature_design_cards)
     schema: dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
@@ -333,6 +357,7 @@ def family_spec_structured_output_request(
             *(["feature_variables"] if prediction else []),
             "reader_display_labels",
             "comparator_applications",
+            *(["literature_design_decisions"] if design_cards else []),
             "roster_decision_note",
         ],
         "properties": {
@@ -401,6 +426,38 @@ def family_spec_structured_output_request(
                     },
                 },
             },
+            **(
+                {
+                    "literature_design_decisions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": [
+                                "dimension",
+                                "citation_keys",
+                                "disposition",
+                                "rationale",
+                            ],
+                            "properties": {
+                                "dimension": _enum(LITERATURE_DESIGN_DIMENSIONS),
+                                "citation_keys": {
+                                    "type": "array",
+                                    "items": _enum(
+                                        [card.citation_key for card in request.literature_design_cards]
+                                    ),
+                                },
+                                "disposition": _enum(
+                                    ["adopt", "adapt", "diverge", "not_applicable"]
+                                ),
+                                "rationale": {"type": "string"},
+                            },
+                        },
+                    },
+                }
+                if design_cards
+                else {}
+            ),
             "roster_decision_note": {"type": "string"},
         },
     }
@@ -514,6 +571,16 @@ def family_spec_response_shape(request: FamilySpecRequest) -> str:
         "objects, exactly one for each of "
         + json.dumps(list(request.direct_comparator_literature_keys))
     )
+    if request.literature_design_cards:
+        lines.append(
+            '- "literature_design_decisions": array of {"dimension": ..., "citation_keys": '
+            '[...], "disposition": ..., "rationale": ...} objects, exactly one for each of '
+            + json.dumps(list(LITERATURE_DESIGN_DIMENSIONS))
+            + '; "disposition" is one of ["adopt", "adapt", "diverge", "not_applicable"], '
+            '"citation_keys" names only cards that state that dimension '
+            + json.dumps(literature_design_card_keys_by_dimension(request))
+            + ', and "rationale" is 12-800 characters'
+        )
     lines.append('- "roster_decision_note": one or more sentences (8-1200 characters)')
     return "\n".join(lines)
 
@@ -532,6 +599,7 @@ def run_family_spec_attempt(
     allowed_citations: Sequence[str],
     direct_keys: Sequence[str],
     comparison_keys: Sequence[str],
+    design_cards: Sequence[LiteratureDesignEvidenceCard] = (),
     allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None,
     know_how_context: str,
     planning_contract_context: str,
@@ -570,6 +638,7 @@ def run_family_spec_attempt(
         comparison_literature_keys=comparison_keys,
         required_primary_cohort_selection_mode=required_primary_cohort_selection_mode,
         planning_contract_context=planning_contract_context,
+        literature_design_cards=design_cards,
     )
     descriptions = {
         name: " ".join(

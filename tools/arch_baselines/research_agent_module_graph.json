@@ -749,6 +749,10 @@
     ],
     [
       "easyicu.research_agent.agents.family_spec_planner",
+      "easyicu.research_agent.planning.literature_design_authority"
+    ],
+    [
+      "easyicu.research_agent.agents.family_spec_planner",
       "easyicu.research_agent.planning.progressive_artifacts"
     ],
     [
@@ -9429,6 +9433,10 @@
     ],
     [
       "easyicu.research_agent.planning.family_spec.contract",
+      "easyicu.research_agent.planning.literature_design_authority"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.contract",
       "easyicu.research_agent.planning.progressive_contract"
     ],
     [
@@ -9474,6 +9482,10 @@
     [
       "easyicu.research_agent.planning.family_spec.feasibility_template",
       "easyicu.research_agent.planning.family_spec.plan_language"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.feasibility_template",
+      "easyicu.research_agent.planning.literature_design_authority"
     ],
     [
       "easyicu.research_agent.planning.family_spec.feasibility_template",
@@ -9594,6 +9606,10 @@
     [
       "easyicu.research_agent.planning.family_spec.request",
       "easyicu.research_agent.planning.family_spec.contract"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.request",
+      "easyicu.research_agent.planning.literature_design_authority"
     ],
     [
       "easyicu.research_agent.planning.family_spec.request",
@@ -13144,7 +13160,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3278,
+    "edge_count": 3282,
     "largest_scc_size": 0,
     "module_count": 766,
     "package_count": 36,

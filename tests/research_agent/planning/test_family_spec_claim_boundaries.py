@@ -39,7 +39,7 @@ def _request(exposure: str) -> SimpleNamespace:
 def test_the_survival_claim_boundary_names_the_requested_exposure(
     exposure: str, label: str
 ) -> None:
-    spec = SimpleNamespace(labels={exposure: label})
+    spec = SimpleNamespace(labels={exposure: label}, literature_design_decisions=[])
 
     selection = survival_template._design_selection(
         _request(exposure), spec, method_keys=["strobe_2007"]
