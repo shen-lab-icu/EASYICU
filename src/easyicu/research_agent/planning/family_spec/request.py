@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping, Optional, Sequence
 
+from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
+
 from ...authority.declared_levels import closed_planning_levels_for
 from ...concept_availability import variable_source_unavailability
 from ...contracts.model_terms import level_spelling
@@ -192,6 +194,75 @@ def sealed_survival_suite_coordinates(
         )
     except (TypeError, ValueError):
         return None
+
+#: The one owner a proposed survival design names; the host seals it only after
+#: the reviewed design is compiled into the study configuration.
+_PROPOSED_SURVIVAL_OWNER = "signed_landmark_survival_suite"
+#: Producer-owned first-observation companion of a materialized concept.
+_ONSET_SUFFIX = "_first_time"
+#: Products every signed suite declares.  The signing projection adds an
+#: interval-specific Cox table when the endpoint has cutpoints inside the
+#: follow-up; a proposal is replaced by the signed plan before it runs.
+_PROPOSED_SURVIVAL_OUTPUTS = (
+    "table:landmark_table_one",
+    "table:landmark_risk_set_flow",
+    "table:landmark_km_curve",
+    "table:landmark_cox_summary",
+    "table:landmark_ph_diagnostics",
+    "table:landmark_rmst_summary",
+    "log:landmark_survival_receipt",
+)
+
+
+def proposed_survival_suite_coordinates(
+    context: ResearchContext,
+    *,
+    planning_contract_context: str = "",
+) -> SealedSuiteCoordinates | None:
+    """The landmark survival suite the host could seal for this study, else ``None``.
+
+    For a study with no sealed suite yet.  Every coordinate comes from a host
+    vocabulary, never from prose: a closed two-level exposure; one
+    fixed-horizon mortality endpoint whose paired follow-up concept is in the
+    context; the landmark at the end of the host-bound ICU-admission feature
+    window, strictly inside the horizon; and the exposure's producer-owned
+    onset companion, which is materialized only once the design is declared.
+    The roster is left empty for the Planner.  Nothing here is sealed.
+    """
+
+    if sealed_survival_suite_coordinates(planning_contract_context) is not None:
+        return None
+    if len(context.cohort.id_columns) != 1:
+        return None
+    exposure = str(context.primary_exposure or "").strip()
+    outcome = str(context.target_outcome or "").strip()
+    variable = context.variable(exposure) if exposure else None
+    if variable is None or not outcome or context.variable(outcome) is None:
+        return None
+    if len(_levels(context, exposure)) != 2 or _binary_outcome_levels(context, outcome) is None:
+        return None
+    endpoint = fixed_horizon_mortality_endpoint(outcome)
+    if endpoint is None or context.variable(endpoint.followup_concept) is None:
+        return None
+    landmark = host_outer_feature_window_end_hours(context)
+    if landmark is None or landmark <= 0 or landmark / 24.0 >= endpoint.horizon_days:
+        return None
+    source = str(getattr(variable, "source_concept", "") or "").strip() or exposure
+    try:
+        return SealedSuiteCoordinates(
+            primary_owner=_PROPOSED_SURVIVAL_OWNER,
+            exposure_status_column=exposure,
+            exposure_onset_column=f"{source}{_ONSET_SUFFIX}",
+            event_column=endpoint.event_concept,
+            followup_time_column=endpoint.followup_concept,
+            landmark_hours=float(landmark),
+            endpoint_horizon_days=float(endpoint.horizon_days),
+            adjustment_columns=[],
+            plan_outputs=list(_PROPOSED_SURVIVAL_OUTPUTS),
+        )
+    except ValueError:
+        return None
+
 
 _CONTINUOUS_EXPOSURE_ROLES = frozenset({"lab", "vital", "composite_score", "other"})
 _NUMERIC_DTYPES = ("float", "int", "double", "decimal")
@@ -425,13 +496,18 @@ def family_template_id_for_context(
         # sealed authority, not the context's exposure, is the design proof.
         return FIXED_WINDOW_TRAJECTORY_FAMILY_ID
     if headline == "survival":
-        # Survival is templated only when the host has already sealed the
-        # landmark survival suite for this run: the Planner names that owner
-        # and labels its columns; it never composes a Cox contract itself.
+        # Survival is templated on the landmark survival suite: the sealed
+        # suite when the host has sealed it for this run, otherwise the suite
+        # the host could seal, as a proposal whose roster the Planner selects.
+        # The Planner never composes a Cox contract itself.
         sealed = sealed_survival_suite_coordinates(planning_contract_context)
+        if sealed is None:
+            proposed = proposed_survival_suite_coordinates(
+                context, planning_contract_context=planning_contract_context
+            )
+            return LANDMARK_SURVIVAL_FAMILY_ID if proposed is not None else None
         if (
-            sealed is None
-            or sealed.exposure_status_column != exposure
+            sealed.exposure_status_column != exposure
             or sealed.event_column != outcome
             or any(context.variable(name) is None for name in sealed.source_columns)
         ):
@@ -899,7 +975,21 @@ def _family_spec_request(
         )
     if family_id == LANDMARK_SURVIVAL_FAMILY_ID:
         sealed = sealed_survival_suite_coordinates(planning_contract_context)
-        assert sealed is not None
+        if sealed is None:
+            proposed = proposed_survival_suite_coordinates(
+                context, planning_contract_context=planning_contract_context
+            )
+            assert proposed is not None
+            return _build_survival_proposal_request(
+                context,
+                proposed=proposed,
+                variable_roster=variable_roster,
+                allowed_literature_citation_keys=allowed_literature_citation_keys,
+                direct_comparator_literature_keys=direct_comparator_literature_keys,
+                comparison_literature_keys=comparison_literature_keys,
+                comparator_titles=comparator_titles,
+                required_primary_cohort_selection_mode=required_primary_cohort_selection_mode,
+            )
         return _build_survival_request(
             context,
             sealed=sealed,
@@ -1523,6 +1613,100 @@ def _build_survival_request(
         adjustment_selection="exact",
         exact_roster=list(sealed.adjustment_columns),
         exact_rationales=rationales,
+        adjustment_candidates=candidates,
+        required_reader_label_keys=required_label_keys,
+        allowed_literature_citation_keys=list(dict.fromkeys(allowed_literature_citation_keys)),
+        direct_comparator_literature_keys=list(dict.fromkeys(direct_comparator_literature_keys)),
+        comparison_literature_keys=list(dict.fromkeys(comparison_literature_keys)),
+        comparator_titles={
+            str(key): " ".join(str(value or "").split())
+            for key, value in (comparator_titles or {}).items()
+            if str(value or "").strip()
+        },
+        variable_roster=roster,
+    )
+
+
+def _build_survival_proposal_request(
+    context: ResearchContext,
+    *,
+    proposed: SealedSuiteCoordinates,
+    variable_roster: Sequence[str],
+    allowed_literature_citation_keys: Sequence[str],
+    direct_comparator_literature_keys: Sequence[str],
+    comparison_literature_keys: Sequence[str],
+    comparator_titles: Mapping[str, str] | None,
+    required_primary_cohort_selection_mode: str | None,
+) -> FamilySpecRequest:
+    """Seal the request for a landmark survival suite the host could seal.
+
+    The suite's coordinates are the host's proposal; the Planner selects the
+    adjustment roster from the host-timed candidates (or keeps the user's
+    exact roster) and labels the columns.  The plan names the suite owner,
+    which executes only after review compiles the design into the study
+    configuration and the host seals it.
+    """
+
+    roster = list(dict.fromkeys(str(value).strip() for value in variable_roster if str(value).strip()))
+    variables = {item.name: item for item in context.variables}
+    exposure = proposed.exposure_status_column
+    outcome = proposed.event_column
+    adjustment = AdjustmentSetAuthority.from_context(context)
+    optional_roster = set(_structurally_available_roster(context, roster))
+    design_columns = {
+        exposure,
+        outcome,
+        proposed.followup_time_column,
+        *context.cohort.outcome_columns,
+        *exposure_companion_columns(context, exposure),
+    }
+    candidates = _candidates(
+        context,
+        variable_roster=[name for name in roster if name in optional_roster],
+        adjustment=adjustment,
+        design_columns=frozenset(design_columns) - set(adjustment.operational_covariates),
+    )
+    exact = adjustment.selection == "exact"
+    required_label_keys = [
+        name
+        for name in dict.fromkeys(
+            [
+                exposure,
+                outcome,
+                proposed.followup_time_column,
+                *(adjustment.operational_covariates if exact else ()),
+            ]
+        )
+        if name in variables and name != context.cohort.id_columns[0]
+    ]
+    dependence = context_dependence_authority(context)
+    cohort_fields = _typed_cohort_fields(
+        context, required_primary_cohort_selection_mode, require_typed_bound=False
+    )
+    return FamilySpecRequest(
+        family_id=LANDMARK_SURVIVAL_FAMILY_ID,
+        analysis_type="survival",
+        research_question=str(context.research_question or "").strip() or "(no question text)",
+        cohort_name=str(context.cohort.cohort_name),
+        **cohort_fields,
+        identity_column=context.cohort.id_columns[0],
+        cluster_unit="patient" if dependence is not None else None,
+        primary_exposure=exposure,
+        exposure_kind="categorical",
+        exposure_levels=_levels(context, exposure),
+        reference_level_index=0,
+        primary_contrast_level_index=1,
+        exposure_is_ordered=False,
+        exposure_companion_columns=[],
+        outcome=outcome,
+        outcome_levels=_levels(context, outcome),
+        event_level_index=1,
+        level_label_keys=_binary_level_label_keys(context, exposure),
+        proposed_suite=proposed,
+        adjustment_selection=adjustment.selection,
+        exact_roster=list(adjustment.operational_covariates) if exact else [],
+        exact_rationales=dict(adjustment.operational_rationales) if exact else {},
+        exact_temporal_roles=dict(adjustment.operational_temporal_roles) if exact else {},
         adjustment_candidates=candidates,
         required_reader_label_keys=required_label_keys,
         allowed_literature_citation_keys=list(dict.fromkeys(allowed_literature_citation_keys)),

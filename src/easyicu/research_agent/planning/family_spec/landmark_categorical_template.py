@@ -42,6 +42,7 @@ from typing import Callable
 
 from ...canonical_json import canonical_sha256
 from ...contracts.model_retention import MISSING_CATEGORY_SHARE_THRESHOLD
+from ...contracts.model_terms import AdjustmentProposal
 from ..design_selection import ResearchDesignCandidate, ResearchDesignSelection
 from ..method_literature import METHOD_CARDS
 from ..progressive_contract import (
@@ -117,6 +118,10 @@ class FamilySkeletonDraft:
     outline: ProgressivePlanOutline
     foundation: ProgressiveFoundationMaterialization
     materializations: tuple[ProgressiveStepMaterialization, ...]
+    #: The Planner's reviewed roster for a primary owner whose step carries
+    #: no model requirement (a proposed survival suite); the host keeps it
+    #: plan-wide.
+    adjustment_proposal: AdjustmentProposal | None = None
 
 
 def _label(spec: FamilyPlanSpec, key: str) -> str:

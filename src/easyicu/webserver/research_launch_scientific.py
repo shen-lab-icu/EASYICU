@@ -680,6 +680,7 @@ def _metadata_planning_operationalized_columns(
     covariate_selection: str,
     covariate_operationalizations: Mapping[str, Any],
     sensitivity_specs: Sequence[Any],
+    exposure_onset_column: Optional[str] = None,
 ) -> tuple[str, ...]:
     """Project host-owned analysis columns into the zero-row plan schema.
 
@@ -693,6 +694,10 @@ def _metadata_planning_operationalized_columns(
     values: list[str] = []
     if primary_exposure_source and primary_exposure_aggregation:
         values.append(f"{primary_exposure_source}_{primary_exposure_aggregation}")
+    if exposure_onset_column:
+        # A declared survival design binds the exposure's producer-owned onset;
+        # its owner names the column.
+        values.append(exposure_onset_column)
     if covariate_selection == "exact":
         mapping = {
             str(key or "").strip(): str(value or "").strip()

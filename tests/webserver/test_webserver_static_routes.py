@@ -858,7 +858,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     ), "agent fixtures and renderer must load before screens-guided-pi-run-files.js"
     # Reader vocabulary (review findings, column and table names) is read by
     # the renderer at call time, so it must be defined before it.
-    vocab_pos = index_html.find("js/screens-agent-reader-vocab.js?v=20260926-occurrence-vocab1")
+    vocab_pos = index_html.find("js/screens-agent-reader-vocab.js?v=20261001-survival-vocab1")
     assert fixtures_pos < vocab_pos < render_pos
     assert "js/screens-agent-render.js?v=20260922-reader-vocab1" in index_html
     assert "css/agent-plan.css?v=20260829-plan-flow1" in index_html

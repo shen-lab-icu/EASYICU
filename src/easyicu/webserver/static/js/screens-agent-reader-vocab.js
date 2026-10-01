@@ -62,6 +62,7 @@
     ROBUSTNESS_DIAGNOSTIC_DISPLAY_MISMATCH: ['稳健性图混入了诊断结果', '稳健性图绑定了不是效应估计的函数形式诊断。'],
     ROBUSTNESS_SPECS_NOT_EXECUTABLE: ['部分稳健性分析没有执行组件', '计划声明的部分稳健性分析没有任何组件会执行。'],
     SCIENTIFIC_STEP_METHOD_SOURCE_NOT_BOUND: ['科学步骤缺少方法依据', '有科学步骤没有引用约束其方法的文献。'],
+    SURVIVAL_LANDMARK_OWNER_NOT_SEALED: ['生存分析组件尚未封存', '计划选用了 landmark 生存分析组件，但研究还没有声明生存设计。暴露、终点、随访、landmark 和协变量齐全时，由系统编译执行设置后重新规划；否则需修订计划。'],
     TABLE_ONE_INDEPENDENT_TESTS_IGNORE_REPEATED_UNITS: ['基线表检验忽略了重复单位', '队列保留了重复单位，基线表却要求按独立样本做检验。'],
     TIME_VARYING_RUNTIME_UNAVAILABLE: ['时变分析无法执行', '这个数据源或设计目前还不能执行时变分析。'],
     TOP_JOURNAL_LITERATURE_SEARCH_NOT_ESTABLISHED: ['顶刊可比研究检索未完成', '还没有完成针对顶刊可比研究的检索。'],

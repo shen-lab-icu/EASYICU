@@ -27,7 +27,7 @@ from ..contracts.association_execution import (
 )
 from ..contracts.declared_product import PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS
 from ..contracts.claim_ceiling import DescriptiveClaimContract
-from ..contracts.model_terms import ModelTermSpec, level_spelling
+from ..contracts.model_terms import AdjustmentProposal, ModelTermSpec, level_spelling
 from ..contracts.functional_form import RCS_LINEAR_SENSITIVITY_METHODS
 from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
 from ..contracts.model_tokens import (
@@ -2694,8 +2694,14 @@ def compile_progressive_plan(
     allowed_literature_citation_keys: Sequence[str] = (),
     allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None = None,
     host_reporting_method_source_keys: Sequence[str] = (),
+    adjustment_proposal: AdjustmentProposal | None = None,
 ) -> tuple[AnalysisPlan, ProgressivePlanCompileReceipt]:
-    """Compile and validate one skeleton without weakening final plan gates."""
+    """Compile and validate one skeleton without weakening final plan gates.
+
+    ``adjustment_proposal`` is a family template's reviewed roster for a
+    primary owner whose step carries no model requirement.  The host writes
+    it; it is never part of the Planner transport.
+    """
 
     canonical_type = canonical_analysis_family(skeleton.analysis_type)
     if canonical_type is None:
@@ -2950,6 +2956,11 @@ def compile_progressive_plan(
                     ],
                     "rationale": skeleton.rationale,
                     "revision": 1,
+                    **(
+                        {"adjustment_proposal": adjustment_proposal.model_dump(mode="json")}
+                        if adjustment_proposal is not None
+                        else {}
+                    ),
                 }
             )
         validate_plan_scientific_action_selections(

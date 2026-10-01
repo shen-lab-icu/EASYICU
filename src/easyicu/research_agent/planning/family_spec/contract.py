@@ -360,6 +360,13 @@ class FamilySpecRequest(BaseModel):
     membership_candidates: list[str] = Field(default_factory=list)
     secondary_continuous_outcome: Optional[str] = Field(default=None, max_length=128)
     sealed_suite: Optional[SealedSuiteCoordinates] = None
+    #: The landmark survival suite the host could seal for a study that has no
+    #: survival design yet: host-vocabulary coordinates with an empty roster the
+    #: Planner selects.  Nothing in it is sealed.  Omitted from the digest when
+    #: absent, so requests sealed before it existed keep their identity.
+    proposed_suite: Optional[SealedSuiteCoordinates] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     sealed_trajectory: Optional[SealedTrajectoryCoordinates] = None
     sealed_feasibility: Optional[SealedFeasibilityCoordinates] = None
     adjustment_selection: Literal["planner_selectable", "exact"]
@@ -461,21 +468,26 @@ class FamilySpecRequest(BaseModel):
         elif self.family_id == LANDMARK_SURVIVAL_FAMILY_ID:
             if self.analysis_type != "survival":
                 raise ValueError("the landmark survival family plans a survival study")
-            if self.sealed_suite is None:
+            suite = self.sealed_suite or self.proposed_suite
+            if suite is None:
                 raise ValueError("the landmark survival family needs its sealed suite coordinates")
+            if self.sealed_suite is not None and self.proposed_suite is not None:
+                raise ValueError("a landmark survival request is either sealed or proposed, not both")
             if any(value is not None for value in landmark_fields):
                 raise ValueError("the sealed survival suite owns its landmark coordinates")
             if self.exposure_kind != "categorical" or len(self.exposure_levels) != 2:
                 raise ValueError("the sealed survival suite contrasts one binary exposure status")
-            if self.primary_exposure != self.sealed_suite.exposure_status_column:
+            if self.primary_exposure != suite.exposure_status_column:
                 raise ValueError("the survival exposure must be the sealed exposure status column")
-            if self.outcome != self.sealed_suite.event_column:
+            if self.outcome != suite.event_column:
                 raise ValueError("the survival outcome must be the sealed event column")
-            if (
+            if self.sealed_suite is not None and (
                 self.adjustment_selection != "exact"
                 or self.exact_roster != self.sealed_suite.adjustment_columns
             ):
                 raise ValueError("the survival adjustment set is sealed, not selectable")
+            if self.proposed_suite is not None and self.proposed_suite.adjustment_columns:
+                raise ValueError("a proposed survival suite seals no adjustment roster")
         elif self.family_id == FIXED_WINDOW_TRAJECTORY_FAMILY_ID:
             if self.analysis_type != "trajectory_clustering":
                 raise ValueError("the trajectory suite family plans a clustering study")
@@ -507,6 +519,8 @@ class FamilySpecRequest(BaseModel):
                 raise ValueError("the prediction family needs selectable predictor candidates")
             if self.adjustment_selection == "exact" and self.exact_roster:
                 raise ValueError("the prediction family fits no adjusted model")
+        if self.proposed_suite is not None and self.family_id != LANDMARK_SURVIVAL_FAMILY_ID:
+            raise ValueError("proposed suite coordinates belong to the landmark survival family")
         if self.sealed_trajectory is not None and self.family_id != FIXED_WINDOW_TRAJECTORY_FAMILY_ID:
             raise ValueError("sealed trajectory coordinates belong to the trajectory suite family")
         if self.sealed_feasibility is not None and self.family_id != SOURCE_FEASIBILITY_FAMILY_ID:
@@ -802,7 +816,7 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
             "belongs to the descriptive and phenotyping families",
             path="baseline_variables",
         )
-    if request.family_id in SEALED_SUITE_FAMILY_IDS:
+    if request.family_id in SEALED_SUITE_FAMILY_IDS and request.proposed_suite is None:
         if spec.adjustment_set:
             raise FamilySpecError(
                 "family_spec_adjustment_not_applicable",
@@ -966,6 +980,23 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
                 f"{item.name!r} reference index exceeds its closed domain",
                 path=f"{path}.reference_level_index",
             )
+    if request.proposed_suite is not None:
+        if spec.baseline_variables:
+            raise FamilySpecError(
+                "family_spec_baseline_variables_not_applicable",
+                "the survival suite describes its adjustment roster in Table 1",
+                path="baseline_variables",
+            )
+        design_limit = design_field_max_length("required_variables")
+        roster = [request.identity_column, *request.proposed_suite.source_columns, *names]
+        if len(roster) > design_limit:
+            raise FamilySpecError(
+                "family_spec_roster_exceeds_design",
+                f"the design names at most {design_limit} variables including the row identity, "
+                f"exposure status and onset, endpoint and follow-up columns; this roster needs "
+                f"{len(roster)}: keep the adjustment covariates that matter most",
+                path="adjustment_set",
+            )
     if request.family_id in LANDMARK_FAMILY_IDS:
         covariates = list(request.exact_roster) if request.adjustment_selection == "exact" else names
         design_limit = design_field_max_length("required_variables")
@@ -985,6 +1016,8 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
         # the request cannot list them because it is sealed before selection.
         *(spec.feature_variables if request.family_id in {PHENOTYPING_FAMILY_ID, PREDICTION_FAMILY_ID} else []),
         *(spec.baseline_variables if request.family_id == PHENOTYPING_FAMILY_ID else []),
+        # A proposed survival suite's roster is the Planner's selection.
+        *(names if request.proposed_suite is not None else []),
         # The study-population distribution names each exposure level.
         *(request.level_label_keys if request.study_population_occurrence is not None else []),
     ]

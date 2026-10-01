@@ -55,6 +55,7 @@ _AGENT_COMPILED_RUNTIME_FINDINGS = frozenset(
         "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
         "REPEATED_STAY_IDENTITY_UNAVAILABLE",
         "REPEATED_STAY_METHOD_NOT_DECLARED",
+        "SURVIVAL_LANDMARK_OWNER_NOT_SEALED",
         "TRAJECTORY_LONGITUDINAL_OWNER_NOT_SEALED",
     }
 )
@@ -66,6 +67,13 @@ _ONE_STAY_POPULATION_FINDING = "REPEATED_STAY_METHOD_NOT_DECLARED"
 #: clusters one value per stay of coordinates the signed fixed-window owner can
 #: model; its closure is the study's declared trajectory design.
 _TRAJECTORY_OWNER_FINDING = "TRAJECTORY_LONGITUDINAL_OWNER_NOT_SEALED"
+#: The reviewer hands this finding to the host only for a survival plan that
+#: names the landmark survival suite with coordinates that close from host
+#: owners; its closure is the study's declared survival design.
+_SURVIVAL_OWNER_FINDING = "SURVIVAL_LANDMARK_OWNER_NOT_SEALED"
+#: The suite's landmark is the plan's timing design, so the same declaration
+#: closes the post-baseline timing gap the review reports beside it.
+_TIMING_FINDING = "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"
 
 
 _AGGREGATION_SUFFIXES = ("_first", "_last", "_min", "_max", "_mean", "_sum")
@@ -699,6 +707,181 @@ def _trajectory_design_configuration(
     )
 
 
+def _survival_design_configuration(
+    study: Mapping[str, Any],
+    *,
+    codes: tuple[str, ...],
+    review_facts: Mapping[str, Any] | None,
+    first_stay_restricted: bool,
+) -> CompiledAgentPlanConfiguration:
+    """Declare the reviewed coordinates as the study's landmark survival design.
+
+    The coordinates are the reviewer's published facts for this exact plan:
+    the exposure, the fixed-horizon endpoint with its paired follow-up, the
+    landmark at the end of the window the plan was made on, and the plan's
+    reviewed roster.  The suite owner validates the declaration, and the next
+    plan runs on its signed authority.
+    """
+
+    from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
+    from easyicu.webserver.landmark_survival_runtime_projection import (
+        survival_family_declared,
+        survival_inference_supported,
+        validate_landmark_survival_declaration,
+    )
+    from easyicu.webserver.scientific_runtime_projection import (
+        WebScientificRuntimeProjectionError,
+    )
+
+    remaining = set(codes) - {_SURVIVAL_OWNER_FINDING, _TIMING_FINDING}
+    if not survival_inference_supported(_PATIENT_CLUSTERED_DESIGN):
+        # The suite fits one model-based row per ICU stay; the reviewer's
+        # dependence limitation stays with the review.
+        remaining.discard("REPEATED_STAY_IDENTITY_UNAVAILABLE")
+    if remaining:
+        raise PlanDecisionError(
+            "agent_plan_runtime_finding_unsupported",
+            "A survival design cannot be compiled together with other runtime coordinates.",
+            details={"finding_codes": sorted(remaining)},
+        )
+    if survival_family_declared(study):
+        raise PlanDecisionError(
+            "agent_plan_survival_design_already_declared",
+            "The study already declares a survival design; a plan that does not use it needs a fresh plan, not a second design.",
+        )
+    facts = (
+        review_facts.get("landmark_survival_suite")
+        if isinstance(review_facts, Mapping)
+        else None
+    )
+    if not (
+        isinstance(facts, Mapping)
+        and facts.get("sealed") is False
+        and facts.get("executable") is True
+    ):
+        raise PlanDecisionError(
+            "agent_plan_survival_coordinates_unavailable",
+            "The review publishes no executable landmark survival coordinates for this plan.",
+        )
+    endpoint = fixed_horizon_mortality_endpoint(str(facts.get("event_column") or ""))
+    covariates = [str(value) for value in facts.get("covariates") or ()]
+    rationales = facts.get("covariate_rationales")
+    temporal_roles = facts.get("covariate_temporal_roles")
+    try:
+        landmark_hours = float(facts.get("landmark_hours"))
+    except (TypeError, ValueError):
+        landmark_hours = 0.0
+    if (
+        endpoint is None
+        or facts.get("followup_column") != endpoint.followup_concept
+        or not covariates
+        or not isinstance(rationales, Mapping)
+        or not isinstance(temporal_roles, Mapping)
+        or set(rationales) != set(covariates)
+        or set(temporal_roles) != set(covariates)
+    ):
+        raise PlanDecisionError(
+            "agent_plan_survival_coordinates_unavailable",
+            "The review's landmark survival coordinates are incomplete for this plan.",
+        )
+
+    # The landmark is the end of the window the plan was made on; a study
+    # with no declared window declares that window together with it.
+    planned_window = _planned_window_for_agent_landmark(study)
+    window = planned_window if planned_window is not None else study.get("time_window")
+    try:
+        window_hours = float(window.get("hours")) if isinstance(window, Mapping) else None
+    except (TypeError, ValueError):
+        window_hours = None
+    if window_hours != landmark_hours:
+        raise PlanDecisionError(
+            "agent_plan_landmark_not_compilable",
+            "The survival plan's landmark is not the end of the study's analytic window.",
+            details={"landmark_hours": landmark_hours, "time_window_hours": window_hours},
+        )
+    exposure, aggregation = _agent_primary_source_coordinate(
+        facts.get("exposure"), fixed_window=False, study=study,
+    )
+    configuration = ScientificConfiguration.inspect(study)
+    execution = dict(study.get("execution_concepts") or {})
+    execution.update(
+        {
+            "outcome": endpoint.event_concept,
+            "primary_exposure": exposure,
+            "covariates": list(covariates),
+        }
+    )
+    if aggregation is not None:
+        execution["primary_exposure_aggregation"] = aggregation
+    else:
+        execution.pop("primary_exposure_aggregation", None)
+    token = f"{landmark_hours:g}".replace(".", "p")
+    landmark = {
+        "spec_id": f"agent_plan_survival_landmark_{token}h",
+        "axis": "timing",
+        "strategy": "landmark",
+        "landmark_hours": landmark_hours,
+        "require_alive_at_landmark": True,
+        "exclude_negative_event_times": True,
+        "observation_duration_variable": endpoint.followup_concept,
+        "observation_duration_unit": endpoint.followup_unit,
+    }
+    confirmations = configuration.merge_confirmations(
+        feature_time_window=True,
+        extraction_completed=True,
+        export_format=True,
+        plan_adjustment_set_confirmed=False,
+        agent_plan_configuration_compiled=True,
+        # The landmark route key; the persisted spec carries its hours.
+        plan_timing_landmark_24h=True,
+        plan_timing_descriptive_only=False,
+        plan_timing_time_varying=False,
+    )
+    if first_stay_restricted:
+        confirmations.update(
+            {"plan_repeated_stays_first": True, "plan_repeated_stays_clustered": False}
+        )
+    patch: Dict[str, Any] = {
+        "execution_concepts": execution,
+        "covariates": list(covariates),
+        "covariate_selection": "exact",
+        "covariate_authority": "agent_plan",
+        "covariate_rationales": {
+            value: str(rationales[value]).strip() for value in covariates
+        },
+        "covariate_temporal_roles": {
+            value: str(temporal_roles[value]).strip() for value in covariates
+        },
+        "covariate_operationalizations": {value: value for value in covariates},
+        "export_format": "parquet",
+        "analysis_design": {
+            "analysis_family": "survival",
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "model_based",
+        },
+        "sensitivity_specs": configuration.replace_sensitivity(
+            axis="timing", replacement=landmark
+        ),
+        "confirmations": confirmations,
+    }
+    if planned_window is not None:
+        patch["time_window"] = planned_window
+    try:
+        validate_landmark_survival_declaration({**dict(study), **patch})
+    except WebScientificRuntimeProjectionError as exc:
+        raise PlanDecisionError(
+            "agent_plan_survival_design_invalid",
+            str(exc),
+            details={"design_error_code": exc.code, **dict(exc.details or {})},
+        ) from exc
+    return CompiledAgentPlanConfiguration(
+        patch=patch,
+        runtime_finding_codes=tuple(
+            code for code in codes if code in {_SURVIVAL_OWNER_FINDING, _TIMING_FINDING}
+        ),
+    )
+
+
 def compile_agent_plan_configuration(
     *,
     study: Mapping[str, Any],
@@ -761,6 +944,13 @@ def compile_agent_plan_configuration(
     if _TRAJECTORY_OWNER_FINDING in codes:
         return _trajectory_design_configuration(
             study, codes=codes, review_facts=review_facts
+        )
+    if _SURVIVAL_OWNER_FINDING in codes:
+        return _survival_design_configuration(
+            study,
+            codes=codes,
+            review_facts=review_facts,
+            first_stay_restricted=first_stay_restricted,
         )
     clustering_refusal: PlanDecisionError | None = None
     if (

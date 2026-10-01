@@ -60,7 +60,6 @@ from ..planning.progressive_contract import (
     ProgressivePlanCompileError,
     ProgressivePlanCompileReceipt,
     ProgressivePlanOutline,
-    ProgressivePlanSkeleton,
 )
 from ..planning.progressive_resume import (
     ProgressivePrefixState,
@@ -94,6 +93,7 @@ The host has already fixed the study family, exposure, outcome, time zero, cohor
    For the phenotyping family: no adjustment set. Choose feature_variables (at least two) ONLY from the feature candidates marked selectable — the numeric window-bound measurements that should define candidate phenotypes; choose baseline_variables for the cluster characterization from the baseline candidates; optionally choose one cohort_membership_column from the membership flags when the question restricts the population to rows with that flag. Label every selected feature and baseline variable.
    For the prediction family: no adjustment set. Choose feature_variables (at least two predictors) ONLY from the feature candidates marked selectable; do not include the outcome or anything measured after the observation window. Label every selected predictor.
    For the sealed landmark survival suite family: no adjustment set and no other roster. The host has sealed the exposure status and onset columns, the event and follow-up columns, the landmark, the horizon, the adjustment set and the PH policy; you only label the sealed columns and write the comparator applications.
+   When the survival request carries proposed_suite instead of sealed_suite, the host has proposed the exposure status, event and follow-up columns, the landmark and the horizon, but not the adjustment set: choose it as for a landmark association family (time zero is the landmark; the onset column is named but not yet materialized) and label every selected covariate.
    For the sealed fixed-window trajectory suite family: no adjustment set and no other roster. The host has sealed the coordinate concepts, the fixed grid, the candidate cluster grid, the selection rule and the stability design; you only label the sealed concepts and the outcome and write the comparator applications.
    For the sealed source-feasibility family: no adjustment set, no roster and no labels. The reviewed protocol found the requested treatment contrast not identifiable from the current source, so the host executes only the sealed fail-closed decision; you write the comparator applications (how each screened study's design differs from what this source can support) and nothing else.
 2. Reader labels: a concise clinical label for every required variable key, derived from the sealed variable descriptions (never a restatement of the identifier). When level label keys such as `<exposure>=0` and `<exposure>=1` are required, give the two groups distinct clinical names.
@@ -137,56 +137,55 @@ def family_spec_user_prompt(
 
     sections: list[str] = []
     sections.append("Research question:\n" + request.research_question)
+    host_design: dict[str, Any] = {
+        "family_id": request.family_id,
+        "primary_exposure": request.primary_exposure,
+        "exposure_kind": request.exposure_kind,
+        "exposure_levels": request.exposure_levels,
+        "reference_level": (
+            request.exposure_levels[request.reference_level_index]
+            if request.exposure_kind == "categorical"
+            else None
+        ),
+        "primary_contrast_level": (
+            request.exposure_levels[request.primary_contrast_level_index]
+            if request.exposure_kind == "categorical"
+            else None
+        ),
+        "exposure_companion_columns": request.exposure_companion_columns,
+        "outcome": request.outcome,
+        "landmark_hours": request.landmark_hours,
+        "event_time_column": request.event_time_column,
+        "observation_duration_column": request.observation_duration_column,
+        "cluster_unit": request.cluster_unit,
+        "secondary_continuous_outcome": request.secondary_continuous_outcome,
+        "alternate_exposures": [item.execution_variables[0] for item in request.alternate_exposures],
+        "first_stay_column": (
+            request.first_stay.execution_variables[0] if request.first_stay else None
+        ),
+        "adjustment_selection": request.adjustment_selection,
+        "exact_roster": request.exact_roster,
+        "sealed_suite": (
+            request.sealed_suite.model_dump(mode="json")
+            if request.sealed_suite is not None
+            else None
+        ),
+        "sealed_trajectory": (
+            request.sealed_trajectory.model_dump(mode="json")
+            if request.sealed_trajectory is not None
+            else None
+        ),
+        "sealed_feasibility": (
+            request.sealed_feasibility.model_dump(mode="json")
+            if request.sealed_feasibility is not None
+            else None
+        ),
+    }
+    if request.proposed_suite is not None:
+        host_design["proposed_suite"] = request.proposed_suite.model_dump(mode="json")
     sections.append(
         "Host-fixed design (binding, not editable):\n"
-        + json.dumps(
-            {
-                "family_id": request.family_id,
-                "primary_exposure": request.primary_exposure,
-                "exposure_kind": request.exposure_kind,
-                "exposure_levels": request.exposure_levels,
-                "reference_level": (
-                    request.exposure_levels[request.reference_level_index]
-                    if request.exposure_kind == "categorical"
-                    else None
-                ),
-                "primary_contrast_level": (
-                    request.exposure_levels[request.primary_contrast_level_index]
-                    if request.exposure_kind == "categorical"
-                    else None
-                ),
-                "exposure_companion_columns": request.exposure_companion_columns,
-                "outcome": request.outcome,
-                "landmark_hours": request.landmark_hours,
-                "event_time_column": request.event_time_column,
-                "observation_duration_column": request.observation_duration_column,
-                "cluster_unit": request.cluster_unit,
-                "secondary_continuous_outcome": request.secondary_continuous_outcome,
-                "alternate_exposures": [item.execution_variables[0] for item in request.alternate_exposures],
-                "first_stay_column": (
-                    request.first_stay.execution_variables[0] if request.first_stay else None
-                ),
-                "adjustment_selection": request.adjustment_selection,
-                "exact_roster": request.exact_roster,
-                "sealed_suite": (
-                    request.sealed_suite.model_dump(mode="json")
-                    if request.sealed_suite is not None
-                    else None
-                ),
-                "sealed_trajectory": (
-                    request.sealed_trajectory.model_dump(mode="json")
-                    if request.sealed_trajectory is not None
-                    else None
-                ),
-                "sealed_feasibility": (
-                    request.sealed_feasibility.model_dump(mode="json")
-                    if request.sealed_feasibility is not None
-                    else None
-                ),
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        )
+        + json.dumps(host_design, ensure_ascii=False, sort_keys=True)
     )
     sections.append(
         (
@@ -615,7 +614,7 @@ def run_family_spec_attempt(
     bind_outline: Callable[[ProgressivePlanOutline], ProgressivePlanOutline],
     validate_outline: Callable[[ProgressivePlanOutline], None],
     compile_and_accept: Callable[
-        [ProgressivePlanSkeleton], tuple[AnalysisPlan, ProgressivePlanCompileReceipt]
+        ..., tuple[AnalysisPlan, ProgressivePlanCompileReceipt]
     ],
     capture_efficiency_metrics: Callable[[], None],
 ) -> AnalysisPlan:
@@ -853,7 +852,8 @@ def run_family_spec_attempt(
     skeleton = assemble_progressive_skeleton(
         outline=outline, foundation=foundation, steps=prefix_state.steps,
     )
-    plan, receipt = compile_and_accept(skeleton)
+    # The template's reviewed roster is host-written, never Planner transport.
+    plan, receipt = compile_and_accept(skeleton, adjustment_proposal=draft.adjustment_proposal)
     attempt.skeleton = skeleton
     attempt.compile_receipt = receipt
     attempt.prompt_metrics["final_skeleton_sha256"] = receipt.skeleton_sha256
