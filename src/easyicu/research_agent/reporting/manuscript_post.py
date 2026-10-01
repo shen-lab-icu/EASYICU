@@ -38,6 +38,7 @@ from ..authority.evidence_store import (
 from ..schema import ResearchContext
 from .writer_repair_decision import coerce_writer_repair_decisions
 from .manuscript_sentence_context import contextual_sentence_deletion
+from .manuscript_surface import claim_token_stands_in_block
 from .manuscript_bibliographic_years import bibliographic_year_spans
 from .side_findings import (
     SideFinding,
@@ -434,7 +435,9 @@ def _apply_writer_evidence_repair_decisions(
     appending the selected registered placeholders. Existing registered
     citations are preserved. A claim decision replaces the whole sentence
     with one exact host-issued token; no model-authored direction, population,
-    number, or interpretation survives that replacement.
+    number, or interpretation survives that replacement. When the sentence's
+    block already states that token, the sentence is dropped instead, so the
+    claim is not printed twice.
     """
 
     sentences = [str(sentence).strip() for sentence in missing_sentences]
@@ -484,6 +487,7 @@ def _apply_writer_evidence_repair_decisions(
         action = decision.action
         evidence_ids = list(decision.evidence_ids)
         dependent_context_drops: tuple[str, ...] = ()
+        reason_code = ""
         if action == "cite":
             replacement = matched_target
             if allowed_evidence:
@@ -501,17 +505,24 @@ def _apply_writer_evidence_repair_decisions(
             token = "{claim:" + claim_ref + "}"
             line_start = rewritten.rfind("\n", 0, target_start) + 1
             before_target = rewritten[line_start:target_start]
+            labelled = re.match(
+                r"^(?P<label>\*\*[^*\n]{1,80}:\*\*)\s+.+$",
+                target,
+            )
             if before_target.lstrip().startswith("#"):
                 # Scientific findings do not belong in a manuscript title or
                 # heading.  A model-selected claim is safely dropped here; the
                 # unchanged strict gate still validates the remaining draft.
                 replacement = ""
                 action = "drop"
+            elif claim_token_stands_in_block(rewritten, target_start, target_end, token):
+                # The block already states this claim, e.g. the token the
+                # rejected sentence restated sits on the next line.  A second
+                # token would print the same host sentence twice.
+                replacement = labelled.group("label") if labelled is not None else ""
+                action = "drop"
+                reason_code = "claim_already_stated_in_block"
             else:
-                labelled = re.match(
-                    r"^(?P<label>\*\*[^*\n]{1,80}:\*\*)\s+.+$",
-                    target,
-                )
                 replacement = (
                     f"{labelled.group('label')}\n\n{token}"
                     if labelled is not None
@@ -536,6 +547,7 @@ def _apply_writer_evidence_repair_decisions(
                 "sentence": target[:500],
                 **({"dependent_context_drops": list(dependent_context_drops)}
                    if dependent_context_drops else {}),
+                **({"reason_code": reason_code} if reason_code else {}),
             }
         )
     return rewritten, sorted(applied, key=lambda item: int(item["index"]))

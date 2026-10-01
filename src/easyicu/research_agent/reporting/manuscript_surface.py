@@ -196,6 +196,19 @@ def deduplicate_claim_paragraphs(text: str) -> str:
     return "".join(regions)
 
 
+def claim_token_stands_in_block(text: str, start: int, end: int, token: str) -> bool:
+    """Whether ``token`` already stands in the block holding ``text[start:end]``.
+
+    Blocks are the ones ``deduplicate_claim_paragraphs`` keeps a claim once
+    in: a heading or a structured-abstract label opens one.  The span itself
+    is not searched, so the text a caller is about to replace never counts.
+    """
+    starts = [match.start() for match in _REGION.finditer(text)]
+    block_start = max((index for index in starts if index <= start), default=0)
+    block_end = min((index for index in starts if index > start), default=len(text))
+    return token in text[block_start:start] or token in text[end:block_end]
+
+
 def repair_filtered_section_openers(text: str, *, before_filter: str) -> str:
     """Remove a dangling connective only when filtering removed its antecedent.
 

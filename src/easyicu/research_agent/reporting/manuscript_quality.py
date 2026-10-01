@@ -409,17 +409,26 @@ def repair_reader_structure_from_existing_prose(
         abstract, "Background"
     ):
         paragraphs = [part.strip() for part in re.split(r"\n\s*\n", abstract)]
-        candidate_index = next(
+        # An unlabeled paragraph after a label continues that label's block
+        # (e.g. an owner-projected Results sentence). Only prose before the
+        # first label can be a Background whose label was omitted.
+        first_label = next(
             (
                 index
                 for index, paragraph in enumerate(paragraphs)
-                if _has_prose(paragraph)
-                and not re.match(
+                if re.match(
                     r"\*\*(?:Background|Methods|Results|Conclusions):\*\*",
                     paragraph,
                     flags=re.I,
                 )
-                and not paragraph.startswith("#")
+            ),
+            len(paragraphs),
+        )
+        candidate_index = next(
+            (
+                index
+                for index, paragraph in enumerate(paragraphs[:first_label])
+                if _has_prose(paragraph) and not paragraph.startswith("#")
             ),
             None,
         )
@@ -560,10 +569,17 @@ def repair_reader_structure_from_existing_prose(
 
     section_map = _sections(repaired)
     conclusion = section_map.get("Conclusion")
-    conclusion_caveat_only = bool(conclusion) and bool(re.fullmatch(
-        r"Independent validation is required\s*\.?",
-        _strip_audit_markup(conclusion or "").strip(), flags=re.I,
-    ))
+    # A claim token is already the interpretation the caveat lacks. The audit
+    # markup strip removes tokens, so test for them first; otherwise every
+    # call would prepend the same claim again.
+    conclusion_caveat_only = (
+        bool(conclusion)
+        and _CLAIM_PLACEHOLDER_RE.search(conclusion) is None
+        and bool(re.fullmatch(
+            r"Independent validation is required\s*\.?",
+            _strip_audit_markup(conclusion or "").strip(), flags=re.I,
+        ))
+    )
     if conclusion is not None and (not _has_prose(conclusion) or conclusion_caveat_only):
         results = section_map.get("Results", "")
         # The family's primary subsection answers the question; a cohort
@@ -640,7 +656,7 @@ def repair_reader_structure_from_existing_prose(
     section_map = _sections(repaired)
     abstract = section_map.get("Abstract")
     abstract_conclusion = _abstract_blocks(abstract or "").get("conclusions", "")
-    caveat_only = bool(re.fullmatch(
+    caveat_only = _CLAIM_PLACEHOLDER_RE.search(abstract_conclusion) is None and bool(re.fullmatch(
         r"Independent validation is required\s*\.?",
         _strip_audit_markup(abstract_conclusion).strip(), flags=re.I,
     ))
