@@ -92,8 +92,8 @@ The host has already fixed the study family, exposure, outcome, time zero, cohor
    For the descriptive family: no adjustment set (leave it empty). Instead choose baseline_variables for Table 1 ONLY from the candidates marked selectable; they describe the groups and imply no model.
    For the phenotyping family: no adjustment set. Choose feature_variables (at least two) ONLY from the feature candidates marked selectable — the numeric window-bound measurements that should define candidate phenotypes; choose baseline_variables for the cluster characterization from the baseline candidates; optionally choose one cohort_membership_column from the membership flags when the question restricts the population to rows with that flag. Label every selected feature and baseline variable.
    For the prediction family: no adjustment set. Choose feature_variables (at least two predictors) ONLY from the feature candidates marked selectable; do not include the outcome or anything measured after the observation window. Label every selected predictor.
-   For the sealed landmark survival suite family: no adjustment set and no other roster. The host has sealed the exposure status and onset columns, the event and follow-up columns, the landmark, the horizon, the adjustment set and the PH policy; you only label the sealed columns and write the comparator applications.
-   When the survival request carries proposed_suite instead of sealed_suite, the host has proposed the exposure status, event and follow-up columns, the landmark and the horizon, but not the adjustment set: choose it as for a landmark association family (time zero is the landmark; the onset column is named but not yet materialized) and label every selected covariate.
+   For the landmark survival suite family with a sealed_suite: no adjustment set and no other roster. The host has sealed the exposure status and onset columns, the event and follow-up columns, the landmark, the horizon, the adjustment set and the PH policy; you only label the sealed columns and write the comparator applications.
+   For the landmark survival suite family with a proposed_suite instead: the host has proposed the exposure status, event and follow-up columns, the landmark and the horizon, but the adjustment set is yours: choose it as for a landmark association family (time zero is the landmark; the onset column is named but not yet materialized) and label every selected covariate.
    For the sealed fixed-window trajectory suite family: no adjustment set and no other roster. The host has sealed the coordinate concepts, the fixed grid, the candidate cluster grid, the selection rule and the stability design; you only label the sealed concepts and the outcome and write the comparator applications.
    For the sealed source-feasibility family: no adjustment set, no roster and no labels. The reviewed protocol found the requested treatment contrast not identifiable from the current source, so the host executes only the sealed fail-closed decision; you write the comparator applications (how each screened study's design differs from what this source can support) and nothing else.
 2. Reader labels: a concise clinical label for every required variable key, derived from the sealed variable descriptions (never a restatement of the identifier). When level label keys such as `<exposure>=0` and `<exposure>=1` are required, give the two groups distinct clinical names.
@@ -182,7 +182,11 @@ def family_spec_user_prompt(
         ),
     }
     if request.proposed_suite is not None:
-        host_design["proposed_suite"] = request.proposed_suite.model_dump(mode="json")
+        # The proposal's roster is the Planner's to select, so it is not shown
+        # as a binding empty roster beside the host-fixed coordinates.
+        host_design["proposed_suite"] = request.proposed_suite.model_dump(
+            mode="json", exclude={"adjustment_columns"}
+        )
     sections.append(
         "Host-fixed design (binding, not editable):\n"
         + json.dumps(host_design, ensure_ascii=False, sort_keys=True)
