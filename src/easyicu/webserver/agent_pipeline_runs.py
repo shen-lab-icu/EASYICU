@@ -497,8 +497,8 @@ def _progressive_compile_failure_message(exc: BaseException) -> str:
     ):
         return (
             "No executable EasyICU method can yet produce the primary result this "
-            "causal or survival question needs, so planning stopped before a plan "
-            "was drafted. No analysis was run."
+            "causal or survival question needs, so planning stopped before its "
+            "analysis steps were drafted. No analysis was run."
         )
     return (
         "The deterministic host compiler rejected the bounded Planner repairs. A "

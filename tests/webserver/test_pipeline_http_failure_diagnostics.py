@@ -180,7 +180,7 @@ def test_a_typed_compile_stop_reaches_the_run_record_as_its_gate_detail(tmp_path
     }
     assert "no host owner" not in json.dumps(gate)
     assert "detail" not in json.loads((untyped_dir / "quality_gate.json").read_text())["gate"]
-    assert "planning stopped before a plan was drafted" in (
+    assert "planning stopped before its analysis steps were drafted" in (
         agent_pipeline_runs._progressive_compile_failure_message(stop)
     )
     assert "rejected the bounded Planner repairs" in (
