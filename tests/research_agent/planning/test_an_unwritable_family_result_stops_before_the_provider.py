@@ -7,7 +7,9 @@ field, and the family router offers no template for such a context unless the
 host has sealed a suite for it.  A causal question and an unsealed survival
 question therefore spent the whole planning budget -- outline, steps, bounded
 suffix repairs -- and failed only at final acceptance.  The planner now stops
-before its first Provider call with ``progressive_family_result_contract_unwritable``.
+with ``progressive_family_result_contract_unwritable``: before its first Provider
+call when every candidate family needs that contract, and otherwise as soon as
+the outline selects such a family, without retrying the choice.
 Synthetic contexts only.
 """
 
@@ -37,6 +39,15 @@ from tests.research_agent.planning.family_spec_fixtures import (
     ALLOWED_CITATIONS,
     DIRECT_COMPARATORS,
     _context,
+)
+from tests.research_agent.planning.progressive_planner_fixtures import (
+    _context as _outline_context,
+)
+from tests.research_agent.planning.progressive_planner_fixtures import (
+    _cox_outline_payload,
+    _foundation_payload,
+    _materialization_payloads,
+    _outline_payload,
 )
 
 UNWRITABLE = "progressive_family_result_contract_unwritable"
@@ -188,3 +199,118 @@ def test_the_contract_counts_only_contexts_final_acceptance_would_reject():
     assert families_requiring_family_result_contract(
         feasibility, analysis_types=("causal_inference",), sealed_survival_suite=False
     ) == ()
+
+
+# The outline stage: the question also offers a family the compiler can
+# finish, so the Planner is asked, and its outline commits the family.
+OUTLINE_QUESTIONS = {
+    "causal_inference": "Estimate the effect of exposure_flag on outcome_flag.",
+    "survival": "Estimate time to outcome_flag by exposure_flag (survival).",
+}
+
+
+PRIMARY_ACTIONS = {
+    "causal_inference": "causal_emulation.iptw_or",
+    "survival": "time_to_event.cox_hr",
+}
+
+
+def _outline_for(family: str) -> dict:
+    # The survival fixture's custom primary, with the family's own action.
+    outline = _cox_outline_payload()
+    outline["analysis_type"] = family
+    for candidate in outline["design_selection"]["candidates"]:
+        candidate["analysis_type"] = family
+    primary = next(step for step in outline["steps"] if step["step_id"] == "05_primary")
+    primary["scientific_action_id"] = PRIMARY_ACTIONS[family]
+    if family == "causal_inference":
+        # A causal article requires a robustness owner.
+        outline["steps"].insert(
+            outline["steps"].index(primary) + 1,
+            {
+                **primary,
+                "step_id": "06_sensitivity",
+                "planned_analysis_role": "sensitivity",
+                "objective": "Bound the effect against unmeasured confounding.",
+                "depends_on": ["05_primary"],
+                "scientific_action_id": "causal_emulation.evalue",
+            },
+        )
+    return outline
+
+
+def _plan_from_outline(family: str, outline: dict, *, strategy="progressive_v2", **kwargs):
+    context = _outline_context().model_copy(
+        update={"research_question": OUTLINE_QUESTIONS[family]}
+    )
+    responses = [outline, _foundation_payload(), *_materialization_payloads()]
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    try:
+        result = ProgressivePlannerAgent(llm).run_attempt(
+            context, planner_strategy=strategy, **kwargs
+        )
+    except Exception as exc:  # noqa: BLE001 - the test reads which stop it was
+        return context, llm, exc
+    return context, llm, result
+
+
+@pytest.mark.parametrize("strategy", [FAMILY_SPEC_STRATEGY, "progressive_v2"])
+@pytest.mark.parametrize("family", ["causal_inference", "survival"])
+def test_an_outline_that_selects_a_family_no_owner_can_finish_stops_before_its_steps(
+    family, strategy
+):
+    context, llm, stopped = _plan_from_outline(family, _outline_for(family), strategy=strategy)
+    types = candidate_analysis_types(context)
+    assert family in types
+    assert families_requiring_family_result_contract(
+        context, analysis_types=types, sealed_survival_suite=False
+    ) == ()
+
+    assert isinstance(stopped, ProgressivePlanCompileError)
+    assert stopped.reason_code == UNWRITABLE
+    assert stopped.path == "analysis_type"
+    assert family in str(stopped)
+    # The outline was the only request: no foundation, step or retry call.
+    assert len(llm.calls) == 1
+
+
+def test_an_outline_that_selects_an_executable_family_goes_on_to_its_steps():
+    outline = _outline_payload()
+    assert outline["analysis_type"] == "association_study"
+
+    _context_, llm, result = _plan_from_outline("causal_inference", outline)
+
+    assert getattr(result, "reason_code", None) != UNWRITABLE
+    assert len(llm.calls) > 1
+
+
+def test_a_sealed_survival_suite_keeps_a_survival_outline_open():
+    disclosure = SEALED_SURVIVAL_SUITE_MARKER + "\n" + json.dumps(
+        {
+            "sealed_primary_owner": "signed_landmark_survival_suite",
+            "exposure_status_column": "exposure_flag",
+            "exposure_onset_column": "exposure_flag_first_time",
+            "event_column": "outcome_flag",
+            "followup_time_column": "followup_days_28d",
+            "landmark_hours": 24,
+            "endpoint_horizon_days": 28,
+            "plan_outputs": ["table:survival_primary"],
+        }
+    )
+
+    _context_, llm, result = _plan_from_outline(
+        "survival", _outline_for("survival"), planning_contract_context=disclosure
+    )
+
+    assert getattr(result, "reason_code", None) != UNWRITABLE
+    assert len(llm.calls) > 1
+
+
+def test_a_design_canary_returns_its_causal_outline():
+    _context_, llm, result = _plan_from_outline(
+        "causal_inference", _outline_for("causal_inference"), stop_after_outline=True
+    )
+
+    assert getattr(result, "reason_code", None) != UNWRITABLE
+    assert result.output.analysis_type == "causal_inference"
+    assert len(llm.calls) == 1

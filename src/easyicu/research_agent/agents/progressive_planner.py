@@ -4406,15 +4406,16 @@ class ProgressivePlannerAgent:
         # The Progressive v2 compiler never writes a family result contract, so
         # a final plan whose every candidate family needs one cannot pass
         # acceptance: stop before any Provider call instead of spending.
+        sealed_survival_suite = (
+            sealed_survival_suite_coordinates(planning_contract_context) is not None
+        )
         v2_compiles_final_plan = resume_checkpoint is None and not stop_after_outline and (
             planner_strategy != FAMILY_SPEC_STRATEGY or family_spec_fallback_reason is not None
         )
         unwritable = v2_compiles_final_plan and families_requiring_family_result_contract(
             context,
             analysis_types=analysis_types,
-            sealed_survival_suite=(
-                sealed_survival_suite_coordinates(planning_contract_context) is not None
-            ),
+            sealed_survival_suite=sealed_survival_suite,
         )
         if unwritable:
             raise ProgressivePlanCompileError(
@@ -4751,6 +4752,20 @@ class ProgressivePlannerAgent:
             self._attempt.resume_validated = resume_checkpoint is not None
             self.capture_efficiency_metrics()
             return outline
+        # The outline committed the family; if no owner can write its result
+        # contract, stop without a retry that would re-read the question.
+        unwritable = families_requiring_family_result_contract(
+            context,
+            analysis_types=(outline.analysis_type,),
+            sealed_survival_suite=sealed_survival_suite,
+        )
+        if unwritable:
+            raise ProgressivePlanCompileError(
+                "progressive_family_result_contract_unwritable",
+                f"the outline selected {unwritable[0]}, whose primary result "
+                "contract no host owner can write",
+                path="analysis_type",
+            )
 
         require_robustness_intent = bool(
             enforce_article_contract
