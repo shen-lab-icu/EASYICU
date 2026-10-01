@@ -676,6 +676,23 @@ def timing_design_closed(plan: Optional[AnalysisPlan]) -> bool:
     )
 
 
+def _signed_survival_suite_step(
+    plan: AnalysisPlan,
+    runtime_authority: CurrentCaseScientificRuntimeAuthority | None,
+) -> Optional[AnalysisStep]:
+    """The one plan step the given signed landmark survival suite binds, if any."""
+
+    if getattr(runtime_authority, "plan_method", None) != _LANDMARK_SURVIVAL_SUITE_METHOD:
+        return None
+    steps = [
+        step for step in plan.steps
+        if _method_head(step) == _LANDMARK_SURVIVAL_SUITE_METHOD
+        and runtime_authority.plan_rule_ref in step.icu_rule_refs
+        and runtime_authority.table_one_product in step.expected_outputs
+    ]
+    return steps[0] if len(steps) == 1 else None
+
+
 def _bound_to_runtime_contract(step: AnalysisStep) -> bool:
     return any(str(ref).startswith("scientific_runtime_contract:") for ref in step.icu_rule_refs)
 
@@ -1261,6 +1278,7 @@ def _sensitivity_facts(
     # Specs the signed primary executes as its own design: executed, but they
     # restate the primary analysis rather than vary it.
     primary_design_spec_ids: set[str] = set()
+    survival_suite = _signed_survival_suite_step(plan, runtime_authority)
     executable: set[str] = set()
     typed_executable: set[str] = set()
     protocol_only: set[str] = set()
@@ -1350,6 +1368,19 @@ def _sensitivity_facts(
                         executed_spec_ids.add(spec_id)
                         if spec.strategy in _PRIMARY_DESIGN_STRATEGIES:
                             primary_design_spec_ids.add(spec_id)
+            if survival_suite is not None and step.step_id == survival_suite.step_id:
+                # The signed survival suite executes the declared landmark
+                # design itself: the same landmark and follow-up coordinate.
+                for spec_id, spec in typed_specs.items():
+                    timing = {spec.event_time_variable, spec.observation_duration_variable} - {None}
+                    if (
+                        spec.strategy == "landmark"
+                        and spec.landmark_hours == runtime_authority.landmark_hours
+                        and timing
+                        and timing <= {runtime_authority.followup_time_column}
+                    ):
+                        executed_spec_ids.add(spec_id)
+                        primary_design_spec_ids.add(spec_id)
             if method == "signed_landmark_categorical_association":
                 signed_refs = {
                     str(ref)
@@ -2524,7 +2555,20 @@ def build_plan_scientific_review(
                 remediation_route="study_authority_change" if declared else "agent_plan_revision",
                 requires_user_authorization=declared,
             ))
-    baseline_coverage = baseline_requirement_coverage(context, plan)
+    # The signed survival suite describes its own Table 1 roster by exposure.
+    survival_suite = _signed_survival_suite_step(plan, runtime_authority)
+    baseline_coverage = baseline_requirement_coverage(
+        context, plan,
+        signed_rosters=(
+            [(
+                survival_suite.step_id,
+                {runtime_authority.exposure_status_column},
+                set(runtime_authority.table_one_columns),
+            )]
+            if survival_suite is not None
+            else []
+        ),
+    )
     accepted_baseline = context_baseline_requirements(context)
     for table in baseline_coverage["tables"]:
         if table["complete"]:
