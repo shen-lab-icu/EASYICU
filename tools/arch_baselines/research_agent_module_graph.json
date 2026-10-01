@@ -5905,6 +5905,10 @@
     ],
     [
       "easyicu.research_agent.execution.runners.landmark_survival_executor",
+      "easyicu.research_agent.contracts.manuscript_result_structure"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_survival_executor",
       "easyicu.research_agent.execution.runners.plausibility_receipt"
     ],
     [
@@ -13180,7 +13184,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3287,
+    "edge_count": 3288,
     "largest_scc_size": 0,
     "module_count": 767,
     "package_count": 36,
