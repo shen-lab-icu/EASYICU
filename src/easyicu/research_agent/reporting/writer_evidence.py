@@ -553,7 +553,8 @@ def _survival_reporting_is_authorized(
     ):
         return False
     raw_owner_authority = (
-        payload.get("schema_version") == "easyicu.survival_reporting/1"
+        payload.get("schema_version")
+        in {"easyicu.survival_reporting/1", "easyicu.survival_reporting/2"}
         and payload.get("execution_owner") == "landmark_survival_executor_v1"
     )
     envelope_owner_authority = (

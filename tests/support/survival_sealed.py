@@ -237,6 +237,24 @@ def synthetic_survival_rows(n: int = 600, *, sex_missing: int = 37) -> pd.DataFr
     })
 
 
+def synthetic_crossing_hazard_rows(n: int = 600) -> pd.DataFrame:
+    """The same synthetic study with crossing hazards, so the PH test rejects.
+
+    Exposed stays die on a decreasing hazard and comparator stays on an
+    increasing one (Weibull shapes 0.6 and 1.6); deaths after day 89 are
+    censored at the 90-day horizon.
+    """
+
+    rng = np.random.default_rng(20261002)
+    frame = synthetic_survival_rows(n)
+    shape = np.where(frame["rrt"].to_numpy() == 1, 0.6, 1.6)
+    time = 1.5 + 160.0 * rng.weibull(shape)
+    died = time < 89.0
+    frame["mort_90d"] = died.astype("int64")
+    frame["followup_days_90d"] = np.where(died, time, 90.0)
+    return frame
+
+
 def run_signed_suite(authority, frame: pd.DataFrame, out_dir):
     """Execute the signed suite on synthetic rows as the host runner does."""
 

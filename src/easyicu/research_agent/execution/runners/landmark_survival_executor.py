@@ -21,6 +21,12 @@ from ...authority.current_case_scientific_runtime import (
     load_current_case_scientific_runtime_authority,
 )
 from ...authority.plausibility import FlagOnlyPlausibilityScope
+from ...authority.prespecified_rule_outcomes import RULE_OUTCOME_SCHEMA_VERSION
+from ...authority.survival_scientific_claims import (
+    CONSTANT_HAZARD_RATIO_CLAIM_ID,
+    SURVIVAL_REPORTING_SCHEMA_VERSION,
+    interval_hazard_ratio_claim_id,
+)
 from ...contracts.host_scaffold import HostScaffoldedScript
 from ...contracts.manuscript_result_structure import PRIMARY_RESULT_HEADINGS_BY_FAMILY
 from ...schema import AnalysisPlan, AnalysisStep
@@ -802,101 +808,60 @@ def build_survival_manuscript_projection(
 ) -> dict[str, object]:
     """Build the reporting projection owned by the signed survival executor.
 
-    Both claims land in the survival results subsection the Writer is required
-    to write for a survival plan: the interval-specific model is part of the
-    signed suite's own non-PH policy, not a separate sensitivity step.  The
-    closing sentence states the PH outcome the suite actually observed.
+    The hazard ratios and the PH decision are host scientific claims compiled
+    from the suite's reporting envelope; host claim placement reports each in
+    the survival results and restores the Conclusion from the primary one.
+    The projection adds what no placement reaches: the primary hazard-ratio
+    tokens in the abstract Results.  The restricted-mean contrast has no
+    claim type, so it is one neutral numeric sentence, worded in the strict
+    Results grammar, in the abstract Results and the survival results.  Like
+    the claims, it reads as an estimate with its confidence interval: a p value
+    below 0.001 has no display the numeric binder can trace.
     """
 
     if interval_count <= 0:
         raise ValueError("survival manuscript projection requires intervals")
+    abstract = {"kind": "abstract_label", "label": "Results"}
+    survival = {
+        "kind": "markdown_heading",
+        "label": PRIMARY_RESULT_HEADINGS_BY_FAMILY["survival"],
+    }
     rmst_fragments = [
-        {"text": "Through "},
+        {"text": "The unadjusted restricted mean survival time at a horizon of "},
         {"numeric_path": "rmst.tau_days_from_landmark", "format_spec": ".0f"},
-        {
-            "text": (
-                " days after the landmark, the unadjusted Kaplan–Meier plug-in "
-                "restricted mean survival time was "
-            )
-        },
+        {"text": " days was "},
         {"numeric_path": "rmst.exposed_rmst_days", "format_spec": ".3f"},
         {"text": " days in the exposed group and "},
         {"numeric_path": "rmst.comparator_rmst_days", "format_spec": ".3f"},
-        {
-            "text": (
-                " days in the comparator group, an exposed-minus-comparator "
-                "difference of "
-            )
-        },
+        {"text": " days in the comparator group, a difference of "},
         {"numeric_path": "rmst.difference_days", "format_spec": ".3f"},
         {"text": " days (95% CI, "},
         {"numeric_path": "rmst.ci_low", "format_spec": ".3f"},
         {"text": " to "},
         {"numeric_path": "rmst.ci_high", "format_spec": ".3f"},
-        {"text": "; p = "},
-        {"numeric_path": "rmst.p_value", "format_spec": ".6g"},
         {"text": ")."},
     ]
-    interval_fragments = [
-        {
-            "text": (
-                "The adjusted piecewise time-varying association estimates "
-                "for the exposed-versus-comparator contrast were "
-            )
-        }
-    ]
-    for index in range(interval_count):
-        prefix = f"time_varying_adjusted_association.intervals[{index}]"
-        if index:
-            interval_fragments.append({"text": "; "})
-        interval_fragments.extend(
-            [
-                {"text": "days "},
-                {"numeric_path": f"{prefix}.start_days", "format_spec": ".0f"},
-                {"text": "–"},
-                {"numeric_path": f"{prefix}.end_days", "format_spec": ".0f"},
-                {"text": ": hazard ratio "},
-                {"numeric_path": f"{prefix}.hazard_ratio", "format_spec": ".3f"},
-                {"text": " (95% CI, "},
-                {"numeric_path": f"{prefix}.ci_low", "format_spec": ".3f"},
-                {"text": " to "},
-                {"numeric_path": f"{prefix}.ci_high", "format_spec": ".3f"},
-                {"text": "; p = "},
-                {"numeric_path": f"{prefix}.p_value", "format_spec": ".6g"},
-                {"text": ")"},
-            ]
-        )
-    interval_fragments.append(
-        {
-            "text": (
-                ". These interval-specific estimates were retained because "
-                "the proportional-hazards assumption was rejected."
-                if proportional_hazards_rejected
-                else ". These prespecified interval-specific estimates are reported "
-                "although the proportional-hazards assumption was not rejected."
-            )
-        }
+    primary_claims = (
+        tuple(interval_hazard_ratio_claim_id(position) for position in range(1, interval_count + 1))
+        if proportional_hazards_rejected
+        else (CONSTANT_HAZARD_RATIO_CLAIM_ID,)
     )
-    heading = PRIMARY_RESULT_HEADINGS_BY_FAMILY["survival"]
     return {
-        "schema_version": "easyicu.manuscript_projection/1",
+        "schema_version": "easyicu.manuscript_projection/2",
         "claims": [
             {
-                "claim_id": "primary_rmst_contrast",
-                "targets": [
-                    {"kind": "abstract_label", "label": "Results"},
-                    {"kind": "markdown_heading", "label": heading},
-                ],
+                "claim_id": "restricted_mean_survival_contrast",
+                "targets": [abstract, survival],
                 "fragments": rmst_fragments,
             },
-            {
-                "claim_id": "time_varying_association_intervals",
-                "targets": [
-                    {"kind": "abstract_label", "label": "Results"},
-                    {"kind": "markdown_heading", "label": heading},
-                ],
-                "fragments": interval_fragments,
-            },
+            *(
+                {
+                    "claim_id": f"abstract_{claim_id}",
+                    "targets": [abstract],
+                    "scientific_claim_id": claim_id,
+                }
+                for claim_id in primary_claims
+            ),
         ],
     }
 
@@ -1240,12 +1205,34 @@ def run_landmark_survival_suite(
     if rmst_table is not None and exposure_intervals is not None:
         rmst_row = rmst_table.iloc[0]
         reportable_survival_results = {
-            "schema_version": "easyicu.survival_reporting/1",
+            "schema_version": SURVIVAL_REPORTING_SCHEMA_VERSION,
             "execution_owner": "landmark_survival_executor_v1",
             "interpretation_ceiling": "descriptive_prognostic_association_not_causal",
+            # Typed claim coordinates: context concepts read by their names.
+            "exposure": sealed.exposure_status_column,
+            "outcome": sealed.event_column,
+            "analysis_unit": sealed.analysis_unit_label,
+            "landmark_hours": float(sealed.landmark_hours),
             "contrast": str(rmst_row["contrast"]),
+            "adjustment_columns": list(sealed.adjustment_columns),
+            "adjusted_hazard_ratio": {
+                "hazard_ratio": float(primary_row["hazard_ratio"]),
+                "ci_low": float(primary_row["ci_low"]),
+                "ci_high": float(primary_row["ci_high"]),
+            },
             "constant_hazard_ratio_authorized": not ph_violation,
             "proportional_hazards_status": ph_status,
+            "proportional_hazards_test": {
+                "schema_version": RULE_OUTCOME_SCHEMA_VERSION,
+                "rule": "proportional_hazards_test",
+                "diagnostic": "schoenfeld_residual_test",
+                "alpha": float(sealed.proportional_hazards_alpha),
+                "global_p_value": global_p,
+                "exposure_p_value": exposure_p,
+                "disposition": (
+                    "assumption_rejected" if ph_violation else "assumption_not_rejected"
+                ),
+            },
             "rmst": {
                 "method": str(rmst_row["adjustment"]),
                 "tau_days_from_landmark": float(rmst_row["tau_days_from_landmark"]),

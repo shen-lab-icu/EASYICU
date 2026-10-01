@@ -2440,6 +2440,10 @@
       "easyicu.research_agent.authority.sensitivity_scientific_claims"
     ],
     [
+      "easyicu.research_agent.authority.scientific_claims",
+      "easyicu.research_agent.authority.survival_scientific_claims"
+    ],
+    [
       "easyicu.research_agent.authority.sensitivity_scientific_claims",
       "easyicu.research_agent.authority.claim_coordinates"
     ],
@@ -2538,6 +2542,10 @@
     [
       "easyicu.research_agent.authority.step_runtime",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.authority.survival_scientific_claims",
+      "easyicu.research_agent.authority.prespecified_rule_outcomes"
     ],
     [
       "easyicu.research_agent.authority.table_one_binding",
@@ -5898,6 +5906,14 @@
     [
       "easyicu.research_agent.execution.runners.landmark_survival_executor",
       "easyicu.research_agent.authority.plausibility"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_survival_executor",
+      "easyicu.research_agent.authority.prespecified_rule_outcomes"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_survival_executor",
+      "easyicu.research_agent.authority.survival_scientific_claims"
     ],
     [
       "easyicu.research_agent.execution.runners.landmark_survival_executor",
@@ -11524,6 +11540,10 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.reporting.manuscript_projection",
+      "easyicu.research_agent.authority.scientific_claims"
+    ],
+    [
       "easyicu.research_agent.reporting.manuscript_provenance",
       "easyicu.research_agent.authority.evidence_store"
     ],
@@ -13184,9 +13204,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3288,
+    "edge_count": 3293,
     "largest_scc_size": 0,
-    "module_count": 767,
+    "module_count": 768,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -13307,6 +13327,7 @@
     "easyicu.research_agent.authority.step_capsule": "authority/step_capsule.py",
     "easyicu.research_agent.authority.step_recovery": "authority/step_recovery.py",
     "easyicu.research_agent.authority.step_runtime": "authority/step_runtime.py",
+    "easyicu.research_agent.authority.survival_scientific_claims": "authority/survival_scientific_claims.py",
     "easyicu.research_agent.authority.table_one_binding": "authority/table_one_binding.py",
     "easyicu.research_agent.authority.time_varying_runtime": "authority/time_varying_runtime.py",
     "easyicu.research_agent.authority.tool_promotion": "authority/tool_promotion.py",

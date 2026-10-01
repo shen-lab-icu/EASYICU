@@ -261,12 +261,68 @@ class PlannedAnalysisFeasibilityOutcome(_RuleOutcome):
         )
 
 
+class ProportionalHazardsTestOutcome(_RuleOutcome):
+    """The prespecified proportional-hazards test and the estimate it permits."""
+
+    rule: Literal["proportional_hazards_test"]
+    diagnostic: Literal["schoenfeld_residual_test"]
+    alpha: float = Field(gt=0.0, lt=1.0)
+    # A test statistic far in the tail can underflow its p value to zero.
+    global_p_value: float = Field(ge=0.0, le=1.0)
+    exposure_p_value: float = Field(ge=0.0, le=1.0)
+    disposition: Literal["assumption_rejected", "assumption_not_rejected"]
+
+    @model_validator(mode="after")
+    def _disposition_follows_from_the_test(self) -> "ProportionalHazardsTestOutcome":
+        rejected = min(self.global_p_value, self.exposure_p_value) < self.alpha
+        expected = "assumption_rejected" if rejected else "assumption_not_rejected"
+        if self.disposition != expected:
+            raise ValueError("proportional-hazards disposition contradicts its own p values")
+        return self
+
+    @property
+    def report_section(self) -> ReportSection:
+        return "primary"
+
+    def result_sentence(self) -> str:
+        # The decision and its threshold only: a p value far in the tail has no
+        # reader display the numeric binder can trace ("p < 0.001" cites a
+        # threshold, not a registered value).  The owner's PH diagnostics keep
+        # the exact p values.
+        alpha = _reader_proportion(self.alpha)
+        if self.disposition == "assumption_rejected":
+            return (
+                "The Schoenfeld residual test rejected the proportional-hazards "
+                f"assumption at the prespecified alpha of {alpha}, so interval-specific "
+                "adjusted hazard ratios are the primary estimates instead of one "
+                "constant hazard ratio."
+            )
+        return (
+            "The Schoenfeld residual test did not reject the proportional-hazards "
+            f"assumption at the prespecified alpha of {alpha}, so one constant "
+            "adjusted hazard ratio is the primary estimate."
+        )
+
+    def conclusion_sentence(self) -> str:
+        if self.disposition == "assumption_rejected":
+            return (
+                "Because the proportional-hazards assumption was rejected, the "
+                "association is described by interval-specific hazard ratios rather "
+                "than one constant hazard ratio."
+            )
+        return (
+            "The proportional-hazards assumption was not rejected, so the "
+            "association is summarized by one constant adjusted hazard ratio."
+        )
+
+
 PrespecifiedRuleOutcome = Annotated[
     Union[
         ClassCountSelectionOutcome,
         ObservedWindowEligibilityOutcome,
         FrozenClassDescriptionOutcome,
         PlannedAnalysisFeasibilityOutcome,
+        ProportionalHazardsTestOutcome,
     ],
     Field(discriminator="rule"),
 ]
@@ -278,6 +334,7 @@ _CLAIM_IDS = {
     "minimum_observed_windows": "observed_window_rule",
     "frozen_class_description": "class_description_rule",
     "planned_analysis_feasibility": "feasibility_rule",
+    "proportional_hazards_test": "proportional_hazards_rule",
 }
 #: The claim's subject and measure, as the machine claim names them.
 _CLAIM_TERMS = {
@@ -287,17 +344,20 @@ _CLAIM_TERMS = {
     "minimum_observed_windows": ("observed windows", "class-model eligibility"),
     "frozen_class_description": ("frozen class solution", "class description"),
     "planned_analysis_feasibility": ("planned analysis", "executability"),
+    "proportional_hazards_test": ("proportional hazards", "Schoenfeld residual test"),
 }
 _CLAIM_POPULATIONS = {
     "information_criterion_class_count": "the class-model records",
     "minimum_observed_windows": "the representation input records",
     "frozen_class_description": "the analysis cohort",
     "planned_analysis_feasibility": "the study inputs",
+    "proportional_hazards_test": "the survival model records",
 }
 _CLAIM_ROLES = {
     "information_criterion_class_count": "primary",
     "minimum_observed_windows": "auxiliary",
     "frozen_class_description": "auxiliary",
+    "proportional_hazards_test": "primary",
 }
 
 
@@ -360,6 +420,7 @@ __all__ = [
     "ObservedWindowEligibilityOutcome",
     "PlannedAnalysisFeasibilityOutcome",
     "PrespecifiedRuleOutcome",
+    "ProportionalHazardsTestOutcome",
     "RULE_OUTCOMES_KEY",
     "RULE_OUTCOME_CLAIM_SCHEMA_VERSION",
     "RULE_OUTCOME_SCHEMA_VERSION",
