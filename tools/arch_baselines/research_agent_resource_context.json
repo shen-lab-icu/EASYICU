@@ -1,7 +1,7 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/schema.py"
+      "src/easyicu/research_agent/reporting/article_contract.py"
     ],
     "summary_changes": {}
   },
@@ -614,9 +614,16 @@
         "src/easyicu/research_agent/schema.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "reporting/article_contract.py credits data_quality to a sealed survival suite that declares its own measurement audit; source digest only, no resource or context size change",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/reporting/article_contract.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "AD (mixed-mode latent class model for declared ordinal trajectory coordinates): schema.py's TrajectoryStabilitySpec.refit_engine admits the mixed-mode best-of-10 engine, which the host's signed trajectory policy names when a coordinate is declared ordinal; a spec naming no engine keeps the single-start default. Only schema.py's source digest changes; the Canonical9 planner/resource envelope is unchanged. Precedent: B, U, AA.",
+  "baseline_reason": "reporting/article_contract.py credits data_quality to a sealed survival suite that declares its own measurement audit; source digest only, no resource or context size change",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -641,7 +648,7 @@
     "src/easyicu/research_agent/planning/study_design.py": "84e7d9c0974ca3d1f9deadcc22de065586a9be20fcdf66f101f931469b64cad0",
     "src/easyicu/research_agent/planning/study_design_playbook.py": "fa07ee36a06d560ca9266999516bf1f394c4ac522d5b1436bf689d274b07888d",
     "src/easyicu/research_agent/providers/prompts/v1/system.txt": "cf9212ac318beac1b2690738506b0b9d658bc28db4b98a521022d57a317eb692",
-    "src/easyicu/research_agent/reporting/article_contract.py": "8c71677ee831deb11d5b1fcc1f3d20e7ca7086e10105039a63ef083d5d39688c",
+    "src/easyicu/research_agent/reporting/article_contract.py": "e905dbc389d449630c87aba037adcc54cea5df3658cbd1504516e89d9453eec2",
     "src/easyicu/research_agent/research_context/outbound.py": "1177d09e1513e6ebdf4cd5c7c3642717e8ff47b65435a4523acb3157d013cc40",
     "src/easyicu/research_agent/resources/capability.py": "3fc6dea8ffde23a358dfccd02b5f31620069fcccba8012807057a9913c70ca84",
     "src/easyicu/research_agent/resources/capability_runtime.py": "5e707e8a4b3a5f375ae579951b07c3e1f07d635b8db093109c613936c8b3bc71",

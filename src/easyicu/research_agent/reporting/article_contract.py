@@ -83,6 +83,11 @@ _SEALED_HOST_SUITE_ROLES: Dict[str, frozenset] = {
     ),
     "signed_source_feasibility_fail_closed": frozenset({"feasibility_decision"}),
 }
+#: A sealed host suite that publishes its own measurement audit owns the
+#: data-quality role through that product; a suite signed without it does not.
+_SEALED_HOST_SUITE_AUDIT_PRODUCTS: Dict[str, str] = {
+    "signed_landmark_survival_suite": "table:landmark_measurement_audit",
+}
 
 _ROLE_ALIASES: Dict[str, Sequence[str]] = {
     "cohort_accounting": (
@@ -625,11 +630,12 @@ def roles_covered_by_plan(
         # more precise run-specific name.
         if step.measurement_audit_spec is not None:
             typed_roles_by_step.setdefault(step.step_id, set()).add("data_quality")
-        sealed_roles = _SEALED_HOST_SUITE_ROLES.get(
-            str(step.method or "").strip().casefold().split(" with ", 1)[0]
-        )
+        sealed_method = str(step.method or "").strip().casefold().split(" with ", 1)[0]
+        sealed_roles = _SEALED_HOST_SUITE_ROLES.get(sealed_method)
         if sealed_roles:
             typed_roles_by_step.setdefault(step.step_id, set()).update(sealed_roles)
+        if _SEALED_HOST_SUITE_AUDIT_PRODUCTS.get(sealed_method) in step.expected_outputs:
+            typed_roles_by_step.setdefault(step.step_id, set()).add("data_quality")
         if step.scientific_action_id is None:
             continue
         try:
