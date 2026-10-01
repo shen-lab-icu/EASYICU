@@ -28,6 +28,7 @@ from easyicu.research_agent.authority.current_case_scientific_runtime import (
     load_current_case_scientific_runtime_authority,
 )
 from easyicu.research_agent.execution.runners.landmark_survival_executor import (
+    run_landmark_survival_figure,
     run_landmark_survival_suite,
 )
 from easyicu.research_agent.orchestration.scientific_runtime import ScientificRuntimeAuthorities
@@ -261,4 +262,39 @@ def run_signed_suite(authority, frame: pd.DataFrame, out_dir):
     return run_landmark_survival_suite(
         frame=frame, authority=authority, runtime_projection_sha256="e" * 64, out_dir=out_dir,
         input_product="table:analysis_cohort", input_evidence_id="cohort", input_sha256="b" * 64,
+    )
+
+
+#: The signed suite's result tables, by the authority field naming each product.
+SURVIVAL_SOURCES = {
+    "km_product": "landmark_km_curve.csv",
+    "cox_product": "landmark_cox_summary.csv",
+    "risk_set_product": "landmark_risk_set_flow.csv",
+    "ph_product": "landmark_ph_diagnostics.csv",
+    "rmst_product": "landmark_rmst_summary.csv",
+    "time_varying_cox_product": "landmark_time_varying_cox_summary.csv",
+}
+
+
+def render_signed_survival_figure(authority, suite_dir, figure_dir):
+    """Render the suite's figure from the tables in ``suite_dir``, as the host figure step does."""
+
+    products = {
+        getattr(authority, field): name
+        for field, name in SURVIVAL_SOURCES.items()
+        if getattr(authority, field) is not None
+    }
+
+    def read(name):
+        path = suite_dir / name
+        return pd.read_csv(path) if path.exists() else None
+
+    return run_landmark_survival_figure(
+        km_table=read(SURVIVAL_SOURCES["km_product"]), cox_table=read(SURVIVAL_SOURCES["cox_product"]),
+        rmst_table=read(SURVIVAL_SOURCES["rmst_product"]),
+        risk_flow=read(SURVIVAL_SOURCES["risk_set_product"]),
+        time_varying_table=read(SURVIVAL_SOURCES["time_varying_cox_product"]),
+        ph_table=read(SURVIVAL_SOURCES["ph_product"]),
+        source_paths={product: suite_dir / name for product, name in products.items()},
+        authority=authority, out_dir=figure_dir,
     )
