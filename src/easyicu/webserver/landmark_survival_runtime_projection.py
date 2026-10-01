@@ -41,6 +41,7 @@ from easyicu.research_agent.icu_rules import VariableKind
 from easyicu.research_agent.planning.analysis_types import canonical_analysis_family
 from easyicu.research_agent.planning.sensitivity_authority import (
     PrespecifiedSensitivitySpec,
+    normalize_prespecified_sensitivities,
 )
 
 from . import primary_cohort
@@ -110,34 +111,7 @@ def _schema_names(universe_path: Path) -> set[str]:
         ) from exc
 
 
-def compile_landmark_survival_runtime_projection(
-    *,
-    study: Mapping[str, Any],
-    sensitivity_specs: Sequence[PrespecifiedSensitivitySpec],
-    primary_exposure: str | None,
-    primary_exposure_source: str | None,
-    target_outcome: str | None,
-    declared_covariates: Sequence[str],
-    covariate_operationalizations: Mapping[str, str],
-    target_is_event_status: bool,
-    universe_path: Path,
-    scientific_configuration_sha256: str,
-    literature_citation_keys: Sequence[str] = (),
-    direct_comparator_literature_keys: Sequence[str] = (),
-    dependence: Any = None,
-) -> WebScientificRuntimeProjection | None:
-    """Bind a survival-family landmark study to the sealed survival suite.
-
-    Returns ``None`` when the study does not declare the survival family or
-    declares no landmark, so the remaining projections keep their routes.
-    """
-
-    if not survival_family_declared(study):
-        return None
-    landmark = one_sensitivity_spec(sensitivity_specs, strategy="landmark")
-    if landmark is None:
-        return None
-
+def _supported_endpoint(target_outcome: str | None) -> Any:
     endpoint = fixed_horizon_mortality_endpoint(str(target_outcome or ""))
     if endpoint is None:
         raise WebScientificRuntimeProjectionError(
@@ -150,14 +124,13 @@ def compile_landmark_survival_runtime_projection(
                 "field": "execution_concepts.outcome",
             },
         )
+    return endpoint
 
+
+def _declaration_missing_fields(
+    study: Mapping[str, Any], landmark: PrespecifiedSensitivitySpec
+) -> list[str]:
     missing_fields: list[str] = []
-    if not primary_exposure:
-        missing_fields.append("primary_exposure")
-    if not primary_exposure_source:
-        missing_fields.append("primary_exposure_source")
-    if not target_is_event_status:
-        missing_fields.append("binary_event_status_outcome")
     # The suite seals its roster before planning; a Planner-selectable roster
     # has no executable owner in this schema version.
     if str(study.get("covariate_selection") or "") != "exact":
@@ -168,12 +141,20 @@ def compile_landmark_survival_runtime_projection(
         missing_fields.append("landmark.exclude_negative_event_times")
     if landmark.observation_duration_variable is None:
         missing_fields.append("landmark.observation_duration_variable")
-    if missing_fields:
-        raise WebScientificRuntimeProjectionError(
-            "web_landmark_survival_authority_incomplete",
-            "The landmark survival design lacks executable typed coordinates.",
-            details={"missing_fields": missing_fields},
-        )
+    return missing_fields
+
+
+def _incomplete(missing_fields: list[str]) -> None:
+    raise WebScientificRuntimeProjectionError(
+        "web_landmark_survival_authority_incomplete",
+        "The landmark survival design lacks executable typed coordinates.",
+        details={"missing_fields": missing_fields},
+    )
+
+
+def _declared_landmark_hours(
+    study: Mapping[str, Any], landmark: PrespecifiedSensitivitySpec, endpoint: Any
+) -> float:
     if (
         landmark.observation_duration_variable != endpoint.followup_concept
         or landmark.observation_duration_unit != endpoint.followup_unit
@@ -208,8 +189,6 @@ def compile_landmark_survival_runtime_projection(
 
     design = study.get("analysis_design")
     design = design if isinstance(design, Mapping) else {}
-    analysis_unit = str(design.get("analysis_unit") or "")
-    variance_estimator = str(design.get("variance_estimator") or "")
     if not survival_inference_supported(design):
         raise WebScientificRuntimeProjectionError(
             "web_landmark_survival_design_unsupported",
@@ -217,13 +196,125 @@ def compile_landmark_survival_runtime_projection(
             "stay; the declared analysis unit or variance estimator has no "
             "executable owner.",
             details={
-                "analysis_unit": analysis_unit,
-                "variance_estimator": variance_estimator,
+                "analysis_unit": str(design.get("analysis_unit") or ""),
+                "variance_estimator": str(design.get("variance_estimator") or ""),
                 "supported_analysis_unit": _SUPPORTED_ANALYSIS_UNIT,
                 "supported_variance_estimator": _SUPPORTED_VARIANCE_ESTIMATOR,
                 "field": "analysis_design",
             },
         )
+    return landmark_hours
+
+
+def _declared_landmark(
+    study: Mapping[str, Any],
+) -> PrespecifiedSensitivitySpec | None:
+    try:
+        specs = normalize_prespecified_sensitivities(study.get("sensitivity_specs"))
+    except ValueError as exc:
+        raise WebScientificRuntimeProjectionError(
+            "web_landmark_survival_authority_incomplete",
+            "The study's sensitivity specifications are not typed.",
+            details={"field": "sensitivity_specs", "reason": str(exc)[:500]},
+        ) from exc
+    return one_sensitivity_spec(specs, strategy="landmark")
+
+
+def validate_landmark_survival_declaration(
+    study: Mapping[str, Any],
+) -> float | None:
+    """The source-independent half of this owner's contract.
+
+    A caller that writes a survival design checks it here, before a launch
+    spends anything, instead of restating the policy.  Returns the declared
+    landmark in hours, or ``None`` for a study that declares no survival
+    family or no landmark (the projection's ``None`` routes).  The exposure
+    kind and the materialized columns are checked by the projection itself.
+    """
+
+    if not survival_family_declared(study):
+        return None
+    landmark = _declared_landmark(study)
+    if landmark is None:
+        return None
+    execution = study.get("execution_concepts")
+    execution = execution if isinstance(execution, Mapping) else {}
+    endpoint = _supported_endpoint(execution.get("outcome"))
+    missing_fields = [
+        *(
+            []
+            if str(execution.get("primary_exposure") or "").strip()
+            else ["execution_concepts.primary_exposure"]
+        ),
+        *_declaration_missing_fields(study, landmark),
+    ]
+    if missing_fields:
+        _incomplete(missing_fields)
+    return _declared_landmark_hours(study, landmark, endpoint)
+
+
+def survival_exposure_onset_column(
+    study: Mapping[str, Any],
+    *,
+    sensitivity_specs: Sequence[PrespecifiedSensitivitySpec],
+    primary_exposure_source: str | None,
+) -> str | None:
+    """The onset column a declared landmark survival design binds, else ``None``.
+
+    Formal materialization emits the producer-owned onset companion for every
+    exposure; a zero-row planning catalog lists only the operational columns
+    the host binds.  Naming the onset here lets a candidate plan bind the
+    suite without reading patient rows.
+    """
+
+    source = str(primary_exposure_source or "").strip()
+    landmarks = [spec for spec in sensitivity_specs if spec.strategy == "landmark"]
+    if not source or len(landmarks) != 1 or not survival_family_declared(study):
+        return None
+    return f"{source}{_ONSET_SUFFIX}"
+
+
+def compile_landmark_survival_runtime_projection(
+    *,
+    study: Mapping[str, Any],
+    sensitivity_specs: Sequence[PrespecifiedSensitivitySpec],
+    primary_exposure: str | None,
+    primary_exposure_source: str | None,
+    target_outcome: str | None,
+    declared_covariates: Sequence[str],
+    covariate_operationalizations: Mapping[str, str],
+    target_is_event_status: bool,
+    universe_path: Path,
+    scientific_configuration_sha256: str,
+    literature_citation_keys: Sequence[str] = (),
+    direct_comparator_literature_keys: Sequence[str] = (),
+    dependence: Any = None,
+) -> WebScientificRuntimeProjection | None:
+    """Bind a survival-family landmark study to the sealed survival suite.
+
+    Returns ``None`` when the study does not declare the survival family or
+    declares no landmark, so the remaining projections keep their routes.
+    """
+
+    if not survival_family_declared(study):
+        return None
+    landmark = one_sensitivity_spec(sensitivity_specs, strategy="landmark")
+    if landmark is None:
+        return None
+
+    endpoint = _supported_endpoint(target_outcome)
+
+    missing_fields: list[str] = []
+    if not primary_exposure:
+        missing_fields.append("primary_exposure")
+    if not primary_exposure_source:
+        missing_fields.append("primary_exposure_source")
+    if not target_is_event_status:
+        missing_fields.append("binary_event_status_outcome")
+    missing_fields.extend(_declaration_missing_fields(study, landmark))
+    if missing_fields:
+        _incomplete(missing_fields)
+    landmark_hours = _declared_landmark_hours(study, landmark, endpoint)
 
     exposure_kind, _levels = primary_exposure_kind(
         universe_path=universe_path,
@@ -318,7 +409,7 @@ def compile_landmark_survival_runtime_projection(
         "analysis_unit_label": (
             _FIRST_STAY_UNIT_LABEL
             if primary_cohort.first_icu_stay_only(study.get("cohort"))
-            else _ANALYSIS_UNIT_LABELS[analysis_unit]
+            else _ANALYSIS_UNIT_LABELS[_SUPPORTED_ANALYSIS_UNIT]
         ),
         "derived_exposure_column": (
             f"incident_{primary_exposure_source}_by_{landmark_token}h"
@@ -364,6 +455,8 @@ def compile_landmark_survival_runtime_projection(
 
 __all__ = [
     "compile_landmark_survival_runtime_projection",
+    "survival_exposure_onset_column",
     "survival_family_declared",
     "survival_inference_supported",
+    "validate_landmark_survival_declaration",
 ]

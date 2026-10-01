@@ -22,6 +22,7 @@ def _request(exposure: str) -> SimpleNamespace:
             adjustment_columns=("age", "sex"),
             source_columns=("event_time", "event", exposure, "age", "sex"),
         ),
+        proposed_suite=None,
         primary_exposure=exposure,
         outcome="death",
         cluster_unit="patient",

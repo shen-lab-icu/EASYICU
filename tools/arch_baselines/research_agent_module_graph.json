@@ -9513,6 +9513,10 @@
     ],
     [
       "easyicu.research_agent.planning.family_spec.landmark_categorical_template",
+      "easyicu.research_agent.contracts.model_terms"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.landmark_categorical_template",
       "easyicu.research_agent.planning.design_selection"
     ],
     [
@@ -9642,6 +9646,10 @@
     [
       "easyicu.research_agent.planning.family_spec.survival_template",
       "easyicu.research_agent.canonical_json"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.survival_template",
+      "easyicu.research_agent.contracts.model_terms"
     ],
     [
       "easyicu.research_agent.planning.family_spec.survival_template",
@@ -13172,7 +13180,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3285,
+    "edge_count": 3287,
     "largest_scc_size": 0,
     "module_count": 767,
     "package_count": 36,

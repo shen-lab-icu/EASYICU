@@ -29,6 +29,9 @@ from easyicu.webserver import (
     dataio,
     provider_adapter,
 )
+from easyicu.webserver.landmark_survival_runtime_projection import (
+    survival_exposure_onset_column,
+)
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
 from easyicu.webserver.plan_change_request import PlanChangeRequest
 from easyicu.webserver.research_plan_revision import (
@@ -280,6 +283,11 @@ def _prepare_scientific_launch(
                 study.get("covariate_operationalizations") or {}
             ),
             sensitivity_specs=sensitivity_specs,
+            exposure_onset_column=survival_exposure_onset_column(
+                study,
+                sensitivity_specs=sensitivity_specs,
+                primary_exposure_source=planning_exposure_source,
+            ),
         )
         if metadata_only_planning
         else ()

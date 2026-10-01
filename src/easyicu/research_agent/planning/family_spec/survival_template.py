@@ -1,4 +1,4 @@
-"""Host template for the sealed fixed-landmark survival suite family.
+"""Host template for the fixed-landmark survival suite family.
 
 A time-to-event question whose runtime is already sealed by a
 ``LandmarkSurvivalRuntimeAuthority`` (risk-set rule, Table 1, Kaplan-Meier,
@@ -9,6 +9,13 @@ projects a cohort-accounting step and one primary step that names the sealed
 owner and copies its source columns and products verbatim; the host's
 ``bind_plan`` later replaces that primary with the signed suite and its
 renderer, so every analysis coordinate is the authority's.
+
+A study with no survival design yet gets the suite the host *could* seal as a
+proposal (``request.proposed_suite``): the same layout, but the Planner selects
+the adjustment roster, the not-yet-materialized onset column stays out of the
+step inputs, and the host keeps the roster with its rationales and timing as
+the plan's ``adjustment_proposal``.  Review compiles that design into the study
+configuration; nothing runs until the host seals the suite and replans.
 
 Step layout:
 
@@ -26,6 +33,7 @@ from __future__ import annotations
 from typing import Callable
 
 from ...canonical_json import canonical_sha256
+from ...contracts.model_terms import AdjustmentProposal
 from ..design_selection import ResearchDesignCandidate, ResearchDesignSelection
 from ..progressive_contract import (
     ProgressiveDisplayLabel,
@@ -45,6 +53,7 @@ from .contract import (
     FamilyPlanSpec,
     FamilySpecError,
     FamilySpecRequest,
+    SealedSuiteCoordinates,
 )
 from .landmark_categorical_template import (
     FamilySkeletonDraft,
@@ -103,17 +112,73 @@ def _bindings(
     return bindings
 
 
+def _suite(request: FamilySpecRequest) -> SealedSuiteCoordinates:
+    suite = request.sealed_suite or request.proposed_suite
+    assert suite is not None
+    return suite
+
+
+def _roster(request: FamilySpecRequest, spec: FamilyPlanSpec) -> list[str]:
+    """The sealed roster, the user's exact roster, or the Planner's selection."""
+
+    if request.sealed_suite is not None:
+        return list(request.sealed_suite.adjustment_columns)
+    if request.adjustment_selection == "exact":
+        return list(request.exact_roster)
+    return [item.name for item in spec.adjustment_set]
+
+
+def _bound_columns(request: FamilySpecRequest, roster: list[str]) -> list[str]:
+    """Columns the primary step binds; a proposal's onset is not materialized yet."""
+
+    suite = _suite(request)
+    if request.sealed_suite is not None:
+        return list(suite.source_columns)
+    return list(
+        dict.fromkeys(
+            [suite.exposure_status_column, suite.event_column, suite.followup_time_column, *roster]
+        )
+    )
+
+
+def _adjustment_proposal(
+    request: FamilySpecRequest, spec: FamilyPlanSpec, roster: list[str]
+) -> AdjustmentProposal:
+    """Keep the proposal's roster with its rationale and host-proven timing."""
+
+    if request.adjustment_selection == "exact":
+        rationales = dict(request.exact_rationales)
+        roles = dict(request.exact_temporal_roles)
+    else:
+        rationales = {item.name: item.clinical_rationale for item in spec.adjustment_set}
+        roles = {}
+        for name in roster:
+            candidate = request.candidate(name)
+            role = candidate.host_temporal_role if candidate is not None else None
+            if role is not None:
+                roles[name] = role
+    return AdjustmentProposal(
+        source_step_id="primary_survival_suite",
+        source_requirement_id="proposed_landmark_survival_suite",
+        covariates=roster,
+        covariate_rationales={name: rationales[name] for name in roster if name in rationales},
+        covariate_temporal_roles={name: roles[name] for name in roster if name in roles},
+    )
+
+
 def _design_selection(
     request: FamilySpecRequest,
     spec: FamilyPlanSpec,
     *,
     method_keys: list[str],
+    roster: list[str] | None = None,
 ) -> ResearchDesignSelection:
-    sealed = request.sealed_suite
-    assert sealed is not None
+    roster = _roster(request, spec) if roster is None else roster
+    sealed = _suite(request)
+    proposed = request.proposed_suite is not None
     exposure = _label(spec, request.primary_exposure)
     outcome = _label(spec, request.outcome)
-    adjustment_text = ", ".join(_label(spec, name) for name in sealed.adjustment_columns)
+    adjustment_text = ", ".join(_label(spec, name) for name in roster) or "no covariates"
     landmark = f"{sealed.landmark_hours:g} h after ICU admission"
     horizon = f"{sealed.endpoint_horizon_days:g} days"
     unit_text = (
@@ -129,7 +194,8 @@ def _design_selection(
     )
     landmark_zh = f"ICU 入院后 {sealed.landmark_hours:g} h"
     horizon_zh = f"{sealed.endpoint_horizon_days:g} 天"
-    adjustment_zh = listing([_label(spec, name) for name in sealed.adjustment_columns], language)
+    adjustment_zh = listing([_label(spec, name) for name in roster], language) or "无协变量"
+    columns = _bound_columns(request, roster)
     comparator_keys = [
         key for key in request.comparison_literature_keys if key in request.allowed_literature_citation_keys
     ]
@@ -148,11 +214,17 @@ def _design_selection(
             f"endpoint is followed to {horizon} with administrative censoring."
         ),
         primary_method=(
-            "Sealed fixed-landmark survival suite: risk-set accounting, Table 1, Kaplan-Meier, "
-            "adjusted Cox with a Schoenfeld audit, and a signed non-PH policy (interval-specific "
-            "Cox or an unadjusted RMST contrast), rendered as one composite figure."
+            (
+                "Proposed fixed-landmark survival suite, sealed by the host once review "
+                "compiles this design"
+                if proposed
+                else "Sealed fixed-landmark survival suite"
+            )
+            + ": risk-set accounting, Table 1, Kaplan-Meier, adjusted Cox with a Schoenfeld "
+            "audit, and a signed non-PH policy (interval-specific Cox or an unadjusted RMST "
+            "contrast), rendered as one composite figure."
         ),
-        required_variables=[request.identity_column, *sealed.source_columns],
+        required_variables=[request.identity_column, *columns],
         assumptions=[
             "Exposure onset times are recorded so prevalent exposure at time zero can be excluded.",
             f"{unit_text[0].upper()}{unit_text[1:]}.",
@@ -201,9 +273,13 @@ def _design_selection(
         ),
         disposition="selected",
         decision_reason=(
-            "The question asks for a time-respecting survival association; the sealed landmark "
-            "suite fixes exposure status before follow-up starts and audits its own assumptions, "
-            "chosen before any data are read."
+            "The question asks for a time-respecting survival association; the host's landmark "
+            "survival suite fixes exposure status before follow-up starts and audits its own "
+            "assumptions; it runs only after review compiles this design and the host seals it."
+            if proposed
+            else "The question asks for a time-respecting survival association; the sealed "
+            "landmark suite fixes exposure status before follow-up starts and audits its own "
+            "assumptions, chosen before any data are read."
         ),
     )
     rejected = ResearchDesignCandidate(
@@ -213,7 +289,7 @@ def _design_selection(
         time_zero="ICU admission.",
         observation_window=f"Status at {horizon} only.",
         primary_method="Logistic regression on the horizon status.",
-        required_variables=[request.identity_column, *sealed.source_columns],
+        required_variables=[request.identity_column, *columns],
         assumptions=["Censoring before the horizon is negligible."],
         literature_citation_keys=[
             key for key in ("strobe_2007", "record_2015") if key in request.allowed_literature_citation_keys
@@ -269,7 +345,9 @@ def build_landmark_survival_skeleton(
 ) -> FamilySkeletonDraft:
     """Project outline, foundation, and step materializations from the sealed suite."""
 
-    if request.family_id != LANDMARK_SURVIVAL_FAMILY_ID or request.sealed_suite is None:
+    if request.family_id != LANDMARK_SURVIVAL_FAMILY_ID or (
+        request.sealed_suite is None and request.proposed_suite is None
+    ):
         raise FamilySpecError(
             "family_spec_template_mismatch",
             "the landmark survival template received a request for another family",
@@ -281,7 +359,10 @@ def build_landmark_survival_skeleton(
             "the spec does not bind this request",
             path="request_sha256",
         )
-    sealed = request.sealed_suite
+    sealed = _suite(request)
+    proposed = request.proposed_suite is not None
+    roster = _roster(request, spec)
+    columns = _bound_columns(request, roster)
     identity = request.identity_column
     method_keys = [
         key
@@ -300,7 +381,9 @@ def build_landmark_survival_skeleton(
             ]
         )
     )[:12]
-    design = _design_selection(request, spec, method_keys=[k for k in method_keys if k in set(primary_keys)][:6])
+    design = _design_selection(
+        request, spec, method_keys=[k for k in method_keys if k in set(primary_keys)][:6], roster=roster,
+    )
     exposure_label = _label(spec, request.primary_exposure)
     outcome_label = _label(spec, request.outcome)
     def _summary_for(name: str) -> str:
@@ -314,13 +397,16 @@ def build_landmark_survival_skeleton(
             "landmark risk-set gates are applied."
         ),
         "baseline_context": (
-            f"Describe the sealed adjustment columns by {exposure_label} with standardized "
-            "differences only; the sealed suite recomputes Table 1 on the landmark risk set."
+            f"Describe the {'selected' if proposed else 'sealed'} adjustment columns by "
+            f"{exposure_label} with standardized differences only; the suite recomputes "
+            "Table 1 on the landmark risk set."
         ),
         "primary_survival_suite": (
-            f"Execute the sealed {sealed.landmark_hours:g} h landmark survival suite for "
-            f"{exposure_label} and {outcome_label}: risk-set accounting, Table 1, Kaplan-Meier, "
-            "adjusted Cox with the Schoenfeld audit and its signed non-proportional-hazards policy."
+            f"Execute the {'proposed' if proposed else 'sealed'} {sealed.landmark_hours:g} h "
+            f"landmark survival suite for {exposure_label} and {outcome_label}: risk-set "
+            "accounting, Table 1, Kaplan-Meier, adjusted Cox with the Schoenfeld audit and its "
+            "signed non-proportional-hazards policy"
+            + ("; it runs once review compiles the design and the host seals it." if proposed else ".")
         ),
         "report": (
             "Produce the zero-patient-row plan report for human review: sources, denominators, "
@@ -336,19 +422,19 @@ def build_landmark_survival_skeleton(
         _outline_step(
             step_id="baseline_context", role="auxiliary", module_id="table_one",
             objective=objectives["baseline_context"], depends_on=["cohort_accounting"],
-            variable_names=[request.primary_exposure, *sealed.adjustment_columns], citations=[],
+            variable_names=[request.primary_exposure, *roster], citations=[],
         ),
         _outline_step(
             step_id="primary_survival_suite", role="primary", module_id="custom_analysis",
             objective=objectives["primary_survival_suite"], depends_on=["cohort_accounting"],
-            variable_names=list(sealed.source_columns), citations=primary_keys,
+            variable_names=columns, citations=primary_keys,
         ),
     ]
     outline_steps.append(
         _outline_step(
             step_id="report", role="auxiliary", module_id="report",
             objective=objectives["report"], depends_on=[step.step_id for step in outline_steps],
-            variable_names=[identity, *sealed.source_columns], citations=[],
+            variable_names=[identity, *columns], citations=[],
         )
     )
     outline = ProgressivePlanOutline(
@@ -361,9 +447,15 @@ def build_landmark_survival_skeleton(
         design_selection=design,
         steps=outline_steps,
         rationale=(
-            f"Family template {request.family_id}: every executable coordinate is the sealed runtime "
-            "authority's; the Planner supplied reader labels and comparator applications only. All "
-            "results stay at plan level under the analysis-only claim ceiling."
+            f"Family template {request.family_id}: every coordinate except the adjustment roster "
+            "is the host's proposed suite, compiled into the study configuration at review before "
+            "the host seals it; the Planner selected the roster and supplied reader labels and "
+            "comparator applications. All results stay at plan level under the analysis-only "
+            "claim ceiling."
+            if proposed
+            else f"Family template {request.family_id}: every executable coordinate is the sealed "
+            "runtime authority's; the Planner supplied reader labels and comparator applications "
+            "only. All results stay at plan level under the analysis-only claim ceiling."
         ),
     )
     if bind_outline is not None:
@@ -378,11 +470,11 @@ def build_landmark_survival_skeleton(
         ProgressiveSkeletonStep(
             step_id="baseline_context", planned_analysis_role="auxiliary", module_id="table_one",
             objective=objectives["baseline_context"], depends_on=["cohort_accounting"],
-            raw_inputs=list(dict.fromkeys([request.primary_exposure, *sealed.adjustment_columns])),
+            raw_inputs=list(dict.fromkeys([request.primary_exposure, *roster])),
             table_one_group_by=request.primary_exposure, table_one_mode="descriptive_smd_only",
             table_one_variables=[
                 ProgressiveTableOneVariable(name=name, summary=_summary_for(name))
-                for name in sealed.adjustment_columns
+                for name in roster
             ],
             literature_bindings=[],
         ),
@@ -392,7 +484,7 @@ def build_landmark_survival_skeleton(
             # Exactly the sealed source columns and owned products: the host's
             # bind_plan replaces this step with the signed suite and refuses any
             # drift from these coordinates.
-            raw_inputs=list(sealed.source_columns),
+            raw_inputs=columns,
             outputs=[
                 ProgressiveOutputIntent(product_id=product, semantic_role="custom")
                 for product in sealed.analysis_outputs
@@ -447,7 +539,12 @@ def build_landmark_survival_skeleton(
         )
         for step in steps
     )
-    return FamilySkeletonDraft(outline=outline, foundation=foundation, materializations=materializations)
+    return FamilySkeletonDraft(
+        outline=outline,
+        foundation=foundation,
+        materializations=materializations,
+        adjustment_proposal=_adjustment_proposal(request, spec, roster) if proposed else None,
+    )
 
 
 __all__ = ["build_landmark_survival_skeleton"]

@@ -83,7 +83,13 @@ from ..trajectory.runtime_validation import (
     signed_trajectory_plan_contract_errors,
 )
 from .figure_strategy import ArticleFigureStrategy
-from .adjustment_authority import AdjustmentSetAuthority, owner_declared_baseline_static
+from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
+
+from .adjustment_authority import (
+    AdjustmentSetAuthority,
+    host_outer_feature_window_end_hours,
+    owner_declared_baseline_static,
+)
 from .analysis_types import (
     canonical_analysis_family,
     longitudinal_trajectory_requested,
@@ -463,6 +469,10 @@ def patient_identity_available(context: ResearchContext) -> bool:
     return context_patient_group_authority(context) is not None
 
 
+#: The host's landmark survival suite.  It closes a temporal design only once
+#: its signed runtime authority binds the step; a draft that names it is a
+#: proposal the host has not sealed.
+_LANDMARK_SURVIVAL_SUITE_METHOD = "signed_landmark_survival_suite"
 _EXECUTABLE_TEMPORAL_METHODS = frozenset(
     {
         "signed_landmark_restricted_cubic_spline",
@@ -659,9 +669,15 @@ def timing_design_closed(plan: Optional[AnalysisPlan]) -> bool:
         _method_head(step) in _EXECUTABLE_TEMPORAL_METHODS
         and (_method_head(step) != "time_varying_exposure_model" or (
             step.scientific_capability == "association_time_varying_exposure_v1"
-            and any(str(ref).startswith("scientific_runtime_contract:") for ref in step.icu_rule_refs)
-        )) for step in applicable
+            and _bound_to_runtime_contract(step)
+        ))
+        and (_method_head(step) != _LANDMARK_SURVIVAL_SUITE_METHOD or _bound_to_runtime_contract(step))
+        for step in applicable
     )
+
+
+def _bound_to_runtime_contract(step: AnalysisStep) -> bool:
+    return any(str(ref).startswith("scientific_runtime_contract:") for ref in step.icu_rule_refs)
 
 
 def temporal_inference_required(plan: Optional[AnalysisPlan]) -> bool:
@@ -2181,6 +2197,128 @@ def trajectory_representation_facts(
     }
 
 
+def landmark_survival_suite_facts(
+    context: ResearchContext,
+    plan: Optional[AnalysisPlan],
+) -> Optional[dict[str, Any]]:
+    """Publish the coordinates of a survival plan that names the landmark suite.
+
+    ``None`` unless the plan's one primary step names the suite.  A step its
+    signed runtime authority binds is sealed.  Otherwise the plan is the host's
+    proposal: the exposure, the fixed-horizon endpoint with its paired
+    follow-up, the landmark at the end of the host-bound feature window, and
+    the reviewed roster the plan keeps as its ``adjustment_proposal``.  It is
+    executable only when every coordinate closes from those owners.
+    """
+
+    if plan is None or canonical_analysis_family(plan.analysis_type) != "survival":
+        return None
+    primaries = [
+        step for step in plan.steps
+        if step.planned_analysis_role == "primary"
+        and _method_head(step) == _LANDMARK_SURVIVAL_SUITE_METHOD
+    ]
+    if len(primaries) != 1:
+        return None
+    primary = primaries[0]
+    if _bound_to_runtime_contract(primary):
+        return {"sealed": True}
+    exposure = str(context.primary_exposure or "").strip()
+    outcome = str(context.target_outcome or "").strip()
+    endpoint = fixed_horizon_mortality_endpoint(outcome)
+    landmark = host_outer_feature_window_end_hours(context)
+    proposal = plan.adjustment_proposal
+    covariates = [str(name) for name in proposal.covariates] if proposal is not None else []
+    rationales = dict(proposal.covariate_rationales) if proposal is not None else {}
+    roles = dict(proposal.covariate_temporal_roles) if proposal is not None else {}
+    executable = bool(
+        exposure
+        and endpoint is not None
+        and landmark is not None
+        and 0 < landmark < endpoint.horizon_days * 24.0
+        and {exposure, endpoint.event_concept, endpoint.followup_concept}.issubset(primary.inputs)
+        and proposal is not None
+        and set(covariates).issubset(primary.inputs)
+        and set(rationales) == set(covariates)
+        and set(roles) == set(covariates)
+    )
+    return {
+        "sealed": False,
+        "executable": executable,
+        "exposure": exposure or None,
+        "event_column": endpoint.event_concept if endpoint is not None else (outcome or None),
+        "followup_column": endpoint.followup_concept if endpoint is not None else None,
+        "endpoint_horizon_days": float(endpoint.horizon_days) if endpoint is not None else None,
+        "landmark_hours": float(landmark) if landmark is not None else None,
+        "covariates": covariates,
+        "covariate_rationales": rationales,
+        "covariate_temporal_roles": roles,
+    }
+
+
+def landmark_survival_suite_findings(
+    facts: Optional[Mapping[str, Any]],
+) -> list[PlanScientificFinding]:
+    """Block a plan that names the landmark survival suite the host has not sealed.
+
+    When its coordinates close, the host can seal the suite from them, so the
+    remedy is a runtime capability, not a question for the researcher.
+    Otherwise the plan names an owner nothing can execute and must be revised.
+    """
+
+    if facts is None or facts.get("sealed"):
+        return []
+    refs = [
+        "analysis_plan.json.steps",
+        "analysis_plan.json.adjustment_proposal",
+        "research_context.json.variables",
+    ]
+    if facts.get("executable"):
+        roster = ", ".join(facts["covariates"]) or "no covariates"
+        return [
+            PlanScientificFinding(
+                code="SURVIVAL_LANDMARK_OWNER_NOT_SEALED",
+                severity="blocker",
+                dimension="statistical_design",
+                message=(
+                    "The survival plan names the landmark survival suite, but the study "
+                    "declares no survival design, so the host has not sealed it. Its "
+                    f"coordinates close: exposure {facts['exposure']}, endpoint "
+                    f"{facts['event_column']} with follow-up {facts['followup_column']}, "
+                    f"landmark {facts['landmark_hours']:g} h, adjustment for {roster}."
+                ),
+                evidence_refs=refs,
+                remediation=(
+                    "Compile these coordinates into the study's survival design and "
+                    "replan on the signed landmark survival suite. Keep the question, "
+                    "the exposure, the endpoint and the reviewed roster; the researcher "
+                    "does not choose the method."
+                ),
+                remediation_route="runtime_capability",
+            )
+        ]
+    return [
+        PlanScientificFinding(
+            code="SURVIVAL_LANDMARK_OWNER_NOT_SEALED",
+            severity="blocker",
+            dimension="statistical_design",
+            message=(
+                "The survival plan names the landmark survival suite, but the host has "
+                "not sealed it and its coordinates do not close: it needs a fixed-horizon "
+                "mortality endpoint with its follow-up, a host-bound landmark inside the "
+                "horizon, and a reviewed roster with a rationale and timing for every "
+                "covariate."
+            ),
+            evidence_refs=refs,
+            remediation=(
+                "Revise the plan so its primary step is an estimator this study can "
+                "execute, or declare the survival design the suite needs."
+            ),
+            remediation_route="agent_plan_revision",
+        )
+    ]
+
+
 def trajectory_representation_findings(
     facts: Optional[Mapping[str, Any]],
 ) -> list[PlanScientificFinding]:
@@ -2466,6 +2604,8 @@ def build_plan_scientific_review(
             ))
     trajectory_representation = trajectory_representation_facts(context, plan)
     findings.extend(trajectory_representation_findings(trajectory_representation))
+    survival_suite = landmark_survival_suite_facts(context, plan)
+    findings.extend(landmark_survival_suite_findings(survival_suite))
     required_source_columns = {
         context.primary_exposure, context.target_outcome,
         *context.cohort.outcome_columns,
@@ -2577,6 +2717,10 @@ def build_plan_scientific_review(
     )
     expected_outcomes = requested_outcomes(context)
     covered_outcomes = planned_model_outcomes(plan, context)
+    if survival_suite is not None and survival_suite.get("executable"):
+        # The proposed suite's event column has its owner; compiling the
+        # design seals the suite that produces it.
+        covered_outcomes = (*covered_outcomes, str(survival_suite["event_column"]))
     missing_model_outcomes = tuple(
         outcome for outcome in expected_outcomes if outcome not in covered_outcomes
     )
@@ -2797,8 +2941,19 @@ def build_plan_scientific_review(
                 ),
             )
         )
-    if not _endpoint_resolved(context) and not context_declares_source_feasibility_scope(
-        context
+    # A proposed survival suite that closes binds the requested time-to-event
+    # endpoint from the fixed-horizon vocabulary (event, paired follow-up,
+    # origin, censoring) when its design is compiled; that is not a question
+    # for the researcher.
+    survival_endpoint_proposed = bool(
+        survival_suite is not None
+        and survival_suite.get("executable")
+        and survival_suite.get("event_column") == str(context.target_outcome or "").strip()
+    )
+    if (
+        not _endpoint_resolved(context)
+        and not survival_endpoint_proposed
+        and not context_declares_source_feasibility_scope(context)
     ):
         # A fail-closed feasibility scope analyses no outcome: the reviewed
         # protocol declared the contrast non-identifiable before any endpoint.
@@ -3613,6 +3768,11 @@ def build_plan_scientific_review(
             ],
             "repeated_unit_design_executable": repeated_unit_design_closed(context, plan),
             "trajectory_representation": trajectory_representation,
+            **(
+                {"landmark_survival_suite": survival_suite}
+                if survival_suite is not None
+                else {}
+            ),
             "primary_covariates": list(covariates),
             "requested_outcomes": list(expected_outcomes),
             "requested_estimate_coverage": {
@@ -3703,6 +3863,8 @@ __all__ = [
     "required_method_layers_for_plan",
     "scientific_steps",
     "timing_design_closed",
+    "landmark_survival_suite_facts",
+    "landmark_survival_suite_findings",
     "trajectory_representation_facts",
     "trajectory_representation_findings",
 ]

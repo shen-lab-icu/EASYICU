@@ -3515,6 +3515,7 @@ class ProgressivePlannerAgent:
         direct_comparator_literature_keys: Sequence[str],
         allowed_know_how_decisions: Mapping[str, Mapping[str, Any]] | None,
         enforce_article_contract: bool,
+        adjustment_proposal: Any = None,
     ) -> tuple[AnalysisPlan, ProgressivePlanCompileReceipt]:
         reporting_source_keys = _article_reporting_source_keys(
             article_context=article_context,
@@ -3527,6 +3528,7 @@ class ProgressivePlannerAgent:
             allowed_literature_citation_keys=allowed_literature_citation_keys,
             allowed_know_how_decisions=allowed_know_how_decisions,
             host_reporting_method_source_keys=reporting_source_keys,
+            adjustment_proposal=adjustment_proposal,
         )
         _accept_compiled_plan(
             plan=plan,
@@ -4138,9 +4140,9 @@ class ProgressivePlannerAgent:
                 article_context=article_context,
             )
 
-        def compile_and_accept(skeleton: ProgressivePlanSkeleton):
+        def compile_and_accept(skeleton: ProgressivePlanSkeleton, adjustment_proposal=None):
             return self._compile_and_accept(
-                skeleton,
+                skeleton, adjustment_proposal=adjustment_proposal,
                 agent_context=context,
                 article_context=article_context,
                 allowed_literature_citation_keys=allowed_citations,
