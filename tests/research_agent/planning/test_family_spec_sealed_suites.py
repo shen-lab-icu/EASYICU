@@ -393,13 +393,15 @@ def _sealed_suite(suite: str) -> tuple[ResearchContext, str]:
         ("trajectory", FIXED_WINDOW_TRAJECTORY_FAMILY_ID),
     ],
 )
-def test_a_sealed_suite_refuses_an_accepted_baseline_roster_before_the_provider(
+def test_a_sealed_suite_keeps_only_an_accepted_roster_its_own_table_one_describes(
     suite: str, family_id: str
 ) -> None:
-    """Its signed owner replaces the plan's steps, so no Table 1 could keep the roster.
+    """A signed owner replaces the plan's steps; only its own Table 1 can keep a roster.
 
-    The outline's baseline gate refused such a plan only after the Planner's
-    Provider call; the request now refuses it while it is sealed.
+    The signed survival suite describes its sealed adjustment columns, which
+    include age and sex here, so it keeps them.  The trajectory suite has no
+    Table 1: the outline's baseline gate refused such a plan only after the
+    Planner's Provider call, and the request now refuses it while it is sealed.
     """
 
     context, disclosure = _sealed_suite(suite)
@@ -435,6 +437,9 @@ def test_a_sealed_suite_refuses_an_accepted_baseline_roster_before_the_provider(
         required_primary_cohort_selection_mode="all_input_rows",
         planning_contract_context=disclosure,
     )
+    if suite == "survival":
+        assert build_family_spec_request(accepting, **request_kwargs).family_id == family_id
+        return
     with pytest.raises(FamilySpecError) as caught:
         build_family_spec_request(accepting, **request_kwargs)
     assert caught.value.reason_code == "family_spec_accepted_baseline_unsatisfiable"

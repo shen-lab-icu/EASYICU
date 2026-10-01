@@ -201,9 +201,17 @@ def baseline_requirement_projection(context: ResearchContext) -> dict[str, Any]:
 
 
 def baseline_requirement_coverage(
-    context: ResearchContext, plan: AnalysisPlan,
+    context: ResearchContext,
+    plan: AnalysisPlan,
+    *,
+    signed_rosters: Sequence[tuple[str, set[str], set[str]]] = (),
 ) -> dict[str, Any]:
-    """Check rows declared by closed table owners, never arbitrary inputs."""
+    """Check rows declared by closed table owners, never arbitrary inputs.
+
+    ``signed_rosters`` are Table 1 rosters a signed runtime owner declares for
+    one of the plan's steps -- ``(step_id, group columns, variables)`` -- which
+    the caller resolves from that owner's contract, not from the step's inputs.
+    """
 
     rosters = [
         (step.step_id, {step.table_one_spec.group_by},
@@ -214,6 +222,7 @@ def baseline_requirement_coverage(
         (step.step_id, set(), set(declared_summary_columns(step)))
         for step in plan.steps if is_descriptive_cohort_summary_step(step)
     )
+    rosters.extend(signed_rosters)
     return _baseline_roster_coverage(context, rosters)
 
 

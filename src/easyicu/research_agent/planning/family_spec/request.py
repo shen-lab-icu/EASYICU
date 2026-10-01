@@ -842,10 +842,10 @@ def _bind_accepted_baseline_rows(
     columns the owner accepts for it, named column first, with the summary its
     closed domain implies.  A roster grouped by another column, or a row with
     no prepared column, is a host contradiction refused before any Provider
-    call.  So is any roster for a sealed suite: its signed owner replaces the
-    plan's steps when the plan is bound, so no Table 1 could keep it, and the
-    outline's baseline gate would refuse it only after the Provider call.  Any
-    other family without a Table 1 is left to the existing gates.
+    call.  A sealed suite keeps a roster only through its own Table 1 (see
+    ``_require_sealed_table_one``); the outline's baseline gate would refuse
+    any other roster only after the Provider call.  Any other family without
+    a Table 1 is left to the existing gates.
     """
 
     projection = baseline_requirement_projection(context)
@@ -854,13 +854,8 @@ def _bind_accepted_baseline_rows(
     if request.family_id in SEALED_SUITE_FAMILY_IDS and any(
         table["variables"] for table in projection["tables"]
     ):
-        raise FamilySpecError(
-            "family_spec_accepted_baseline_unsatisfiable",
-            "the accepted baseline roster cannot be kept: this family's sealed "
-            "suite replaces the plan's steps when the plan is bound and has no "
-            "Table 1",
-            path="accepted_baseline_rows",
-        )
+        _require_sealed_table_one(request, projection)
+        return request
     group_column = table_one_group_column(request)
     if group_column is None:
         return request
@@ -902,6 +897,53 @@ def _bind_accepted_baseline_rows(
             "accepted_baseline_rows": [row.model_dump(mode="json") for row in rows.values()],
         }
     )
+
+
+def _require_sealed_table_one(request: FamilySpecRequest, projection: Mapping[str, Any]) -> None:
+    """Refuse an accepted roster a sealed suite's own Table 1 does not describe.
+
+    The signed landmark survival suite describes its sealed adjustment columns
+    by exposure status, in the template's baseline step and again on the
+    landmark risk set.  A reviewed candidate's roster therefore survives the
+    replan when it is grouped by that exposure and every row binds one of
+    those columns.  A row outside the sealed roster could not be kept, and the
+    trajectory and feasibility suites replace the plan's steps with no Table 1
+    at all; both are refused before any Provider call.
+    """
+
+    sealed = request.sealed_suite
+    if request.family_id != LANDMARK_SURVIVAL_FAMILY_ID or sealed is None:
+        raise FamilySpecError(
+            "family_spec_accepted_baseline_unsatisfiable",
+            "the accepted baseline roster cannot be kept: this family's sealed "
+            "suite replaces the plan's steps when the plan is bound and has no "
+            "Table 1",
+            path="accepted_baseline_rows",
+        )
+    described = set(sealed.adjustment_columns)
+    lost: list[str] = []
+    for table in projection["tables"]:
+        group = table["group_by"]
+        if group["required"] is not None and sealed.exposure_status_column not in group["available_columns"]:
+            raise FamilySpecError(
+                "family_spec_accepted_baseline_grouping_unsupported",
+                f"the accepted baseline roster is grouped by {group['required']!r}; "
+                f"the sealed suite's Table 1 is grouped by {sealed.exposure_status_column!r}",
+                path="accepted_baseline_rows",
+            )
+        lost.extend(
+            row["required"]
+            for row in table["variables"]
+            if not described.intersection(row["available_columns"])
+        )
+    if lost:
+        raise FamilySpecError(
+            "family_spec_accepted_baseline_unsatisfiable",
+            "the accepted baseline roster cannot be kept: the sealed suite's Table 1 "
+            f"describes only its adjustment columns {sorted(described)!r}, not "
+            + ", ".join(repr(name) for name in dict.fromkeys(lost)),
+            path="accepted_baseline_rows",
+        )
 
 
 def _refuse_eligibility_after_time_zero(request: FamilySpecRequest) -> None:
