@@ -683,6 +683,20 @@ def landmark_design_roster(request: "FamilySpecRequest", covariates: Sequence[st
     )
 
 
+def planner_selects_adjustment(request: "FamilySpecRequest") -> bool:
+    """Whether the Planner selects this request's adjustment roster.
+
+    A landmark association family and a proposed survival suite estimate an
+    adjusted association; unless an exact user roster is sealed, the Planner
+    selects its roster from the selectable candidates.  The spec contract and
+    the written response shape both read this, so they cannot disagree.
+    """
+
+    return request.adjustment_selection == "planner_selectable" and (
+        request.family_id in LANDMARK_FAMILY_IDS or request.proposed_suite is not None
+    )
+
+
 def table_one_group_column(request: "FamilySpecRequest") -> Optional[str]:
     """The column a family's own Table 1 is grouped by, or ``None`` without one.
 
@@ -980,13 +994,8 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
                 f"{item.name!r} reference index exceeds its closed domain",
                 path=f"{path}.reference_level_index",
             )
-    selectable = [item.name for item in request.adjustment_candidates if item.selectable]
-    if (
-        not names
-        and selectable
-        and request.adjustment_selection == "planner_selectable"
-        and (request.family_id in LANDMARK_FAMILY_IDS or request.proposed_suite is not None)
-    ):
+    selectable = [item.name for item in request.selectable_candidates]
+    if not names and selectable and planner_selects_adjustment(request):
         # An adjusted-association family whose roster is the Planner's: an
         # empty set is no adjusted estimate and leaves its Table 1 nothing
         # to describe, so the Planner repairs it rather than the build failing.
@@ -996,7 +1005,7 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
             f"selectable confounders ({', '.join(selectable[:8])}"
             f"{', ...' if len(selectable) > 8 else ''}): select those that can cause both "
             "the exposure and the outcome and are fixed before time zero, each with "
-            "its rationale; an empty adjustment set is not an adjusted estimate",
+            "its clinical_rationale; an empty adjustment set is not an adjusted estimate",
             path="adjustment_set",
         )
     if request.proposed_suite is not None:

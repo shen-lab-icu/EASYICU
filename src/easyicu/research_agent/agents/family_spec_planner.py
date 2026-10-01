@@ -42,6 +42,7 @@ from ..planning.family_spec.contract import (
     FamilyPlanSpec,
     FamilySpecRequest,
     literature_design_card_keys_by_dimension,
+    planner_selects_adjustment,
     validate_family_plan_spec,
 )
 from ..planning.literature_bindings import missing_required_method_layers
@@ -87,7 +88,7 @@ FAMILY_SPEC_GUIDE = """You are the EasyICU study statistician completing one typ
 
 The host has already fixed the study family, exposure, outcome, time zero, cohort eligibility, dependence handling, sensitivity axes, and every executable step. You decide only what a statistician decides at this point:
 
-1. For a landmark association family: the adjustment set. Choose covariates ONLY from the candidates marked selectable. For each, give one concise clinical confounding rationale (why it can cause both the exposure and the outcome, and that it is fixed before time zero). Do not adjust for a consequence of the exposure or for the outcome. A candidate marked not selectable cannot be used, whatever the rationale; explain any omission in roster_decision_note. If the roster is an exact user-reviewed roster, return it unchanged.
+1. For a landmark association family: the adjustment set. Choose covariates ONLY from the candidates marked selectable, at least one whenever any is selectable. For each, give one concise clinical confounding rationale (why it can cause both the exposure and the outcome, and that it is fixed before time zero). Do not adjust for a consequence of the exposure or for the outcome. A candidate marked not selectable cannot be used, whatever the rationale; explain any omission in roster_decision_note. If the roster is an exact user-reviewed roster, return it unchanged.
    Code each covariate with one of that candidate's allowed_codings. A binary or categorical coding needs reference_level_index, the 0-based index of the reference level (below the candidate's closed_domain_size); a continuous coding takes reference_level_index null.
    For the descriptive family: no adjustment set (leave it empty). Instead choose baseline_variables for Table 1 ONLY from the candidates marked selectable; they describe the groups and imply no model.
    For the phenotyping family: no adjustment set. Choose feature_variables (at least two) ONLY from the feature candidates marked selectable — the numeric window-bound measurements that should define candidate phenotypes; choose baseline_variables for the cluster characterization from the baseline candidates; optionally choose one cohort_membership_column from the membership flags when the question restricts the population to rows with that flag. Label every selected feature and baseline variable.
@@ -511,7 +512,9 @@ def family_spec_response_shape(request: FamilySpecRequest) -> str:
         f'- "family_id": "{request.family_id}"',
         f'- "request_sha256": "{request.request_sha256}" (copy exactly)',
     ]
-    if request.family_id not in LANDMARK_FAMILY_IDS:
+    planner_roster = planner_selects_adjustment(request)
+    # A proposed survival suite adjusts like a landmark association family.
+    if request.family_id not in LANDMARK_FAMILY_IDS and request.proposed_suite is None:
         lines.append('- "adjustment_set": [] (this family fits no adjusted model)')
     else:
         if request.adjustment_selection == "exact":
@@ -527,6 +530,7 @@ def family_spec_response_shape(request: FamilySpecRequest) -> str:
             '"reference_level_index" (0-based index of the reference level, below the '
             "candidate's closed_domain_size, for binary or categorical coding; null for "
             'continuous coding), and "clinical_rationale" (one sentence, 16-500 characters)'
+            + ("; at least one entry" if planner_roster and selectable else "")
         )
     if request.family_id in {DESCRIPTIVE_FAMILY_ID, PHENOTYPING_FAMILY_ID}:
         lines.append('- "baseline_variables": array of distinct names from ' + json.dumps(selectable))
@@ -550,10 +554,7 @@ def family_spec_response_shape(request: FamilySpecRequest) -> str:
         DESCRIPTIVE_FAMILY_ID,
         PHENOTYPING_FAMILY_ID,
         PREDICTION_FAMILY_ID,
-    } or (
-        request.family_id in LANDMARK_FAMILY_IDS
-        and request.adjustment_selection != "exact"
-    )
+    } or planner_roster
     label_keys = [*request.required_reader_label_keys, *request.level_label_keys]
     example_key = next((key for key in label_keys if "_" in key), label_keys[0] if label_keys else "")
     lines.append(
