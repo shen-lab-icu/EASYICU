@@ -15,16 +15,12 @@ from __future__ import annotations
 
 import json
 
-import numpy as np
 import pandas as pd
 import pytest
 
 from easyicu.research_agent.authority.current_case_scientific_runtime import (
     build_current_case_scientific_runtime_authority,
     load_current_case_scientific_runtime_authority,
-)
-from easyicu.research_agent.execution.runners.landmark_survival_executor import (
-    run_landmark_survival_suite,
 )
 from easyicu.research_agent.orchestration.scientific_runtime import ScientificRuntimeAuthorities
 from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
@@ -33,7 +29,13 @@ from easyicu.research_agent.reporting.article_contract import (
     build_article_analysis_contract,
     roles_covered_by_plan,
 )
-from tests.support.survival_sealed import bound_survival_plan, sealed_draft, sealed_survival
+from tests.support.survival_sealed import (
+    bound_survival_plan,
+    run_signed_suite as _run,
+    sealed_draft,
+    sealed_survival,
+    synthetic_survival_rows as _frame,
+)
 
 AUDIT = "table:landmark_measurement_audit"
 
@@ -44,34 +46,6 @@ def _unsigned_audit(authority):
     body = authority.model_dump(mode="json", exclude={"execution_contract_sha256", "measurement_audit_product"})
     body["plan_outputs"] = [value for value in body["plan_outputs"] if value != AUDIT]
     return build_current_case_scientific_runtime_authority(body)
-
-
-def _frame(n: int = 600, *, sex_missing: int = 37) -> pd.DataFrame:
-    rng = np.random.default_rng(20261001)
-    treated = rng.binomial(1, 0.4, size=n)
-    onset = np.where(
-        treated == 1,
-        rng.choice([-2.0, 3.0, 9.0, 18.0, 30.0], size=n, p=[0.05, 0.4, 0.3, 0.2, 0.05]),
-        np.nan,
-    )
-    died = rng.binomial(1, 1.0 / (1.0 + np.exp(-(-1.2 + 0.7 * treated))), size=n)
-    sex = rng.binomial(1, 0.5, size=n).astype(float)
-    sex[rng.choice(n, size=sex_missing, replace=False)] = np.nan
-    return pd.DataFrame({
-        "rrt": treated.astype("int64"),
-        "rrt_first_time": onset,
-        "mort_90d": died.astype("int64"),
-        "followup_days_90d": np.where(died == 1, rng.uniform(1.5, 89.0, size=n), 90.0),
-        "age": rng.normal(64.0, 13.0, size=n),
-        "sex": sex,
-    })
-
-
-def _run(authority, frame, out_dir):
-    return run_landmark_survival_suite(
-        frame=frame, authority=authority, runtime_projection_sha256="e" * 64, out_dir=out_dir,
-        input_product="table:analysis_cohort", input_evidence_id="cohort", input_sha256="b" * 64,
-    )
 
 
 def test_the_suite_publishes_the_audit_of_the_columns_it_executes(tmp_path):

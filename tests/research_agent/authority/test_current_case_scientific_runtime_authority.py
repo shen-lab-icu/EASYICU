@@ -1037,11 +1037,7 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
 
 ## Results
 
-### Primary association
-
-Owner values omitted.
-
-### Sensitivity and subgroup analyses
+### Survival results
 
 Owner values omitted.
 """,

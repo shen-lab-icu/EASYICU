@@ -22,6 +22,7 @@ from ...authority.current_case_scientific_runtime import (
 )
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...contracts.host_scaffold import HostScaffoldedScript
+from ...contracts.manuscript_result_structure import PRIMARY_RESULT_HEADINGS_BY_FAMILY
 from ...schema import AnalysisPlan, AnalysisStep
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 from .typed_input_binding import sole_typed_cohort_input
@@ -728,8 +729,16 @@ def _render_figure(
     return outputs
 
 
-def build_survival_manuscript_projection(*, interval_count: int) -> dict[str, object]:
-    """Build the reporting projection owned by the signed survival executor."""
+def build_survival_manuscript_projection(
+    *, interval_count: int, proportional_hazards_rejected: bool
+) -> dict[str, object]:
+    """Build the reporting projection owned by the signed survival executor.
+
+    Both claims land in the survival results subsection the Writer is required
+    to write for a survival plan: the interval-specific model is part of the
+    signed suite's own non-PH policy, not a separate sensitivity step.  The
+    closing sentence states the PH outcome the suite actually observed.
+    """
 
     if interval_count <= 0:
         raise ValueError("survival manuscript projection requires intervals")
@@ -794,9 +803,13 @@ def build_survival_manuscript_projection(*, interval_count: int) -> dict[str, ob
             "text": (
                 ". These interval-specific estimates were retained because "
                 "the proportional-hazards assumption was rejected."
+                if proportional_hazards_rejected
+                else ". These prespecified interval-specific estimates are reported "
+                "although the proportional-hazards assumption was not rejected."
             )
         }
     )
+    heading = PRIMARY_RESULT_HEADINGS_BY_FAMILY["survival"]
     return {
         "schema_version": "easyicu.manuscript_projection/1",
         "claims": [
@@ -804,7 +817,7 @@ def build_survival_manuscript_projection(*, interval_count: int) -> dict[str, ob
                 "claim_id": "primary_rmst_contrast",
                 "targets": [
                     {"kind": "abstract_label", "label": "Results"},
-                    {"kind": "markdown_heading", "label": "Primary association"},
+                    {"kind": "markdown_heading", "label": heading},
                 ],
                 "fragments": rmst_fragments,
             },
@@ -812,10 +825,7 @@ def build_survival_manuscript_projection(*, interval_count: int) -> dict[str, ob
                 "claim_id": "time_varying_association_intervals",
                 "targets": [
                     {"kind": "abstract_label", "label": "Results"},
-                    {
-                        "kind": "markdown_heading",
-                        "label": "Sensitivity and subgroup analyses",
-                    },
+                    {"kind": "markdown_heading", "label": heading},
                 ],
                 "fragments": interval_fragments,
             },
@@ -1194,7 +1204,8 @@ def run_landmark_survival_suite(
                 ],
             },
             "manuscript_projection": build_survival_manuscript_projection(
-                interval_count=len(exposure_intervals)
+                interval_count=len(exposure_intervals),
+                proportional_hazards_rejected=ph_violation,
             ),
         }
 

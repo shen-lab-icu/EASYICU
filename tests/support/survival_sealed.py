@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import numpy as np
 import pandas as pd
 
 from easyicu.research_agent import pipeline as _pipeline
@@ -25,6 +26,9 @@ from easyicu.research_agent.agents.progressive_planner import (
 from easyicu.research_agent.authority.current_case_scientific_runtime import (
     LandmarkSurvivalRuntimeAuthority,
     load_current_case_scientific_runtime_authority,
+)
+from easyicu.research_agent.execution.runners.landmark_survival_executor import (
+    run_landmark_survival_suite,
 )
 from easyicu.research_agent.orchestration.scientific_runtime import ScientificRuntimeAuthorities
 from easyicu.research_agent.planning import figure_plan_shaping as _figure_plan
@@ -208,3 +212,35 @@ def bound_survival_plan(context, authorities: ScientificRuntimeAuthorities):
     authorities.validate_plan(bound)
     _final_plan.validate_final_plan_shape(bound)
     return bound
+
+
+def synthetic_survival_rows(n: int = 600, *, sex_missing: int = 37) -> pd.DataFrame:
+    """Seeded synthetic rows for the sealed study's suite; no patient data."""
+
+    rng = np.random.default_rng(20261001)
+    treated = rng.binomial(1, 0.4, size=n)
+    onset = np.where(
+        treated == 1,
+        rng.choice([-2.0, 3.0, 9.0, 18.0, 30.0], size=n, p=[0.05, 0.4, 0.3, 0.2, 0.05]),
+        np.nan,
+    )
+    died = rng.binomial(1, 1.0 / (1.0 + np.exp(-(-1.2 + 0.7 * treated))), size=n)
+    sex = rng.binomial(1, 0.5, size=n).astype(float)
+    sex[rng.choice(n, size=sex_missing, replace=False)] = np.nan
+    return pd.DataFrame({
+        "rrt": treated.astype("int64"),
+        "rrt_first_time": onset,
+        "mort_90d": died.astype("int64"),
+        "followup_days_90d": np.where(died == 1, rng.uniform(1.5, 89.0, size=n), 90.0),
+        "age": rng.normal(64.0, 13.0, size=n),
+        "sex": sex,
+    })
+
+
+def run_signed_suite(authority, frame: pd.DataFrame, out_dir):
+    """Execute the signed suite on synthetic rows as the host runner does."""
+
+    return run_landmark_survival_suite(
+        frame=frame, authority=authority, runtime_projection_sha256="e" * 64, out_dir=out_dir,
+        input_product="table:analysis_cohort", input_evidence_id="cohort", input_sha256="b" * 64,
+    )
