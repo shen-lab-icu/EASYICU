@@ -285,6 +285,67 @@ def _measurement_audit_table(
     )
 
 
+_PH_ROW_INCHES = 0.11
+_FLOW_PANEL_MIN_INCHES = 1.2
+
+
+def _fit_ph_panel_rows(fig: Any, *, ax_flow: Any, ax_ph: Any, rows: int) -> None:
+    """Give every proportional-hazards term a legible row in panel d.
+
+    The panel lists one row per model term, and a categorical covariate adds
+    one per level, so a fixed panel height overlaps its labels once a model
+    has a few covariates.  The height comes from the risk-set panel above it
+    while that panel keeps its minimum; beyond that the figure grows.
+    """
+
+    height = fig.get_figheight()
+    flow, ph = ax_flow.get_position(), ax_ph.get_position()
+    need = rows * _PH_ROW_INCHES - ph.height * height
+    if need <= 0:
+        return
+    spare = max(flow.height * height - _FLOW_PANEL_MIN_INCHES, 0.0)
+    taken = min(need, spare)
+    grow = need - taken
+    if grow > 0:
+        # Every axes keeps its absolute size and moves up; the new strip at
+        # the bottom extends panel d downward.
+        new_height = height + grow
+        for axes in fig.axes:
+            box = axes.get_position()
+            axes.set_position([
+                box.x0, (box.y0 * height + grow) / new_height,
+                box.width, box.height * height / new_height,
+            ])
+        fig.set_figheight(new_height)
+        height = new_height
+        flow, ph = ax_flow.get_position(), ax_ph.get_position()
+    ax_flow.set_position([
+        flow.x0, flow.y0 + taken / height, flow.width, flow.height - taken / height,
+    ])
+    ax_ph.set_position([
+        ph.x0, ph.y0 - grow / height, ph.width, ph.height + need / height,
+    ])
+
+
+def _fit_row_label_to_gutter(fig: Any, *, ax: Any, neighbour: Any, label: str) -> None:
+    """Name a one-row estimate without reaching into the panel on its left.
+
+    The row label is the exposure group's display label, whose length is the
+    study's; unwrapped, a long one runs across the neighbouring panel's data.
+    It is wrapped at word boundaries until its drawn extent clears that panel.
+    """
+
+    for width in (len(label), 28, 22, 18, 15, 12, 9):
+        if width > len(label):
+            continue
+        text = label if width == len(label) else textwrap.fill(label, width=width)
+        ax.set_yticks([0], [text])
+        fig.canvas.draw()
+        left_edge = min(tick.get_window_extent().x0 for tick in ax.get_yticklabels())
+        if left_edge >= neighbour.get_window_extent().x1 + 2.0:
+            return
+
+
 def _render_figure(
     *,
     km_table: Any,
@@ -330,6 +391,7 @@ def _render_figure(
     ax_hr = fig.add_subplot(grid[0, 1])
     ax_flow = fig.add_subplot(grid[1:3, 1])
     ax_ph = fig.add_subplot(grid[3, 1])
+    _fit_ph_panel_rows(fig, ax_flow=ax_flow, ax_ph=ax_ph, rows=len(ph_table))
     labels = {
         0: sealed.comparator_group_label,
         1: sealed.exposed_group_label,
@@ -374,13 +436,15 @@ def _render_figure(
             )
         risk_rows.append(counts)
     ax_risk.axis("off")
+    # The table stops below the "Number at risk" heading so the heading never
+    # sits on the first column's time label.
     table = ax_risk.table(
         cellText=risk_rows,
         rowLabels=[labels[0], labels[1]],
         colLabels=[f"{value:g}" for value in risk_times],
         cellLoc="center",
         rowLoc="right",
-        bbox=[0.0, 0.0, 1.0, 1.0],
+        bbox=[0.0, 0.0, 1.0, 0.74],
     )
     table.auto_set_font_size(False)
     table.set_fontsize(5.7)
@@ -435,7 +499,9 @@ def _render_figure(
         ax_hr.set_xticks(ticks, [f"{tick:g}" for tick in ticks])
         ax_hr.xaxis.set_minor_locator(NullLocator())
         ax_hr.xaxis.set_minor_formatter(NullFormatter())
-        ax_hr.set_yticks([0], [sealed.exposed_group_label])
+        _fit_row_label_to_gutter(
+            fig, ax=ax_hr, neighbour=ax_km, label=sealed.exposed_group_label
+        )
         ax_hr.set_xlabel("Adjusted hazard ratio (95% CI)")
         ax_hr.set_title("Adjusted Cox association", loc="left")
         ax_hr.text(
@@ -503,7 +569,9 @@ def _render_figure(
         ax_hr.axvline(0.0, color=palette["neutral"], linestyle="--", linewidth=0.8)
         span = max(abs(difference_low), abs(difference_high), 0.25)
         ax_hr.set_xlim(-1.15 * span, 1.15 * span)
-        ax_hr.set_yticks([0], [sealed.exposed_group_label])
+        _fit_row_label_to_gutter(
+            fig, ax=ax_hr, neighbour=ax_km, label=sealed.exposed_group_label
+        )
         ax_hr.set_xlabel("RMST difference, days (95% CI)")
         ax_hr.set_title("PH-free survival contrast", loc="left")
         ax_hr.text(

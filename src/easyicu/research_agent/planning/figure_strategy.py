@@ -659,6 +659,9 @@ def _acceptable_chart_match(role: FigureRoleStrategy, chart_type: str) -> bool:
         "sensitivity_forest_plot": "sensitivity_forest",
         "availability_heatmap": "coverage_heatmap",
         "rmst_difference_forest": "risk_difference_panel",
+        # One hazard-ratio row per follow-up interval: the signed survival
+        # suite's policy alternative when the PH assumption is rejected.
+        "time_varying_hazard_ratio_forest": "hazard_ratio_forest",
     }
     chart_type = renderer_chart_aliases.get(chart_type, chart_type)
     if chart_type in accepted:
