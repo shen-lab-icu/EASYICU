@@ -1359,6 +1359,28 @@ def _descriptor_endpoint_semantic_key(descriptor: ConceptDescriptor) -> Optional
     return None
 
 
+def _paired_fixed_horizon_endpoint(
+    target_outcome: str, descriptors: Sequence[ConceptDescriptor]
+) -> Any:
+    """The fixed-horizon mortality endpoint whose paired follow-up is in context.
+
+    Event status by day *h* with its follow-up time censored at *h* is a
+    time-to-event endpoint, so a survival question requests no other
+    definition of it.  Without the paired follow-up it is only a binary flag.
+    """
+
+    from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
+
+    # Named apart from the context's ``endpoint``: this reads the concept
+    # vocabulary only and never fills the declared endpoint.
+    horizon = fixed_horizon_mortality_endpoint(target_outcome)
+    if horizon is None or not any(
+        descriptor.name == horizon.followup_concept for descriptor in descriptors
+    ):
+        return None
+    return horizon
+
+
 def _enrich_target_outcome_descriptor(
     *,
     descriptors: Sequence[ConceptDescriptor],
@@ -1395,6 +1417,11 @@ def _enrich_target_outcome_descriptor(
             or requested_semantic != "declared_primary_outcome"
         ):
             descriptor.source_concept = requested_semantic
+        paired = (
+            _paired_fixed_horizon_endpoint(target_outcome, descriptors)
+            if requested_semantic == "time_to_event_endpoint"
+            else None
+        )
         # A question that leaves mortality unspecified, or names no endpoint
         # at all (a bare declared column), requests no definition; neither can
         # conflict with the owner-issued one.
@@ -1402,6 +1429,7 @@ def _enrich_target_outcome_descriptor(
             owner_metadata_present
             and requested_semantic not in {"mortality_unspecified", "declared_primary_outcome"}
             and owner_semantic != requested_semantic
+            and paired is None
         ):
             explicit_note = (
                 f"Endpoint-definition conflict: the research question requests "
@@ -1409,6 +1437,13 @@ def _enrich_target_outcome_descriptor(
                 f"'{target_outcome}' defines {descriptor.description!r}. Do not "
                 "reinterpret or execute this endpoint until the physical concept "
                 "and requested definition agree."
+            )
+        elif owner_metadata_present and paired is not None:
+            explicit_note = (
+                f"The research question requests a time-to-event endpoint; "
+                f"'{target_outcome}' ({descriptor.description!r}) with its paired "
+                f"follow-up '{paired.followup_concept}' is that endpoint, censored "
+                f"at day {paired.horizon_days:g}."
             )
         elif owner_metadata_present and requested_semantic == "mortality_unspecified":
             explicit_note = (
