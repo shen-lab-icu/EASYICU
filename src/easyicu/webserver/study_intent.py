@@ -248,6 +248,74 @@ def _negated(text: str, start: int) -> bool:
     return bool(_NEGATION.search(window))
 
 
+# A follow-up handling clause says how follow-up ends: "处理死亡、出院与删失",
+# "account for death and discharge as competing events", "censored at death".
+# The events it lists end follow-up; they are not endpoints the researcher asks
+# to analyse, whichever concept they name.  Every check below is a bounded
+# search or split, so a long question cannot make the reader backtrack.
+_HANDLING_VERB = re.compile(
+    r"(?:处理|考虑|handl(?:e|es|ed|ing)|account(?:s|ed|ing)?\s+for|deal(?:s|t|ing)?\s+with)"
+    r"[^。；;?？]{0,24}$",
+    re.IGNORECASE,
+)
+_CENSORING_TERM = re.compile(
+    r"删失|截尾|竞争(?:风险|事件)|censor\w*|competing[\s-]+(?:risks?|events?)", re.IGNORECASE
+)
+_SENTENCE_END = re.compile(r"[。；;.?？!！]")
+_CONJUNCTION = re.compile(r"\s*(?:、|与|和|及|或|\band\b|\bor\b)\s*", re.IGNORECASE)
+_LIST_SEPARATOR = re.compile(
+    r"\s*(?:,\s*(?:and|or)\b|、|,|，|与|和|及|或|\band\b|\bor\b)\s*", re.IGNORECASE
+)
+# "death and discharge as competing events", "死亡作为竞争事件", "死亡时删失".
+_ENDING_MARKER = re.compile(r"\s*(?:\bas\b|作为|视为|时)\s*(?:an?\s+)?$", re.IGNORECASE)
+# "censored at death", "the competing risk of death".
+_CENSORED_AT = re.compile(
+    r"(?:censor(?:ed|ing)?\s+(?:at|on|by)|competing[\s-]+(?:risks?|events?)\s+(?:of|from))\s+$",
+    re.IGNORECASE,
+)
+
+
+def _listed_events(segment: str, separator: re.Pattern, *, trailing: bool) -> bool:
+    """Whether ``segment`` continues a list of short event names.
+
+    It must start at a separator and hold only short items without "的";
+    ``trailing`` requires it to end at a separator too.
+    """
+
+    pieces = separator.split(segment)
+    if pieces[0].strip():
+        return False
+    items = pieces[1:-1] if trailing else pieces[1:]
+    if trailing and len(pieces) > 1 and pieces[-1].strip():
+        return False
+    return all(0 < len(item.strip()) <= 16 and "的" not in item for item in items)
+
+
+def _follow_up_handling(text: str, start: int, end: int) -> bool:
+    """True when the match names an event that ends follow-up, not an endpoint."""
+
+    before = text[max(0, start - 40) : start]
+    if _CENSORED_AT.search(before):
+        return True
+    after = _SENTENCE_END.split(text[end : end + 96], maxsplit=1)[0]
+    term = _CENSORING_TERM.search(after)
+    if term is None:
+        return False
+    head = after[: term.start()]
+    marker = _ENDING_MARKER.search(head)
+    if marker is not None and _listed_events(
+        head[: marker.start()], _CONJUNCTION, trailing=False
+    ):
+        return True
+    if not _HANDLING_VERB.search(before):
+        return False
+    # "考虑死亡的竞争风险": the term is the event's own.
+    if head.rstrip().endswith("的"):
+        return _listed_events(head.rstrip()[:-1], _LIST_SEPARATOR, trailing=False)
+    # "处理死亡、出院与删失": a handled list that ends in censoring.
+    return _listed_events(head, _LIST_SEPARATOR, trailing=True)
+
+
 # Concepts that name the same clinical thing at different granularity. Used to
 # stop one phrase from filling two different slots.
 _CONCEPT_FAMILIES: Tuple[frozenset, ...] = (
@@ -280,7 +348,9 @@ def _match_concept(text: str) -> List[Tuple[str, str]]:
         if concept in seen:
             continue
         for match in re.finditer(pattern, text, re.IGNORECASE):
-            if _negated(text, match.start()):
+            if _negated(text, match.start()) or _follow_up_handling(
+                text, match.start(), match.end()
+            ):
                 continue
             seen.add(concept)
             found.append((concept, match.group(0)))
@@ -295,6 +365,7 @@ def explicit_outcome_concepts(question: str) -> tuple[str, ...]:
     only adds the closed, high-specificity endpoint vocabulary. A configured
     event outcome remains the caller's authority. Specific phrases reserve
     their text span: ``28-day mortality`` must not add generic ``death`` too.
+    An event a follow-up handling clause lists ends follow-up; it is not read.
     This is intent, not evidence that the source can supply these endpoints.
     """
 
@@ -305,9 +376,13 @@ def explicit_outcome_concepts(question: str) -> tuple[str, ...]:
         if concept not in _OUTCOME_CONCEPTS_PRIMARY:
             continue
         for match in re.finditer(pattern, text, re.IGNORECASE):
-            if _negated(text, match.start()) or any(
-                match.start() < end and start < match.end()
-                for start, end in covered
+            if (
+                _negated(text, match.start())
+                or _follow_up_handling(text, match.start(), match.end())
+                or any(
+                    match.start() < end and start < match.end()
+                    for start, end in covered
+                )
             ):
                 continue
             covered.append(match.span())
