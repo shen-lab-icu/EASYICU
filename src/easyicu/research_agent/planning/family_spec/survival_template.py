@@ -21,11 +21,14 @@ Step layout:
 
 1. ``cohort_accounting``        denominators and cohort flow
 2. ``baseline_context``         Table 1 by exposure status, SMD only
-3. ``primary_survival_suite``   the sealed suite owner (primary)
-4. ``report``                   zero-patient-row plan report
+3. ``measurement_audit``        availability of the suite's source columns
+                                (only when the suite publishes its own audit)
+4. ``primary_survival_suite``   the sealed suite owner (primary)
+5. ``report``                   zero-patient-row plan report
 
-The Table 1 and cohort-flow drafts satisfy the outline's article-role owners;
-after ``bind_plan`` the sealed suite carries both inside its own step.
+The Table 1, measurement-audit and cohort-flow drafts satisfy the outline's
+article-role owners; after ``bind_plan`` the sealed suite carries all three
+inside its own step.
 """
 
 from __future__ import annotations
@@ -64,6 +67,14 @@ from .landmark_categorical_template import (
 )
 from .plan_language import listing, plan_language, sentence
 
+#: The suite's own data-quality product.  A suite that publishes it audits
+#: its source columns itself, so the outline names a measurement audit that
+#: binding replaces with this product.
+SUITE_MEASUREMENT_AUDIT = "table:landmark_measurement_audit"
+_AUDIT_OUTPUTS = (
+    ("table:measurement_missingness", "measurement_missingness"),
+    ("table:measurement_process_audit", "measurement_process"),
+)
 _PRIMARY_DESIGN_ELEMENTS = (
     "dependence",
     "estimand",
@@ -364,6 +375,7 @@ def build_landmark_survival_skeleton(
     roster = _roster(request, spec)
     columns = _bound_columns(request, roster)
     identity = request.identity_column
+    audited = SUITE_MEASUREMENT_AUDIT in sealed.analysis_outputs
     method_keys = [
         key
         for key in request.allowed_literature_citation_keys
@@ -401,6 +413,11 @@ def build_landmark_survival_skeleton(
             f"{exposure_label} with standardized differences only; the suite recomputes "
             "Table 1 on the landmark risk set."
         ),
+        "measurement_audit": (
+            "Audit the availability of every source column of the "
+            f"{'proposed' if proposed else 'sealed'} suite before the landmark risk set; "
+            f"the signed suite publishes this audit as {SUITE_MEASUREMENT_AUDIT}."
+        ),
         "primary_survival_suite": (
             f"Execute the {'proposed' if proposed else 'sealed'} {sealed.landmark_hours:g} h "
             f"landmark survival suite for {exposure_label} and {outcome_label}: risk-set "
@@ -423,6 +440,15 @@ def build_landmark_survival_skeleton(
             step_id="baseline_context", role="auxiliary", module_id="table_one",
             objective=objectives["baseline_context"], depends_on=["cohort_accounting"],
             variable_names=[request.primary_exposure, *roster], citations=[],
+        ),
+        *(
+            [_outline_step(
+                step_id="measurement_audit", role="auxiliary", module_id="measurement_audit",
+                objective=objectives["measurement_audit"], depends_on=["cohort_accounting"],
+                variable_names=[identity, *columns], citations=[],
+            )]
+            if audited
+            else []
         ),
         _outline_step(
             step_id="primary_survival_suite", role="primary", module_id="custom_analysis",
@@ -477,6 +503,21 @@ def build_landmark_survival_skeleton(
                 for name in roster
             ],
             literature_bindings=[],
+        ),
+        *(
+            [ProgressiveSkeletonStep(
+                step_id="measurement_audit", planned_analysis_role="auxiliary", module_id="measurement_audit",
+                objective=objectives["measurement_audit"], depends_on=["cohort_accounting"],
+                raw_inputs=list(dict.fromkeys([identity, *columns])),
+                product_inputs=[_ref("cohort_accounting", "artifact:analysis_cohort")],
+                outputs=[
+                    ProgressiveOutputIntent(product_id=product, semantic_role=role)
+                    for product, role in _AUDIT_OUTPUTS
+                ],
+                literature_bindings=[],
+            )]
+            if audited
+            else []
         ),
         ProgressiveSkeletonStep(
             step_id="primary_survival_suite", planned_analysis_role="primary", module_id="custom_analysis",

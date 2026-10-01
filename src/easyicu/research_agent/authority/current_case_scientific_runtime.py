@@ -2349,6 +2349,14 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
         default=None,
         pattern=r"^table:[a-z][a-z0-9_]{0,79}$",
     )
+    #: The suite's own availability audit of its sealed source columns.  Left
+    #: out of the signed body while unset, so a suite signed before it keeps
+    #: its digest; the Web projection declares it for every new suite.
+    measurement_audit_product: str | None = Field(
+        default=None,
+        pattern=r"^table:[a-z][a-z0-9_]{0,79}$",
+        exclude_if=lambda value: value is None,
+    )
     receipt_product: str = Field(pattern=r"^log:[a-z][a-z0-9_]{0,79}$")
     figure_product: str = Field(pattern=r"^figure:[a-z][a-z0-9_]{0,79}$")
 
@@ -2424,6 +2432,11 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
             *(
                 (self.time_varying_cox_product,)
                 if self.time_varying_cox_product is not None
+                else ()
+            ),
+            *(
+                (self.measurement_audit_product,)
+                if self.measurement_audit_product is not None
                 else ()
             ),
             self.receipt_product,

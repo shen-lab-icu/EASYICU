@@ -250,6 +250,40 @@ def _table_one(frame: Any, sealed: LandmarkSurvivalRuntimeAuthority):
     return pd.DataFrame(rows)
 
 
+def _measurement_audit_table(
+    sealed: LandmarkSurvivalRuntimeAuthority, source: Any, landmark: Any
+):
+    """Availability of every sealed source column, in the source and at the landmark.
+
+    The same counts the receipt's ``missingness_measurement_audit`` records,
+    published as the suite's data-quality product: the complete-case model
+    drops a landmark row that lacks any adjustment column.
+    """
+
+    import pandas as pd
+
+    roles = {
+        sealed.exposure_status_column: "exposure_status",
+        sealed.exposure_onset_column: "exposure_onset",
+        sealed.event_column: "event",
+        sealed.followup_time_column: "followup_time",
+        **{column: "adjustment" for column in sealed.adjustment_columns},
+    }
+    return pd.DataFrame(
+        [
+            {
+                "column": column,
+                "column_role": roles[column],
+                "source_n": int(len(source)),
+                "source_missing_n": int(source[column].isna().sum()),
+                "landmark_population_n": int(len(landmark)),
+                "landmark_missing_n": int(landmark[column].isna().sum()),
+            }
+            for column in sealed.required_columns
+        ]
+    )
+
+
 def _render_figure(
     *,
     km_table: Any,
@@ -1182,6 +1216,9 @@ def run_landmark_survival_suite(
         rmst_table.to_csv(rmst_path, index=False)
     if time_varying_table is not None:
         time_varying_table.to_csv(time_varying_path, index=False)
+    measurement_path = out_dir / "landmark_measurement_audit.csv"
+    if sealed.measurement_audit_product is not None:
+        _measurement_audit_table(sealed, working, analysis).to_csv(measurement_path, index=False)
     analysis.to_parquet(analysis_path, index=False)
     receipt = {
         "schema_version": "easyicu.landmark_survival_runtime_receipt/1",
@@ -1245,6 +1282,8 @@ def run_landmark_survival_suite(
         output_files[sealed.rmst_product] = rmst_path.name
     if sealed.time_varying_cox_product is not None:
         output_files[sealed.time_varying_cox_product] = time_varying_path.name
+    if sealed.measurement_audit_product is not None:
+        output_files[sealed.measurement_audit_product] = measurement_path.name
     return {
         "status": "ok",
         "analysis_family": "survival",

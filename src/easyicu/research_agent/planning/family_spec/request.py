@@ -210,6 +210,7 @@ _PROPOSED_SURVIVAL_OUTPUTS = (
     "table:landmark_cox_summary",
     "table:landmark_ph_diagnostics",
     "table:landmark_rmst_summary",
+    "table:landmark_measurement_audit",
     "log:landmark_survival_receipt",
 )
 

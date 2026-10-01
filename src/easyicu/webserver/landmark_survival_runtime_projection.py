@@ -376,6 +376,7 @@ def compile_landmark_survival_runtime_projection(
         "table:landmark_ph_diagnostics",
         "table:landmark_rmst_summary",
         *(["table:landmark_time_varying_cox_summary"] if cutpoints else []),
+        "table:landmark_measurement_audit",
         "log:landmark_survival_receipt",
         "figure:landmark_survival_suite",
     ]
@@ -442,6 +443,7 @@ def compile_landmark_survival_runtime_projection(
         "time_varying_cox_product": (
             "table:landmark_time_varying_cox_summary" if cutpoints else None
         ),
+        "measurement_audit_product": "table:landmark_measurement_audit",
         "receipt_product": "log:landmark_survival_receipt",
         "figure_product": "figure:landmark_survival_suite",
     }
