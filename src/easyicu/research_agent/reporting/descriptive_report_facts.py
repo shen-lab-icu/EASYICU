@@ -251,6 +251,61 @@ def _compile_grouped_table_one_cohort_report_facts(projected, evidence):
     return tuple(facts)
 
 
+def _compile_survival_cohort_report_facts(projected, evidence):
+    """Copy the landmark cohort count from a verified signed survival suite.
+
+    The suite owns its own Table 1, so no grouped Table 1 fact names its
+    population.  The count is the suite's recorded landmark population: the
+    stays still under observation at the landmark, in the analysis unit its
+    typed reporting envelope declares.
+    """
+
+    from .writer_evidence import _verified_evidence_json
+    from ..authority.survival_scientific_claims import (
+        SURVIVAL_REPORTING_KEY,
+        SurvivalReporting,
+        survival_reporting_requests_claims,
+    )
+
+    facts = []
+    for row in projected:
+        summary = row.get("step_summary", {})
+        # The Writer projection keeps the envelope but not its schema version;
+        # the verified source summary below is the typed authority.
+        if not (
+            row.get("status") == "ok"
+            and isinstance(summary, dict)
+            and summary.get("status") == "ok"
+            and SURVIVAL_REPORTING_KEY in summary
+        ):
+            continue
+        source_id = str(row.get("step_summary_evidence_id") or "")
+        source = _verified_evidence_json(
+            evidence, source_id, exact_evidence_id=True, expected_kind="statistic",
+        )
+        if not survival_reporting_requests_claims(source):
+            continue  # A /1 envelope has no typed reporting coordinates.
+        reporting = SurvivalReporting.model_validate(source[SURVIVAL_REPORTING_KEY])
+        population = _count(source.get("n_landmark_population"), positive=True)
+        if "n_source" in source and _count(source["n_source"], positive=True) < population:
+            raise ValueError("Survival landmark population exceeds its source cohort")
+        unit = " ".join(reporting.analysis_unit.split())
+        if re.fullmatch(r"[A-Za-z][A-Za-z -]{0,60}[A-Za-z]", unit) is None:
+            raise ValueError("Survival analysis unit is not a reader noun phrase")
+        record = evidence.get(source_id)
+        if record is None or record.produced_by_step != row.get("step_id"):
+            raise ValueError("Survival source does not belong to the verified step")
+        facts.append(DescriptiveReportFact(
+            subsection="Cohort characteristics",
+            text=f"The landmark analysis cohort included {population:,} {unit}",
+            evidence_id=record.evidence_id,
+            source_sha256=record.sha256,
+            source_fields=("n_landmark_population",),
+            required_result_sections=("Results",),
+        ))
+    return tuple(facts)
+
+
 def _recorded_share(row: Mapping[str, Any], count: int, denominator: int):
     """Return a level's recorded share and, when recorded, its interval.
 
@@ -365,8 +420,9 @@ def compile_primary_counts_only_report_facts(records, *, evidence, reader_displa
                                            context=None, manuscript_language="en"):
     """Shared full-run/report-only admission; loose wrapper counts are not facts.
 
-    Admits the grouped Table 1 cohort count, the primary counts-only
-    distribution and the study population's exposure occurrence.
+    Admits the grouped Table 1 cohort count, a signed survival suite's
+    landmark cohort count, the primary counts-only distribution and the
+    study population's exposure occurrence.
     """
     from ..audits.envelope_consumers import RegisteredOutputEnvelopeConsumer
     from ..authority.scientific_claim_registry import load_registered_scientific_claims
@@ -383,6 +439,7 @@ def compile_primary_counts_only_report_facts(records, *, evidence, reader_displa
     )
     return (
         *_compile_grouped_table_one_cohort_report_facts(projected, evidence),
+        *_compile_survival_cohort_report_facts(projected, evidence),
         *descriptive_facts,
         *_compile_study_population_occurrence_report_facts(
             projected, evidence,

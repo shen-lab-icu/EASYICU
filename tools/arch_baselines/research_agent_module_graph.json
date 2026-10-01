@@ -11365,6 +11365,10 @@
     ],
     [
       "easyicu.research_agent.reporting.descriptive_report_facts",
+      "easyicu.research_agent.authority.survival_scientific_claims"
+    ],
+    [
+      "easyicu.research_agent.reporting.descriptive_report_facts",
       "easyicu.research_agent.contracts.cohort_product_keys"
     ],
     [
@@ -11526,6 +11530,10 @@
     [
       "easyicu.research_agent.reporting.manuscript_post",
       "easyicu.research_agent.reporting.manuscript_sentence_context"
+    ],
+    [
+      "easyicu.research_agent.reporting.manuscript_post",
+      "easyicu.research_agent.reporting.manuscript_surface"
     ],
     [
       "easyicu.research_agent.reporting.manuscript_post",
@@ -13204,7 +13212,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3293,
+    "edge_count": 3295,
     "largest_scc_size": 0,
     "module_count": 768,
     "package_count": 36,
