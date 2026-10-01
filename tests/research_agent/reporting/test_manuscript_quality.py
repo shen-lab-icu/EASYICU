@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import sys
 
+import pytest
+
 from easyicu.research_agent.reporting.manuscript_quality import (
     audit_manuscript_quality,
     repair_incompatible_reader_labels,
@@ -484,6 +486,50 @@ def test_display_labels_resolve_adjustment_sets_without_hiding_real_conflicts() 
     different_roster = text.replace("age, sex, and adm", "age, sex, and charlson_max")
     conflicting = audit_manuscript_quality(
         different_roster,
+        reader_display_labels=labels,
+    )
+    assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" in {
+        finding.code for finding in conflicting.findings
+    }
+
+
+@pytest.mark.parametrize(
+    "methods",
+    [
+        "The model was adjusted for the exact set of patient age, patient sex, "
+        "and patient admission type.",
+        "The adjustment set comprised the prespecified covariates patient age, "
+        "patient sex, and patient admission type.",
+        "The adjustment set was the following covariates: patient age, patient "
+        "sex, and patient admission type.",
+    ],
+)
+def test_a_phrase_naming_the_adjustment_set_is_not_a_covariate(methods) -> None:
+    labels = {
+        "age": "Patient age",
+        "sex": "Patient sex",
+        "adm": "Patient admission type",
+    }
+    text = _valid_manuscript().replace(
+        "The adjustment set comprised age and sex.", methods,
+    ).replace(
+        "After adjustment for age and sex, Sepsis-3 status was associated with mortality.",
+        "After adjustment for age, sex, and adm, Sepsis-3 status was associated "
+        "with mortality.",
+    )
+
+    audit = audit_manuscript_quality(text, reader_display_labels=labels)
+    assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" not in {
+        finding.code for finding in audit.findings
+    }
+    assert audit.adjustment_sets == {
+        "Methods": ("adm", "age", "sex"),
+        "Results": ("adm", "age", "sex"),
+    }
+
+    # The phrase never hides a different roster.
+    conflicting = audit_manuscript_quality(
+        text.replace("age, sex, and adm", "age, sex, and charlson_max"),
         reader_display_labels=labels,
     )
     assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" in {

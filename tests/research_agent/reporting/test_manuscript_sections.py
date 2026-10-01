@@ -67,7 +67,11 @@ def test_results_contract_requires_complete_non_ph_survival_reporting() -> None:
 
     assert "exposed and comparator RMST" in results.instruction
     assert "signed RMST difference" in results.instruction
-    assert "every interval-specific adjusted estimate" in results.instruction
+    # The interval-specific estimates and the PH decision are host claims.
+    assert (
+        "adjusted hazard ratios and proportional-hazards decision are host claims"
+        in results.instruction
+    )
     assert "Do not report an unauthorized constant hazard ratio" in results.instruction
     assert [spec.max_tokens for spec in MANUSCRIPT_SECTION_SPECS] == [
         256,

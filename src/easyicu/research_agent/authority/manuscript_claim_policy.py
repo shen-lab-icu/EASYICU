@@ -563,6 +563,14 @@ def _claim_target_position(
                 return heading.end()
         return 0
     if claim.claim_type == "association":
+        # The family's primary subsection reports its association, whatever
+        # the family names it ("Primary association", "Survival results").
+        for name in PRIMARY_RESULT_HEADINGS:
+            heading = re.search(
+                rf"^###\s+{re.escape(name)}[ \t]*$", results_section, re.I | re.MULTILINE,
+            )
+            if heading is not None:
+                return heading.end()
         pattern = r"^###\s+.*(?:primary\s+association|association|primary\s+model).*$"
     else:
         pattern = r"^###\s+.*(?:primary\s+outcome|outcome|cohort).*$"

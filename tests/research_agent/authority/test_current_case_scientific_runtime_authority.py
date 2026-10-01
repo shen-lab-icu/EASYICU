@@ -1009,9 +1009,11 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
     assert exposure_intervals["interval_start_days"].tolist() == [0.0, 7.0, 14.0]
     assert exposure_intervals["interval_end_days"].tolist() == [7.0, 14.0, 27.0]
     reporting = summary["reportable_survival_results"]
-    assert reporting["schema_version"] == "easyicu.survival_reporting/1"
-    assert reporting["constant_hazard_ratio_authorized"] is (
-        not summary["proportional_hazards_status"].startswith("violation_")
+    assert reporting["schema_version"] == "easyicu.survival_reporting/2"
+    rejected = summary["proportional_hazards_status"].startswith("violation_")
+    assert reporting["constant_hazard_ratio_authorized"] is not rejected
+    assert reporting["proportional_hazards_test"]["disposition"] == (
+        "assumption_rejected" if rejected else "assumption_not_rejected"
     )
     assert reporting["rmst"]["difference_days"] == pytest.approx(
         rmst.loc[0, "rmst_difference_days"]
@@ -1021,10 +1023,15 @@ def test_h1_runtime_compiles_and_executes_one_deterministic_survival_suite(
         for row in reporting["time_varying_adjusted_association"]["intervals"]
     ] == pytest.approx(exposure_intervals["hazard_ratio"].tolist())
     projection = reporting["manuscript_projection"]
-    assert projection["schema_version"] == "easyicu.manuscript_projection/1"
+    assert projection["schema_version"] == "easyicu.manuscript_projection/2"
+    primary = (
+        [f"interval_{position}_adjusted_hazard_ratio" for position in (1, 2, 3)]
+        if rejected
+        else ["adjusted_hazard_ratio"]
+    )
     assert [claim["claim_id"] for claim in projection["claims"]] == [
-        "primary_rmst_contrast",
-        "time_varying_association_intervals",
+        "restricted_mean_survival_contrast",
+        *(f"abstract_{claim_id}" for claim_id in primary),
     ]
     from easyicu.research_agent.reporting.manuscript_projection import (
         project_owner_issued_manuscript_claims,
@@ -1050,10 +1057,12 @@ Owner values omitted.
             }
         ],
     )
-    assert len(repairs) == 4
-    assert f"{reporting['rmst']['p_value']:.6g}" in projected
-    for row in reporting["time_varying_adjusted_association"]["intervals"]:
-        assert f"{row['p_value']:.6g}" in projected
+    # The restricted-mean sentence in both targets; one abstract token per
+    # primary hazard-ratio claim.
+    assert len(repairs) == 2 + len(primary)
+    assert f"{reporting['rmst']['difference_days']:.3f}" in projected
+    for claim_id in primary:
+        assert "{claim:01_survival." + claim_id + "}" in projected
     assert not (tmp_path / "landmark_survival_suite.svg").exists()
     risk = pd.read_csv(tmp_path / "landmark_risk_set_flow.csv")
     final_count = risk.loc[

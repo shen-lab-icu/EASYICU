@@ -1,10 +1,15 @@
 """Typed, owner-issued projection of reportable results into manuscript prose.
 
-Execution owners may attach one ``easyicu.manuscript_projection/1`` contract to
+Execution owners may attach one ``easyicu.manuscript_projection`` contract to
 any ``reportable_*_results`` mapping.  This module resolves only declared text
 and numeric paths.  It does not infer an estimand, choose a result, or calculate
 a new statistic; the unchanged evidence and numeric binders remain the final
 authority gates.
+
+A ``/2`` contract may instead name a host scientific claim that the same
+summary compiles; the projection then places that claim's token, the only
+interpretive sentence the strict Results grammar admits.  A fragment claim
+renders exactly one sentence, so its evidence citation covers every value.
 """
 
 from __future__ import annotations
@@ -15,7 +20,13 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 
-_SCHEMA_VERSION = "easyicu.manuscript_projection/1"
+_SCHEMA_VERSIONS = frozenset({
+    "easyicu.manuscript_projection/1", "easyicu.manuscript_projection/2",
+})
+_CLAIM_TOKEN_SCHEMA_VERSION = "easyicu.manuscript_projection/2"
+# The strict filter splits prose at this boundary; a projected fragment claim
+# that crossed it would leave every sentence but the last uncited.
+_SENTENCE_BOUNDARY_RE = re.compile(r"[.!?。！？]\s+")
 _REPORTABLE_KEY_RE = re.compile(r"^reportable_[a-z0-9_]+_results$")
 _CLAIM_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
 _FORMAT_SPEC_RE = re.compile(r"^\.(?:[0-9]|1[0-2])[feg]$")
@@ -44,6 +55,7 @@ class _Claim:
     claim_id: str
     targets: Tuple[_Target, ...]
     fragments: Tuple[_Fragment, ...]
+    scientific_claim_id: str | None = None
 
 
 def _strict_keys(
@@ -119,8 +131,12 @@ def _parse_contract(payload: Any, *, coordinate: str) -> Tuple[_Claim, ...]:
         allowed=frozenset({"schema_version", "claims"}),
         coordinate=coordinate,
     )
-    if payload.get("schema_version") != _SCHEMA_VERSION:
+    schema_version = payload.get("schema_version")
+    if schema_version not in _SCHEMA_VERSIONS:
         raise ManuscriptProjectionError(f"{coordinate} has unsupported schema_version")
+    claim_keys = {"claim_id", "targets", "fragments"}
+    if schema_version == _CLAIM_TOKEN_SCHEMA_VERSION:
+        claim_keys.add("scientific_claim_id")
     raw_claims = payload.get("claims")
     if not isinstance(raw_claims, list) or not raw_claims:
         raise ManuscriptProjectionError(f"{coordinate}.claims must be non-empty")
@@ -132,7 +148,7 @@ def _parse_contract(payload: Any, *, coordinate: str) -> Tuple[_Claim, ...]:
             raise ManuscriptProjectionError(f"{claim_coordinate} must be a mapping")
         _strict_keys(
             raw_claim,
-            allowed=frozenset({"claim_id", "targets", "fragments"}),
+            allowed=frozenset(claim_keys),
             coordinate=claim_coordinate,
         )
         claim_id = str(raw_claim.get("claim_id") or "").strip()
@@ -147,14 +163,25 @@ def _parse_contract(payload: Any, *, coordinate: str) -> Tuple[_Claim, ...]:
             raise ManuscriptProjectionError(
                 f"{claim_coordinate}.targets must be non-empty"
             )
-        if not isinstance(raw_fragments, list) or not raw_fragments:
-            raise ManuscriptProjectionError(
-                f"{claim_coordinate}.fragments must be non-empty"
-            )
         targets = tuple(
             _parse_target(item, coordinate=f"{claim_coordinate}.targets[{i}]")
             for i, item in enumerate(raw_targets)
         )
+        if "scientific_claim_id" in raw_claim:
+            scientific_claim_id = str(raw_claim.get("scientific_claim_id") or "").strip()
+            if raw_fragments is not None or not _CLAIM_ID_RE.fullmatch(scientific_claim_id):
+                raise ManuscriptProjectionError(
+                    f"{claim_coordinate} must name one scientific claim and no fragments"
+                )
+            claims.append(_Claim(
+                claim_id=claim_id, targets=targets, fragments=(),
+                scientific_claim_id=scientific_claim_id,
+            ))
+            continue
+        if not isinstance(raw_fragments, list) or not raw_fragments:
+            raise ManuscriptProjectionError(
+                f"{claim_coordinate}.fragments must be non-empty"
+            )
         fragments = tuple(
             _parse_fragment(item, coordinate=f"{claim_coordinate}.fragments[{i}]")
             for i, item in enumerate(raw_fragments)
@@ -219,6 +246,11 @@ def _render_claim(
     sentence = "".join(parts).strip()
     if not sentence:
         raise ManuscriptProjectionError(f"claim {claim.claim_id} rendered empty text")
+    if _SENTENCE_BOUNDARY_RE.search(sentence):
+        raise ManuscriptProjectionError(
+            f"claim {claim.claim_id} renders more than one sentence; each "
+            "projected sentence must carry its own evidence"
+        )
     return sentence, tuple(literals)
 
 
@@ -235,6 +267,21 @@ def _target_body_span(text: str, target: _Target) -> tuple[int, int] | None:
         )
     match = pattern.search(text)
     return (match.start(2), match.end(2)) if match is not None else None
+
+
+def _compiled_claim_ids(summary: Mapping[str, Any]) -> frozenset[str]:
+    """The scientific claims the host compiles from one owner summary."""
+
+    from ..authority.scientific_claims import derive_scientific_claim_drafts
+
+    try:
+        return frozenset(
+            draft.claim_id for draft in derive_scientific_claim_drafts(dict(summary))
+        )
+    except ValueError as exc:
+        raise ManuscriptProjectionError(
+            f"the owner summary does not compile its scientific claims: {exc}"
+        ) from exc
 
 
 def project_owner_issued_manuscript_claims(
@@ -268,14 +315,29 @@ def project_owner_issued_manuscript_claims(
             raise ManuscriptProjectionError(
                 "manuscript projection requires step_summary_evidence_id"
             )
+        compiled_claim_ids: frozenset[str] | None = None
         for block_key, reporting in reportable_blocks:
             claims = _parse_contract(
                 reporting["manuscript_projection"],
                 coordinate=f"{record.get('step_id')}.{block_key}.manuscript_projection",
             )
             for claim in claims:
-                sentence, literals = _render_claim(claim, reporting=reporting)
-                sentence = sentence.rstrip(". ") + f" {{evidence:{evidence_id}}}."
+                if claim.scientific_claim_id is not None:
+                    if compiled_claim_ids is None:
+                        compiled_claim_ids = _compiled_claim_ids(summary)
+                    step_id = str(record.get("step_id") or "").strip()
+                    if not step_id or claim.scientific_claim_id not in compiled_claim_ids:
+                        raise ManuscriptProjectionError(
+                            f"claim {claim.claim_id} names scientific claim "
+                            f"{claim.scientific_claim_id!r}, which this step's summary "
+                            "does not compile"
+                        )
+                    # A bare token paragraph, as host claim placement writes it.
+                    sentence = "{claim:" + f"{step_id}.{claim.scientific_claim_id}" + "}"
+                    literals: tuple[str, ...] = (sentence,)
+                else:
+                    sentence, literals = _render_claim(claim, reporting=reporting)
+                    sentence = sentence.rstrip(". ") + f" {{evidence:{evidence_id}}}."
                 for target in claim.targets:
                     span = _target_body_span(projected, target)
                     if span is None:

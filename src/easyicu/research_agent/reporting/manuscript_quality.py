@@ -681,6 +681,20 @@ def repair_reader_structure_from_existing_prose(
     return repaired, tuple(repairs)
 
 
+_ADJUSTMENT_SET_QUALIFIER = (
+    r"(?:exact|full|complete|same|prespecified|pre-specified|declared|sealed|following)"
+)
+_ADJUSTMENT_SET_NOUN = r"(?:covariates|variables|confounders)"
+# A phrase that names the set before listing it ("the exact set of", "the
+# prespecified covariates", "the following covariates:") is not a covariate.
+_ADJUSTMENT_SET_DESCRIPTOR_RE = re.compile(
+    rf"^(?:the\s+)?(?:{_ADJUSTMENT_SET_QUALIFIER}\s+)*"
+    rf"(?:(?:set|list)\s+of\s+(?:(?:the\s+)?(?:{_ADJUSTMENT_SET_QUALIFIER}\s+)*"
+    rf"{_ADJUSTMENT_SET_NOUN}\b\s*)?|{_ADJUSTMENT_SET_NOUN}\b)\s*:?\s*",
+    re.I,
+)
+
+
 def _normalise_adjustment_set(
     raw: str,
     reader_display_labels: Mapping[str, str] | None = None,
@@ -725,6 +739,7 @@ def _normalise_adjustment_set(
         maxsplit=1,
         flags=re.I,
     )[0]
+    cleaned = _ADJUSTMENT_SET_DESCRIPTOR_RE.sub("", cleaned.strip(), count=1)
     cleaned = re.sub(r"\[@[^\]]+\]", "", cleaned)
     cleaned = re.sub(r"\band\b", ",", cleaned, flags=re.I)
     values: list[str] = []
