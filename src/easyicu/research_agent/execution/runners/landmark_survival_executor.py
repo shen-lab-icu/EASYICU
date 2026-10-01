@@ -352,6 +352,44 @@ def _fit_row_label_to_gutter(fig: Any, *, ax: Any, neighbour: Any, label: str) -
             return
 
 
+def _reader_legend(*, headline_hr_authorized: bool, promotes_time_varying: bool) -> str:
+    """The figure's source-bound legend: what each drawn panel shows, and no value.
+
+    Panel (b) follows the signed PH decision as it is drawn.  The manuscript
+    projects this legend; a figure without one cannot enter a manuscript.
+    """
+
+    if headline_hr_authorized:
+        estimate = (
+            "(b) The adjusted Cox hazard ratio with its confidence interval; the "
+            "prespecified proportional-hazards test did not reject the assumption."
+        )
+    elif promotes_time_varying:
+        estimate = (
+            "(b) Adjusted interval-specific hazard ratios with their confidence "
+            "intervals from the prespecified extended Cox model, drawn instead of "
+            "one constant hazard ratio because the proportional-hazards assumption "
+            "was rejected."
+        )
+    else:
+        estimate = (
+            "(b) The unadjusted restricted-mean survival-time difference with its "
+            "confidence interval, drawn instead of a hazard ratio because the "
+            "proportional-hazards assumption was rejected."
+        )
+    return " ".join((
+        "(a) Unadjusted Kaplan-Meier survival after the landmark by exposure "
+        "group, with the number at risk below.",
+        estimate,
+        "(c) Risk-set accounting from the source records through the endpoint, "
+        "landmark and exposure-timing gates to the analysis population.",
+        "(d) Schoenfeld residual tests of the proportional-hazards assumption, "
+        "globally and for each model term.",
+        "Every value is drawn from the suite's registered result tables; the "
+        "figure fits no model of its own.",
+    ))
+
+
 def _render_figure(
     *,
     km_table: Any,
@@ -791,6 +829,10 @@ def _render_figure(
             "signed PH policy rejects reportability."
         ),
         image_integrity_note="All plotted values are rendered from digest-bound upstream result tables.",
+        reader_caption=_reader_legend(
+            headline_hr_authorized=headline_hr_authorized,
+            promotes_time_varying=promotes_time_varying,
+        ),
     )
     outputs = save_publication_figure(
         fig,

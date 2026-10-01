@@ -17,25 +17,19 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-from easyicu.research_agent.execution.runners.landmark_survival_executor import (
-    run_landmark_survival_figure,
-)
 from easyicu.research_agent.figures import publication
 from easyicu.research_agent.gates.visual_qa import audit_svg_text_layout
 from easyicu.research_agent.planning.figure_strategy import (
     build_article_figure_strategy,
     figure_panel_covers_role,
 )
-from tests.support.survival_sealed import run_signed_suite, sealed_survival, synthetic_survival_rows
-
-SOURCES = {
-    "km_product": "landmark_km_curve.csv",
-    "cox_product": "landmark_cox_summary.csv",
-    "risk_set_product": "landmark_risk_set_flow.csv",
-    "ph_product": "landmark_ph_diagnostics.csv",
-    "rmst_product": "landmark_rmst_summary.csv",
-    "time_varying_cox_product": "landmark_time_varying_cox_summary.csv",
-}
+from tests.support.survival_sealed import (
+    SURVIVAL_SOURCES,
+    render_signed_survival_figure,
+    run_signed_suite,
+    sealed_survival,
+    synthetic_survival_rows,
+)
 
 
 def _render(tmp_path, *, extra_terms: int = 0):
@@ -44,34 +38,17 @@ def _render(tmp_path, *, extra_terms: int = 0):
     _context, authority = sealed_survival(tmp_path)
     out = tmp_path / "suite"
     run_signed_suite(authority, synthetic_survival_rows(), out)
-    ph = pd.read_csv(out / SOURCES["ph_product"])
     if extra_terms:
+        ph = pd.read_csv(out / SURVIVAL_SOURCES["ph_product"])
         # One row per level of a categorical covariate, as the suite writes it.
         level = ph.loc[ph["covariate"].astype(str) != "global"].iloc[[0]]
         ph = pd.concat(
             [ph, *(level.assign(covariate=f"admission_type_{index}") for index in range(extra_terms))],
             ignore_index=True,
         )
-        ph.to_csv(out / SOURCES["ph_product"], index=False)
-    products = {
-        getattr(authority, field): name
-        for field, name in SOURCES.items()
-        if getattr(authority, field) is not None
-    }
-
-    def read(name):
-        path = out / name
-        return pd.read_csv(path) if path.exists() else None
-
-    figure_dir = tmp_path / "figure"
-    run_landmark_survival_figure(
-        km_table=read(SOURCES["km_product"]), cox_table=read(SOURCES["cox_product"]),
-        rmst_table=read(SOURCES["rmst_product"]), risk_flow=read(SOURCES["risk_set_product"]),
-        time_varying_table=read(SOURCES["time_varying_cox_product"]), ph_table=ph,
-        source_paths={product: out / name for product, name in products.items()},
-        authority=authority, out_dir=figure_dir,
-    )
-    return authority, figure_dir / "landmark_survival_suite.svg"
+        ph.to_csv(out / SURVIVAL_SOURCES["ph_product"], index=False)
+    render_signed_survival_figure(authority, out, tmp_path / "figure")
+    return authority, tmp_path / "figure" / "landmark_survival_suite.svg"
 
 
 @pytest.mark.parametrize("extra_terms", [0, 3, 12, 20])
