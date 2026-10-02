@@ -349,31 +349,41 @@ def _looks_qualitative_scientific_assertion(sentence: str) -> bool:
     return bool(_QUALITATIVE_SCIENTIFIC_ASSERTION_RE.search(sentence))
 
 
+def _without_citation_identifiers(sentence: str) -> str:
+    """The sentence's prose without its literature keys and evidence tokens.
+
+    A year or version embedded only in an exact run-bound literature key is
+    citation metadata, not a reported manuscript value, and so is the digest
+    in a step artifact's evidence id (``statistic_step_summary_3f9a...``).  The
+    literature and evidence owners separately reject unknown keys and ids.
+    Only the closed ``[@key]`` and ``{evidence:...}`` forms are stripped;
+    numeric or interpretive prose around them remains subject to the
+    unchanged result/claim gates.
+    """
+
+    return _VALID_EVIDENCE_TOKEN_RE.sub(
+        "", _LITERATURE_CITATION_MARKER_RE.sub("", sentence)
+    )
+
+
 def _looks_result_like_sentence(sentence: str) -> bool:
     if _looks_manuscript_metadata_sentence(sentence):
         return False
-    # A year or version embedded only in an exact run-bound literature key is
-    # citation metadata, not a reported manuscript value.  The literature
-    # owner separately rejects unknown keys and missing section authority.
-    # Strip only the closed ``[@key]`` marker; numeric or interpretive prose
-    # surrounding it remains subject to the unchanged result/claim gates.
-    prose = _LITERATURE_CITATION_MARKER_RE.sub("", sentence)
-    return bool(_RESULT_TOKEN_RE.search(prose))
+    return bool(_RESULT_TOKEN_RE.search(_without_citation_identifiers(sentence)))
 
 
 _NUMERIC_VALUE_TOKEN_RE = re.compile(r"\d|%")
 
 
 def _carries_numeric_value(sentence: str) -> bool:
-    """Whether a sentence states a number outside its literature citation keys.
+    """Whether a sentence states a number outside its citation identifiers.
 
     ``_looks_result_like_sentence`` also fires on interpretive vocabulary
     (mortality, mean, missingness); this narrower test isolates the numeric
     method details that only an exact ``ManuscriptMethodFact`` may admit.
     """
 
-    prose = _LITERATURE_CITATION_MARKER_RE.sub("", sentence)
-    return bool(_NUMERIC_VALUE_TOKEN_RE.search(prose))
+    return bool(_NUMERIC_VALUE_TOKEN_RE.search(_without_citation_identifiers(sentence)))
 
 
 def _evidence_refs(sentence: str) -> tuple[str, ...]:
