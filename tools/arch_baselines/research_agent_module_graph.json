@@ -1953,6 +1953,10 @@
     ],
     [
       "easyicu.research_agent.authority.manuscript_method_facts",
+      "easyicu.research_agent.research_context.typed"
+    ],
+    [
+      "easyicu.research_agent.authority.manuscript_method_facts",
       "easyicu.research_agent.schema"
     ],
     [
@@ -13212,7 +13216,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3295,
+    "edge_count": 3296,
     "largest_scc_size": 0,
     "module_count": 768,
     "package_count": 36,

@@ -25,8 +25,21 @@ from ..contracts.executed_method_design import (
     LatentClassModelDesign,
     validate_executed_method_design,
 )
-from ..schema import EvidenceRecord, ResearchContext, RESEARCH_CONTEXT_SCHEMA_VERSION
+from ..research_context.typed import (
+    RESEARCH_CONTEXT_V2_SCHEMA_VERSION,
+    RESEARCH_CONTEXT_V3_SCHEMA_VERSION,
+    parse_research_context,
+)
+from ..schema import EvidenceRecord, RESEARCH_CONTEXT_SCHEMA_VERSION
 from .runtime_artifacts import verified_run_evidence_path
+
+# Every typed context version; a context prepared from a materialized extract
+# is /3.  Anything else is a legacy untyped artifact and gains no authority.
+_TYPED_CONTEXT_VERSIONS = frozenset({
+    RESEARCH_CONTEXT_SCHEMA_VERSION,
+    RESEARCH_CONTEXT_V2_SCHEMA_VERSION,
+    RESEARCH_CONTEXT_V3_SCHEMA_VERSION,
+})
 
 
 class MethodFactAuthorityError(ValueError):
@@ -205,10 +218,10 @@ def _context_facts(
         # Legacy untyped context artifacts gain no new authority.
         if (
             not isinstance(raw, dict)
-            or raw.get("schema_version") != RESEARCH_CONTEXT_SCHEMA_VERSION
+            or raw.get("schema_version") not in _TYPED_CONTEXT_VERSIONS
         ):
             return ()
-        context = ResearchContext.model_validate(raw)
+        context = parse_research_context(raw)
     except (OSError, UnicodeError, ValueError) as exc:
         raise MethodFactAuthorityError("method context cannot be reproduced") from exc
 
