@@ -474,9 +474,54 @@ def _finding_msg(findings: Iterable[Any], validator: str) -> List[Dict[str, Any]
     return out
 
 
+def _typed_measurement_audit_ids(
+    *,
+    evidence_records: Sequence[Any],
+    per_step_records: Optional[Sequence[Mapping[str, Any]]],
+    run_dir: Optional[Path],
+) -> set[str]:
+    """Current step summaries whose owner recorded its own measurement audit.
+
+    An owner such as the signed landmark survival suite counts the missing
+    values of its sealed columns in its summary (``missingness_measurement_audit``,
+    the key the supplement inventory reads) and publishes the table under its
+    own product name, so no evidence id or description says "missingness".
+    """
+    if run_dir is None or per_step_records is None:
+        return set()
+    records = {
+        _record_field(record, "evidence_id"): record
+        for record in current_evidence_records(evidence_records, per_step_records)
+    }
+    found: set[str] = set()
+    for step in current_step_records(per_step_records):
+        record = records.get(step.get("step_summary_evidence_id"))
+        if (
+            step.get("status") != "ok"
+            or record is None
+            or _record_field(record, "produced_by_step") != step.get("step_id")
+        ):
+            continue
+        path = verified_run_evidence_path(run_dir, record)
+        if path is None:
+            continue
+        try:
+            summary = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        audit = (
+            summary.get("missingness_measurement_audit")
+            if isinstance(summary, Mapping) else None
+        )
+        if isinstance(audit, Mapping) and audit:
+            found.add(_record_field(record, "evidence_id"))
+    return found
+
+
 def _build_statistician_comments(
     *, evidence_records: Iterable[Any], findings: Iterable[Any],
     primary_result_evidence_ids: set[str],
+    measurement_audit_evidence_ids: set[str] = frozenset(),
 ) -> List[ReviewerComment]:
     comments: List[ReviewerComment] = []
     aliases = _available_evidence_ids(evidence_records)
@@ -529,12 +574,16 @@ def _build_statistician_comments(
                 ),
             )
         )
-    has_missingness_profile = "missingness" in aliases or _has_evidence_token(
-        aliases,
-        "missingness",
-        "missingness_audit",
-        "missingness profile",
-        "missing strategy",
+    has_missingness_profile = (
+        bool(measurement_audit_evidence_ids)
+        or "missingness" in aliases
+        or _has_evidence_token(
+            aliases,
+            "missingness",
+            "missingness_audit",
+            "missingness profile",
+            "missing strategy",
+        )
     )
     if not has_missingness_profile:
         comments.append(
@@ -793,6 +842,10 @@ def run_reviewer_round(
             comments=_build_statistician_comments(
                 evidence_records=recs, findings=finds,
                 primary_result_evidence_ids=primary_ids,
+                measurement_audit_evidence_ids=_typed_measurement_audit_ids(
+                    evidence_records=recs, per_step_records=per_step_records,
+                    run_dir=run_dir,
+                ),
             ),
         ),
         ReviewerCritique(
