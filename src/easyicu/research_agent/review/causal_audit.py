@@ -29,7 +29,9 @@ Policy
    are themselves bound to an ``associational`` effect trigger a
    ``warning``. Matches against sentences bound to a
    ``causal_overclaimed`` effect trigger an ``error`` that blocks the
-   bound manuscript from being marked final.
+   bound manuscript from being marked final. A word inside a disclaimer
+   ("an association, not a causal effect", "cannot support causal
+   inference") states the opposite of a causal claim and is not a hit.
 
 3. **Optional hook for DoWhy / causallib / EconML.** The module does
    not import any causal library. A user / skill may attach an
@@ -73,6 +75,45 @@ _CAUSAL_PATTERNS: Tuple[Tuple[str, str], ...] = (
     (r"\bincrease(?:s|d) (?:[A-Za-z_]+ )?(?:by|to)\b", "moderate"),
     (r"\bdecrease(?:s|d) (?:[A-Za-z_]+ )?(?:by|to)\b", "moderate"),
 )
+
+
+# A negation or contrast cue governs a causal word when it precedes the word
+# in the same clause, within a few words: "not causal", "rather than a causal
+# effect", "should not be interpreted as causal", "without ... as a causal".
+_DISCLAIMER_CUE_RE = re.compile(
+    r"\b(?:not|no|non|never|cannot|without|neither|nor|rather than|instead of)\b"
+    r"|n['’]t\b",
+    re.IGNORECASE,
+)
+# "not only causes" and "no doubt ... caused" assert, they do not disclaim.
+_ASSERTING_NEGATION_RE = re.compile(
+    r"\bnot (?:only|just|merely)\b|\b(?:no|without(?: a)?) (?:doubt|question)\b",
+    re.IGNORECASE,
+)
+_CLAUSE_BREAK_RE = re.compile(
+    r"[,;:()\[\]]|\b(?:but|however|whereas|although|though|while|yet)\b",
+    re.IGNORECASE,
+)
+_DISCLAIMER_WINDOW_WORDS = 8
+# The same disclaimer written the other way round: "causal inference is not
+# possible", "causal conclusions cannot be drawn".
+_TRAILING_DISCLAIMER_RE = re.compile(
+    r"\s+(?:inferences?|interpretations?|conclusions?|claims?|effects?|"
+    r"relationships?|links?)\s+(?:cannot|(?:is|are|was|were|can|could|should|"
+    r"may|might|must|will|would)\s+not)\b",
+    re.IGNORECASE,
+)
+
+
+def _disclaimed(sentence: str, match: "re.Match[str]") -> bool:
+    """Whether the causal word at ``match`` sits inside a disclaimer."""
+    clause = _CLAUSE_BREAK_RE.split(sentence[: match.start()])[-1]
+    window = " ".join(clause.split()[-_DISCLAIMER_WINDOW_WORDS:])
+    if _DISCLAIMER_CUE_RE.search(_ASSERTING_NEGATION_RE.sub(" ", window)):
+        return True
+    return match.group(0).lower() == "causal" and bool(
+        _TRAILING_DISCLAIMER_RE.match(sentence, match.end())
+    )
 
 
 # Evidence-metadata flag that a skill / user can set to declare the step
@@ -374,7 +415,10 @@ def scan_manuscript_for_causal_language(
     for sentence in _iter_sentences(bound_manuscript):
         linked_ids = _EVIDENCE_ID_RE.findall(sentence)
         for pattern, strength in _CAUSAL_PATTERNS:
-            if not re.search(pattern, sentence, flags=re.IGNORECASE):
+            if all(
+                _disclaimed(sentence, match)
+                for match in re.finditer(pattern, sentence, flags=re.IGNORECASE)
+            ):
                 continue
             linked_labels = [label_by_id.get(i) for i in linked_ids if label_by_id.get(i)]
             # Default severity is warning. Escalate to error only if the
