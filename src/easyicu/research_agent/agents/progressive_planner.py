@@ -4619,6 +4619,19 @@ class ProgressivePlannerAgent:
                 continuous_domain_variables=continuous_domain_variables,
             )
 
+        def unwritable_outline_family(
+            candidate: ProgressivePlanOutline,
+        ) -> tuple[str, ...]:
+            # A design canary returns its outline and never reaches final
+            # acceptance, so only a plan that would be compiled is stopped.
+            if stop_after_outline:
+                return ()
+            return families_requiring_family_result_contract(
+                context,
+                analysis_types=(candidate.analysis_type,),
+                sealed_survival_suite=sealed_survival_suite,
+            )
+
         if resume_checkpoint is not None:
             self._attempt.prompt_metrics = restore_progressive_resume_prompt_metrics(
                 checkpoint=resume_checkpoint,
@@ -4637,6 +4650,11 @@ class ProgressivePlannerAgent:
 
             def parse_outline(raw: str) -> ProgressivePlanOutline:
                 parsed = bind_outline(_parse_model(raw, ProgressivePlanOutline))
+                if unwritable_outline_family(parsed):
+                    # The outline committed its family. A retry for any other
+                    # violation would only ask the question again; the stop
+                    # below needs no further validation.
+                    return parsed
                 self._validate_outline_authority(
                     parsed,
                     analysis_types=analysis_types,
@@ -4705,6 +4723,16 @@ class ProgressivePlannerAgent:
                 "article_requirement_id as module_id.",
             )
             self.capture_efficiency_metrics()
+        # The outline committed the family; if no owner can write its result
+        # contract, stop without a retry that would re-read the question.
+        unwritable = unwritable_outline_family(outline)
+        if unwritable:
+            raise ProgressivePlanCompileError(
+                "progressive_family_result_contract_unwritable",
+                f"the outline selected {unwritable[0]}, whose primary result "
+                "contract no host owner can write",
+                path="analysis_type",
+            )
         self._validate_outline_authority(
             outline,
             analysis_types=analysis_types,
@@ -4754,20 +4782,6 @@ class ProgressivePlannerAgent:
             self._attempt.resume_validated = resume_checkpoint is not None
             self.capture_efficiency_metrics()
             return outline
-        # The outline committed the family; if no owner can write its result
-        # contract, stop without a retry that would re-read the question.
-        unwritable = families_requiring_family_result_contract(
-            context,
-            analysis_types=(outline.analysis_type,),
-            sealed_survival_suite=sealed_survival_suite,
-        )
-        if unwritable:
-            raise ProgressivePlanCompileError(
-                "progressive_family_result_contract_unwritable",
-                f"the outline selected {unwritable[0]}, whose primary result "
-                "contract no host owner can write",
-                path="analysis_type",
-            )
 
         require_robustness_intent = bool(
             enforce_article_contract
