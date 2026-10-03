@@ -27,6 +27,12 @@ from ...authority.survival_scientific_claims import (
     SURVIVAL_REPORTING_SCHEMA_VERSION,
     interval_hazard_ratio_claim_id,
 )
+from ...contracts.executed_method_design import (
+    EXECUTED_METHOD_DESIGN_KEY,
+    EXECUTED_METHOD_DESIGN_SCHEMA_VERSION,
+    LandmarkSurvivalDesign,
+    executed_method_design_payload,
+)
 from ...contracts.host_scaffold import HostScaffoldedScript
 from ...contracts.manuscript_result_structure import PRIMARY_RESULT_HEADINGS_BY_FAMILY
 from ...schema import AnalysisPlan, AnalysisStep
@@ -908,6 +914,32 @@ def build_survival_manuscript_projection(
     }
 
 
+def _executed_survival_design(sealed: LandmarkSurvivalRuntimeAuthority) -> dict[str, Any]:
+    """The design this run applied, read from the sealed contract it executed."""
+
+    followup_days = float(sealed.endpoint_horizon_days) - float(sealed.landmark_hours) / 24.0
+    return executed_method_design_payload(
+        LandmarkSurvivalDesign(
+            schema_version=EXECUTED_METHOD_DESIGN_SCHEMA_VERSION,
+            design_kind="landmark_survival",
+            time_origin=sealed.endpoint_time_origin,
+            landmark_hours=float(sealed.landmark_hours),
+            endpoint_horizon_days=float(sealed.endpoint_horizon_days),
+            prevalent_exposure_cutoff_hours=float(sealed.prevalent_exposure_cutoff_hours),
+            exposure_window_end_hours=float(sealed.exposure_window_hours[1]),
+            n_adjustment_covariates=len(sealed.adjustment_columns),
+            effect_model="cox_proportional_hazards_efron_ties",
+            interval_method=sealed.uncertainty_method,
+            proportional_hazards_test="schoenfeld_residuals",
+            proportional_hazards_alpha=float(sealed.proportional_hazards_alpha),
+            time_varying_cutpoints_days=[
+                float(cut) for cut in sealed.time_varying_interval_cutpoints_days
+            ],
+            rmst_horizon_days=followup_days if sealed.rmst_product is not None else None,
+        )
+    )
+
+
 def run_landmark_survival_suite(
     *,
     frame: Any,
@@ -1398,6 +1430,10 @@ def run_landmark_survival_suite(
         "analysis_role": "primary",
         "deterministic_standard_analysis": LANDMARK_SURVIVAL_ANALYSIS_KIND,
         "interpretation_class": "descriptive_prognostic_association",
+        # The first numeric block. The per-step numeric cap keeps headline
+        # roots first and then this order, so the design's few numbers bind
+        # as one exact Methods fact whatever the size of the rest.
+        EXECUTED_METHOD_DESIGN_KEY: _executed_survival_design(sealed),
         "typed_cohort_input": input_product,
         "input_evidence_id": input_evidence_id,
         "input_sha256": input_sha256,

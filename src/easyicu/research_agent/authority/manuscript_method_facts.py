@@ -22,6 +22,7 @@ from typing import Sequence
 from ..contracts.executed_method_design import (
     EXECUTED_METHOD_DESIGN_KEY,
     FixedWindowRepresentationDesign,
+    LandmarkSurvivalDesign,
     LatentClassModelDesign,
     validate_executed_method_design,
 )
@@ -55,7 +56,7 @@ def is_method_fact_candidate(text: str) -> bool:
             text,
             re.I,
         )
-        or re.search(r"\bExecuted (?:time design|class model)\s*:", text, re.I)
+        or re.search(r"\bExecuted (?:time design|class model|survival design)\s*:", text, re.I)
     )
 
 
@@ -108,6 +109,8 @@ def _design_text(design: object) -> str:
             f"{relation} {_reader_anchor(design.anchor)}, and a record entered the "
             f"model with at least {design.minimum_observed_windows} observed windows"
         )
+    if isinstance(design, LandmarkSurvivalDesign):
+        return _survival_design_text(design)
     assert isinstance(design, LatentClassModelDesign)
     counts = design.candidate_class_counts
     if counts == list(range(counts[0], counts[-1] + 1)):
@@ -135,6 +138,42 @@ def _design_text(design: object) -> str:
         "Bayesian information criterion and a prespecified minimum class proportion "
         f"of {proportion} of records"
     )
+
+
+def _days(values: Sequence[float]) -> str:
+    text = [f"{value:g}" for value in values]
+    return text[0] if len(text) == 1 else ", ".join(text[:-1]) + f" and {text[-1]}"
+
+
+def _survival_design_text(design: LandmarkSurvivalDesign) -> str:
+    """The landmark risk set, the model and the alternatives the suite ran."""
+
+    text = (
+        "Executed survival design: the risk set comprised records alive and "
+        f"observed at a landmark {design.landmark_hours:g} hours after "
+        f"{_quoted_source(design.time_origin)}, excluding records whose exposure "
+        f"began at or before hour {design.prevalent_exposure_cutoff_hours:g}, with "
+        f"exposure beginning by hour {design.exposure_window_end_hours:g} defining "
+        f"the exposed group and follow-up ending at day {design.endpoint_horizon_days:g}; "
+        "a Cox proportional hazards model with Efron ties, adjusted for "
+        f"{design.n_adjustment_covariates} prespecified covariates, estimated the "
+        "exposure contrast with Wald intervals, and proportional hazards were "
+        "tested with Schoenfeld residuals at a prespecified alpha of "
+        f"{design.proportional_hazards_alpha:g}"
+    )
+    # No result vocabulary ("hazard ratio", "confidence interval"): the numeric
+    # binder would then accept only result fields for this sentence's numbers.
+    if design.time_varying_cutpoints_days:
+        text += (
+            "; interval-specific contrasts came from a piecewise Cox model split "
+            f"at days {_days(design.time_varying_cutpoints_days)} after the landmark"
+        )
+    if design.rmst_horizon_days is not None:
+        text += (
+            "; the restricted mean survival time difference was unadjusted over the "
+            f"{design.rmst_horizon_days:g} days after the landmark"
+        )
+    return text
 
 
 def _executed_design_facts(

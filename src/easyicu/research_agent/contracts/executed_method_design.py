@@ -82,8 +82,53 @@ class LatentClassModelDesign(_ExecutedDesign):
         return self
 
 
+class LandmarkSurvivalDesign(_ExecutedDesign):
+    """The landmark risk set, the model, its diagnostic and its alternatives.
+
+    Times are hours or days from the time origin; the cutpoints and the
+    restricted-mean horizon are days after the landmark, the scale the
+    survival model runs on.
+    """
+
+    design_kind: Literal["landmark_survival"]
+    time_origin: str = Field(min_length=1, max_length=80)
+    landmark_hours: float = Field(gt=0)
+    endpoint_horizon_days: float = Field(gt=0)
+    prevalent_exposure_cutoff_hours: float
+    exposure_window_end_hours: float = Field(gt=0)
+    n_adjustment_covariates: int = Field(ge=0)
+    effect_model: Literal["cox_proportional_hazards_efron_ties"]
+    interval_method: Literal["wald_95_ci"]
+    proportional_hazards_test: Literal["schoenfeld_residuals"]
+    proportional_hazards_alpha: float = Field(gt=0.0, lt=1.0)
+    time_varying_cutpoints_days: list[float]
+    rmst_horizon_days: float | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _times_are_ordered(self) -> "LandmarkSurvivalDesign":
+        followup_days = self.endpoint_horizon_days - self.landmark_hours / 24.0
+        cutpoints = self.time_varying_cutpoints_days
+        if followup_days <= 0:
+            raise ValueError("the landmark is not before the endpoint horizon")
+        if not (
+            self.prevalent_exposure_cutoff_hours
+            < self.exposure_window_end_hours
+            <= self.landmark_hours
+        ):
+            raise ValueError("the exposure window does not close by the landmark")
+        if any(
+            later <= earlier for earlier, later in zip(cutpoints, cutpoints[1:])
+        ) or any(not 0 < cut < followup_days for cut in cutpoints):
+            raise ValueError("time-varying cutpoints must increase within follow-up")
+        if self.rmst_horizon_days is not None and abs(
+            self.rmst_horizon_days - followup_days
+        ) > 1e-9:
+            raise ValueError("the restricted-mean horizon is not the follow-up end")
+        return self
+
+
 ExecutedMethodDesign = Annotated[
-    Union[FixedWindowRepresentationDesign, LatentClassModelDesign],
+    Union[FixedWindowRepresentationDesign, LatentClassModelDesign, LandmarkSurvivalDesign],
     Field(discriminator="design_kind"),
 ]
 _DESIGN_ADAPTER: TypeAdapter[Any] = TypeAdapter(ExecutedMethodDesign)
@@ -104,6 +149,7 @@ __all__ = [
     "EXECUTED_METHOD_DESIGN_SCHEMA_VERSION",
     "ExecutedMethodDesign",
     "FixedWindowRepresentationDesign",
+    "LandmarkSurvivalDesign",
     "LatentClassModelDesign",
     "executed_method_design_payload",
     "validate_executed_method_design",
