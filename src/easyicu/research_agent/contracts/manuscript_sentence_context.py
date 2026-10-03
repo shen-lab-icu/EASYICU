@@ -3,6 +3,8 @@
 This owner never supplies a replacement antecedent or a scientific statement.
 Only a leading dependent sentence in the *same paragraph* as a deleted opener
 can be removed. Every additional removal is returned for the repair receipt.
+Audit-only citation markup is not prose: it neither supplies an antecedent nor
+separates a dependent sentence from the opener it depends on.
 """
 
 from __future__ import annotations
@@ -20,6 +22,12 @@ _DEPENDENT_OPENER = re.compile(
 )
 _PARAGRAPH_BOUNDARY = re.compile(r"\n[ \t]*\n")
 _SENTENCE_END = re.compile(r"[.!?。！？](?:[ \t]+|$)")
+# A scaffold evidence token or its bound link. Readers never see either, and a
+# Writer often places one after the period, where sentence splitting assigns it
+# to the next sentence.
+_CITATION = r"\{evidence:[^}\n]+\}|\[[^\]\n]+\]\(evidence/[^\n)]*\)"
+_CITATION_MARKUP = re.compile(_CITATION)
+_LEADING_CITATION_MARKUP = re.compile(rf"(?:[ \t]*(?:{_CITATION}))*[ \t]*")
 
 
 @dataclass(frozen=True)
@@ -32,7 +40,8 @@ class ContextualSentenceDeletion:
 def has_dependent_opener(paragraph: str) -> bool:
     """Recognize narrow anaphoric openers, not arbitrary 'This study' prose."""
 
-    return bool(_DEPENDENT_OPENER.match(paragraph.lstrip()))
+    text = paragraph.lstrip()
+    return bool(_DEPENDENT_OPENER.match(text[_LEADING_CITATION_MARKUP.match(text).end():]))
 
 
 def contextual_sentence_deletion(
@@ -48,8 +57,8 @@ def contextual_sentence_deletion(
     boundaries = list(_PARAGRAPH_BOUNDARY.finditer(prefix))
     paragraph_start = boundaries[-1].end() if boundaries else 0
     # A heading with no blank line also starts a new paragraph. Any other
-    # surviving text before the target may still supply its antecedent.
-    before = text[paragraph_start:start].strip()
+    # surviving prose before the target may still supply its antecedent.
+    before = _CITATION_MARKUP.sub("", text[paragraph_start:start]).strip()
     if before and not re.fullmatch(r"#{1,6}[^\n]*\n?", before):
         return ContextualSentenceDeletion(start, end)
 
@@ -66,7 +75,11 @@ def contextual_sentence_deletion(
         remaining = suffix[sentence_start:]
         if not has_dependent_opener(remaining):
             break
-        terminal = _SENTENCE_END.search(remaining)
+        # A leading citation goes with its sentence; a period inside a link
+        # label never ends that sentence.
+        terminal = _SENTENCE_END.search(
+            remaining, _LEADING_CITATION_MARKUP.match(remaining).end(),
+        )
         if terminal is None:
             break  # Do not guess the end of an incomplete sentence.
         sentence_end = sentence_start + terminal.end()
