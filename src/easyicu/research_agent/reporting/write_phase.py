@@ -1361,6 +1361,11 @@ def _project_and_report_owner_manuscript_claims(
 ) -> str:
     """Project typed owner claims before the unchanged STRICT gates rerun."""
 
+    if not scaffold.strip():
+        # No Writer draft, so no target to project into. The Writer's own
+        # failure is already a finding and the run closes as not generated;
+        # a projection error here would replace that cause with a false one.
+        return scaffold
     projected, repairs = project_owner_issued_manuscript_claims(
         scaffold,
         per_step_records=current_step_records(per_step_records),
