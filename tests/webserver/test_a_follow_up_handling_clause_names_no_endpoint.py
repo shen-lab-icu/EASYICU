@@ -41,6 +41,18 @@ from easyicu.webserver import study_intent
         ),
         ("乳酸与 ICU 住院时长的关系，考虑死亡的竞争风险", ("los_icu",)),
         ("乳酸与 ICU 再入院的关系，死亡作为竞争事件", ("icu_readmission",)),
+        (
+            "Is early fluid balance associated with ICU length of stay, with death treated "
+            "as a competing risk?",
+            ("los_icu",),
+        ),
+        (
+            "Is lactate associated with ICU readmission, with death and discharge considered "
+            "as competing events?",
+            ("icu_readmission",),
+        ),
+        ("乳酸与 ICU 住院时长的关系，以死亡为竞争风险", ("los_icu",)),
+        ("乳酸与 ICU 再入院的关系，以死亡和出院为竞争事件", ("icu_readmission",)),
     ],
 )
 def test_events_that_end_follow_up_are_not_requested_endpoints(question, expected):
@@ -56,6 +68,8 @@ def test_events_that_end_follow_up_are_not_requested_endpoints(question, expecte
         ("Patients are censored at discharge and death is the primary outcome.", ("death",)),
         ("以28天死亡为主要结局，并在出院时删失", ("mort_28d",)),
         ("处理缺失数据后，研究院内死亡", ("death",)),
+        # 以 ... 为 takes only the events right before the censoring term.
+        ("以死亡为主要结局，以出院为竞争风险", ("death",)),
     ],
 )
 def test_an_endpoint_named_beside_its_censoring_rule_is_still_read(question, expected):

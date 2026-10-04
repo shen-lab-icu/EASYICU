@@ -29,9 +29,13 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Literal, Mapping, Optional, Tuple
 
 from easyicu.ai_optin import AIOptInError
+from easyicu.outcome_availability import (
+    fixed_horizon_mortality_endpoint_stated_by,
+    stated_mortality_horizon_mentions,
+)
 from easyicu.webserver import provider_adapter
 from easyicu.webserver.provider_gate import ProviderGateError, resolve_provider_gate
 
@@ -101,6 +105,13 @@ def _concept_groups() -> Dict[str, List[str]]:
         return {}
 
 
+# The closed fixed-horizon mortality concepts are read by the shared horizon
+# reader: "28-day mortality", "survival to day 90", "one-year survival" and
+# "随访一年" each name the one closed endpoint their horizon admits.  A horizon
+# no closed endpoint admits ("30-day mortality") is left to the generic
+# mortality reading.
+_FIXED_HORIZON_MORTALITY = "fixed_horizon_mortality"
+
 # Clinical phrasings (EN + ZH) mapped onto catalog concept ids. This is a
 # reading aid, not an allowlist of what a study may be about: an unmatched
 # phrase yields an unread slot, never a default.
@@ -153,8 +164,7 @@ _PHRASE_TO_CONCEPT: Tuple[Tuple[str, str], ...] = (
     (r"\bsex\b|gender|性别", "sex"),
     (r"\badmission (?:type|category)\b|\btype of admission\b|入院类型|入院类别|入科类型", "adm"),
     (r"in-?hospital mortality|hospital mortality|院内死亡|住院death|住院死亡", "death"),
-    (r"28-?\s*day mortality|28\s*天死亡", "mort_28d"),
-    (r"90-?\s*day mortality|90\s*天死亡", "mort_90d"),
+    (_FIXED_HORIZON_MORTALITY, _FIXED_HORIZON_MORTALITY),
     (r"icu mortality|icu 死亡", "death"),
     (r"mortality|death|死亡|病死", "death"),
     (r"length of stay|\blos\b|住院时长|住院时间|icu 时长", "los_icu"),
@@ -266,8 +276,16 @@ _CONJUNCTION = re.compile(r"\s*(?:、|与|和|及|或|\band\b|\bor\b)\s*", re.IG
 _LIST_SEPARATOR = re.compile(
     r"\s*(?:,\s*(?:and|or)\b|、|,|，|与|和|及|或|\band\b|\bor\b)\s*", re.IGNORECASE
 )
-# "death and discharge as competing events", "死亡作为竞争事件", "死亡时删失".
-_ENDING_MARKER = re.compile(r"\s*(?:\bas\b|作为|视为|时)\s*(?:an?\s+)?$", re.IGNORECASE)
+# "death and discharge as competing events", "death treated as a competing
+# risk", "死亡作为竞争事件", "死亡时删失".
+_ENDING_MARKER = re.compile(
+    r"\s*(?:(?:(?:treated|considered|regarded|handled|counted|modell?ed|analy[sz]ed)\s+)?\bas\b"
+    r"|作为|视为|时)\s*(?:an?\s+)?$",
+    re.IGNORECASE,
+)
+# "以死亡为竞争风险": 以 ... 为 takes the events between them as the term.
+_TAKEN_AS_OPENER = re.compile(r"以\s*$")
+_TAKEN_AS_MARKER = re.compile(r"\s*为\s*$")
 # "censored at death", "the competing risk of death".
 _CENSORED_AT = re.compile(
     r"(?:censor(?:ed|ing)?\s+(?:at|on|by)|competing[\s-]+(?:risks?|events?)\s+(?:of|from))\s+$",
@@ -303,6 +321,8 @@ def _follow_up_handling(text: str, start: int, end: int) -> bool:
         return False
     head = after[: term.start()]
     marker = _ENDING_MARKER.search(head)
+    if marker is None and _TAKEN_AS_OPENER.search(before):
+        marker = _TAKEN_AS_MARKER.search(head)
     if marker is not None and _listed_events(
         head[: marker.start()], _CONJUNCTION, trailing=False
     ):
@@ -336,6 +356,19 @@ def _family_of(concept: Optional[str]) -> Optional[frozenset]:
     return None
 
 
+def _entry_readings(pattern: str, concept: str, text: str) -> Iterator[Tuple[str, int, int]]:
+    """Each reading of one phrase-table entry in ``text``: concept, start, end."""
+
+    if concept == _FIXED_HORIZON_MORTALITY:
+        for mention in stated_mortality_horizon_mentions(text):
+            endpoint = fixed_horizon_mortality_endpoint_stated_by(mention.horizon)
+            if endpoint is not None:
+                yield endpoint.event_concept, mention.start, mention.end
+        return
+    for match in re.finditer(pattern, text, re.IGNORECASE):
+        yield concept, match.start(), match.end()
+
+
 def _match_concept(text: str) -> List[Tuple[str, str]]:
     """Return concept/phrase pairs in dictionary-specificity order.
 
@@ -344,17 +377,16 @@ def _match_concept(text: str) -> List[Tuple[str, str]]:
     """
     found: List[Tuple[str, str]] = []
     seen = set()
-    for pattern, concept in _PHRASE_TO_CONCEPT:
-        if concept in seen:
-            continue
-        for match in re.finditer(pattern, text, re.IGNORECASE):
-            if _negated(text, match.start()) or _follow_up_handling(
-                text, match.start(), match.end()
+    for pattern, entry in _PHRASE_TO_CONCEPT:
+        for concept, start, end in _entry_readings(pattern, entry, text):
+            if (
+                concept in seen
+                or _negated(text, start)
+                or _follow_up_handling(text, start, end)
             ):
                 continue
             seen.add(concept)
-            found.append((concept, match.group(0)))
-            break
+            found.append((concept, text[start:end]))
     return found
 
 
@@ -372,20 +404,17 @@ def explicit_outcome_concepts(question: str) -> tuple[str, ...]:
     text = str(question or "")
     values: list[str] = []
     covered: list[tuple[int, int]] = []
-    for pattern, concept in _PHRASE_TO_CONCEPT:
-        if concept not in _OUTCOME_CONCEPTS_PRIMARY:
+    for pattern, entry in _PHRASE_TO_CONCEPT:
+        if entry not in _OUTCOME_CONCEPTS_PRIMARY and entry != _FIXED_HORIZON_MORTALITY:
             continue
-        for match in re.finditer(pattern, text, re.IGNORECASE):
+        for concept, start, end in _entry_readings(pattern, entry, text):
             if (
-                _negated(text, match.start())
-                or _follow_up_handling(text, match.start(), match.end())
-                or any(
-                    match.start() < end and start < match.end()
-                    for start, end in covered
-                )
+                _negated(text, start)
+                or _follow_up_handling(text, start, end)
+                or any(start < stop and begin < end for begin, stop in covered)
             ):
                 continue
-            covered.append(match.span())
+            covered.append((start, end))
             if concept not in values:
                 values.append(concept)
     return tuple(values)
