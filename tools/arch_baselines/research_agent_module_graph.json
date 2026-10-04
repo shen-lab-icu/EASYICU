@@ -11700,6 +11700,10 @@
       "easyicu.research_agent.contracts.manuscript_sentence_context"
     ],
     [
+      "easyicu.research_agent.reporting.manuscript_surface",
+      "easyicu.research_agent.contracts.manuscript_sentence_context"
+    ],
+    [
       "easyicu.research_agent.reporting.manuscript_tables",
       "easyicu.research_agent.authority.evidence_store"
     ],
@@ -13252,7 +13256,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3305,
+    "edge_count": 3306,
     "largest_scc_size": 0,
     "module_count": 769,
     "package_count": 36,
