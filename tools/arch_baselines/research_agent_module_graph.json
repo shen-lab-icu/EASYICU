@@ -11613,6 +11613,10 @@
     ],
     [
       "easyicu.research_agent.reporting.manuscript_quality",
+      "easyicu.research_agent.reporting.manuscript_tables"
+    ],
+    [
+      "easyicu.research_agent.reporting.manuscript_quality",
       "easyicu.research_agent.schema"
     ],
     [
@@ -11702,6 +11706,10 @@
     [
       "easyicu.research_agent.reporting.manuscript_tables",
       "easyicu.research_agent.authority.runtime_artifacts"
+    ],
+    [
+      "easyicu.research_agent.reporting.manuscript_tables",
+      "easyicu.research_agent.contracts.manuscript_result_structure"
     ],
     [
       "easyicu.research_agent.reporting.manuscript_tables",
@@ -13244,7 +13252,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3303,
+    "edge_count": 3305,
     "largest_scc_size": 0,
     "module_count": 769,
     "package_count": 36,

@@ -20,6 +20,13 @@ A symmetric Dirichlet prior with total mass :data:`MIXED_MODE_CATEGORY_PRIOR`
 on each indicator's level probabilities keeps estimates off the boundary
 (posterior-mode EM).  The reported log-likelihood excludes the prior.  The
 engine version fixes the prior, so it is not a design knob.
+
+The level indicators are a sparse matrix with one entry per observed ordinal
+cell, so their memory follows the observed cells, not the number of levels.
+As a dense float matrix, a design at its limit (16 coordinates over 48
+windows, 5 levels, about 92,000 stays) held 2.8 GB per start, and 7.3 GB with
+GCS levels.  The EM sums are the same; only their order differs, so a fit's
+labels and likelihood agree with the dense form to rounding.
 """
 
 from __future__ import annotations
@@ -29,6 +36,7 @@ import math
 from typing import Any, Mapping, Sequence
 
 import numpy as np
+from scipy import sparse
 from scipy.special import logsumexp
 
 #: Total pseudo-count spread evenly over one indicator's levels, per class.
@@ -66,13 +74,19 @@ def _one_hot_levels(
     observed: np.ndarray,
     ordinal_columns: Sequence[int],
     column_levels: Sequence[OrdinalLevels | None],
-) -> tuple[np.ndarray, list[tuple[int, int]]]:
+) -> tuple[sparse.csr_array, list[tuple[int, int]]]:
+    """Each observed ordinal cell's level, as a sparse row-by-level indicator.
+
+    A row holds one entry per observed ordinal column, in column order, so its
+    indices are sorted without a coordinate-format copy.
+    """
+
     n_rows = x.shape[0]
     width = sum(len(column_levels[column]) for column in ordinal_columns)
-    one_hot = np.zeros((n_rows, width), dtype=float)
+    level_columns = np.full((n_rows, len(ordinal_columns)), -1, dtype=np.int32)
     blocks: list[tuple[int, int]] = []
     start = 0
-    for column in ordinal_columns:
+    for position, column in enumerate(ordinal_columns):
         levels = column_levels[column]
         assert levels is not None
         seen = observed[:, column]
@@ -86,10 +100,41 @@ def _one_hot_levels(
                 f"ordinal indicator {column} has a value outside its declared "
                 f"levels {list(levels)}"
             )
-        one_hot[np.flatnonzero(seen), start + codes] = 1.0
+        level_columns[np.flatnonzero(seen), position] = start + codes
         blocks.append((start, len(levels)))
         start += len(levels)
+    present = level_columns >= 0
+    per_row = present.sum(axis=1)
+    # One index type for both arrays, so the matrix keeps them without a copy.
+    index_type = np.int32 if int(per_row.sum()) < np.iinfo(np.int32).max else np.int64
+    indptr = np.zeros(n_rows + 1, dtype=index_type)
+    np.cumsum(per_row, out=indptr[1:])
+    indices = level_columns[present].astype(index_type, copy=False)
+    del level_columns, present
+    one_hot = sparse.csr_array(
+        (np.ones(indices.size, dtype=float), indices, indptr), shape=(n_rows, width)
+    )
     return one_hot, blocks
+
+
+def _class_level_counts(
+    one_hot: sparse.csr_array, responsibilities: np.ndarray
+) -> np.ndarray:
+    """Each class's responsibility-weighted count of every level, classes by levels.
+
+    The indicators stay the left operand, so the product runs over their
+    observed cells only.
+    """
+
+    return (one_hot.T @ responsibilities).T
+
+
+def _row_level_log_probabilities(
+    one_hot: sparse.csr_array, log_level_probabilities: np.ndarray
+) -> np.ndarray:
+    """Each row's log-probability of its observed levels, rows by classes."""
+
+    return one_hot @ log_level_probabilities.T
 
 
 def fit_observed_data_mixed_mode_lca(
@@ -159,14 +204,16 @@ def fit_observed_data_mixed_mode_lca(
     for iteration in range(max_iter):
         weights = np.maximum(responsibilities.sum(axis=0), 1e-12)
         weights /= weights.sum()
-        level_counts = responsibilities.T @ one_hot
+        level_counts = _class_level_counts(one_hot, responsibilities)
         prior_term = 0.0
         for start, size in blocks:
             block = level_counts[:, start : start + size] + MIXED_MODE_CATEGORY_PRIOR / size
             log_block = np.log(block) - np.log(block.sum(axis=1, keepdims=True))
             log_level_probabilities[:, start : start + size] = log_block
             prior_term += float((MIXED_MODE_CATEGORY_PRIOR / size) * log_block.sum())
-        log_prob = np.log(weights)[None, :] + one_hot @ log_level_probabilities.T
+        log_prob = np.log(weights)[None, :] + _row_level_log_probabilities(
+            one_hot, log_level_probabilities
+        )
         if n_continuous:
             weighted = responsibilities.T @ statistics
             effective = weighted[:, :n_continuous]
