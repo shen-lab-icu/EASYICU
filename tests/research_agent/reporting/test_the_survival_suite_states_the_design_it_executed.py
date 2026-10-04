@@ -13,7 +13,9 @@ choices in words instead of writing sentences the gate deletes.
 The fact says what the suite timed: the exposure source's first recorded time,
 not a verified onset, so exposure begun before that record is not observed.
 And it names both analysis sets: the adjusted Cox models drop records with a
-missing covariate, while Kaplan-Meier and the restricted mean keep them.
+missing covariate, while Kaplan-Meier and the restricted mean keep them.  It
+states the PH decision as the suite's typed rule makes it: the exposure term's
+test or the Bonferroni-adjusted global test, not every term, at the alpha.
 
 Synthetic study and seeded synthetic rows only (renal replacement therapy and
 90-day mortality).
@@ -107,6 +109,10 @@ def test_the_design_is_one_exact_bound_methods_fact(tmp_path):
     assert f"a landmark {authority.landmark_hours:g} hours after" in fact.text
     assert f"follow-up ending at day {authority.endpoint_horizon_days:g}" in fact.text
     assert f"alpha of {authority.proportional_hazards_alpha:g}" in fact.text
+    assert (
+        "judged violated when the test of the exposure term or a "
+        "Bonferroni-adjusted global test over all model terms rejected"
+    ) in fact.text
     assert "exposure timing was the first recorded time of the exposure source" in fact.text
     assert "exposure began" not in fact.text and "onset" not in fact.text
     assert "used the records with complete covariate data" in fact.text

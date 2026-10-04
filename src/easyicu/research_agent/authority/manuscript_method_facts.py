@@ -186,7 +186,9 @@ def _survival_design_text(design: LandmarkSurvivalDesign) -> str:
     """The landmark risk set, the model and the alternatives the suite ran."""
 
     # The onset column is the exposure source's first recorded time, not a
-    # verified clinical onset: say so rather than "exposure began".
+    # verified clinical onset: say so rather than "exposure began".  The PH
+    # decision is the suite's typed rule (ProportionalHazardsTestOutcome): the
+    # exposure term's test or the Bonferroni global test below alpha.
     text = (
         "Executed survival design: the risk set comprised records alive and "
         f"observed at a landmark {design.landmark_hours:g} hours after "
@@ -199,8 +201,9 @@ def _survival_design_text(design: LandmarkSurvivalDesign) -> str:
         "a Cox proportional hazards model with Efron ties, adjusted for "
         f"{design.n_adjustment_covariates} prespecified covariates, estimated the "
         "exposure contrast with Wald intervals, and proportional hazards were "
-        "tested with Schoenfeld residuals at a prespecified alpha of "
-        f"{design.proportional_hazards_alpha:g}"
+        "tested with Schoenfeld residuals, judged violated when the test of the "
+        "exposure term or a Bonferroni-adjusted global test over all model terms "
+        f"rejected at a prespecified alpha of {design.proportional_hazards_alpha:g}"
     )
     # No result vocabulary ("hazard ratio", "confidence interval"): the numeric
     # binder would then accept only result fields for this sentence's numbers.
