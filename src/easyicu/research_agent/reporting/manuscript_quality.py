@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import hashlib
 import re
-from typing import Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 from ..authority.reader_numeric_display import (
     OVERPRECISE_READER_DECIMAL_RE,
@@ -32,6 +32,9 @@ from .manuscript_surface import (
     render_reader_manuscript,
 )
 from ..schema import AnalysisPlan
+
+if TYPE_CHECKING:
+    from .manuscript_tables import ReaderTableCallout
 
 _REQUIRED_SECTIONS: Mapping[str, tuple[str, ...]] = {
     "Abstract": (),
@@ -280,8 +283,13 @@ def repair_registered_display_callouts(
     *,
     expected_display_labels: Sequence[str],
     analysis_plan: AnalysisPlan | None = None,
+    reader_tables: Sequence[ReaderTableCallout] = (),
 ) -> tuple[str, tuple[Mapping[str, str], ...]]:
-    """Add neutral Results callouts only for host-registered displays."""
+    """Add neutral Results callouts only for host-registered displays.
+
+    A declared reader table is called by the reader's number for it, in its
+    Results subsection, citing the registered product it formats.
+    """
 
     repaired = str(manuscript or "")
     existing_subsections = _subsections(_sections(repaired).get("Results", ""))
@@ -302,6 +310,10 @@ def repair_registered_display_callouts(
             "See Figure 1 {evidence:publication_figure_contract}.",
         ),
     }
+    templates.update(
+        (table.label, (table.subsection, f"See {table.label} {{evidence:{table.evidence_id}}}."))
+        for table in reader_tables
+    )
     repairs: list[Mapping[str, str]] = []
     for raw_label in expected_display_labels:
         label = str(raw_label).strip()
@@ -1095,16 +1107,22 @@ def _section_has_truncated_ending(section_text: str) -> bool:
 
 def expected_manuscript_display_labels(
     evidence_ids: Sequence[str],
+    reader_tables: Sequence[ReaderTableCallout] = (),
 ) -> tuple[str, ...]:
-    """Map verified evidence identities to reader-facing display labels."""
+    """Map verified evidence identities to reader-facing display labels.
+
+    A declared reader table is expected under the reader's number for it
+    while the product it formats is current.
+    """
 
     names = {str(item).strip() for item in evidence_ids if str(item).strip()}
     labels: list[str] = []
     if "table_one" in names:
         labels.append("Table 1")
+    labels.extend(table.label for table in reader_tables if table.evidence_id in names)
     if "publication_figure_contract" in names:
         labels.append("Figure 1")
-    return tuple(labels)
+    return tuple(dict.fromkeys(labels))
 
 
 def audit_manuscript_quality(

@@ -18,6 +18,7 @@ from typing import Sequence
 
 from ..authority.evidence_store import evidence_artifact_basename_stem
 from ..authority.runtime_artifacts import verified_run_evidence_path
+from ..contracts.manuscript_result_structure import COHORT_RESULT_HEADING
 from ..contracts.manuscript_tables import (
     MANUSCRIPT_TABLES_KEY,
     GroupedSummaryLayout,
@@ -39,6 +40,25 @@ class ManuscriptTable:
     columns: tuple[str, ...]
     rows: tuple[tuple[str, ...], ...]
     notes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ReaderTableCallout:
+    """The reader's number for a declared table, its source and its Results subsection."""
+
+    label: str
+    caption: str
+    evidence_id: str
+    subsection: str
+
+
+#: Both declared layouts describe the analysed cohort (how the groups compare,
+#: how the cohort was reached), so Results calls them where it describes the
+#: cohort.  A new layout names its own subsection here.
+_RESULTS_SUBSECTION_BY_LAYOUT = {
+    "grouped_summary": COHORT_RESULT_HEADING,
+    "stage_flow": COHORT_RESULT_HEADING,
+}
 
 
 def _number(value: str, places: int = 2) -> str:
@@ -159,6 +179,68 @@ def build_manuscript_tables(
     evidence_records: Sequence[EvidenceRecord],
     run_dir: Path,
 ) -> tuple[ManuscriptTable, ...]:
+    """Project the plan's Table 1 steps, then each owner's declared tables."""
+
+    tables = _table_one_tables(plan=plan, evidence_records=evidence_records, run_dir=run_dir)
+    tables.extend(
+        table for table, _declaration, _source in _declared_tables(
+            plan=plan, evidence_records=evidence_records, run_dir=run_dir,
+        )
+    )
+    return tuple(tables)
+
+
+def declared_table_callouts(
+    *,
+    plan: AnalysisPlan,
+    evidence_records: Sequence[EvidenceRecord],
+    run_dir: Path,
+) -> tuple[ReaderTableCallout, ...]:
+    """Number each declared table as the reader does, with the product it shows.
+
+    The plan's Table 1 tables come first, so a declared table's number follows
+    theirs; a plan Table 1 keeps its own ``table_one`` callout.  When the
+    tables cannot be projected the reader shows none, so none is called; the
+    projection error is reported where the reader's tables are built.
+    """
+
+    try:
+        first = 1 + len(_table_one_tables(plan=plan, evidence_records=evidence_records, run_dir=run_dir))
+        declared = _declared_tables(plan=plan, evidence_records=evidence_records, run_dir=run_dir)
+    except ManuscriptTableProjectionError:
+        return ()
+    return tuple(
+        ReaderTableCallout(
+            label=f"Table {number}", caption=table.caption, evidence_id=source.evidence_id,
+            subsection=_RESULTS_SUBSECTION_BY_LAYOUT[declaration.body.layout],
+        )
+        for number, (table, declaration, source) in enumerate(declared, first)
+    )
+
+
+def reader_table_digest(callouts: Sequence[ReaderTableCallout]) -> str:
+    """The Writer's list of the declared tables the reader prints, or nothing."""
+
+    if not callouts:
+        return ""
+    return "\n".join((
+        "## reader tables",
+        "Writer instruction: the host prints these tables after the manuscript. Call each "
+        "table once, by its exact label, in its Results subsection and cite its evidence ID.",
+        *(
+            f"- {callout.label}: {callout.caption}; subsection={callout.subsection}; "
+            f"cite={{evidence:{callout.evidence_id}}}"
+            for callout in callouts
+        ),
+    ))
+
+
+def _table_one_tables(
+    *,
+    plan: AnalysisPlan,
+    evidence_records: Sequence[EvidenceRecord],
+    run_dir: Path,
+) -> list[ManuscriptTable]:
     """Project the exact Table 1 owner from the current verified record set."""
 
     tables: list[ManuscriptTable] = []
@@ -223,8 +305,7 @@ def build_manuscript_tables(
         tables.append(ManuscriptTable(
             caption="Baseline characteristics", columns=columns, rows=tuple(rows), notes=tuple(notes),
         ))
-    tables.extend(_declared_tables(plan=plan, evidence_records=evidence_records, run_dir=run_dir))
-    return tuple(tables)
+    return tables
 
 
 def _verified_bytes(run_dir: Path, record: EvidenceRecord) -> bytes:
@@ -357,10 +438,10 @@ def _declared_tables(
     plan: AnalysisPlan,
     evidence_records: Sequence[EvidenceRecord],
     run_dir: Path,
-) -> list[ManuscriptTable]:
+) -> list[tuple[ManuscriptTable, ManuscriptTableDeclaration, EvidenceRecord]]:
     """Project each reader table a plan step's signed owner declared, in plan order."""
 
-    tables: list[ManuscriptTable] = []
+    tables: list[tuple[ManuscriptTable, ManuscriptTableDeclaration, EvidenceRecord]] = []
     for step in plan.steps:
         summaries = [
             _step_summary(run_dir, record) for record in evidence_records
@@ -400,5 +481,5 @@ def _declared_tables(
                 raise ManuscriptTableProjectionError(
                     f"Declared table {declaration.product!r} requires one current registered source"
                 )
-            tables.append(_declared_table(plan, declaration, sources[0], run_dir))
+            tables.append((_declared_table(plan, declaration, sources[0], run_dir), declaration, sources[0]))
     return tables
