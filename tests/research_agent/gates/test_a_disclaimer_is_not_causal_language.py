@@ -1,11 +1,17 @@
-"""A disclaimer of causality is not causal language.
+"""A disclaimer of causality is not causal language; a negated claim still is.
 
 The causal-language scan flagged every sentence that contained "causal", so a
 manuscript that correctly called its estimate an association "rather than a
 causal effect" drew a major clinician comment.  The web readiness page shows
 that comment as an open major scientific revision.  A negation or contrast cue
-in the same clause, a few words before the causal word, now marks a
-disclaimer; a causal claim is still found, also next to a disclaimer.
+in the same clause, a few words before the bare word "causal", marks a
+disclaimer.
+
+Only that word can be disclaimed.  A verb or phrase pattern ("caused",
+"attributable to", "effect of", "leads to") states a mechanism even beside a
+negation: "not attributable to illness severity but to early vasopressor use"
+attributes the difference to the exposure, so it is still a hit.  "and",
+"but", "whereas" and "while" start a new assertion.
 
 Generic sentences only; no study's values.
 """
@@ -44,9 +50,19 @@ DISCLAIMERS = (
     "The estimate was summarised without interpreting the exposure as a causal factor.",
     "Causal inference is not possible from routinely collected records.",
     "Causal conclusions cannot be drawn from this cohort.",
-    "These findings do not establish that the exposure causes death.",
     "This non-causal estimate summarises the cohort {evidence:primary_estimate}.",
-    "The model doesn't imply that ventilation causes death.",
+    "These associations should not be interpreted as causal.",
+    "This design cannot establish a causal relationship.",
+    "The hazard ratio is not a causal estimate.",
+    "We estimate an association, and causal inference is not possible.",
+    "A causal relationship could not be established in this cohort.",
+    "The estimate is not causal but associational.",
+    "We report associations instead of a causal effect.",
+    "We report associations rather than interpreting them as causal.",
+    "The estimate is neither causal nor generalisable.",
+    # The phrase is the noun of the disclaimed word.
+    "No causal effect of renal replacement therapy can be inferred from these data.",
+    "These data cannot estimate the causal effect of early vasopressors.",
 )
 CLAIMS = (
     "Sepsis causes acute kidney injury.",
@@ -59,6 +75,27 @@ CLAIMS = (
     "Although no trial exists, the drug causes harm.",
     "The estimate is not causal; sepsis causes kidney injury.",
     "The estimate is not causal, but the causal pathway runs through sedation.",
+)
+
+
+# A negation near a verb or phrase pattern does not withdraw the claim.
+CLAIMS_BESIDE_A_NEGATION = (
+    "The mortality difference was not attributable to illness severity but to early vasopressor use.",
+    "The excess mortality is not explained by baseline severity and is attributable to the exposure.",
+    "Patients with no prior dialysis had mortality attributable to the exposure.",
+    "Neither age nor sex modified the effect of the exposure.",
+    "The causal effect was not attenuated after adjustment.",
+    "The causal effect was not significant after adjustment.",
+    "Rather than being confounded the estimate is causal.",
+    "The estimate is not confounded and is causal.",
+    "Early vasopressors did not lead to lower mortality.",
+)
+# Negating the report verb leaves the reported mechanism in the sentence; the
+# exempt way to say it names the word itself ("do not establish a causal
+# relationship").
+VERB_CLAIMS_UNDER_A_NEGATED_REPORT = (
+    "These findings do not establish that the exposure causes death.",
+    "The model doesn't imply that ventilation causes death.",
 )
 
 
@@ -97,3 +134,28 @@ def test_a_cue_many_words_before_does_not_disclaim_the_word():
     )
 
     assert len(scan_manuscript_for_causal_language(bound_manuscript=sentence, effect_labels=[])) == 1
+
+
+@pytest.mark.parametrize("sentence", CLAIMS_BESIDE_A_NEGATION)
+def test_a_claim_beside_a_negation_is_still_a_hit(sentence):
+    hits = scan_manuscript_for_causal_language(bound_manuscript=sentence, effect_labels=[ASSOCIATIONAL])
+
+    assert [hit.severity for hit in hits] == ["warning"]
+
+
+@pytest.mark.parametrize("sentence", VERB_CLAIMS_UNDER_A_NEGATED_REPORT)
+def test_a_verb_claim_under_a_negated_report_is_still_a_hit(sentence):
+    hits = scan_manuscript_for_causal_language(bound_manuscript=sentence, effect_labels=[ASSOCIATIONAL])
+
+    assert [hit.severity for hit in hits] == ["warning"]
+
+
+def test_a_negated_attribution_on_an_overclaimed_effect_is_an_error():
+    sentence = (
+        "The mortality difference was not attributable to illness severity but to early "
+        "vasopressor use {evidence:primary_estimate}."
+    )
+
+    hits = scan_manuscript_for_causal_language(bound_manuscript=sentence, effect_labels=[OVERCLAIMED])
+
+    assert [hit.severity for hit in hits] == ["error"]
