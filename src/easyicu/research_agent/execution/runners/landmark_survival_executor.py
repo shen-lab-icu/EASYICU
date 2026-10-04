@@ -1552,6 +1552,9 @@ def run_landmark_survival_suite(
         "n_source": int(len(working)),
         "n_landmark_population": int(len(analysis)),
         "n_complete_case": int(len(model_frame)),
+        # The whole risk set's events, Kaplan-Meier's and the restricted
+        # mean's; ``n_events`` counts the complete-case models' events.
+        "n_events_landmark_population": int(analysis[sealed.derived_event_column].sum()),
         "missingness_measurement_audit": missingness_measurement_audit,
         "n_events": int(model_frame[sealed.derived_event_column].sum()),
         "effect_measure": sealed.effect_measure,
