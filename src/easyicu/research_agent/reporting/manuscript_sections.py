@@ -718,7 +718,7 @@ def repair_existing_manuscript_sections(
     )
 
     manuscript, _structural_repairs = repair_reader_structure_from_existing_prose(
-        manuscript
+        manuscript, analysis_plan=common.get("analysis_plan"),
     )
     manuscript, _phrase_repairs = repair_reader_internal_phrases(
         manuscript,
@@ -734,6 +734,7 @@ def repair_existing_manuscript_sections(
     manuscript, _display_repairs = repair_registered_display_callouts(
         manuscript,
         expected_display_labels=display_labels,
+        analysis_plan=common.get("analysis_plan"),
     )
     sections = _existing_scientific_sections(manuscript)
     repaired_keys: list[str] = []
@@ -793,7 +794,9 @@ def repair_existing_manuscript_sections(
             if spec.key not in repaired_keys:
                 repaired_keys.append(spec.key)
         scientific = _assemble_scientific_sections(sections)
-        scientific, _repair_rounding = repair_reader_structure_from_existing_prose(scientific)
+        scientific, _repair_rounding = repair_reader_structure_from_existing_prose(
+            scientific, analysis_plan=common.get("analysis_plan"),
+        )
         scientific, _phrase_repairs = repair_reader_internal_phrases(
             scientific,
             reader_display_labels=common.get("reader_display_labels", {}),
@@ -802,6 +805,7 @@ def repair_existing_manuscript_sections(
         scientific, _display_repairs = repair_registered_display_callouts(
             scientific,
             expected_display_labels=display_labels,
+            analysis_plan=common.get("analysis_plan"),
         )
         sections = _existing_scientific_sections(scientific)
 
@@ -893,10 +897,13 @@ def repair_named_manuscript_sections(
     display_labels = expected_manuscript_display_labels(
         tuple(common.get("evidence_ids") or ())
     )
-    scientific, _repair_rounding = repair_reader_structure_from_existing_prose(scientific)
+    scientific, _repair_rounding = repair_reader_structure_from_existing_prose(
+        scientific, analysis_plan=common.get("analysis_plan"),
+    )
     scientific, _display_repairs = repair_registered_display_callouts(
         scientific,
         expected_display_labels=display_labels,
+        analysis_plan=common.get("analysis_plan"),
     )
     scientific, _phrase_repairs = repair_reader_internal_phrases(
         scientific,
@@ -1002,11 +1009,12 @@ def render_manuscript_sections(
     )
 
     scientific, _structural_repairs = repair_reader_structure_from_existing_prose(
-        scientific
+        scientific, analysis_plan=common.get("analysis_plan"),
     )
     scientific, _display_repairs = repair_registered_display_callouts(
         scientific,
         expected_display_labels=display_labels,
+        analysis_plan=common.get("analysis_plan"),
     )
     scientific, _phrase_repairs = repair_reader_internal_phrases(
         scientific,
@@ -1065,7 +1073,7 @@ def render_manuscript_sections(
                 checkpoint(_assemble_scientific_sections(sections))
         scientific = _assemble_scientific_sections(sections)
         scientific, _repair_rounding = repair_reader_structure_from_existing_prose(
-            scientific
+            scientific, analysis_plan=common.get("analysis_plan"),
         )
         scientific, _phrase_repairs = repair_reader_internal_phrases(
             scientific,

@@ -1929,7 +1929,9 @@ def _draft_manuscript(
     )
     from .manuscript_quality import repair_reader_structure_from_existing_prose
 
-    scaffold, structural_repairs = repair_reader_structure_from_existing_prose(scaffold)
+    scaffold, structural_repairs = repair_reader_structure_from_existing_prose(
+        scaffold, analysis_plan=execute_result.plan,
+    )
     if structural_repairs:
         if pipeline._evidence_enforcement_mode is EvidenceEnforcementMode.STRICT:
             evidence.enforce_evidence_bound_scaffold(scaffold, per_step_records=per_step_records)
@@ -2224,6 +2226,7 @@ def _bind_and_review_manuscript(
     evidence_bound_scaffold, _display_callouts = repair_registered_display_callouts(
         evidence_bound_scaffold,
         expected_display_labels=expected_manuscript_display_labels(current_evidence_names),
+        analysis_plan=plan,
     )
     bound_unfiltered = evidence.bind_manuscript(
         evidence_bound_scaffold,
@@ -2296,7 +2299,7 @@ def _bind_and_review_manuscript(
     from .manuscript_quality import repair_reader_structure_from_existing_prose
 
     bound, post_filter_structural_repairs = repair_reader_structure_from_existing_prose(
-        bound
+        bound, analysis_plan=plan,
     )
     if post_filter_structural_repairs:
         findings.append(

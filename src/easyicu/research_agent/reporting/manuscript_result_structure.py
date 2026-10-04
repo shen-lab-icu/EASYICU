@@ -18,17 +18,22 @@ from ..contracts.manuscript_result_structure import (
 __all__ = [
     "PRIMARY_RESULT_HEADINGS",
     "planned_result_roles",
+    "primary_result_heading",
     "required_result_subsections",
     "result_section_instruction",
 ]
 
 
-def required_result_subsections(plan: AnalysisPlan) -> tuple[str, ...]:
-    """Derive headings from explicit plan family and scientific step roles."""
-    primary = PRIMARY_RESULT_HEADINGS_BY_FAMILY.get(
+def primary_result_heading(plan: AnalysisPlan) -> str:
+    """The plan family's primary Results heading."""
+    return PRIMARY_RESULT_HEADINGS_BY_FAMILY.get(
         canonical_analysis_family(plan.analysis_type), DEFAULT_PRIMARY_RESULT_HEADING,
     )
-    sections = [COHORT_RESULT_HEADING, primary]
+
+
+def required_result_subsections(plan: AnalysisPlan) -> tuple[str, ...]:
+    """Derive headings from explicit plan family and scientific step roles."""
+    sections = [COHORT_RESULT_HEADING, primary_result_heading(plan)]
     roles = {step.planned_analysis_role for step in plan.steps}
     sections.extend(heading for role, heading in RESULT_HEADINGS_BY_ROLE.items() if role in roles)
     return tuple(sections)
