@@ -60,3 +60,22 @@ def test_piecewise_time_varying_cox_rejects_post_followup_cutpoint() -> None:
             interval_cutpoints=[7.0, 27.0],
             exposure_col="exposure",
         )
+
+
+@pytest.mark.parametrize("group", [0, 1])
+def test_an_exposure_group_without_an_event_in_an_interval_is_refused(group) -> None:
+    frame = _survival_frame()
+    # Censor this group's events after day 14: its last interval has none.
+    late = (frame["exposure"] == group) & (frame["time"] > 14.0)
+    frame.loc[late, "event"] = 0
+
+    with pytest.raises(TimeVaryingCoxError, match=f"group {group} has no event in interval 3"):
+        fit_piecewise_time_varying_cox(
+            frame,
+            duration_col="time",
+            event_col="event",
+            covariates=["exposure", "age"],
+            interval_cutpoints=[7.0, 14.0],
+            exposure_col="exposure",
+        )
+
