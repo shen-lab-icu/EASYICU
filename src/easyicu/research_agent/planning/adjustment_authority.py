@@ -38,6 +38,14 @@ HostTemporalRole = Literal["baseline_static", "at_or_before_time_zero"]
 # ``first_24h``, ``0-24h``, ``0_24h``, ``24h``: the trailing hour bound of a
 # named window is the only fact this owner reads from a window label.
 _WINDOW_END_HOURS = re.compile(r"(?:^|[^0-9])(\d+(?:\.\d+)?)\s*h(?:ours?)?\s*$", re.IGNORECASE)
+#: The words a free-text window label may carry besides its hours: the ICU-
+#: admission anchor and window words.  Any other word names another anchor
+#: ("sepsis_onset_0_24h", "hospital admission 0-24 hours"), which the trailing
+#: hour bound cannot place on the ICU-admission axis.
+_ICU_AXIS_LABEL_WORDS = frozenset({
+    "icu", "admission", "admit", "admitted", "first", "from", "after", "since",
+    "within", "window", "the", "of", "h", "hr", "hrs", "hour", "hours",
+})
 #: The typed label form, ``<anchor>[start,end]h``; the research-context
 #: builder writes ``icu_admission[start,end]h``, and concept metadata may name
 #: another anchor (``event_onset[0,72]h``).
@@ -93,9 +101,10 @@ def host_outer_feature_window_end_hours(context: Any) -> Optional[float]:
 def _analysis_window_end_hours(label: Any) -> Optional[float]:
     """The window's end in hours after ICU admission, or None if it names none.
 
-    A typed interval anchored elsewhere (``event_onset[0,72]h``) cannot be
-    placed on the ICU-admission axis without the event time, so it proves no
-    timing here; neither does a label this owner cannot read.
+    A window anchored elsewhere cannot be placed on the ICU-admission axis
+    without the anchor's time, so it proves no timing here: a typed interval
+    (``event_onset[0,72]h``) or free text naming another anchor
+    (``sepsis_onset_0_24h``).  Neither does a label this owner cannot read.
     """
 
     text = str(label or "").strip()
@@ -107,7 +116,11 @@ def _analysis_window_end_hours(label: Any) -> Optional[float]:
             return None
         return float(interval.group("end"))
     match = _WINDOW_END_HOURS.search(text)
-    return float(match.group(1)) if match else None
+    if match is None:
+        return None
+    if any(word not in _ICU_AXIS_LABEL_WORDS for word in re.findall(r"[a-z]+", text.lower())):
+        return None
+    return float(match.group(1))
 
 
 def owner_declared_baseline_static(variable: Any) -> bool:
