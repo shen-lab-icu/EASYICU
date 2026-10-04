@@ -1671,6 +1671,17 @@ def _model_term_domain_conflicts(
     return conflicts
 
 
+def _endpoint_conflict_recorded(context: ResearchContext) -> bool:
+    """Whether the context builder recorded that the question asks for another endpoint."""
+
+    target = str(context.target_outcome or "").strip()
+    descriptor = context.variable(target) if target else None
+    return descriptor is not None and any(
+        "endpoint-definition conflict" in str(value).casefold()
+        for value in descriptor.clinical_caveats
+    )
+
+
 def _endpoint_resolved(context: ResearchContext) -> bool:
     target = str(context.target_outcome or "").strip()
     descriptor = context.variable(target) if target else None
@@ -1682,10 +1693,7 @@ def _endpoint_resolved(context: ResearchContext) -> bool:
         description
         and "mortality_unspecified" not in description_text
         and "declared_primary_outcome" not in description_text
-        and not any(
-            "endpoint-definition conflict" in str(value).casefold()
-            for value in descriptor.clinical_caveats
-        )
+        and not _endpoint_conflict_recorded(context)
     )
 
 
@@ -3011,11 +3019,14 @@ def build_plan_scientific_review(
     # A proposed survival suite that closes binds the requested time-to-event
     # endpoint from the fixed-horizon vocabulary (event, paired follow-up,
     # origin, censoring) when its design is compiled; that is not a question
-    # for the researcher.
+    # for the researcher.  A recorded endpoint-definition conflict is: the
+    # question asked for another endpoint (survival to day 28 of a 90-day
+    # endpoint), and compiling the suite would not answer it.
     survival_endpoint_proposed = bool(
         survival_suite is not None
         and survival_suite.get("executable")
         and survival_suite.get("event_column") == str(context.target_outcome or "").strip()
+        and not _endpoint_conflict_recorded(context)
     )
     if (
         not _endpoint_resolved(context)
