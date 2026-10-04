@@ -79,3 +79,20 @@ def test_an_exposure_group_without_an_event_in_an_interval_is_refused(group) -> 
             exposure_col="exposure",
         )
 
+
+
+def test_a_separated_covariate_stops_the_model() -> None:
+    frame = _survival_frame()
+    # Recorded only in stays without an event: complete separation.
+    rng = np.random.default_rng(20261004)
+    frame["marker"] = np.where(frame["event"] == 1, 0, rng.binomial(1, 0.5, len(frame)))
+
+    with pytest.raises(TimeVaryingCoxError, match="did not converge: Column marker have very low variance"):
+        fit_piecewise_time_varying_cox(
+            frame,
+            duration_col="time",
+            event_col="event",
+            covariates=["exposure", "age", "marker"],
+            interval_cutpoints=[7.0, 14.0],
+            exposure_col="exposure",
+        )

@@ -9,6 +9,7 @@ not choose cut points, covariates, or a headline estimand.
 from __future__ import annotations
 
 import math
+import warnings
 from typing import Any, Sequence
 
 
@@ -36,6 +37,7 @@ def fit_piecewise_time_varying_cox(
     import numpy as np
     import pandas as pd
     from lifelines import CoxTimeVaryingFitter
+    from lifelines.exceptions import ConvergenceWarning
     from scipy.stats import norm
 
     columns = [str(value) for value in covariates]
@@ -123,15 +125,26 @@ def fit_piecewise_time_varying_cox(
     if int(long_frame["__event"].sum()) != int(event.sum()):
         raise TimeVaryingCoxError("time-varying Cox expansion changed event count")
 
-    fitter = CoxTimeVaryingFitter()
-    fitter.fit(
-        long_frame,
-        id_col="__subject_id",
-        start_col="__start",
-        stop_col="__stop",
-        event_col="__event",
-        show_progress=False,
-    )
+    # A separated or non-converged fit still returns coefficients; refuse it.
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", ConvergenceWarning)
+        fitter = CoxTimeVaryingFitter()
+        fitter.fit(
+            long_frame,
+            id_col="__subject_id",
+            start_col="__start",
+            stop_col="__stop",
+            event_col="__event",
+            show_progress=False,
+        )
+    nonconvergence = [
+        str(item.message).split(". ", 1)[0]
+        for item in caught if issubclass(item.category, ConvergenceWarning)
+    ]
+    if nonconvergence:
+        raise TimeVaryingCoxError(
+            f"time-varying Cox model did not converge: {nonconvergence[0]}"
+        )
     terms = [str(value) for value in fitter.params_.index]
     term_index = {term: index for index, term in enumerate(terms)}
     covariance = fitter.variance_matrix_.to_numpy(dtype=float)

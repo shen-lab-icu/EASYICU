@@ -14,6 +14,7 @@ import math
 import re
 import shutil
 import textwrap
+import warnings
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -1058,6 +1059,7 @@ def run_landmark_survival_suite(
     import numpy as np
     import pandas as pd
     from lifelines import CoxPHFitter
+    from lifelines.exceptions import ConvergenceWarning
 
     from ...figures.base import km_estimate
     from ...methods.ph_schoenfeld import ph_test
@@ -1252,12 +1254,24 @@ def run_landmark_survival_suite(
         for column in model_frame.columns
         if column not in {sealed.derived_time_column, sealed.derived_event_column}
     ]
-    fitter = CoxPHFitter()
-    fitter.fit(
-        model_frame,
-        duration_col=sealed.derived_time_column,
-        event_col=sealed.derived_event_column,
-    )
+    # lifelines reports separation and non-convergence as warnings and still
+    # returns coefficients, a separated term's diverging; that is no result.
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", ConvergenceWarning)
+        fitter = CoxPHFitter()
+        fitter.fit(
+            model_frame,
+            duration_col=sealed.derived_time_column,
+            event_col=sealed.derived_event_column,
+        )
+    nonconvergence = [
+        str(item.message).split(". ", 1)[0]
+        for item in caught if issubclass(item.category, ConvergenceWarning)
+    ]
+    if nonconvergence:
+        raise ValueError(
+            f"landmark survival Cox model did not converge: {nonconvergence[0]}"
+        )
     summary = fitter.summary.reset_index().rename(columns={"covariate": "term"})
     if "term" not in summary.columns:
         summary = summary.rename(columns={summary.columns[0]: "term"})
