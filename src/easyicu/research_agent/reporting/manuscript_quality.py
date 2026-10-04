@@ -925,15 +925,21 @@ def repair_reader_internal_phrases(
         )
         counts = dict.fromkeys(labels, 0)
 
+        from .manuscript_surface import collapse_repeated_label_prefix, in_sentence_label
+
         def replace_label(match: re.Match[str]) -> str:
             key = terms[int(match.lastgroup.removeprefix("label_"))][1]
             if key is None:
                 return match.group(0)
             counts[key] += 1
-            return labels[key]
+            # A label opening a sentence, line or table cell keeps its
+            # heading capital; inside a sentence it reads in lower case.
+            before = match.string[:match.start()].rstrip(" \t*_`\"“(")
+            if not before or before[-1] in ".!?:\n-|":
+                return labels[key]
+            return in_sentence_label(labels[key])
 
         pieces = [pattern.sub(replace_label, piece) for piece in pieces]
-        from .manuscript_surface import collapse_repeated_label_prefix
 
         for index, piece in enumerate(pieces):
             pieces[index], prefix_repairs = collapse_repeated_label_prefix(piece, labels.values())
@@ -1096,15 +1102,51 @@ def audit_manuscript_quality(
     section_map = _sections(text)
     findings: list[ManuscriptQualityFinding] = []
     from .descriptive_report_facts import missing_primary_result_facts
-    from .manuscript_surface import repeated_reader_paragraphs
+    from .manuscript_surface import (
+        estimates_without_values,
+        repeated_reader_paragraphs,
+        repeated_reader_sentences,
+    )
 
-    for section, body in _sections(reader).items():
+    reader_sections = _sections(reader)
+    for section, body in reader_sections.items():
         duplicates = repeated_reader_paragraphs(body)
         if duplicates:
             findings.append(ManuscriptQualityFinding(
                 code="MANUSCRIPT_REPEATED_PARAGRAPH", severity="error", section=section,
                 message="The same paragraph is repeated within one reader section.",
                 excerpts=duplicates,
+            ))
+    # The Abstract restates results by design; elsewhere a sentence said again
+    # (one claim closing both Discussion and Conclusion) reads as a template.
+    repeated = repeated_reader_sentences({
+        name: body for name, body in reader_sections.items()
+        if name in _READER_FACING_SECTIONS and name != "Abstract"
+    })
+    for section in dict.fromkeys(name for name, _sentence in repeated):
+        findings.append(ManuscriptQualityFinding(
+            code="MANUSCRIPT_REPEATED_SENTENCE", severity="warning", section=section,
+            message=(
+                "A sentence stated earlier in the manuscript is repeated verbatim; state it "
+                "once, then refer back to it or interpret it in new words."
+            ),
+            excerpts=tuple(sentence for name, sentence in repeated if name == section)[:8],
+        ))
+    reader_abstract = _abstract_blocks(reader_sections.get("Abstract", ""))
+    for section, body in (
+        ("Abstract", "\n\n".join(reader_abstract.get(block, "") for block in ("results", "conclusions"))),
+        *((name, reader_sections.get(name, "")) for name in ("Results", "Discussion", "Conclusion")),
+    ):
+        lost = estimates_without_values(body)
+        if lost:
+            findings.append(ManuscriptQualityFinding(
+                code="MANUSCRIPT_ESTIMATE_WITHOUT_VALUE", severity="error", section=section,
+                message=(
+                    "A sentence closes with an effect measure in parentheses but no value, which "
+                    "reads as a lost estimate. Give the estimate with its interval, or name the "
+                    "measure in words without parentheses."
+                ),
+                excerpts=lost[:8],
             ))
 
     for section, missing in missing_primary_result_facts(text, expected_primary_result_facts).items():

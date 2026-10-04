@@ -15,7 +15,7 @@ from easyicu.research_agent import CriticAgent
 _CLAIM = (
     "After adjustment for patient age and patient sex, first lactate tertile 3 "
     "versus 1 showed no clear association with ICU readmission and hospital "
-    "mortality in the analysis set (adjusted odds ratio)."
+    "mortality in the analysis set, as estimated by the adjusted odds ratio."
 )
 _LINK = (
     '[statistic_step_summary_ab12](evidence/statistic_step_summary_ab12__step_summary.json '

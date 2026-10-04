@@ -126,7 +126,7 @@ def test_the_reader_sentence_names_the_contrast_at_one_precision() -> None:
         "case analysis set (adjusted odds ratio, 1.860; 95% CI, 1.222 to 2.833)."
     )
     assert claim.render_reader_text(include_estimate=False).endswith(
-        "in the complete case analysis set (adjusted odds ratio)."
+        "in the complete case analysis set, as estimated by the adjusted odds ratio."
     )
 
 

@@ -508,9 +508,11 @@ class ScientificClaim(ScientificClaimDraft):
             relation = "was negatively associated with"
         else:
             relation = "showed no clear association with"
-        # A conclusion keeps the estimand: it can carry the claim's scope
-        # ("this point contrast only").
-        estimate_text = f" ({self.estimand})"
+        # A conclusion keeps the estimand, which can carry the claim's scope
+        # ("this point contrast only", "days 0 to 7 after the landmark"), but
+        # not as a parenthetical: "(adjusted hazard ratio)" reads as an
+        # estimate whose value was lost.
+        estimate_text = f", as estimated by the {self.estimand}"
         if include_estimate and self.point_estimate is not None:
             assert self.interval_lower is not None
             assert self.interval_upper is not None

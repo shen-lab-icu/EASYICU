@@ -66,7 +66,8 @@ def test_b_source_aware_set_reads_as_the_analysis_set(
 
     reader = claim.render_reader_text(include_estimate=include_estimate)
 
-    assert f"{outcome.replace('_', ' ')} in the analysis set (" in reader
+    scope = " (" if include_estimate else ", as estimated by the "
+    assert f"{outcome.replace('_', ' ')} in the analysis set{scope}" in reader
     assert "source aware" not in reader.casefold()
     # The machine authority the Writer's claim tokens are checked against is unchanged.
     assert "the source aware analysis set" in claim.render_text()

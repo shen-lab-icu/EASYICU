@@ -679,7 +679,8 @@ def missing_scientific_claims_in_results(
     """Return host-authorized claims absent from the final Results prose.
 
     ``reader_labels`` must be the labels the claims were expanded with; the
-    check looks for the sentence the reader actually sees.
+    check looks for the sentence the reader actually sees.  Letter case is
+    not compared: a variable name opening a sentence is capitalized there.
     """
 
     span = _results_section_span(manuscript)
@@ -688,7 +689,7 @@ def missing_scientific_claims_in_results(
     start, end = span
     normalized_results = " ".join(
         _NUMERIC_PROVENANCE_FOOTNOTE_RE.sub("", manuscript[start:end]).split()
-    )
+    ).casefold()
     return tuple(
         claim.claim_ref
         for claim in claims
@@ -696,7 +697,7 @@ def missing_scientific_claims_in_results(
             round_reader_numeric_display(
                 claim.render_reader_text(labels=reader_labels)
             )[0].split()
-        )
+        ).casefold()
         not in normalized_results
     )
 
@@ -955,6 +956,11 @@ def filter_evidence_bound_scaffold(
     )
 
 
+_INTERPRETATION_HEADINGS = frozenset(
+    {"discussion", "讨论", "conclusion", "conclusions", "结论"}
+)
+
+
 def expand_scientific_claim_tokens(
     scaffold: str,
     *,
@@ -971,7 +977,10 @@ def expand_scientific_claim_tokens(
     out: list[str] = []
     missing: list[str] = []
     malformed: list[str] = []
-    conclusion_depth: int | None = None
+    # Discussion and Conclusion interpret a result the Results already state:
+    # there the host renders the claim's bounded interpretation, not the
+    # result sentence a second time.
+    interpretation_depth: int | None = None
     abstract_conclusion = False
     for raw_line in scaffold.splitlines():
         structure_prefix, content = _split_markdown_structure_prefix(raw_line)
@@ -979,10 +988,10 @@ def expand_scientific_claim_tokens(
         if heading_prefix:
             depth = heading_prefix.count("#")
             name = _normalized_heading(heading_content)
-            if name in {"conclusion", "conclusions", "结论"}:
-                conclusion_depth = depth
-            elif conclusion_depth is not None and depth <= conclusion_depth:
-                conclusion_depth = None
+            if name in _INTERPRETATION_HEADINGS:
+                interpretation_depth = depth
+            elif interpretation_depth is not None and depth <= interpretation_depth:
+                interpretation_depth = None
             abstract_conclusion = False
         label = _STRUCTURED_ABSTRACT_LABEL_RE.search(structure_prefix)
         if label is not None:
@@ -1010,7 +1019,7 @@ def expand_scientific_claim_tokens(
         # Never round the scaffold wholesale: canonical footnotes, evidence IDs
         # and source URLs are provenance, not display values.
         reader_text, _ = round_reader_numeric_display(claim.render_reader_text(
-            include_estimate=not (conclusion_depth is not None or abstract_conclusion),
+            include_estimate=not (interpretation_depth is not None or abstract_conclusion),
             labels=reader_labels,
         ))
         out.append(

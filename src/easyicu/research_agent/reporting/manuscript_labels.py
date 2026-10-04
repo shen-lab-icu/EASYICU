@@ -4,6 +4,7 @@ import re
 from typing import Mapping
 
 from ..authority.evidence_store import prose_requires_numeric_provenance
+from .manuscript_surface import in_sentence_label
 
 
 def _recorded_term(variable):
@@ -97,6 +98,10 @@ def reader_claim_labels(context, labels: Mapping[str, str]) -> dict[str, str]:
     text, could break Markdown or a placeholder, or would carry a value that
     the numeric binder must trace.  Every caller that expands claims and every
     caller that checks the expanded Results builds its labels here.
+
+    A claim names its variables inside its sentence, so each name is the
+    in-sentence form ("associated with death by 28 days"); the claim
+    capitalizes a name that opens it.
     """
     result: dict[str, str] = {}
     named = source_bound_manuscript_labels(
@@ -111,7 +116,7 @@ def reader_claim_labels(context, labels: Mapping[str, str]) -> dict[str, str]:
             or prose_requires_numeric_provenance(name)
         ):
             continue
-        result[str(key)] = name
+        result[str(key)] = in_sentence_label(name)
     return result
 
 
