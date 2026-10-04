@@ -102,12 +102,21 @@ def _design_text(design: object) -> str:
 
     if isinstance(design, FixedWindowRepresentationDesign):
         relation = "after" if design.window_start_hours >= 0 else "relative to"
+        if design.window_evidence is None:
+            eligibility = (
+                f"with at least {design.minimum_observed_windows} observed windows"
+            )
+        else:
+            eligibility = (
+                "when at least one SOFA-2 score was available in at least "
+                f"{design.minimum_observed_windows} windows"
+            )
         return (
             "Executed time design: each coordinate was summarized by its maximum in "
             f"{design.n_windows} consecutive {design.window_width_hours}-hour windows "
             f"from {design.window_start_hours} to {design.window_end_hours} hours "
             f"{relation} {_reader_anchor(design.anchor)}, and a record entered the "
-            f"model with at least {design.minimum_observed_windows} observed windows"
+            f"model {eligibility}"
         )
     if isinstance(design, LandmarkSurvivalDesign):
         return _survival_design_text(design)

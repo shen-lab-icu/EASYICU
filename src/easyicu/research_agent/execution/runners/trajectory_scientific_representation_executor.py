@@ -358,6 +358,8 @@ def run_trajectory_scientific_representation(
         "window_width_hours": sealed.grid_width_hours,
         "n_windows": n_windows,
         "minimum_observed_windows": sealed.minimum_available_windows,
+        # A window counts on SOFA-2 evidence only (``available_windows``).
+        "window_evidence": "any_available_sofa2_score",
     }
     eligibility_outcome = validate_rule_outcome(
         {

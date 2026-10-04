@@ -149,6 +149,43 @@ def test_the_eligibility_rule_states_its_window_and_counts() -> None:
     )
 
 
+
+def test_an_eligibility_rule_names_the_evidence_its_windows_count_on() -> None:
+    """A window counts on an available SOFA-2 score, not on any observation."""
+
+    [claim] = _claims(
+        {"status": "ok", "reportable_rule_outcomes": [
+            _eligibility(window_evidence="any_available_sofa2_score")
+        ]},
+        step_id="00_panel",
+    )
+
+    assert claim.render_reader_text() == (
+        "Of 1,402 records in the study cohort, 1,240 had at least one SOFA-2 score "
+        "available in at least 3 of the 6 prespecified 8-hour windows from 0 to 48 "
+        "hours after ICU admission and entered the class model; 162 were excluded."
+    )
+    assert claim.render_reader_text(include_estimate=False) == (
+        "Class membership was estimated only for records with at least one SOFA-2 "
+        "score available in the prespecified minimum number of windows."
+    )
+    assert claim.model_dump(mode="json")["rule_outcome"]["window_evidence"] == (
+        "any_available_sofa2_score"
+    )
+
+
+def test_an_envelope_that_never_stated_its_window_evidence_replays_unchanged() -> None:
+    """A registered claim embeds its envelope; an older one gains no key on replay."""
+
+    [claim] = _claims(
+        {"status": "ok", "reportable_rule_outcomes": [_eligibility()]},
+        step_id="00_panel",
+    )
+
+    assert claim.model_dump(mode="json")["rule_outcome"] == _eligibility()
+    assert "window_evidence" not in json.dumps(claim.model_dump(mode="json"))
+
+
 def test_wording_follows_the_grid_and_anchor_it_is_given() -> None:
     [sparse] = _claims(
         {"status": "ok", "reportable_rule_outcomes": [
@@ -223,6 +260,8 @@ def test_class_description_and_feasibility_outcomes_are_claims() -> None:
         pytest.param(_eligibility(n_windows=5), id="grid_does_not_tile_window"),
         pytest.param(_eligibility(minimum_observed_windows=7), id="minimum_exceeds_grid"),
         pytest.param(_eligibility(anchor="ICU admission"), id="anchor_not_a_key"),
+        pytest.param(_eligibility(window_evidence="any_coordinate"),
+                     id="unknown_window_evidence"),
         pytest.param({"schema_version": RULE_OUTCOME_SCHEMA_VERSION,
                       "rule": "planned_analysis_feasibility",
                       "disposition": "not_executable_from_sealed_inputs",
@@ -370,6 +409,8 @@ def test_only_a_deterministic_owner_obtains_the_claim(tmp_path: Path) -> None:
                                   disposition="minimum_selected"),
                      id="minimum_selected"),
         pytest.param(_eligibility(), id="observed_windows"),
+        pytest.param(_eligibility(window_evidence="any_available_sofa2_score"),
+                     id="observed_windows_on_sofa2"),
     ],
 )
 def test_every_number_in_a_rule_sentence_binds_to_its_owner(tmp_path: Path, outcome) -> None:

@@ -142,6 +142,7 @@ def test_the_panel_owner_states_its_window_rule_and_grid(tmp_path: Path) -> None
         "input_n": flow["input_cohort"],
         "included_n": flow["included_in_clustering"],
         "excluded_n": flow["excluded_insufficient_windows"],
+        "window_evidence": "any_available_sofa2_score",
     }
     assert (outcome["input_n"], outcome["included_n"]) == (40, 34)
     assert summary["executed_method_design"] == {
@@ -154,10 +155,17 @@ def test_the_panel_owner_states_its_window_rule_and_grid(tmp_path: Path) -> None
         "n_windows": 6,
         "window_aggregation": "max",
         "minimum_observed_windows": 3,
+        "window_evidence": "any_available_sofa2_score",
     }
     written = json.loads((tmp_path / "out" / "step_summary.json").read_text("utf-8"))
     [draft] = derive_scientific_claim_drafts(written)
     assert draft.claim_id == "observed_window_rule"
+    # Lactate in every window made no stay eligible, and the sentence says so.
+    assert draft.rule_outcome.result_sentence() == (
+        "Of 40 records in the study cohort, 34 had at least one SOFA-2 score "
+        "available in at least 3 of the 6 prespecified 8-hour windows from 0 to 48 "
+        "hours after ICU admission and entered the class model; 6 were excluded."
+    )
 
 
 def test_the_window_rule_counts_every_study_cohort_stay(tmp_path: Path) -> None:
@@ -199,8 +207,9 @@ def test_the_window_rule_counts_every_study_cohort_stay(tmp_path: Path) -> None:
     assert (outcome["input_n"], outcome["included_n"], outcome["excluded_n"]) == (50, 34, 16)
     [draft] = derive_scientific_claim_drafts(summary)
     assert draft.rule_outcome.result_sentence().startswith(
-        "Of 50 records in the study cohort, 34 had at least 3 of the 6 prespecified "
-        "8-hour windows from 0 to 48 hours after ICU admission observed"
+        "Of 50 records in the study cohort, 34 had at least one SOFA-2 score available "
+        "in at least 3 of the 6 prespecified 8-hour windows from 0 to 48 hours after "
+        "ICU admission"
     )
 
 
