@@ -10,6 +10,11 @@ summary, also when the summary is larger than the per-step numeric cap.  The
 Writer is told that Methods numbers are the host's, so it describes the same
 choices in words instead of writing sentences the gate deletes.
 
+The fact says what the suite timed: the exposure source's first recorded time,
+not a verified onset, so exposure begun before that record is not observed.
+And it names both analysis sets: the adjusted Cox models drop records with a
+missing covariate, while Kaplan-Meier and the restricted mean keep them.
+
 Synthetic study and seeded synthetic rows only (renal replacement therapy and
 90-day mortality).
 """
@@ -31,6 +36,7 @@ from easyicu.research_agent.contracts.executed_method_design import (
     validate_executed_method_design,
 )
 from easyicu.research_agent.authority.manuscript_claim_policy import filter_evidence_bound_scaffold
+from easyicu.research_agent.authority.manuscript_method_facts import _design_text
 from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 from easyicu.research_agent.reporting.manuscript_sections import MANUSCRIPT_SECTION_SPECS
 from tests.support.survival_sealed import run_signed_suite, sealed_survival, synthetic_survival_rows
@@ -97,6 +103,9 @@ def test_the_design_is_one_exact_bound_methods_fact(tmp_path):
     assert f"a landmark {authority.landmark_hours:g} hours after" in fact.text
     assert f"follow-up ending at day {authority.endpoint_horizon_days:g}" in fact.text
     assert f"alpha of {authority.proportional_hazards_alpha:g}" in fact.text
+    assert "exposure timing was the first recorded time of the exposure source" in fact.text
+    assert "exposure began" not in fact.text and "onset" not in fact.text
+    assert "used the records with complete covariate data" in fact.text
     assert fact.evidence_id == EVIDENCE
     _bound_without_loss(store, ledger, fact)
 
@@ -180,3 +189,25 @@ def test_the_gate_keeps_the_worded_choice_and_deletes_the_numbered_one():
 
     assert result.removed_result_sentences == (numbered,)
     assert worded in result.scaffold
+
+
+@pytest.mark.parametrize(
+    ("change", "sets"),
+    [
+        ({}, "; the Cox models used the records with complete covariate data, and the Kaplan-Meier "
+             "curves and the restricted mean survival time difference used the whole risk set"),
+        ({"time_varying_cutpoints_days": [], "rmst_horizon_days": None},
+         "; the Cox model used the records with complete covariate data, and the Kaplan-Meier "
+         "curves used the whole risk set"),
+        ({"n_adjustment_covariates": 0}, None),
+    ],
+    ids=["interval_and_rmst", "single_model", "unadjusted"],
+)
+def test_the_design_names_the_set_each_estimate_used(change, sets):
+    text = _design_text(validate_executed_method_design({**BASE, **change}))
+
+    assert "exposed records first recorded at or before hour 6 were excluded" in text
+    if sets is None:
+        assert "complete covariate data" not in text
+    else:
+        assert text.endswith(sets)
