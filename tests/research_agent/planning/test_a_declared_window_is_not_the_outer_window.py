@@ -7,6 +7,8 @@ could not place on the ICU-admission axis -- another anchor such as
 ``event_onset[0,72]h``, or an unreadable label -- also inherited the outer
 0-24 h window, so a measurement taken up to 72 h after an event became an
 at-or-before-landmark covariate and entered the compiled adjustment set.
+Free text naming another anchor (``sepsis_onset_0_24h``) was read by its
+trailing hour bound as an ICU-admission window; it proves nothing either.
 Synthetic contexts only.
 """
 
@@ -52,6 +54,9 @@ def _with_window(window, *, landmark_hours: float | None = None):
         pytest.param("hospital_admission[-12,12]h", id="another_anchor_ending_early"),
         pytest.param("throughout the ICU stay", id="unreadable_label"),
         pytest.param("icu_admission[0,48]h", id="icu_window_ending_after_landmark"),
+        pytest.param("sepsis_onset_0_24h", id="free_text_naming_another_anchor"),
+        pytest.param("sepsis onset 0-24 hours", id="free_text_words_naming_another_anchor"),
+        pytest.param("hospital_admission_0_24h", id="free_text_hospital_admission"),
     ],
 )
 def test_a_declared_window_the_host_cannot_place_proves_no_timing(window) -> None:
@@ -65,6 +70,9 @@ def test_a_declared_window_the_host_cannot_place_proves_no_timing(window) -> Non
         pytest.param("icu_admission[0,24]h", id="icu_window_ending_at_landmark"),
         pytest.param("icu_admission[-6,24]h", id="icu_window_starting_before_admission"),
         pytest.param("first_24h", id="named_icu_window"),
+        pytest.param("icu_admit_0_24h", id="free_text_icu_anchor"),
+        pytest.param("0-24h", id="bare_window"),
+        pytest.param("first 24 hours", id="free_text_words"),
     ],
 )
 def test_a_window_on_the_icu_axis_still_proves_its_timing(window) -> None:
@@ -79,6 +87,10 @@ def test_another_anchor_proves_nothing_at_a_later_landmark_either() -> None:
     context = _with_window("event_onset[0,24]h", landmark_hours=48.0)
 
     assert COVARIATE not in host_proven_temporal_roles(context)
+
+
+def test_a_free_text_event_window_is_not_a_selectable_covariate() -> None:
+    assert not _request(_with_window("sepsis_onset_0_24h")).candidate(COVARIATE).selectable
 
 
 def test_the_planner_cannot_adjust_for_an_event_window_measurement() -> None:
