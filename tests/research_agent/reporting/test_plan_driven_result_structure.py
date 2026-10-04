@@ -3,7 +3,9 @@
 import pytest
 
 from easyicu.research_agent.reporting.manuscript_quality import (
-    audit_manuscript_quality, repair_registered_display_callouts,
+    audit_manuscript_quality,
+    repair_reader_structure_from_existing_prose,
+    repair_registered_display_callouts,
 )
 from easyicu.research_agent.reporting.manuscript_sections import (
     render_manuscript_sections, repair_existing_manuscript_sections,
@@ -101,6 +103,45 @@ def test_registered_figure_callout_uses_the_actual_primary_heading():
     assert repair_registered_display_callouts(
         repaired, expected_display_labels=("Figure 1",),
     ) == (repaired, ())
+
+
+
+def _results_with_two_primary_headings() -> str:
+    # A draft may also carry another family's heading; the plan names the primary.
+    return _results("Descriptive results", extra=(
+        "\n{claim:describe.observed_risk}\n\n"
+        "### Survival results\n"
+        "Median follow-up was 28 days {evidence:result}.\n\n"
+        "{claim:survival_model.adjusted_hazard}\n\n"
+        "## Conclusion\n\n"
+    ))
+
+
+def test_a_registered_figure_callout_goes_to_the_plan_familys_primary_heading():
+    repaired, changes = repair_registered_display_callouts(
+        _results_with_two_primary_headings(), expected_display_labels=("Figure 1",),
+        analysis_plan=_plan("survival"),
+    )
+
+    before, survival = repaired.split("### Survival results", 1)
+    assert len(changes) == 1
+    assert "See Figure 1" in survival and "See Figure 1" not in before
+
+
+def test_a_restored_conclusion_states_the_plan_familys_primary_claim():
+    text = _results_with_two_primary_headings()
+
+    repaired, repairs = repair_reader_structure_from_existing_prose(
+        text, analysis_plan=_plan("survival"),
+    )
+
+    assert "MANUSCRIPT_CONCLUSION_RESTORED" in {repair["code"] for repair in repairs}
+    conclusion = repaired.split("## Conclusion", 1)[1]
+    assert "{claim:survival_model.adjusted_hazard}" in conclusion
+    assert "describe.observed_risk" not in conclusion
+    # Without a plan the repair still reads every family's heading, in order.
+    legacy, _ = repair_reader_structure_from_existing_prose(text)
+    assert "{claim:describe.observed_risk}" in legacy.split("## Conclusion", 1)[1]
 
 
 def test_saved_report_migration_uses_the_same_plan_without_redoing_other_sections():

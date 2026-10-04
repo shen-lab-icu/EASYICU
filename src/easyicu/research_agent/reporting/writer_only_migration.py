@@ -541,11 +541,12 @@ def prepare_writer_only_migration(
     ids = _evidence_ids(source, manuscript, evidence_digest)
     labels = expected_manuscript_display_labels(ids)
     manuscript, _structural_repairs = repair_reader_structure_from_existing_prose(
-        manuscript
+        manuscript, analysis_plan=plan,
     )
     manuscript, _display_repairs = repair_registered_display_callouts(
         manuscript,
         expected_display_labels=labels,
+        analysis_plan=plan,
     )
     source_quality = audit_manuscript_quality(
         manuscript,
@@ -715,6 +716,7 @@ def repair_writer_only(
         source_manuscript = place_primary_result_summaries(source_manuscript, prepared.host_result_facts)
         source_manuscript, _ = repair_registered_display_callouts(
             source_manuscript, expected_display_labels=prepared.expected_display_labels,
+            analysis_plan=prepared.plan,
         )
         source_manuscript = remove_empty_optional_subsections(source_manuscript)
     try:
@@ -808,6 +810,7 @@ def repair_writer_only(
         canonical = place_primary_result_summaries(canonical, prepared.host_result_facts)
         canonical, _ = repair_registered_display_callouts(
             canonical, expected_display_labels=prepared.expected_display_labels,
+            analysis_plan=prepared.plan,
         )
         canonical = remove_empty_optional_subsections(canonical)
         canonical = repair_section_opening_connectors(canonical)

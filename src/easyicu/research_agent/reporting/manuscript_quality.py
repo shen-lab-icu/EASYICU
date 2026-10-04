@@ -19,7 +19,11 @@ from ..authority.reader_numeric_display import (
 )
 from .manuscript_sentence_context import has_dependent_opener
 from .manuscript_baseline import missing_baseline_method_mentions
-from .manuscript_result_structure import PRIMARY_RESULT_HEADINGS, required_result_subsections
+from .manuscript_result_structure import (
+    PRIMARY_RESULT_HEADINGS,
+    primary_result_heading,
+    required_result_subsections,
+)
 from .manuscript_surface import (
     _CLAIM_MARKER_RE,
     _CLAIM_PLACEHOLDER_RE,
@@ -263,18 +267,30 @@ def _replace_subsection_body(
     return _replace_section_body(text, section, replaced)
 
 
+def _primary_result_headings(analysis_plan: AnalysisPlan | None) -> tuple[str, ...]:
+    """The plan family's primary heading; without a plan, every family's."""
+
+    if analysis_plan is None:
+        return PRIMARY_RESULT_HEADINGS
+    return (primary_result_heading(analysis_plan),)
+
+
 def repair_registered_display_callouts(
     manuscript: str,
     *,
     expected_display_labels: Sequence[str],
+    analysis_plan: AnalysisPlan | None = None,
 ) -> tuple[str, tuple[Mapping[str, str], ...]]:
     """Add neutral Results callouts only for host-registered displays."""
 
     repaired = str(manuscript or "")
     existing_subsections = _subsections(_sections(repaired).get("Results", ""))
     primary_heading = next(
-        (heading for heading in PRIMARY_RESULT_HEADINGS if heading in existing_subsections),
-        "Primary association",
+        (
+            heading for heading in _primary_result_headings(analysis_plan)
+            if heading in existing_subsections
+        ),
+        "Primary association" if analysis_plan is None else primary_result_heading(analysis_plan),
     )
     templates = {
         "Table 1": (
@@ -345,8 +361,14 @@ def remove_empty_optional_subsections(manuscript: str) -> str:
 
 def repair_reader_structure_from_existing_prose(
     manuscript: str,
+    *,
+    analysis_plan: AnalysisPlan | None = None,
 ) -> tuple[str, tuple[Mapping[str, str], ...]]:
-    """Restore required wrappers using only prose already in the draft."""
+    """Restore required wrappers using only prose already in the draft.
+
+    With a plan, a restored Conclusion takes its claim from the plan family's
+    primary subsection, not from another family's heading the draft also uses.
+    """
 
     repaired = str(manuscript or "")
     repairs: list[Mapping[str, str]] = []
@@ -586,7 +608,7 @@ def repair_reader_structure_from_existing_prose(
         # claim placed before it is not the study's conclusion.
         subsections = _subsections(results)
         primary = next(
-            (subsections[heading] for heading in PRIMARY_RESULT_HEADINGS
+            (subsections[heading] for heading in _primary_result_headings(analysis_plan)
              if heading in subsections and _CLAIM_PLACEHOLDER_RE.search(subsections[heading])),
             "",
         )
