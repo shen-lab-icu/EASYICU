@@ -412,6 +412,28 @@ def _writer_repair_target_span(scaffold: str, target: str) -> Optional[Tuple[int
     return (match.start(), match.end()) if match is not None else None
 
 
+def _pending_target_spans(
+    scaffold: str, sentences: Sequence[str], pending: Sequence[Any],
+) -> List[Tuple[int, int]]:
+    """Text the decisions still to apply remove or replace; none of it keeps a claim.
+
+    A sentence to be cited stays as written, so it is not among them.  A
+    sentence to be dropped takes the dependent sentences after it.
+    """
+
+    spans: List[Tuple[int, int]] = []
+    for decision in pending:
+        if decision.action == "cite" or decision.index >= len(sentences):
+            continue
+        span = _writer_repair_target_span(scaffold, sentences[decision.index])
+        if span is None:
+            continue
+        if decision.action == "drop" and span[0] < span[1]:
+            span = (span[0], contextual_sentence_deletion(scaffold, *span).end)
+        spans.append(span)
+    return spans
+
+
 def _apply_writer_evidence_repair_decisions(
     scaffold: str,
     *,
@@ -458,7 +480,7 @@ def _apply_writer_evidence_repair_decisions(
     applied: List[Dict[str, object]] = []
     seen: set[int] = set()
     removed_context: set[str] = set()
-    for decision in validated:
+    for position, decision in enumerate(validated):
         index = decision.index
         if index >= len(sentences) or index in seen:
             raise ValueError("writer evidence repair index is invalid or duplicated")
@@ -515,10 +537,14 @@ def _apply_writer_evidence_repair_decisions(
                 # unchanged strict gate still validates the remaining draft.
                 replacement = ""
                 action = "drop"
-            elif claim_token_stands_in_block(rewritten, target_start, target_end, token):
+            elif claim_token_stands_in_block(
+                rewritten, target_start, target_end, token,
+                excluded=_pending_target_spans(rewritten, sentences, validated[position + 1:]),
+            ):
                 # The block already states this claim, e.g. the token the
                 # rejected sentence restated sits on the next line.  A second
-                # token would print the same host sentence twice.
+                # token would print the same host sentence twice.  Text a later
+                # decision removes or replaces does not count.
                 replacement = labelled.group("label") if labelled is not None else ""
                 action = "drop"
                 reason_code = "claim_already_stated_in_block"
