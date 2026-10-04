@@ -79,6 +79,24 @@ def fit_piecewise_time_varying_cox(
 
     interval_starts = (0.0, *cutpoints)
     interval_ends = (*cutpoints, float(duration.max()))
+    # An exposure group with no event in an interval has no finite estimate
+    # for that interval's contrast; the fitter would return a divergent
+    # coefficient that can still look finite.  Refuse before fitting.
+    exposure = source[exposure_col].to_numpy(dtype=float)
+    levels = np.unique(exposure)
+    if len(levels) == 2:
+        event_interval = np.searchsorted(np.asarray(cutpoints), duration, side="left")
+        for level in levels:
+            counts = np.bincount(
+                event_interval[(event == 1) & (exposure == level)],
+                minlength=len(interval_starts),
+            )
+            empty = [str(index + 1) for index, count in enumerate(counts) if count == 0]
+            if empty:
+                raise TimeVaryingCoxError(
+                    f"time-varying Cox exposure group {level:g} has no event in "
+                    f"interval {', '.join(empty)}"
+                )
     records: list[dict[str, Any]] = []
     values = source[columns].to_numpy(dtype=float)
     for subject_id, (subject_duration, subject_event, row) in enumerate(
