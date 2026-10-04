@@ -630,7 +630,8 @@
         '你是否批准建议的基线调整变量？',
       ),
     };
-    return known[code] || String(row && (row.authorization_question || row.message) || '');
+    const vocab = window.AGENT_READER_VOCAB ? window.AGENT_READER_VOCAB.question(code) : '';
+    return known[code] || vocab || String(row && (row.authorization_question || row.message) || '');
   }
   function scientificDecisionTitle(row) {
     const code = String(row && row.code || '');
