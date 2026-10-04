@@ -288,8 +288,14 @@ def project_owner_issued_manuscript_claims(
     scaffold: str,
     *,
     per_step_records: Sequence[Mapping[str, Any]],
+    absent_targets: List[Dict[str, Any]] | None = None,
 ) -> tuple[str, List[Dict[str, Any]]]:
-    """Insert missing deterministic owner claims declared by typed contracts."""
+    """Insert missing deterministic owner claims declared by typed contracts.
+
+    A target section the draft lacks raises, unless the caller collects it in
+    ``absent_targets``: a Writer draft without the section is the Writer's
+    failure, not an invalid owner contract, and that caller reports it.
+    """
 
     projected = scaffold
     repairs: List[Dict[str, Any]] = []
@@ -340,6 +346,17 @@ def project_owner_issued_manuscript_claims(
                     sentence = sentence.rstrip(". ") + f" {{evidence:{evidence_id}}}."
                 for target in claim.targets:
                     span = _target_body_span(projected, target)
+                    if span is None and absent_targets is not None:
+                        absent_targets.append(
+                            {
+                                "step_id": str(record.get("step_id") or ""),
+                                "evidence_id": evidence_id,
+                                "claim_id": claim.claim_id,
+                                "target_kind": target.kind,
+                                "target_label": target.label,
+                            }
+                        )
+                        continue
                     if span is None:
                         raise ManuscriptProjectionError(
                             f"claim {claim.claim_id} target is absent: "
@@ -365,7 +382,35 @@ def project_owner_issued_manuscript_claims(
     return projected, repairs
 
 
+#: The Writer section that holds each kind of projection target.
+_TARGET_SECTION_KEYS = {"abstract_label": "abstract", "markdown_heading": "results"}
+
+
+def with_absent_target_repairs(
+    section_errors: Mapping[str, Tuple[str, ...]],
+    absent_targets: Sequence[Mapping[str, Any]],
+) -> Dict[str, Tuple[str, ...]]:
+    """Section repairs plus one for each owner target the Writer draft lacks."""
+
+    merged = {key: tuple(values) for key, values in section_errors.items()}
+    for target in absent_targets:
+        place = (
+            f"the **{target['target_label']}:** label"
+            if target["target_kind"] == "abstract_label"
+            else f"the '### {target['target_label']}' subsection"
+        )
+        detail = (
+            f"OWNER_CLAIM_TARGET_ABSENT: restore {place}; the signed owner of "
+            f"{target['evidence_id']} places its result claims there."
+        )
+        key = _TARGET_SECTION_KEYS[target["target_kind"]]
+        if detail not in merged.get(key, ()):
+            merged[key] = (*merged.get(key, ()), detail)
+    return merged
+
+
 __all__ = [
     "ManuscriptProjectionError",
     "project_owner_issued_manuscript_claims",
+    "with_absent_target_repairs",
 ]

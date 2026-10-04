@@ -85,7 +85,7 @@ from .manuscript_provenance import (
     ManuscriptProvenanceError,
 )
 from .manuscript_reader import build_manuscript_reader
-from .manuscript_projection import project_owner_issued_manuscript_claims
+from .manuscript_projection import project_owner_issued_manuscript_claims, with_absent_target_repairs
 from .manuscript_result_structure import planned_result_roles
 from .novelty_positioning import build_unsigned_novelty_positioning_packet
 from ..literature import LiteratureAgent, LiteratureBundle, manuscript_citable_keys
@@ -702,6 +702,7 @@ class _DraftStageResult:
     writer_error_message: Optional[str]
     scaffold: str
     reader_tables: tuple[ReaderTableCallout, ...] = ()
+    absent_owner_claim_targets: tuple[Mapping[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1365,17 +1366,24 @@ def _project_and_report_owner_manuscript_claims(
     scaffold: str,
     per_step_records: Sequence[Dict[str, Any]],
     findings: List[ValidationFinding],
-) -> str:
-    """Project typed owner claims before the unchanged STRICT gates rerun."""
+) -> tuple[str, tuple[Dict[str, Any], ...]]:
+    """Project typed owner claims before the unchanged STRICT gates rerun.
+
+    Also returns the owner targets the Writer draft lacks.  A missing section
+    is the Writer's failure, not the owner's: the repair loop asks the Writer
+    to restore it, and a final draft that still lacks it fails closed there.
+    """
 
     if not scaffold.strip():
         # No Writer draft, so no target to project into. The Writer's own
         # failure is already a finding and the run closes as not generated;
         # a projection error here would replace that cause with a false one.
-        return scaffold
+        return scaffold, ()
+    absent: List[Dict[str, Any]] = []
     projected, repairs = project_owner_issued_manuscript_claims(
         scaffold,
         per_step_records=current_step_records(per_step_records),
+        absent_targets=absent,
     )
     if repairs:
         findings.append(
@@ -1390,7 +1398,29 @@ def _project_and_report_owner_manuscript_claims(
                 detail={"repairs": repairs},
             )
         )
-    return projected
+    return projected, tuple(absent)
+
+
+def _report_absent_owner_claim_targets(
+    absent: Sequence[Mapping[str, Any]], findings: List[ValidationFinding],
+) -> None:
+    """Fail closed on a final draft without the sections owners place claims in."""
+
+    if absent:
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_result_sufficiency",
+                severity="error",
+                message=(
+                    "The Writer draft lacks the section(s) in which a signed owner "
+                    "places its result claims, so those claims are not in the manuscript."
+                ),
+                detail={
+                    "reason_code": "writer_draft_lacks_owner_claim_target",
+                    "targets": [dict(target) for target in absent],
+                },
+            )
+        )
 
 
 def _ensure_unsigned_novelty_positioning_packet(
@@ -1755,7 +1785,7 @@ def _draft_manuscript(
                 },
             )
         )
-    scaffold = _project_and_report_owner_manuscript_claims(
+    scaffold, absent_owner_claim_targets = _project_and_report_owner_manuscript_claims(
         scaffold,
         per_step_records,
         findings,
@@ -1987,6 +2017,7 @@ def _draft_manuscript(
         writer_error_message=writer_error_message,
         scaffold=scaffold,
         reader_tables=reader_tables,
+        absent_owner_claim_targets=absent_owner_claim_targets,
     )
 
 
@@ -3422,6 +3453,7 @@ def _draft_bind_and_repair_manuscript(
             reader_display_labels=dict(execute_result.plan.display_labels or {}),
             expected_baseline_mentions=baseline_reporting_mentions(context, execute_result.plan.display_labels),
         )
+        section_errors = with_absent_target_repairs(section_errors, draft.absent_owner_claim_targets)
         if not section_errors:
             break
         section_repair = (draft.scaffold, section_errors)
@@ -3429,6 +3461,7 @@ def _draft_bind_and_repair_manuscript(
             "writer", "Repairing sections rejected by final manuscript checks.",
             run_id=run_id, section_keys=list(section_errors),
         )
+    _report_absent_owner_claim_targets(draft.absent_owner_claim_targets, findings)
     return draft, binding
 
 

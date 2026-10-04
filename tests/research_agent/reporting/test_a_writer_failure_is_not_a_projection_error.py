@@ -8,7 +8,8 @@ then found no target in the empty scaffold and raised
 ``ManuscriptProjectionError``: the run stopped with a generic resume failure,
 the Writer's cause was lost, and the paid execution was discarded. Owner
 claims are now projected only into a Writer draft; a draft that omits a
-projection target still fails closed.
+projection target reports it as the Writer's failure, and the owner contract
+still raises on its own.
 
 Synthetic study and seeded synthetic rows only (renal replacement therapy and
 90-day mortality).
@@ -55,15 +56,18 @@ def test_no_writer_draft_means_nothing_to_project(tmp_path, scaffold):
     records = _records(tmp_path)
     findings = []
 
-    projected = write_phase._project_and_report_owner_manuscript_claims(scaffold, records, findings)
+    projected, absent = write_phase._project_and_report_owner_manuscript_claims(scaffold, records, findings)
 
     assert projected == scaffold
+    assert absent == ()
     assert findings == []
 
 
-def test_a_draft_without_the_target_still_fails_closed(tmp_path):
+def test_a_draft_without_the_target_reports_it_for_the_writer(tmp_path):
     records = _records(tmp_path)
     draft = "## Results\n\nThe landmark cohort is described in Table 1.\n"
 
-    with pytest.raises(ManuscriptProjectionError, match="target is absent"):
-        write_phase._project_and_report_owner_manuscript_claims(draft, records, [])
+    projected, absent = write_phase._project_and_report_owner_manuscript_claims(draft, records, [])
+
+    assert projected == draft
+    assert {item["target_kind"] for item in absent} == {"abstract_label", "markdown_heading"}
