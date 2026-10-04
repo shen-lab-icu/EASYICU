@@ -7,7 +7,7 @@ another.
 """
 
 import re
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 
 _REGION = re.compile(r"(?=^#{1,6} |^\*\*(?:Background|Methods|Results|Conclusions):\*\*)", re.M)
@@ -238,17 +238,33 @@ def deduplicate_claim_paragraphs(text: str) -> str:
     return "".join(regions)
 
 
-def claim_token_stands_in_block(text: str, start: int, end: int, token: str) -> bool:
+def claim_token_stands_in_block(
+    text: str,
+    start: int,
+    end: int,
+    token: str,
+    *,
+    excluded: Sequence[tuple[int, int]] = (),
+) -> bool:
     """Whether ``token`` already stands in the block holding ``text[start:end]``.
 
     Blocks are the ones ``deduplicate_claim_paragraphs`` keeps a claim once
     in: a heading or a structured-abstract label opens one.  The span itself
-    is not searched, so the text a caller is about to replace never counts.
+    is not searched, so the text a caller is about to replace never counts,
+    and neither does an ``excluded`` span: text the caller will also replace
+    or remove cannot keep the claim.
     """
     starts = [match.start() for match in _REGION.finditer(text)]
     block_start = max((index for index in starts if index <= start), default=0)
     block_end = min((index for index in starts if index > start), default=len(text))
-    return token in text[block_start:start] or token in text[end:block_end]
+    skipped = ((start, end), *excluded)
+    position = text.find(token, block_start, block_end)
+    while position >= 0:
+        stop = position + len(token)
+        if not any(position < span_end and span_start < stop for span_start, span_end in skipped):
+            return True
+        position = text.find(token, position + 1, block_end)
+    return False
 
 
 def repair_filtered_section_openers(text: str, *, before_filter: str) -> str:
