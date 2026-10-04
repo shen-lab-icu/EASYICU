@@ -75,6 +75,11 @@ _COLLAPSING_KDIGO_STAGE_BINDINGS = frozenset(
 #: A materialized exposure carries the cohort aggregation in its name; the
 #: binding underneath is what this owner judges.
 _WINDOW_AGGREGATION_SUFFIXES = ("_max", "_min", "_mean", "_first", "_last")
+#: Window summaries the materializer writes as an event status when their
+#: source concept is one (``add_timeseries`` in
+#: ``research_agent/intake/materialized_metadata.py``).  Its mean is an event
+#: fraction, a different quantity.
+_EVENT_STATUS_WINDOW_AGGREGATIONS = frozenset({"first", "max", "min"})
 
 
 def _kdigo_binding_stem(name: str) -> str:
@@ -320,7 +325,7 @@ def primary_exposure_kind(
     """Classify a physical exposure without reading patient rows."""
 
     dtype = ""
-    published: tuple[object, ...] = ()
+    published: tuple[object, ...] | None = None
     if primary_exposure:
         try:
             import pyarrow.parquet as pq
@@ -343,14 +348,16 @@ def primary_exposure_kind(
     )
 
 
-def _published_column_domain(universe_path: Path, column: str) -> tuple[object, ...]:
+def _published_column_domain(
+    universe_path: Path, column: str
+) -> tuple[object, ...] | None:
     """The closed domain the materializer published for one physical column.
 
     A window maximum, minimum or first value of an event status keeps the
     status's two values, and the materializer says so in the universe's
     verified column metadata; a fraction, a count or a time publishes no
-    domain.  A zero-row planning catalog has no materialized authority, so
-    planning keeps the concept owner's rule.
+    domain.  A zero-row planning catalog has no materialized authority
+    (``None``), so planning keeps the concept owner's rule.
     """
 
     try:
@@ -362,7 +369,7 @@ def _published_column_domain(universe_path: Path, column: str) -> tuple[object, 
             details={"artifact": Path(universe_path).name, "reason": str(exc)[:500]},
         ) from exc
     if verified is None:
-        return ()
+        return None
     for file_binding in verified.sidecar.files:
         binding = file_binding.columns.get(column)
         if binding is not None:
@@ -375,7 +382,7 @@ def exposure_kind_for_dtype(
     primary_exposure: str | None,
     primary_exposure_source: str | None,
     dtype: str,
-    published_levels: Sequence[object] = (),
+    published_levels: Sequence[object] | None = None,
 ) -> tuple[VariableKind, tuple[str, ...]]:
     """Classify an exposure from its names, schema dtype, and declared domain.
 
@@ -384,6 +391,9 @@ def exposure_kind_for_dtype(
     ``published_levels`` is the domain the materializer published for the
     physical column itself; a published two-level domain makes an
     operationalized column (a window maximum of an event status) binary.
+    ``None`` means there is no materialized authority (the zero-row planning
+    catalog, or names alone), and planning reads the owners the materializer
+    will apply instead (``_event_status_window_levels``).
     """
 
     hint = classify_variable(
@@ -397,7 +407,7 @@ def exposure_kind_for_dtype(
         # The type fixes this column's domain, and its values bind as
         # ``false``/``true`` whatever encoding the concept declares.
         return VariableKind.BINARY, (level_spelling(False), level_spelling(True))
-    published = tuple(level_spelling(value) for value in published_levels)
+    published = tuple(level_spelling(value) for value in published_levels or ())
     if len(published) == 2 and len(set(published)) == 2 and all(published):
         return VariableKind.BINARY, published
     declared = _declared_binary_levels(
@@ -407,7 +417,53 @@ def exposure_kind_for_dtype(
     )
     if declared:
         return VariableKind.BINARY, declared
+    if published_levels is None:
+        status = _event_status_window_levels(
+            primary_exposure=primary_exposure,
+            primary_exposure_source=primary_exposure_source,
+        )
+        if status:
+            return VariableKind.BINARY, status
     return hint.kind, ()
+
+
+def _event_status_window_levels(
+    *,
+    primary_exposure: str | None,
+    primary_exposure_source: str | None,
+) -> tuple[str, ...]:
+    """The two values a window summary of an event status will be published with.
+
+    Metadata-only planning names an aggregated exposure
+    ``<source>_<aggregation>`` before any row exists.  The materializer writes
+    the window maximum, minimum or first value of an event-status concept as
+    an event status with values 0 and 1, but a zero-row catalog has no column
+    metadata to say so, and without levels the categorical landmark runtime
+    cannot be signed.  Planning therefore reads the owners the materializer
+    applies: the concept owner's event-status declaration and the summary the
+    column names.  A mean (an event fraction), a count, a summary of a factor
+    or a measurement, and a column that is not its declared source's own
+    summary keep no levels.
+    """
+
+    exposure = str(primary_exposure or "").strip()
+    source = str(primary_exposure_source or "").strip()
+    if not source or not exposure.startswith(f"{source}_"):
+        return ()
+    if exposure[len(source) + 1 :] not in _EVENT_STATUS_WINDOW_AGGREGATIONS:
+        return ()
+    try:  # the concept owner's dictionary, read as the declared-domain rule reads it
+        from easyicu.concept.export_metadata import concept_declares_event_status
+        from easyicu.concept.loader import load_dictionary
+
+        event_status = concept_declares_event_status(
+            source, load_dictionary().get(source)
+        )
+    except Exception:  # noqa: BLE001 - an unreadable dictionary declares nothing
+        return ()
+    if not event_status:
+        return ()
+    return level_spelling(0), level_spelling(1)
 
 
 def _declared_binary_levels(

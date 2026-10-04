@@ -54,7 +54,10 @@ def typed_export(
     labs: pd.DataFrame | None = None,
     outcomes: pd.DataFrame | None = None,
     binding_overrides: dict[str, ColumnMetadataBinding] | None = None,
+    event_concepts: tuple[str, ...] = (),
 ) -> Path:
+    """Write the export; ``event_concepts`` adds event-status lab columns."""
+
     root.mkdir()
     roles = roles or {}
     binding_overrides = binding_overrides or {}
@@ -68,9 +71,11 @@ def typed_export(
                 "age": [50, 50, 60],
                 "lact": [1.0, 2.0, 3.0],
                 "mech_vent": [False, True, False],
+                **{concept: [False, True, False] for concept in event_concepts},
             }
         )
     )
+    lab_concepts = ["age", "lact", "mech_vent", *event_concepts]
     outcomes = (
         outcomes
         if outcomes is not None
@@ -96,6 +101,15 @@ def typed_export(
                 "mech_vent",
                 roles.get("mech_vent", ConceptColumnRole.EVENT_STATUS),
             ),
+            **{
+                concept: binding_overrides.get(concept)
+                or metadata_binding(
+                    concept,
+                    concept,
+                    roles.get(concept, ConceptColumnRole.EVENT_STATUS),
+                )
+                for concept in event_concepts
+            },
         },
     )
     outcome_binding = ColumnMetadataFileBinding(
@@ -126,7 +140,7 @@ def typed_export(
                 "concept_selection": {
                     "mode": "explicit",
                     "modules": {
-                        "labs": ["age", "lact", "mech_vent"],
+                        "labs": lab_concepts,
                         "outcomes": ["death"],
                     },
                 },
@@ -134,8 +148,8 @@ def typed_export(
                     {
                         "file": "labs.parquet",
                         "module": "labs",
-                        "concepts": 3,
-                        "concept_ids": ["age", "lact", "mech_vent"],
+                        "concepts": len(lab_concepts),
+                        "concept_ids": lab_concepts,
                         "rows": len(labs),
                         "column_metadata_columns": list(lab_binding.columns),
                     },
