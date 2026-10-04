@@ -34,6 +34,7 @@ from .manuscript_surface import (
 from ..schema import AnalysisPlan
 
 if TYPE_CHECKING:
+    from ..authority.scientific_claims import ScientificClaim
     from .manuscript_tables import ReaderTableCallout
 
 _REQUIRED_SECTIONS: Mapping[str, tuple[str, ...]] = {
@@ -371,15 +372,41 @@ def remove_empty_optional_subsections(manuscript: str) -> str:
     return text
 
 
+def _conclusion_claim_tokens(
+    tokens: Sequence[str], claims: Sequence["ScientificClaim"],
+) -> list[str]:
+    """The claim tokens a restored Conclusion states, in Results order.
+
+    A study can answer with several primary estimates: when the
+    proportional-hazards test rejects, every interval's hazard ratio is
+    primary, and so is every point contrast of a spline model.  The first of
+    them alone states part of the answer as the whole, so the Conclusion
+    reads every primary estimate its source reports.  A rule outcome, such as
+    the test that chose the estimates, is not one.  Without the run's claims,
+    or without a primary estimate, the first token stands for the answer.
+    """
+
+    by_ref = {claim.claim_ref: claim for claim in claims}
+    estimates: dict[str, str] = {}
+    for token in tokens:
+        ref = _CLAIM_PLACEHOLDER_RE.search(token).group(0)[len("{claim:"):-1]
+        claim = by_ref.get(ref)
+        if claim is not None and claim.analysis_role == "primary" and claim.rule_outcome is None:
+            estimates.setdefault(ref, token)
+    return list(estimates.values()) or list(tokens[:1])
+
+
 def repair_reader_structure_from_existing_prose(
     manuscript: str,
     *,
     analysis_plan: AnalysisPlan | None = None,
+    claims: Sequence["ScientificClaim"] = (),
 ) -> tuple[str, tuple[Mapping[str, str], ...]]:
     """Restore required wrappers using only prose already in the draft.
 
     With a plan, a restored Conclusion takes its claim from the plan family's
     primary subsection, not from another family's heading the draft also uses.
+    With the run's claims it states every primary estimate found there.
     """
 
     repaired = str(manuscript or "")
@@ -625,19 +652,17 @@ def repair_reader_structure_from_existing_prose(
             "",
         )
         source = primary or results
-        candidate = next(
-            (
-                sentence.strip()
-                # Placed host tokens are paragraphs without a full stop.
-                for sentence in re.split(r"(?<=[.!?])\s+|\n\s*\n", source)
-                if _has_prose(sentence)
-                and (
-                    _CLAIM_PLACEHOLDER_RE.fullmatch(sentence.rstrip(".!?"))
-                )
-            ),
-            None,
-        )
-        if candidate is not None:
+        tokens = [
+            sentence.strip()
+            # Placed host tokens are paragraphs without a full stop.
+            for sentence in re.split(r"(?<=[.!?])\s+|\n\s*\n", source)
+            if _has_prose(sentence)
+            and (
+                _CLAIM_PLACEHOLDER_RE.fullmatch(sentence.rstrip(".!?"))
+            )
+        ]
+        if tokens:
+            candidate = "\n\n".join(_conclusion_claim_tokens(tokens, claims))
             if conclusion_caveat_only:
                 candidate = f"{candidate}\n\n{conclusion.strip()}"
             repaired = _replace_section_body(repaired, "Conclusion", candidate)

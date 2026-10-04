@@ -9,7 +9,8 @@ Results stayed empty and the Conclusion had no claim to read.
 
 The hazard ratios and the PH decision are now host claims compiled from the
 suite's versioned reporting envelope.  Host placement reports them in the
-survival results and restores the Conclusion from the primary one; the
+survival results and restores the Conclusion from the primary ones, every
+interval when the PH test rejects; the
 projection places the primary tokens in the abstract Results with one neutral
 restricted-mean sentence.  Every number these sentences print binds to a
 value the suite registered.  Synthetic study and seeded synthetic rows only
@@ -182,7 +183,7 @@ def test_the_suite_results_pass_the_strict_gate_into_every_section_they_answer(t
     placed = place_scientific_claim_tokens_in_results(
         projected, claims=claims, planned_step_roles=planned_result_roles(plan),
     )
-    repaired, _structure = repair_reader_structure_from_existing_prose(placed.scaffold)
+    repaired, _structure = repair_reader_structure_from_existing_prose(placed.scaffold, claims=claims)
     by_ref = {claim.claim_ref: claim for claim in claims}
     filtered = filter_evidence_bound_scaffold(
         repaired, resolve_claim=by_ref.get, resolve_evidence=lambda ref: ref == EVIDENCE,
@@ -199,12 +200,15 @@ def test_the_suite_results_pass_the_strict_gate_into_every_section_they_answer(t
     survival = _section(filtered.scaffold, "### Survival results")
     assert "restricted mean survival time" in survival
     assert all(claim.placeholder in survival for claim in claims)
-    # The Conclusion reads the first primary association, not the PH rule.
-    assert _section(filtered.scaffold, "## Conclusion").split()[0] == primary[0].placeholder
+    # The Conclusion reads every primary association, not the PH rule.
+    conclusion = _section(filtered.scaffold, "## Conclusion")
+    assert conclusion.split()[: len(primary)] == [claim.placeholder for claim in primary]
+    assert ph_rule.placeholder not in conclusion
 
     expanded = expand_scientific_claim_tokens(filtered.scaffold, resolve_claim=by_ref.get)
     assert expanded.missing_claim_refs == () and expanded.malformed_sentences == ()
-    assert primary[0].render_reader_text(include_estimate=False) in _section(expanded.scaffold, "## Conclusion")
+    for claim in primary:
+        assert claim.render_reader_text(include_estimate=False) in _section(expanded.scaffold, "## Conclusion")
     assert ph_rule.rule_outcome.result_sentence() in _section(expanded.scaffold, "### Survival results")
     assert _blocking(filtered.scaffold, plan) == set()
     assert _blocking(expanded.scaffold, plan) == set()
