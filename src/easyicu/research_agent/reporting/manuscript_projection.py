@@ -255,14 +255,16 @@ def _render_claim(
 
 
 def _target_body_span(text: str, target: _Target) -> tuple[int, int] | None:
+    # The label matches in any case, as the quality gate reads abstract labels
+    # and required subsections: a draft's "### Primary Association" is present.
     if target.kind == "abstract_label":
         pattern = re.compile(
-            rf"(?ms)(^\*\*{re.escape(target.label)}:\*\*\s*)(.*?)"
+            rf"(?ms)(^\*\*(?i:{re.escape(target.label)}):\*\*\s*)(.*?)"
             r"(?=^\*\*[A-Za-z][^\n]*:\*\*|^## |\Z)"
         )
     else:
         pattern = re.compile(
-            rf"(?ms)(^###\s+{re.escape(target.label)}\s*\n)(.*?)"
+            rf"(?ms)(^###\s+(?i:{re.escape(target.label)})\s*\n)(.*?)"
             r"(?=^### |^## |\Z)"
         )
     match = pattern.search(text)
