@@ -490,8 +490,12 @@ def _reader_legend(*, headline_hr_authorized: bool, promotes_time_varying: bool)
         estimate,
         "(c) Risk-set accounting from the source records through the endpoint, "
         "landmark and exposure-timing gates to the analysis population.",
-        "(d) Schoenfeld residual tests of the proportional-hazards assumption, "
-        "globally and for each model term.",
+        "(d) Schoenfeld residual tests of the proportional-hazards assumption "
+        "for each model term and globally, the global test Bonferroni-adjusted "
+        "over the terms. The dashed line marks the prespecified alpha against "
+        "which the exposure term and the global test were judged; the other "
+        "terms, in lighter bars, are not adjusted for multiplicity and enter the "
+        "decision only through the global test.",
         "Every value is drawn from the suite's registered result tables; the "
         "figure fits no model of its own.",
     ))
@@ -737,8 +741,10 @@ def _render_figure(
         )
     add_panel_label(ax_hr, "b", x=-0.16, y=1.05, fontsize=8.0)
 
-    display = risk_flow.tail(4).copy()
+    # Every stage, from the source records the legend starts at.
+    display = risk_flow.copy()
     display_labels = {
+        "source_rows": "Source records",
         "valid_fixed_horizon_endpoint": (
             f"Valid {sealed.endpoint_horizon_days:g}-day endpoint"
         ),
@@ -781,6 +787,13 @@ def _render_figure(
         raise ValueError(
             "landmark survival PH diagnostics lack columns: " + ", ".join(missing)
         )
+    # The signed rule judges the exposure term and the Bonferroni global test
+    # at alpha; the other terms enter it only through the global test.
+    decisive_terms = {"global", sealed.derived_exposure_column}
+    if not decisive_terms.issubset(set(ph_display["covariate"].astype(str))):
+        raise ValueError(
+            "landmark survival PH diagnostics lack the global or exposure test"
+        )
     ph_values = np.asarray(ph_display["p_value"], dtype=float)
     alpha_values = np.asarray(ph_display["declared_alpha"], dtype=float)
     if (
@@ -806,7 +819,14 @@ def _render_figure(
     ]
     y_ph = np.arange(len(ph_display))
     alpha = float(alpha_values[0])
-    ax_ph.barh(y_ph, ph_display["neg_log10_p"], color=palette["orange"])
+    ax_ph.barh(
+        y_ph,
+        ph_display["neg_log10_p"],
+        color=[
+            palette["orange"] if term in decisive_terms else palette["orange_soft"]
+            for term in ph_display["covariate"].astype(str)
+        ],
+    )
     ax_ph.axvline(
         -np.log10(alpha),
         color=palette["neutral"],
