@@ -1,7 +1,8 @@
 /* Owner: shared artifact reader vocabulary. */
 /* Reader-facing names for the host codes the shared artifact renderers show:
-   plan-review findings, result-table columns and titles, method cards and the
-   design elements a method source supports.  Text only -- nothing here
+   plan-review findings and the questions their decisions ask, result-table
+   columns and titles, method cards and the design elements a method source
+   supports.  Text only -- nothing here
    derives, rounds, or reinterprets a registered value. */
 (function () {
   'use strict';
@@ -54,7 +55,8 @@
     REPEATED_STAY_DEDUP_UNDECLARED: ['重复入住的处理规则未声明', '可能存在同一患者多次入住，但没有步骤写明是只取首次入住，还是按患者聚类或混合模型处理。'],
     REPEATED_STAY_IDENTITY_UNAVAILABLE: ['无法识别同一患者的多次入住', '数据源没有给出患者身份，无法排除同一患者多次入住；可以继续做开发性分析，但不能按患者独立处理，也不能作论文结论。'],
     REPEATED_STAY_METHOD_NOT_DECLARED: ['重复入住没有对应的统计方法', '有患者身份，但没有可执行的方法处理同一患者的多次入住；由 Agent 选定方法。'],
-    REQUESTED_OCCURRENCE_COVERAGE_INCOMPLETE: ['暴露发生比例没有分析步骤', '问题问到暴露的发生比例，但没有步骤在研究队列上报告它。'],
+    REQUESTED_DOSE_RESPONSE_NOT_ESTIMABLE: ['所问的剂量反应无法估计', '问题要求剂量反应关系，但主要暴露只有两个水平；梯度至少需要三个有序水平或连续暴露，两水平对比不能代替。'],
+    REQUESTED_OCCURRENCE_COVERAGE_INCOMPLETE:['暴露发生比例没有分析步骤', '问题问到暴露的发生比例，但没有步骤在研究队列上报告它。'],
     REQUESTED_OUTCOME_COVERAGE_INCOMPLETE: ['部分结局没有分析步骤', '问题里提到的结局并非都有可执行的分析。'],
     REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY: ['要求的敏感性分析只写在文字里', '你要求的敏感性分析缺失，或只有描述、没有可执行步骤。'],
     REVIEWABLE_PLAN_SPECIFICATION_MISSING: ['缺少完整的推荐设定', '所选设计没有给出完整、可审阅的推荐设定。'],
@@ -69,6 +71,20 @@
     TRAJECTORY_LONGITUDINAL_OWNER_NOT_SEALED: ['轨迹尚未按时间窗建模', '计划的轨迹聚类只用了每次住院的一个值；这些变量可以交给固定时间窗轨迹组件建模，由系统编译执行设置后重新规划。'],
     TRAJECTORY_REPRESENTATION_NOT_LONGITUDINAL: ['轨迹类别只基于单个时点', '计划的轨迹聚类只用了每次住院的一个值，类别概括的是住院而不是轨迹；这些变量也不能交给固定时间窗轨迹组件建模。可以继续做分析级结果，需写明这一局限。'],
     UNADJUSTED_ASSOCIATION_NOT_ARTICLE_GRADE: ['主关联没有调整混杂', '主要关联未做调整，只能作描述性解读。'],
+  };
+
+  // The question a review decision asks the researcher, in Chinese.  English
+  // readers keep the host's own authorization question.
+  const QUESTIONS = {
+    ADJUSTMENT_RATIONALE_OR_TIMING_UNBOUND: '你是否批准新研究版本中每个调整协变量的临床理由与基线时间定位？',
+    POPULATION_SCOPE_AMENDMENT_DECLARED: '新计划改变了描述性结果的研究人群，是否接受这项声明的科学变更？',
+    PRIMARY_EXPOSURE_TIME_ANCHOR_MISMATCH: '研究应采用概念所有者发布的临床定义锚点，还是为所声明的临床锚点发布新的暴露定义（新的概念或研究版本）？',
+    PRIMARY_EXPOSURE_TIME_ANCHOR_UNVERIFIED: '研究应采用概念所有者发布的临床定义锚点，还是为所声明的临床锚点发布新的暴露定义（新的概念或研究版本）？',
+    REPEATED_STAY_METHOD_NOT_DECLARED: '新的研究版本应每位患者只取一次 ICU 入住，还是保留多次入住并采用聚类或混合效应估计？',
+    REQUESTED_DOSE_RESPONSE_NOT_ESTIMABLE: '问题要求剂量反应梯度，但暴露只有两个水平。新的研究版本应改用分级或连续暴露，还是改问两个水平之间的对比？',
+    REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY: '是否需要一个实际执行这些敏感性分析的新研究版本，还是缩减所要求的输出？',
+    ROBUSTNESS_AXES_TOO_NARROW: '新的研究版本应增加预先设定、有来源支持的敏感性分析维度，还是让当前较窄的分析保持仅分析级？',
+    UNADJUSTED_ASSOCIATION_NOT_ARTICLE_GRADE: '保留描述性分析，还是授权一个采用有临床时序调整策略的新研究版本？',
   };
 
   const COLUMNS = {
@@ -260,6 +276,10 @@
     const row = FINDINGS[String(code || '')];
     return row && zh() ? { title: row[0], detail: row[1] } : null;
   }
+  function question(code) {
+    const text = QUESTIONS[String(code || '')];
+    return text && zh() ? text : '';
+  }
   function column(key) {
     const row = COLUMNS[String(key || '')];
     return row ? pick(row) : '';
@@ -286,5 +306,5 @@
     return parts.join(chinese ? '；' : '; ');
   }
 
-  window.AGENT_READER_VOCAB = Object.freeze({ finding, column, tableTitle, citationUse });
+  window.AGENT_READER_VOCAB = Object.freeze({ finding, question, column, tableTitle, citationUse });
 })();
