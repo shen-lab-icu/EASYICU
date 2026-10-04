@@ -865,6 +865,40 @@ def requested_exposure_occurrence_cues(context: ResearchContext) -> Tuple[str, .
     return tuple(cue for cue in _OCCURRENCE_CUES if _keyword_present(text, cue))
 
 
+#: Words by which a question asks how its outcome changes across graded levels
+#: of its exposure.  A cue names the relationship itself: a bare "gradient"
+#: also names physiology (the alveolar-arterial gradient), and a bare "trend" a
+#: secular trend.  Latin cues match across a space, hyphen or underscore.
+_DOSE_RESPONSE_CUES = (
+    "dose response",
+    "exposure response",
+    "dose dependent",
+    "dose dependence",
+    "剂量反应",
+    "剂量-反应",
+    "剂量效应",
+    "剂量依赖",
+)
+
+
+def requested_dose_response_cues(context: ResearchContext) -> Tuple[str, ...]:
+    """Return the words by which the question asks for a dose-response relationship.
+
+    Only the research question and the requested outputs are read, as for an
+    occurrence.  Whether the exposure can carry a gradient -- three or more
+    ordered levels, or a continuous scale -- is the consumer's typed check.
+    """
+
+    prefs = context.user_preferences
+    parts = [context.research_question or ""]
+    if prefs is not None:
+        parts.append(prefs.must_have_outputs or "")
+    text = " ".join(part.lower() for part in parts if part)
+    # An en or em dash joins the two words as often as a hyphen does.
+    text = text.replace("\u2013", "-").replace("\u2014", "-")
+    return tuple(cue for cue in _DOSE_RESPONSE_CUES if _keyword_present(text, cue))
+
+
 
 #: Words by which a question asks how its variables change over ICU time.
 #: Trajectory clustering and cross-sectional phenotype discovery share one
@@ -1796,6 +1830,7 @@ __all__ = [
     "analysis_type_for_capability",
     "required_endpoint_kind_for_family",
     "requested_exposure_occurrence_cues",
+    "requested_dose_response_cues",
     "infer_analysis_type",
     "longitudinal_trajectory_requested",
     "strong_trajectory_clustering_framing",

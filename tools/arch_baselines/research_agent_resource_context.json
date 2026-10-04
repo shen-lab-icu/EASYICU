@@ -1,7 +1,7 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/planning/figure_strategy.py"
+      "src/easyicu/research_agent/planning/analysis_types.py"
     ],
     "summary_changes": {}
   },
@@ -628,9 +628,16 @@
         "src/easyicu/research_agent/planning/figure_strategy.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "planning/analysis_types.py gains requested_dose_response_cues (QF): plan review reads the question's dose-response cues. Only that source digest moves; no planner or coder context size changes.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/planning/analysis_types.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "planning/figure_strategy.py lets the survival_effect role accept the interval hazard-ratio forest that the signed survival suite draws when its PH test rejects; source digest only, no resource or context size change",
+  "baseline_reason": "planning/analysis_types.py gains requested_dose_response_cues (QF): plan review reads the question's dose-response cues. Only that source digest moves; no planner or coder context size changes.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -649,7 +656,7 @@
     "src/easyicu/research_agent/learning/runtime.py": "87743106defc0df92c826bcc5a16e9156c89877517ce1d29ce5be9654840925a",
     "src/easyicu/research_agent/learning/store.py": "2a951e221b413c6e0c251382224acd3bba7bde8e23cca25812def65df0ef26d0",
     "src/easyicu/research_agent/planning/analysis_blueprint.py": "5330a604f9894c879ba400bee3b3ac1b617de1ce24425506139a5a29bb4020b2",
-    "src/easyicu/research_agent/planning/analysis_types.py": "4c7a953052eb45e4092a949f9b837d4a7ee58f75109a951ed240c933096eca10",
+    "src/easyicu/research_agent/planning/analysis_types.py": "9570788d59f61cf027f6d99ad02429888cfc71118f62f8df153517f55f7d76a0",
     "src/easyicu/research_agent/planning/cohort_contract.py": "4c9e01922aa5a10632f2711241242bc212a921f985d8f3d5092f79a06d3e7a54",
     "src/easyicu/research_agent/planning/figure_strategy.py": "f6c2cb10e1af641787fb7de1da29cfee99d869f56a3116ec3c1b2881fd3b93bf",
     "src/easyicu/research_agent/planning/study_design.py": "84e7d9c0974ca3d1f9deadcc22de065586a9be20fcdf66f101f931469b64cad0",
