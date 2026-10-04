@@ -668,7 +668,8 @@ def _render_figure(
         )
     ax_flow.set_xlim(0, max(display["count"]) * 1.18)
     ax_flow.invert_yaxis()
-    ax_flow.set_xlabel(f"{sealed.analysis_unit_label} (n)")
+    unit = sealed.analysis_unit_label
+    ax_flow.set_xlabel(f"{unit[:1].upper()}{unit[1:]} (n)")
     ax_flow.set_title("Risk-set accounting", loc="left")
     add_panel_label(ax_flow, "c", x=-0.16, y=1.05, fontsize=8.0)
 

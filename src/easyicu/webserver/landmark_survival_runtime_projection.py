@@ -63,8 +63,10 @@ _SUPPORTED_VARIANCE_ESTIMATOR = "model_based"
 #: Producer-owned first-observation companion of a materialized concept.
 _ONSET_SUFFIX = "_first_time"
 _ANALYSIS_UNIT_LABELS = {"icu_stay": "ICU stays"}
-#: One row per patient once the host keeps each patient's first ICU stay.
-_FIRST_STAY_UNIT_LABEL = "First ICU stays (one per patient)"
+#: One row per patient once the host keeps each patient's first ICU stay. The
+#: label is a reader noun phrase: claims and the cohort fact read it mid-sentence
+#: ("the first ICU stays alive and under observation at the landmark").
+_FIRST_STAY_UNIT_LABEL = "first ICU stays"
 _TIME_ORIGIN_LABELS = {"icu_admission": "ICU admission"}
 
 
