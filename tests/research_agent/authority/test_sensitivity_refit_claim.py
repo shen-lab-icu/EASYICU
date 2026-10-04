@@ -83,7 +83,7 @@ def test_c_first_stay_refit_names_its_restriction() -> None:
     assert claim.direction == "positive"
     assert claim.render_reader_text(include_estimate=False).endswith(
         "was positively associated with death in the complete case analysis set "
-        "restricted to the first ICU stay of each patient (adjusted odds ratio)."
+        "restricted to the first ICU stay of each patient, as estimated by the adjusted odds ratio."
     )
 
 

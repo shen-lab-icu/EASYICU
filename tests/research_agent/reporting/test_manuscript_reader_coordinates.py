@@ -26,7 +26,8 @@ def test_readable_labels_are_not_expanded_again(source):
 def test_label_repair_is_single_pass_and_idempotent():
     labels = {"group_code": "risk group", "risk": "Risk score", "age": "Patient age in years"}
     source = "group_code and age; risk. {evidence:age} [@risk] {claim:step.age}"
-    expected = "risk group and Patient age in years; Risk score. {evidence:age} [@risk] {claim:step.age}"
+    # A name inside a sentence drops its heading capital; one opening it keeps it.
+    expected = "risk group and patient age in years; risk score. {evidence:age} [@risk] {claim:step.age}"
     once, _ = repair_reader_internal_phrases(source, reader_display_labels=labels)
     twice, second_repairs = repair_reader_internal_phrases(once, reader_display_labels=labels)
     assert once == expected

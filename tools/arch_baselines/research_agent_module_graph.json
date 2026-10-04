@@ -11504,6 +11504,10 @@
       "easyicu.research_agent.authority.evidence_store"
     ],
     [
+      "easyicu.research_agent.reporting.manuscript_labels",
+      "easyicu.research_agent.reporting.manuscript_surface"
+    ],
+    [
       "easyicu.research_agent.reporting.manuscript_literature",
       "easyicu.research_agent.literature"
     ],
@@ -13228,7 +13232,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3299,
+    "edge_count": 3300,
     "largest_scc_size": 0,
     "module_count": 769,
     "package_count": 36,

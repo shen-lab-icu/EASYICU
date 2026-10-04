@@ -151,11 +151,51 @@ def manuscript_section_target_deviations(
     return deviations
 
 
+#: Capitalized words a label keeps inside a sentence: eponyms, and population
+#: and insurance categories that style guides capitalize.
+_PROPER_LABEL_WORDS = frozenset({
+    "African", "American", "Apgar", "Asian", "Berlin", "Black", "Braden", "Caprini",
+    "Charlson", "Cox", "Elixhauser", "Glasgow", "Hispanic", "Horowitz", "Kaplan",
+    "Killip", "Latino", "Medicaid", "Medicare", "Native", "Pacific", "Ramsay",
+    "Richmond", "Wells", "White",
+})
+
+
+#: Words that may legitimately stand twice in a row ("in in-hospital death").
+_FUNCTION_WORDS = frozenset({
+    "a", "an", "and", "as", "at", "by", "for", "from", "in", "no", "not", "of", "on",
+    "or", "per", "the", "to", "with", "within", "without",
+})
+
+
+def in_sentence_label(label: str) -> str:
+    """A reader label as it reads inside a sentence.
+
+    Labels are written like headings ("Death by 28 days"), so mid-sentence the
+    heading capital drops ("associated with death by 28 days").  An acronym
+    (ICU, SOFA score), a mixed-case term (pH, eGFR), a title-case name
+    (Sequential Organ Failure Assessment) or an eponym (Charlson comorbidity
+    index) keeps its capitals.  A sentence-initial use is the caller's to
+    capitalize.
+    """
+
+    words = str(label).split(" ")
+    first = words[0]
+    if (
+        not re.fullmatch(r"[A-Z][a-z]+(?:-[a-z]+)*", first)
+        or first.split("-")[0] in _PROPER_LABEL_WORDS
+        or (len(words) > 1 and re.match(r"[A-Z]", words[1]))
+    ):
+        return str(label)
+    return first.lower() + str(label)[len(first):]
+
+
 def collapse_repeated_label_prefix(text: str, labels) -> tuple[str, tuple[dict[str, str], ...]]:
-    """Remove a duplicated multiword prefix of a complete source-bound label.
+    """Remove a duplicated prefix of a complete source-bound label.
 
     A raw field embedded in prose may already have part of its expanded label
-    before it. Only exact alphabetic prefixes (at least two words) are handled;
+    before it ("patient age" becoming "patient Patient age at baseline").  Only
+    exact alphabetic prefixes of a label of at least three words are handled;
     there is no synonym matching, numerical cleanup or scientific paraphrase.
     The caller keeps evidence/citation tokens out of these visible text pieces.
     """
@@ -165,7 +205,9 @@ def collapse_repeated_label_prefix(text: str, labels) -> tuple[str, tuple[dict[s
             continue
         words = re.split(r"[ -]+", label)
         full = r"[ -]+".join(map(re.escape, words))
-        for length in range(len(words) - 1, 1, -1):
+        for length in range(len(words) - 1, 0, -1):
+            if length == 1 and words[0].casefold() in _FUNCTION_WORDS:
+                continue  # "a difference in in-hospital death" is English.
             prefix = r"[ -]+".join(map(re.escape, words[:length]))
             pattern = re.compile(r"(?<![A-Za-z0-9_])" + prefix + r"[ -]+(?P<label>" + full + r")(?![A-Za-z0-9_])", re.I)
             text, count = pattern.subn(lambda match: match["label"], text)
@@ -245,3 +287,57 @@ def repeated_reader_paragraphs(section: str) -> tuple[str, ...]:
                 duplicates.append(normalized)
             seen.add(normalized)
     return tuple(duplicates)
+
+
+_SENTENCE_BREAK_RE = re.compile(r"(?<=[.!?。！？])\s+")
+#: A sentence this long said twice reads as a template, not as emphasis.
+_REPEATED_SENTENCE_MIN_CHARS = 60
+
+
+def repeated_reader_sentences(sections: Mapping[str, str]) -> tuple[tuple[str, str], ...]:
+    """Long prose sentences said again, as ``(section, sentence)`` pairs.
+
+    ``sections`` maps reader section names to their reader text in manuscript
+    order.  Headings, tables, figures and footnotes are not prose.  The first
+    occurrence stands; each later one is reported in its own section.
+    """
+
+    seen: set[str] = set()
+    repeated: list[tuple[str, str]] = []
+    for name, body in sections.items():
+        for paragraph in re.split(r"\n\s*\n", body):
+            lines = [
+                line.strip() for line in paragraph.splitlines()
+                if line.strip() and line.strip()[0] not in "#|!" and not line.strip().startswith("[^")
+            ]
+            for sentence in _SENTENCE_BREAK_RE.split(" ".join(" ".join(lines).split())):
+                if len(sentence) < _REPEATED_SENTENCE_MIN_CHARS:
+                    continue
+                key = sentence.casefold()
+                if key in seen:
+                    repeated.append((name, sentence))
+                seen.add(key)
+    return tuple(repeated)
+
+
+# A parenthesis that opens with an effect measure and closes its sentence
+# promises that measure's value: "(adjusted hazard ratio for days 0 to 7
+# after the landmark)." reads as an estimate whose number was lost.
+_NAMED_ESTIMATE_RE = re.compile(
+    r"\((?P<inner>(?:(?:adjusted|unadjusted|crude)\s+)?(?:"
+    r"(?:subdistribution\s+)?(?:hazard|odds|risk|rate)\s+ratios?"
+    r"|relative\s+risks?|(?:risk|mean)\s+differences?"
+    r"|restricted\s+mean\s+survival\s+time\s+differences?"
+    r")\b[^()]*)\)(?=\s*(?:[.;!?]|$))",
+    re.I | re.M,
+)
+_ESTIMATE_VALUE_RE = re.compile(r"\d\.\d|\bCI\b|\d\s*%|\bp\s*[<=>]", re.I)
+
+
+def estimates_without_values(text: str) -> tuple[str, ...]:
+    """Sentence-closing parentheses that name an effect estimate without a value."""
+
+    return tuple(dict.fromkeys(
+        match.group(0) for match in _NAMED_ESTIMATE_RE.finditer(text)
+        if _ESTIMATE_VALUE_RE.search(match["inner"]) is None
+    ))
