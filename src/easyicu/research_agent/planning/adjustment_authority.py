@@ -167,7 +167,9 @@ def host_window_bound_roles(
     return roles
 
 
-def host_proven_temporal_roles(context: Any) -> dict[str, HostTemporalRole]:
+def host_proven_temporal_roles(
+    context: Any, *, reference_hours: Optional[float] = None
+) -> dict[str, HostTemporalRole]:
     """Project the covariate timing the host can prove without a rationale.
 
     An owner-declared baseline demographic is static.  A window-derived clinical
@@ -177,11 +179,15 @@ def host_proven_temporal_roles(context: Any) -> dict[str, HostTemporalRole]:
     other variable is absent from the mapping: a generated clinical rationale
     never replaces this timing authority, so such a variable can enter an
     adjustment set only through an exact user-reviewed roster.
+
+    ``reference_hours`` is a host-typed time zero that is not yet a study
+    preference: the landmark of a design the host itself proposes for review.
+    Without it the study's declared landmark is used.
     """
 
-    return host_window_bound_roles(
-        context, reference_hours=primary_landmark_hours(context)
-    )
+    if reference_hours is None:
+        reference_hours = primary_landmark_hours(context)
+    return host_window_bound_roles(context, reference_hours=reference_hours)
 
 
 def _matches_declared_covariate(declared: str, observed: str) -> bool:
@@ -346,13 +352,16 @@ class AdjustmentSetAuthority:
 def adjusted_model_term_planning_authority(
     context: Any,
     variable_names: Sequence[str],
+    *,
+    reference_hours: Optional[float] = None,
 ) -> dict[str, Any]:
     """Project model-term eligibility for a bounded Planner prompt.
 
     This metadata-only projection cannot select an adjustment set or infer
     clinical timing. It exposes which catalog variables the current typed
     authority permits as model terms and the encodings supported by their
-    sealed domains.
+    sealed domains. ``reference_hours`` is passed to
+    :func:`host_proven_temporal_roles`.
     """
 
     adjustment = AdjustmentSetAuthority.from_context(context)
@@ -366,7 +375,9 @@ def adjusted_model_term_planning_authority(
     primary_exposure = str(context.primary_exposure or "").strip()
     outcome = str(context.target_outcome or "").strip()
     variables = {item.name: item for item in context.variables}
-    host_timed: Mapping[str, HostTemporalRole] = host_proven_temporal_roles(context)
+    host_timed: Mapping[str, HostTemporalRole] = host_proven_temporal_roles(
+        context, reference_hours=reference_hours
+    )
     eligible: list[dict[str, Any]] = []
     excluded: list[dict[str, str]] = []
     for name in dict.fromkeys(str(value or "").strip() for value in variable_names):
