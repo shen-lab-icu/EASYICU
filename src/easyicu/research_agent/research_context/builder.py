@@ -75,6 +75,12 @@ from .typed import (
     materialized_research_inputs_from_authority,
     project_research_context_variables,
 )
+from easyicu.outcome_availability import (
+    StatedHorizon,
+    fixed_horizon_mortality_endpoint,
+    stated_mortality_horizons,
+)
+
 from ..concept_availability import normalize_database_name
 from .cohort_granularity import resolve_cohort_granularity
 from .observation_semantics import compile_observation_semantics
@@ -1160,13 +1166,26 @@ def _guess_outcome_columns(df: pd.DataFrame) -> List[str]:
     return out
 
 
+#: Outcome names that state their own mortality horizon.
+_NAMED_HORIZON_OUTCOMES = {
+    "death_28d": StatedHorizon(count=28, unit="day"),
+    "mortality_28d": StatedHorizon(count=28, unit="day"),
+    "death_30d": StatedHorizon(count=30, unit="day"),
+    "mortality_30d": StatedHorizon(count=30, unit="day"),
+}
+
+
 def _infer_outcome_semantics(
     *,
     research_question: str,
     outcome_name: Optional[str],
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     question = (research_question or "").lower()
     outcome = (outcome_name or "").lower()
+    # The horizons the question states for death or survival ("survival to
+    # day 28", "one-year mortality"): a request names its horizon as well as
+    # its endpoint.
+    stated = stated_mortality_horizons(research_question)
     if any(
         term in question
         for term in ("survival", "time-to-event", "time to event", "cox", "hazard")
@@ -1178,7 +1197,9 @@ def _infer_outcome_semantics(
         "follow_up_time",
     }:
         return {
-            "label": "time-to-event endpoint",
+            "label": "time-to-event endpoint" + (
+                " over " + " or ".join(horizon.noun for horizon in stated) if stated else ""
+            ),
             "description": (
                 "Outcome component for a time-to-event analysis; keep the event "
                 "indicator, follow-up time, censoring rule and time zero explicit. "
@@ -1189,6 +1210,7 @@ def _infer_outcome_semantics(
                 "source fields."
             ),
             "source_concept": "time_to_event_endpoint",
+            "horizons": stated,
             "substitution_note": (
                 "Do not substitute a binary event-rate, logistic model target, "
                 "or unrelated follow-up horizon for this time-to-event endpoint."
@@ -1227,27 +1249,15 @@ def _infer_outcome_semantics(
                 f"for one another when using '{outcome_name}'."
             ),
         }
-    if any(term in question for term in ("28-day mortality", "28 day mortality", "28天死亡", "28 天死亡")) or outcome in {
-        "death_28d",
-        "mortality_28d",
-    }:
+    named = _NAMED_HORIZON_OUTCOMES.get(outcome)
+    if stated or named is not None:
+        horizons = stated or (named,)
+        label = " or ".join(f"{horizon.adjective} mortality" for horizon in horizons)
         return {
-            "label": "28-day mortality",
-            "description": "Binary outcome flag operationalizing 28-day mortality for this analysis.",
-            "source_concept": "mortality_28d",
-            "substitution_note": (
-                "Do not silently substitute ICU, hospital, 28-day, or 30-day mortality "
-                f"for one another when using '{outcome_name}'."
-            ),
-        }
-    if any(term in question for term in ("30-day mortality", "30 day mortality", "30天死亡", "30 天死亡")) or outcome in {
-        "death_30d",
-        "mortality_30d",
-    }:
-        return {
-            "label": "30-day mortality",
-            "description": "Binary outcome flag operationalizing 30-day mortality for this analysis.",
-            "source_concept": "mortality_30d",
+            "label": label,
+            "description": f"Binary outcome flag operationalizing {label} for this analysis.",
+            "source_concept": horizons[0].semantic_key,
+            "horizons": horizons,
             "substitution_note": (
                 "Do not silently substitute ICU, hospital, 28-day, or 30-day mortality "
                 f"for one another when using '{outcome_name}'."
@@ -1328,6 +1338,9 @@ def _descriptor_endpoint_semantic_key(descriptor: ConceptDescriptor) -> Optional
     the shared prompt any benchmark-specific variable names.
     """
 
+    fixed = fixed_horizon_mortality_endpoint(str(descriptor.source_concept or ""))
+    if fixed is not None:
+        return f"mortality_{fixed.horizon_days}d"
     text = " ".join(
         [
             str(descriptor.source_concept or ""),
@@ -1348,10 +1361,9 @@ def _descriptor_endpoint_semantic_key(descriptor: ConceptDescriptor) -> Optional
         )
     ):
         return "hospital_mortality"
-    if any(token in text for token in ("28-day mortality", "28 day mortality", "28天死亡")):
-        return "mortality_28d"
-    if any(token in text for token in ("30-day mortality", "30 day mortality", "30天死亡")):
-        return "mortality_30d"
+    horizons = stated_mortality_horizons(text)
+    if horizons:
+        return horizons[0].semantic_key
     if any(token in text for token in ("length of stay", "length-of-stay")):
         return "length_of_stay"
     if "readmission" in text:
@@ -1360,16 +1372,18 @@ def _descriptor_endpoint_semantic_key(descriptor: ConceptDescriptor) -> Optional
 
 
 def _paired_fixed_horizon_endpoint(
-    target_outcome: str, descriptors: Sequence[ConceptDescriptor]
+    target_outcome: str,
+    descriptors: Sequence[ConceptDescriptor],
+    stated: Sequence[StatedHorizon] = (),
 ) -> Any:
     """The fixed-horizon mortality endpoint whose paired follow-up is in context.
 
     Event status by day *h* with its follow-up time censored at *h* is a
     time-to-event endpoint, so a survival question requests no other
-    definition of it.  Without the paired follow-up it is only a binary flag.
+    definition of it, unless it states another horizon (``stated``): survival
+    to day 28 is not the 90-day endpoint.  Without the paired follow-up it is
+    only a binary flag.
     """
-
-    from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
 
     # Named apart from the context's ``endpoint``: this reads the concept
     # vocabulary only and never fills the declared endpoint.
@@ -1378,7 +1392,24 @@ def _paired_fixed_horizon_endpoint(
         descriptor.name == horizon.followup_concept for descriptor in descriptors
     ):
         return None
+    if stated and not any(item.admits(horizon.horizon_days) for item in stated):
+        return None
     return horizon
+
+
+def _stated_horizon_is_the_owners(semantics: Dict[str, Any], descriptor: ConceptDescriptor) -> bool:
+    """Whether a mortality request states the owner's fixed horizon in other words.
+
+    "1-year mortality" asks for the 365-day endpoint and "3-month mortality"
+    for the 90-day one; the closed vocabulary owns the endpoint's horizon.
+    """
+
+    if semantics["source_concept"] == "time_to_event_endpoint":
+        return False
+    owner = fixed_horizon_mortality_endpoint(str(descriptor.source_concept or ""))
+    return owner is not None and any(
+        item.admits(owner.horizon_days) for item in semantics.get("horizons", ())
+    )
 
 
 def _enrich_target_outcome_descriptor(
@@ -1418,9 +1449,12 @@ def _enrich_target_outcome_descriptor(
         ):
             descriptor.source_concept = requested_semantic
         paired = (
-            _paired_fixed_horizon_endpoint(target_outcome, descriptors)
+            _paired_fixed_horizon_endpoint(target_outcome, descriptors, semantics["horizons"])
             if requested_semantic == "time_to_event_endpoint"
             else None
+        )
+        agrees = owner_semantic == requested_semantic or _stated_horizon_is_the_owners(
+            semantics, descriptor
         )
         # A question that leaves mortality unspecified, or names no endpoint
         # at all (a bare declared column), requests no definition; neither can
@@ -1428,7 +1462,7 @@ def _enrich_target_outcome_descriptor(
         if (
             owner_metadata_present
             and requested_semantic not in {"mortality_unspecified", "declared_primary_outcome"}
-            and owner_semantic != requested_semantic
+            and not agrees
             and paired is None
         ):
             explicit_note = (
