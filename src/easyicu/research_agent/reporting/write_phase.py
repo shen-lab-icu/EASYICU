@@ -1545,6 +1545,50 @@ def _place_host_claims_in_results(
     return claim_placement.scaffold
 
 
+def _place_host_claims_and_restore_structure(
+    pipeline: Any,
+    scaffold: str,
+    *,
+    evidence: Any,
+    per_step_records: Sequence[Dict[str, Any]],
+    plan: Optional[AnalysisPlan],
+    findings: List[ValidationFinding],
+) -> str:
+    """Place the run's host claims, then restore structure from the draft's prose.
+
+    A restored Conclusion reads the same claims, so it states every primary
+    estimate rather than the first token it meets.
+    """
+
+    claims = evidence.authoritative_scientific_claims(per_step_records)
+    scaffold = _place_host_claims_in_results(
+        scaffold,
+        claims=claims,
+        plan=plan,
+        findings=findings,
+    )
+    from .manuscript_quality import repair_reader_structure_from_existing_prose
+
+    scaffold, structural_repairs = repair_reader_structure_from_existing_prose(
+        scaffold, analysis_plan=plan, claims=claims,
+    )
+    if structural_repairs:
+        if pipeline._evidence_enforcement_mode is EvidenceEnforcementMode.STRICT:
+            evidence.enforce_evidence_bound_scaffold(scaffold, per_step_records=per_step_records)
+        findings.append(
+            ValidationFinding(
+                validator="manuscript_quality",
+                severity="warning",
+                message=(
+                    "Restored reader structure using only existing "
+                    "evidence-bound manuscript prose."
+                ),
+                detail={"repairs": list(structural_repairs)},
+            )
+        )
+    return scaffold
+
+
 def _draft_manuscript(
     pipeline: Any,
     *,
@@ -1967,31 +2011,14 @@ def _draft_manuscript(
     )
     if method_finding is not None:
         findings.append(method_finding)
-    scaffold = _place_host_claims_in_results(
+    scaffold = _place_host_claims_and_restore_structure(
+        pipeline,
         scaffold,
-        claims=evidence.authoritative_scientific_claims(per_step_records),
+        evidence=evidence,
+        per_step_records=per_step_records,
         plan=execute_result.plan,
         findings=findings,
     )
-    from .manuscript_quality import repair_reader_structure_from_existing_prose
-
-    scaffold, structural_repairs = repair_reader_structure_from_existing_prose(
-        scaffold, analysis_plan=execute_result.plan,
-    )
-    if structural_repairs:
-        if pipeline._evidence_enforcement_mode is EvidenceEnforcementMode.STRICT:
-            evidence.enforce_evidence_bound_scaffold(scaffold, per_step_records=per_step_records)
-        findings.append(
-            ValidationFinding(
-                validator="manuscript_quality",
-                severity="warning",
-                message=(
-                    "Restored reader structure using only existing "
-                    "evidence-bound manuscript prose."
-                ),
-                detail={"repairs": list(structural_repairs)},
-            )
-        )
     scaffold_path = run_dir / "manuscript_scaffold.md"
     scaffold_path.write_text(scaffold, encoding="utf-8")
     if evidence.get("manuscript_scaffold_raw") is None or scaffold.strip():
