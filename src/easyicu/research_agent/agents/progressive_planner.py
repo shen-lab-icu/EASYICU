@@ -65,6 +65,7 @@ from ..planning.planner_output_contract import (
 from ..planning.preplan_know_how import verify_know_how_decisions
 from ..planning.primary_result_contract import (
     families_requiring_family_result_contract,
+    family_result_stop_reason,
     validate_required_primary_result,
 )
 from ..planning.progressive_compiler import (
@@ -1292,6 +1293,26 @@ def _family_spec_fallback_reason(
     ):
         return "no_family_template_for_context"
     return None
+
+
+def _family_result_stop(
+    context: ResearchContext,
+    *,
+    families: Sequence[str],
+    planner_strategy: str,
+    planning_contract_context: str,
+    outline_selected: bool = False,
+) -> ProgressivePlanCompileError:
+    """Stop for families whose result contract Progressive v2 cannot write."""
+
+    templated = planner_strategy != FAMILY_SPEC_STRATEGY and family_template_id_for_context(
+        context, analysis_types=families, planning_contract_context=planning_contract_context,
+    ) is not None
+    reason, message = family_result_stop_reason(
+        families, template_strategy=FAMILY_SPEC_STRATEGY if templated else None,
+        outline_selected=outline_selected,
+    )
+    return ProgressivePlanCompileError(reason, message, path="analysis_type")
 
 
 def _accept_compiled_plan(
@@ -4420,10 +4441,11 @@ class ProgressivePlannerAgent:
             sealed_survival_suite=sealed_survival_suite,
         )
         if unwritable:
-            raise ProgressivePlanCompileError(
-                "progressive_family_result_contract_unwritable",
-                f"no host owner can write the primary result contract for {', '.join(unwritable)}",
-                path="analysis_type",
+            raise _family_result_stop(
+                context,
+                families=unwritable,
+                planner_strategy=planner_strategy,
+                planning_contract_context=planning_contract_context,
             )
         checkpoint_authorities = build_progressive_checkpoint_authorities(
             context=context,
@@ -4727,11 +4749,12 @@ class ProgressivePlannerAgent:
         # contract, stop without a retry that would re-read the question.
         unwritable = unwritable_outline_family(outline)
         if unwritable:
-            raise ProgressivePlanCompileError(
-                "progressive_family_result_contract_unwritable",
-                f"the outline selected {unwritable[0]}, whose primary result "
-                "contract no host owner can write",
-                path="analysis_type",
+            raise _family_result_stop(
+                context,
+                families=unwritable,
+                planner_strategy=planner_strategy,
+                planning_contract_context=planning_contract_context,
+                outline_selected=True,
             )
         self._validate_outline_authority(
             outline,
