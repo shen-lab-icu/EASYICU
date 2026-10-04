@@ -102,7 +102,9 @@ class SurvivalReporting(BaseModel):
     landmark_hours: float = Field(gt=0.0)
     contrast: str = Field(min_length=1)
     adjustment_columns: list[str]
-    adjusted_hazard_ratio: _HazardRatio
+    # Present exactly when the constant estimate is a result; an envelope
+    # signed before the PH fence may still carry it beside a rejected test.
+    adjusted_hazard_ratio: _HazardRatio | None = None
     constant_hazard_ratio_authorized: bool
     proportional_hazards_status: str = Field(min_length=1)
     proportional_hazards_test: ProportionalHazardsTestOutcome
@@ -117,6 +119,8 @@ class SurvivalReporting(BaseModel):
             raise ValueError(
                 "a constant hazard ratio is authorized exactly when the PH test does not reject"
             )
+        if self.constant_hazard_ratio_authorized and self.adjusted_hazard_ratio is None:
+            raise ValueError("an authorized constant hazard ratio must be reported")
         if self.proportional_hazards_status.startswith("violation_") != rejected:
             raise ValueError("the PH status contradicts the PH test outcome")
         if self.time_varying_adjusted_association.adjustment_columns != self.adjustment_columns:
@@ -188,6 +192,7 @@ def derive_survival_claim_payloads(summary: Mapping[str, Any]) -> list[dict[str,
 
     payloads: list[dict[str, Any]] = []
     if reporting.constant_hazard_ratio_authorized:
+        assert reporting.adjusted_hazard_ratio is not None
         payloads.append(association(
             CONSTANT_HAZARD_RATIO_CLAIM_ID, reporting.adjusted_hazard_ratio,
             estimand="adjusted hazard ratio over the post-landmark follow-up",

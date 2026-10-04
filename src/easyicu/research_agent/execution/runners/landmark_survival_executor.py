@@ -1275,6 +1275,23 @@ def run_landmark_survival_suite(
                 "landmark survival time-varying result lacks every exposure interval"
             )
 
+    # When the prespecified PH test rejects, the constant hazard ratio is not a
+    # result: it stays a diagnostic row of the Cox table and never becomes a
+    # summary leaf, which would make it bindable in the manuscript.
+    constant_hazard_ratio = (
+        {}
+        if ph_violation
+        else {
+            "hazard_ratio": float(primary_row["hazard_ratio"]),
+            "ci_low": float(primary_row["ci_low"]),
+            "ci_high": float(primary_row["ci_high"]),
+        }
+    )
+    constant_hazard_ratio_envelope = (
+        {"adjusted_hazard_ratio": dict(constant_hazard_ratio)}
+        if constant_hazard_ratio
+        else {}
+    )
     reportable_survival_results = None
     if rmst_table is not None and exposure_intervals is not None:
         rmst_row = rmst_table.iloc[0]
@@ -1289,11 +1306,7 @@ def run_landmark_survival_suite(
             "landmark_hours": float(sealed.landmark_hours),
             "contrast": str(rmst_row["contrast"]),
             "adjustment_columns": list(sealed.adjustment_columns),
-            "adjusted_hazard_ratio": {
-                "hazard_ratio": float(primary_row["hazard_ratio"]),
-                "ci_low": float(primary_row["ci_low"]),
-                "ci_high": float(primary_row["ci_high"]),
-            },
+            **constant_hazard_ratio_envelope,
             "constant_hazard_ratio_authorized": not ph_violation,
             "proportional_hazards_status": ph_status,
             "proportional_hazards_test": {
@@ -1382,9 +1395,7 @@ def run_landmark_survival_suite(
         "contrast": (
             f"{sealed.exposed_group_label} versus {sealed.comparator_group_label}"
         ),
-        "hazard_ratio": float(primary_row["hazard_ratio"]),
-        "ci_low": float(primary_row["ci_low"]),
-        "ci_high": float(primary_row["ci_high"]),
+        **constant_hazard_ratio,
         "ph_global_p_value": global_p,
         "ph_exposure_p_value": exposure_p,
         "ph_status": ph_status,
@@ -1446,9 +1457,15 @@ def run_landmark_survival_suite(
         "contrast": (
             f"{sealed.exposed_group_label} versus {sealed.comparator_group_label}"
         ),
-        "hazard_ratio": float(primary_row["hazard_ratio"]),
-        "hazard_ratio_ci_low": float(primary_row["ci_low"]),
-        "hazard_ratio_ci_high": float(primary_row["ci_high"]),
+        **(
+            {
+                "hazard_ratio": constant_hazard_ratio["hazard_ratio"],
+                "hazard_ratio_ci_low": constant_hazard_ratio["ci_low"],
+                "hazard_ratio_ci_high": constant_hazard_ratio["ci_high"],
+            }
+            if constant_hazard_ratio
+            else {}
+        ),
         "proportional_hazards_status": ph_status,
         "non_ph_alternative": sealed.non_ph_alternative,
         "time_varying_effect_method": sealed.time_varying_effect_method,

@@ -709,11 +709,20 @@ def _render_writer_evidence_digest(
                 value = summary.get(key)
                 if isinstance(value, str) and value.strip():
                     digest_row[key] = value
+        reportable_survival = summary.get("reportable_survival_results")
+        survival_projection_authorized = _survival_reporting_is_authorized(
+            record=record,
+            summary=summary,
+            payload=reportable_survival,
+            evidence=evidence,
+        )
         for key in () if formal_rejection else WRITER_DIGEST_PREFERRED_KEYS:
+            # With non-proportional hazards the owner's interval and RMST block
+            # is the result; a generic effect key would pick up one of its
+            # nested intervals (or a withheld constant estimate) as a headline.
             if (
-                has_panel_primary
-                and key in _PRIMARY_EFFECT_DIGEST_KEYS_WHEN_PANEL_PRESENT
-            ):
+                has_panel_primary or survival_projection_authorized
+            ) and key in _PRIMARY_EFFECT_DIGEST_KEYS_WHEN_PANEL_PRESENT:
                 continue
             scalar = _preferred_writer_scalar(summary, key)
             if scalar is not None:
@@ -768,13 +777,7 @@ def _render_writer_evidence_digest(
             digest_row["reportable_secondary_results"] = dict(
                 reportable_secondary
             )
-        reportable_survival = summary.get("reportable_survival_results")
-        if _survival_reporting_is_authorized(
-            record=record,
-            summary=summary,
-            payload=reportable_survival,
-            evidence=evidence,
-        ):
+        if survival_projection_authorized:
             # Non-proportional hazards make the constant Cox coefficient an
             # invalid headline. Keep the owner-issued absolute-time and
             # interval-specific alternatives together and ahead of the
