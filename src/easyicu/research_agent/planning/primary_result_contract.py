@@ -141,6 +141,34 @@ def families_requiring_family_result_contract(
     return families if all(family in required for family in families) else ()
 
 
+def family_result_stop_reason(
+    families: Sequence[str],
+    *,
+    template_strategy: str | None,
+    outline_selected: bool = False,
+) -> tuple[str, str]:
+    """The typed reason and message for stopping before an unwritable family result.
+
+    ``template_strategy`` names the planner strategy that plans these families
+    from a host template (a survival question with a proposable landmark
+    suite) when the run's own strategy does not use it.  Only without one does
+    no host owner write the contract.
+    """
+
+    named = ", ".join(families)
+    lead = f"the outline selected {named}; " if outline_selected else ""
+    if template_strategy is not None:
+        return (
+            "progressive_family_template_required",
+            f"{lead}the host template that writes the primary result contract for "
+            f"{named} is planned only by the {template_strategy} strategy",
+        )
+    return (
+        "progressive_family_result_contract_unwritable",
+        f"{lead}no host owner can write the primary result contract for {named}",
+    )
+
+
 def validate_required_primary_result(
     *,
     plan: AnalysisPlan,
@@ -420,6 +448,7 @@ def family_primary_result_execution_guide(step: AnalysisStep) -> str:
 __all__ = [
     "FAMILY_RESULT_CONTRACT_FAMILIES",
     "families_requiring_family_result_contract",
+    "family_result_stop_reason",
     "family_primary_result_execution_guide",
     "model_terms_retry_guide",
     "primary_result_contract_guide",

@@ -9,7 +9,10 @@ question therefore spent the whole planning budget -- outline, steps, bounded
 suffix repairs -- and failed only at final acceptance.  The planner now stops
 with ``progressive_family_result_contract_unwritable``: before its first Provider
 call when every candidate family needs that contract, and otherwise as soon as
-the outline selects such a family, without retrying the choice.
+the outline selects such a family, without retrying the choice.  When the
+family-spec strategy has a host template for the family (a survival question
+with a proposable landmark suite), an owner exists that Progressive v2 does
+not use, and the stop says so with ``progressive_family_template_required``.
 Synthetic contexts only.
 """
 
@@ -25,6 +28,7 @@ from easyicu.research_agent.agents.progressive_planner import (
     ProgressivePlannerAgent,
     candidate_analysis_types,
 )
+from easyicu.research_agent.planning.family_spec import family_template_id_for_context
 from easyicu.research_agent.planning.family_spec.request import (
     SEALED_SURVIVAL_SUITE_MARKER,
 )
@@ -49,8 +53,10 @@ from tests.research_agent.planning.progressive_planner_fixtures import (
     _materialization_payloads,
     _outline_payload,
 )
+from tests.support.survival_proposal import survival_context
 
 UNWRITABLE = "progressive_family_result_contract_unwritable"
+TEMPLATE_REQUIRED = "progressive_family_template_required"
 QUESTIONS = {
     "causal_inference": (
         "Among adult ICU stays, what is the effect of a higher first-24 h injury stage "
@@ -109,6 +115,26 @@ def test_a_family_result_no_owner_can_write_stops_before_the_provider(family, st
     assert stopped.details["owner"] == "easyicu.planning.progressive_compiler_v1"
     assert stopped.path == "analysis_type"
     assert llm.calls == []
+
+
+def test_a_survival_question_a_family_template_can_plan_names_that_strategy():
+    # The host can propose a landmark survival suite for this cohort, so the
+    # family-spec strategy plans the question from its template.
+    context = survival_context(research_question=QUESTIONS["survival"])
+    assert candidate_analysis_types(context) == ("survival",)
+    assert family_template_id_for_context(context, analysis_types=("survival",)) is not None
+
+    llm, stopped = _plan(context, strategy="progressive_v2")
+
+    assert isinstance(stopped, ProgressivePlanCompileError)
+    assert stopped.reason_code == TEMPLATE_REQUIRED
+    assert stopped.path == "analysis_type"
+    assert FAMILY_SPEC_STRATEGY in str(stopped)
+    assert llm.calls == []
+
+    routed_llm, routed = _plan(context)
+    assert getattr(routed, "reason_code", None) not in {UNWRITABLE, TEMPLATE_REQUIRED}
+    assert routed_llm.calls
 
 
 def test_a_question_with_another_executable_family_still_reaches_the_planner():
