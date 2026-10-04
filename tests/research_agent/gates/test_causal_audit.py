@@ -168,6 +168,31 @@ def test_causal_language_over_overclaimed_triggers_error(ra):
     assert hits[0].severity == "error"
 
 
+def test_a_bound_citation_still_links_its_overclaimed_effect(ra):
+    """The write phase scans the bound manuscript, where a placeholder is a link."""
+
+    labels = [
+        ra.EffectLabel(
+            evidence_id="primary_association_tmle",
+            artefact_path="tmle.json",
+            estimand="risk_difference",
+            label="causal_overclaimed",
+            rationale="missing supports",
+            identification_strategy="tmle",
+            missing_supports=["dag"],
+        )
+    ]
+    bound = (
+        "SOFA-2 directly causes ICU mortality [primary_association_tmle]"
+        '(evidence/primary_association_tmle__tmle.json "sha256=0123abcd").'
+    )
+    hits = ra.scan_manuscript_for_causal_language(
+        bound_manuscript=bound, effect_labels=labels,
+    )
+    assert [hit.severity for hit in hits] == ["error"]
+    assert hits[0].linked_evidence_ids == ["primary_association_tmle"]
+
+
 def test_causal_language_over_explicit_is_silent(ra):
     labels = [
         ra.EffectLabel(

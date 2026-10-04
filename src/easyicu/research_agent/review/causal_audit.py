@@ -29,9 +29,13 @@ Policy
    are themselves bound to an ``associational`` effect trigger a
    ``warning``. Matches against sentences bound to a
    ``causal_overclaimed`` effect trigger an ``error`` that blocks the
-   bound manuscript from being marked final. A word inside a disclaimer
-   ("an association, not a causal effect", "cannot support causal
-   inference") states the opposite of a causal claim and is not a hit.
+   bound manuscript from being marked final. The bare word ``causal``
+   inside a disclaimer ("an association, not a causal effect", "cannot
+   support causal inference") states the opposite of a causal claim and
+   is not a hit. A verb or phrase ("caused", "attributable to", "effect
+   of") is a hit even beside a negation: "not attributable to X but to Y"
+   still attributes. Only "effect of" as the noun of a disclaimed
+   "causal" ("no causal effect of X can be inferred") goes with it.
 
 3. **Optional hook for DoWhy / causallib / EconML.** The module does
    not import any causal library. A user / skill may attach an
@@ -77,43 +81,73 @@ _CAUSAL_PATTERNS: Tuple[Tuple[str, str], ...] = (
 )
 
 
-# A negation or contrast cue governs a causal word when it precedes the word
-# in the same clause, within a few words: "not causal", "rather than a causal
-# effect", "should not be interpreted as causal", "without ... as a causal".
-_DISCLAIMER_CUE_RE = re.compile(
-    r"\b(?:not|no|non|never|cannot|without|neither|nor|rather than|instead of)\b"
-    r"|n['’]t\b",
+# Only the word that names causality itself can sit inside a disclaimer: "not
+# causal", "cannot establish a causal relationship", "rather than a causal
+# effect", "causal inference is not possible".  A verb or phrase pattern
+# ("caused", "attributable to", "effect of", "leads to") states a mechanism even
+# beside a negation -- "not attributable to X but to Y", "neither age nor sex
+# modified the effect of" -- so a negation alone never exempts it.
+_DISCLAIMABLE_WORD_RE = re.compile(r"caus(?:al(?:ly|ity)?|ation)", re.IGNORECASE)
+_NEGATION_CUE_RE = re.compile(
+    r"\b(?:not|no|non|never|cannot|without|neither|nor)\b|n['’]t\b",
     re.IGNORECASE,
 )
-# "not only causes" and "no doubt ... caused" assert, they do not disclaim.
+# A contrast cue disclaims only the short phrase it introduces ("rather than a
+# causal effect"); the side it contrasts with is asserted ("causal rather than
+# associational", "rather than being confounded the estimate is causal").
+_CONTRAST_CUE_RE = re.compile(
+    r"\b(?:rather\s+than|instead\s+of)(?:\s+\S+){0,3}\s*$", re.IGNORECASE
+)
+# "not only causal" and "no doubt ... causal" assert, they do not disclaim.
 _ASSERTING_NEGATION_RE = re.compile(
     r"\bnot (?:only|just|merely)\b|\b(?:no|without(?: a)?) (?:doubt|question)\b",
     re.IGNORECASE,
 )
+# "and", "but", "whereas" and "while" begin a new assertion: "not X but Y",
+# "is not explained by X and is causal".
 _CLAUSE_BREAK_RE = re.compile(
-    r"[,;:()\[\]]|\b(?:but|however|whereas|although|though|while|yet)\b",
+    r"[,;:()\[\]]|\b(?:and|but|however|whereas|although|though|while|yet)\b",
     re.IGNORECASE,
 )
 _DISCLAIMER_WINDOW_WORDS = 8
 # The same disclaimer written the other way round: "causal inference is not
-# possible", "causal conclusions cannot be drawn".
+# possible", "causal conclusions cannot be drawn".  The negated predicate must
+# deny that a causal claim is made or supported; "the causal effect was not
+# attenuated" still asserts the effect.
 _TRAILING_DISCLAIMER_RE = re.compile(
     r"\s+(?:inferences?|interpretations?|conclusions?|claims?|effects?|"
-    r"relationships?|links?)\s+(?:cannot|(?:is|are|was|were|can|could|should|"
-    r"may|might|must|will|would)\s+not)\b",
+    r"relationships?|links?)\s+(?:cannot|(?:is|are|was|were|can|could|"
+    r"should|may|might|must|will|would)\s+not)\s+(?:be\s+)?(?:possible|drawn|"
+    r"made|inferred|established|demonstrated|shown|proven|proved|supported|"
+    r"warranted|justified|implied|assumed|claimed|concluded|determined|"
+    r"confirmed|identified|estimated|appropriate)\b",
     re.IGNORECASE,
 )
 
 
+# "no causal effect of X": the phrase is the noun the disclaimed word modifies.
+_MODIFYING_CAUSAL_WORD_RE = re.compile(r"\b(caus(?:al|ation))\s+$", re.IGNORECASE)
+
+
 def _disclaimed(sentence: str, match: "re.Match[str]") -> bool:
-    """Whether the causal word at ``match`` sits inside a disclaimer."""
+    """Whether the bare causal word at ``match`` sits inside a disclaimer.
+
+    A phrase pattern is disclaimed only as the noun of a disclaimed causal
+    word ("cannot estimate the causal effect of"), never by a negation alone.
+    """
+    if not _DISCLAIMABLE_WORD_RE.fullmatch(match.group(0)):
+        modifier = _MODIFYING_CAUSAL_WORD_RE.search(sentence, 0, match.start())
+        if modifier is None or match.group(0).lower() != "effect of":
+            return False
+        word = _DISCLAIMABLE_WORD_RE.match(sentence, modifier.start(1))
+        return word is not None and _disclaimed(sentence, word)
     clause = _CLAUSE_BREAK_RE.split(sentence[: match.start()])[-1]
     window = " ".join(clause.split()[-_DISCLAIMER_WINDOW_WORDS:])
-    if _DISCLAIMER_CUE_RE.search(_ASSERTING_NEGATION_RE.sub(" ", window)):
+    if _NEGATION_CUE_RE.search(_ASSERTING_NEGATION_RE.sub(" ", window)):
         return True
-    return match.group(0).lower() == "causal" and bool(
-        _TRAILING_DISCLAIMER_RE.match(sentence, match.end())
-    )
+    if _CONTRAST_CUE_RE.search(window):
+        return True
+    return bool(_TRAILING_DISCLAIMER_RE.match(sentence, match.end()))
 
 
 # Evidence-metadata flag that a skill / user can set to declare the step
@@ -393,7 +427,12 @@ def label_effects(
 
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?。！？])\s+")
-_EVIDENCE_ID_RE = re.compile(r"\{evidence:([^}]+)\}")
+# A sentence cites its evidence as a ``{evidence:<id>}`` placeholder before
+# binding and as the compact ``[<id>](evidence/...)`` link after it.  The
+# write phase scans the bound manuscript, so both must link the effect.
+_EVIDENCE_ID_RE = re.compile(
+    r"\{evidence:([^}]+)\}|\[([^\[\]\s|]+)\]\(evidence/[^)\s]*"
+)
 
 
 def _iter_sentences(text: str) -> Iterable[str]:
@@ -413,7 +452,9 @@ def scan_manuscript_for_causal_language(
     label_by_id = {e.evidence_id: e.label for e in effect_labels}
     hits: List[CausalLanguageHit] = []
     for sentence in _iter_sentences(bound_manuscript):
-        linked_ids = _EVIDENCE_ID_RE.findall(sentence)
+        linked_ids = [
+            placeholder or link for placeholder, link in _EVIDENCE_ID_RE.findall(sentence)
+        ]
         for pattern, strength in _CAUSAL_PATTERNS:
             if all(
                 _disclaimed(sentence, match)
