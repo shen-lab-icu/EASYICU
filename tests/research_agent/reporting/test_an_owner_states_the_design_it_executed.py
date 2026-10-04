@@ -6,7 +6,9 @@ grammar admits a numeric design detail only as an exact host fact, so a
 manuscript either lost the executed grid or restated the context window as
 the analysis window.  Owners now seal an ``executed_method_design`` block; the
 host renders it as an exact Methods fact bound to that owner's summary, and
-the Writer's method boundary carries it.  Synthetic designs only.
+the Writer's method boundary carries it.  Prose that names a window states
+only one the executed grid ran on: a run-context window cited as the
+analysis window is removed.  Synthetic designs only.
 """
 
 from __future__ import annotations
@@ -120,6 +122,7 @@ def test_the_wording_follows_the_design_it_is_given(tmp_path) -> None:
     assert "for 2, 4 and 6 classes" in model.text
 
 
+
 def test_a_design_names_the_evidence_its_windows_count_on(tmp_path) -> None:
     """A window counts on an available SOFA-2 score, not on any observation."""
 
@@ -160,6 +163,62 @@ def test_a_design_statement_cannot_be_forged(tmp_path, forged) -> None:
         store.enforce_evidence_bound_scaffold(
             "## Methods\n\n### Variables\n\n" + forged(panel.scaffold)
         )
+
+
+def _discussion(window: str, evidence_id: str = "00_panel_summary") -> str:
+    return (
+        f"SOFA-2 scores were summarized within the {window} "
+        f"{{evidence:{evidence_id}}}."
+    )
+
+
+@pytest.mark.parametrize(
+    ("stated", "executed"),
+    [
+        ("prespecified 0–24-hour observation window", "prespecified 0–48-hour observation window"),
+        ("zero-to-24-hour observation window", "zero-to-48-hour observation window"),
+        ("observation window of the first 24 hours", "observation window of the first 48 hours"),
+        ("admission-to-24-hour window", "8–16-hour window"),
+        ("prespecified 24-hour window", "prespecified 8-hour windows"),
+    ],
+    ids=["range", "zero_to", "first_hours", "admission_to", "window_length"],
+)
+def test_prose_names_only_a_window_the_executed_grid_ran_on(tmp_path, stated, executed) -> None:
+    store = _store(tmp_path, {"00_panel": PANEL})
+    ledger = [{"step_id": "00_panel", "status": "ok", "evidence_ids": ["00_panel_summary"]}]
+
+    _safe, removed = store.enforce_evidence_bound_scaffold(
+        f"## Discussion\n\n{_discussion(executed)}\n", per_step_records=ledger,
+    )
+    assert not removed
+    with pytest.raises(EvidenceEnforcementError) as caught:
+        store.enforce_evidence_bound_scaffold(
+            f"## Discussion\n\n{_discussion(stated)}\n", per_step_records=ledger,
+        )
+    assert caught.value.detail["removed_sentences"] == [_discussion(stated)]
+
+
+def test_a_stated_duration_and_a_run_without_a_time_grid_keep_their_words(tmp_path) -> None:
+    store = _store(tmp_path / "grid", {"00_panel": PANEL})
+    ledger = [{"step_id": "00_panel", "status": "ok", "evidence_ids": ["00_panel_summary"]}]
+    duration = (
+        "Stays ending within 24 hours of ICU admission contributed fewer windows "
+        "{evidence:00_panel_summary}."
+    )
+    _safe, removed = store.enforce_evidence_bound_scaffold(
+        f"## Discussion\n\n{duration}\n", per_step_records=ledger,
+    )
+    assert not removed
+
+    model_only = _store(tmp_path / "model", {"01_candidates": MODEL})
+    sentence = _discussion("prespecified 0–24-hour observation window", "01_candidates_summary")
+    _safe, removed = model_only.enforce_evidence_bound_scaffold(
+        f"## Discussion\n\n{sentence}\n",
+        per_step_records=[
+            {"step_id": "01_candidates", "status": "ok", "evidence_ids": ["01_candidates_summary"]}
+        ],
+    )
+    assert not removed
 
 
 def test_the_design_form_is_reserved_outside_methods_too(tmp_path) -> None:

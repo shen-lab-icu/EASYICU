@@ -36,7 +36,11 @@ from easyicu.research_agent.contracts.executed_method_design import (
     validate_executed_method_design,
 )
 from easyicu.research_agent.authority.manuscript_claim_policy import filter_evidence_bound_scaffold
-from easyicu.research_agent.authority.manuscript_method_facts import _design_text
+from easyicu.research_agent.authority.manuscript_method_facts import (
+    ManuscriptMethodFact,
+    _design_text,
+    _executed_hour_spans,
+)
 from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 from easyicu.research_agent.reporting.manuscript_sections import MANUSCRIPT_SECTION_SPECS
 from tests.support.survival_sealed import run_signed_suite, sealed_survival, synthetic_survival_rows
@@ -189,6 +193,33 @@ def test_the_gate_keeps_the_worded_choice_and_deletes_the_numbered_one():
 
     assert result.removed_result_sentences == (numbered,)
     assert worded in result.scaffold
+
+
+def test_prose_names_only_the_landmark_and_exposure_windows():
+    design = validate_executed_method_design(BASE)
+    assert _executed_hour_spans(design) == ((0.0, 24.0), (0.0, 6.0), (6.0, 24.0))
+    fact = ManuscriptMethodFact(
+        source_field=f"{STEP}.{EXECUTED_METHOD_DESIGN_KEY}", text=_design_text(design),
+        source_sha256="0" * 64, evidence_id=EVIDENCE,
+        executed_hour_spans=_executed_hour_spans(design),
+    )
+    landmark = (
+        "Covariates were taken from the window of the first 24 hours "
+        f"{{evidence:{EVIDENCE}}}."
+    )
+    other = (
+        "Covariates were taken from the window of the first 48 hours "
+        f"{{evidence:{EVIDENCE}}}."
+    )
+
+    result = filter_evidence_bound_scaffold(
+        f"## Discussion\n\n{landmark}\n\n{other}\n",
+        resolve_claim=lambda ref: None, resolve_evidence=lambda ref: ref == EVIDENCE,
+        method_facts=(fact,),
+    )
+
+    assert result.removed_result_sentences == (other,)
+    assert landmark in result.scaffold
 
 
 @pytest.mark.parametrize(

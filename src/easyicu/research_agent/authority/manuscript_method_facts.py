@@ -66,6 +66,9 @@ class ManuscriptMethodFact:
     text: str
     source_sha256: str
     evidence_id: str = "research_context"
+    #: The windows an executed time design ran on, each (start, end) in hours
+    #: from its time origin; reader prose may state a window only as one of them.
+    executed_hour_spans: tuple[tuple[float, float], ...] = ()
 
     @property
     def scaffold(self) -> str:
@@ -95,6 +98,31 @@ def _window_text(value: str) -> str:
 
 def _reader_anchor(anchor: str) -> str:
     return " ".join("ICU" if word == "icu" else word for word in anchor.split("_"))
+
+
+def _executed_hour_spans(design: object) -> tuple[tuple[float, float], ...]:
+    """The windows a design ran on: its whole grid and each grid window, or the
+    landmark, the prevalent-exposure and the exposure windows.  A class model
+    runs on no time window."""
+
+    if isinstance(design, FixedWindowRepresentationDesign):
+        start, width = design.window_start_hours, design.window_width_hours
+        cells = tuple(
+            (float(start + index * width), float(start + (index + 1) * width))
+            for index in range(design.n_windows)
+        )
+        return tuple(dict.fromkeys((
+            (float(design.window_start_hours), float(design.window_end_hours)), *cells,
+        )))
+    if isinstance(design, LandmarkSurvivalDesign):
+        cutoff = float(design.prevalent_exposure_cutoff_hours)
+        return tuple(dict.fromkeys((
+            (0.0, float(design.landmark_hours)),
+            (0.0, float(design.exposure_window_end_hours)),
+            *(((0.0, cutoff),) if cutoff > 0 else ()),
+            (cutoff, float(design.exposure_window_end_hours)),
+        )))
+    return ()
 
 
 def _design_text(design: object) -> str:
@@ -233,6 +261,7 @@ def _executed_design_facts(
                 text=_design_text(design),
                 source_sha256=record.sha256,
                 evidence_id=record.evidence_id,
+                executed_hour_spans=_executed_hour_spans(design),
             )
         )
     return facts
