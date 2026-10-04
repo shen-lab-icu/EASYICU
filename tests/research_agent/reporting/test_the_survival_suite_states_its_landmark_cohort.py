@@ -172,6 +172,28 @@ def test_a_cohort_the_models_kept_whole_is_stated_once(tmp_path):
     assert fact.source_fields == ("n_landmark_population",)
 
 
+def test_a_first_stay_suite_states_its_cohort_in_its_own_unit(tmp_path):
+    """A first-ICU-stay cohort is stated, not refused.
+
+    Its unit label used to be "First ICU stays (one per patient)", which the
+    reader-noun-phrase grammar refuses, so every first-stay survival study
+    raised in the write phase after its paid execution.
+    """
+
+    _context, authority = sealed_survival(tmp_path, cohort={"exclude_readmissions": True})
+    assert authority.analysis_unit_label == "first ICU stays"
+    summary = json.loads(json.dumps(run_signed_suite(authority, synthetic_survival_rows(), tmp_path / "out")))
+    store, records = _registered(tmp_path, summary)
+
+    fact, modelled = _compile_survival_cohort_report_facts(records, store)
+
+    assert fact.text == (
+        f"The landmark analysis cohort included {summary['n_landmark_population']:,} first ICU stays"
+    )
+    assert modelled.text == _modelled_text(summary)
+    assert " first ICU stays in the landmark analysis cohort, " in modelled.text
+
+
 def test_the_shared_report_admission_carries_the_landmark_cohort(tmp_path, monkeypatch):
     """The full write and the report-only repair admit facts through one owner."""
 

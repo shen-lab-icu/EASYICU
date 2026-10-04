@@ -21,6 +21,7 @@ from easyicu.research_agent.orchestration.scientific_runtime import (
 from easyicu.research_agent.planning.sensitivity_authority import (
     PrespecifiedSensitivitySpec,
 )
+from easyicu.research_agent.reporting.descriptive_report_facts import is_reader_noun_phrase
 from easyicu.webserver.landmark_survival_runtime_projection import (
     compile_landmark_survival_runtime_projection,
 )
@@ -153,8 +154,11 @@ def test_a_first_stay_cohort_names_its_unit_one_stay_per_patient(tmp_path):
     label = lambda projection: load_current_case_scientific_runtime_authority(  # noqa: E731
         projection.authority
     ).analysis_unit_label
-    assert label(first_stay) == "First ICU stays (one per patient)"
+    assert label(first_stay) == "first ICU stays"
     assert label(every_stay) == "ICU stays"
+    # Both read as the unit the cohort fact and the claims name after a count.
+    assert is_reader_noun_phrase(label(first_stay))
+    assert is_reader_noun_phrase(label(every_stay))
 
 
 def test_sealed_survival_endpoint_and_exposure_bind_the_run_coordinates(tmp_path):

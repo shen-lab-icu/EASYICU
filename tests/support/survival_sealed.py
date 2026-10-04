@@ -95,6 +95,7 @@ def sealed_survival(
     *,
     review_only_specs: tuple[dict, ...] = (),
     unevenly_measured: str | None = None,
+    cohort: dict | None = None,
 ):
     """The signed authority and the sealed replan context.
 
@@ -105,6 +106,9 @@ def sealed_survival(
     """
 
     study = {**STUDY, **reviewed_patch()}
+    if cohort is not None:
+        # ``cohort`` amends the reviewed population (e.g. first ICU stays only).
+        study["cohort"] = {**dict(study.get("cohort") or {}), **cohort}
     specs = normalize_prespecified_sensitivities(study["sensitivity_specs"])
     onset = survival_exposure_onset_column(study, sensitivity_specs=specs, primary_exposure_source="rrt")
     columns = _metadata_planning_operationalized_columns(

@@ -16,6 +16,17 @@ from ..contracts.primary_cohort import STUDY_POPULATION_PRODUCTS
 from ..contracts.descriptive_execution import exposure_outcome_distribution_result_receipt_valid
 from ..authority.scientific_claims import ScientificClaim
 
+#: A host-issued unit a fact sentence may name after its count ("ICU stays",
+#: "first ICU stays"): letters, spaces and hyphens only, so no number,
+#: placeholder or markup can enter the sentence through it.
+_READER_NOUN_PHRASE = re.compile(r"[A-Za-z][A-Za-z -]{0,60}[A-Za-z]")
+
+
+def is_reader_noun_phrase(text: str) -> bool:
+    """Whether ``text`` may follow a count in a host fact sentence."""
+
+    return _READER_NOUN_PHRASE.fullmatch(" ".join(str(text).split())) is not None
+
 
 @dataclass(frozen=True)
 class DescriptiveReportFact:
@@ -291,7 +302,7 @@ def _compile_survival_cohort_report_facts(projected, evidence):
         if "n_source" in source and _count(source["n_source"], positive=True) < population:
             raise ValueError("Survival landmark population exceeds its source cohort")
         unit = " ".join(reporting.analysis_unit.split())
-        if re.fullmatch(r"[A-Za-z][A-Za-z -]{0,60}[A-Za-z]", unit) is None:
+        if not is_reader_noun_phrase(unit):
             raise ValueError("Survival analysis unit is not a reader noun phrase")
         record = evidence.get(source_id)
         if record is None or record.produced_by_step != row.get("step_id"):
