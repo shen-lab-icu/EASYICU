@@ -19,7 +19,14 @@ from __future__ import annotations
 import math
 from typing import Annotated, Any, Literal, Mapping, Union
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    model_serializer,
+    model_validator,
+)
 
 RULE_OUTCOMES_KEY = "reportable_rule_outcomes"
 RULE_OUTCOME_SCHEMA_VERSION = "easyicu.prespecified_rule_outcome/1"
@@ -170,6 +177,20 @@ class ObservedWindowEligibilityOutcome(_RuleOutcome):
     input_n: int = Field(gt=0)
     included_n: int = Field(ge=0)
     excluded_n: int = Field(ge=0)
+    #: What makes a window count.  The representation owner counts a window
+    #: when any SOFA-2 coordinate has an owner-available value in it, directly
+    #: observed or carried forward by the SOFA-2 owner; other coordinates do
+    #: not count.  An envelope written before this field omits it.
+    window_evidence: Literal["any_available_sofa2_score"] | None = None
+
+    @model_serializer(mode="wrap")
+    def _preserve_unstated_window_evidence(self, handler):
+        payload = handler(self)
+        if self.window_evidence is None:
+            # A registered claim embeds the envelope as written; an envelope
+            # that never stated its window evidence replays without the key.
+            payload.pop("window_evidence", None)
+        return payload
 
     @model_validator(mode="after")
     def _grid_and_counts_close(self) -> "ObservedWindowEligibilityOutcome":
@@ -198,19 +219,33 @@ class ObservedWindowEligibilityOutcome(_RuleOutcome):
         )
 
     def result_sentence(self) -> str:
+        if self.window_evidence is None:
+            return (
+                f"Of {_reader_count(self.input_n)} records in the study cohort, "
+                f"{_reader_count(self.included_n)} had at least "
+                f"{self.minimum_observed_windows} of the {self.n_windows} prespecified "
+                f"{self.window_width_hours}-hour windows from {self._span()} observed "
+                f"and entered the class model; {_reader_count(self.excluded_n)} were "
+                "excluded."
+            )
         return (
             f"Of {_reader_count(self.input_n)} records in the study cohort, "
-            f"{_reader_count(self.included_n)} had at least "
-            f"{self.minimum_observed_windows} of the {self.n_windows} prespecified "
-            f"{self.window_width_hours}-hour windows from {self._span()} observed "
-            f"and entered the class model; {_reader_count(self.excluded_n)} were "
-            "excluded."
+            f"{_reader_count(self.included_n)} had at least one SOFA-2 score "
+            f"available in at least {self.minimum_observed_windows} of the "
+            f"{self.n_windows} prespecified {self.window_width_hours}-hour windows "
+            f"from {self._span()} and entered the class model; "
+            f"{_reader_count(self.excluded_n)} were excluded."
         )
 
     def conclusion_sentence(self) -> str:
+        if self.window_evidence is None:
+            return (
+                "Class membership was estimated only for records meeting the "
+                "prespecified observed-window rule."
+            )
         return (
-            "Class membership was estimated only for records meeting the "
-            "prespecified observed-window rule."
+            "Class membership was estimated only for records with at least one "
+            "SOFA-2 score available in the prespecified minimum number of windows."
         )
 
 

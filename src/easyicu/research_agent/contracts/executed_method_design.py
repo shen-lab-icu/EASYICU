@@ -13,7 +13,14 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    model_serializer,
+    model_validator,
+)
 
 EXECUTED_METHOD_DESIGN_KEY = "executed_method_design"
 EXECUTED_METHOD_DESIGN_SCHEMA_VERSION = "easyicu.executed_method_design/1"
@@ -36,6 +43,17 @@ class FixedWindowRepresentationDesign(_ExecutedDesign):
     n_windows: int = Field(ge=1)
     window_aggregation: Literal["max"]
     minimum_observed_windows: int = Field(ge=1)
+    #: What makes a window count toward the minimum: any SOFA-2 coordinate with
+    #: an owner-available value, directly observed or carried forward by the
+    #: SOFA-2 owner.  A design written before this field omits it.
+    window_evidence: Literal["any_available_sofa2_score"] | None = None
+
+    @model_serializer(mode="wrap")
+    def _preserve_unstated_window_evidence(self, handler):
+        payload = handler(self)
+        if self.window_evidence is None:
+            payload.pop("window_evidence", None)
+        return payload
 
     @model_validator(mode="after")
     def _grid_tiles_the_window(self) -> "FixedWindowRepresentationDesign":

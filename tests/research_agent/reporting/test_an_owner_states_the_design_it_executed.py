@@ -120,6 +120,30 @@ def test_the_wording_follows_the_design_it_is_given(tmp_path) -> None:
     assert "for 2, 4 and 6 classes" in model.text
 
 
+def test_a_design_names_the_evidence_its_windows_count_on(tmp_path) -> None:
+    """A window counts on an available SOFA-2 score, not on any observation."""
+
+    store = _store(tmp_path, {
+        "00_panel": {**PANEL, "window_evidence": "any_available_sofa2_score"},
+    })
+
+    [panel] = store.manuscript_method_facts()
+
+    assert panel.scaffold == (
+        "Executed time design: each coordinate was summarized by its maximum in 6 "
+        "consecutive 8-hour windows from 0 to 48 hours after ICU admission, and a "
+        "record entered the model when at least one SOFA-2 score was available in "
+        "at least 3 windows {evidence:00_panel_summary}."
+    )
+    ledger = [{"step_id": "00_panel", "status": "ok", "evidence_ids": ["00_panel_summary"]}]
+    scaffold = "## Methods\n\n### Variables\n\n" + panel.scaffold
+    safe, removed = store.enforce_evidence_bound_scaffold(scaffold, per_step_records=ledger)
+    assert not removed
+    bound = store.bind_manuscript(safe, per_step_records=ledger)
+    _, _, untraced = bind_numeric_values(bound, evidence=store, per_step_records=ledger)
+    assert not untraced
+
+
 @pytest.mark.parametrize(
     "forged",
     [
