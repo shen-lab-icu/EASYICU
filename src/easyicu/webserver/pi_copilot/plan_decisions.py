@@ -749,6 +749,35 @@ def _survival_design_configuration(
             "agent_plan_survival_design_already_declared",
             "The study already declares a survival design; a plan that does not use it needs a fresh plan, not a second design.",
         )
+    current_design = study.get("analysis_design")
+    confirmations = study.get("confirmations")
+    clustered_commitment = (
+        isinstance(current_design, Mapping)
+        and str(current_design.get("variance_estimator") or "") == "cluster_robust"
+    ) or (
+        isinstance(confirmations, Mapping)
+        and confirmations.get("plan_repeated_stays_clustered") is True
+    )
+    if (
+        clustered_commitment
+        and not first_stay_restricted
+        and not survival_inference_supported(_PATIENT_CLUSTERED_DESIGN)
+    ):
+        # The suite fits one model-based row per ICU stay.  Declaring it would
+        # overwrite the study's patient-clustered dependence model while its
+        # confirmation stays behind; keeping each patient's first ICU stay, or
+        # giving up the clustering, is the researcher's decision.
+        raise PlanDecisionError(
+            "agent_plan_survival_clustering_unexecutable",
+            "The study models repeated ICU stays with patient-clustered inference, but the landmark survival suite fits one model-based row per ICU stay; keeping each patient's first ICU stay needs the researcher's decision.",
+            details={
+                "variance_estimator": (
+                    current_design.get("variance_estimator")
+                    if isinstance(current_design, Mapping)
+                    else None
+                ),
+            },
+        )
     facts = (
         review_facts.get("landmark_survival_suite")
         if isinstance(review_facts, Mapping)

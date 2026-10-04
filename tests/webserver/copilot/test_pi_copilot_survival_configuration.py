@@ -244,6 +244,45 @@ def test_a_declared_design_is_not_replaced_and_other_runtime_gaps_are_not_absorb
     assert raised.value.details == {"finding_codes": ["PRIMARY_POPULATION_EXECUTION_OWNER_MISSING"]}
 
 
+_CLUSTERED = {"analysis_unit": "icu_stay", "variance_estimator": "cluster_robust", "cluster_unit": "patient"}
+
+
+@pytest.mark.parametrize(
+    "commitment",
+    [
+        {"analysis_design": dict(_CLUSTERED)},
+        {"confirmations": {"feature_time_window": True, "plan_repeated_stays_clustered": True}},
+        {
+            "analysis_design": dict(_CLUSTERED),
+            "confirmations": {"feature_time_window": True, "plan_repeated_stays_clustered": True},
+        },
+    ],
+    ids=["design", "confirmation", "both"],
+)
+def test_a_patient_clustered_commitment_is_refused_not_downgraded(commitment) -> None:
+    """The suite fits one model-based row per stay; it must not overwrite clustering.
+
+    The compile used to write a model-based design over the study's
+    patient-clustered one and leave its confirmation behind.
+    """
+
+    with pytest.raises(PlanDecisionError) as raised:
+        _compile(
+            study=_study(**commitment),
+            codes=(_OWNER, _TIMING, "REPEATED_STAY_IDENTITY_UNAVAILABLE"),
+        )
+
+    assert raised.value.code == "agent_plan_survival_clustering_unexecutable"
+
+
+def test_a_study_without_a_clustering_commitment_still_compiles() -> None:
+    unclustered = _study(confirmations={"feature_time_window": True, "plan_repeated_stays_clustered": False})
+
+    patch = _compile(study=unclustered).patch
+
+    assert patch["analysis_design"]["variance_estimator"] == "model_based"
+
+
 def test_a_first_stay_study_keeps_its_population() -> None:
     from easyicu.webserver import primary_cohort
 
