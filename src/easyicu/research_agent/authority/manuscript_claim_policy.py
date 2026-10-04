@@ -157,6 +157,26 @@ _HEADING_RESULT_VERB_RE = re.compile(
     r"\b(?:was|were|had|showed|demonstrated|differ(?:ed|s)?|varied)\b",
     re.I,
 )
+# An hour span a sentence states for a window, from its time origin: "0-24 h",
+# "0 to 24 hours", "-12 to 36 hours", "first 24 hours", "zero-to-24-hour",
+# "admission-to-24-hour"; or a window's length alone, "a 24-hour window".
+# Digits only.  "Within 24 hours of" usually states a duration and is not read.
+_WINDOW_WORD_RE = re.compile(r"\bwindows?\b|窗", re.I)
+_HOUR_UNIT = r"(?:(?:hours?|hrs?|h)(?![A-Za-z])|小时)"
+_HOUR_RANGE_RE = re.compile(
+    r"(?<![\d.])(-?\d+(?:\.\d+)?)\s*(?:–|—|-|\bto\b|至|到)\s*(-?\d+(?:\.\d+)?)[\s-]*"
+    + _HOUR_UNIT,
+    re.I,
+)
+_HOURS_FROM_ORIGIN_RE = re.compile(
+    r"(?:\bfirst\s+|前\s*|\b(?:zero|admission)[\s-]+to[\s-]+)(\d+(?:\.\d+)?)[\s-]*"
+    + _HOUR_UNIT,
+    re.I,
+)
+_HOUR_LENGTH_WINDOW_RE = re.compile(
+    r"(?<![\d.–—-])(\d+(?:\.\d+)?)[\s-]*" + _HOUR_UNIT + r"[\s-]+(?:\w+\s+){0,2}windows?\b",
+    re.I,
+)
 _RESULTS_HEADING_RE = re.compile(r"^##\s+results\s*$", re.I | re.MULTILINE)
 _NEXT_H2_RE = re.compile(r"^##\s+.+$", re.MULTILINE)
 _STRUCTURED_ABSTRACT_LABEL_RE = re.compile(
@@ -384,6 +404,38 @@ def _carries_numeric_value(sentence: str) -> bool:
     """
 
     return bool(_NUMERIC_VALUE_TOKEN_RE.search(_without_citation_identifiers(sentence)))
+
+
+def _hour_span(start: float, end: float) -> tuple[float, float]:
+    return (round(float(start), 6), round(float(end), 6))
+
+
+def _states_unexecuted_window(
+    sentence: str, executed_spans: frozenset[tuple[float, float]],
+) -> bool:
+    """Whether a window sentence states an hour span no executed design ran on.
+
+    The research context's time window describes the cohort an owner read,
+    not the grid it executed; a sentence citing the context could otherwise
+    present that window as the analysis window.  Only a sentence that names a
+    window and states an hour span or a window length is tested; a stated
+    duration ("died within 24 hours of admission") keeps its words.
+    """
+
+    if not executed_spans:
+        return False
+    prose = _without_citation_identifiers(sentence)
+    if _WINDOW_WORD_RE.search(prose) is None:
+        return False
+    stated = [_hour_span(*match.groups()) for match in _HOUR_RANGE_RE.finditer(prose)]
+    stated.extend(
+        _hour_span(0.0, match.group(1)) for match in _HOURS_FROM_ORIGIN_RE.finditer(prose)
+    )
+    lengths = {round(end - start, 6) for start, end in executed_spans}
+    return any(span not in executed_spans for span in stated) or any(
+        round(float(match.group(1)), 6) not in lengths
+        for match in _HOUR_LENGTH_WINDOW_RE.finditer(prose)
+    )
 
 
 def _evidence_refs(sentence: str) -> tuple[str, ...]:
@@ -743,6 +795,9 @@ def filter_evidence_bound_scaffold(
     filtered_claims: list[str] = []
     filtered_lines: list[str] = []
     method_lines = {fact.scaffold for fact in method_facts}
+    executed_spans = frozenset(
+        _hour_span(*span) for fact in method_facts for span in fact.executed_hour_spans
+    )
     section = subsection = ""
     findings_depth: int | None = None
     in_abstract = False
@@ -843,11 +898,19 @@ def filter_evidence_bound_scaffold(
             and not _contains_malformed_authority_placeholder(sentences[0])
             and _SCIENTIFIC_CLAIM_TOKEN_RE.search(sentences[0]) is None
             and (not restricted_line or _neutral_findings_text(sentences[0]))
+            and not _states_unexecuted_window(sentences[0], executed_spans)
         ):
             filtered_lines.append(line)
             continue
         kept: list[str] = []
         for sentence in sentences:
+            if _states_unexecuted_window(sentence, executed_spans):
+                # An executed design states the windows the analysis ran on
+                # (exact Methods facts); any other window is not the analysis.
+                rejected = sentence.strip()
+                removed.append(rejected)
+                filtered_claims.append(rejected)
+                continue
             literature_background = bool(
                 not restricted_line
                 and _has_nonnumeric_literature_context(sentence)
