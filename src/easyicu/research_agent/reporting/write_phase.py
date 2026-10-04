@@ -51,7 +51,13 @@ from ..authority.runtime_artifacts import (
 from ..figures.skill import PublicationFigureSkill
 from ..publication_skills import compile_publication_skill_activation
 from .latex import scaffold_to_latex
-from .manuscript_tables import ManuscriptTableProjectionError, build_manuscript_tables
+from .manuscript_tables import (
+    ManuscriptTableProjectionError,
+    ReaderTableCallout,
+    build_manuscript_tables,
+    declared_table_callouts,
+    reader_table_digest,
+)
 from .manuscript_figures import (
     ManuscriptFigureProjectionError,
     build_manuscript_figures,
@@ -695,6 +701,7 @@ class _DraftStageResult:
     manuscript_packet: Optional[ManuscriptDraftPacket]
     writer_error_message: Optional[str]
     scaffold: str
+    reader_tables: tuple[ReaderTableCallout, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1543,6 +1550,11 @@ def _draft_manuscript(
         per_step_records
     )
     current_evidence_names = evidence.current_resolvable_names(per_step_records)
+    # The reader numbers an owner's declared tables after the plan's Table 1.
+    # The Writer is told them; the host restores any callout the draft lacks.
+    reader_tables = declared_table_callouts(
+        plan=execute_result.plan, evidence_records=current_verified_evidence_records, run_dir=run_dir,
+    )
     preferred_writer_evidence_names = _preferred_writer_evidence_names(
         evidence,
         per_step_records,
@@ -1621,6 +1633,10 @@ def _draft_manuscript(
                 run_dir=run_dir,
                 per_step_records=writer_authority_records,
                 evidence=evidence,
+            )
+        if reader_tables:
+            writer_evidence_digest = (
+                writer_evidence_digest.rstrip("\n") + "\n\n" + reader_table_digest(reader_tables) + "\n"
             )
         writer_digest_path = run_dir / "writer_evidence_digest.md"
         writer_digest_path.write_text(writer_evidence_digest, encoding="utf-8")
@@ -1970,6 +1986,7 @@ def _draft_manuscript(
         manuscript_packet=manuscript_packet,
         writer_error_message=writer_error_message,
         scaffold=scaffold,
+        reader_tables=reader_tables,
     )
 
 
@@ -2136,6 +2153,7 @@ def _bind_and_review_manuscript(
     manuscript_language: str,
     context: ResearchContext | None = None,
     plan: AnalysisPlan | None = None,
+    reader_tables: Sequence[ReaderTableCallout] = (),
 ) -> _BindingStageResult:
     """Bind manuscript claims to current evidence and persist the critique."""
     claim_labels = reader_claim_labels(context, reader_display_labels)
@@ -2225,8 +2243,9 @@ def _bind_and_review_manuscript(
     # Reapply only host-registered callouts before the unchanged binding gates.
     evidence_bound_scaffold, _display_callouts = repair_registered_display_callouts(
         evidence_bound_scaffold,
-        expected_display_labels=expected_manuscript_display_labels(current_evidence_names),
+        expected_display_labels=expected_manuscript_display_labels(current_evidence_names, reader_tables),
         analysis_plan=plan,
+        reader_tables=reader_tables,
     )
     bound_unfiltered = evidence.bind_manuscript(
         evidence_bound_scaffold,
@@ -2490,7 +2509,7 @@ def _bind_and_review_manuscript(
         evidence=evidence,
         findings=findings,
         expected_display_labels=expected_manuscript_display_labels(
-            current_evidence_names
+            current_evidence_names, reader_tables
         ),
         reader_display_labels=reader_display_labels,
         expected_baseline_mentions=baseline_reporting_mentions(context, reader_display_labels),
@@ -3389,6 +3408,7 @@ def _draft_bind_and_repair_manuscript(
             manuscript_language=run_language,
             context=context,
             plan=execute_result.plan,
+            reader_tables=draft.reader_tables,
         )
         if writer_attempt or writer_probe_mode or draft.writer_error_message:
             break
@@ -3396,7 +3416,9 @@ def _draft_bind_and_repair_manuscript(
             binding.bound,
             analysis_plan=execute_result.plan,
             expected_primary_result_facts=binding.primary_result_facts,
-            expected_display_labels=expected_manuscript_display_labels(draft.current_evidence_names),
+            expected_display_labels=expected_manuscript_display_labels(
+                draft.current_evidence_names, draft.reader_tables,
+            ),
             reader_display_labels=dict(execute_result.plan.display_labels or {}),
             expected_baseline_mentions=baseline_reporting_mentions(context, execute_result.plan.display_labels),
         )
