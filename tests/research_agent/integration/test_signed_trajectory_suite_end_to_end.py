@@ -14,6 +14,7 @@ recorded runs.  Synthetic stays only.
 
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
@@ -54,6 +55,9 @@ from easyicu.research_agent.trajectory.plan_contract import (
     MIXED_MODE_LCA_BEST_OF_10_ENGINE,
     OBSERVED_DATA_MIXED_MODE_LCA_FIT_METHOD,
     OBSERVED_DATA_MIXED_MODE_LCA_MODEL_FAMILY,
+)
+from easyicu.research_agent.trajectory.runtime_validation import (
+    signed_trajectory_runtime_bundle_errors,
 )
 from easyicu.research_agent.trajectory.scientific_runtime_authority import (
     build_trajectory_scientific_runtime_authority,
@@ -439,6 +443,27 @@ def _assert_rule_outcomes_and_designs_reach_the_report(
     return design_facts
 
 
+def _assert_the_validator_refuses_disagreeing_receipts(
+    manifest: dict, run_dir: Path, *, tampers: tuple, error: str
+) -> None:
+    """The bundle validator accepts the run, and refuses it once a receipt disagrees."""
+
+    plan = AnalysisPlan.model_validate_json(
+        (run_dir / "analysis_plan.json").read_text(encoding="utf-8")
+    )
+    per_step = manifest["per_step_records"]
+    assert signed_trajectory_runtime_bundle_errors(
+        plan=plan, records=per_step, run_dir=run_dir
+    ) == []
+    for step, field, value in tampers:
+        tampered = deepcopy(per_step)
+        (record,) = [item for item in tampered if item["step_id"] == step]
+        record["step_summary"][field] = value
+        assert signed_trajectory_runtime_bundle_errors(
+            plan=plan, records=tampered, run_dir=run_dir
+        ) == [error], field
+
+
 def _assert_every_step_ran_without_a_script(manifest: dict, run_dir: Path) -> None:
     assert manifest["readiness"]["failed_steps"] == []
     assert [
@@ -481,11 +506,19 @@ def test_frozen_classes_are_rendered_and_described_on_the_run_cohort(tmp_path):
     )
     assert not stability_source.empty
     _assert_every_step_ran_without_a_script(manifest, run_dir)
+    # A figure that drew no solution beside a frozen one is refused.
+    _assert_the_validator_refuses_disagreeing_receipts(manifest, run_dir, tampers=(
+        ("03_authority_compiled_trajectory_selection_figure",
+         "reportable_phenotype_solution", False),
+    ), error="signed trajectory stable-solution decision is incoherent")
     _assert_rule_outcomes_and_designs_reach_the_report(manifest, run_dir, claims={
         "00_authority_compiled_trajectory_representation.observed_window_rule": (
             "minimum_observed_windows"
         ),
         "01_authority_compiled_trajectory_candidates.class_count_rule": "minimum_selected",
+        "02_authority_compiled_trajectory_stability.class_stability_rule": (
+            "stability_threshold_met"
+        ),
     })
 
 
@@ -539,6 +572,9 @@ def test_ordinal_levels_freeze_classes_with_the_mixed_mode_model(tmp_path):
             "01_authority_compiled_trajectory_candidates.class_count_rule": (
                 "minimum_selected"
             ),
+            "02_authority_compiled_trajectory_stability.class_stability_rule": (
+                "stability_threshold_met"
+            ),
         },
     )
     assert "mixed-mode latent class model with categorical indicators" in (
@@ -579,7 +615,7 @@ def test_a_suite_without_an_interior_solution_describes_no_class(tmp_path):
     })
 
 
-def test_noise_stops_at_the_stability_gate_and_describes_no_class(tmp_path):
+def test_noise_is_rejected_by_the_stability_rule_and_reported(tmp_path):
     """Noise can still minimise BIC inside the grid; its refits then disagree."""
 
     _carried, run_dir, manifest = _run(tmp_path, layout="noise")
@@ -587,17 +623,38 @@ def test_noise_stops_at_the_stability_gate_and_describes_no_class(tmp_path):
     records = _records(manifest)
     candidates = records["01_authority_compiled_trajectory_candidates"]["step_summary"]
     assert candidates["scientific_status"] == "selected"
+    # The stability rule's rejection is the study's result, not a failed step.
+    assert all(records[step]["status"] == "ok" for step in SIGNED_AND_DESCRIPTION_STEPS)
     freeze = records["02_authority_compiled_trajectory_stability"]["step_summary"]
     assert freeze["reason_code"] == "TRAJECTORY_STABILITY_BELOW_THRESHOLD"
     assert freeze["mean_adjusted_rand_index"] < 0.6
     assert freeze["freeze_status"] == "not_frozen_stability_threshold_failed"
-    for step in (
-        "03_authority_compiled_trajectory_selection_figure",
-        "05_frozen_class_description",
-    ):
-        assert records[step]["status"] == "skipped_dependency_failed"
-    assert not (
+    description = records["05_frozen_class_description"]["step_summary"]
+    assert description["scientific_status"] == "failed_closed"
+    assert description["reason_code"] == TRAJECTORY_NO_SOLUTION_REASON
+    assert pd.read_csv(
         run_dir / "steps" / "05_frozen_class_description" / "outputs" / "outcome_by_cluster.csv"
-    ).exists()
-    # The flow does not depend on the stability gate; the host still draws it.
-    _assert_the_host_drew_the_cohort_flow(manifest, run_dir)
+    ).empty
+    figure = records["03_authority_compiled_trajectory_selection_figure"]["step_summary"]
+    assert figure["reportable_phenotype_solution"] is False
+    _assert_every_step_ran_without_a_script(manifest, run_dir)
+    _assert_rule_outcomes_and_designs_reach_the_report(manifest, run_dir, claims={
+        "00_authority_compiled_trajectory_representation.observed_window_rule": (
+            "minimum_observed_windows"
+        ),
+        "01_authority_compiled_trajectory_candidates.class_count_rule": "minimum_selected",
+        "02_authority_compiled_trajectory_stability.class_stability_rule": (
+            "stability_below_threshold"
+        ),
+        "05_frozen_class_description.class_description_rule": "no_frozen_solution",
+    })
+    # The figure reports the stability owner's decision, not the selection's.
+    assert figure["scientific_status"] == "failed_closed"
+    assert figure["reason_code"] == TRAJECTORY_NO_SOLUTION_REASON
+    _assert_the_validator_refuses_disagreeing_receipts(manifest, run_dir, tampers=(
+        ("02_authority_compiled_trajectory_stability", "reportable_result", None),
+        ("02_authority_compiled_trajectory_stability", "n_successful_resamples", 0),
+        ("03_authority_compiled_trajectory_selection_figure",
+         "reportable_phenotype_solution", True),
+        ("03_authority_compiled_trajectory_selection_figure", "scientific_status", "selected"),
+    ), error="signed trajectory unstable-solution decision is incoherent")

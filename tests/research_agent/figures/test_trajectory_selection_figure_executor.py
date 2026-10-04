@@ -484,6 +484,42 @@ def test_characterization_states_the_sealed_decision_when_no_solution_is_reporta
     )
 
 
+def test_a_selected_solution_the_stability_rule_rejected_reports_no_solution(
+    tmp_path: Path,
+) -> None:
+    """The stability owner froze none of the selected classes.
+
+    Its characterization tables are empty by design.  The figure reported the
+    selection's status instead, so its empty projections could not verify
+    their parents and the step failed its source-data contract.  It now
+    reports the same no-solution decision.
+    """
+
+    _step_id, summary = _run_characterization(
+        tmp_path, empty=True, selection=_selected()
+    )
+
+    assert summary["reportable_phenotype_solution"] is False
+    assert summary["scientific_status"] == "failed_closed"
+    assert summary["reason_code"] == "TRAJECTORY_NO_FROZEN_SOLUTION"
+    sizes = tmp_path / "cluster_sizes.csv"
+    projection = pd.read_csv(
+        tmp_path / "figure" / "trajectory_cluster_sizes_source_data.csv"
+    )
+    assert empty_parent_projection(
+        projection,
+        step_summary=summary,
+        table_frames={sizes: pd.read_csv(sizes)},
+        parent_paths={sizes},
+    ) == {sizes}
+    svg = (
+        tmp_path / "figure" / "trajectory_phenotype_characterization.svg"
+    ).read_text("utf-8")
+    assert "No stable phenotype solution" in svg
+    # A selected candidate's own status is not the reason no class is drawn.
+    assert "INTERIOR_OPTIMUM" not in svg
+
+
 @pytest.mark.parametrize("reportable", [True, False], ids=["solution", "no_solution"])
 def test_both_signed_figures_pass_the_host_text_layout_audit(
     tmp_path: Path, reportable: bool

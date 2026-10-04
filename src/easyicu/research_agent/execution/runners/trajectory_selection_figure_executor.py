@@ -21,6 +21,7 @@ from ...figures.publication import (
     make_figure_contract,
     save_publication_figure,
 )
+from ...contracts.phenotype_comparison import TRAJECTORY_NO_SOLUTION_REASON
 from ...figures.display_labels import display_label
 from ...schema import AnalysisStep
 from .typed_input_binding import load_typed_input
@@ -395,7 +396,7 @@ def _render_characterization_figure(
         _no_solution_axis(
             ax_stability,
             title="Resampling stability",
-            reason_code=reason_code or "no completed resample",
+            reason_code=reason_code or "no prespecified stability estimate",
         )
     ax_stability.set_title("Resampling stability", loc="left", pad=5)
     # Letters sit left of the left-aligned titles, as in the selection figure;
@@ -798,8 +799,14 @@ def run_trajectory_selection_figure(
         stability=stability_bound.frame,
         bounds=(profile_bound, size_bound, stability_bound),
         failed_closed=failed_closed,
-        reason_code=reason_code,
+        # A selected candidate carries no rejection reason of its own; a panel
+        # without a solution then names the prespecified rule.
+        reason_code=reason_code if failed_closed else "",
     )
+    # The stability owner decides whether the selected classes are frozen.
+    # When it froze none, its characterization tables are empty by design and
+    # this figure reports that no-solution decision as well.
+    no_solution = failed_closed or not characterization["reportable_solution"]
     summary = {
         "step_id": step_id,
         "status": "ok",
@@ -808,8 +815,12 @@ def run_trajectory_selection_figure(
         "analysis_family": "phenotyping",
         "deterministic_standard_analysis": "trajectory_selection_diagnostic_figure",
         "rendering_only": True,
-        "scientific_status": "failed_closed" if failed_closed else "selected",
-        "reason_code": reason_code if failed_closed else None,
+        "scientific_status": "failed_closed" if no_solution else "selected",
+        "reason_code": (
+            reason_code
+            if failed_closed
+            else TRAJECTORY_NO_SOLUTION_REASON if no_solution else None
+        ),
         "candidate_count": int(len(selection)),
         "coordinate_count": int(len(availability)),
         "figure_path": f"{stem.name}.png",

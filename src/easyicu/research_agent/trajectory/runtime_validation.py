@@ -9,10 +9,15 @@ from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
 
+from ..authority.prespecified_rule_outcomes import (
+    RULE_OUTCOMES_KEY,
+    validate_rule_outcome,
+)
 from ..contracts.phenotype_comparison import (
     COMPARISON_ACTION,
     COMPARISON_PRODUCT,
     TRAJECTORY_ASSIGNMENTS_PRODUCT,
+    TRAJECTORY_NO_SOLUTION_REASON,
     comparison_cohort_input,
     comparison_label_source,
 )
@@ -35,6 +40,18 @@ _KINDS = {
     _FIGURE: "trajectory_selection_diagnostic_figure",
 }
 _CONTRACT_REF = re.compile(r"^scientific_runtime_contract:([0-9a-f]{64})$")
+#: The stability owner's two rejections of a selected solution, each with the
+#: freeze status it writes and the disposition of the rule outcome it states.
+_STABILITY_REJECTIONS = {
+    "TRAJECTORY_STABILITY_BELOW_THRESHOLD": (
+        "not_frozen_stability_threshold_failed",
+        "stability_below_threshold",
+    ),
+    "TRAJECTORY_STABILITY_REFITS_BELOW_MINIMUM": (
+        "not_frozen_stability_refits_below_minimum",
+        "too_few_successful_refits",
+    ),
+}
 
 #: The four signed owners, in execution order.
 SIGNED_TRAJECTORY_OWNER_METHODS = (_REPRESENTATION, _CANDIDATES, _STABILITY, _FIGURE)
@@ -430,6 +447,13 @@ def signed_trajectory_runtime_bundle_errors(
             and figure.get("reason_code") == reason
         ):
             errors.append("signed trajectory failed-closed decision is incoherent")
+    elif stability.get("scientific_status") == "failed_closed":
+        # The selected solution failed its prespecified stability rule: the
+        # owner completed, froze nothing, and states the rule's outcome.
+        if not _stability_rejection_is_coherent(
+            candidate=candidate, stability=stability, figure=figure, selected_k=selected_k
+        ):
+            errors.append("signed trajectory unstable-solution decision is incoherent")
     else:
         if not (
             candidate.get("scientific_status") == "selected"
@@ -439,9 +463,46 @@ def signed_trajectory_runtime_bundle_errors(
             and stability.get("stability_threshold_passed") is not False
             and stability.get("outcome_binding_received_by_executor") is False
             and not stability.get("outcome_bindings_received")
+            and figure.get("reportable_phenotype_solution") is not False
         ):
             errors.append("signed trajectory stable-solution decision is incoherent")
     return errors
+
+
+def _stability_rejection_is_coherent(
+    *,
+    candidate: Mapping[str, Any],
+    stability: Mapping[str, Any],
+    figure: Mapping[str, Any],
+    selected_k: int | None,
+) -> bool:
+    expected = _STABILITY_REJECTIONS.get(str(stability.get("reason_code") or ""))
+    if expected is None:
+        return False
+    freeze_status, disposition = expected
+    try:
+        (outcome,) = [
+            validate_rule_outcome(item)
+            for item in stability.get(RULE_OUTCOMES_KEY) or ()
+        ]
+    except (TypeError, ValueError):
+        return False
+    return (
+        candidate.get("scientific_status") == "selected"
+        and candidate.get("stability_authorized") is True
+        and stability.get("selected_n_clusters") == selected_k
+        and stability.get("freeze_status") == freeze_status
+        and stability.get("reportable_result") == "no_stable_phenotype_solution"
+        and outcome.rule == "class_solution_stability"
+        and outcome.disposition == disposition
+        and outcome.selected_class_count == selected_k
+        and outcome.successful_resamples == stability.get("n_successful_resamples")
+        and stability.get("outcome_binding_received_by_executor") is False
+        and not stability.get("outcome_bindings_received")
+        and figure.get("reportable_phenotype_solution") is False
+        and figure.get("scientific_status") == "failed_closed"
+        and figure.get("reason_code") == TRAJECTORY_NO_SOLUTION_REASON
+    )
 
 
 __all__ = [
