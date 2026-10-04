@@ -5933,6 +5933,10 @@
     ],
     [
       "easyicu.research_agent.execution.runners.landmark_survival_executor",
+      "easyicu.research_agent.contracts.manuscript_tables"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_survival_executor",
       "easyicu.research_agent.execution.runners.plausibility_receipt"
     ],
     [
@@ -11689,6 +11693,10 @@
     ],
     [
       "easyicu.research_agent.reporting.manuscript_tables",
+      "easyicu.research_agent.contracts.manuscript_tables"
+    ],
+    [
+      "easyicu.research_agent.reporting.manuscript_tables",
       "easyicu.research_agent.methods.table_one"
     ],
     [
@@ -13220,9 +13228,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3297,
+    "edge_count": 3299,
     "largest_scc_size": 0,
-    "module_count": 768,
+    "module_count": 769,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -13402,6 +13410,7 @@
     "easyicu.research_agent.contracts.landmark_spline_validation": "contracts/landmark_spline_validation.py",
     "easyicu.research_agent.contracts.manuscript_result_structure": "contracts/manuscript_result_structure.py",
     "easyicu.research_agent.contracts.manuscript_sentence_context": "contracts/manuscript_sentence_context.py",
+    "easyicu.research_agent.contracts.manuscript_tables": "contracts/manuscript_tables.py",
     "easyicu.research_agent.contracts.method_kernels": "contracts/method_kernels.py",
     "easyicu.research_agent.contracts.method_packages": "contracts/method_packages.py",
     "easyicu.research_agent.contracts.model_contract_match": "contracts/model_contract_match.py",

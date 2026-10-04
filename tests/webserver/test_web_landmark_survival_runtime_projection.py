@@ -12,6 +12,14 @@ from easyicu.research_agent.authority.current_case_scientific_runtime import (
     load_current_case_scientific_runtime_authority,
 )
 from easyicu.research_agent.contracts.endpoint import EndpointSpec
+from easyicu.research_agent.contracts.executed_method_design import (
+    EXECUTED_METHOD_DESIGN_KEY,
+    validate_executed_method_design,
+)
+from easyicu.research_agent.contracts.manuscript_tables import (
+    MANUSCRIPT_TABLES_KEY,
+    validate_manuscript_table_declarations,
+)
 from easyicu.research_agent.execution.runners.landmark_survival_executor import (
     run_landmark_survival_suite,
 )
@@ -140,6 +148,33 @@ def test_survival_family_landmark_compiles_the_sealed_suite_and_executes(tmp_pat
     )
     assert summary["status"] == "ok"
     assert set(summary["output_files"]) == set(authority.analysis_plan_outputs)
+
+
+def test_a_48_hour_landmark_runs_and_names_its_own_hour(tmp_path):
+    """Every other survival test lands at 24 hours; a 48-hour design is its own."""
+
+    universe, frame = _universe(tmp_path)
+    projection = compile_web_scientific_runtime_projection(
+        **_coordinates(universe, sensitivity_specs=(_landmark(spec_id="landmark_48h", landmark_hours=48),))
+    )
+    assert projection is not None
+    authority = load_current_case_scientific_runtime_authority(projection.authority)
+    assert authority.landmark_hours == 48.0
+    assert authority.exposure_window_hours == (0.0, 48.0)
+
+    summary = run_landmark_survival_suite(
+        frame=frame, authority=authority, runtime_projection_sha256=projection.projection_sha256,
+        out_dir=tmp_path / "out", input_product="table:analysis_cohort", input_evidence_id="cohort",
+        input_sha256="b" * 64,
+    )
+
+    assert summary["status"] == "ok"
+    assert validate_executed_method_design(summary[EXECUTED_METHOD_DESIGN_KEY]).landmark_hours == 48.0
+    assert summary["reportable_survival_results"]["landmark_hours"] == 48.0
+    _table_one, flow = validate_manuscript_table_declarations(summary[MANUSCRIPT_TABLES_KEY])
+    assert flow.body.stage_labels["alive_and_observed_at_landmark"] == (
+        "Alive and under observation at the 48-hour landmark"
+    )
 
 
 def test_a_first_stay_cohort_names_its_unit_one_stay_per_patient(tmp_path):

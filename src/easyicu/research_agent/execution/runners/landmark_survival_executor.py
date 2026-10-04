@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import shutil
 import textwrap
 from pathlib import Path
@@ -34,6 +35,11 @@ from ...contracts.executed_method_design import (
     executed_method_design_payload,
 )
 from ...contracts.host_scaffold import HostScaffoldedScript
+from ...contracts.manuscript_tables import (
+    MANUSCRIPT_TABLE_SCHEMA_VERSION,
+    MANUSCRIPT_TABLES_KEY,
+    validate_manuscript_table_declarations,
+)
 from ...contracts.manuscript_result_structure import PRIMARY_RESULT_HEADINGS_BY_FAMILY
 from ...schema import AnalysisPlan, AnalysisStep
 from .plausibility_receipt import render_standard_plausibility_receipt_code
@@ -261,6 +267,100 @@ def _table_one(frame: Any, sealed: LandmarkSurvivalRuntimeAuthority):
         )
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def _reader_words(text: str) -> str:
+    """Plain reader words for a table caption or label (no markup characters)."""
+
+    cleaned = re.sub(r"[{}\[\]<>`\\|*_#]+", " ", str(text))
+    return " ".join(cleaned.split())[:200] or "Unnamed"
+
+
+def _manuscript_tables(
+    sealed: LandmarkSurvivalRuntimeAuthority, analysis: Any
+) -> list[dict[str, Any]]:
+    """Declare the suite's Table 1 and risk-set accounting as reader tables.
+
+    The reporting owner formats the two products' recorded cells under these
+    words; it computes nothing.  Every group and stage word comes from the
+    sealed contract, so a reader sees the groups the suite compared.
+    """
+
+    group = analysis[sealed.derived_exposure_column]
+    sizes = group.value_counts()
+    events = analysis[sealed.derived_event_column].groupby(group).sum()
+    landmark = f"{sealed.landmark_hours:g}"
+
+    def counts(value: int) -> dict[str, Any]:
+        n, deaths = int(sizes.get(value, 0)), int(events.get(value, 0))
+        return {"n": n, "events": deaths, "events_percent": 100.0 * deaths / n if n else 0.0}
+
+    declarations = [
+        {
+            "schema_version": MANUSCRIPT_TABLE_SCHEMA_VERSION,
+            "product": sealed.table_one_product,
+            "caption": _reader_words(
+                f"Characteristics of the {sealed.analysis_unit_label} in the landmark "
+                "analysis cohort, by exposure group"
+            ),
+            "body": {
+                "layout": "grouped_summary",
+                "groups": [
+                    {
+                        "prefix": "unexposed",
+                        "label": _reader_words(sealed.comparator_group_label),
+                        **counts(0),
+                    },
+                    {
+                        "prefix": "exposed",
+                        "label": _reader_words(sealed.exposed_group_label),
+                        **counts(1),
+                    },
+                ],
+                # Every suite endpoint is a fixed-horizon death.
+                "events_label": f"Deaths by day {sealed.endpoint_horizon_days:g}, n (%)",
+            },
+            "notes": [
+                "Categorical percentages use every record of the group as the denominator, "
+                "so levels need not sum to 100% when a value is missing.",
+                "Continuous variables are summarized over their recorded values.",
+                "The standardized mean difference compares the exposed with the comparator "
+                "group; it is not a significance test.",
+                "Deaths are counted from the landmark to the end of follow-up.",
+            ],
+        },
+        {
+            "schema_version": MANUSCRIPT_TABLE_SCHEMA_VERSION,
+            "product": sealed.risk_set_product,
+            "caption": "Risk-set accounting from the source cohort to the landmark analysis cohort",
+            "body": {
+                "layout": "stage_flow",
+                "stage_labels": {
+                    "source_rows": "Source cohort",
+                    "valid_fixed_horizon_endpoint": (
+                        f"Valid {sealed.endpoint_horizon_days:g}-day endpoint"
+                    ),
+                    "alive_and_observed_at_landmark": (
+                        f"Alive and under observation at the {landmark}-hour landmark"
+                    ),
+                    "exposure_status_and_timing_supported": (
+                        "Exposure status and first recorded time available"
+                    ),
+                    "landmark_analysis_population": "Landmark analysis cohort",
+                },
+            },
+            "notes": [
+                "The last stage excludes exposed records whose exposure was first recorded "
+                f"at or before hour {sealed.prevalent_exposure_cutoff_hours:g} or after hour "
+                f"{sealed.exposure_window_hours[1]:g}.",
+                "Excluded counts are the records removed since the stage before.",
+            ],
+        },
+    ]
+    return [
+        declaration.model_dump(mode="json")
+        for declaration in validate_manuscript_table_declarations(declarations)
+    ]
 
 
 def _measurement_audit_table(
@@ -1488,6 +1588,7 @@ def run_landmark_survival_suite(
         "human_attestation_required": True,
         "analysis_cohort_file": analysis_path.name,
         "scientific_runtime_receipt": receipt,
+        MANUSCRIPT_TABLES_KEY: _manuscript_tables(sealed, analysis),
         "output_files": output_files,
     }
 

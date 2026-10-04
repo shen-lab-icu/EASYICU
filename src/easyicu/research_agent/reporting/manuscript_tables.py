@@ -1,7 +1,9 @@
-"""Reader-only projection of current, contract-bound Table 1 source rows.
+"""Reader-only projection of current, contract-bound table source rows.
 
 This owner formats registered summaries; it never reads the cohort or computes
-new statistics. The executed plan chooses the variables and summary family.
+new statistics. The executed plan chooses the Table 1 variables and summary
+family; a signed owner declares its own reader tables in its step summary
+(``contracts.manuscript_tables``), and only their recorded cells are shown.
 """
 
 from __future__ import annotations
@@ -9,11 +11,20 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+import hashlib
+import json
 from pathlib import Path
 from typing import Sequence
 
 from ..authority.evidence_store import evidence_artifact_basename_stem
 from ..authority.runtime_artifacts import verified_run_evidence_path
+from ..contracts.manuscript_tables import (
+    MANUSCRIPT_TABLES_KEY,
+    GroupedSummaryLayout,
+    ManuscriptTableDeclaration,
+    StageFlowLayout,
+    validate_manuscript_table_declarations,
+)
 from ..methods.table_one import table_one_spec_sha256
 from ..schema import AnalysisPlan, EvidenceRecord
 
@@ -212,4 +223,182 @@ def build_manuscript_tables(
         tables.append(ManuscriptTable(
             caption="Baseline characteristics", columns=columns, rows=tuple(rows), notes=tuple(notes),
         ))
+    tables.extend(_declared_tables(plan=plan, evidence_records=evidence_records, run_dir=run_dir))
     return tuple(tables)
+
+
+def _verified_bytes(run_dir: Path, record: EvidenceRecord) -> bytes:
+    path = verified_run_evidence_path(run_dir, record)
+    try:
+        payload = None if path is None else path.read_bytes()
+    except OSError as exc:
+        raise ManuscriptTableProjectionError("A declared table source could not be read") from exc
+    if payload is None or hashlib.sha256(payload).hexdigest() != record.sha256:
+        raise ManuscriptTableProjectionError("A declared table source is missing or has drifted")
+    return payload
+
+
+def _step_summary(run_dir: Path, record: EvidenceRecord) -> dict:
+    try:
+        summary = json.loads(_verified_bytes(run_dir, record))
+    except ValueError as exc:
+        raise ManuscriptTableProjectionError("A step summary is not valid JSON") from exc
+    return summary if isinstance(summary, dict) else {}
+
+
+def _source_rows(run_dir: Path, record: EvidenceRecord) -> list[dict[str, str]]:
+    if Path(record.relative_path).suffix.lower() != ".csv":
+        raise ManuscriptTableProjectionError("A declared table source is not a CSV product")
+    try:
+        rows = list(csv.DictReader(_verified_bytes(run_dir, record).decode("utf-8").splitlines()))
+    except (UnicodeError, csv.Error) as exc:
+        raise ManuscriptTableProjectionError("A declared table source could not be read") from exc
+    if not rows or any(
+        not isinstance(key, str) or not isinstance(value, str)
+        for row in rows for key, value in row.items()
+    ):
+        raise ManuscriptTableProjectionError("A declared table source has no well-formed rows")
+    return rows
+
+
+def _level_text(plan: AnalysisPlan, name: str, level: str) -> str:
+    """A recorded level by the plan's name for it; an integral number reads as one."""
+
+    text = level
+    try:
+        number = Decimal(level)
+        if number.is_finite() and number == number.to_integral_value():
+            text = str(int(number))
+    except InvalidOperation:
+        pass
+    return plan.display_labels.get(f"{name}={text}") or text
+
+
+def _grouped_summary(plan: AnalysisPlan, body: GroupedSummaryLayout, rows):
+    groups = body.groups
+    columns = ("Characteristic", *(f"{group.label} (n = {group.n})" for group in groups), "SMD")
+    projected: list[tuple[str, ...]] = []
+    opened: set[str] = set()
+    for row in rows:
+        name = row["variable"]
+        label = plan.display_labels.get(name) or name.replace("_", " ")
+        smd = _number(row["standardized_mean_difference"], 3)
+        if row["summary_type"] == "categorical_n_percent":
+            if name not in opened:
+                projected.append((f"{label}, n (%)", *("" for _ in groups), ""))
+                opened.add(name)
+            projected.append((
+                "  " + _level_text(plan, name, row["level"]),
+                *(_count_percent(row[f"{g.prefix}_n"], row[f"{g.prefix}_percent"]) for g in groups),
+                smd,
+            ))
+        elif row["summary_type"] == "continuous_mean_sd":
+            projected.append((
+                f"{label}, mean (SD)",
+                *(f"{_number(row[f'{g.prefix}_mean'])} ({_number(row[f'{g.prefix}_sd'])})" for g in groups),
+                smd,
+            ))
+            projected.append((
+                "  Median [Q1, Q3]",
+                *(
+                    f"{_number(row[f'{g.prefix}_median'])} "
+                    f"[{_number(row[f'{g.prefix}_q1'])}, {_number(row[f'{g.prefix}_q3'])}]"
+                    for g in groups
+                ),
+                "",
+            ))
+        else:
+            raise ManuscriptTableProjectionError("A declared summary row has an unknown summary type")
+    if body.events_label is not None:
+        projected.append((
+            body.events_label,
+            *(_count_percent(str(group.events), repr(group.events_percent)) for group in groups),
+            "",
+        ))
+    return columns, projected
+
+
+def _stage_flow(body: StageFlowLayout, rows):
+    try:
+        ordered = sorted(rows, key=lambda row: int(row["stage_order"]))
+    except ValueError as exc:
+        raise ManuscriptTableProjectionError("A declared stage order is not an integer") from exc
+    if [int(row["stage_order"]) for row in ordered] != list(range(1, len(ordered) + 1)):
+        raise ManuscriptTableProjectionError("Declared stages are not consecutive")
+    projected = []
+    for index, row in enumerate(ordered):
+        label = body.stage_labels.get(row["stage"])
+        if label is None:
+            raise ManuscriptTableProjectionError("A recorded stage has no declared reader label")
+        excluded = "" if index == 0 else _count(row["excluded_since_prior_stage"])
+        projected.append((label, _count(row["count"]), excluded))
+    return ("Stage", "Records", "Excluded"), projected
+
+
+def _declared_table(
+    plan: AnalysisPlan, declaration: ManuscriptTableDeclaration, source: EvidenceRecord, run_dir: Path,
+) -> ManuscriptTable:
+    rows = _source_rows(run_dir, source)
+    try:
+        if isinstance(declaration.body, GroupedSummaryLayout):
+            columns, projected = _grouped_summary(plan, declaration.body, rows)
+        else:
+            columns, projected = _stage_flow(declaration.body, rows)
+    except KeyError as exc:
+        raise ManuscriptTableProjectionError("A declared table source lacks a required field") from exc
+    return ManuscriptTable(
+        caption=declaration.caption, columns=columns, rows=tuple(projected),
+        notes=(*declaration.notes, f"Source SHA-256: {source.sha256}"),
+    )
+
+
+def _declared_tables(
+    *,
+    plan: AnalysisPlan,
+    evidence_records: Sequence[EvidenceRecord],
+    run_dir: Path,
+) -> list[ManuscriptTable]:
+    """Project each reader table a plan step's signed owner declared, in plan order."""
+
+    tables: list[ManuscriptTable] = []
+    for step in plan.steps:
+        summaries = [
+            _step_summary(run_dir, record) for record in evidence_records
+            if record.kind == "statistic"
+            and record.generation_mode == "deterministic_standard"
+            and record.produced_by_step == step.step_id
+            and Path(record.relative_path).name.endswith("step_summary.json")
+        ]
+        declaring = [summary for summary in summaries if summary.get(MANUSCRIPT_TABLES_KEY) is not None]
+        if not declaring:
+            continue
+        # Read without its step ledger, a store also keeps a re-executed
+        # step's earlier summary, and which one is current is unknown.
+        if len(summaries) > 1:
+            raise ManuscriptTableProjectionError(
+                f"Step {step.step_id!r} declares reader tables but has more than one step summary"
+            )
+        summary = declaring[0]
+        raw = summary[MANUSCRIPT_TABLES_KEY]
+        try:
+            declarations = validate_manuscript_table_declarations(raw)
+        except ValueError as exc:
+            raise ManuscriptTableProjectionError("A declared reader table is malformed") from exc
+        output_files = summary.get("output_files")
+        for declaration in declarations:
+            filename = output_files.get(declaration.product) if isinstance(output_files, dict) else None
+            if not isinstance(filename, str):
+                raise ManuscriptTableProjectionError("A declared reader table is not an output of its step")
+            sources = [
+                record for record in evidence_records
+                if record.kind == "table" and record.produced_by_step == step.step_id
+                and evidence_artifact_basename_stem(
+                    Path(record.relative_path), record.evidence_id,
+                ) == Path(filename).stem
+            ]
+            if len(sources) != 1:
+                raise ManuscriptTableProjectionError(
+                    f"Declared table {declaration.product!r} requires one current registered source"
+                )
+            tables.append(_declared_table(plan, declaration, sources[0], run_dir))
+    return tables
