@@ -977,7 +977,9 @@ def build_survival_manuscript_projection(
     }
     rmst_fragments = [
         {"text": "The unadjusted restricted mean survival time at a horizon of "},
-        {"numeric_path": "rmst.tau_days_from_landmark", "format_spec": ".0f"},
+        # The horizon is the endpoint less the landmark, so a landmark that is
+        # not a whole day gives a fractional horizon; print it as Methods does.
+        {"numeric_path": "rmst.tau_days_from_landmark", "format_spec": ".6g"},
         {"text": " days was "},
         {"numeric_path": "rmst.exposed_rmst_days", "format_spec": ".3f"},
         {"text": " days in the exposed group and "},
