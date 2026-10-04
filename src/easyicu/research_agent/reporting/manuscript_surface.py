@@ -9,12 +9,17 @@ another.
 import re
 from typing import Any, Mapping, Sequence
 
+from ..contracts.manuscript_sentence_context import (
+    AUDIT_MARKUP_RE,
+    CLAIM_MARKER_PATTERN,
+    EVIDENCE_LINK_PATTERN,
+)
+
 
 _REGION = re.compile(r"(?=^#{1,6} |^\*\*(?:Background|Methods|Results|Conclusions):\*\*)", re.M)
 _CLAIM = re.compile(r"\{claim:[^{}\s]+\}[.!?]?")
-_EVIDENCE_LINK_RE = re.compile(r'\[[^\]]+\]\(evidence/[^\n)]*(?:"[^"]*")?\)')
-_EVIDENCE_PLACEHOLDER_RE = re.compile(r"\{evidence:[^}\n]+\}")
-_CLAIM_MARKER_RE = re.compile(r"\[\^claim_\d+\]")
+_EVIDENCE_LINK_RE = re.compile(EVIDENCE_LINK_PATTERN)
+_CLAIM_MARKER_RE = re.compile(CLAIM_MARKER_PATTERN)
 _CLAIM_PLACEHOLDER_RE = re.compile(
     r"\{claim:[A-Za-z0-9_-]+\.[a-z][a-z0-9_]*\}"
 )
@@ -49,13 +54,11 @@ _PROSE_SECTION_ALIASES = {
 
 
 def _strip_audit_markup(text: str) -> str:
-    cleaned = _EVIDENCE_LINK_RE.sub("", text)
-    cleaned = _EVIDENCE_PLACEHOLDER_RE.sub("", cleaned)
-    cleaned = _CLAIM_DEFINITION_RE.sub("", cleaned)
-    cleaned = _CLAIM_MARKER_RE.sub("", cleaned)
-    cleaned = _CLAIM_PLACEHOLDER_RE.sub("", cleaned)
-    cleaned = re.sub(r"<!--.*?-->", "", cleaned, flags=re.S)
-    return cleaned
+    # Footnote definitions are whole lines; the inline markup is the one that
+    # contextual deletion reads past (``contracts.manuscript_sentence_context``).
+    cleaned = _CLAIM_DEFINITION_RE.sub("", text)
+    cleaned = AUDIT_MARKUP_RE.sub("", cleaned)
+    return _CLAIM_PLACEHOLDER_RE.sub("", cleaned)
 
 
 def render_reader_manuscript(bound_text: str) -> str:

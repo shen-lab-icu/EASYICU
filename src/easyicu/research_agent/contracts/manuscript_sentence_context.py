@@ -3,8 +3,9 @@
 This owner never supplies a replacement antecedent or a scientific statement.
 Only a leading dependent sentence in the *same paragraph* as a deleted opener
 can be removed. Every additional removal is returned for the repair receipt.
-Audit-only citation markup is not prose: it neither supplies an antecedent nor
-separates a dependent sentence from the opener it depends on.
+Audit-only markup is not prose: it neither supplies an antecedent nor
+separates a dependent sentence from the opener it depends on.  This owner
+defines that markup once; the reader view strips the same markup.
 """
 
 from __future__ import annotations
@@ -22,12 +23,22 @@ _DEPENDENT_OPENER = re.compile(
 )
 _PARAGRAPH_BOUNDARY = re.compile(r"\n[ \t]*\n")
 _SENTENCE_END = re.compile(r"[.!?。！？](?:[ \t]+|$)")
-# A scaffold evidence token or its bound link. Readers never see either, and a
-# Writer often places one after the period, where sentence splitting assigns it
-# to the next sentence.
-_CITATION = r"\{evidence:[^}\n]+\}|\[[^\]\n]+\]\(evidence/[^\n)]*\)"
-_CITATION_MARKUP = re.compile(_CITATION)
-_LEADING_CITATION_MARKUP = re.compile(rf"(?:[ \t]*(?:{_CITATION}))*[ \t]*")
+# Audit-only markup: a scaffold evidence token, its bound link, a numeric
+# claim footnote marker, and an annotation comment (an unresolved evidence
+# token is demoted to one).  Readers never see any of them, and a Writer often
+# places a citation after the period, where sentence splitting assigns it to
+# the next sentence.
+EVIDENCE_TOKEN_PATTERN = r"\{evidence:[^}\n]+\}"
+EVIDENCE_LINK_PATTERN = r'\[[^\]]+\]\(evidence/[^\n)]*(?:"[^"]*")?\)'
+CLAIM_MARKER_PATTERN = r"\[\^claim_\d+\]"
+ANNOTATION_COMMENT_PATTERN = r"<!--.*?-->"
+_CITATION = "|".join(
+    (EVIDENCE_TOKEN_PATTERN, EVIDENCE_LINK_PATTERN, CLAIM_MARKER_PATTERN, ANNOTATION_COMMENT_PATTERN)
+)
+#: Every piece of audit-only markup, for owners that strip it.
+AUDIT_MARKUP_RE = re.compile(_CITATION, re.S)
+_CITATION_MARKUP = AUDIT_MARKUP_RE
+_LEADING_CITATION_MARKUP = re.compile(rf"(?:[ \t]*(?:{_CITATION}))*[ \t]*", re.S)
 
 
 @dataclass(frozen=True)
