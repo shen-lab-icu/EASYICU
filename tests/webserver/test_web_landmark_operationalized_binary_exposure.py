@@ -191,9 +191,12 @@ def test_a_universe_without_materialized_metadata_keeps_the_name_rule(
 
 def test_a_published_domain_overrides_the_count_reading_of_an_int64_flag() -> None:
     # The prepared Sepsis-3 shape: an int64 window maximum of a flag whose
-    # name and dtype read as a count.
+    # name and dtype read as a count when its metadata publishes no domain.
     assert exposure_kind_for_dtype(
-        primary_exposure="abx_max", primary_exposure_source="abx", dtype="int64"
+        primary_exposure="abx_max",
+        primary_exposure_source="abx",
+        dtype="int64",
+        published_levels=(),
     ) == (VariableKind.COUNT, ())
     assert exposure_kind_for_dtype(
         primary_exposure="abx_max",
