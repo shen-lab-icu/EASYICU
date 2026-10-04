@@ -2335,7 +2335,8 @@ def _bind_and_review_manuscript(
                 detail={"removed_sentences": removed_numeric_sentences},
             )
         )
-    method_finding = audit_bound_source_method_facts(
+    # A Writer that failed wrote no Methods for the source definitions to survive in.
+    method_finding = None if writer_error_message else audit_bound_source_method_facts(
         bound, evidence=evidence, per_step_records=per_step_records,
     )
     if method_finding is not None:
@@ -2412,7 +2413,10 @@ def _bind_and_review_manuscript(
             )
         )
         bound = render_not_generated(
-            ManuscriptState.blocked("writer_produced_no_bindable_prose"),
+            ManuscriptState.blocked(
+                "writer_failed_before_draft" if writer_error_message
+                else "writer_produced_no_bindable_prose"
+            ),
             "The manuscript writer failed or produced no substantive "
             "evidence-bound prose for this run. See manifest findings for the "
             "writer and evidence-binding errors.",
