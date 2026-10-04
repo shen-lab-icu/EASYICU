@@ -25,6 +25,12 @@ from scipy.optimize import linear_sum_assignment
 from scipy.special import logsumexp
 from sklearn.metrics import adjusted_rand_score
 
+from ...authority.prespecified_rule_outcomes import (
+    RULE_OUTCOME_SCHEMA_VERSION,
+    RULE_OUTCOMES_KEY,
+    rule_outcome_payload,
+    validate_rule_outcome,
+)
 from ...schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -32,6 +38,7 @@ from ...schema import (
     TrajectoryStabilitySpec,
 )
 from ...trajectory.mixed_mode_latent_class import (
+    ClassModelFitNotRealized,
     fit_observed_data_mixed_mode_lca,
     representation_column_levels,
 )
@@ -439,6 +446,45 @@ def _empty_outputs(out_dir: Path, id_column: str = "id") -> None:
     )
 
 
+def _stability_rule_outcome(
+    spec: TrajectoryStabilitySpec,
+    *,
+    selected_n_clusters: int,
+    successful_resamples: int,
+    mean_ari: float | None,
+    threshold_passed: bool | None,
+    refits_short: bool,
+) -> Any:
+    """The prespecified stability rule's outcome, or None when no rule applied.
+
+    A report-only design states its stability without an accept/reject rule,
+    so only its refit minimum can decide anything.
+    """
+
+    if refits_short:
+        disposition = "too_few_successful_refits"
+    elif threshold_passed is None:
+        return None
+    elif threshold_passed:
+        disposition = "stability_threshold_met"
+    else:
+        disposition = "stability_below_threshold"
+    return validate_rule_outcome(
+        {
+            "schema_version": RULE_OUTCOME_SCHEMA_VERSION,
+            "rule": "class_solution_stability",
+            "metric": spec.stability_metric,
+            "selected_class_count": int(selected_n_clusters),
+            "planned_resamples": int(spec.n_resamples),
+            "successful_resamples": int(successful_resamples),
+            "minimum_successful_resamples": int(spec.minimum_successful_resamples),
+            "mean_stability": mean_ari,
+            "minimum_mean_stability": spec.minimum_mean_stability,
+            "disposition": disposition,
+        }
+    )
+
+
 def _sample_hash(values: pd.Series) -> str:
     def contract_token(value: Any) -> str:
         if isinstance(value, (bool, np.bool_)):
@@ -547,7 +593,9 @@ def _fit_observed_data_diag_gmm(
         normalizer = logsumexp(log_prob, axis=1)
         likelihood = float(normalizer.sum())
         if not math.isfinite(likelihood):
-            raise ValueError("observed-data refit produced non-finite likelihood")
+            raise ClassModelFitNotRealized(
+                "observed-data refit produced non-finite likelihood"
+            )
         responsibilities = np.exp(log_prob - normalizer[:, None])
         if iteration > 0 and abs(likelihood - previous) <= tolerance * (
             1.0 + abs(previous)
@@ -557,10 +605,12 @@ def _fit_observed_data_diag_gmm(
         previous = likelihood
 
     if not converged:
-        raise ValueError("observed-data refit did not converge")
+        raise ClassModelFitNotRealized("observed-data refit did not converge")
     labels = np.argmax(responsibilities, axis=1).astype(int)
     if np.unique(labels).size != n_components:
-        raise ValueError("observed-data refit did not realize every selected cluster")
+        raise ClassModelFitNotRealized(
+            "observed-data refit did not realize every selected cluster"
+        )
     parameter_digest = hashlib.sha256()
     for array in (weights, means, variances):
         parameter_digest.update(np.ascontiguousarray(array).tobytes())
@@ -631,18 +681,25 @@ def _fit_with_engine(
     ]
     best: tuple[np.ndarray, Mapping[str, Any], int] | None = None
     starts: list[dict[str, Any]] = []
+    every_start_unrealized = True
     for index, start_seed in enumerate(seeds):
         try:
             labels, trace = fit_start(x, seed=start_seed, **fit)
         except ValueError as exc:
             starts.append({"seed": start_seed, "error": f"{type(exc).__name__}: {exc}"})
+            every_start_unrealized = every_start_unrealized and isinstance(
+                exc, ClassModelFitNotRealized
+            )
             continue
         likelihood = float(trace["final_log_likelihood"])
         starts.append({"seed": start_seed, "final_log_likelihood": likelihood})
         if best is None or likelihood > float(best[1]["final_log_likelihood"]):
             best = (labels, trace, index)
     if best is None:
-        raise ValueError(
+        # Starts that all failed to converge or to realize every class are the
+        # model's result on this sample; any other start error is not.
+        failure = ClassModelFitNotRealized if every_start_unrealized else ValueError
+        raise failure(
             f"no start of {engine} produced a converged fit that realizes every "
             f"cluster; first start: {starts[0]['error']}"
         )
@@ -1632,6 +1689,7 @@ def run_trajectory_stability(
                     "sample_n": sample_n,
                     "sample_id_hash": sample_id_hash,
                     "error": f"{type(exc).__name__}: {exc}",
+                    "solution_not_realized": isinstance(exc, ClassModelFitNotRealized),
                 }
                 failure_rows.append(failure_row)
                 attempt_rows.append(
@@ -1659,75 +1717,116 @@ def run_trajectory_stability(
         if len(attempt_rows) != spec.n_resamples:
             raise ValueError("stability attempt ledger does not match n_resamples")
 
-        if len(successful_rows) < spec.minimum_successful_resamples:
+        refits_short = len(successful_rows) < spec.minimum_successful_resamples
+        mean_ari: float | None = None
+        if refits_short:
             pending_assignments_path.unlink(missing_ok=True)
             _write_json(
                 out_dir / "cluster_stability_refit_failures.json",
                 {"failures": failure_rows},
             )
-            raise _NumericalRefitFailure(
-                "successful stability refits are below the planner-owned minimum: "
-                f"{len(successful_rows)} < {spec.minimum_successful_resamples}"
+            if not all(row["solution_not_realized"] for row in failure_rows):
+                raise _NumericalRefitFailure(
+                    "successful stability refits are below the planner-owned minimum: "
+                    f"{len(successful_rows)} < {spec.minimum_successful_resamples}"
+                )
+        else:
+            stability = pd.DataFrame(successful_rows)
+            stability.to_csv(out_dir / "cluster_stability.csv", index=False)
+            if not assignments_header_written or not pending_assignments_path.is_file():
+                raise ValueError("successful refits did not produce assignment rows")
+            pending_assignments_path.replace(
+                out_dir / "cluster_stability_assignments.csv"
             )
-        stability = pd.DataFrame(successful_rows)
-        stability.to_csv(out_dir / "cluster_stability.csv", index=False)
-        if not assignments_header_written or not pending_assignments_path.is_file():
-            raise ValueError("successful refits did not produce assignment rows")
-        pending_assignments_path.replace(out_dir / "cluster_stability_assignments.csv")
+            mean_ari = float(stability["adjusted_rand_index"].mean())
+        threshold_passed = (
+            None
+            if spec.decision_mode == "report_only" or mean_ari is None
+            else mean_ari >= float(spec.minimum_mean_stability)
+        )
+        # The prespecified rule rejects the solution when too few refits
+        # reproduced it or their mean agreement is below the planner's minimum.
+        # That is the study's result: the owner completes, freezes nothing and
+        # leaves every class-describing table empty.
+        rejection_reason: str | None = None
+        if refits_short:
+            freeze_status = "not_frozen_stability_refits_below_minimum"
+            rejection_reason = "TRAJECTORY_STABILITY_REFITS_BELOW_MINIMUM"
+        elif threshold_passed is None:
+            freeze_status = "candidate_labels_preserved_report_only_no_stability_decision"
+        elif threshold_passed:
+            freeze_status = "candidate_labels_frozen_stability_threshold_passed"
+        else:
+            freeze_status = "not_frozen_stability_threshold_failed"
+            rejection_reason = "TRAJECTORY_STABILITY_BELOW_THRESHOLD"
+        # Typed before anything is published: an outcome its own numbers
+        # contradict fails the step instead of following an "ok" status.
+        stability_outcome = _stability_rule_outcome(
+            spec,
+            selected_n_clusters=selected_n_clusters,
+            successful_resamples=len(successful_rows),
+            mean_ari=mean_ari,
+            threshold_passed=threshold_passed,
+            refits_short=refits_short,
+        )
 
-        final_assignments = pd.DataFrame(
-            {id_column: ids.tolist(), "cluster": reference_array.tolist()}
-        )
-        final_assignments.to_csv(out_dir / "cluster_assignments.csv", index=False)
-        if include_characterization:
-            profile_rows: list[dict[str, Any]] = []
-            for cluster in sorted(pd.unique(reference_array), key=str):
-                mask = reference_array == cluster
-                for column in representation_columns:
-                    values = pd.to_numeric(
-                        representation.loc[mask, column], errors="coerce"
-                    ).dropna()
-                    match = re.fullmatch(r".+__h(-?\d+)_(-?\d+)", column)
-                    if match is None:
-                        raise ValueError(
-                            f"representation column lacks a signed window: {column}"
+        if rejection_reason is None:
+            final_assignments = pd.DataFrame(
+                {id_column: ids.tolist(), "cluster": reference_array.tolist()}
+            )
+            final_assignments.to_csv(out_dir / "cluster_assignments.csv", index=False)
+            if include_characterization:
+                profile_rows: list[dict[str, Any]] = []
+                for cluster in sorted(pd.unique(reference_array), key=str):
+                    mask = reference_array == cluster
+                    for column in representation_columns:
+                        values = pd.to_numeric(
+                            representation.loc[mask, column], errors="coerce"
+                        ).dropna()
+                        match = re.fullmatch(r".+__h(-?\d+)_(-?\d+)", column)
+                        if match is None:
+                            raise ValueError(
+                                f"representation column lacks a signed window: {column}"
+                            )
+                        profile_rows.append(
+                            {
+                                "cluster": cluster,
+                                "source_column": column,
+                                "window_start_hours": int(match.group(1)),
+                                "window_end_hours": int(match.group(2)),
+                                "summary_statistic": "mean",
+                                "value": float(values.mean()),
+                                "n_observed": int(len(values)),
+                            }
                         )
-                    profile_rows.append(
-                        {
-                            "cluster": cluster,
-                            "source_column": column,
-                            "window_start_hours": int(match.group(1)),
-                            "window_end_hours": int(match.group(2)),
-                            "summary_statistic": "mean",
-                            "value": float(values.mean()),
-                            "n_observed": int(len(values)),
-                        }
-                    )
-            pd.DataFrame(profile_rows).to_csv(
-                out_dir / "trajectory_profiles.csv", index=False
+                pd.DataFrame(profile_rows).to_csv(
+                    out_dir / "trajectory_profiles.csv", index=False
+                )
+                (
+                    final_assignments.groupby("cluster", sort=True)
+                    .size()
+                    .rename("n")
+                    .reset_index()
+                    .to_csv(out_dir / "cluster_sizes.csv", index=False)
+                )
+            provenance = final_assignments.copy()
+            provenance["stability_inclusion_n"] = inclusion_counts
+            provenance["assignment_agreement_n"] = agreement_counts
+            provenance["stability_inclusion_fraction"] = provenance[
+                "stability_inclusion_n"
+            ] / len(successful_rows)
+            provenance["assignment_agreement_fraction"] = np.where(
+                provenance["stability_inclusion_n"] > 0,
+                provenance["assignment_agreement_n"]
+                / provenance["stability_inclusion_n"],
+                np.nan,
             )
-            (
-                final_assignments.groupby("cluster", sort=True)
-                .size()
-                .rename("n")
-                .reset_index()
-                .to_csv(out_dir / "cluster_sizes.csv", index=False)
+            provenance["assignment_uncertainty_fraction"] = (
+                1.0 - provenance["assignment_agreement_fraction"]
             )
-        provenance = final_assignments.copy()
-        provenance["stability_inclusion_n"] = inclusion_counts
-        provenance["assignment_agreement_n"] = agreement_counts
-        provenance["stability_inclusion_fraction"] = provenance[
-            "stability_inclusion_n"
-        ] / len(successful_rows)
-        provenance["assignment_agreement_fraction"] = np.where(
-            provenance["stability_inclusion_n"] > 0,
-            provenance["assignment_agreement_n"] / provenance["stability_inclusion_n"],
-            np.nan,
-        )
-        provenance["assignment_uncertainty_fraction"] = (
-            1.0 - provenance["assignment_agreement_fraction"]
-        )
-        provenance.to_csv(out_dir / "cluster_assignment_provenance.csv", index=False)
+            provenance.to_csv(
+                out_dir / "cluster_assignment_provenance.csv", index=False
+            )
 
         policy = {
             "schema_version": "easyicu.trajectory_missingness_policy/1",
@@ -1743,7 +1842,7 @@ def run_trajectory_stability(
             "clustering_method": solution_schema.get("model_family"),
             "fit_method": solution_schema.get("fit_method"),
             "covariance_type": solution_schema.get("covariance_type"),
-            "n_clusters": selected_n_clusters,
+            "n_clusters": selected_n_clusters if rejection_reason is None else None,
             "time_axis": representation_schema.get("time_axis"),
             "anchor": representation_schema.get("anchor"),
             "anchor_provenance": representation_schema.get("anchor_provenance"),
@@ -1754,23 +1853,12 @@ def run_trajectory_stability(
             ),
             "coordinate_scaling": scaling_manifest,
         }
+        if rejection_reason is not None:
+            policy.update(
+                {"scientific_status": "failed_closed", "reason_code": rejection_reason}
+            )
         _write_json(out_dir / "trajectory_missingness_policy.json", policy)
 
-        mean_ari = float(stability["adjusted_rand_index"].mean())
-        threshold_passed = (
-            None
-            if spec.decision_mode == "report_only"
-            else mean_ari >= float(spec.minimum_mean_stability)
-        )
-        freeze_status = (
-            "candidate_labels_preserved_report_only_no_stability_decision"
-            if threshold_passed is None
-            else (
-                "candidate_labels_frozen_stability_threshold_passed"
-                if threshold_passed
-                else "not_frozen_stability_threshold_failed"
-            )
-        )
         freeze = {
             "schema_version": "easyicu.trajectory_stability_freeze/1",
             "freeze_status": freeze_status,
@@ -1800,8 +1888,16 @@ def run_trajectory_stability(
             "outcome_bindings_received": [],
             "eligibility_reapplied": False,
         }
+        if rejection_reason is not None:
+            freeze.update(
+                {
+                    "scientific_status": "failed_closed",
+                    "reason_code": rejection_reason,
+                    "reportable_result": "no_stable_phenotype_solution",
+                }
+            )
         _write_json(out_dir / "stability_freeze.json", freeze)
-        if failure_rows:
+        if failure_rows and not refits_short:
             _write_json(
                 out_dir / "cluster_stability_refit_failures.json",
                 {"failures": failure_rows},
@@ -1829,7 +1925,7 @@ def run_trajectory_stability(
             )
         summary.update(
             {
-                "status": ("ok" if threshold_passed is not False else "failed_closed"),
+                "status": "ok",
                 "freeze_status": freeze_status,
                 "selected_n_clusters": selected_n_clusters,
                 "n_clusters": selected_n_clusters,
@@ -1855,13 +1951,21 @@ def run_trajectory_stability(
                 "outputs": sorted(set(output_files.values())),
             }
         )
-        if threshold_passed is False:
-            summary["failure_class"] = "scientific_instability"
-            summary["reason_code"] = "TRAJECTORY_STABILITY_BELOW_THRESHOLD"
-            summary["errors"].append(
-                "Mean stability was below the planner-owned threshold; "
-                "the selected k was not changed, execution failed closed, and a "
-                "new planner revision is required before retrying."
+        if stability_outcome is not None:
+            summary[RULE_OUTCOMES_KEY] = [rule_outcome_payload(stability_outcome)]
+        if rejection_reason is not None:
+            summary.update(
+                {
+                    "scientific_status": "failed_closed",
+                    "reason_code": rejection_reason,
+                    "reportable_result": "no_stable_phenotype_solution",
+                    "limitations": [
+                        "The candidate solution did not meet the prespecified "
+                        "resampling stability rule: the selected class count was "
+                        "not changed, no class was frozen, and a different design "
+                        "requires a new planner revision."
+                    ],
+                }
             )
     except _NumericalRefitFailure as exc:
         summary["failure_class"] = "numerical_engine_failure"

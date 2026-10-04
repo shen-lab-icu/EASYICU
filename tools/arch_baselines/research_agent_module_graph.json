@@ -6737,6 +6737,10 @@
     ],
     [
       "easyicu.research_agent.execution.runners.trajectory_selection_figure_executor",
+      "easyicu.research_agent.contracts.phenotype_comparison"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.trajectory_selection_figure_executor",
       "easyicu.research_agent.execution.runners.typed_input_binding"
     ],
     [
@@ -6750,6 +6754,10 @@
     [
       "easyicu.research_agent.execution.runners.trajectory_selection_figure_executor",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.trajectory_stability_executor",
+      "easyicu.research_agent.authority.prespecified_rule_outcomes"
     ],
     [
       "easyicu.research_agent.execution.runners.trajectory_stability_executor",
@@ -13201,6 +13209,10 @@
     ],
     [
       "easyicu.research_agent.trajectory.runtime_validation",
+      "easyicu.research_agent.authority.prespecified_rule_outcomes"
+    ],
+    [
+      "easyicu.research_agent.trajectory.runtime_validation",
       "easyicu.research_agent.contracts.phenotype_comparison"
     ],
     [
@@ -13232,7 +13244,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3300,
+    "edge_count": 3303,
     "largest_scc_size": 0,
     "module_count": 769,
     "package_count": 36,

@@ -3,7 +3,8 @@
 Owner: the signed trajectory model engine for coordinates the host declares
 ordinal.  Public contract: :func:`fit_observed_data_mixed_mode_lca` fits one
 start and returns hard labels plus a trace; :func:`mixed_mode_parameter_count`
-is the free-parameter count its BIC uses.
+is the free-parameter count its BIC uses.  :class:`ClassModelFitNotRealized`
+marks a fit that did not converge or did not realize every class.
 
 Each representation column is one indicator.  A declared ordinal coordinate
 (an organ score with levels 0-4, a stage) is a categorical indicator with
@@ -34,6 +35,15 @@ from scipy.special import logsumexp
 MIXED_MODE_CATEGORY_PRIOR = 1.0
 
 OrdinalLevels = tuple[int, ...]
+
+
+class ClassModelFitNotRealized(ValueError):
+    """A class-model fit that did not converge or did not realize every class.
+
+    It describes the model on the rows it was fitted to, unlike an input or
+    contract error, so a resampling-stability rule can count it as a refit
+    that did not reproduce the selected solution.
+    """
 
 
 def mixed_mode_parameter_count(
@@ -188,7 +198,9 @@ def fit_observed_data_mixed_mode_lca(
         normalizer = logsumexp(log_prob, axis=1)
         likelihood = float(normalizer.sum())
         if not math.isfinite(likelihood):
-            raise ValueError("mixed-mode latent class fit produced a non-finite likelihood")
+            raise ClassModelFitNotRealized(
+                "mixed-mode latent class fit produced a non-finite likelihood"
+            )
         objective = likelihood + prior_term
         responsibilities = np.exp(log_prob - normalizer[:, None])
         if iteration > 0 and abs(objective - previous) <= tolerance * (1.0 + abs(previous)):
@@ -197,10 +209,12 @@ def fit_observed_data_mixed_mode_lca(
         previous = objective
 
     if not converged:
-        raise ValueError("mixed-mode latent class fit did not converge")
+        raise ClassModelFitNotRealized("mixed-mode latent class fit did not converge")
     labels = np.argmax(responsibilities, axis=1).astype(int)
     if np.unique(labels).size != n_components:
-        raise ValueError("mixed-mode latent class fit did not realize every class")
+        raise ClassModelFitNotRealized(
+            "mixed-mode latent class fit did not realize every class"
+        )
     digest = hashlib.sha256()
     for array in (weights, log_level_probabilities, means, variances):
         digest.update(np.ascontiguousarray(array).tobytes())
@@ -256,6 +270,7 @@ def representation_column_levels(
 
 __all__ = [
     "MIXED_MODE_CATEGORY_PRIOR",
+    "ClassModelFitNotRealized",
     "coordinate_measurement_levels",
     "fit_observed_data_mixed_mode_lca",
     "mixed_mode_parameter_count",

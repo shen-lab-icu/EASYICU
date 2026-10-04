@@ -1,9 +1,9 @@
 """Host claims for the formal outcome of a prespecified rule.
 
 A deterministic owner applies rules fixed before execution: a class-count
-criterion over a candidate grid, a minimum of observed windows, a class
-description that needs a frozen solution, a planned analysis the inputs cannot
-support.  The rule's outcome is a study result even when the rule selects
+criterion over a candidate grid, a minimum of observed windows, the resampling
+stability of a selected class solution, a class description that needs a
+frozen solution, a planned analysis the inputs cannot support.  The rule's outcome is a study result even when the rule selects
 nothing.  Without a host claim the strict Results grammar can state none of
 it, so a run whose owners all succeed can leave its required Results empty,
 and an unqualified count such as the criterion's minimum reads as a solution.
@@ -351,6 +351,120 @@ class ProportionalHazardsTestOutcome(_RuleOutcome):
         )
 
 
+def _reader_pair(value: float, minimum: float) -> tuple[str, str]:
+    """A mean and its prespecified minimum, with places enough to differ.
+
+    At two places a mean of 0.696 and a minimum of 0.70 would both read
+    "0.70" in a sentence saying one is below the other.  Four places at most:
+    the reader rounding (``reader_numeric_display``) keeps them as written.
+    """
+
+    places = max(
+        len(_reader_proportion(number).partition(".")[2]) for number in (value, minimum)
+    )
+    while (
+        value != minimum
+        and places < 4
+        and f"{value:.{places}f}" == f"{minimum:.{places}f}"
+    ):
+        places += 1
+    return f"{value:.{places}f}", f"{minimum:.{places}f}"
+
+
+class ClassSolutionStabilityOutcome(_RuleOutcome):
+    """The prespecified resampling-stability rule for a selected class solution.
+
+    Every planned subsample refit must realize every class, and the mean
+    agreement of the refits with the selected solution must reach the
+    planner's minimum, before the solution is frozen.
+    """
+
+    rule: Literal["class_solution_stability"]
+    metric: Literal["adjusted_rand_index"]
+    selected_class_count: int = Field(ge=2)
+    planned_resamples: int = Field(ge=2)
+    successful_resamples: int = Field(ge=0)
+    minimum_successful_resamples: int = Field(ge=2)
+    # The mean over the successful refits; with too few of them the
+    # prespecified quantity does not exist.  A report-only design has no
+    # minimum, so only its refit count can decide.
+    mean_stability: float | None = Field(ge=-1.0, le=1.0)
+    minimum_mean_stability: float | None = Field(ge=-1.0, le=1.0)
+    disposition: Literal[
+        "stability_threshold_met",
+        "stability_below_threshold",
+        "too_few_successful_refits",
+    ]
+
+    @model_validator(mode="after")
+    def _disposition_follows_from_the_refits(self) -> "ClassSolutionStabilityOutcome":
+        if max(
+            self.successful_resamples, self.minimum_successful_resamples
+        ) > self.planned_resamples:
+            raise ValueError("refit counts exceed the planned resamples")
+        if self.successful_resamples < self.minimum_successful_resamples:
+            if self.mean_stability is not None:
+                raise ValueError("an unestablished stability has no mean")
+            expected = "too_few_successful_refits"
+        elif self.mean_stability is None:
+            raise ValueError("an established stability needs its mean")
+        elif self.minimum_mean_stability is None:
+            raise ValueError("a stability decision needs its prespecified minimum")
+        elif self.mean_stability >= self.minimum_mean_stability:
+            expected = "stability_threshold_met"
+        else:
+            expected = "stability_below_threshold"
+        if self.disposition != expected:
+            raise ValueError("stability disposition contradicts its own numbers")
+        return self
+
+    @property
+    def report_section(self) -> ReportSection:
+        return "primary"
+
+    def result_sentence(self) -> str:
+        opening = (
+            "In the prespecified resampling stability assessment of the "
+            f"{self.selected_class_count}-class candidate solution"
+        )
+        if self.disposition == "too_few_successful_refits":
+            return (
+                f"{opening}, {self.successful_resamples} of {self.planned_resamples} "
+                "subsample refits converged and realized every class, fewer than the "
+                f"{self.minimum_successful_resamples} the rule requires; stability was "
+                "not established, and under the prespecified rule no class solution "
+                "was frozen."
+            )
+        assert self.mean_stability is not None
+        assert self.minimum_mean_stability is not None
+        mean, minimum = _reader_pair(self.mean_stability, self.minimum_mean_stability)
+        agreement = (
+            f"{opening}, the mean adjusted Rand index across "
+            f"{self.successful_resamples} subsample refits was {mean}"
+        )
+        if self.disposition == "stability_below_threshold":
+            return (
+                f"{agreement}, below the prespecified minimum of {minimum}; under the "
+                "prespecified rule no class solution was frozen."
+            )
+        return (
+            f"{agreement}, at or above the prespecified minimum of {minimum}, and the "
+            "candidate solution was frozen."
+        )
+
+    def conclusion_sentence(self) -> str:
+        if self.disposition == "stability_threshold_met":
+            return (
+                f"The {self.selected_class_count}-class solution met the prespecified "
+                "resampling stability rule and was frozen for class description."
+            )
+        return (
+            f"The {self.selected_class_count}-class candidate solution did not meet "
+            "the prespecified resampling stability rule, so no classes are described "
+            "or interpreted."
+        )
+
+
 PrespecifiedRuleOutcome = Annotated[
     Union[
         ClassCountSelectionOutcome,
@@ -358,6 +472,7 @@ PrespecifiedRuleOutcome = Annotated[
         FrozenClassDescriptionOutcome,
         PlannedAnalysisFeasibilityOutcome,
         ProportionalHazardsTestOutcome,
+        ClassSolutionStabilityOutcome,
     ],
     Field(discriminator="rule"),
 ]
@@ -370,6 +485,7 @@ _CLAIM_IDS = {
     "frozen_class_description": "class_description_rule",
     "planned_analysis_feasibility": "feasibility_rule",
     "proportional_hazards_test": "proportional_hazards_rule",
+    "class_solution_stability": "class_stability_rule",
 }
 #: The claim's subject and measure, as the machine claim names them.
 _CLAIM_TERMS = {
@@ -380,6 +496,7 @@ _CLAIM_TERMS = {
     "frozen_class_description": ("frozen class solution", "class description"),
     "planned_analysis_feasibility": ("planned analysis", "executability"),
     "proportional_hazards_test": ("proportional hazards", "Schoenfeld residual test"),
+    "class_solution_stability": ("selected class solution", "resampling stability"),
 }
 _CLAIM_POPULATIONS = {
     "information_criterion_class_count": "the class-model records",
@@ -387,12 +504,14 @@ _CLAIM_POPULATIONS = {
     "frozen_class_description": "the analysis cohort",
     "planned_analysis_feasibility": "the study inputs",
     "proportional_hazards_test": "the survival model records",
+    "class_solution_stability": "the class-model records",
 }
 _CLAIM_ROLES = {
     "information_criterion_class_count": "primary",
     "minimum_observed_windows": "auxiliary",
     "frozen_class_description": "auxiliary",
     "proportional_hazards_test": "primary",
+    "class_solution_stability": "primary",
 }
 
 
@@ -451,6 +570,7 @@ def derive_rule_outcome_claim_payloads(
 
 __all__ = [
     "ClassCountSelectionOutcome",
+    "ClassSolutionStabilityOutcome",
     "FrozenClassDescriptionOutcome",
     "ObservedWindowEligibilityOutcome",
     "PlannedAnalysisFeasibilityOutcome",
