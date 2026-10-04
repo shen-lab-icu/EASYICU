@@ -10,7 +10,10 @@ The shared report-fact owner now copies the suite's recorded landmark
 population, in the analysis unit of its typed reporting envelope, and places
 it after the strict gate.  The adjusted Cox models are complete-case while
 Kaplan-Meier and the restricted mean use the whole cohort, so when the models
-dropped records their recorded count follows as a second fact.  Synthetic
+dropped records their recorded count follows as a second fact.  Each fact
+states the events of its own set, so a reader never pairs the models' events
+with the whole cohort; a summary recorded before the risk set's events keeps
+its counts-only sentences.  Synthetic
 study and seeded synthetic rows only (renal replacement therapy and 90-day
 mortality); the rows miss sex for a few stays.
 """
@@ -58,6 +61,14 @@ def _modelled_text(summary) -> str:
     return (
         f"Of the {summary['n_landmark_population']:,} {unit} in the landmark analysis cohort, "
         f"{summary['n_complete_case']:,} had complete covariate data and entered the adjusted survival models"
+        + (f", with {summary['n_events']:,} events" if "n_events_landmark_population" in summary else "")
+    )
+
+
+def _cohort_text(summary, unit) -> str:
+    return f"The landmark analysis cohort included {summary['n_landmark_population']:,} {unit}" + (
+        f", with {summary['n_events_landmark_population']:,} events during follow-up"
+        if "n_events_landmark_population" in summary else ""
     )
 
 
@@ -134,15 +145,15 @@ def test_the_landmark_cohort_fills_cohort_characteristics_and_binds(tmp_path):
     facts = _compile_survival_cohort_report_facts(projected, store)
     fact, modelled = facts
     unit = summary["reportable_survival_results"]["analysis_unit"]
-    assert fact.text == (
-        f"The landmark analysis cohort included {summary['n_landmark_population']:,} {unit}"
-    )
-    assert fact.source_fields == ("n_landmark_population",)
+    assert fact.text == _cohort_text(summary, unit)
+    assert ", with " in fact.text
+    assert fact.source_fields == ("n_landmark_population", "n_events_landmark_population")
     assert fact.required_result_sections == ("Results",)
     # The models dropped the stays without a recorded sex.
     assert summary["n_complete_case"] < summary["n_landmark_population"]
+    assert summary["n_events"] <= summary["n_events_landmark_population"]
     assert modelled.text == _modelled_text(summary)
-    assert modelled.source_fields == ("n_landmark_population", "n_complete_case")
+    assert modelled.source_fields == ("n_landmark_population", "n_complete_case", "n_events")
     assert modelled.required_result_sections == ("Results",)
     assert _compile_survival_cohort_report_facts(records, store) == facts
 
@@ -160,6 +171,7 @@ def test_the_landmark_cohort_fills_cohort_characteristics_and_binds(tmp_path):
     assert {claim.evidence_id for claim in binding.values()} == {EVIDENCE}
     assert {claim.canonical for claim in binding.values()} == {
         float(summary["n_landmark_population"]), float(summary["n_complete_case"]),
+        float(summary["n_events_landmark_population"]), float(summary["n_events"]),
     }
 
 
@@ -169,7 +181,23 @@ def test_a_cohort_the_models_kept_whole_is_stated_once(tmp_path):
 
     assert summary["n_complete_case"] == summary["n_landmark_population"]
     [fact] = _compile_survival_cohort_report_facts(records, store)
-    assert fact.source_fields == ("n_landmark_population",)
+    assert fact.source_fields == ("n_landmark_population", "n_events_landmark_population")
+
+
+def test_a_summary_recorded_before_its_risk_set_events_keeps_its_sentences(tmp_path):
+    _plan, summary = _suite(tmp_path)
+    legacy = copy.deepcopy(summary)
+    del legacy["n_events_landmark_population"]
+    store, records = _registered(tmp_path, legacy)
+
+    fact, modelled = _compile_survival_cohort_report_facts(records, store)
+
+    unit = summary["reportable_survival_results"]["analysis_unit"]
+    assert fact.text == (
+        f"The landmark analysis cohort included {summary['n_landmark_population']:,} {unit}"
+    )
+    assert modelled.text.endswith("entered the adjusted survival models")
+    assert modelled.source_fields == ("n_landmark_population", "n_complete_case")
 
 
 def test_a_first_stay_suite_states_its_cohort_in_its_own_unit(tmp_path):
@@ -187,9 +215,7 @@ def test_a_first_stay_suite_states_its_cohort_in_its_own_unit(tmp_path):
 
     fact, modelled = _compile_survival_cohort_report_facts(records, store)
 
-    assert fact.text == (
-        f"The landmark analysis cohort included {summary['n_landmark_population']:,} first ICU stays"
-    )
+    assert fact.text == _cohort_text(summary, "first ICU stays")
     assert modelled.text == _modelled_text(summary)
     assert " first ICU stays in the landmark analysis cohort, " in modelled.text
 
@@ -216,7 +242,8 @@ def test_the_shared_report_admission_carries_the_landmark_cohort(tmp_path, monke
 
     assert facts == _compile_survival_cohort_report_facts(projected, store)
     assert [fact.source_fields for fact in facts] == [
-        ("n_landmark_population",), ("n_landmark_population", "n_complete_case"),
+        ("n_landmark_population", "n_events_landmark_population"),
+        ("n_landmark_population", "n_complete_case", "n_events"),
     ]
 
 
@@ -237,6 +264,9 @@ def test_an_envelope_signed_before_typed_reporting_states_no_cohort(tmp_path):
         ("n_source", 1, "exceeds its source cohort"),
         ("n_complete_case", 0, "recorded integer count"),
         ("n_complete_case", 10**9, "exceeds its landmark population"),
+        ("n_events_landmark_population", 10**9, "exceed their landmark population"),
+        ("n_events_landmark_population", 1.5, "recorded integer count"),
+        ("n_events", 10**8, "exceed their model set"),
         ("analysis_unit", "ICU stays {evidence:other}", "reader noun phrase"),
     ],
 )

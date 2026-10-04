@@ -307,31 +307,52 @@ def _compile_survival_cohort_report_facts(projected, evidence):
         record = evidence.get(source_id)
         if record is None or record.produced_by_step != row.get("step_id"):
             raise ValueError("Survival source does not belong to the verified step")
+        # A suite that records its risk set's events states each event count
+        # beside its own denominator; a summary written before that keeps its
+        # counts-only sentences.
+        events = (
+            _count(source["n_events_landmark_population"])
+            if "n_events_landmark_population" in source else None
+        )
+        if events is not None and events > population:
+            raise ValueError("Survival events exceed their landmark population")
         facts.append(DescriptiveReportFact(
             subsection="Cohort characteristics",
-            text=f"The landmark analysis cohort included {population:,} {unit}",
+            text=f"The landmark analysis cohort included {population:,} {unit}" + (
+                f", with {events:,} events during follow-up" if events is not None else ""
+            ),
             evidence_id=record.evidence_id,
             source_sha256=record.sha256,
-            source_fields=("n_landmark_population",),
+            source_fields=("n_landmark_population",) + (
+                ("n_events_landmark_population",) if events is not None else ()
+            ),
             required_result_sections=("Results",),
         ))
         # The adjusted Cox models are complete-case while Kaplan-Meier and the
         # restricted mean use the whole cohort, so one count cannot stand for
-        # both: state the models' smaller set beside the cohort.
+        # both: state the models' smaller set, and its events, beside the cohort.
         modelled = _count(source.get("n_complete_case"), positive=True)
         if modelled > population:
             raise ValueError("Survival model set exceeds its landmark population")
         if modelled < population:
+            text = (
+                f"Of the {population:,} {unit} in the landmark analysis cohort, "
+                f"{modelled:,} had complete covariate data and entered the adjusted "
+                "survival models"
+            )
+            fields: tuple[str, ...] = ("n_landmark_population", "n_complete_case")
+            if events is not None:
+                modelled_events = _count(source.get("n_events"))
+                if modelled_events > min(modelled, events):
+                    raise ValueError("Survival model events exceed their model set")
+                text += f", with {modelled_events:,} events"
+                fields += ("n_events",)
             facts.append(DescriptiveReportFact(
                 subsection="Cohort characteristics",
-                text=(
-                    f"Of the {population:,} {unit} in the landmark analysis cohort, "
-                    f"{modelled:,} had complete covariate data and entered the adjusted "
-                    "survival models"
-                ),
+                text=text,
                 evidence_id=record.evidence_id,
                 source_sha256=record.sha256,
-                source_fields=("n_landmark_population", "n_complete_case"),
+                source_fields=fields,
                 required_result_sections=("Results",),
             ))
     return tuple(facts)
