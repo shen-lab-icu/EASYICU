@@ -15,7 +15,7 @@ from typing import Any, Mapping, Optional, Sequence
 from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
 
 from ...authority.declared_levels import closed_planning_levels_for
-from ...concept_availability import variable_source_unavailability
+from ...concept_availability import concept_records_one_value_per_stay, variable_source_unavailability
 from ...contracts.model_terms import level_spelling
 from ...contracts.primary_cohort import study_population_product_for
 from ...schema import ResearchContext
@@ -249,6 +249,10 @@ def proposed_survival_suite_coordinates(
     if landmark is None or landmark <= 0 or landmark / 24.0 >= endpoint.horizon_days:
         return None
     source = str(getattr(variable, "source_concept", "") or "").strip() or exposure
+    # The suite times the exposure by its first recorded time; a concept its
+    # owner records once per stay (sex, age) has none to classify.
+    if concept_records_one_value_per_stay(source):
+        return None
     try:
         return SealedSuiteCoordinates(
             primary_owner=_PROPOSED_SURVIVAL_OWNER,

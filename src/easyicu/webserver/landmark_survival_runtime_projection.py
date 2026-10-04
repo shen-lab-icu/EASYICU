@@ -37,6 +37,7 @@ from easyicu.outcome_availability import (
 from easyicu.research_agent.authority.current_case_scientific_runtime import (
     build_current_case_scientific_runtime_authority,
 )
+from easyicu.research_agent.concept_availability import concept_records_one_value_per_stay
 from easyicu.research_agent.icu_rules import VariableKind
 from easyicu.research_agent.planning.analysis_types import canonical_analysis_family
 from easyicu.research_agent.planning.sensitivity_authority import (
@@ -331,6 +332,17 @@ def compile_landmark_survival_runtime_projection(
             details={
                 "primary_exposure": primary_exposure,
                 "exposure_kind": exposure_kind.value,
+            },
+        )
+    if concept_records_one_value_per_stay(str(primary_exposure_source)):
+        raise WebScientificRuntimeProjectionError(
+            "web_landmark_survival_exposure_incompatible",
+            "The sealed survival suite times the exposure by its first recorded "
+            "time; this exposure is recorded once per stay.",
+            details={
+                "primary_exposure": primary_exposure,
+                "primary_exposure_source": primary_exposure_source,
+                "exposure_timing": "one_value_per_stay",
             },
         )
     onset_column = f"{primary_exposure_source}{_ONSET_SUFFIX}"

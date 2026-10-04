@@ -265,6 +265,21 @@ def default_public_databases() -> List[str]:
     return list(PUBLIC_DATABASES)
 
 
+@lru_cache(maxsize=1024)
+def concept_records_one_value_per_stay(concept: str) -> bool:
+    """Whether the concept owner declares one value per stay, with no record time.
+
+    A stay-level concept (age, sex, admission type) has no first recorded time,
+    so materialization emits no timing companion for it.  A concept the
+    dictionary does not know is outside its authority and is not declared.
+    """
+
+    from easyicu.resources import load_dictionary
+
+    definition = load_dictionary(include_sofa2=True).get(normalize_concept_name(concept))
+    return getattr(definition, "target", None) == "id_tbl"
+
+
 def cross_database_concept_availability(
     *,
     concepts: Sequence[str],

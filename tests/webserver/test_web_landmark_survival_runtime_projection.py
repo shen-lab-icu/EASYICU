@@ -308,6 +308,16 @@ def test_survival_family_without_landmark_keeps_other_routes(tmp_path):
             "web_landmark_survival_exposure_incompatible",
             "exposure_kind",
         ),
+        (
+            # Recorded once per stay: no first recorded time to classify.
+            {
+                "primary_exposure": "sex",
+                "primary_exposure_source": "sex",
+                "declared_covariates": ("age", "charlson", "sofa2_max"),
+            },
+            "web_landmark_survival_exposure_incompatible",
+            "exposure_timing",
+        ),
     ],
 )
 def test_survival_projection_fails_closed_on_unsupported_coordinates(
