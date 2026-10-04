@@ -93,6 +93,7 @@ from .adjustment_authority import (
 from .analysis_types import (
     canonical_analysis_family,
     longitudinal_trajectory_requested,
+    requested_dose_response_cues,
     requested_exposure_occurrence_cues,
 )
 from .population_requirements import context_population_requirements
@@ -340,6 +341,28 @@ def requested_exposure_occurrence(
     ):
         return ()
     return requested_exposure_occurrence_cues(context)
+
+
+def requested_dose_response_on_two_levels(
+    context: ResearchContext,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The dose-response cues of a question whose exposure has two levels.
+
+    A gradient needs at least three ordered levels or a continuous exposure;
+    across two levels there is one contrast, which answers another question.
+    Returns the cues and the exposure's levels, or two empty tuples when the
+    question does not ask for a gradient or its exposure can carry one.
+    """
+
+    cues = requested_dose_response_cues(context)
+    exposure = str(context.primary_exposure or "").strip()
+    if not cues or not exposure:
+        return (), ()
+    variables = {item.name: item for item in context.variables}
+    levels = closed_planning_levels_for(name=exposure, variables=variables)
+    if len(levels) != 2:
+        return (), ()
+    return cues, tuple(str(level) for level in levels)
 
 
 def exposure_occurrence_steps(
@@ -3072,6 +3095,37 @@ def build_plan_scientific_review(
                     "different question."
                 ),
                 remediation_route="agent_plan_revision",
+            )
+        )
+    dose_response_cues, two_levels = requested_dose_response_on_two_levels(context)
+    if dose_response_cues:
+        findings.append(
+            PlanScientificFinding(
+                code="REQUESTED_DOSE_RESPONSE_NOT_ESTIMABLE",
+                severity="blocker",
+                dimension="statistical_design",
+                message=(
+                    "The research question asks for a dose-response relationship "
+                    f"({', '.join(dose_response_cues)}), but the primary exposure "
+                    f"has two levels ({', '.join(two_levels)}); a gradient needs at "
+                    "least three ordered levels or a continuous exposure."
+                ),
+                evidence_refs=[
+                    "research_context.json.research_question",
+                    "research_context.json.primary_exposure",
+                ],
+                remediation=(
+                    "A two-level contrast answers another question, so it does not "
+                    "stand in for the requested gradient. A new study version can "
+                    "name a graded or continuous exposure, or ask for the two-level "
+                    "contrast itself."
+                ),
+                requires_user_authorization=True,
+                authorization_question=(
+                    "The question asks for a dose-response gradient, but its exposure "
+                    "has two levels. Should a new study version use a graded or "
+                    "continuous exposure, or ask for the two-level contrast instead?"
+                ),
             )
         )
     if clinical_definitions["independent_clinical_review_pending_contracts"]:
