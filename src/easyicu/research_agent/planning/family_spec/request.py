@@ -560,17 +560,21 @@ def _candidates(
     variable_roster: Sequence[str],
     adjustment: AdjustmentSetAuthority,
     design_columns: frozenset[str] = frozenset(),
+    reference_hours: float | None = None,
 ) -> list[AdjustmentCandidate]:
     """Project the candidate roster from the host model-term authority.
 
     ``design_columns`` are coordinates the family already uses for another
     purpose (alternate exposure definitions, landmark timing, the first-stay
     flag, secondary outcomes); they are never offered as covariates.
+    ``reference_hours`` is the time zero of a host-proposed design that the
+    study has not declared yet (see ``host_proven_temporal_roles``).
     """
 
     authority = adjusted_model_term_planning_authority(
         context,
         [name for name in variable_roster if name not in design_columns],
+        reference_hours=reference_hours,
     )
     shares = _measured_missing_shares(context)
     candidates: list[AdjustmentCandidate] = []
@@ -1703,11 +1707,16 @@ def _build_survival_proposal_request(
         *context.cohort.outcome_columns,
         *exposure_companion_columns(context, exposure),
     }
+    # Before review the study declares no landmark, so the declared-landmark
+    # timing proves only the demographics.  The suite this request proposes
+    # starts follow-up at its own landmark; a measurement whose window closes
+    # by then is a baseline covariate of that design, as in a sealed suite.
     candidates = _candidates(
         context,
         variable_roster=[name for name in roster if name in optional_roster],
         adjustment=adjustment,
         design_columns=frozenset(design_columns) - set(adjustment.operational_covariates),
+        reference_hours=float(proposed.landmark_hours),
     )
     exact = adjustment.selection == "exact"
     required_label_keys = [
