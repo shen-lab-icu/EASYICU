@@ -221,8 +221,8 @@ def _design_selection(
         ),
         time_zero=f"ICU admission; follow-up starts at the {landmark} landmark.",
         observation_window=(
-            f"Exposure status is fixed at the {landmark} landmark from exposure onset times; the "
-            f"endpoint is followed to {horizon} with administrative censoring."
+            f"Exposure status is fixed at the {landmark} landmark from the exposure's first recorded "
+            f"times; the endpoint is followed to {horizon} with administrative censoring."
         ),
         primary_method=(
             (
@@ -237,7 +237,10 @@ def _design_selection(
         ),
         required_variables=[request.identity_column, *columns],
         assumptions=[
-            "Exposure onset times are recorded so prevalent exposure at time zero can be excluded.",
+            # The onset column is the first recorded time, not a verified onset.
+            "Exposure timing is the first recorded time of the exposure source; exposure that began "
+            "before its first record, such as before ICU admission, is not observed, so some prevalent "
+            "exposure may count as incident.",
             f"{unit_text[0].upper()}{unit_text[1:]}.",
         ],
         literature_citation_keys=[*method_keys, *comparator_keys][:8],
@@ -261,11 +264,13 @@ def _design_selection(
         reviewable_plan=(
             [
                 f"研究队列；{unit_text_zh}；纳入在 {landmark_zh} landmark 时存活且终点有效的入住。",
-                f"截至 {landmark_zh} 新发的 {exposure}；排除时间零点时已存在的暴露。",
+                f"截至 {landmark_zh} 新发的 {exposure}，以暴露首次记录时间计；首次记录在时间零点及以前的"
+                "暴露按已存在暴露排除。",
                 f"自 ICU 入院起 {horizon_zh} 内的 {outcome}，按行政截尾处理。",
                 f"调整 {adjustment_zh} 的 Cox 比例风险模型；Wald 95% CI；按封印的处理政策做 "
                 "Schoenfeld 残差审计。",
-                "对封印的列做完整病例分析，并审计分母。",
+                "校正模型对封印的列做完整病例分析，并审计分母；Kaplan-Meier 曲线和限制平均生存时间使用"
+                "完整风险集。",
                 "比例风险假设被拒绝时，以预先设定的分段 Cox 模型和未调整的限制平均生存时间对比，"
                 "替代恒定的风险比。",
             ]
@@ -273,11 +278,13 @@ def _design_selection(
             else [
                 f"The study cohort; {unit_text}; stays alive at the {landmark} landmark with a valid "
                 "endpoint.",
-                f"Incident {exposure} by {landmark}; prevalent exposure at time zero is excluded.",
+                f"Incident {exposure} by {landmark}, timed by its first record; exposure first recorded "
+                "at or before time zero is excluded as prevalent.",
                 sentence(f"{outcome} through {horizon} from ICU admission, censored administratively."),
                 f"Adjusted Cox proportional-hazards model for {adjustment_text}; Wald 95% CI; Schoenfeld "
                 "residual audit with the sealed handling policy.",
-                "Complete-case on the sealed columns with an audited denominator.",
+                "Complete-case adjusted models on the sealed columns with an audited denominator; "
+                "Kaplan-Meier and the restricted mean use the whole risk set.",
                 "Prespecified interval-specific Cox and an unadjusted restricted-mean survival-time "
                 "contrast replace a constant hazard ratio when proportional hazards is rejected.",
             ]

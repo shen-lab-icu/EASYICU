@@ -148,13 +148,17 @@ def _days(values: Sequence[float]) -> str:
 def _survival_design_text(design: LandmarkSurvivalDesign) -> str:
     """The landmark risk set, the model and the alternatives the suite ran."""
 
+    # The onset column is the exposure source's first recorded time, not a
+    # verified clinical onset: say so rather than "exposure began".
     text = (
         "Executed survival design: the risk set comprised records alive and "
         f"observed at a landmark {design.landmark_hours:g} hours after "
-        f"{_quoted_source(design.time_origin)}, excluding records whose exposure "
-        f"began at or before hour {design.prevalent_exposure_cutoff_hours:g}, with "
-        f"exposure beginning by hour {design.exposure_window_end_hours:g} defining "
-        f"the exposed group and follow-up ending at day {design.endpoint_horizon_days:g}; "
+        f"{_quoted_source(design.time_origin)}, with follow-up ending at day "
+        f"{design.endpoint_horizon_days:g}; exposure timing was the first recorded "
+        "time of the exposure source, which does not observe exposure begun before "
+        "that record: exposed records first recorded at or before hour "
+        f"{design.prevalent_exposure_cutoff_hours:g} were excluded, and those first "
+        f"recorded by hour {design.exposure_window_end_hours:g} formed the exposed group; "
         "a Cox proportional hazards model with Efron ties, adjusted for "
         f"{design.n_adjustment_covariates} prespecified covariates, estimated the "
         "exposure contrast with Wald intervals, and proportional hazards were "
@@ -172,6 +176,18 @@ def _survival_design_text(design: LandmarkSurvivalDesign) -> str:
         text += (
             "; the restricted mean survival time difference was unadjusted over the "
             f"{design.rmst_horizon_days:g} days after the landmark"
+        )
+    if design.n_adjustment_covariates:
+        # The adjusted models drop records with a missing covariate; the
+        # unadjusted estimates keep them.  Name both sets, without counts.
+        models = "Cox models" if design.time_varying_cutpoints_days else "Cox model"
+        whole = "the Kaplan-Meier curves" + (
+            " and the restricted mean survival time difference"
+            if design.rmst_horizon_days is not None else ""
+        )
+        text += (
+            f"; the {models} used the records with complete covariate data, and "
+            f"{whole} used the whole risk set"
         )
     return text
 

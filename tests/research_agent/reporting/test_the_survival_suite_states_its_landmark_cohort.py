@@ -8,8 +8,11 @@ failed the manuscript audit whatever its results.
 
 The shared report-fact owner now copies the suite's recorded landmark
 population, in the analysis unit of its typed reporting envelope, and places
-it after the strict gate.  Synthetic study and seeded synthetic rows only
-(renal replacement therapy and 90-day mortality).
+it after the strict gate.  The adjusted Cox models are complete-case while
+Kaplan-Meier and the restricted mean use the whole cohort, so when the models
+dropped records their recorded count follows as a second fact.  Synthetic
+study and seeded synthetic rows only (renal replacement therapy and 90-day
+mortality); the rows miss sex for a few stays.
 """
 
 from __future__ import annotations
@@ -43,11 +46,19 @@ STEP = "primary_survival_suite"
 EVIDENCE = "statistic_step_summary_primary_survival_suite"
 
 
-def _suite(tmp_path):
+def _suite(tmp_path, **rows):
     context, authority = sealed_survival(tmp_path)
     plan = bound_survival_plan(context, ScientificRuntimeAuthorities(trajectory=None, current_case=authority))
-    summary = json.loads(json.dumps(run_signed_suite(authority, synthetic_survival_rows(), tmp_path / "out")))
+    summary = json.loads(json.dumps(run_signed_suite(authority, synthetic_survival_rows(**rows), tmp_path / "out")))
     return plan, summary
+
+
+def _modelled_text(summary) -> str:
+    unit = summary["reportable_survival_results"]["analysis_unit"]
+    return (
+        f"Of the {summary['n_landmark_population']:,} {unit} in the landmark analysis cohort, "
+        f"{summary['n_complete_case']:,} had complete covariate data and entered the adjusted survival models"
+    )
 
 
 def _registered(tmp_path, summary):
@@ -120,26 +131,45 @@ def test_the_landmark_cohort_fills_cohort_characteristics_and_binds(tmp_path):
     # the digest-verified source summary is the typed authority.
     assert "schema_version" not in projected[0]["step_summary"]["reportable_survival_results"]
 
-    [fact] = _compile_survival_cohort_report_facts(projected, store)
+    facts = _compile_survival_cohort_report_facts(projected, store)
+    fact, modelled = facts
     unit = summary["reportable_survival_results"]["analysis_unit"]
     assert fact.text == (
         f"The landmark analysis cohort included {summary['n_landmark_population']:,} {unit}"
     )
     assert fact.source_fields == ("n_landmark_population",)
     assert fact.required_result_sections == ("Results",)
-    assert _compile_survival_cohort_report_facts(records, store) == (fact,)
+    # The models dropped the stays without a recorded sex.
+    assert summary["n_complete_case"] < summary["n_landmark_population"]
+    assert modelled.text == _modelled_text(summary)
+    assert modelled.source_fields == ("n_landmark_population", "n_complete_case")
+    assert modelled.required_result_sections == ("Results",)
+    assert _compile_survival_cohort_report_facts(records, store) == facts
 
     draft = _filtered_draft(plan)
     assert "Cohort characteristics" in _empty_subsections(draft, plan)
-    placed = render_descriptive_report_claims(draft, (fact,))
-    assert fact.scaffold in _cohort(placed)
+    placed = render_descriptive_report_claims(draft, facts)
+    cohort = _cohort(placed)
+    assert cohort.index(fact.scaffold) < cohort.index(modelled.scaffold)
     assert "Cohort characteristics" not in _empty_subsections(placed, plan)
-    assert render_descriptive_report_claims(placed, (fact,)) == placed
+    assert render_descriptive_report_claims(placed, facts) == placed
 
     bound = store.bind_manuscript(placed, per_step_records=records)
     _, binding, untraced = bind_numeric_values(bound, evidence=store, per_step_records=records)
     assert untraced == []
-    assert {claim.source_field for claim in binding.values()} == {"n_landmark_population"}
+    assert {claim.evidence_id for claim in binding.values()} == {EVIDENCE}
+    assert {claim.canonical for claim in binding.values()} == {
+        float(summary["n_landmark_population"]), float(summary["n_complete_case"]),
+    }
+
+
+def test_a_cohort_the_models_kept_whole_is_stated_once(tmp_path):
+    _plan, summary = _suite(tmp_path, sex_missing=0)
+    store, records = _registered(tmp_path, summary)
+
+    assert summary["n_complete_case"] == summary["n_landmark_population"]
+    [fact] = _compile_survival_cohort_report_facts(records, store)
+    assert fact.source_fields == ("n_landmark_population",)
 
 
 def test_the_shared_report_admission_carries_the_landmark_cohort(tmp_path, monkeypatch):
@@ -163,7 +193,9 @@ def test_the_shared_report_admission_carries_the_landmark_cohort(tmp_path, monke
     facts = compile_primary_counts_only_report_facts(records, evidence=store, reader_display_labels={})
 
     assert facts == _compile_survival_cohort_report_facts(projected, store)
-    assert len(facts) == 1
+    assert [fact.source_fields for fact in facts] == [
+        ("n_landmark_population",), ("n_landmark_population", "n_complete_case"),
+    ]
 
 
 def test_an_envelope_signed_before_typed_reporting_states_no_cohort(tmp_path):
@@ -181,6 +213,8 @@ def test_an_envelope_signed_before_typed_reporting_states_no_cohort(tmp_path):
         ("n_landmark_population", 12.5, "recorded integer count"),
         ("n_landmark_population", 0, "recorded integer count"),
         ("n_source", 1, "exceeds its source cohort"),
+        ("n_complete_case", 0, "recorded integer count"),
+        ("n_complete_case", 10**9, "exceeds its landmark population"),
         ("analysis_unit", "ICU stays {evidence:other}", "reader noun phrase"),
     ],
 )

@@ -252,12 +252,13 @@ def _compile_grouped_table_one_cohort_report_facts(projected, evidence):
 
 
 def _compile_survival_cohort_report_facts(projected, evidence):
-    """Copy the landmark cohort count from a verified signed survival suite.
+    """Copy the landmark cohort counts from a verified signed survival suite.
 
     The suite owns its own Table 1, so no grouped Table 1 fact names its
     population.  The count is the suite's recorded landmark population: the
     stays still under observation at the landmark, in the analysis unit its
-    typed reporting envelope declares.
+    typed reporting envelope declares.  When the complete-case adjusted models
+    dropped records, their recorded count follows as a second fact.
     """
 
     from .writer_evidence import _verified_evidence_json
@@ -303,6 +304,25 @@ def _compile_survival_cohort_report_facts(projected, evidence):
             source_fields=("n_landmark_population",),
             required_result_sections=("Results",),
         ))
+        # The adjusted Cox models are complete-case while Kaplan-Meier and the
+        # restricted mean use the whole cohort, so one count cannot stand for
+        # both: state the models' smaller set beside the cohort.
+        modelled = _count(source.get("n_complete_case"), positive=True)
+        if modelled > population:
+            raise ValueError("Survival model set exceeds its landmark population")
+        if modelled < population:
+            facts.append(DescriptiveReportFact(
+                subsection="Cohort characteristics",
+                text=(
+                    f"Of the {population:,} {unit} in the landmark analysis cohort, "
+                    f"{modelled:,} had complete covariate data and entered the adjusted "
+                    "survival models"
+                ),
+                evidence_id=record.evidence_id,
+                source_sha256=record.sha256,
+                source_fields=("n_landmark_population", "n_complete_case"),
+                required_result_sections=("Results",),
+            ))
     return tuple(facts)
 
 
