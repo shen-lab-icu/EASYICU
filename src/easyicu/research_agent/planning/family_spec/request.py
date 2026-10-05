@@ -10,6 +10,7 @@ from prose except the research question text that is copied verbatim.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any, Mapping, Optional, Sequence
 
 from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
@@ -316,7 +317,7 @@ def _landmark_timing_spec(context: ResearchContext) -> Any | None:
     return None
 
 
-def _typed_cohort_constraints(context: ResearchContext) -> Mapping[str, Any]:
+def _data_constraints(context: ResearchContext) -> Mapping[str, Any]:
     preferences = context.user_preferences
     raw = getattr(preferences, "data_constraints", None)
     if not isinstance(raw, str) or not raw.strip():
@@ -325,10 +326,48 @@ def _typed_cohort_constraints(context: ResearchContext) -> Mapping[str, Any]:
         payload = json.loads(raw)
     except json.JSONDecodeError:
         return {}
-    if not isinstance(payload, Mapping):
-        return {}
-    cohort = payload.get("cohort")
+    return payload if isinstance(payload, Mapping) else {}
+
+
+def _typed_cohort_constraints(context: ResearchContext) -> Mapping[str, Any]:
+    cohort = _data_constraints(context).get("cohort")
     return cohort if isinstance(cohort, Mapping) else {}
+
+
+def _concept_cohort_window(context: ResearchContext) -> dict[str, Any]:
+    """The window a concept-derived population is decided by, as the host states it.
+
+    ``data_constraints.concept_cohort_window`` is the window an export of the
+    study is selected by: a stay enters on a positive concept row at or before
+    ``window_end_hours`` after ICU admission.  Without it the population is not
+    concept-derived; a record that cannot be read fails closed.
+    """
+
+    constraints = _data_constraints(context)
+    if "concept_cohort_window" not in constraints:
+        return {}
+    window = constraints["concept_cohort_window"]
+    definition = window.get("definition") if isinstance(window, Mapping) else None
+    end = window.get("window_end_hours") if isinstance(window, Mapping) else None
+    if (
+        not isinstance(definition, str)
+        or not definition.strip()
+        or len(definition.strip()) > 64
+        or isinstance(end, bool)
+        or not isinstance(end, (int, float))
+        or not math.isfinite(end)
+        or end <= 0
+    ):
+        raise FamilySpecError(
+            "family_spec_concept_cohort_window_invalid",
+            "data_constraints.concept_cohort_window must name the concept population and "
+            "a positive window_end_hours",
+            path="cohort",
+        )
+    return {
+        "concept_cohort_definition": definition.strip(),
+        "concept_cohort_window_end_hours": float(end),
+    }
 
 
 def _typed_cohort_fields(
@@ -376,6 +415,7 @@ def _typed_cohort_fields(
         "age_min": age_min,
         "age_max": age_max,
         "minimum_icu_hours": minimum_icu_hours,
+        **_concept_cohort_window(context),
     }
 
 
@@ -980,11 +1020,15 @@ def _require_sealed_table_one(request: FamilySpecRequest, projection: Mapping[st
 
 
 def _refuse_eligibility_after_time_zero(request: FamilySpecRequest) -> None:
-    """A typed minimum ICU stay must be decided by the plan's time zero.
+    """Cohort eligibility must be decided by the plan's time zero.
 
-    A stay reaches the minimum exactly when it is still in the ICU at that
-    hour.  A minimum beyond time zero would select on survival after it, so
-    the host refuses instead of fitting a plan on that population.
+    A stay reaches a typed minimum ICU stay exactly when it is still in the
+    ICU at that hour, so a minimum beyond time zero would select on survival
+    after it.  A concept-derived population admits a stay on a positive row up
+    to its window's end, so a window ending after time zero would select on
+    what happens after it; a window ending at time zero has decided membership
+    by then.  The host refuses either selection instead of fitting a plan on
+    that population.
     """
 
     minimum = request.minimum_icu_hours
@@ -995,6 +1039,16 @@ def _refuse_eligibility_after_time_zero(request: FamilySpecRequest) -> None:
             f"a minimum ICU stay of {minimum:g} h ends after the plan's time zero at "
             f"{time_zero:g} h after ICU admission; eligibility would depend on survival "
             "after time zero",
+            path="cohort",
+        )
+    window_end = request.concept_cohort_window_end_hours
+    if window_end is not None and time_zero is not None and window_end > time_zero:
+        raise FamilySpecError(
+            "family_spec_cohort_eligibility_after_time_zero",
+            f"the {request.concept_cohort_definition} population admits a stay on a positive "
+            f"row up to {window_end:g} h after ICU admission, after the plan's time zero at "
+            f"{time_zero:g} h; eligibility would depend on what happens after time zero, so "
+            f"the study's cohort window must end by {time_zero:g} h",
             path="cohort",
         )
 

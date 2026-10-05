@@ -136,6 +136,7 @@ from easyicu.webserver.research_pipeline_run_preparation import (
 from easyicu.webserver.pi_copilot.contracts import (
     EXECUTION_RETRY_REPLAYABLE_GATE_REASONS,
 )
+from easyicu.webserver.pi_copilot.extraction_handoff import compile_study_cohort
 from easyicu.webserver.agent_review_recovery import (
     PendingReviewEntry as _PendingRun,
     PendingReviewRegistry,
@@ -1939,6 +1940,29 @@ def _compile_data_constraints(constraints: Mapping[str, Any]) -> str:
     )
 
 
+def _study_concept_cohort_window(study: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """The window a concept-derived study population is decided by, or ``None``.
+
+    It is the window an export of this study records
+    (``cohort_execution.concept_cohort_window``): a stay enters on a positive
+    concept row at or before ``window_end_hours`` after ICU admission.  A
+    cohort Data Extraction cannot compile has none here; extraction refuses it
+    with its own reason.
+    """
+
+    try:
+        execution = dataio.export_cohort_execution(compile_study_cohort(study))
+    except dataio.ExportCohortError:
+        return None
+    window = execution["concept_cohort_window"]
+    if window is None:
+        return None
+    return {
+        "definition": str(window["definition"]),
+        "window_end_hours": int(window["window_end_hours"]),
+    }
+
+
 def _research_user_preferences(
     study: Mapping[str, Any],
     *,
@@ -2035,6 +2059,10 @@ def _research_user_preferences(
     cohort = study.get("cohort")
     if isinstance(cohort, Mapping) and cohort:
         constraints["cohort"] = dict(cohort)
+    concept_window = _study_concept_cohort_window(study)
+    if concept_window is not None:
+        # Planning refuses a plan whose time zero comes before this window ends.
+        constraints["concept_cohort_window"] = concept_window
     if isinstance(confirmations, Mapping) and confirmations:
         constraints["confirmations"] = dict(confirmations)
     if analysis_design:
