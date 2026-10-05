@@ -22,6 +22,12 @@ from easyicu.research_agent.agents.progressive_planner import ProgressivePlanner
 from easyicu.research_agent.orchestration.scientific_runtime import ScientificRuntimeAuthorities
 from easyicu.research_agent.planning.family_spec import FamilySpecError
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+from easyicu.research_agent.research_context.concept_population import (
+    ConceptCohortWindow,
+    ConceptCohortWindowError,
+    concept_cohort_window,
+    context_data_constraints,
+)
 from easyicu.research_agent.schema import ConceptDescriptor, ResearchContext, VariableRole
 from easyicu.webserver import dataio, primary_cohort
 from easyicu.webserver.agent_pipeline_runs import _research_user_preferences
@@ -203,30 +209,63 @@ def test_without_a_concept_window_the_request_keeps_its_digest() -> None:
     assert "concept_cohort_window_end_hours" not in dumped
 
 
-@pytest.mark.parametrize(
-    "window",
-    [
-        {},
-        {"definition": "sepsis3"},
-        {"window_end_hours": 24},
-        {"definition": "", "window_end_hours": 24},
-        {"definition": "s" * 65, "window_end_hours": 24},
-        {"definition": 3, "window_end_hours": 24},
-        {"definition": "sepsis3", "window_end_hours": "24"},
-        {"definition": "sepsis3", "window_end_hours": True},
-        {"definition": "sepsis3", "window_end_hours": 0},
-        {"definition": "sepsis3", "window_end_hours": -24},
-        {"definition": "sepsis3", "window_end_hours": float("nan")},
-        {"definition": "sepsis3", "window_end_hours": float("inf")},
-        "sepsis3 within 24 h",
-        None,
-    ],
-)
+_UNREADABLE_WINDOWS = [
+    {},
+    {"definition": "sepsis3"},
+    {"window_end_hours": 24},
+    {"definition": "", "window_end_hours": 24},
+    {"definition": "s" * 65, "window_end_hours": 24},
+    {"definition": 3, "window_end_hours": 24},
+    {"definition": "sepsis3", "window_end_hours": "24"},
+    {"definition": "sepsis3", "window_end_hours": True},
+    {"definition": "sepsis3", "window_end_hours": 0},
+    {"definition": "sepsis3", "window_end_hours": -24},
+    {"definition": "sepsis3", "window_end_hours": float("nan")},
+    {"definition": "sepsis3", "window_end_hours": float("inf")},
+    "sepsis3 within 24 h",
+    None,
+]
+
+
+@pytest.mark.parametrize("window", _UNREADABLE_WINDOWS)
 def test_a_concept_window_that_cannot_be_read_fails_closed(window: object) -> None:
     with pytest.raises(FamilySpecError) as caught:
         _request(_with_concept_window(_context(), window))
     assert caught.value.reason_code == "family_spec_concept_cohort_window_invalid"
     assert caught.value.path == "cohort"
+
+
+def test_one_typed_reader_states_the_window_for_every_owner() -> None:
+    """Planning and reporting read the same record through one reader."""
+
+    context = _with_concept_window(
+        _context(), {"definition": " sepsis3 ", "window_end_hours": 24}
+    )
+
+    assert concept_cohort_window(context) == ConceptCohortWindow("sepsis3", 24.0)
+    assert _request(context).concept_cohort_definition == "sepsis3"
+    assert concept_cohort_window(_context()) is None
+
+
+@pytest.mark.parametrize("window", _UNREADABLE_WINDOWS)
+def test_the_typed_reader_refuses_a_window_it_cannot_read(window: object) -> None:
+    with pytest.raises(ConceptCohortWindowError):
+        concept_cohort_window(_with_concept_window(_context(), window))
+
+
+@pytest.mark.parametrize("raw", [None, "", "  ", "not json", "[1, 2]", '"text"'])
+def test_constraints_that_are_not_one_json_object_state_no_window(raw: object) -> None:
+    context = _context()
+    context = context.model_copy(
+        update={
+            "user_preferences": context.user_preferences.model_copy(
+                update={"data_constraints": raw}
+            )
+        }
+    )
+
+    assert context_data_constraints(context) == {}
+    assert concept_cohort_window(context) is None
 
 
 @pytest.mark.parametrize(

@@ -10,7 +10,6 @@ from prose except the research question text that is copied verbatim.
 from __future__ import annotations
 
 import json
-import math
 from typing import Any, Mapping, Optional, Sequence
 
 from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
@@ -23,6 +22,11 @@ from ...contracts.sealed_suite_robustness import (
     EXPOSURE_ONSET_HOURS_PRODUCT,
     PREVALENCE_SENSITIVITY_PRODUCT,
     prevalence_sensitivity_cutoffs_hours,
+)
+from ...research_context.concept_population import (
+    ConceptCohortWindowError,
+    concept_cohort_window,
+    context_data_constraints,
 )
 from ...schema import ResearchContext
 from ...trajectory.plan_contract import trajectory_context_is_bound
@@ -317,20 +321,8 @@ def _landmark_timing_spec(context: ResearchContext) -> Any | None:
     return None
 
 
-def _data_constraints(context: ResearchContext) -> Mapping[str, Any]:
-    preferences = context.user_preferences
-    raw = getattr(preferences, "data_constraints", None)
-    if not isinstance(raw, str) or not raw.strip():
-        return {}
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
-    return payload if isinstance(payload, Mapping) else {}
-
-
 def _typed_cohort_constraints(context: ResearchContext) -> Mapping[str, Any]:
-    cohort = _data_constraints(context).get("cohort")
+    cohort = context_data_constraints(context).get("cohort")
     return cohort if isinstance(cohort, Mapping) else {}
 
 
@@ -343,30 +335,17 @@ def _concept_cohort_window(context: ResearchContext) -> dict[str, Any]:
     concept-derived; a record that cannot be read fails closed.
     """
 
-    constraints = _data_constraints(context)
-    if "concept_cohort_window" not in constraints:
-        return {}
-    window = constraints["concept_cohort_window"]
-    definition = window.get("definition") if isinstance(window, Mapping) else None
-    end = window.get("window_end_hours") if isinstance(window, Mapping) else None
-    if (
-        not isinstance(definition, str)
-        or not definition.strip()
-        or len(definition.strip()) > 64
-        or isinstance(end, bool)
-        or not isinstance(end, (int, float))
-        or not math.isfinite(end)
-        or end <= 0
-    ):
+    try:
+        window = concept_cohort_window(context)
+    except ConceptCohortWindowError as exc:
         raise FamilySpecError(
-            "family_spec_concept_cohort_window_invalid",
-            "data_constraints.concept_cohort_window must name the concept population and "
-            "a positive window_end_hours",
-            path="cohort",
-        )
+            "family_spec_concept_cohort_window_invalid", str(exc), path="cohort",
+        ) from exc
+    if window is None:
+        return {}
     return {
-        "concept_cohort_definition": definition.strip(),
-        "concept_cohort_window_end_hours": float(end),
+        "concept_cohort_definition": window.definition,
+        "concept_cohort_window_end_hours": window.window_end_hours,
     }
 
 
