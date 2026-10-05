@@ -162,6 +162,12 @@ class SealedSuiteCoordinates(BaseModel):
         default=None,
         exclude_if=lambda value: value is None,
     )
+    #: The hours the suite's prevalence-definition sensitivity analysis
+    #: re-fits at; ``None`` for a suite without it, left out of the dump.
+    prevalence_sensitivity_cutoffs_hours: list[float] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     event_column: str = Field(min_length=1, max_length=128)
     followup_time_column: str = Field(min_length=1, max_length=128)
     landmark_hours: float = Field(gt=0.0)

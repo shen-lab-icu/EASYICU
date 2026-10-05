@@ -1535,7 +1535,9 @@ def _sensitivity_facts(
         axis
         for step in plan.steps
         for axis in sealed_suite_prespecified_axes(
-            method=str(step.method or ""), rule_refs=step.icu_rule_refs
+            method=str(step.method or ""),
+            rule_refs=step.icu_rule_refs,
+            expected_outputs=step.expected_outputs,
         )
     }
     executable.update(sealed_axes)

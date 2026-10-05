@@ -18,6 +18,8 @@ And it names both analysis sets: the adjusted Cox models drop records with a
 missing covariate, while Kaplan-Meier and the restricted mean keep them.  It
 states the PH decision as the suite's typed rule makes it: the exposure term's
 test or the Bonferroni-adjusted global test, not every term, at the alpha.
+A suite that re-fitted its estimate for the prevalence definition names the
+hours it excluded by and says no record moved to the comparator group.
 
 Synthetic study and seeded synthetic rows only (renal replacement therapy and
 90-day mortality).
@@ -282,3 +284,37 @@ def test_the_design_names_the_set_each_estimate_used(change, sets):
         assert "complete covariate data" not in text
     else:
         assert text.endswith(sets)
+
+
+@pytest.mark.parametrize(
+    ("hours", "analyses", "listed"),
+    [
+        ([12.0], "a prespecified sensitivity analysis", "hour 12"),
+        ([9.0, 12.0], "prespecified sensitivity analyses", "hour 9 or, separately, hour 12"),
+    ],
+    ids=["one_hour", "two_hours"],
+)
+def test_the_design_names_its_prevalence_sensitivity_analyses(hours, analyses, listed):
+    payload = {**BASE, "prevalence_sensitivity_cutoffs_hours": hours}
+    design = validate_executed_method_design(payload)
+    text = _design_text(design)
+
+    assert (
+        f"; {analyses} of the prevalence definition also excluded the exposed records first "
+        f"recorded at or before {listed} and repeated the reported adjusted Cox contrast, with "
+        "no record moved to the comparator group;"
+    ) in text
+    assert executed_method_design_payload(design) == payload
+    spans = _executed_hour_spans(design)
+    for hour in hours:
+        assert (0.0, hour) in spans and (hour, 24.0) in spans
+
+
+@pytest.mark.parametrize(
+    "hours",
+    [[], [6.0], [12.0, 9.0], [12.0, 24.0]],
+    ids=["no_hour", "at_the_cutoff", "unordered", "at_the_window_end"],
+)
+def test_a_disordered_sensitivity_grid_is_refused(hours):
+    with pytest.raises(ValueError):
+        validate_executed_method_design({**BASE, "prevalence_sensitivity_cutoffs_hours": hours})

@@ -28,6 +28,7 @@ from ...authority.survival_scientific_claims import (
     CONSTANT_HAZARD_RATIO_CLAIM_ID,
     SURVIVAL_REPORTING_SCHEMA_VERSION,
     interval_hazard_ratio_claim_id,
+    prevalence_sensitivity_claim_id,
 )
 from ...contracts.executed_method_design import (
     EXECUTED_METHOD_DESIGN_KEY,
@@ -42,6 +43,7 @@ from ...contracts.manuscript_tables import (
     validate_manuscript_table_declarations,
 )
 from ...contracts.manuscript_result_structure import PRIMARY_RESULT_HEADINGS_BY_FAMILY
+from ...gates.figure_privacy import MIN_DISCLOSED_GROUP_SIZE
 from ...schema import AnalysisPlan, AnalysisStep
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 from .typed_input_binding import sole_typed_cohort_input
@@ -54,6 +56,10 @@ LANDMARK_SURVIVAL_ANALYSIS_KIND = "signed_landmark_survival_suite"
 #: literal, which is what made
 #: ``test_report_names_every_owner_the_selector_consults`` single it out.
 LANDMARK_SURVIVAL_FIGURE_ANALYSIS_KIND = "signed_landmark_survival_figure"
+#: The fewest rows and events an adjusted Cox fit of this suite rests on: the
+#: risk set, the primary complete-case model and every sensitivity re-fit.
+_MINIMUM_MODEL_ROWS = 100
+_MINIMUM_MODEL_EVENTS = 10
 
 
 def landmark_survival_executor_owns_step(
@@ -198,6 +204,62 @@ def _landmark_finite_float(value: Any, *, label: str) -> float:
     if not math.isfinite(number):
         raise ValueError(f"landmark survival {label} is non-finite")
     return number
+
+
+def _adjusted_cox_fit(
+    model_frame: Any, *, sealed: LandmarkSurvivalRuntimeAuthority
+) -> tuple[Any, Optional[str]]:
+    """The adjusted Cox fit of one complete-case frame, and why it is no result.
+
+    lifelines reports separation and non-convergence as warnings and still
+    returns coefficients, a separated term's diverging; that is no result.
+    The second value is the first such warning, else ``None``.
+    """
+
+    from lifelines import CoxPHFitter
+    from lifelines.exceptions import ConvergenceWarning
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", ConvergenceWarning)
+        fitter = CoxPHFitter().fit(
+            model_frame,
+            duration_col=sealed.derived_time_column,
+            event_col=sealed.derived_event_column,
+        )
+    nonconvergence = [
+        str(item.message).split(". ", 1)[0]
+        for item in caught if issubclass(item.category, ConvergenceWarning)
+    ]
+    return fitter, (nonconvergence[0] if nonconvergence else None)
+
+
+def _proportional_hazards_decision(
+    model_frame: Any, *, sealed: LandmarkSurvivalRuntimeAuthority, covariates: list[str]
+) -> Optional[tuple[Any, float, float, bool]]:
+    """The sealed PH rule on one complete-case frame.
+
+    The Schoenfeld test table, the global and the exposure term's p values,
+    and whether either rejects at the sealed alpha.  ``None`` when the test
+    gives no single global or exposure result.
+    """
+
+    from ...methods.ph_schoenfeld import ph_test
+
+    table = ph_test(
+        model_frame,
+        duration_col=sealed.derived_time_column,
+        event_col=sealed.derived_event_column,
+        covariates=covariates,
+        time_transform="km",
+    )
+    terms = table["covariate"].astype(str)
+    global_rows = table.loc[terms.eq("global"), "p_value"]
+    exposure_rows = table.loc[terms.eq(sealed.derived_exposure_column), "p_value"]
+    if len(global_rows) != 1 or len(exposure_rows) != 1:
+        return None
+    global_p = _landmark_finite_float(global_rows.iloc[0], label="global PH p")
+    exposure_p = _landmark_finite_float(exposure_rows.iloc[0], label="exposure PH p")
+    return table, global_p, exposure_p, min(global_p, exposure_p) < sealed.proportional_hazards_alpha
 
 
 def _table_one(frame: Any, sealed: LandmarkSurvivalRuntimeAuthority):
@@ -402,6 +464,169 @@ def _measurement_audit_table(
             for column in sealed.required_columns
         ]
     )
+
+
+def _prevalence_sensitivity_fit(
+    model_frame: Any,
+    *,
+    sealed: LandmarkSurvivalRuntimeAuthority,
+    covariates: list[str],
+    hours: float,
+    constant_estimand: bool,
+) -> dict[str, Any]:
+    """Re-fit the primary estimand on one restricted complete-case frame.
+
+    The estimand is the primary's: the constant hazard ratio when the primary
+    PH test let it stand, else every interval's on the primary's cutpoints.
+    The re-fit's own PH test is a disclosed diagnostic: a constant estimate it
+    rejects is not reported, and the estimand never switches.  A frame the
+    primary's gates would refuse, or a fit that fails, has no estimate.
+    """
+
+    import numpy as np
+
+    from ...methods.time_varying_cox import fit_piecewise_time_varying_cox
+
+    exposure = sealed.derived_exposure_column
+    fit: dict[str, Any] = {
+        "prevalent_exposure_cutoff_hours": float(hours),
+        "n_analysis": int(len(model_frame)),
+        "n_exposed": int(model_frame[exposure].sum()),
+        "n_events": int(model_frame[sealed.derived_event_column].sum()),
+        "ph_global_p_value": None,
+        "ph_exposure_p_value": None,
+        "estimates": [],
+        "not_reported": None,
+    }
+    cutpoints = sealed.time_varying_interval_cutpoints_days
+    if not constant_estimand and sealed.time_varying_effect_method is None:
+        return {**fit, "not_reported": "the primary estimate is withheld"}
+    if fit["n_analysis"] < _MINIMUM_MODEL_ROWS or fit["n_events"] < _MINIMUM_MODEL_EVENTS:
+        return {**fit, "not_reported": "below the primary model's minimum rows or events"}
+    if any(model_frame[column].nunique() < 2 for column in covariates):
+        return {**fit, "not_reported": "a model term is constant on the restricted risk set"}
+    columns = dict(duration_col=sealed.derived_time_column, event_col=sealed.derived_event_column)
+    try:
+        decision = _proportional_hazards_decision(model_frame, sealed=sealed, covariates=covariates)
+        if decision is None:
+            return {**fit, "not_reported": "the PH test lacks a global or exposure result"}
+        _ph_table, global_p, exposure_p, rejected = decision
+        fit.update(ph_global_p_value=global_p, ph_exposure_p_value=exposure_p)
+        if constant_estimand:
+            if rejected:
+                return {**fit, "not_reported": "proportional hazards rejected on the restricted risk set"}
+            fitter, nonconvergence = _adjusted_cox_fit(model_frame, sealed=sealed)
+            if nonconvergence is not None:
+                return {**fit, "not_reported": "the Cox model did not converge"}
+            row = fitter.summary.loc[exposure]
+            estimates = [(None, None, row["exp(coef)"], row["exp(coef) lower 95%"], row["exp(coef) upper 95%"])]
+        else:
+            table = fit_piecewise_time_varying_cox(
+                model_frame, covariates=covariates, interval_cutpoints=cutpoints,
+                exposure_col=exposure, **columns,
+            )
+            rows = table.loc[table["is_exposure"]]
+            if len(rows) != len(cutpoints) + 1:
+                return {**fit, "not_reported": "an exposure interval was not estimated"}
+            estimates = [
+                (row.interval_start_days, row.interval_end_days, row.hazard_ratio, row.ci_low, row.ci_high)
+                for row in rows.itertuples(index=False)
+            ]
+    except (ValueError, ArithmeticError, np.linalg.LinAlgError) as error:
+        return {**fit, "not_reported": f"the model could not be fitted: {str(error)[:120]}"}
+    checked = []
+    for start, end, ratio, low, high in estimates:
+        ratio, low, high = (float(value) for value in (ratio, low, high))
+        if not all(math.isfinite(value) and value > 0 for value in (ratio, low, high)) or not low <= ratio <= high:
+            return {**fit, "not_reported": "an estimate is not finite"}
+        checked.append({
+            **({} if start is None else {"start_days": float(start), "end_days": float(end)}),
+            "hazard_ratio": ratio, "ci_low": low, "ci_high": high,
+        })
+    return {**fit, "estimates": checked}
+
+
+def _prevalence_sensitivity_table(
+    primary: dict[str, Any], fits: list[dict[str, Any]], *, constant_estimand: bool
+):
+    """The primary fit and every re-fit of the prespecified grid, one row per estimate."""
+
+    import pandas as pd
+
+    estimand = (
+        "adjusted_hazard_ratio" if constant_estimand else "interval_adjusted_hazard_ratio"
+    )
+    rows = []
+    for analysis, fit in (("primary", primary), *(("sensitivity", item) for item in fits)):
+        common = {
+            "analysis": analysis,
+            "prevalent_exposure_cutoff_hours": fit["prevalent_exposure_cutoff_hours"],
+            "n_landmark_population": fit["n_landmark_population"],
+            "n_excluded_early_exposed": fit["n_excluded_early_exposed"],
+            "n_complete_case": fit["n_analysis"],
+            "n_exposed": fit["n_exposed"],
+            "n_events": fit["n_events"],
+            "estimand": estimand,
+            "ph_global_p_value": fit["ph_global_p_value"],
+            "ph_exposure_p_value": fit["ph_exposure_p_value"],
+        }
+        for estimate in fit["estimates"] or [{}]:
+            rows.append({
+                **common,
+                "interval_start_days": estimate.get("start_days"),
+                "interval_end_days": estimate.get("end_days"),
+                "hazard_ratio": estimate.get("hazard_ratio"),
+                "ci_low": estimate.get("ci_low"),
+                "ci_high": estimate.get("ci_high"),
+                "reported": bool(fit["estimates"]),
+                "not_reported_reason": fit["not_reported"],
+            })
+    return pd.DataFrame(rows)
+
+
+def _exposure_onset_hours_table(sealed: LandmarkSurvivalRuntimeAuthority, analysis: Any):
+    """The exposed group's first-record hours: descriptive and outcome-blind.
+
+    One row per whole hour of the exposure window after the prevalence
+    cutoff.  A count under the disclosed-group floor is suppressed.  The
+    stretch of hours up to each sensitivity cutoff, and from the last one to
+    the window's end, has a total the suite reports elsewhere: the records
+    that cutoff excludes, and the exposed group's size.  A stretch holding
+    one suppressed count therefore also suppresses its smallest other nonzero
+    count (a zero only when it has none), so subtraction recovers no hour
+    within it.  Every suppressed count reads the same.  This protects the
+    distribution within a stretch, not its size: like the suite's other
+    cohort counts, that total is exact.
+    """
+
+    import pandas as pd
+
+    onset = analysis.loc[
+        analysis[sealed.derived_exposure_column].eq(1), sealed.exposure_onset_column
+    ]
+    start = math.floor(float(sealed.prevalent_exposure_cutoff_hours))
+    end = math.ceil(float(sealed.exposure_window_hours[1]))
+    counts = {
+        hour: int((onset.gt(hour - 1) & onset.le(hour)).sum())
+        for hour in range(start + 1, end + 1)
+    }
+    hidden = {hour for hour, count in counts.items() if 0 < count < MIN_DISCLOSED_GROUP_SIZE}
+    low = start
+    for high in (*(int(hour) for hour in sealed.prevalence_sensitivity_cutoffs_hours or ()), end):
+        stretch = [hour for hour in counts if low < hour <= high]
+        shown = [hour for hour in stretch if hour not in hidden]
+        if len(stretch) - len(shown) == 1 and shown:
+            hidden.add(min(shown, key=lambda hour: (counts[hour] == 0, counts[hour], hour)))
+        low = high
+    return pd.DataFrame([
+        {
+            "first_record_after_hour": float(hour - 1),
+            "first_record_by_hour": float(hour),
+            "exposed_records": "suppressed" if hour in hidden else str(count),
+            "summary_kind": "descriptive_outcome_blind",
+        }
+        for hour, count in counts.items()
+    ])
 
 
 _PH_ROW_INCHES = 0.11
@@ -979,8 +1204,25 @@ def _render_figure(
     return outputs
 
 
+def _sensitivity_estimate_block(estimates: list[dict[str, Any]]) -> dict[str, Any]:
+    """A re-fit's estimates as its envelope reads them; none when it has none."""
+
+    if not estimates:
+        return {}
+    values = [
+        {name: estimate[name] for name in ("hazard_ratio", "ci_low", "ci_high")}
+        for estimate in estimates
+    ]
+    if "start_days" in estimates[0]:
+        return {"interval_hazard_ratios": values}
+    return {"adjusted_hazard_ratio": values[0]}
+
+
 def build_survival_manuscript_projection(
-    *, interval_count: int, proportional_hazards_rejected: bool
+    *,
+    interval_count: int,
+    proportional_hazards_rejected: bool,
+    sensitivity_claim_ids: list[str] | tuple[str, ...] = (),
 ) -> dict[str, object]:
     """Build the reporting projection owned by the signed survival executor.
 
@@ -1040,6 +1282,16 @@ def build_survival_manuscript_projection(
                 }
                 for claim_id in primary_claims
             ),
+            # A sensitivity claim has no heading of its own in a survival
+            # article; it is reported beside the estimates it re-fits.
+            *(
+                {
+                    "claim_id": f"results_{claim_id}",
+                    "targets": [survival],
+                    "scientific_claim_id": claim_id,
+                }
+                for claim_id in sensitivity_claim_ids
+            ),
         ],
     }
 
@@ -1067,6 +1319,11 @@ def _executed_survival_design(sealed: LandmarkSurvivalRuntimeAuthority) -> dict[
             ],
             rmst_horizon_days=followup_days if sealed.rmst_product is not None else None,
             exposure_onset_representation=sealed.exposure_onset_representation,
+            prevalence_sensitivity_cutoffs_hours=(
+                None
+                if sealed.prevalence_sensitivity_cutoffs_hours is None
+                else [float(hour) for hour in sealed.prevalence_sensitivity_cutoffs_hours]
+            ),
         )
     )
 
@@ -1085,11 +1342,8 @@ def run_landmark_survival_suite(
 
     import numpy as np
     import pandas as pd
-    from lifelines import CoxPHFitter
-    from lifelines.exceptions import ConvergenceWarning
 
     from ...figures.base import km_estimate
-    from ...methods.ph_schoenfeld import ph_test
     from ...methods.rmst import rmst, rmst_difference
     from ...methods.time_varying_cox import fit_piecewise_time_varying_cox
 
@@ -1154,11 +1408,14 @@ def run_landmark_survival_suite(
     analysis[sealed.derived_exposure_column] = incident.loc[eligible_mask].astype(int)
     analysis[sealed.derived_event_column] = event.loc[eligible_mask].astype(int)
     analysis[sealed.derived_time_column] = followup.loc[eligible_mask] - landmark_days
-    if len(analysis) < 100 or analysis[sealed.derived_exposure_column].nunique() != 2:
+    if (
+        len(analysis) < _MINIMUM_MODEL_ROWS
+        or analysis[sealed.derived_exposure_column].nunique() != 2
+    ):
         raise ValueError(
             "landmark survival risk set lacks an estimable exposure contrast"
         )
-    if int(analysis[sealed.derived_event_column].sum()) < 10:
+    if int(analysis[sealed.derived_event_column].sum()) < _MINIMUM_MODEL_EVENTS:
         raise ValueError("landmark survival risk set has insufficient event support")
 
     missingness_measurement_audit = {
@@ -1272,8 +1529,8 @@ def run_landmark_survival_suite(
         pieces.append(encoded)
     model_frame = pd.concat(pieces, axis=1).dropna().astype(float)
     if (
-        len(model_frame) < 100
-        or int(model_frame[sealed.derived_event_column].sum()) < 10
+        len(model_frame) < _MINIMUM_MODEL_ROWS
+        or int(model_frame[sealed.derived_event_column].sum()) < _MINIMUM_MODEL_EVENTS
     ):
         raise ValueError("landmark survival complete-case model is not estimable")
     covariates = [
@@ -1281,23 +1538,10 @@ def run_landmark_survival_suite(
         for column in model_frame.columns
         if column not in {sealed.derived_time_column, sealed.derived_event_column}
     ]
-    # lifelines reports separation and non-convergence as warnings and still
-    # returns coefficients, a separated term's diverging; that is no result.
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always", ConvergenceWarning)
-        fitter = CoxPHFitter()
-        fitter.fit(
-            model_frame,
-            duration_col=sealed.derived_time_column,
-            event_col=sealed.derived_event_column,
-        )
-    nonconvergence = [
-        str(item.message).split(". ", 1)[0]
-        for item in caught if issubclass(item.category, ConvergenceWarning)
-    ]
-    if nonconvergence:
+    fitter, nonconvergence = _adjusted_cox_fit(model_frame, sealed=sealed)
+    if nonconvergence is not None:
         raise ValueError(
-            f"landmark survival Cox model did not converge: {nonconvergence[0]}"
+            f"landmark survival Cox model did not converge: {nonconvergence}"
         )
     summary = fitter.summary.reset_index().rename(columns={"covariate": "term"})
     if "term" not in summary.columns:
@@ -1320,26 +1564,10 @@ def run_landmark_survival_suite(
     for name in ("hazard_ratio", "ci_low", "ci_high", "standard_error", "p_value"):
         _landmark_finite_float(primary_row[name], label=name)
 
-    ph_table = ph_test(
-        model_frame,
-        duration_col=sealed.derived_time_column,
-        event_col=sealed.derived_event_column,
-        covariates=covariates,
-        time_transform="km",
-    )
-    global_rows = ph_table.loc[ph_table["covariate"].astype(str).eq("global")]
-    exposure_rows = ph_table.loc[
-        ph_table["covariate"].astype(str).eq(sealed.derived_exposure_column)
-    ]
-    if len(global_rows) != 1 or len(exposure_rows) != 1:
+    decision = _proportional_hazards_decision(model_frame, sealed=sealed, covariates=covariates)
+    if decision is None:
         raise ValueError("landmark survival PH audit lacks global or exposure result")
-    global_p = _landmark_finite_float(
-        global_rows["p_value"].iloc[0], label="global PH p"
-    )
-    exposure_p = _landmark_finite_float(
-        exposure_rows["p_value"].iloc[0], label="exposure PH p"
-    )
-    ph_violation = min(global_p, exposure_p) < sealed.proportional_hazards_alpha
+    ph_table, global_p, exposure_p, ph_violation = decision
     if ph_violation:
         ph_status = (
             "violation_report_only"
@@ -1419,6 +1647,35 @@ def run_landmark_survival_suite(
                 "landmark survival time-varying result lacks every exposure interval"
             )
 
+    # The prevalence-definition sensitivity analysis: every hour of the sealed
+    # grid also excludes the exposed records first recorded by it, from the
+    # analysis rather than into the comparator, and re-fits the primary
+    # estimand.  Each fit is reported whatever its result.
+    prevalence_fits: list[dict[str, Any]] = []
+    if sealed.prevalence_sensitivity_product is not None:
+        onset = analysis[sealed.exposure_onset_column]
+        for hours in sealed.prevalence_sensitivity_cutoffs_hours or ():
+            early = analysis[sealed.derived_exposure_column].eq(1) & onset.le(hours)
+            restricted = model_frame.loc[
+                ~model_frame.index.isin(analysis.index[early.to_numpy()])
+            ]
+            prevalence_fits.append({
+                **_prevalence_sensitivity_fit(
+                    restricted, sealed=sealed, covariates=covariates, hours=hours,
+                    constant_estimand=not ph_violation,
+                ),
+                "n_landmark_population": int(len(analysis) - early.sum()),
+                "n_excluded_early_exposed": int(early.sum()),
+            })
+    prevalence_claim_ids = [
+        prevalence_sensitivity_claim_id(
+            fit["prevalent_exposure_cutoff_hours"],
+            None if "start_days" not in estimate else position,
+        )
+        for fit in prevalence_fits
+        for position, estimate in enumerate(fit["estimates"], start=1)
+    ]
+
     # When the prespecified PH test rejects, the constant hazard ratio is not a
     # result: it stays a diagnostic row of the Cox table and never becomes a
     # summary leaf, which would make it bindable in the manuscript.
@@ -1492,6 +1749,29 @@ def run_landmark_survival_suite(
             "manuscript_projection": build_survival_manuscript_projection(
                 interval_count=len(exposure_intervals),
                 proportional_hazards_rejected=ph_violation,
+                sensitivity_claim_ids=prevalence_claim_ids,
+            ),
+            # Last, so the per-step numeric cap reaches the primary estimates
+            # first; every hour of the grid, reported or not.
+            **(
+                {
+                    "prevalence_definition_sensitivity": {
+                        "axis": "prevalence_definition",
+                        "fits": [
+                            {
+                                "prevalent_exposure_cutoff_hours": fit[
+                                    "prevalent_exposure_cutoff_hours"
+                                ],
+                                "n_analysis": fit["n_analysis"],
+                                "n_events": fit["n_events"],
+                                **_sensitivity_estimate_block(fit["estimates"]),
+                            }
+                            for fit in prevalence_fits
+                        ],
+                    }
+                }
+                if prevalence_fits
+                else {}
             ),
         }
 
@@ -1513,6 +1793,45 @@ def run_landmark_survival_suite(
         rmst_table.to_csv(rmst_path, index=False)
     if time_varying_table is not None:
         time_varying_table.to_csv(time_varying_path, index=False)
+    prevalence_path = out_dir / "landmark_prevalence_sensitivity.csv"
+    onset_hours_path = out_dir / "landmark_exposure_onset_hours.csv"
+    if sealed.prevalence_sensitivity_product is not None:
+        primary_estimates = (
+            [{
+                "hazard_ratio": float(primary_row["hazard_ratio"]),
+                "ci_low": float(primary_row["ci_low"]),
+                "ci_high": float(primary_row["ci_high"]),
+            }]
+            if not ph_violation
+            else [
+                {
+                    "start_days": float(row.interval_start_days),
+                    "end_days": float(row.interval_end_days),
+                    "hazard_ratio": float(row.hazard_ratio),
+                    "ci_low": float(row.ci_low),
+                    "ci_high": float(row.ci_high),
+                }
+                for row in exposure_intervals.itertuples(index=False)
+            ]
+            if exposure_intervals is not None
+            else []
+        )
+        primary_fit = {
+            "prevalent_exposure_cutoff_hours": float(sealed.prevalent_exposure_cutoff_hours),
+            "n_landmark_population": int(len(analysis)),
+            "n_excluded_early_exposed": 0,
+            "n_analysis": int(len(model_frame)),
+            "n_exposed": int(model_frame[sealed.derived_exposure_column].sum()),
+            "n_events": int(model_frame[sealed.derived_event_column].sum()),
+            "ph_global_p_value": global_p,
+            "ph_exposure_p_value": exposure_p,
+            "estimates": primary_estimates,
+            "not_reported": None if primary_estimates else "the primary estimate is withheld",
+        }
+        _prevalence_sensitivity_table(
+            primary_fit, prevalence_fits, constant_estimand=not ph_violation
+        ).to_csv(prevalence_path, index=False)
+        _exposure_onset_hours_table(sealed, analysis).to_csv(onset_hours_path, index=False)
     measurement_path = out_dir / "landmark_measurement_audit.csv"
     if sealed.measurement_audit_product is not None:
         _measurement_audit_table(sealed, working, analysis).to_csv(measurement_path, index=False)
@@ -1577,6 +1896,10 @@ def run_landmark_survival_suite(
         output_files[sealed.rmst_product] = rmst_path.name
     if sealed.time_varying_cox_product is not None:
         output_files[sealed.time_varying_cox_product] = time_varying_path.name
+    if sealed.prevalence_sensitivity_product is not None:
+        output_files[sealed.prevalence_sensitivity_product] = prevalence_path.name
+    if sealed.exposure_onset_hours_product is not None:
+        output_files[sealed.exposure_onset_hours_product] = onset_hours_path.name
     if sealed.measurement_audit_product is not None:
         output_files[sealed.measurement_audit_product] = measurement_path.name
     return {

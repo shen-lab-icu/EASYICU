@@ -177,6 +177,35 @@ def _adjustment_proposal(
     )
 
 
+def _prevalence_sensitivity_sentences(hours: list[float], *, present: bool) -> tuple[str, str]:
+    """The reviewable words for the suite's prevalence-definition sensitivity analysis."""
+
+    if not hours:
+        return "", ""
+    named = [f"hour {hour:g}" for hour in hours]
+    listed = named[0] if len(named) == 1 else ", ".join(named[:-1]) + f" or, separately, {named[-1]}"
+    analyses = (
+        "A prespecified sensitivity analysis of the prevalence definition also excludes"
+        if len(hours) == 1
+        else "Prespecified sensitivity analyses of the prevalence definition also exclude"
+    )
+    repeats = "repeats" if len(hours) == 1 else "repeat"
+    english = (
+        f" {analyses} exposure first recorded{' as present' if present else ''} at or before "
+        f"{listed} and {repeats} the reported estimate; a descriptive table shows the exposed "
+        "group's first-record hours."
+    )
+    named_zh = [f"第 {hour:g} 小时" for hour in hours]
+    listed_zh = named_zh[0] if len(named_zh) == 1 else (
+        "、".join(named_zh[:-1]) + f"或（另一项分析中）{named_zh[-1]}"
+    )
+    chinese = (
+        f"预先设定的现患定义敏感性分析另外排除首次{'阳性' if present else ''}记录在{listed_zh}"
+        "及以前的暴露，并重复报告的估计；描述性表格给出暴露组首次记录的小时分布。"
+    )
+    return english, chinese
+
+
 def _design_selection(
     request: FamilySpecRequest,
     spec: FamilyPlanSpec,
@@ -190,6 +219,9 @@ def _design_selection(
     # A suite signed before the onset representation timed the exposure by its
     # first record of any value, and its plan keeps those words.
     present = sealed.exposure_onset_representation == "first_truthy_event_time"
+    sensitivity_en, sensitivity_zh = _prevalence_sensitivity_sentences(
+        sealed.prevalence_sensitivity_cutoffs_hours or [], present=present
+    )
     exposure = _label(spec, request.primary_exposure)
     outcome = _label(spec, request.outcome)
     adjustment_text = ", ".join(_label(spec, name) for name in roster) or "no covariates"
@@ -287,7 +319,7 @@ def _design_selection(
                 "校正模型对封印的列做完整病例分析，并审计分母；Kaplan-Meier 曲线和限制平均生存时间使用"
                 "完整风险集。",
                 "比例风险假设被拒绝时，以预先设定的分段 Cox 模型和未调整的限制平均生存时间对比，"
-                "替代恒定的风险比。",
+                "替代恒定的风险比。" + sensitivity_zh,
             ]
             if language == "zh"
             else [
@@ -303,7 +335,8 @@ def _design_selection(
                 "Complete-case adjusted models on the sealed columns with an audited denominator; "
                 "Kaplan-Meier and the restricted mean use the whole risk set.",
                 "Prespecified interval-specific Cox and an unadjusted restricted-mean survival-time "
-                "contrast replace a constant hazard ratio when proportional hazards is rejected.",
+                "contrast replace a constant hazard ratio when proportional hazards is rejected."
+                + sensitivity_en,
             ]
         ),
         disposition="selected",

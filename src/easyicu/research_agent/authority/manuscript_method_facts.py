@@ -116,11 +116,17 @@ def _executed_hour_spans(design: object) -> tuple[tuple[float, float], ...]:
         )))
     if isinstance(design, LandmarkSurvivalDesign):
         cutoff = float(design.prevalent_exposure_cutoff_hours)
+        window_end = float(design.exposure_window_end_hours)
         return tuple(dict.fromkeys((
             (0.0, float(design.landmark_hours)),
-            (0.0, float(design.exposure_window_end_hours)),
+            (0.0, window_end),
             *(((0.0, cutoff),) if cutoff > 0 else ()),
-            (cutoff, float(design.exposure_window_end_hours)),
+            (cutoff, window_end),
+            *(
+                span
+                for hour in design.prevalence_sensitivity_cutoffs_hours or ()
+                for span in ((0.0, float(hour)), (float(hour), window_end))
+            ),
         )))
     return ()
 
@@ -224,6 +230,21 @@ def _survival_design_text(design: LandmarkSurvivalDesign) -> str:
         text += (
             "; the restricted mean survival time difference was unadjusted over the "
             f"{design.rmst_horizon_days:g} days after the landmark"
+        )
+    if design.prevalence_sensitivity_cutoffs_hours:
+        hours = [f"hour {hour:g}" for hour in design.prevalence_sensitivity_cutoffs_hours]
+        analyses = (
+            "a prespecified sensitivity analysis"
+            if len(hours) == 1
+            else "prespecified sensitivity analyses"
+        )
+        listed = hours[0] if len(hours) == 1 else (
+            ", ".join(hours[:-1]) + f" or, separately, {hours[-1]}"
+        )
+        text += (
+            f"; {analyses} of the prevalence definition also excluded the exposed "
+            f"records {recorded} at or before {listed} and repeated the reported "
+            "adjusted Cox contrast, with no record moved to the comparator group"
         )
     if design.n_adjustment_covariates:
         # The adjusted models drop records with a missing covariate; the

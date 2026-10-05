@@ -18,6 +18,11 @@ from ...authority.declared_levels import closed_planning_levels_for
 from ...concept_availability import concept_records_one_value_per_stay, variable_source_unavailability
 from ...contracts.model_terms import level_spelling
 from ...contracts.primary_cohort import study_population_product_for
+from ...contracts.sealed_suite_robustness import (
+    EXPOSURE_ONSET_HOURS_PRODUCT,
+    PREVALENCE_SENSITIVITY_PRODUCT,
+    prevalence_sensitivity_cutoffs_hours,
+)
 from ...schema import ResearchContext
 from ...trajectory.plan_contract import trajectory_context_is_bound
 from ..accepted_analysis_inputs import analysis_input_value_columns
@@ -186,6 +191,9 @@ def sealed_survival_suite_coordinates(
             exposure_status_column=str(payload.get("exposure_status_column") or ""),
             exposure_onset_column=str(payload.get("exposure_onset_column") or ""),
             exposure_onset_representation=payload.get("exposure_onset_representation"),
+            prevalence_sensitivity_cutoffs_hours=payload.get(
+                "prevalence_sensitivity_cutoffs_hours"
+            ),
             event_column=str(payload.get("event_column") or ""),
             followup_time_column=str(payload.get("followup_time_column") or ""),
             landmark_hours=float(payload.get("landmark_hours") or 0.0),
@@ -204,7 +212,9 @@ _PROPOSED_SURVIVAL_OWNER = "signed_landmark_survival_suite"
 _ONSET_SUFFIX = "_onset_time"
 #: Products every signed suite declares.  The signing projection adds an
 #: interval-specific Cox table when the endpoint has cutpoints inside the
-#: follow-up; a proposal is replaced by the signed plan before it runs.
+#: follow-up, and the prevalence-definition sensitivity tables when its rule
+#: gives an hour inside the exposure window; a proposal is replaced by the
+#: signed plan before it runs.
 _PROPOSED_SURVIVAL_OUTPUTS = (
     "table:landmark_table_one",
     "table:landmark_risk_set_flow",
@@ -255,18 +265,25 @@ def proposed_survival_suite_coordinates(
     # its owner records once per stay (sex, age) has none to classify.
     if concept_records_one_value_per_stay(source):
         return None
+    # The exposure window ends at the landmark.
+    sensitivity_hours = prevalence_sensitivity_cutoffs_hours(float(landmark))
+    outputs = list(_PROPOSED_SURVIVAL_OUTPUTS)
+    if sensitivity_hours:
+        audit = outputs.index("table:landmark_measurement_audit")
+        outputs[audit:audit] = [PREVALENCE_SENSITIVITY_PRODUCT, EXPOSURE_ONSET_HOURS_PRODUCT]
     try:
         return SealedSuiteCoordinates(
             primary_owner=_PROPOSED_SURVIVAL_OWNER,
             exposure_status_column=exposure,
             exposure_onset_column=f"{source}{_ONSET_SUFFIX}",
             exposure_onset_representation="first_truthy_event_time",
+            prevalence_sensitivity_cutoffs_hours=list(sensitivity_hours) or None,
             event_column=endpoint.event_concept,
             followup_time_column=endpoint.followup_concept,
             landmark_hours=float(landmark),
             endpoint_horizon_days=float(endpoint.horizon_days),
             adjustment_columns=[],
-            plan_outputs=list(_PROPOSED_SURVIVAL_OUTPUTS),
+            plan_outputs=outputs,
         )
     except ValueError:
         return None

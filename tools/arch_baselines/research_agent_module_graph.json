@@ -1761,6 +1761,10 @@
     ],
     [
       "easyicu.research_agent.authority.current_case_scientific_runtime",
+      "easyicu.research_agent.contracts.sealed_suite_robustness"
+    ],
+    [
+      "easyicu.research_agent.authority.current_case_scientific_runtime",
       "easyicu.research_agent.schema"
     ],
     [
@@ -5957,6 +5961,10 @@
     ],
     [
       "easyicu.research_agent.execution.runners.landmark_survival_executor",
+      "easyicu.research_agent.gates.figure_privacy"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_survival_executor",
       "easyicu.research_agent.methods.ph_schoenfeld"
     ],
     [
@@ -9645,6 +9653,10 @@
     ],
     [
       "easyicu.research_agent.planning.family_spec.request",
+      "easyicu.research_agent.contracts.sealed_suite_robustness"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.request",
       "easyicu.research_agent.planning.accepted_analysis_inputs"
     ],
     [
@@ -13264,7 +13276,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3308,
+    "edge_count": 3311,
     "largest_scc_size": 0,
     "module_count": 769,
     "package_count": 36,

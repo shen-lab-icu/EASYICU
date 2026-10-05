@@ -11,6 +11,11 @@ Its coordinates are typed here, the reported estimate follows from the
 envelope's own test result, and every sentence is the fixed association or
 rule-outcome template over those fields.  An older ``/1`` envelope stays
 readable and claims nothing.
+
+A suite that declares the prevalence-definition sensitivity analysis adds its
+re-fits to the envelope.  Each estimable fit repeats the primary estimand on
+the restricted risk set and is claimed as a sensitivity analysis, never as the
+answer.
 """
 
 from __future__ import annotations
@@ -35,6 +40,18 @@ def interval_hazard_ratio_claim_id(position: int) -> str:
     """The claim id of the ``position``-th (1-based) follow-up interval."""
 
     return f"interval_{position}_adjusted_hazard_ratio"
+
+
+def prevalence_sensitivity_claim_id(hours: float, position: int | None = None) -> str:
+    """The claim id of one sensitivity re-fit: its constant or ``position``-th interval estimate."""
+
+    token = f"{hours:g}".replace(".", "p")
+    estimate = (
+        CONSTANT_HAZARD_RATIO_CLAIM_ID
+        if position is None
+        else interval_hazard_ratio_claim_id(position)
+    )
+    return f"prevalence_cutoff_{token}h_{estimate}"
 
 
 class _HazardRatio(BaseModel):
@@ -88,6 +105,38 @@ class _TimeVaryingAssociation(BaseModel):
         return self
 
 
+class _PrevalenceSensitivityFit(BaseModel):
+    """One re-fit that also excluded exposed records first recorded by ``hours``.
+
+    It carries the primary's estimand, which the envelope checks: the constant
+    hazard ratio when that is authorized, else every interval's.  A fit the
+    risk set could not support carries neither and is reported without an
+    estimate.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False)
+
+    prevalent_exposure_cutoff_hours: float = Field(gt=0.0)
+    n_analysis: int = Field(ge=0)
+    n_events: int = Field(ge=0)
+    adjusted_hazard_ratio: _HazardRatio | None = None
+    interval_hazard_ratios: list[_HazardRatio] | None = None
+
+
+class _PrevalenceSensitivity(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    axis: Literal["prevalence_definition"]
+    fits: list[_PrevalenceSensitivityFit] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _hours_increase(self) -> "_PrevalenceSensitivity":
+        hours = [fit.prevalent_exposure_cutoff_hours for fit in self.fits]
+        if any(later <= earlier for earlier, later in zip(hours, hours[1:])):
+            raise ValueError("sensitivity fits must follow increasing cutoffs")
+        return self
+
+
 class SurvivalReporting(BaseModel):
     """The suite's reporting envelope; fields the claims do not read pass through."""
 
@@ -111,6 +160,7 @@ class SurvivalReporting(BaseModel):
     rmst: dict[str, Any]
     time_varying_adjusted_association: _TimeVaryingAssociation
     manuscript_projection: dict[str, Any]
+    prevalence_definition_sensitivity: _PrevalenceSensitivity | None = None
 
     @model_validator(mode="after")
     def _estimate_follows_from_the_test(self) -> "SurvivalReporting":
@@ -129,6 +179,23 @@ class SurvivalReporting(BaseModel):
             not column.strip() for column in self.adjustment_columns
         ):
             raise ValueError("survival adjustment columns must be unique and non-empty")
+        intervals = len(self.time_varying_adjusted_association.intervals)
+        for fit in (
+            self.prevalence_definition_sensitivity.fits
+            if self.prevalence_definition_sensitivity is not None
+            else ()
+        ):
+            if (
+                fit.adjusted_hazard_ratio is not None
+                and not self.constant_hazard_ratio_authorized
+            ) or (
+                fit.interval_hazard_ratios is not None
+                and (
+                    self.constant_hazard_ratio_authorized
+                    or len(fit.interval_hazard_ratios) != intervals
+                )
+            ):
+                raise ValueError("a sensitivity fit must repeat the primary estimand")
         return self
 
 
@@ -153,7 +220,33 @@ def survival_claim_ids(reporting: SurvivalReporting) -> tuple[str, ...]:
         for position in range(
             1, len(reporting.time_varying_adjusted_association.intervals) + 1
         )
-    )
+    ) + tuple(claim_id for claim_id, _estimate, _hours, _estimand in _sensitivity_estimates(reporting))
+
+
+def _sensitivity_estimates(reporting: SurvivalReporting):
+    """Each estimable re-fit's estimates: claim id, estimate, hours and estimand."""
+
+    sensitivity = reporting.prevalence_definition_sensitivity
+    primary_intervals = reporting.time_varying_adjusted_association.intervals
+    for fit in sensitivity.fits if sensitivity is not None else ():
+        hours = fit.prevalent_exposure_cutoff_hours
+        if fit.adjusted_hazard_ratio is not None:
+            yield (
+                prevalence_sensitivity_claim_id(hours),
+                fit.adjusted_hazard_ratio,
+                hours,
+                "adjusted hazard ratio over the post-landmark follow-up",
+            )
+        for position, (estimate, interval) in enumerate(
+            zip(fit.interval_hazard_ratios or (), primary_intervals), start=1
+        ):
+            yield (
+                prevalence_sensitivity_claim_id(hours, position),
+                estimate,
+                hours,
+                f"adjusted hazard ratio for days {interval.start_days:g} to "
+                f"{interval.end_days:g} after the landmark",
+            )
 
 
 def derive_survival_claim_payloads(summary: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -212,6 +305,16 @@ def derive_survival_claim_payloads(summary: Mapping[str, Any]) -> list[dict[str,
             ),
             role=interval_role,
         ))
+    # A re-fit on a restricted risk set is a sensitivity analysis of the
+    # prevalence definition: its population says which records it excluded.
+    for claim_id, estimate, hours, estimand in _sensitivity_estimates(reporting):
+        payloads.append({
+            **association(claim_id, estimate, estimand=estimand, role="sensitivity"),
+            "population": (
+                f"{common['population']}, excluding exposed records first recorded "
+                f"at or before hour {hours:g}"
+            ),
+        })
     payloads.extend(derive_rule_outcome_claim_payloads({
         "status": "ok",
         RULE_OUTCOMES_KEY: [rule_outcome_payload(reporting.proportional_hazards_test)],
@@ -226,6 +329,7 @@ __all__ = [
     "SurvivalReporting",
     "derive_survival_claim_payloads",
     "interval_hazard_ratio_claim_id",
+    "prevalence_sensitivity_claim_id",
     "survival_claim_ids",
     "survival_reporting_requests_claims",
 ]
