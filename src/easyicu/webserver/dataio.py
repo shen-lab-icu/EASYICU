@@ -866,6 +866,23 @@ def _resolve_export_out_dir(
     return _unique_child_dir(root, label)
 
 
+def _cohort_execution_readme_lines(record: Any) -> List[str]:
+    if not isinstance(record, Mapping):
+        return []
+    lines = [
+        f"- Scores: SOFA and SOFA-2 keep their own `{record.get('score_window_hours', '')} h` "
+        "worst-value window; the observation window is not a scoring window"
+    ]
+    window = record.get("concept_cohort_window")
+    if isinstance(window, Mapping):
+        lines.insert(
+            0,
+            f"- Cohort rule: a stay enters on a positive `{window.get('definition', '')}` row "
+            f"at or before hour `{window.get('window_end_hours', '')}` after ICU admission",
+        )
+    return lines
+
+
 def _render_export_readme(
     manifest: Dict[str, Any],
     *,
@@ -931,6 +948,7 @@ def _render_export_readme(
         f"- Cohort preset: `{cohort.get('preset', '')}`",
         f"- Cohort selected: `{report.get('selected', report.get('cohort_size', ''))}`",
         f"- Observation window: `{cohort.get('observation_window_hours', '')} hours`",
+        *_cohort_execution_readme_lines(manifest.get("cohort_execution")),
         f"- Modules: `{', '.join(unique_modules)}`",
         f"- Concepts selected: `{sum(int(f.get('concepts') or 0) for f in files)}`",
         f"- Structurally unavailable for this database: `{structurally_unavailable_count}` (listed with reason codes in `_manifest.json`)",
@@ -1610,8 +1628,31 @@ def _truthy_mask(values: Any) -> Any:
     return lowered.isin({"1", "true", "t", "yes", "y", "positive", "present"})
 
 
+#: Row times a concept load returns, in hours after ICU admission: the merged
+#: frame's ``charttime``, or the KDIGO bundle's own column on its special route.
+_CONCEPT_ROW_TIME_COLUMNS = ("charttime", "datetime", "observationoffset")
+
+
+def _concept_row_hours(frame: Any) -> Any:
+    """Hours after ICU admission of each concept row, or None when untimed."""
+
+    import pandas as pd
+
+    column = next(
+        (name for name in _CONCEPT_ROW_TIME_COLUMNS if name in frame.columns), None
+    )
+    if column is None:
+        return None
+    values = frame[column]
+    if pd.api.types.is_timedelta64_dtype(values):
+        return values / pd.Timedelta(hours=1)
+    if pd.api.types.is_numeric_dtype(values) and not pd.api.types.is_bool_dtype(values):
+        return values.astype(float)
+    return None
+
+
 def _positive_ids_from_concept_payload(
-    payload: Any, id_col: str, spec: Dict[str, Any]
+    payload: Any, id_col: str, spec: Dict[str, Any], window_end_hours: int
 ) -> Set[Any]:
     import pandas as pd
 
@@ -1623,6 +1664,17 @@ def _positive_ids_from_concept_payload(
         frame_id = _cohort_id_column(frame, id_col)
         if not frame_id:
             continue
+        hours = _concept_row_hours(frame)
+        if hours is None:
+            # Without a row time the window cannot be applied, and a stay
+            # positive only after it would enter the cohort.
+            raise ExportCohortError(
+                "concept_cohort_row_time_unavailable",
+                {
+                    "concepts": list(spec["concepts"]),
+                    "time_columns": list(_CONCEPT_ROW_TIME_COLUMNS),
+                },
+            )
 
         mask = pd.Series(False, index=frame.index)
         for col in spec.get("positive", []):
@@ -1639,6 +1691,9 @@ def _positive_ids_from_concept_payload(
                     mask = mask | ((numeric > 0) & (numeric <= threshold))
                 elif op == "ge":
                     mask = mask | (numeric >= threshold)
+        # ``primary_cohort.CONCEPT_POSITIVE_ROWS``: only a positive row timed at
+        # or before the window's end admits a stay.
+        mask = mask & hours.le(window_end_hours)
         matched.update(frame.loc[mask, frame_id].dropna().tolist())
     return matched
 
@@ -1656,7 +1711,9 @@ def _match_concept_derived_cohort_ids(
     spec = _CONCEPT_DERIVED_COHORTS.get(preset)
     if not spec:
         return set(base_ids)
-    load_kwargs = {"win_length": f"{window_hours}h"}
+    # The window decides who enters; it is not a scoring window, so SOFA and
+    # SOFA-2 inside a sepsis definition keep their own.
+    load_kwargs: Dict[str, Any] = {}
     if _module_uses_sepsis_kwargs(spec["concepts"]):
         load_kwargs.update(sepsis_load_kwargs or {})
     try:
@@ -1675,7 +1732,7 @@ def _match_concept_derived_cohort_ids(
             {"preset": preset, "concepts": spec["concepts"], "detail": str(exc)},
         ) from exc
 
-    matched = _positive_ids_from_concept_payload(payload, id_col, spec)
+    matched = _positive_ids_from_concept_payload(payload, id_col, spec, window_hours)
     if not matched and base_ids:
         return set()
     return set(base_ids) & matched
@@ -1735,7 +1792,6 @@ def _resolve_export_cohort(
                 "max_patients_applied": bool(max_n),
                 "applied_filters": [],
             },
-            "load_kwargs": {"win_length": f"{normalized['observation_window_hours']}h"},
             "sepsis_load_kwargs": sepsis_load_kwargs,
         }
 
@@ -1869,7 +1925,6 @@ def _resolve_export_cohort(
                 "exclude_matches": len(exclude_ids),
             },
         },
-        "load_kwargs": {"win_length": f"{normalized['observation_window_hours']}h"},
         "sepsis_load_kwargs": sepsis_load_kwargs,
     }
 
@@ -1915,6 +1970,56 @@ def normalize_export_cohort_contract(
     """Compile one public, path-free Data Extraction cohort contract."""
 
     return _normalize_export_cohort(dict(cohort) if isinstance(cohort, Mapping) else None)
+
+
+#: What an export's cohort and scores mean, recorded in its manifest.  Version 2
+#: admits a concept-derived cohort only on a positive row timed at or before the
+#: end of its window (``primary_cohort.CONCEPT_POSITIVE_ROWS``), and never uses
+#: that window as a scoring window.  Version 1 exports carry no record: they
+#: admitted a stay on a positive row at any time, and scored SOFA and SOFA-2
+#: over the observation window instead of their own.
+EXPORT_COHORT_EXECUTION_SCHEMA = "easyicu.export-cohort-execution/2"
+#: The SOFA and SOFA-2 callbacks' own worst-value window.
+_SCORE_WINDOW_HOURS = 24
+
+
+def export_cohort_execution(cohort: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    """The executed cohort and score rule an export manifest records."""
+
+    normalized = normalize_export_cohort_contract(cohort)
+    window = None
+    if normalized["preset"] in _CONCEPT_DERIVED_COHORTS:
+        window = {
+            "definition": normalized["preset"],
+            "positive_rows": primary_cohort.CONCEPT_POSITIVE_ROWS,
+            "window_end_hours": int(normalized["observation_window_hours"]),
+        }
+    return {
+        "schema_version": EXPORT_COHORT_EXECUTION_SCHEMA,
+        "concept_cohort_window": window,
+        "score_window_hours": _SCORE_WINDOW_HOURS,
+    }
+
+
+def export_cohort_execution_current(manifest: Mapping[str, Any]) -> bool:
+    """Whether an export's cohort and scores mean what this owner executes now.
+
+    A manifest without a record predates version 2.  Its rows still agree when
+    neither change could have reached them: no concept-derived cohort, and an
+    observation window equal to the scores' own window.
+    """
+
+    record = manifest.get("cohort_execution")
+    if isinstance(record, Mapping):
+        return record.get("schema_version") == EXPORT_COHORT_EXECUTION_SCHEMA
+    contract = manifest.get("cohort_contract")
+    normalized = normalize_export_cohort_contract(
+        contract if isinstance(contract, Mapping) else None
+    )
+    return (
+        normalized["preset"] not in _CONCEPT_DERIVED_COHORTS
+        and int(normalized["observation_window_hours"]) == _SCORE_WINDOW_HOURS
+    )
 
 
 def resolve_registered_export_binding(
@@ -2209,7 +2314,6 @@ def make_export_runner(
         )
         patient_ids = cohort_info["patient_ids"]
         cohort_size = cohort_info["cohort_size"]
-        load_kwargs = dict(cohort_info.get("load_kwargs") or {})
         sepsis_load_kwargs = dict(cohort_info.get("sepsis_load_kwargs") or {})
         resource_plan = api.plan_extraction_resources(
             database,
@@ -2300,7 +2404,9 @@ def make_export_runner(
                     cohort_size,
                 ).to_dict()
                 module_resource_plans[mod] = module_resource_plan
-                module_kwargs = dict(load_kwargs)
+                # The cohort's observation window is not a scoring window: a
+                # module's SOFA and SOFA-2 keep their own (``cohort_execution``).
+                module_kwargs: Dict[str, Any] = {}
                 # Explicitly carry the owner decision into load_concepts so its
                 # legacy estimate cannot silently re-batch a measured fast path.
                 # ``batch_size == cohort_size`` is one scan / one patient batch.
@@ -2484,6 +2590,9 @@ def make_export_runner(
             },
             "cohort_contract": cohort_info.get("cohort_contract"),
             "cohort_report": cohort_info.get("cohort_report"),
+            "cohort_execution": export_cohort_execution(
+                cohort_info.get("cohort_contract")
+            ),
             "concept_selection": {
                 "mode": (
                     "explicit" if concepts is not None else "all_in_selected_modules"

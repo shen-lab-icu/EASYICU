@@ -88,6 +88,8 @@ def test_handoff_rejects_registered_export_with_different_extraction_contract(
     assert handoff.reusable is False
     assert handoff.mismatch_codes == (
         "registered_export_cohort_mismatch",
+        # A 720 h export from before the recorded rule scored over that window.
+        "registered_export_cohort_execution_outdated",
         "registered_export_format_mismatch",
     )
     assert handoff.source_data_path == str(raw_path.resolve())
