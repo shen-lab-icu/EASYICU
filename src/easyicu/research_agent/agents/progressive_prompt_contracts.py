@@ -239,8 +239,16 @@ def foundation_shape_contract(
     required_cohort_name: str | None = None,
     required_binary_display_label_scopes: Sequence[str] = (),
     required_reader_display_label_keys: Sequence[str] = (),
+    cohort_concept_ids: Sequence[str] = (),
 ) -> str:
-    """Project the exact foundation envelope without adding case science."""
+    """Project the exact foundation envelope without adding case science.
+
+    The concepts a cohort predicate or population criterion may read are named
+    here as well as in the structured-output schema. A Provider without strict
+    JSON schema never receives that schema, and a Planner told only to "copy an
+    allowed cohort concept id" from a list it cannot see kept every input row
+    rather than risk a refused predicate.
+    """
 
     predicate_shape = {
         "concept_id": "<copy an allowed cohort concept id>",
@@ -262,6 +270,10 @@ def foundation_shape_contract(
         "criterion": "<2-160 characters>",
         "concept_ids": ["<copy an allowed cohort concept id>"],
     }
+    # Only a Planner that chooses which rows to keep states a population.
+    states_population = (
+        host_cohort is None and required_cohort_selection_mode != "all_input_rows"
+    )
     if host_cohort is not None:
         cohort = {**host_cohort.model_dump(mode="json"), "population_criteria": []}
     elif required_cohort_selection_mode == "predicate_filtered":
@@ -269,6 +281,15 @@ def foundation_shape_contract(
             "name": required_cohort_name or "<1-128 characters>",
             "selection_mode": "predicate_filtered",
             "inclusion": [predicate_shape],
+            "exclusion": [],
+            "population_criteria": [criterion_shape],
+        }
+    elif required_cohort_selection_mode == "all_input_rows":
+        # A caller-bound mode keeps every input row; nothing is stated here.
+        cohort = {
+            "name": required_cohort_name or "<1-128 characters>",
+            "selection_mode": "all_input_rows",
+            "inclusion": [],
             "exclusion": [],
             "population_criteria": [],
         }
@@ -278,7 +299,7 @@ def foundation_shape_contract(
             "selection_mode": "<all_input_rows|predicate_filtered>",
             "inclusion": [],
             "exclusion": [],
-            "population_criteria": [],
+            "population_criteria": [criterion_shape],
         }
     required_labels = [
         {"key": key, "value": "<reader-facing clinical variable label>"}
@@ -336,7 +357,8 @@ def foundation_shape_contract(
             "inclusion or exclusion must have this exact JSON shape:\n"
             + json.dumps(predicate_shape, ensure_ascii=False, separators=(",", ":"))
             + "\nThis shape does not require adding a cohort restriction; "
-            "all_input_rows keeps both lists empty."
+            "all_input_rows keeps both lists empty, and fits only when no "
+            "restriction the study states is left for these predicates to apply."
             if host_cohort is None and required_cohort_selection_mode is None
             else ""
         )
@@ -345,7 +367,15 @@ def foundation_shape_contract(
             + json.dumps(criterion_shape, ensure_ascii=False, separators=(",", ":"))
             + ", and a criterion with concepts is applied by at least one "
             "inclusion or exclusion predicate over one of them."
-            if host_cohort is None
+            if states_population
+            else ""
+        )
+        + (
+            "\nAllowed cohort concept ids (a predicate's concept_id and a "
+            "criterion's concept_ids copy one of these exactly): "
+            + json.dumps(list(cohort_concept_ids), ensure_ascii=False)
+            + "."
+            if states_population and cohort_concept_ids
             else ""
         )
         + (

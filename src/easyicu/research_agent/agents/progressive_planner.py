@@ -2894,6 +2894,7 @@ class ProgressivePlannerAgent:
                 required_cohort_name=required_cohort_name,
                 required_binary_display_label_scopes=required_label_scopes,
                 required_reader_display_label_keys=required_label_keys,
+                cohort_concept_ids=progressive_cohort_concept_ids(context, variables),
             ),
         ]
         if required_label_keys:
@@ -4958,6 +4959,7 @@ class ProgressivePlannerAgent:
                     ),
                     required_binary_display_label_scopes=required_label_scopes,
                     required_reader_display_label_keys=required_label_keys,
+                    cohort_concept_ids=progressive_cohort_concept_ids(context, variables),
                 )
                 + "\nReturn exactly one ProgressiveFoundationMaterialization; "
                 "never flatten foundation fields into the response root.",
