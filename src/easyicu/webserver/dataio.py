@@ -2022,6 +2022,43 @@ def export_cohort_execution_current(manifest: Mapping[str, Any]) -> bool:
     )
 
 
+#: Contract fields that decide which stays an export holds.
+_EXPORT_POPULATION_FIELDS = (
+    "preset",
+    "age_min",
+    "age_max",
+    "min_icu_los_hours",
+    "exclude_readmissions",
+    "icd_enabled",
+    "icd_include",
+    "icd_exclude",
+)
+
+
+def export_rows_decided_by(cohort: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    """The parts of a cohort contract that decide an export's rows now.
+
+    The population fields decide which stays enter.  The observation window
+    decides membership only for a concept-derived cohort; it bounds neither
+    the other rows nor the scores (``cohort_execution``).  A sepsis definition
+    executes through its runtime arguments, and its profile labels select no
+    rows.  Two contracts with the same answer extract the same rows.
+    """
+
+    normalized = normalize_export_cohort_contract(
+        dict(cohort) if isinstance(cohort, Mapping) else None
+    )
+    rows: Dict[str, Any] = {
+        field: normalized[field] for field in _EXPORT_POPULATION_FIELDS
+    }
+    if normalized["preset"] in _CONCEPT_DERIVED_COHORTS:
+        rows["observation_window_hours"] = int(normalized["observation_window_hours"])
+    rows["sepsis_runtime_kwargs"] = dict(
+        normalized["sepsis_definition"]["runtime_kwargs"]
+    )
+    return rows
+
+
 def resolve_registered_export_binding(
     export_path: str,
     database: str,
@@ -3299,6 +3336,24 @@ def prepared_export_manifest_path(path: Path) -> Optional[Path]:
         if candidate.exists():
             return candidate
     return None
+
+
+def read_prepared_export_manifest(raw_path: str) -> Optional[Dict[str, Any]]:
+    """The manifest of the prepared export at ``raw_path``, or None.
+
+    None when the path is not a readable directory or carries no readable
+    manifest (a raw database folder, for one): callers that require a
+    prepared package refuse through their own validation.
+    """
+
+    try:
+        path = Path(raw_path).expanduser().resolve(strict=True)
+    except (FileNotFoundError, OSError, RuntimeError):
+        return None
+    if not path.is_dir():
+        return None
+    manifest = _read_export_manifest(path)
+    return manifest or None
 
 
 def _read_export_manifest(path: Path) -> Dict[str, Any]:

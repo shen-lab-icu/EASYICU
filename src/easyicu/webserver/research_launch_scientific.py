@@ -601,6 +601,75 @@ def launch_materialization_window(study: Mapping[str, Any]) -> Optional[Dict[str
     return dict(raw) if isinstance(raw, Mapping) else None
 
 
+#: A package that declares itself the study's complete prepared input
+#: (``agent_pipeline_runs._metadata_only_planning_catalog`` reads the same mode).
+_STUDY_LOCAL_PREPARED_COHORT = "study_local_prepared_cohort"
+
+
+def _require_export_holds_study_cohort(
+    study: Mapping[str, Any], export_path: str
+) -> None:
+    """Refuse an export whose rows are not the population the study states.
+
+    Data Extraction records in each manifest the cohort contract the export
+    was extracted for and the rule that executed it.  A study changed after
+    extraction, or bound to an export prepared for another cohort, would
+    otherwise analyze those rows under the cohort it states: a family
+    template re-applies typed age and stay bounds and the host the first
+    ICU stay, a progressive plan only the predicates its Planner writes,
+    and nothing a concept-derived or diagnosis population, so a Sepsis-3
+    study over an all-ICU export analyzes every stay.  A folder without a
+    prepared manifest
+    is left to the package validation that requires one.  A package that
+    records no extraction contract (an export from before contracts were
+    recorded) cannot be compared; it serves a study that states only typed
+    age or stay bounds, which a family template re-applies (a progressive
+    plan only through its Planner's predicates), but not a concept-derived
+    or diagnosis population, which nothing after extraction applies.  A
+    study-local prepared cohort
+    declares itself the study's complete input.
+    """
+
+    from easyicu.webserver.pi_copilot.extraction_handoff import (
+        bound_export_mismatches,
+        compile_study_cohort,
+    )
+
+    manifest = dataio.read_prepared_export_manifest(export_path)
+    if manifest is None:
+        return
+    try:
+        if isinstance(manifest.get("cohort_contract"), Mapping):
+            mismatches = bound_export_mismatches(study, manifest)
+        elif str(manifest.get("entry_mode") or "") == _STUDY_LOCAL_PREPARED_COHORT:
+            mismatches = ()
+        else:
+            stated = compile_study_cohort(study)
+            unreapplied = bool(
+                stated["preset"] in primary_cohort.CONCEPT_DERIVED_PRESETS
+                or stated["icd_enabled"]
+            )
+            mismatches = ("registered_export_cohort_unrecorded",) if unreapplied else ()
+    except dataio.ExportCohortError as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_export_cohort_invalid",
+            "The study's cohort or the bound export's recorded cohort is not an "
+            "executable extraction contract.",
+            details={"reason_code": exc.error},
+        ) from exc
+    if mismatches:
+        raise ResearchPipelineRunError(
+            "research_pipeline_export_cohort_mismatch",
+            "The bound export does not hold the rows of the cohort this study "
+            "states (details.mismatch_codes): it was extracted for another "
+            "cohort or under an earlier rule, or it records no population for a "
+            "cohort that only extraction applies. Retrying will fail "
+            "identically; run easyicu_start_extraction to extract the study's "
+            "cohort.",
+            details={"mismatch_codes": list(mismatches)},
+        )
+
+
 def _neutral_materialization_scope(
     study: Mapping[str, Any], *, export_path: str
 ) -> Dict[str, Any]:
