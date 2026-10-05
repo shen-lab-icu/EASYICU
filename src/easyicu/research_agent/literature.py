@@ -49,6 +49,11 @@ from .literature_concepts import (
     literature_concept_identity,
 )
 from .literature_excerpt import select_source_backed_excerpt
+from .planning.analysis_types import (
+    AnalysisTypeSpec,
+    infer_analysis_type,
+    is_concept_set_family,
+)
 from .planning.method_literature import method_literature_citations
 from .planning.literature_design_authority import LiteratureDesignEvidenceCard
 from .planning.literature_design_authority import render_literature_design_cards_for_prompt
@@ -368,10 +373,17 @@ class HypothesisBlueprintAgent:
     ) -> HypothesisBlueprint:
         predictor = _pick_blueprint_predictor(context)
         outcome = context.target_outcome or _pick_blueprint_outcome(context)
+        # The analysis-type owner names the question's family.  A concept-set
+        # family (phenotype discovery, description, audits) studies a set of
+        # concepts, not a predictor->outcome pair: it has no target outcome to
+        # miss and no association to hypothesise.  The picked predictor still
+        # anchors the concept audit and the database feasibility check.
+        family = infer_analysis_type(context)
+        concept_set = is_concept_set_family(family.key)
         missing_variables: List[str] = []
-        if predictor is None:
+        if predictor is None and not concept_set:
             missing_variables.append("primary_predictor")
-        if outcome is None:
+        if outcome is None and not concept_set:
             missing_variables.append("target_outcome")
 
         feasible_variables = [
@@ -396,10 +408,18 @@ class HypothesisBlueprintAgent:
             concepts=concept_dependencies,
             databases=db_targets,
         )
-        hypothesis = _render_hypothesis(
-            context=context,
-            predictor=predictor,
-            outcome=outcome,
+        hypothesis = (
+            _render_concept_set_hypothesis(
+                context=context,
+                family=family,
+                outcome=outcome,
+            )
+            if concept_set
+            else _render_hypothesis(
+                context=context,
+                predictor=predictor,
+                outcome=outcome,
+            )
         )
         domain_gate_notes = _domain_gate_notes(context, predictor=predictor)
         domain_gate_notes.extend(
@@ -412,6 +432,7 @@ class HypothesisBlueprintAgent:
             has_cross_db=bool(context.cross_database_validation),
             cross_database_feasibility=db_feasibility["cross_database_feasibility"],
             degraded_reason=db_feasibility["degraded_reason"],
+            concept_set_family=family if concept_set else None,
         )
         critique = _blueprint_self_critique(
             context=context,
@@ -3429,6 +3450,26 @@ def _render_hypothesis(
     )
 
 
+def _render_concept_set_hypothesis(
+    *,
+    context: ResearchContext,
+    family: AnalysisTypeSpec,
+    outcome: Optional[str],
+) -> str:
+    """State a concept-set question as its family, without a predictor or outcome."""
+
+    text = (
+        f"In {context.cohort.cohort_name}, the question is a "
+        f"{family.name.lower()} over a set of concepts rather than one "
+        f"predictor-outcome pair: {family.description}"
+    )
+    if outcome:
+        text += (
+            f" {outcome} is summarised descriptively, not as an association claim."
+        )
+    return text
+
+
 def _domain_gate_notes(
     context: ResearchContext,
     *,
@@ -3482,6 +3523,7 @@ def _blueprint_steps(
     has_cross_db: bool,
     cross_database_feasibility: Optional[Dict[str, str]] = None,
     degraded_reason: Optional[Dict[str, str]] = None,
+    concept_set_family: Optional[AnalysisTypeSpec] = None,
 ) -> List[str]:
     steps: List[str] = []
     if has_literature:
@@ -3513,7 +3555,13 @@ def _blueprint_steps(
         steps.append(
             f"Audit {predictor} distribution, missingness, and invalid transformations."
         )
-    if predictor and outcome:
+    if concept_set_family is not None:
+        steps.append(
+            f"Plan the {concept_set_family.name.lower()} modules: "
+            + "; ".join(concept_set_family.candidate_steps)
+            + "."
+        )
+    elif predictor and outcome:
         steps.append(
             f"Estimate the {predictor}-{outcome} association with prespecified "
             "covariates or a justified unadjusted model."

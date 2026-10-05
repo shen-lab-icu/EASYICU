@@ -7993,6 +7993,10 @@
     ],
     [
       "easyicu.research_agent.literature",
+      "easyicu.research_agent.planning.analysis_types"
+    ],
+    [
+      "easyicu.research_agent.literature",
       "easyicu.research_agent.planning.literature_design_authority"
     ],
     [
@@ -13260,7 +13264,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3307,
+    "edge_count": 3308,
     "largest_scc_size": 0,
     "module_count": 769,
     "package_count": 36,

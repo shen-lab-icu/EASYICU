@@ -1058,6 +1058,65 @@ def strong_trajectory_clustering_framing(text: str) -> bool:
         )
         is not None
     )
+    # A question also asks for discovery when the groups are the plural object
+    # of a grouping verb: its profiles "cluster into distinct subgroups" or
+    # "form reproducible sub-phenotypes", or it asks to "identify latent
+    # classes" or "derive sub-phenotypes".  A singular or previously defined
+    # group is still membership, which an association model may use.
+    plural_groups = (
+        r"sub[-\s]?phenotypes|phenotypes|sub[-\s]?types|endotypes|"
+        r"latent\s+classes|clusters"
+    )
+    clusters_into_groups = (
+        re.search(
+            r"\bclust(?:er|ers|ered|ering)\s+into\s+(?:[a-z0-9_-]+\s+){0,3}"
+            r"(?:" + plural_groups + r"|sub[-\s]?groups|groups|classes)\b",
+            normalised,
+        )
+        is not None
+    )
+    profiles_form_groups = (
+        re.search(
+            r"\b(?:trajector(?:y|ies)|profiles?|patterns?|courses?|curves?|"
+            r"time[-\s]+series)\b.{0,64}"
+            r"\b(?:form|define|reveal|yield|constitute|separate)s?\s+"
+            r"(?:into\s+)?(?:[a-z0-9_-]+\s+){0,3}(?:" + plural_groups + r")\b",
+            normalised,
+        )
+        is not None
+    )
+    discovered_groups = (
+        r"(?:latent[-\s]+(?:trajectory\s+)?class(?:es)?|sub[-\s]?phenotypes|"
+        r"endotypes)"
+    )
+    groups_discovered = (
+        re.search(
+            r"\b(?:discover|identify|derive|learn|uncover|detect|find)\w*\b.{0,64}"
+            r"\b" + discovered_groups + r"\b",
+            normalised,
+        )
+        is not None
+        or re.search(
+            r"\b" + discovered_groups + r"\b.{0,64}\b(?:be|been|are|were|is)\s+"
+            r"(?:derived|identified|discovered|learned|uncovered|detected|found)\b",
+            normalised,
+        )
+        is not None
+    )
+    existing_groups = (
+        re.search(
+            r"\b(?:existing|previously|pre[-\s]?assigned|assigned|published|"
+            r"established)\b.{0,48}"
+            r"\b(?:cluster|class|phenotype|sub[-\s]?phenotype|subtype|endotype|"
+            r"membership)",
+            normalised,
+        )
+        is not None
+    )
+    plural_discovery_target = bool(
+        (clusters_into_groups or profiles_form_groups or groups_discovered)
+        and not existing_groups
+    )
     chinese_discovery_disclaimer = (
         re.search(
             # Negate an action, not every word beginning with 不. In particular,
@@ -1091,9 +1150,24 @@ def strong_trajectory_clustering_framing(text: str) -> bool:
         )
         is not None
     )
+    # 聚成/聚为 name clustering itself, so profiles that 聚成 groups ask for
+    # discovery even without an action verb such as 识别.
+    chinese_clustered_into_groups = (
+        re.search(
+            r"(?:轨迹|特征|指标|模式|曲线)[^，。；;]{0,12}"
+            r"(?:聚成|聚为|聚类为|聚类成|聚合为|聚合成)[^，。；;]{0,8}"
+            r"(?:亚表型|亚型|表型|内型|类别|类|群|组)",
+            normalised,
+        )
+        is not None
+    )
     chinese_discovery = bool(
         not chinese_discovery_disclaimer
-        and (chinese_action_target or chinese_named_grouping)
+        and (
+            chinese_action_target
+            or chinese_named_grouping
+            or chinese_clustered_into_groups
+        )
     )
     chinese_explicit_discovery = bool(
         chinese_discovery
@@ -1119,6 +1193,7 @@ def strong_trajectory_clustering_framing(text: str) -> bool:
         cluster_action_target
         or cluster_into_groups
         or imperative_trajectory_clustering
+        or plural_discovery_target
         or (discovery_action and phenotype_target and generic_unsupervised_method)
         or (discovery_action and explicit_procedure)
         or (
