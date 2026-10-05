@@ -346,6 +346,15 @@ class FamilySpecRequest(BaseModel):
     minimum_icu_hours: Optional[float] = Field(
         default=None, gt=0.0, exclude_if=lambda value: value is None
     )
+    #: A concept-derived population (``sepsis3`` ...) and the hour after ICU
+    #: admission by which a positive concept row admits a stay.  Omitted from
+    #: the digest when absent, like the minimum stay.
+    concept_cohort_definition: Optional[str] = Field(
+        default=None, min_length=1, max_length=64, exclude_if=lambda value: value is None
+    )
+    concept_cohort_window_end_hours: Optional[float] = Field(
+        default=None, gt=0.0, exclude_if=lambda value: value is None
+    )
     identity_column: str = Field(min_length=1, max_length=128)
     cluster_unit: Optional[Literal["patient"]] = None
     primary_exposure: str = Field(max_length=128)
@@ -435,9 +444,20 @@ class FamilySpecRequest(BaseModel):
 
     @property
     def cohort_time_zero_hours(self) -> Optional[float]:
-        """Hours after ICU admission by which typed cohort eligibility is decided."""
+        """Hours after ICU admission by which typed cohort eligibility is decided.
 
-        return self.landmark_hours or self.observation_window_hours
+        The family's landmark, else its survival suite's (sealed or proposed;
+        a suite always states one), else the end of its observation window.
+        Only survival requests carry a suite, so every other family keeps the
+        landmark-or-window value it had before the suite was read here.
+        """
+
+        suite = self.sealed_suite or self.proposed_suite
+        return (
+            self.landmark_hours
+            or (suite.landmark_hours if suite is not None else None)
+            or self.observation_window_hours
+        )
 
     @model_validator(mode="after")
     def _exposure_shape(self) -> "FamilySpecRequest":
