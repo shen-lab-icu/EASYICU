@@ -15,6 +15,7 @@ from typing import Any, Literal, Mapping, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..contracts.figure_plan import DeterministicFigurePanelTemplate
+from ..contracts.trajectory_design import trajectory_population_issues
 from ..schema import AnalysisPlan, TrajectoryStabilitySpec
 from .plan_contract import (
     DIAG_GMM_BEST_OF_10_ENGINE,
@@ -36,12 +37,14 @@ from .runtime_validation import (
     SIGNED_TRAJECTORY_STABILITY_INPUTS,
 )
 
-#: The population the signed owners analyze, stated on every plan they own.
-#: The representation reads the whole staged long panel, which is bound to the
-#: host-restricted source universe, and excludes a stay only under the signed
-#: SOFA-2 window rule; the candidate and stability owners read its products.
-#: The plan therefore selects every input row. A predicate here would describe
-#: a population these owners do not analyze, so none is ever carried.
+#: The population the signed owners analyze when the design states none.
+#: The representation counts every stay of the locked study cohort
+#: (``COHORT_PARQUET``), which the host materializes from the plan's cohort, and
+#: excludes a stay only under the signed SOFA-2 window rule; the candidate and
+#: stability owners read its products.  Without a reviewed population the plan
+#: therefore selects every input row of the host-restricted universe.  A
+#: design's population (``TrajectoryScientificRuntimeAuthority.population``)
+#: replaces it with exactly the predicates the design seals.
 SIGNED_TRAJECTORY_POPULATION: Mapping[str, Any] = {
     "name": "primary",
     "selection_mode": "all_input_rows",
@@ -182,6 +185,15 @@ _MODEL_BY_VERSION = {
 }
 
 
+class TrajectoryPopulationAuthority(BaseModel):
+    """The reviewed population: canonical cohort predicates, as the design sealed them."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    inclusion: tuple[dict[str, Any], ...]
+    exclusion: tuple[dict[str, Any], ...]
+
+
 class EvidenceStateAuthority(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -247,6 +259,11 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
     minimum_cluster_fraction: float = Field(gt=0.0, lt=1.0)
     minimum_cluster_fraction_reason_code: str = Field(pattern=r"^[A-Z][A-Z0-9_]{2,79}$")
     stability_spec: TrajectoryStabilitySpec
+    #: The design's population; absent for a design that states none, whose
+    #: owners keep every stay (``SIGNED_TRAJECTORY_POPULATION``).
+    population: Optional[TrajectoryPopulationAuthority] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     execution_contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
@@ -311,6 +328,19 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
                 raise ValueError("the mixed-mode model needs an ordinal coordinate")
         elif measured is not None:
             raise ValueError("only the mixed-mode model declares coordinate measurement")
+        if self.population is not None:
+            if not (self.population.inclusion or self.population.exclusion):
+                raise ValueError("a sealed population states at least one predicate")
+            issues = trajectory_population_issues(
+                self.population.inclusion,
+                self.population.exclusion,
+                window_end_hours=self.window_end_hours,
+            )
+            if issues:
+                raise ValueError(
+                    "the sealed population is not one the signed owners apply: "
+                    + "; ".join(issues)
+                )
         body = self.model_dump(mode="json", exclude={"execution_contract_sha256"})
         if hashlib.sha256(_canonical_bytes(body)).hexdigest() != (
             self.execution_contract_sha256
@@ -347,6 +377,23 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
         return f"scientific_runtime_contract:{self.execution_contract_sha256}"
 
     @property
+    def population_definition(self) -> dict[str, Any]:
+        """The plan cohort these owners analyze: the sealed population, else every row."""
+
+        if self.population is None:
+            return {
+                **SIGNED_TRAJECTORY_POPULATION,
+                "inclusion": [],
+                "exclusion": [],
+            }
+        return {
+            "name": "primary",
+            "selection_mode": "predicate_filtered",
+            "inclusion": [dict(item) for item in self.population.inclusion],
+            "exclusion": [dict(item) for item in self.population.exclusion],
+        }
+
+    @property
     def development_execution_step_ids(self) -> tuple[str, str, str, str]:
         return (
             "00_authority_compiled_trajectory_representation",
@@ -369,7 +416,7 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
             {
                 "research_question": str(research_question),
                 "analysis_type": "trajectory_clustering",
-                "cohort": dict(SIGNED_TRAJECTORY_POPULATION),
+                "cohort": self.population_definition,
                 "steps": [
                     {
                         "step_id": representation_id,
@@ -484,6 +531,12 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
             "grid_width_hours": self.grid_width_hours,
             "candidate_cluster_counts": list(self.candidate_cluster_counts),
             "representation_outputs": list(self.representation_required_outputs),
+            # The host compiles the reviewed population into the plan cohort.
+            **(
+                {"population": self.population_definition}
+                if self.population is not None
+                else {}
+            ),
         }
         return (
             "CALLER-BOUND FIXED-WINDOW TRAJECTORY SUITE: the representation step "
@@ -604,17 +657,29 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
                     "trajectory selection-figure plan drifted from signed authority"
                 )
         population = plan.cohort
+        sealed = self.population_definition
+
+        def predicates(kind: str) -> list[dict[str, Any]]:
+            return [
+                item.to_dict() if hasattr(item, "to_dict") else dict(item)
+                for item in getattr(population, kind, ()) or ()
+            ]
+
         if (
             population is None
-            or getattr(population, "selection_mode", None)
-            != SIGNED_TRAJECTORY_POPULATION["selection_mode"]
-            or getattr(population, "inclusion", ())
-            or getattr(population, "exclusion", ())
+            or getattr(population, "selection_mode", None) != sealed["selection_mode"]
+            or predicates("inclusion") != sealed["inclusion"]
+            or predicates("exclusion") != sealed["exclusion"]
         ):
             raise TrajectoryScientificAuthorityError(
                 "trajectory population drifted from signed authority: the owners "
-                "analyze every input row, so the plan must select all input rows "
-                "without inclusion or exclusion predicates"
+                + (
+                    "analyze every input row, so the plan must select all input "
+                    "rows without inclusion or exclusion predicates"
+                    if self.population is None
+                    else "analyze the sealed population, so the plan must state "
+                    "exactly its inclusion and exclusion predicates"
+                )
             )
 
     def validate_representation_schema(self, schema: Mapping[str, Any]) -> None:
@@ -754,6 +819,7 @@ __all__ = [
     "CoordinateScalingAuthority",
     "EvidenceStateAuthority",
     "SIGNED_TRAJECTORY_POPULATION",
+    "TrajectoryPopulationAuthority",
     "TrajectoryScientificAuthorityError",
     "TRAJECTORY_CHARACTERIZATION_FIGURE_PANELS",
     "TrajectoryScientificRuntimeAuthority",

@@ -628,12 +628,13 @@ def _trajectory_design_configuration(
 ) -> CompiledAgentPlanConfiguration:
     """Declare the reviewed coordinates as the study's trajectory design.
 
-    The coordinates, and the window and grid, are the reviewer's published
-    facts for this exact plan, not a second reading of it here: the window the
-    question states, or the design owner's default.  Facts published before
-    the review read a window carry none and keep the default.  Stability
-    knobs keep the design owner's defaults; the web owner validates the
-    declaration.
+    The coordinates, the window and grid, and the population are the
+    reviewer's published facts for this exact plan, not a second reading of
+    it here: the window the question states, or the design owner's default,
+    and the cohort predicates the plan states, unchanged.  Facts published
+    before the review read a window or a population carry none and keep the
+    default window and every stay.  Stability knobs keep the design owner's
+    defaults; the web owner validates the declaration.
     """
 
     from easyicu.webserver.trajectory_runtime_projection import (
@@ -683,9 +684,26 @@ def _trajectory_design_configuration(
         if isinstance(window, Mapping) and window.get("executable") is True
         else {}
     )
+    population = representation.get("trajectory_population")
+    population_field = (
+        {
+            "population": {
+                "inclusion": list(population.get("inclusion") or ()),
+                "exclusion": list(population.get("exclusion") or ()),
+            }
+        }
+        if isinstance(population, Mapping)
+        and population.get("source") == "plan"
+        and population.get("executable") is True
+        else {}
+    )
     try:
         design = normalize_trajectory_design(
-            {"coordinate_concepts": [str(value) for value in coordinates], **window_fields}
+            {
+                "coordinate_concepts": [str(value) for value in coordinates],
+                **window_fields,
+                **population_field,
+            }
         )
     except TrajectoryDesignError as exc:
         raise PlanDecisionError(

@@ -906,9 +906,10 @@ def _data_foundation_profile(
     ``analysis_inputs`` are an accepted candidate's primary-analysis concepts
     (``planning.accepted_analysis_inputs``); they are materialized like any
     declared scientific input so the package-bound plan can keep them.
-    ``trajectory_concepts`` are a declared trajectory design's concepts; the
-    long panel is cut from the materialized concepts, so they must be among
-    them.
+    ``trajectory_concepts`` are a declared trajectory design's concepts and
+    the concepts its population reads; the long panel is cut from the
+    materialized concepts, and the study cohort is selected on the same
+    universe, so they must be among them.
     """
 
     from easyicu.research_agent.acquisition.catalog import build_available_catalog

@@ -3261,6 +3261,10 @@
     ],
     [
       "easyicu.research_agent.contracts.trajectory_design",
+      "easyicu.research_agent.planning.cohort_contract"
+    ],
+    [
+      "easyicu.research_agent.contracts.trajectory_design",
       "easyicu.research_agent.schema"
     ],
     [
@@ -13257,6 +13261,10 @@
     ],
     [
       "easyicu.research_agent.trajectory.scientific_runtime_authority",
+      "easyicu.research_agent.contracts.trajectory_design"
+    ],
+    [
+      "easyicu.research_agent.trajectory.scientific_runtime_authority",
       "easyicu.research_agent.schema"
     ],
     [
@@ -13276,7 +13284,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3311,
+    "edge_count": 3313,
     "largest_scc_size": 0,
     "module_count": 769,
     "package_count": 36,

@@ -3,7 +3,8 @@
 End to end without a Provider: a typed synthetic export is materialized by the
 host, the signed owners run on the long panel, the selection figure reads the
 owners' published tables, the host draws the owner's cohort flow, and the
-frozen classes are described on the run cohort.  Unit fixtures had drifted from the stability owner's real columns, so
+frozen classes are described on the run cohort.  A sealed population is the
+cohort the owners count.  Unit fixtures had drifted from the stability owner's real columns, so
 the figure failed on every real run while its own tests passed; this module
 runs the owners themselves.  The run's evidence then holds each rule's formal
 outcome as a host claim and each owner's executed design as a Methods fact.
@@ -218,7 +219,7 @@ def _typed_export(root: Path, *, layout: str, integer_levels: bool = False) -> P
     return export
 
 
-def _authority(*, mixed_mode: bool = False):
+def _authority(*, mixed_mode: bool = False, population: dict | None = None):
     columns = [f"{c}__h{s}_{s + 12}" for c in COORDINATES for s in (0, 12)]
     stability = TrajectoryStabilitySpec(
         n_resamples=6,
@@ -305,10 +306,19 @@ def _authority(*, mixed_mode: bool = False):
                 "mixture_weights_k_minus_1_plus_k_per_indicator_free_parameters"
             ),
         )
+    if population is not None:
+        body["population"] = population
     return build_trajectory_scientific_runtime_authority(body)
 
 
-def _run(tmp_path: Path, *, layout: str, mixed_mode: bool = False, outcome: bool = True):
+def _run(
+    tmp_path: Path,
+    *,
+    layout: str,
+    mixed_mode: bool = False,
+    outcome: bool = True,
+    population: dict | None = None,
+):
     export = _typed_export(tmp_path, layout=layout, integer_levels=mixed_mode)
     paths = cohort_materializer.materialize_to_parquet(
         tmp_path / "materialized",
@@ -322,7 +332,7 @@ def _run(tmp_path: Path, *, layout: str, mixed_mode: bool = False, outcome: bool
         trajectory_concepts=COORDINATES,
         trajectory_window=(0.0, 24.0),
     )
-    authority = _authority(mixed_mode=mixed_mode)
+    authority = _authority(mixed_mode=mixed_mode, population=population)
     owners = authority.development_execution_only_plan(research_question=QUESTION)
     description = {
         "step_id": "outcome_by_class",
@@ -520,6 +530,57 @@ def test_frozen_classes_are_rendered_and_described_on_the_run_cohort(tmp_path):
             "stability_threshold_met"
         ),
     })
+
+
+def test_the_sealed_population_is_the_cohort_the_owners_count(tmp_path):
+    """Only the stays the reviewed population admits are counted and clustered."""
+
+    older = {
+        "concept_id": "age",
+        "time_window": {"anchor": "icu_admit", "start_offset_hours": 0, "end_offset_hours": 24},
+        "aggregation": "first",
+        "op": ">=",
+        "value": 60,
+    }
+    carried, run_dir, manifest = _run(
+        tmp_path,
+        layout="three_classes",
+        population={"inclusion": [older], "exclusion": []},
+    )
+
+    labs = pd.read_parquet(tmp_path / "export" / "labs.parquet")
+    admitted = labs.groupby("stay_id")["age"].first().ge(60)
+    in_window = labs.loc[labs.charttime.lt(24)]
+    windows = (in_window.charttime // 12).groupby(in_window.stay_id).nunique()
+    eligible = windows.reindex(admitted.index, fill_value=0).ge(2)
+    n_admitted = int(admitted.sum())
+    n_clustered = int((admitted & eligible).sum())
+    assert 0 < n_admitted < N_STAYS and 0 < n_clustered < n_admitted
+
+    bound = AnalysisPlan.model_validate_json(
+        (tmp_path / "locked_plan.json").read_text(encoding="utf-8")
+    )
+    assert bound.cohort.selection_mode == "predicate_filtered"
+    assert [predicate.to_dict() for predicate in bound.cohort.inclusion] == [older]
+    [applied] = [
+        finding for finding in manifest["findings"]
+        if finding.get("validator") == "cohort_materializer"
+    ]
+    assert applied["detail"]["n_universe"] == N_STAYS
+    assert applied["detail"]["n_analysis_cohort"] == n_admitted
+    owner = pd.read_csv(
+        run_dir / "steps" / "00_authority_compiled_trajectory_representation"
+        / "outputs" / "cohort_flow.csv"
+    )
+    assert dict(zip(owner.metric, owner.n)) == {
+        "input_cohort": n_admitted,
+        "meets_min_observed_windows": n_clustered,
+        "excluded_insufficient_windows": n_admitted - n_clustered,
+        "included_in_clustering": n_clustered,
+    }
+    assert _records(manifest)["00_authority_compiled_trajectory_representation"][
+        "status"
+    ] == "ok"
 
 
 def test_an_outcome_free_study_freezes_classes_without_describing_an_outcome(tmp_path):
