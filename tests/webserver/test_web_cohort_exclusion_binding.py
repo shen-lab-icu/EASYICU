@@ -47,8 +47,8 @@ def test_an_exclusion_is_compiled_as_an_exclusion() -> None:
     inclusion = _inclusion_criteria(study)
     exclusion = _exclusion_criteria(study)
 
-    # who enters
-    assert "ICU stays" in inclusion
+    # who enters -- by the fields the export executes, not by the label
+    assert "ICU stays" not in inclusion
     assert "age range: 18 to *" in inclusion
     assert "minimum ICU length of stay: 24 hours" in inclusion
     assert "include diagnoses: condition-a" in inclusion
@@ -194,19 +194,19 @@ def test_a_diagnosis_criterion_is_declared_only_when_the_owner_can_run_it() -> N
 
 
 def test_a_removal_stated_in_prose_does_not_arrive_as_an_inclusion() -> None:
-    """``review`` is the inclusion channel, so removals need their own slot.
+    """A removal stated in prose has its own slot, and is not an applied criterion.
 
-    Splitting the structured fields was not enough: real studies state the
-    cohort as one free-text ``review`` blob, and a removal written there was
-    delivered as an inclusion criterion.
+    Real studies state the cohort as one free-text ``review`` blob, and a
+    removal written there was delivered as an inclusion criterion. Neither
+    wording is executed by the export, so neither is declared as applied.
     """
 
     study = _study(
         review="adult ICU stays",
         exclusion_statement="stays that ended before the landmark",
     )
-    assert _inclusion_criteria(study) == ["adult ICU stays"]
-    assert _exclusion_criteria(study) == ["stays that ended before the landmark"]
+    assert _inclusion_criteria(study) == []
+    assert _exclusion_criteria(study) == []
 
 
 def test_both_sides_stay_bounded() -> None:

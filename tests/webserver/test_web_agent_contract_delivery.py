@@ -13,6 +13,7 @@ with one consumer that does not use it.
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 
 from easyicu.research_agent.icu_rules import default_time_windows
@@ -173,7 +174,7 @@ def test_a_trimmed_declaration_says_that_it_was_trimmed() -> None:
 
 
 def test_a_stated_removal_has_a_slot_that_is_not_the_inclusion_channel() -> None:
-    """``review`` is the inclusion contract; removals need their own field."""
+    """A removal has its own field; neither wording is an applied contract."""
 
     study = {
         "cohort": {
@@ -181,8 +182,11 @@ def test_a_stated_removal_has_a_slot_that_is_not_the_inclusion_channel() -> None
             "exclusion_statement": "stays ending before the landmark",
         }
     }
-    assert _inclusion_criteria(study) == ["adult ICU stays"]
-    assert _exclusion_criteria(study) == ["stays ending before the landmark"]
+    assert _inclusion_criteria(study) == []
+    assert _exclusion_criteria(study) == []
+    stated = json.loads(_research_user_preferences(study)["data_constraints"])
+    assert stated["cohort"]["review"] == "adult ICU stays"
+    assert stated["cohort"]["exclusion_statement"] == "stays ending before the landmark"
 
     # the slot is persistable, and unknown cohort fields still fail closed
     accepted = study_contexts._sanitize_patch(  # noqa: SLF001
