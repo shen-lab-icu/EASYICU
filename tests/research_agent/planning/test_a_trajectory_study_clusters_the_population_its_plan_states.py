@@ -354,7 +354,11 @@ def test_a_plan_that_selects_every_stay_compiles_no_population() -> None:
     review, finding = _review({"name": "primary", "selection_mode": "all_input_rows"})
 
     assert finding.code == _OWNER
-    assert "population" not in finding.message
+    # The compile clusters every stay; the finding says so rather than leave
+    # a population the question names to look applied.
+    assert (
+        "in every input row: the plan's cohort states no population predicate" in finding.message
+    )
     assert "analysis_plan.json.cohort" not in finding.evidence_refs
     population = review.facts["trajectory_representation"]["trajectory_population"]
     assert population["source"] == "none" and population["executable"] is True
