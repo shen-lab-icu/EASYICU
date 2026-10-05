@@ -4186,7 +4186,7 @@ def test_export_runner_applies_native_cohort_contract_to_patient_ids(
 
     assert result["file_count"] == 1
     assert loaded[0]["kwargs"]["patient_ids"] == {"stay_id": [2]}
-    assert loaded[0]["kwargs"]["win_length"] == "48h"
+    assert "win_length" not in loaded[0]["kwargs"]
     assert manifest["cohort_contract"]["age_min"] == 40
     assert manifest["cohort_report"]["selected"] == 1
 
@@ -4269,7 +4269,7 @@ def test_export_runner_keeps_legacy_all_icu_default_without_cohort_contract(
     runner(_ExportJob())
 
     assert loaded[0]["kwargs"]["patient_ids"] == {"stay_id": [3, 4]}
-    assert loaded[0]["kwargs"]["win_length"] == "720h"
+    assert "win_length" not in loaded[0]["kwargs"]
     manifest = json.loads(
         (tmp_path / "out" / "_manifest.json").read_text(encoding="utf-8")
     )
@@ -4800,7 +4800,7 @@ def test_export_runner_ignores_stale_icd_tokens_when_preset_is_not_icd(
     )
 
     assert loaded[0]["kwargs"]["patient_ids"] == {"stay_id": [1, 2]}
-    assert loaded[0]["kwargs"]["win_length"] == "720h"
+    assert "win_length" not in loaded[0]["kwargs"]
     assert manifest["cohort_contract"]["icd_include"] == []
     assert manifest["cohort_contract"]["observation_window_hours"] == 720
     assert manifest["cohort_report"]["applied_filters"] == ["demographics"]
@@ -4851,7 +4851,7 @@ def test_export_runner_applies_concept_derived_cohort_prefilter(
     def fake_load_concepts(concepts, **kwargs):
         loaded.append({"concepts": concepts, "kwargs": kwargs})
         if concepts == loaded_concepts:
-            return pd.DataFrame({"stay_id": [1, 2, 3], positive_column: [0, 1, True]})
+            return pd.DataFrame({"stay_id": [1, 2, 3], "charttime": [0.0, 1.0, 72.0], positive_column: [0, 1, True]})
         ids = (kwargs.get("patient_ids") or {}).get("stay_id", [])
         payload: dict[str, object] = {"stay_id": ids}
         for concept in concepts:
@@ -4884,7 +4884,7 @@ def test_export_runner_applies_concept_derived_cohort_prefilter(
 
     assert loaded[0]["concepts"] == concepts
     assert loaded[0]["kwargs"]["patient_ids"] == {"stay_id": [1, 2, 3]}
-    assert loaded[0]["kwargs"]["win_length"] == "72h"
+    assert "win_length" not in loaded[0]["kwargs"]
     assert loaded[1]["kwargs"]["patient_ids"] == {"stay_id": [2, 3]}
     assert manifest["cohort_report"]["applied_filters"] == [
         "demographics",

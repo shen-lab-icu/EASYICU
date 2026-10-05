@@ -121,6 +121,10 @@ def compile_registered_export_handoff(
     mismatches: list[str] = []
     if requested_cohort != observed_cohort:
         mismatches.append("registered_export_cohort_mismatch")
+    if not dataio.export_cohort_execution_current(manifest):
+        # The same contract executed under an earlier rule selects or scores
+        # different rows; Data Extraction owns which rows still agree.
+        mismatches.append("registered_export_cohort_execution_outdated")
     if requested_format != observed_format:
         mismatches.append("registered_export_format_mismatch")
     if not set(requested_modules).issubset(observed_modules):

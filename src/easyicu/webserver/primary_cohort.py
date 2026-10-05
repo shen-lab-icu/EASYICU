@@ -40,6 +40,11 @@ SUPPORTED_COHORT_PRESETS: Tuple[str, ...] = (
 CONCEPT_DERIVED_PRESETS = frozenset(
     {"aki", "respiratory", "sepsis3", "vasopressor", "ventilation"}
 )
+#: A concept-derived population admits a stay on a positive concept row timed
+#: at or before the end of its window, in hours after ICU admission.  Rows the
+#: loader reads before admission count; rows after the window do not, so who
+#: enters never depends on what happens after the window the study states.
+CONCEPT_POSITIVE_ROWS = "at_or_before_window_end_after_icu_admission"
 ADMISSION_ELIGIBILITY_FIELDS: Tuple[str, ...] = (
     "age_min",
     "age_max",
@@ -344,6 +349,7 @@ def normalize_primary_cohort_scope(
         phenotype = {
             "definition": preset,
             "observation_window_hours": int(execution["observation_window_hours"]),
+            "positive_rows": CONCEPT_POSITIVE_ROWS,
         }
         if preset == "sepsis3" and isinstance(raw.get("sepsis_definition"), Mapping):
             phenotype["definition_parameters"] = _canonical_mapping(
