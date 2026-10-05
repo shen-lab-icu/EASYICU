@@ -59,7 +59,7 @@ from .landmark_categorical_template import (
     _method_card_elements,
     _method_card_ids,
 )
-from .phenotyping_template import OUTCOME_BY_CLUSTER_ACTION, OUTCOME_BY_CLUSTER_METHOD
+from .phenotyping_template import OUTCOME_BY_CLUSTER_ACTION, OUTCOME_BY_CLUSTER_METHOD, _estimand
 from .plan_language import listing, plan_language, sentence
 
 #: Products the signed candidate owner registers (``trajectory/plan_contract``).
@@ -140,7 +140,8 @@ def _design_selection(
     # Classes are discovered without an outcome.  A study's outcome is only
     # described by frozen class; a study without one describes none.
     outcome = _label(spec, request.outcome) if request.outcome else ""
-    concept_text = ", ".join(_label(spec, name) for name in sealed.coordinate_concepts)
+    coordinate_labels = [_label(spec, name) for name in sealed.coordinate_concepts]
+    concept_text = ", ".join(coordinate_labels)
     window = f"{sealed.window_hours[0]}–{sealed.window_hours[1]} h after ICU admission"
     grid = f"{sealed.grid_width_hours} h"
     candidates = ", ".join(str(value) for value in sealed.candidate_cluster_counts)
@@ -181,11 +182,14 @@ def _design_selection(
     selected = ResearchDesignCandidate(
         design_id="fixed_window_trajectory_suite",
         analysis_type="trajectory_clustering",
-        estimand=(
-            f"Candidate organ-dysfunction trajectory classes over {window} on a fixed {grid} grid "
-            f"of {concept_text}, selected by BIC from the sealed candidate grid ({candidates}) "
-            "and frozen only when the signed stability design holds; classes are candidates, not "
-            "validated phenotypes, and imply no causal contrast."
+        # The estimand names the coordinates while it holds them, and claims
+        # no clinical construct they do not; the plan below lists them in full.
+        estimand=_estimand(
+            f"Candidate trajectory classes of {len(coordinate_labels)} coordinate concepts",
+            coordinate_labels,
+            f", measured over {window} on a fixed {grid} grid, selected by BIC from the sealed "
+            f"candidate grid ({candidates}) and frozen only when the signed stability design "
+            "holds; classes are candidates, not validated phenotypes, and imply no causal contrast.",
         ),
         time_zero="ICU admission; every trajectory is aligned to the same fixed grid.",
         observation_window=f"{window} in {grid} windows; rows outside the window are not observed.",
@@ -231,7 +235,7 @@ def _design_selection(
         reviewable_plan=(
             [
                 f"研究队列；{unit_text_zh}。",
-                f"{listing([_label(spec, name) for name in sealed.coordinate_concepts], language)} "
+                f"{listing(coordinate_labels, language)} "
                 f"在 {window_zh} 内按 {grid} 窗口汇总。",
                 (
                     f"分区冻结后才按类别描述 {outcome}。"
