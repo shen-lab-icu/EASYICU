@@ -36,6 +36,7 @@ _COMPANION_SUFFIXES = (
     "_measured",
     "_first_time",
     "_last_time",
+    "_onset_time",
     "_first",
     "_max",
     "_min",
@@ -588,7 +589,7 @@ def coder_guide_for_step(
             selected.add("adjusted")
     has_provenance_inputs = any(
         re.search(
-            r"(?:_n|_measured|_status|_first_time|_last_time)" r"(?:_\d+(?:h|d))?$",
+            r"(?:_n|_measured|_status|_first_time|_last_time|_onset_time)" r"(?:_\d+(?:h|d))?$",
             name,
         )
         for raw in (step.inputs or [])
@@ -892,7 +893,7 @@ def _planner_preferred_topic_representation(name: str) -> bool:
         lowered,
     ):
         return False
-    if re.search(r"_(?:min|mean|first|first_time|last_time)$", lowered):
+    if re.search(r"_(?:min|mean|first|first_time|last_time|onset_time)$", lowered):
         return False
     return True
 

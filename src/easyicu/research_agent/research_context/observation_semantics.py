@@ -238,9 +238,13 @@ def _conditional_event_time_updates(
                 )
             )
         ]
+        # An event time applies where its event is present: the source's own
+        # status first, then the source's presence in a window, which a first
+        # or last recorded status can match on one frame only by coincidence.
         candidates.sort(
             key=lambda candidate: (
                 candidate.name != source_concept,
+                candidate.unit_normalization != "window_presence_max",
                 candidate.name,
             )
         )
@@ -248,16 +252,31 @@ def _conditional_event_time_updates(
             if declared_event:
                 raise ValueError("declared event status and event time must be distinct")
             continue
-        event_status_column = candidates[0].name
-        try:
-            result = reconcile_conditional_event_time(
-                frame,
-                event_status_column=event_status_column,
-                event_time_column=descriptor.name,
-            )
-        except ValueError:
-            if declared_event:
-                raise
+        result = None
+        for candidate in candidates:
+            try:
+                attempt = reconcile_conditional_event_time(
+                    frame,
+                    event_status_column=candidate.name,
+                    event_time_column=descriptor.name,
+                )
+            except ValueError:
+                if declared_event:
+                    raise
+                continue
+            # A sibling representation of the source stands for the event only
+            # where it reproduces every applicable time.  A coverage flag is the
+            # event only for a source that records nothing but presence; where
+            # the source records absence, it must not read as a missing time.
+            if (
+                not (declared_event or observation_time)
+                and candidate.name not in {source_concept, legacy_event_base}
+                and attempt.audit["missing_event_time_n"]
+            ):
+                continue
+            result, event_status_column = attempt, candidate.name
+            break
+        if result is None:
             continue
         audit = result.audit
         raw_n_missing = int(frame[descriptor.name].isna().sum())

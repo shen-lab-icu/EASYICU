@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
 import pytest
 
+from easyicu.concept.metadata_projection import ConceptColumnRole
 from easyicu.outcome_availability import FIXED_HORIZON_MORTALITY_ENDPOINTS
 from easyicu.research_agent.authority.current_case_scientific_runtime import (
     LandmarkSurvivalRuntimeAuthority,
@@ -30,6 +33,8 @@ from easyicu.research_agent.planning.sensitivity_authority import (
     PrespecifiedSensitivitySpec,
 )
 from easyicu.research_agent.reporting.descriptive_report_facts import is_reader_noun_phrase
+from easyicu.research_agent.intake.materialized_metadata import MaterializedMetadataError
+from easyicu.webserver import landmark_survival_runtime_projection as survival_projection
 from easyicu.webserver.landmark_survival_runtime_projection import (
     compile_landmark_survival_runtime_projection,
 )
@@ -81,7 +86,7 @@ def _universe(tmp_path, *, n: int = 600):
     frame = pd.DataFrame(
         {
             "mech_vent_max": ventilated.astype("int64"),
-            "mech_vent_first_time": onset,
+            "mech_vent_onset_time": onset,
             "mort_28d": died.astype("int64"),
             "followup_days_28d": followup,
             "age": rng.normal(63.0, 14.0, size=n),
@@ -122,7 +127,8 @@ def test_survival_family_landmark_compiles_the_sealed_suite_and_executes(tmp_pat
     authority = load_current_case_scientific_runtime_authority(projection.authority)
     assert isinstance(authority, LandmarkSurvivalRuntimeAuthority)
     assert authority.exposure_status_column == "mech_vent_max"
-    assert authority.exposure_onset_column == "mech_vent_first_time"
+    assert authority.exposure_onset_column == "mech_vent_onset_time"
+    assert authority.exposure_onset_representation == "first_truthy_event_time"
     assert authority.event_column == "mort_28d"
     assert authority.followup_time_column == "followup_days_28d"
     assert authority.endpoint_horizon_days == 28.0
@@ -309,7 +315,7 @@ def test_survival_family_without_landmark_keeps_other_routes(tmp_path):
             "exposure_kind",
         ),
         (
-            # Recorded once per stay: no first recorded time to classify.
+            # Recorded once per stay: no record time to classify.
             {
                 "primary_exposure": "sex",
                 "primary_exposure_source": "sex",
@@ -334,11 +340,73 @@ def test_survival_projection_fails_closed_on_unsupported_coordinates(
 
 def test_survival_projection_requires_the_onset_companion_column(tmp_path):
     universe, frame = _universe(tmp_path)
-    frame.drop(columns=["mech_vent_first_time"]).to_parquet(universe, index=False)
+    # The first-observation companion can be an absent record; it never
+    # stands in for the onset.
+    frame.rename(columns={"mech_vent_onset_time": "mech_vent_first_time"}).to_parquet(
+        universe, index=False
+    )
     with pytest.raises(WebScientificRuntimeProjectionError) as excinfo:
         compile_landmark_survival_runtime_projection(**_coordinates(universe))
     assert excinfo.value.code == "web_scientific_runtime_columns_missing"
-    assert excinfo.value.details["missing_columns"] == ["mech_vent_first_time"]
+    assert excinfo.value.details["missing_columns"] == ["mech_vent_onset_time"]
+
+
+def _verified_onset(role, transform):
+    columns = (
+        {}
+        if role is None
+        else {
+            "mech_vent_onset_time": SimpleNamespace(
+                metadata=SimpleNamespace(role=role), representation_transform=transform
+            )
+        }
+    )
+    return SimpleNamespace(sidecar=SimpleNamespace(files=(SimpleNamespace(columns=columns),)))
+
+
+@pytest.mark.parametrize(
+    ("role", "transform"),
+    [
+        (ConceptColumnRole.FIRST_OBSERVATION_TIME, "window_first_time"),
+        (ConceptColumnRole.EVENT_TIME, "window_first_time"),
+        (None, None),
+    ],
+    ids=["first_observation", "event_time_of_another_record", "undeclared"],
+)
+def test_a_typed_onset_binds_only_as_the_first_present_record(
+    tmp_path, monkeypatch, role, transform
+):
+    universe, _frame = _universe(tmp_path)
+    monkeypatch.setattr(
+        survival_projection,
+        "load_verified_materialized_cohort_authority",
+        lambda _path: _verified_onset(ConceptColumnRole.EVENT_TIME, "first_truthy_event_time"),
+    )
+    assert compile_landmark_survival_runtime_projection(**_coordinates(universe)) is not None
+
+    monkeypatch.setattr(
+        survival_projection,
+        "load_verified_materialized_cohort_authority",
+        lambda _path: _verified_onset(role, transform),
+    )
+    with pytest.raises(WebScientificRuntimeProjectionError) as excinfo:
+        compile_landmark_survival_runtime_projection(**_coordinates(universe))
+    assert excinfo.value.code == "web_landmark_survival_onset_unverified"
+    assert excinfo.value.details == {"onset_column": "mech_vent_onset_time"}
+
+
+def test_an_unverifiable_universe_binds_no_onset(tmp_path, monkeypatch):
+    universe, _frame = _universe(tmp_path)
+
+    def unverifiable(_path):
+        raise MaterializedMetadataError("sidecar digest mismatch")
+
+    monkeypatch.setattr(
+        survival_projection, "load_verified_materialized_cohort_authority", unverifiable
+    )
+    with pytest.raises(WebScientificRuntimeProjectionError) as excinfo:
+        compile_landmark_survival_runtime_projection(**_coordinates(universe))
+    assert excinfo.value.code == "web_scientific_runtime_metadata_unverified"
 
 
 def test_fixed_horizon_vocabulary_pairs_each_event_with_its_followup():

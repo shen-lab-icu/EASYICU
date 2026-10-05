@@ -82,6 +82,7 @@ _SAFE_MATERIALIZED_REPRESENTATIONS = frozenset(
         "window_measurement_status",
         "window_first_time",
         "window_last_time",
+        "first_truthy_event_time",
     }
 )
 

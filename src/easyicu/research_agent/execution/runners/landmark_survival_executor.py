@@ -291,6 +291,9 @@ def _manuscript_tables(
     sizes = group.value_counts()
     events = analysis[sealed.derived_event_column].groupby(group).sum()
     landmark = f"{sealed.landmark_hours:g}"
+    # A suite signed before the onset representation timed the exposure by
+    # its first record of any value; its words stay as they were.
+    present_onset = sealed.exposure_onset_representation == "first_truthy_event_time"
 
     def counts(value: int) -> dict[str, Any]:
         n, deaths = int(sizes.get(value, 0)), int(events.get(value, 0))
@@ -345,14 +348,17 @@ def _manuscript_tables(
                         f"Alive and under observation at the {landmark}-hour landmark"
                     ),
                     "exposure_status_and_timing_supported": (
-                        "Exposure status and first recorded time available"
+                        "Exposure status and time of first present record available"
+                        if present_onset
+                        else "Exposure status and first recorded time available"
                     ),
                     "landmark_analysis_population": "Landmark analysis cohort",
                 },
             },
             "notes": [
                 "The last stage excludes exposed records whose exposure was first recorded "
-                f"at or before hour {sealed.prevalent_exposure_cutoff_hours:g} or after hour "
+                + ("as present " if present_onset else "")
+                + f"at or before hour {sealed.prevalent_exposure_cutoff_hours:g} or after hour "
                 f"{sealed.exposure_window_hours[1]:g}.",
                 "Excluded counts are the records removed since the stage before.",
             ],
@@ -1060,6 +1066,7 @@ def _executed_survival_design(sealed: LandmarkSurvivalRuntimeAuthority) -> dict[
                 float(cut) for cut in sealed.time_varying_interval_cutpoints_days
             ],
             rmst_horizon_days=followup_days if sealed.rmst_product is not None else None,
+            exposure_onset_representation=sealed.exposure_onset_representation,
         )
     )
 

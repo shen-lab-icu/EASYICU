@@ -155,6 +155,13 @@ class SealedSuiteCoordinates(BaseModel):
     primary_owner: str = Field(pattern=r"^signed_[a-z][a-z0-9_]{0,79}$")
     exposure_status_column: str = Field(min_length=1, max_length=128)
     exposure_onset_column: str = Field(min_length=1, max_length=128)
+    #: The onset is the first record of the exposure as present; ``None`` for a
+    #: suite signed before that, which timed it by its first record of any value.
+    #: Left out of the dump while unset, so such a request keeps its digest.
+    exposure_onset_representation: Literal["first_truthy_event_time"] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     event_column: str = Field(min_length=1, max_length=128)
     followup_time_column: str = Field(min_length=1, max_length=128)
     landmark_hours: float = Field(gt=0.0)

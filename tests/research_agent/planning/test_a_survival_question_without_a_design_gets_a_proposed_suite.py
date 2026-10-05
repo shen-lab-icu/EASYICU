@@ -58,7 +58,8 @@ def test_closed_host_coordinates_propose_the_suite_with_an_open_roster():
     proposed = proposed_survival_suite_coordinates(context)
     assert proposed is not None
     assert proposed.primary_owner == "signed_landmark_survival_suite"
-    assert (proposed.exposure_status_column, proposed.exposure_onset_column) == ("rrt", "rrt_first_time")
+    assert (proposed.exposure_status_column, proposed.exposure_onset_column) == ("rrt", "rrt_onset_time")
+    assert proposed.exposure_onset_representation == "first_truthy_event_time"
     assert (proposed.event_column, proposed.followup_time_column) == ("mort_90d", "followup_days_90d")
     assert (proposed.landmark_hours, proposed.endpoint_horizon_days) == (24.0, 90.0)
     assert proposed.adjustment_columns == []
@@ -80,9 +81,9 @@ def test_the_planner_selects_the_roster_and_the_plan_names_the_suite_owner():
     primary = next(step for step in plan.steps if step.planned_analysis_role == "primary")
     assert primary.method == "signed_landmark_survival_suite"
     # The onset companion is materialized only once the design is declared.
-    assert "rrt_first_time" not in primary.inputs
+    assert "rrt_onset_time" not in primary.inputs
     assert {"rrt", "mort_90d", "followup_days_90d", "age", "sex"} <= set(primary.inputs)
-    assert "rrt_first_time" not in plan.design_selection.selected.required_variables
+    assert "rrt_onset_time" not in plan.design_selection.selected.required_variables
     proposal = plan.adjustment_proposal
     assert proposal is not None
     assert proposal.covariates == ["age", "sex"]
@@ -197,7 +198,7 @@ def test_only_a_proposal_adds_its_coordinates_to_the_planner_prompt():
     context = _context()
     request = _request(context)
     prompt = family_spec_user_prompt(request, variable_descriptions={})
-    assert '"proposed_suite"' in prompt and "rrt_first_time" in prompt
+    assert '"proposed_suite"' in prompt and "rrt_onset_time" in prompt
     assert "proposed_suite" in FAMILY_SPEC_GUIDE
     sealed_shape = request.model_copy(update={"proposed_suite": None})
     assert '"proposed_suite"' not in family_spec_user_prompt(sealed_shape, variable_descriptions={})

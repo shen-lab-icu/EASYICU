@@ -132,7 +132,7 @@ def sealed_survival(
     base = survival_context()
     variables = [
         *base.variables,
-        ConceptDescriptor(name="rrt_first_time", description="first recorded therapy time",
+        ConceptDescriptor(name="rrt_onset_time", description="first time therapy was recorded as present",
                           role=VariableRole.OTHER, dtype="float64", unit="hours"),
         ConceptDescriptor(name="weight", description="admission weight",
                           role=VariableRole.DEMOGRAPHIC, dtype="float64", unit="kg"),
@@ -234,7 +234,7 @@ def synthetic_survival_rows(n: int = 600, *, sex_missing: int = 37) -> pd.DataFr
     sex[rng.choice(n, size=sex_missing, replace=False)] = np.nan
     return pd.DataFrame({
         "rrt": treated.astype("int64"),
-        "rrt_first_time": onset,
+        "rrt_onset_time": onset,
         "mort_90d": died.astype("int64"),
         "followup_days_90d": np.where(died == 1, rng.uniform(1.5, 89.0, size=n), 90.0),
         "age": rng.normal(64.0, 13.0, size=n),

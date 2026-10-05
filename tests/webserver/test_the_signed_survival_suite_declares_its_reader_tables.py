@@ -137,7 +137,7 @@ def test_the_reader_tables_copy_the_recorded_cells(tmp_path):
         for index, stage in enumerate(stages)
     ]
     assert flow.rows[0][0] == "Source cohort" and flow.rows[-1][0] == "Landmark analysis cohort"
-    assert any("first recorded at or before hour 0" in note for note in flow.notes)
+    assert any("first recorded as present at or before hour 0" in note for note in flow.notes)
     # Formatting reads the products; it never rewrites them.
     assert before == {record.relative_path: (run_dir / record.relative_path).read_bytes() for record in records}
 

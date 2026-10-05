@@ -213,6 +213,7 @@ def _safe_get_concept_info(name: str) -> Optional[Dict[str, Any]]:
 _WIDE_COMPANION_SUFFIXES: tuple[str, ...] = (
     "_first_time",
     "_last_time",
+    "_onset_time",
     "_measured",
     "_median",
     "_first",
@@ -562,6 +563,7 @@ def _apply_legacy_materialization_window(
         "_measured": (ConceptColumnRole.MEASUREMENT_STATUS, "window_measurement_status"),
         "_first_time": (ConceptColumnRole.FIRST_OBSERVATION_TIME, "window_first_time"),
         "_last_time": (ConceptColumnRole.LAST_OBSERVATION_TIME, "window_last_time"),
+        "_onset_time": (ConceptColumnRole.EVENT_TIME, "first_truthy_event_time"),
     }
     window = provenance["cohort_window_hours"]
     start, end = float(window[0]), float(window[1])

@@ -1103,8 +1103,7 @@ def select_progressive_variables(
             ("_max", 120),
             ("_measured", 110),
             ("_n", 100),
-            ("_first_time", 90),
-            ("_last_time", 80),
+            ("_onset_time", 95), ("_first_time", 90), ("_last_time", 80),
         ):
             if folded_name.endswith(suffix):
                 score += bonus

@@ -60,7 +60,7 @@ def test_the_suite_publishes_the_audit_of_the_columns_it_executes(tmp_path):
     audit = pd.read_csv(tmp_path / "out" / summary["output_files"][AUDIT])
     assert list(audit["column"]) == list(authority.required_columns)
     assert dict(zip(audit["column"], audit["column_role"])) == {
-        "rrt": "exposure_status", "rrt_first_time": "exposure_onset", "mort_90d": "event",
+        "rrt": "exposure_status", "rrt_onset_time": "exposure_onset", "mort_90d": "event",
         "followup_days_90d": "followup_time", "age": "adjustment", "sex": "adjustment",
     }
     by_column = audit.set_index("column")

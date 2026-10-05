@@ -187,6 +187,9 @@ def _design_selection(
     roster = _roster(request, spec) if roster is None else roster
     sealed = _suite(request)
     proposed = request.proposed_suite is not None
+    # A suite signed before the onset representation timed the exposure by its
+    # first record of any value, and its plan keeps those words.
+    present = sealed.exposure_onset_representation == "first_truthy_event_time"
     exposure = _label(spec, request.primary_exposure)
     outcome = _label(spec, request.outcome)
     adjustment_text = ", ".join(_label(spec, name) for name in roster) or "no covariates"
@@ -221,8 +224,9 @@ def _design_selection(
         ),
         time_zero=f"ICU admission; follow-up starts at the {landmark} landmark.",
         observation_window=(
-            f"Exposure status is fixed at the {landmark} landmark from the exposure's first recorded "
-            f"times; the endpoint is followed to {horizon} with administrative censoring."
+            f"Exposure status is fixed at the {landmark} landmark from the exposure's "
+            + ("first records as present" if present else "first recorded times")
+            + f"; the endpoint is followed to {horizon} with administrative censoring."
         ),
         primary_method=(
             (
@@ -237,10 +241,16 @@ def _design_selection(
         ),
         required_variables=[request.identity_column, *columns],
         assumptions=[
-            # The onset column is the first recorded time, not a verified onset.
-            "Exposure timing is the first recorded time of the exposure source; exposure that began "
-            "before its first record, such as before ICU admission, is not observed, so some prevalent "
-            "exposure may count as incident.",
+            # The onset column is the first record (as present), not a verified onset.
+            (
+                "Exposure timing is the first time the exposure source recorded the exposure as "
+                "present; exposure that began before that record, such as before ICU admission, is "
+                "not observed, so some prevalent exposure may count as incident."
+                if present
+                else "Exposure timing is the first recorded time of the exposure source; exposure "
+                "that began before its first record, such as before ICU admission, is not observed, "
+                "so some prevalent exposure may count as incident."
+            ),
             f"{unit_text[0].upper()}{unit_text[1:]}.",
         ],
         literature_citation_keys=[*method_keys, *comparator_keys][:8],
@@ -264,8 +274,13 @@ def _design_selection(
         reviewable_plan=(
             [
                 f"研究队列；{unit_text_zh}；纳入在 {landmark_zh} landmark 时存活且终点有效的入住。",
-                f"截至 {landmark_zh} 新发的 {exposure}，以暴露首次记录时间计；首次记录在时间零点及以前的"
-                "暴露按已存在暴露排除。",
+                (
+                    f"截至 {landmark_zh} 新发的 {exposure}，以暴露首次记录为阳性的时间计；首次阳性记录在"
+                    "时间零点及以前的暴露按已存在暴露排除。"
+                    if present
+                    else f"截至 {landmark_zh} 新发的 {exposure}，以暴露首次记录时间计；首次记录在时间零点"
+                    "及以前的暴露按已存在暴露排除。"
+                ),
                 f"自 ICU 入院起 {horizon_zh} 内的 {outcome}，按行政截尾处理。",
                 f"调整 {adjustment_zh} 的 Cox 比例风险模型；Wald 95% CI；按封印的处理政策做 "
                 "Schoenfeld 残差审计。",
@@ -278,8 +293,10 @@ def _design_selection(
             else [
                 f"The study cohort; {unit_text}; stays alive at the {landmark} landmark with a valid "
                 "endpoint.",
-                f"Incident {exposure} by {landmark}, timed by its first record; exposure first recorded "
-                "at or before time zero is excluded as prevalent.",
+                f"Incident {exposure} by {landmark}, timed by its first record"
+                + (" as present; exposure first recorded as present " if present
+                   else "; exposure first recorded ")
+                + "at or before time zero is excluded as prevalent.",
                 sentence(f"{outcome} through {horizon} from ICU admission, censored administratively."),
                 f"Adjusted Cox proportional-hazards model for {adjustment_text}; Wald 95% CI; Schoenfeld "
                 "residual audit with the sealed handling policy.",

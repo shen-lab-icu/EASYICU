@@ -783,8 +783,7 @@ class LLMConceptAuditor:
         # from losing its registered clinical role during concept review.
         companion_suffixes = (
             "_measured",
-            "_first_time",
-            "_last_time",
+            "_first_time", "_last_time", "_onset_time",
             "_first",
             "_max",
             "_min",

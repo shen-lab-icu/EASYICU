@@ -24,6 +24,7 @@ _MATERIALIZED_FEATURE_SUFFIXES = tuple(
         (
             "_first_time",
             "_last_time",
+            "_onset_time",
             "_measured",
             "_first",
             "_mean",

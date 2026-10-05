@@ -185,6 +185,7 @@ def sealed_survival_suite_coordinates(
             primary_owner=str(payload.get("sealed_primary_owner") or ""),
             exposure_status_column=str(payload.get("exposure_status_column") or ""),
             exposure_onset_column=str(payload.get("exposure_onset_column") or ""),
+            exposure_onset_representation=payload.get("exposure_onset_representation"),
             event_column=str(payload.get("event_column") or ""),
             followup_time_column=str(payload.get("followup_time_column") or ""),
             landmark_hours=float(payload.get("landmark_hours") or 0.0),
@@ -198,8 +199,9 @@ def sealed_survival_suite_coordinates(
 #: The one owner a proposed survival design names; the host seals it only after
 #: the reviewed design is compiled into the study configuration.
 _PROPOSED_SURVIVAL_OWNER = "signed_landmark_survival_suite"
-#: Producer-owned first-observation companion of a materialized concept.
-_ONSET_SUFFIX = "_first_time"
+#: Producer-owned onset companion of a typed event status: the first time the
+#: materialization window recorded it present.
+_ONSET_SUFFIX = "_onset_time"
 #: Products every signed suite declares.  The signing projection adds an
 #: interval-specific Cox table when the endpoint has cutpoints inside the
 #: follow-up; a proposal is replaced by the signed plan before it runs.
@@ -249,8 +251,8 @@ def proposed_survival_suite_coordinates(
     if landmark is None or landmark <= 0 or landmark / 24.0 >= endpoint.horizon_days:
         return None
     source = str(getattr(variable, "source_concept", "") or "").strip() or exposure
-    # The suite times the exposure by its first recorded time; a concept its
-    # owner records once per stay (sex, age) has none to classify.
+    # The suite times the exposure by its first record as present; a concept
+    # its owner records once per stay (sex, age) has none to classify.
     if concept_records_one_value_per_stay(source):
         return None
     try:
@@ -258,6 +260,7 @@ def proposed_survival_suite_coordinates(
             primary_owner=_PROPOSED_SURVIVAL_OWNER,
             exposure_status_column=exposure,
             exposure_onset_column=f"{source}{_ONSET_SUFFIX}",
+            exposure_onset_representation="first_truthy_event_time",
             event_column=endpoint.event_concept,
             followup_time_column=endpoint.followup_concept,
             landmark_hours=float(landmark),

@@ -2308,6 +2308,15 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
     development_execution_only_allowed: bool = False
     exposure_status_column: str = Field(min_length=1)
     exposure_onset_column: str = Field(min_length=1)
+    #: How the onset column times the exposure.  The Web projection binds every
+    #: new suite to the first record of the exposure as present
+    #: (``first_truthy_event_time``).  Left out of the signed body while unset,
+    #: so a suite signed before it keeps its digest; such a suite timed the
+    #: exposure by its first record of any value.
+    exposure_onset_representation: Literal["first_truthy_event_time"] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     event_column: str = Field(min_length=1)
     followup_time_column: str = Field(min_length=1)
     endpoint_time_origin: str = Field(min_length=1)
@@ -2612,6 +2621,8 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
             "adjustment_columns": list(self.adjustment_columns),
             "plan_outputs": list(self.plan_outputs),
         }
+        if self.exposure_onset_representation is not None:
+            coordinates["exposure_onset_representation"] = self.exposure_onset_representation
         return (
             "CALLER-BOUND LANDMARK SURVIVAL SUITE: the single primary step is "
             "owned by the sealed host suite named in sealed_primary_owner; it "
