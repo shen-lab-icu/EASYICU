@@ -342,7 +342,9 @@ class FamilySpecRequest(BaseModel):
     primary_contrast_level_index: int = Field(ge=0)
     exposure_is_ordered: bool
     exposure_companion_columns: list[str] = Field(default_factory=list)
-    #: Empty only for the sealed feasibility family, which analyses no outcome.
+    #: Empty for the sealed feasibility family, which analyses no outcome, and
+    #: for a trajectory suite whose study has none: its classes are discovered
+    #: without an outcome, which is only ever described by frozen class.
     outcome: str = Field(max_length=128)
     outcome_levels: list[str] = Field(default_factory=list, max_length=2)
     event_level_index: int = Field(ge=0, le=1)
@@ -438,6 +440,9 @@ class FamilySpecRequest(BaseModel):
         if self.family_id == SOURCE_FEASIBILITY_FAMILY_ID:
             if self.outcome or self.outcome_levels:
                 raise ValueError("the sealed feasibility family analyses no outcome")
+        elif self.family_id == FIXED_WINDOW_TRAJECTORY_FAMILY_ID and not self.outcome:
+            if self.outcome_levels or self.event_level_index:
+                raise ValueError("a trajectory suite without an outcome has no outcome levels")
         elif not self.outcome or len(self.outcome_levels) != 2:
             raise ValueError("every result-bearing family needs one two-level outcome")
         if self.family_id == SOURCE_FEASIBILITY_FAMILY_ID:

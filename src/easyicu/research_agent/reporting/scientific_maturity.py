@@ -30,6 +30,7 @@ from ..planning.scientific_review import (
     repeat_units_possible as _plan_repeat_units_possible,
     repeated_unit_design_closed as _plan_repeated_unit_design_closed,
     scientific_steps as _plan_scientific_steps,
+    study_endpoint_required as _plan_study_endpoint_required,
     timing_design_closed as _plan_timing_design_closed,
 )
 from ..planning.adjustment_authority import AdjustmentSetAuthority
@@ -1241,7 +1242,7 @@ def build_scientific_maturity_audit(
                 ),
             )
         )
-    if not endpoint["resolved"]:
+    if not endpoint["resolved"] and _plan_study_endpoint_required(context, plan):
         findings.append(
             ScientificMaturityFinding(
                 code="OUTCOME_DEFINITION_UNRESOLVED",
