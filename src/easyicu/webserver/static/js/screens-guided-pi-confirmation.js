@@ -536,7 +536,16 @@
           '这项研究需要预先设定哪些可执行的敏感性分析？',
         ),
       };
-      return known[code] || String((item && (item.question || item.code)) || '');
+      const vocab = window.AGENT_READER_VOCAB;
+      return known[code] || (vocab ? vocab.question(code) : '') || String((item && (item.question || item.code)) || '');
+    }
+
+    // The review's evidence for a decision reads in the reader vocabulary's
+    // words when it has them; English readers keep the host's evidence.
+    function localizedDecisionEvidence(item) {
+      const vocab = window.AGENT_READER_VOCAB;
+      const finding = vocab ? vocab.finding(String((item && item.code) || '')) : null;
+      return (finding && finding.detail) || String((item && item.evidence) || localizedAuthorizationQuestion(item));
     }
 
     function localizedAuthorizationDecisionCopy(item) {
@@ -752,7 +761,7 @@
           'Confirmed analyses are not all executable in this candidate plan',
           '候选计划尚未完整执行已确认分析',
         ),
-        evidenceDetail: String((item && item.evidence) || localizedAuthorizationQuestion(item)),
+        evidenceDetail: localizedDecisionEvidence(item),
         guidance: tr(
           'Keeping them is recommended because it preserves the question and the outputs already confirmed by the researcher.',
           '建议保留：这样不会改变研究问题，也不会删减研究者已经确认的输出。',
@@ -786,7 +795,7 @@
         context: localizedAuthorizationQuestion(item),
         evidenceLabel: tr('Current review evidence', '当前审阅证据'),
         evidenceStatus: tr('The plan has no bound endpoint yet', '计划尚未绑定主要结局'),
-        evidenceDetail: String((item && item.evidence) || localizedAuthorizationQuestion(item)),
+        evidenceDetail: localizedDecisionEvidence(item),
         guidance: tr(
           'Only endpoints this data source can bind are listed. Your choice is saved to the study and a revised candidate plan is generated; analysis stays paused for review.',
           '这里只列出当前数据源能绑定的结局。选择后写入研究配置并重新生成候选计划；分析仍会停下供你审核。',
@@ -806,7 +815,7 @@
         context: localizedAuthorizationQuestion(item),
         evidenceLabel: tr('Current review evidence', '当前审阅证据'),
         evidenceStatus: tr('One user decision remains', '还需 1 项用户决定'),
-        evidenceDetail: String((item && item.evidence) || localizedAuthorizationQuestion(item)),
+        evidenceDetail: localizedDecisionEvidence(item),
         guidance: tr('Your answer will be saved in a revised plan; analysis remains paused.', '你的回答会写入修订后的计划；分析仍保持暂停。'),
         technicalRemediation: String((item && item.remediation) || ''),
       };
