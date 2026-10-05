@@ -125,12 +125,17 @@ class LandmarkSurvivalDesign(_ExecutedDesign):
     #: written before this field omits it; its suite timed the exposure by its
     #: first record of any value.
     exposure_onset_representation: Literal["first_truthy_event_time"] | None = None
+    #: The prevalence-definition sensitivity analysis: each fit also excluded
+    #: exposed records first recorded by one of these hours.  A design without
+    #: that analysis omits the field.
+    prevalence_sensitivity_cutoffs_hours: list[float] | None = None
 
     @model_serializer(mode="wrap")
-    def _preserve_unstated_onset_representation(self, handler):
+    def _preserve_unstated_fields(self, handler):
         payload = handler(self)
-        if self.exposure_onset_representation is None:
-            payload.pop("exposure_onset_representation", None)
+        for name in ("exposure_onset_representation", "prevalence_sensitivity_cutoffs_hours"):
+            if getattr(self, name) is None:
+                payload.pop(name, None)
         return payload
 
     @model_validator(mode="after")
@@ -153,6 +158,16 @@ class LandmarkSurvivalDesign(_ExecutedDesign):
             self.rmst_horizon_days - followup_days
         ) > 1e-9:
             raise ValueError("the restricted-mean horizon is not the follow-up end")
+        hours = self.prevalence_sensitivity_cutoffs_hours
+        if hours is not None and (
+            not hours
+            or any(later <= earlier for earlier, later in zip(hours, hours[1:]))
+            or not self.prevalent_exposure_cutoff_hours < hours[0]
+            or hours[-1] >= self.exposure_window_end_hours
+        ):
+            raise ValueError(
+                "sensitivity cutoffs must increase between the cutoff and the window end"
+            )
         return self
 
 

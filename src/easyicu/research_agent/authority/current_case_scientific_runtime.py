@@ -45,6 +45,10 @@ from ..contracts.functional_form import (
     FunctionalFormSpec, RCS_LINEAR_SENSITIVITY_METHODS, functional_form_products,
 )
 from ..contracts.runtime_outcomes import RuntimeOutcomeContract
+from ..contracts.sealed_suite_robustness import (
+    PREVALENCE_SENSITIVITY_RULE,
+    prevalence_sensitivity_cutoffs_hours,
+)
 from ..schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -2358,6 +2362,28 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
         default=None,
         pattern=r"^table:[a-z][a-z0-9_]{0,79}$",
     )
+    #: The prespecified sensitivity analysis of the prevalence definition:
+    #: its rule, the hours that rule gives for this exposure window, its table
+    #: and the outcome-blind table of the exposed group's first-record hours.
+    #: Declared together and left out of the signed body while unset, so a
+    #: suite signed before them keeps its digest.
+    prevalence_sensitivity_rule: (
+        Literal["whole_hours_at_quarter_and_half_of_exposure_window"] | None
+    ) = Field(default=None, exclude_if=lambda value: value is None)
+    prevalence_sensitivity_cutoffs_hours: tuple[float, ...] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    prevalence_sensitivity_product: str | None = Field(
+        default=None,
+        pattern=r"^table:[a-z][a-z0-9_]{0,79}$",
+        exclude_if=lambda value: value is None,
+    )
+    exposure_onset_hours_product: str | None = Field(
+        default=None,
+        pattern=r"^table:[a-z][a-z0-9_]{0,79}$",
+        exclude_if=lambda value: value is None,
+    )
     #: The suite's own availability audit of its sealed source columns.  Left
     #: out of the signed body while unset, so a suite signed before it keeps
     #: its digest; the Web projection declares it for every new suite.
@@ -2401,6 +2427,28 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
             raise ValueError(
                 "landmark survival time-varying intervals must be increasing inside follow-up"
             )
+        sensitivity = (
+            self.prevalence_sensitivity_rule,
+            self.prevalence_sensitivity_cutoffs_hours,
+            self.prevalence_sensitivity_product,
+            self.exposure_onset_hours_product,
+        )
+        if any(value is None for value in sensitivity) != all(
+            value is None for value in sensitivity
+        ):
+            raise ValueError(
+                "landmark survival prevalence sensitivity fields are declared together"
+            )
+        if self.prevalence_sensitivity_rule == PREVALENCE_SENSITIVITY_RULE and (
+            not self.prevalence_sensitivity_cutoffs_hours
+            or self.prevalence_sensitivity_cutoffs_hours
+            != prevalence_sensitivity_cutoffs_hours(window_end)
+            or self.prevalence_sensitivity_cutoffs_hours[0]
+            <= self.prevalent_exposure_cutoff_hours
+        ):
+            raise ValueError(
+                "landmark survival prevalence sensitivity hours must follow their rule"
+            )
         source_columns = (
             self.exposure_status_column,
             self.exposure_onset_column,
@@ -2441,6 +2489,11 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
             *(
                 (self.time_varying_cox_product,)
                 if self.time_varying_cox_product is not None
+                else ()
+            ),
+            *(
+                (self.prevalence_sensitivity_product, self.exposure_onset_hours_product)
+                if self.prevalence_sensitivity_product is not None
                 else ()
             ),
             *(
@@ -2623,6 +2676,10 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
         }
         if self.exposure_onset_representation is not None:
             coordinates["exposure_onset_representation"] = self.exposure_onset_representation
+        if self.prevalence_sensitivity_cutoffs_hours is not None:
+            coordinates["prevalence_sensitivity_cutoffs_hours"] = list(
+                self.prevalence_sensitivity_cutoffs_hours
+            )
         return (
             "CALLER-BOUND LANDMARK SURVIVAL SUITE: the single primary step is "
             "owned by the sealed host suite named in sealed_primary_owner; it "

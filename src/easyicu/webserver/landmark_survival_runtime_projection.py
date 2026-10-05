@@ -18,7 +18,9 @@ display.  Every scientific coordinate comes from typed host vocabularies:
   ``easyicu.outcome_availability``;
 * the landmark, its eligibility flags and the follow-up binding come from the
   study's single landmark sensitivity; the adjustment roster is the exact
-  StudyContext roster.
+  StudyContext roster;
+* the prevalence-definition sensitivity analysis re-fits at the hours its
+  sealed rule gives for the exposure window (``sealed_suite_robustness``).
 
 It reads the materialized universe *schema* only.  Anything the vocabularies
 cannot close fails with ``WebScientificRuntimeProjectionError`` instead of
@@ -40,6 +42,12 @@ from easyicu.research_agent.authority.current_case_scientific_runtime import (
 )
 from easyicu.concept.metadata_projection import ConceptColumnRole
 from easyicu.research_agent.concept_availability import concept_records_one_value_per_stay
+from easyicu.research_agent.contracts.sealed_suite_robustness import (
+    EXPOSURE_ONSET_HOURS_PRODUCT,
+    PREVALENCE_SENSITIVITY_PRODUCT,
+    PREVALENCE_SENSITIVITY_RULE,
+    prevalence_sensitivity_cutoffs_hours,
+)
 from easyicu.research_agent.icu_rules import VariableKind
 from easyicu.research_agent.intake.materialized_metadata import (
     MaterializedMetadataError,
@@ -435,6 +443,7 @@ def compile_landmark_survival_runtime_projection(
         for value in endpoint.time_varying_cutpoints_days
         if 0 < value < tau
     ]
+    prevalence_cutoffs = prevalence_sensitivity_cutoffs_hours(landmark_hours)
     outputs = [
         "table:landmark_table_one",
         "table:landmark_risk_set_flow",
@@ -443,6 +452,11 @@ def compile_landmark_survival_runtime_projection(
         "table:landmark_ph_diagnostics",
         "table:landmark_rmst_summary",
         *(["table:landmark_time_varying_cox_summary"] if cutpoints else []),
+        *(
+            [PREVALENCE_SENSITIVITY_PRODUCT, EXPOSURE_ONSET_HOURS_PRODUCT]
+            if prevalence_cutoffs
+            else []
+        ),
         "table:landmark_measurement_audit",
         "log:landmark_survival_receipt",
         "figure:landmark_survival_suite",
@@ -471,6 +485,16 @@ def compile_landmark_survival_runtime_projection(
         "exposure_window_hours": [0.0, landmark_hours],
         "prevalent_exposure_cutoff_hours": 0.0,
         "prevalent_exposure_action": "exclude",
+        **(
+            {
+                "prevalence_sensitivity_rule": PREVALENCE_SENSITIVITY_RULE,
+                "prevalence_sensitivity_cutoffs_hours": list(prevalence_cutoffs),
+                "prevalence_sensitivity_product": PREVALENCE_SENSITIVITY_PRODUCT,
+                "exposure_onset_hours_product": EXPOSURE_ONSET_HOURS_PRODUCT,
+            }
+            if prevalence_cutoffs
+            else {}
+        ),
         "exposed_group_label": f"Incident {exposure_name} by {landmark_token} h",
         "comparator_group_label": (
             f"No incident {exposure_name} by {landmark_token} h"

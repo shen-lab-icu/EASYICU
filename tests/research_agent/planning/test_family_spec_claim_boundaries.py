@@ -20,6 +20,7 @@ def _request(exposure: str) -> SimpleNamespace:
             landmark_hours=24.0,
             endpoint_horizon_days=28.0,
             exposure_onset_representation="first_truthy_event_time",
+            prevalence_sensitivity_cutoffs_hours=[6.0, 12.0],
             adjustment_columns=("age", "sex"),
             source_columns=("event_time", "event", exposure, "age", "sex"),
         ),
