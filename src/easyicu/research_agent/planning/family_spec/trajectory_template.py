@@ -137,7 +137,9 @@ def _design_selection(
 ) -> ResearchDesignSelection:
     sealed = request.sealed_trajectory
     assert sealed is not None
-    outcome = _label(spec, request.outcome)
+    # Classes are discovered without an outcome.  A study's outcome is only
+    # described by frozen class; a study without one describes none.
+    outcome = _label(spec, request.outcome) if request.outcome else ""
     concept_text = ", ".join(_label(spec, name) for name in sealed.coordinate_concepts)
     window = f"{sealed.window_hours[0]}–{sealed.window_hours[1]} h after ICU admission"
     grid = f"{sealed.grid_width_hours} h"
@@ -159,7 +161,23 @@ def _design_selection(
     comparator_keys = [
         key for key in request.comparison_literature_keys if key in request.allowed_literature_citation_keys
     ]
-    required_variables = [request.identity_column, request.outcome]
+    # Without an outcome the design names what it describes: the audited
+    # coordinates beside the identity, as the outcome-free feasibility family does.
+    required_variables = (
+        [request.identity_column, request.outcome]
+        if request.outcome
+        else [
+            request.identity_column,
+            *(name for name in request.measurement_audit_columns if name != request.identity_column),
+        ]
+    )
+    if len(required_variables) < 2:
+        raise FamilySpecError(
+            "family_spec_trajectory_roster_empty",
+            "a trajectory suite without an outcome needs at least one audited coordinate "
+            "beside the identity column",
+            path="measurement_audit_columns",
+        )
     selected = ResearchDesignCandidate(
         design_id="fixed_window_trajectory_suite",
         analysis_type="trajectory_clustering",
@@ -200,7 +218,7 @@ def _design_selection(
         ),
         supports=(
             "A prespecified, reproducible candidate trajectory partition with its selection and "
-            f"stability evidence and a descriptive link to {outcome}."
+            + (f"stability evidence and a descriptive link to {outcome}." if outcome else "stability evidence.")
         ),
         cannot_prove=(
             "No causal effect of a class, no external reproducibility, and no clinical phenotype "
@@ -215,7 +233,11 @@ def _design_selection(
                 f"研究队列；{unit_text_zh}。",
                 f"{listing([_label(spec, name) for name in sealed.coordinate_concepts], language)} "
                 f"在 {window_zh} 内按 {grid} 窗口汇总。",
-                f"分区冻结后才按类别描述 {outcome}。",
+                (
+                    f"分区冻结后才按类别描述 {outcome}。"
+                    if outcome
+                    else "研究问题不含结局；类别只按坐标描述，不比较结局。"
+                ),
                 f"{listing([str(value) for value in sealed.candidate_cluster_counts], language)} "
                 + (
                     "类的混合型潜在类别模型（有序坐标为分类指标，连续坐标为高斯指标）；"
@@ -230,7 +252,12 @@ def _design_selection(
             else [
                 f"The study cohort; {unit_text}.",
                 sentence(f"{concept_text} aggregated per {grid} window over {window}."),
-                sentence(f"{outcome} is described by class only after the partition is frozen."),
+                (
+                    sentence(f"{outcome} is described by class only after the partition is frozen.")
+                    if outcome
+                    else "The question names no outcome; classes are described by their coordinates "
+                    "only, with no outcome comparison."
+                ),
                 (
                     f"Mixed-mode latent class models (categorical indicators for ordinal "
                     f"coordinates, Gaussian for continuous ones) with {candidates} classes; "
@@ -328,6 +355,7 @@ def build_fixed_window_trajectory_skeleton(
     sealed = request.sealed_trajectory
     identity = request.identity_column
     outcome = request.outcome
+    outcome_names = [outcome] if outcome else []
     audit_columns = list(request.measurement_audit_columns)
     method_keys = [key for key in request.allowed_literature_citation_keys if _method_card_elements(key)]
     primary_keys = list(
@@ -383,7 +411,7 @@ def build_fixed_window_trajectory_skeleton(
         _outline_step(
             step_id="cohort_accounting", role="auxiliary", module_id="cohort_definition",
             objective=objectives["cohort_accounting"], depends_on=[],
-            variable_names=[identity, outcome], citations=[],
+            variable_names=[identity, *outcome_names], citations=[],
         ),
         _outline_step(
             step_id="coordinate_audit", role="auxiliary", module_id="measurement_audit",
@@ -404,7 +432,7 @@ def build_fixed_window_trajectory_skeleton(
             step_id="cluster_stability", role="auxiliary", module_id="custom_analysis",
             objective=objectives["cluster_stability"],
             depends_on=["trajectory_representation", "candidate_selection"],
-            variable_names=[identity, outcome], citations=[],
+            variable_names=[identity, *outcome_names], citations=[],
         ),
         *(
             [
@@ -430,7 +458,7 @@ def build_fixed_window_trajectory_skeleton(
         _outline_step(
             step_id="report", role="auxiliary", module_id="report",
             objective=objectives["report"], depends_on=[step.step_id for step in outline_steps],
-            variable_names=[identity, outcome], citations=[],
+            variable_names=[identity, *outcome_names], citations=[],
         )
     )
     outline = ProgressivePlanOutline(
@@ -455,7 +483,7 @@ def build_fixed_window_trajectory_skeleton(
         ProgressiveSkeletonStep(
             step_id="cohort_accounting", planned_analysis_role="auxiliary", module_id="cohort_definition",
             objective=objectives["cohort_accounting"], depends_on=[],
-            raw_inputs=[identity, outcome], literature_bindings=[],
+            raw_inputs=[identity, *outcome_names], literature_bindings=[],
         ),
         ProgressiveSkeletonStep(
             step_id="coordinate_audit", planned_analysis_role="auxiliary", module_id="measurement_audit",

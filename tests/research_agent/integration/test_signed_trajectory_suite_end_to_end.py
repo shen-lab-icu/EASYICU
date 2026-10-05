@@ -308,7 +308,7 @@ def _authority(*, mixed_mode: bool = False):
     return build_trajectory_scientific_runtime_authority(body)
 
 
-def _run(tmp_path: Path, *, layout: str, mixed_mode: bool = False):
+def _run(tmp_path: Path, *, layout: str, mixed_mode: bool = False, outcome: bool = True):
     export = _typed_export(tmp_path, layout=layout, integer_levels=mixed_mode)
     paths = cohort_materializer.materialize_to_parquet(
         tmp_path / "materialized",
@@ -317,7 +317,7 @@ def _run(tmp_path: Path, *, layout: str, mixed_mode: bool = False):
         database="miiv",
         static_concepts=("age",),
         feature_concepts=COORDINATES,
-        outcome_concepts=("death",),
+        outcome_concepts=("death",) if outcome else (),
         emit_trajectory=True,
         trajectory_concepts=COORDINATES,
         trajectory_window=(0.0, 24.0),
@@ -346,12 +346,12 @@ def _run(tmp_path: Path, *, layout: str, mixed_mode: bool = False):
     }
     draft_payload = owners.model_dump(mode="json")
     draft = AnalysisPlan.model_validate(
-        {**draft_payload, "steps": [*draft_payload["steps"], description]}
+        {**draft_payload, "steps": [*draft_payload["steps"], *([description] if outcome else [])]}
     )
     bound, findings = ScientificRuntimeAuthorities(
         trajectory=authority, current_case=None
     ).bind_plan(draft)
-    carried = findings[0].detail["frozen_class_description"]
+    carried = findings[0].detail.get("frozen_class_description") if findings else None
     locked = tmp_path / "locked_plan.json"
     locked.write_text(bound.model_dump_json(indent=2), encoding="utf-8")
     pipeline = ResearchAgentPipeline(
@@ -374,7 +374,7 @@ def _run(tmp_path: Path, *, layout: str, mixed_mode: bool = False):
         cohort=paths["parquet"],
         trajectory_path=paths["trajectory"],
         database="miiv",
-        target_outcome="death",
+        target_outcome="death" if outcome else None,
         id_columns=["stay_id"],
         stop_after_analysis=True,
     )
@@ -511,6 +511,35 @@ def test_frozen_classes_are_rendered_and_described_on_the_run_cohort(tmp_path):
         ("03_authority_compiled_trajectory_selection_figure",
          "reportable_phenotype_solution", False),
     ), error="signed trajectory stable-solution decision is incoherent")
+    _assert_rule_outcomes_and_designs_reach_the_report(manifest, run_dir, claims={
+        "00_authority_compiled_trajectory_representation.observed_window_rule": (
+            "minimum_observed_windows"
+        ),
+        "01_authority_compiled_trajectory_candidates.class_count_rule": "minimum_selected",
+        "02_authority_compiled_trajectory_stability.class_stability_rule": (
+            "stability_threshold_met"
+        ),
+    })
+
+
+def test_an_outcome_free_study_freezes_classes_without_describing_an_outcome(tmp_path):
+    """A study that names no outcome runs the signed owners alone."""
+
+    carried, run_dir, manifest = _run(tmp_path, layout="three_classes", outcome=False)
+
+    assert not (carried or {}).get("carried")
+    records = _records(manifest)
+    assert not any(
+        record["step_summary"].get("method") == "descriptive_outcome_by_cluster"
+        for record in records.values()
+    )
+    assert all(records[step]["status"] == "ok" for step in SIGNED_AND_DESCRIPTION_STEPS[:4])
+    freeze = records["02_authority_compiled_trajectory_stability"]["step_summary"]
+    assert freeze["freeze_status"] == TRAJECTORY_FROZEN_STATUS
+    assert manifest["readiness"]["failed_steps"] == []
+    assert [
+        finding for finding in manifest["findings"] if finding.get("severity") == "error"
+    ] == []
     _assert_rule_outcomes_and_designs_reach_the_report(manifest, run_dir, claims={
         "00_authority_compiled_trajectory_representation.observed_window_rule": (
             "minimum_observed_windows"

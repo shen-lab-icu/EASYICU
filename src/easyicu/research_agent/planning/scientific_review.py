@@ -1682,6 +1682,39 @@ def _endpoint_conflict_recorded(context: ResearchContext) -> bool:
     )
 
 
+#: Families whose plans report a result on the study endpoint.
+_ENDPOINT_RESULT_FAMILIES = frozenset(
+    {
+        "descriptive_epidemiology", "prediction_model", "dynamic_prediction",
+        "ordinal_dose_response", "survival",
+    }
+)
+
+
+def plan_reports_endpoint_result(plan: Optional[AnalysisPlan]) -> bool:
+    """Whether the plan reports a result on the study endpoint."""
+
+    return association_study(plan) or (
+        plan is not None
+        and canonical_analysis_family(plan.analysis_type) in _ENDPOINT_RESULT_FAMILIES
+    )
+
+
+def study_endpoint_required(
+    context: ResearchContext, plan: Optional[AnalysisPlan]
+) -> bool:
+    """Whether the study needs a resolved endpoint definition.
+
+    A declared target outcome needs one, and so does a plan that reports a
+    result on the endpoint.  A discovery or audit plan whose study declares no
+    outcome, such as trajectory clustering, has no endpoint to resolve.
+    """
+
+    return bool(str(context.target_outcome or "").strip()) or plan_reports_endpoint_result(
+        plan
+    )
+
+
 def _endpoint_resolved(context: ResearchContext) -> bool:
     target = str(context.target_outcome or "").strip()
     descriptor = context.variable(target) if target else None
@@ -3030,6 +3063,7 @@ def build_plan_scientific_review(
     )
     if (
         not _endpoint_resolved(context)
+        and study_endpoint_required(context, plan)
         and not survival_endpoint_proposed
         and not context_declares_source_feasibility_scope(context)
     ):
@@ -3047,12 +3081,7 @@ def build_plan_scientific_review(
                 authorization_question="Please confirm the intended clinical endpoint and time horizon in a new study version.",
             )
         )
-    endpoint_result_required = association_study(plan) or canonical_analysis_family(
-        plan.analysis_type
-    ) in {
-        "descriptive_epidemiology", "prediction_model", "dynamic_prediction",
-        "ordinal_dose_response", "survival",
-    }
+    endpoint_result_required = plan_reports_endpoint_result(plan)
     if endpoint_result_required and missing_model_outcomes:
         findings.append(
             PlanScientificFinding(
@@ -3953,6 +3982,7 @@ __all__ = [
     "build_plan_scientific_review",
     "executable_scientific_step",
     "model_covariates",
+    "plan_reports_endpoint_result",
     "planned_model_outcomes",
     "requested_outcomes",
     "requested_exposure_occurrence",
@@ -3971,6 +4001,7 @@ __all__ = [
     "required_method_layers_for_context",
     "required_method_layers_for_plan",
     "scientific_steps",
+    "study_endpoint_required",
     "timing_design_closed",
     "landmark_survival_suite_facts",
     "landmark_survival_suite_findings",

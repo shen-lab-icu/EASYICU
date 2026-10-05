@@ -486,20 +486,24 @@ def family_template_id_for_context(
         # current-run result is the sealed fail-closed decision, which needs
         # no outcome, exposure or adjustment coordinate from the context.
         return SOURCE_FEASIBILITY_FAMILY_ID
+    if (
+        headline == "trajectory_clustering"
+        and sealed_trajectory_suite_coordinates(planning_contract_context) is not None
+        and len(context.cohort.id_columns) == 1
+        and (not outcome or _binary_outcome_levels(context, outcome) is not None)
+    ):
+        # Longitudinal trajectory clustering is templated only when the host
+        # has sealed the fixed-window trajectory suite for this run; the
+        # sealed authority, not the context's exposure, is the design proof.
+        # Discovery needs no outcome: a binary outcome the study has is only
+        # described by frozen class.
+        return FIXED_WINDOW_TRAJECTORY_FAMILY_ID
     if not outcome or context.variable(outcome) is None:
         return None
     if _binary_outcome_levels(context, outcome) is None:
         return None
     if len(context.cohort.id_columns) != 1:
         return None
-    if (
-        headline == "trajectory_clustering"
-        and sealed_trajectory_suite_coordinates(planning_contract_context) is not None
-    ):
-        # Longitudinal trajectory clustering is templated only when the host
-        # has sealed the fixed-window trajectory suite for this run; the
-        # sealed authority, not the context's exposure, is the design proof.
-        return FIXED_WINDOW_TRAJECTORY_FAMILY_ID
     if headline == "survival":
         # Survival is templated on the landmark survival suite: the sealed
         # suite when the host has sealed it for this run, otherwise the suite
@@ -1551,7 +1555,8 @@ def _build_trajectory_request(
         exposure_is_ordered=False,
         outcome=outcome,
         outcome_levels=outcome_levels,
-        event_level_index=len(outcome_levels) - 1,
+        # A study without an outcome has no event level to name.
+        event_level_index=max(len(outcome_levels) - 1, 0),
         observation_window_hours=float(sealed.window_hours[1]),
         sealed_trajectory=sealed,
         adjustment_selection="planner_selectable",
