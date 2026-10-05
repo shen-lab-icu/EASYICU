@@ -132,6 +132,84 @@ def test_full_launch_materializes_planner_proposed_exposure_and_outcome(
     assert scientific.foundation_profile["required_feature_concepts"] == ("lact",)
 
 
+def test_a_trajectory_population_is_materialized_with_its_coordinates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.webserver import research_pipeline_run_preparation as preparation
+
+    adult = {
+        "concept_id": "age",
+        "time_window": {"anchor": "icu_admit", "start_offset_hours": 0, "end_offset_hours": 24},
+        "aggregation": "first",
+        "op": ">=",
+        "value": 18,
+    }
+    request = ResearchPipelineLaunchRequest(
+        **{
+            **_request().__dict__,
+            "budget_mode": "full_reviewed",
+            "study_context": {
+                "id": "study-1",
+                "question": "Do first-24h SOFA-2 trajectories form distinct classes?",
+                "analysis_design": {
+                    "analysis_family": "trajectory_clustering",
+                    "analysis_unit": "icu_stay",
+                    "variance_estimator": "model_based",
+                },
+                "trajectory_design": {
+                    "coordinate_concepts": ["sofa2_resp", "sofa2_cardio"],
+                    "window_end_hours": 24,
+                    "grid_width_hours": 4,
+                    "population": {"inclusion": [adult], "exclusion": []},
+                },
+                "execution_concepts": {"covariates": []},
+                "data_source": {"database": "miiv"},
+            },
+        }
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(preparation, "_neutral_materialization_scope", lambda study, **_kwargs: study)
+    monkeypatch.setattr(
+        preparation,
+        "_metadata_only_planning_coordinates",
+        lambda **_kwargs: {"target_outcome": None, "primary_exposure": None, "endpoint": None},
+    )
+    monkeypatch.setattr(preparation, "_validate_primary_concept_selection", lambda *_args: None)
+    monkeypatch.setattr(preparation, "_configured_covariates", lambda _study: ())
+    monkeypatch.setattr(preparation, "_configured_covariate_selection", lambda _study: "planner_selectable")
+    monkeypatch.setattr(preparation, "_configured_sensitivity_specs", lambda _study: ())
+    monkeypatch.setattr(preparation, "_cohort_window", lambda _study: (0.0, 24.0))
+    monkeypatch.setattr(
+        preparation,
+        "_validate_analysis_design",
+        lambda _study: {"variance_estimator": "model_based"},
+    )
+
+    def foundation(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "allowed_modules": ("labevents", "demographics"),
+            "static_concepts": ("age",),
+            "outcome_concepts": (),
+            "required_feature_concepts": ("sofa2_resp", "sofa2_cardio"),
+            "require_outcome": False,
+            "primary_exposure_source_concept": None,
+        }
+
+    monkeypatch.setattr(preparation, "_data_foundation_profile", foundation)
+    monkeypatch.setattr(
+        preparation.dataio,
+        "validate_research_pipeline_source",
+        lambda *_args, **_kwargs: {"binding": {"sha256": "a" * 64}},
+    )
+
+    preparation._prepare_scientific_launch(request)
+
+    # The panel is cut from the coordinates; the population's predicates read
+    # stay-level columns of the same universe, so both are materialized.
+    assert captured["trajectory_concepts"] == ("sofa2_resp", "sofa2_cardio", "age")
+
+
 def test_candidate_plan_defers_unresolved_analysis_design_to_planner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

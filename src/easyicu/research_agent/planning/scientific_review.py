@@ -64,6 +64,7 @@ from ..contracts.scientific_runtime_ownership import declared_runtime_outcomes
 from ..contracts.trajectory_design import (
     TRAJECTORY_PRIMARY_ACTION,
     trajectory_coordinate_proposal,
+    trajectory_population_design,
     trajectory_window_design,
 )
 from ..contracts.source_feasibility_validation import (
@@ -2256,8 +2257,10 @@ def trajectory_representation_facts(
     facts name what the signed owner could model instead, under the design
     owner's rule (``contracts.trajectory_design.trajectory_coordinate_proposal``):
     the Host compiles exactly these coordinates, over the window the question
-    states for its trajectories (``trajectory_window_design``).  A stated
-    window the owner cannot count is not replaced by its default.
+    states for its trajectories (``trajectory_window_design``), in the
+    population the plan states (``trajectory_population_design``).  A stated
+    window the owner cannot count is not replaced by its default, and a
+    stated population it cannot apply is not dropped.
     """
 
     if canonical_analysis_family(plan.analysis_type) != "trajectory_clustering":
@@ -2297,11 +2300,26 @@ def trajectory_representation_facts(
     window = trajectory_window_design(
         trajectory_window_statements(str(context.research_question or ""))
     )
+    # Demographics are fixed at admission; any other concept can change
+    # inside the trajectory window.
+    static_concepts = {
+        name
+        for variable in context.variables
+        if str(getattr(variable.role, "value", variable.role)) == "demographic"
+        for name in (variable.name, getattr(variable, "source_concept", None))
+        if name
+    }
+    population = trajectory_population_design(
+        plan.cohort, window, static_concepts=static_concepts
+    )
     return {
         "longitudinal_owner": longitudinal_owner,
         **proposal,
         "trajectory_window": window,
-        "executable": bool(proposal["executable"] and window["executable"]),
+        "trajectory_population": population,
+        "executable": bool(
+            proposal["executable"] and window["executable"] and population["executable"]
+        ),
     }
 
 
@@ -2441,6 +2459,32 @@ def _trajectory_window_clause(window: Mapping[str, Any]) -> str:
     return f" over its default {span}; the question states no trajectory window it reads"
 
 
+def _trajectory_population_clause(population: Mapping[str, Any]) -> str:
+    """Which stays the design the Host would compile clusters."""
+
+    if population.get("source") != "plan" or population.get("executable") is not True:
+        return ""
+    counts = [
+        f"{len(population[kind])} {kind} predicate"
+        + ("" if len(population[kind]) == 1 else "s")
+        for kind in ("inclusion", "exclusion")
+        if population.get(kind)
+    ]
+    clause = (
+        ", in the population the plan states ("
+        + " and ".join(counts)
+        + ", each settled by the end of the trajectory window)"
+    )
+    within = list(population.get("within_trajectory_window") or ())
+    if within:
+        clause += (
+            ". Membership is decided inside the trajectory window by "
+            + "; ".join(within)
+            + ", so it depends on the hours the classes describe"
+        )
+    return clause
+
+
 def trajectory_representation_findings(
     facts: Optional[Mapping[str, Any]],
 ) -> list[PlanScientificFinding]:
@@ -2463,9 +2507,13 @@ def trajectory_representation_findings(
     prefix = str(facts["eligibility_coordinate_prefix"])
     window = facts.get("trajectory_window") or {}
     window_executable = window.get("executable", True) is not False
+    population = facts.get("trajectory_population") or {}
+    population_executable = population.get("executable", True) is not False
     refs = ["analysis_plan.json.steps", "research_context.json.variables"]
     if window.get("source") == "question":
         refs.append("research_context.json.research_question")
+    if population.get("source") == "plan":
+        refs.append("analysis_plan.json.cohort")
     if facts["executable"]:
         return [
             PlanScientificFinding(
@@ -2479,14 +2527,26 @@ def trajectory_representation_findings(
                     "classes would not describe trajectories. The signed "
                     "fixed-window trajectory owner can model these coordinates"
                     + _trajectory_window_clause(window)
+                    + _trajectory_population_clause(population)
                     + "."
                 ),
                 evidence_refs=refs,
                 remediation=(
-                    "Compile these coordinates and this window into the study's "
-                    "fixed-window trajectory design and replan on the signed "
-                    "trajectory suite. Keep the question, the coordinates and the "
-                    "window; the researcher does not choose the method."
+                    "Compile these coordinates"
+                    + (
+                        ", this window and this population"
+                        if population.get("source") == "plan"
+                        else " and this window"
+                    )
+                    + " into the study's fixed-window trajectory design and replan "
+                    "on the signed trajectory suite. Keep the question, the "
+                    "coordinates"
+                    + (
+                        ", the window and the population"
+                        if population.get("source") == "plan"
+                        else " and the window"
+                    )
+                    + "; the researcher does not choose the method."
                 ),
                 remediation_route="runtime_capability",
             )
@@ -2517,11 +2577,16 @@ def trajectory_representation_findings(
         )
     if not window_executable:
         reasons.append(str(window.get("reason") or "its window is not a fixed-window design"))
+    if not population_executable:
+        reasons.append(
+            str(population.get("reason") or "its population is not one the owner applies")
+        )
     if not reasons:
         reasons.append("its coordinates are not a valid trajectory design")
     # A revision of the plan's inputs reaches the owner only when the
-    # question's own window is one the owner counts.
-    if facts.get("coordinates_executable") and window_executable:
+    # question's own window is one the owner counts, and the plan's own
+    # population one it applies.
+    if facts.get("coordinates_executable") and window_executable and population_executable:
         return [
             PlanScientificFinding(
                 code="TRAJECTORY_REPRESENTATION_NOT_LONGITUDINAL",
@@ -2574,6 +2639,12 @@ def trajectory_representation_findings(
                     if window_executable
                     else " Keep the window the question states; do not count it "
                     "from ICU admission or change its length to fit the owner."
+                )
+                + (
+                    ""
+                    if population_executable
+                    else " Keep the population the plan states; do not drop a "
+                    "predicate or move its window to fit the owner."
                 )
             ),
             remediation_route="agent_plan_revision",

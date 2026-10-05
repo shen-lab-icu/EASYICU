@@ -5317,9 +5317,13 @@ def make_research_pipeline_run_runner(
                         ),
                         *primary_cohort.cohort_required_concepts(study.get("cohort")),
                         # A declared trajectory design is admitted on the
-                        # catalog's columns, so its concepts must be on it.
+                        # catalog's columns, so its concepts, and those its
+                        # population reads, must be on it.
                         *(
-                            trajectory_design.required_concepts
+                            (
+                                *trajectory_design.required_concepts,
+                                *trajectory_design.population_concepts,
+                            )
                             if trajectory_design is not None
                             else ()
                         ),

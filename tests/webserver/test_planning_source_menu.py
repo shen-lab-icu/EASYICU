@@ -389,10 +389,8 @@ def test_an_offered_cross_concept_reading_can_actually_be_selected(monkeypatch):
     assert set(coverage.available) == {"aki_stage_strict", "aki_ascertainment", "death"}
 
 
-def test_the_planning_runner_requires_its_exposure_and_outcome_columns(
-    tmp_path, monkeypatch
-):
-    """The runner hands the study's coordinates to the source menu as required."""
+def _captured_planning_roster(tmp_path, monkeypatch, study_context: dict) -> dict:
+    """Run a planner-only launch until it binds its source menu; return the roster."""
     import pandas as pd
 
     from easyicu.webserver import provider_adapter
@@ -432,11 +430,9 @@ def test_the_planning_runner_requires_its_exposure_and_outcome_columns(
     runner = owner.make_research_pipeline_run_runner(
         export_path=str(export),
         study_context={
-            "id": "study-planning-coordinates",
             "revision": 1,
-            "question": "How common is Sepsis-3 in adult ICU stays, and is it "
-            "associated with ICU mortality?",
             "data_source": {"path": str(export), "database": "miiv"},
+            **study_context,
         },
         project_root=str(tmp_path / "projects"),
         provider={"provider": "openai", "external": True},
@@ -457,4 +453,62 @@ def test_the_planning_runner_requires_its_exposure_and_outcome_columns(
         runner(Job())
 
     assert raised.value.code == "test_planning_roster_captured"
+    return captured
+
+
+def test_the_planning_runner_requires_its_exposure_and_outcome_columns(
+    tmp_path, monkeypatch
+):
+    """The runner hands the study's coordinates to the source menu as required."""
+
+    captured = _captured_planning_roster(tmp_path, monkeypatch, {
+        "id": "study-planning-coordinates",
+        "question": "How common is Sepsis-3 in adult ICU stays, and is it "
+        "associated with ICU mortality?",
+    })
+
     assert tuple(captured["required_coordinates"]) == ("sep3", "death")
+
+
+def test_the_planning_roster_carries_the_concepts_a_trajectory_population_reads(
+    tmp_path, monkeypatch
+):
+    """A declared population is materialized with the coordinates it restricts."""
+
+    def predicate(concept, op, value, aggregation):
+        return {
+            "concept_id": concept,
+            "time_window": {
+                "anchor": "icu_admit", "start_offset_hours": 0, "end_offset_hours": 24,
+            },
+            "aggregation": aggregation,
+            "op": op,
+            "value": value,
+        }
+
+    captured = _captured_planning_roster(tmp_path, monkeypatch, {
+        "id": "study-trajectory-population",
+        # The question names no population concept, so only the design's
+        # population can put one on the roster.
+        "question": "Do first-24h SOFA-2 trajectories form distinct classes?",
+        "analysis_design": {
+            "analysis_family": "trajectory_clustering",
+            "analysis_unit": "icu_stay",
+            "variance_estimator": "model_based",
+        },
+        "trajectory_design": {
+            "coordinate_concepts": ["sofa2_resp", "sofa2_cardio"],
+            "window_end_hours": 24,
+            "grid_width_hours": 4,
+            "population": {
+                "inclusion": [
+                    predicate("age", ">=", 18, "first"),
+                    predicate("lact", ">", 2, "max"),
+                ],
+                "exclusion": [],
+            },
+        },
+    })
+
+    required = {value for value in captured["required_concepts"] if value}
+    assert {"sofa2_resp", "sofa2_cardio", "age", "lact"} <= required

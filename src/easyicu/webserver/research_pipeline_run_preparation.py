@@ -313,8 +313,10 @@ def _prepare_scientific_launch(
             require_primary_exposure=bool(configured_primary_exposure),
             covariates=covariates,
             sensitivity_specs=sensitivity_specs,
+            # The population's predicates read stay-level columns of the
+            # same universe, so they are materialized with the coordinates.
             trajectory_concepts=(
-                trajectory_design.required_concepts
+                (*trajectory_design.required_concepts, *trajectory_design.population_concepts)
                 if trajectory_design is not None
                 else ()
             ),
