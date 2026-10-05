@@ -72,6 +72,7 @@ from ..literature import LiteratureBundle, manuscript_citable_records
 from ..research_context.temporal_semantics import (
     normalise_time_anchor,
     primary_exposure_time_anchor_alignment,
+    study_time_origin_alignment,
     window_extends_after_anchor,
 )
 from ..research_context.typed import declared_domain_for_variable
@@ -3262,6 +3263,37 @@ def build_plan_scientific_review(
                     "Should the study adopt the owner-issued clinical-definition "
                     "anchor, or should a new concept/study version be issued for "
                     "the intended clinical anchor?"
+                ),
+            )
+        )
+    if study_time_origin_alignment(context).status == "mismatch":
+        findings.append(
+            PlanScientificFinding(
+                code="STUDY_TIME_ZERO_MISMATCH",
+                severity="blocker",
+                dimension="icu_clinical_design",
+                message=(
+                    "The study's declared time zero is not the event its "
+                    "materialized windows count from, and the study has no "
+                    "primary exposure whose definition could carry it."
+                ),
+                evidence_refs=[
+                    "research_context.json.research_question",
+                    "research_context.json.temporal_constraints",
+                    "research_context.json.user_preferences.timing_and_design",
+                    "research_context.json.variables.analysis_window",
+                ],
+                remediation=(
+                    "Create a new StudyContext revision whose time zero is the "
+                    "windows' origin, or a materialization whose windows count "
+                    "from the declared time zero; the Planner may not relabel a "
+                    "window's origin."
+                ),
+                requires_user_authorization=True,
+                authorization_question=(
+                    "Should the study take the windows' origin as its time zero, "
+                    "or be revised so its windows count from the declared time "
+                    "zero?"
                 ),
             )
         )

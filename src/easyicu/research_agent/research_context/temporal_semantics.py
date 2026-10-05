@@ -113,7 +113,9 @@ class PrimaryExposureTimeAnchorAlignment:
     clinical definition comes only from the descriptor's typed clinical
     contract.  The physical analysis window remains a separate observation
     coordinate.  Missing evidence stays unresolved and is never filled from a
-    generic cohort window or a Planner assertion.
+    generic cohort window or a Planner assertion.  A study without a primary
+    exposure is ``not_applicable``; :func:`study_time_origin_alignment` owns
+    its time zero.
     """
 
     status: Literal[
@@ -122,6 +124,7 @@ class PrimaryExposureTimeAnchorAlignment:
         "declared_only",
         "materialized_only",
         "unspecified",
+        "not_applicable",
     ]
     primary_exposure: Optional[str]
     declared_anchor: Optional[str]
@@ -190,24 +193,18 @@ def _declared_primary_anchor(
     return None, None
 
 
-def _materialized_primary_anchor(
-    context: ResearchContext,
-) -> tuple[Optional[str], Optional[str]]:
-    exposure_name = str(context.primary_exposure or "").strip()
-    descriptor = context.variable(exposure_name) if exposure_name else None
-    window = str(getattr(descriptor, "analysis_window", "") or "").strip()
-    if not window:
-        return None, None
+def _window_anchor(window: str) -> Optional[str]:
+    """The event a materialized analysis window counts its hours from."""
 
+    window = str(window or "").strip()
+    if not window:
+        return None
     prefix = re.match(
         r"^\s*(?P<anchor>[A-Za-z][A-Za-z0-9 _-]{1,80})\s*\[",
         window,
     )
     if prefix:
-        return (
-            normalise_time_anchor(prefix.group("anchor")),
-            f"variables.{exposure_name}.analysis_window",
-        )
+        return normalise_time_anchor(prefix.group("anchor"))
 
     explicit = re.search(
         r"\b(?:after|from|anchored\s+(?:at|to)|relative\s+to)\s+(?:the\s+)?"
@@ -217,11 +214,19 @@ def _materialized_primary_anchor(
         re.I,
     )
     if explicit:
-        return (
-            normalise_time_anchor(explicit.group("anchor")),
-            f"variables.{exposure_name}.analysis_window",
-        )
-    return None, None
+        return normalise_time_anchor(explicit.group("anchor"))
+    return None
+
+
+def _materialized_primary_anchor(
+    context: ResearchContext,
+) -> tuple[Optional[str], Optional[str]]:
+    exposure_name = str(context.primary_exposure or "").strip()
+    descriptor = context.variable(exposure_name) if exposure_name else None
+    anchor = _window_anchor(str(getattr(descriptor, "analysis_window", "") or ""))
+    if anchor is None:
+        return None, None
+    return anchor, f"variables.{exposure_name}.analysis_window"
 
 
 def primary_exposure_time_anchor_alignment(
@@ -230,9 +235,22 @@ def primary_exposure_time_anchor_alignment(
     """Compare sealed study time zero with an owner-issued concept contract."""
 
     declared, declared_source = _declared_primary_anchor(context)
-    observation, observation_source = _materialized_primary_anchor(context)
     exposure_name = str(context.primary_exposure or "").strip()
-    descriptor = context.variable(exposure_name) if exposure_name else None
+    if not exposure_name:
+        # No exposure definition exists to carry the declared time zero.
+        return PrimaryExposureTimeAnchorAlignment(
+            status="not_applicable",
+            primary_exposure=None,
+            declared_anchor=declared,
+            definition_anchor=None,
+            observation_window_anchor=None,
+            observation_window_role=None,
+            declared_source=declared_source,
+            definition_source=None,
+            observation_window_source=None,
+        )
+    observation, observation_source = _materialized_primary_anchor(context)
+    descriptor = context.variable(exposure_name)
     definition = getattr(descriptor, "clinical_definition", None)
     definition_anchor = normalise_time_anchor(definition.definition_time_anchor) if (
         definition is not None and definition.definition_time_anchor
@@ -278,6 +296,70 @@ def primary_exposure_time_anchor_alignment(
         definition_source=comparison_source,
         observation_window_source=observation_source,
     )
+
+
+@dataclass(frozen=True)
+class StudyTimeOriginAlignment:
+    """A declared time zero against the windows of a study with no primary exposure.
+
+    Every materialized analysis window names the event its hours count from.
+    A trajectory, descriptive or audit study has no exposure definition to
+    carry a declared time zero, so the declaration is compared with those
+    windows.  A study with a primary exposure is ``not_applicable`` here: its
+    time zero belongs to :func:`primary_exposure_time_anchor_alignment`.
+    """
+
+    status: Literal[
+        "aligned",
+        "mismatch",
+        "declared_only",
+        "unspecified",
+        "not_applicable",
+    ]
+    declared_anchor: Optional[str]
+    declared_source: Optional[str]
+    window_anchors: tuple[str, ...]
+    window_sources: tuple[str, ...]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "status": self.status,
+            "declared_anchor": self.declared_anchor,
+            "declared_source": self.declared_source,
+            "window_anchors": list(self.window_anchors),
+            "window_sources": list(self.window_sources),
+        }
+
+
+def study_time_origin_alignment(context: ResearchContext) -> StudyTimeOriginAlignment:
+    """Compare the declared time zero of a study without a primary exposure.
+
+    ``aligned`` when every materialized window counts from the declared event,
+    ``mismatch`` when one counts from another.  A declaration with no window
+    to compare (``declared_only``) asks nothing of the windows.
+    """
+
+    declared, declared_source = _declared_primary_anchor(context)
+    if str(context.primary_exposure or "").strip():
+        return StudyTimeOriginAlignment(
+            "not_applicable", declared, declared_source, (), ()
+        )
+    windows = [
+        (variable.name, anchor)
+        for variable in context.variables
+        if (anchor := _window_anchor(str(variable.analysis_window or ""))) is not None
+    ]
+    anchors = tuple(sorted({anchor for _, anchor in windows}))
+    sources = tuple(f"variables.{name}.analysis_window" for name, _ in windows)
+    if declared is None:
+        status: Literal[
+            "aligned", "mismatch", "declared_only", "unspecified", "not_applicable"
+        ] = "unspecified"
+    elif not anchors:
+        status = "declared_only"
+    else:
+        status = "aligned" if anchors == (declared,) else "mismatch"
+    return StudyTimeOriginAlignment(status, declared, declared_source, anchors, sources)
 
 
 class TimeWindowSemanticParser:
