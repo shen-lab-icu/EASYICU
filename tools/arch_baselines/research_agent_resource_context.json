@@ -3,7 +3,16 @@
     "source_digest_changes": [
       "src/easyicu/research_agent/planning/analysis_types.py"
     ],
-    "summary_changes": {}
+    "summary_changes": {
+      "max_planner_with_resources_bytes": {
+        "now": 64201,
+        "was": 61166
+      },
+      "max_planner_without_resources_bytes": {
+        "now": 59701,
+        "was": 56526
+      }
+    }
   },
   "baseline_history": [
     {
@@ -635,9 +644,25 @@
         "src/easyicu/research_agent/planning/analysis_types.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "planning/analysis_types.py reads outcome-free discovery wordings (OF-1): the fixed M3 question (\"Discover candidate sepsis subphenotypes from labs and vital signs.\") now infers trajectory_clustering instead of the data_quality_audit fallback, so its planning contract carries that family's guidance: M3 planning contract 5,224 -> 6,797 bytes, Planner prompt 55,410 -> 59,701 bytes without resources and 59,910 -> 64,201 with (limit 120,000). No other task, resource selection or coder context changes; provider-free and patient-data-free.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/planning/analysis_types.py"
+      ],
+      "summary_changes": {
+        "max_planner_with_resources_bytes": {
+          "now": 64201,
+          "was": 61166
+        },
+        "max_planner_without_resources_bytes": {
+          "now": 59701,
+          "was": 56526
+        }
+      }
     }
   ],
-  "baseline_reason": "planning/analysis_types.py gains requested_dose_response_cues (QF): plan review reads the question's dose-response cues. Only that source digest moves; no planner or coder context size changes.",
+  "baseline_reason": "planning/analysis_types.py reads outcome-free discovery wordings (OF-1): the fixed M3 question (\"Discover candidate sepsis subphenotypes from labs and vital signs.\") now infers trajectory_clustering instead of the data_quality_audit fallback, so its planning contract carries that family's guidance: M3 planning contract 5,224 -> 6,797 bytes, Planner prompt 55,410 -> 59,701 bytes without resources and 59,910 -> 64,201 with (limit 120,000). No other task, resource selection or coder context changes; provider-free and patient-data-free.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -656,7 +681,7 @@
     "src/easyicu/research_agent/learning/runtime.py": "87743106defc0df92c826bcc5a16e9156c89877517ce1d29ce5be9654840925a",
     "src/easyicu/research_agent/learning/store.py": "2a951e221b413c6e0c251382224acd3bba7bde8e23cca25812def65df0ef26d0",
     "src/easyicu/research_agent/planning/analysis_blueprint.py": "5330a604f9894c879ba400bee3b3ac1b617de1ce24425506139a5a29bb4020b2",
-    "src/easyicu/research_agent/planning/analysis_types.py": "9570788d59f61cf027f6d99ad02429888cfc71118f62f8df153517f55f7d76a0",
+    "src/easyicu/research_agent/planning/analysis_types.py": "936b11fe41791a06369a20d930e6e1b3ec29a16c3bd71197f916e8fb9948bc4b",
     "src/easyicu/research_agent/planning/cohort_contract.py": "4c9e01922aa5a10632f2711241242bc212a921f985d8f3d5092f79a06d3e7a54",
     "src/easyicu/research_agent/planning/figure_strategy.py": "f6c2cb10e1af641787fb7de1da29cfee99d869f56a3116ec3c1b2881fd3b93bf",
     "src/easyicu/research_agent/planning/study_design.py": "84e7d9c0974ca3d1f9deadcc22de065586a9be20fcdf66f101f931469b64cad0",
@@ -677,8 +702,8 @@
   "summary": {
     "coder_resource_provider_calls": 0,
     "max_coder_resource_prompt_bytes": 2255,
-    "max_planner_with_resources_bytes": 61166,
-    "max_planner_without_resources_bytes": 56526,
+    "max_planner_with_resources_bytes": 64201,
+    "max_planner_without_resources_bytes": 59701,
     "max_resource_added_bytes": 4657,
     "selected_resource_count": 7,
     "task_count": 9
@@ -1269,15 +1294,15 @@
       "know_how_prompt_bytes": 3872,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 14978,
+        "approx_input_tokens": 16051,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 46966,
+            "bytes": 51257,
             "included": true,
             "required": true,
-            "sha256": "783fb69a7d1438c72c42ec400e2cf605477af4b0428ba90fc56978c9d6f8de21"
+            "sha256": "770ffc7fc360779baeac3d0007d8eef2627f67e1e2056927d3d81d6bf250bc71"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -1288,30 +1313,30 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 59910,
+        "total_bytes": 64201,
         "truncated_strings": false,
-        "user_bytes": 51466
+        "user_bytes": 55757
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13853,
+        "approx_input_tokens": 14926,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 46966,
+            "bytes": 51257,
             "included": true,
             "required": true,
-            "sha256": "783fb69a7d1438c72c42ec400e2cf605477af4b0428ba90fc56978c9d6f8de21"
+            "sha256": "770ffc7fc360779baeac3d0007d8eef2627f67e1e2056927d3d81d6bf250bc71"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 55410,
+        "total_bytes": 59701,
         "truncated_strings": false,
-        "user_bytes": 46966
+        "user_bytes": 51257
       },
-      "planning_contract_bytes": 5224,
-      "planning_contract_sha256": "82172ff411943278938076647bd408f87f0369c127268bed8fe7bd529426cd8b",
+      "planning_contract_bytes": 6797,
+      "planning_contract_sha256": "e004ee08cb5fce9b9e1486479caf6db5074f9447cb5585bc479936bd53464d7d",
       "question": "Discover candidate sepsis subphenotypes from labs and vital signs.",
       "resource_added_bytes": 4500,
       "resource_allowlist_sha256": "c1e182996b78b356bf511ddf1473ab457bbb70cfb6ff490fe1bcc71047e38cab",
