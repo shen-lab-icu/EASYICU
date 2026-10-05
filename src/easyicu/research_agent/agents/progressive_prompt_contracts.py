@@ -309,6 +309,14 @@ def foundation_shape_contract(
         + "\nCopy schema_version and outline_sha256 exactly. "
         + cohort_instruction
         + (
+            "\nThe input rows are every row of the source cohort in the data "
+            "authority; only the inclusion and exclusion contracts shown there "
+            "are already applied. A population that the question or the outline "
+            "names, and those contracts do not already select, is applied only "
+            "by the predicates written here, over the allowed cohort concepts "
+            "and inside the host's time windows. Keep all_input_rows when the "
+            "input rows are that population or no allowed concept expresses it, "
+            "and then name the cohort for the rows it keeps."
             "\nIf the candidate chooses predicate_filtered, every item in "
             "inclusion or exclusion must have this exact JSON shape:\n"
             + json.dumps(predicate_shape, ensure_ascii=False, separators=(",", ":"))

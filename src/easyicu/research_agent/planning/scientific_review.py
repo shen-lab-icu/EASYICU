@@ -2462,6 +2462,10 @@ def _trajectory_window_clause(window: Mapping[str, Any]) -> str:
 def _trajectory_population_clause(population: Mapping[str, Any]) -> str:
     """Which stays the design the Host would compile clusters."""
 
+    if population.get("source") == "none":
+        # The compile takes a population only from the plan's cohort, so a
+        # question's population that the cohort does not state is not applied.
+        return ", in every input row: the plan's cohort states no population predicate"
     if population.get("source") != "plan" or population.get("executable") is not True:
         return ""
     counts = [
