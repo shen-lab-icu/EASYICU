@@ -86,6 +86,34 @@ def _manifest_modules(manifest: Mapping[str, Any]) -> set[str]:
     return modules
 
 
+def bound_export_mismatches(
+    study: Mapping[str, Any], manifest: Mapping[str, Any]
+) -> tuple[str, ...]:
+    """Why a prepared export does not hold the rows this study states.
+
+    The manifest records the cohort contract the export was extracted for and
+    the rule that executed it.  A study whose cohort changed after extraction,
+    or that is bound to an export prepared for another cohort, states one
+    population while its rows are another's; Data Extraction answers which
+    parts of a contract decide the rows.  The reuse decision below and the
+    research launch read the same answer.
+    """
+
+    observed = manifest.get("cohort_contract")
+    requested_rows = dataio.export_rows_decided_by(compile_study_cohort(study))
+    observed_rows = dataio.export_rows_decided_by(
+        observed if isinstance(observed, Mapping) else None
+    )
+    mismatches: list[str] = []
+    if requested_rows != observed_rows:
+        mismatches.append("registered_export_cohort_mismatch")
+    if not dataio.export_cohort_execution_current(manifest):
+        # The same contract executed under an earlier rule selects or scores
+        # different rows; Data Extraction owns which rows still agree.
+        mismatches.append("registered_export_cohort_execution_outdated")
+    return tuple(mismatches)
+
+
 def compile_registered_export_handoff(
     study: Mapping[str, Any],
     registered_source: Mapping[str, Any],
@@ -102,11 +130,6 @@ def compile_registered_export_handoff(
     )
     manifest = binding["manifest"]
     requested_cohort = compile_study_cohort(study)
-    observed_cohort = dataio.normalize_export_cohort_contract(
-        manifest.get("cohort_contract")
-        if isinstance(manifest.get("cohort_contract"), Mapping)
-        else None
-    )
     requested_modules = tuple(
         dict.fromkeys(
             str(value).strip().lower()
@@ -118,13 +141,7 @@ def compile_registered_export_handoff(
     observed_format = str(manifest.get("format") or "").strip().lower()
     observed_modules = _manifest_modules(manifest)
 
-    mismatches: list[str] = []
-    if requested_cohort != observed_cohort:
-        mismatches.append("registered_export_cohort_mismatch")
-    if not dataio.export_cohort_execution_current(manifest):
-        # The same contract executed under an earlier rule selects or scores
-        # different rows; Data Extraction owns which rows still agree.
-        mismatches.append("registered_export_cohort_execution_outdated")
+    mismatches = list(bound_export_mismatches(study, manifest))
     if requested_format != observed_format:
         mismatches.append("registered_export_format_mismatch")
     if not set(requested_modules).issubset(observed_modules):
@@ -220,6 +237,7 @@ def submit_study_extraction(
 __all__ = [
     "ExtractionHandoff",
     "ExtractionTransaction",
+    "bound_export_mismatches",
     "compile_registered_export_handoff",
     "compile_study_cohort",
     "submit_study_extraction",

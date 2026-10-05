@@ -62,6 +62,7 @@ from easyicu.webserver.research_launch_scientific import (
     _patient_grouping_for_analysis_design,
     _primary_exposure,
     _primary_exposure_aggregation,
+    _require_export_holds_study_cohort,
     _target_outcome,
     _validate_analysis_design,
     _validate_primary_concept_selection,
@@ -202,6 +203,15 @@ def _prepare_scientific_launch(
             "The configured ICU database is not supported.",
             details={"database": database_raw},
         ) from exc
+
+    if not (
+        request.execution_resume_source_run_id
+        or request.development_resume_source_job_id
+        or os.environ.get(_DEVELOPMENT_RESUME_JOB_ENV)
+    ):
+        # A resumed run continues on the package its sealed plan bound; a new
+        # plan or run analyzes the bound export's rows as the study's own.
+        _require_export_holds_study_cohort(study, request.export_path)
 
     budget_mode = str(request.budget_mode or "").strip().lower()
     materialization_study = _neutral_materialization_scope(
