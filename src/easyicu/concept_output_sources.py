@@ -85,6 +85,55 @@ CONCEPT_OUTPUT_LOAD_SOURCES: Mapping[str, str] = MappingProxyType(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class CompositeLoaderSupport:
+    """What one provenance pseudo-loader needs before it can emit its outputs.
+
+    The loader reads these values, and so does the cross-database availability
+    owner, so the two cannot disagree.  ``no_source_databases`` lack the table
+    the loader reads; there its outputs are structurally unavailable.
+    ``required_concepts`` must be derivable for the loader to run at all;
+    ``optional_concepts`` refine its definition, and a missing one degrades it.
+    """
+
+    no_source_databases: frozenset[str] = frozenset()
+    no_source_reason: str = ""
+    required_concepts: tuple[str, ...] = ()
+    optional_concepts: tuple[str, ...] = ()
+
+
+# ``outcomes_loader`` support is owned by ``easyicu.outcome_availability``.
+COMPOSITE_LOADER_SUPPORT: Mapping[str, CompositeLoaderSupport] = MappingProxyType(
+    {
+        # ICD code sets matched over the diagnosis table.
+        "comorbidity_loader": CompositeLoaderSupport(
+            no_source_databases=frozenset({"hirid", "aumc"}),
+            no_source_reason="no_icd_diagnosis_source",
+        ),
+        # Structured culture results.
+        "microbiology_loader": CompositeLoaderSupport(
+            no_source_databases=frozenset({"sic", "aumc", "hirid"}),
+            no_source_reason="no_structured_culture_source",
+        ),
+        # circEWS: lactate and MAP, graded by vasoactive and inotropic rates.
+        "circ_failure_loader": CompositeLoaderSupport(
+            required_concepts=("lact", "map"),
+            optional_concepts=(
+                "norepi_rate",
+                "epi_rate",
+                "adh_rate",
+                "dobu_rate",
+                "dopa_rate",
+                "phn_rate",
+                "milrinone",
+                "levo_rate",
+                "theo_rate",
+            ),
+        ),
+    }
+)
+
+
 def resolve_composite_concept_output(
     concept: str, available_concepts: Collection[str],
 ) -> str | None:
@@ -201,7 +250,9 @@ def compile_concept_load_plan(output_concepts: Sequence[str]) -> ConceptLoadPlan
 
 __all__ = [
     "COMPOSITE_CONCEPT_OUTPUT_SOURCES",
+    "COMPOSITE_LOADER_SUPPORT",
     "CONCEPT_OUTPUT_LOAD_SOURCES",
+    "CompositeLoaderSupport",
     "ConceptLoadPlan",
     "ConceptLoadPlanError",
     "ConceptLoadPlanReason",

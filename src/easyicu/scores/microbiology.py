@@ -20,12 +20,12 @@ from __future__ import annotations
 
 import pandas as pd
 
+from ..concept_output_sources import COMPOSITE_LOADER_SUPPORT
 from ..datasource import FilterOp, FilterSpec
 from .comorbidity import build_datasource, lower_cols, table_df
 
 # eICU 'organism' values that denote a NEGATIVE culture, not an isolate.
 _EICU_NEGATIVE = {"no growth", "no growth on culture", "", "none"}
-_NO_MICRO_DATABASES = {"sic", "aumc", "hirid"}
 
 _STAY_ID_COL = {
     "miiv": "stay_id",
@@ -60,7 +60,8 @@ def load_microbiology(
     patient_values = _patient_values(patient_ids)
     if patient_values == []:
         return pd.DataFrame()
-    if db in _NO_MICRO_DATABASES:
+    # Declared once for this loader and for the availability owner.
+    if db in COMPOSITE_LOADER_SUPPORT["microbiology_loader"].no_source_databases:
         if verbose:
             print(f"[microbiology] {database} ships no structured culture table — N/A")
         return pd.DataFrame()

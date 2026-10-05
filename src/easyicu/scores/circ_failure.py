@@ -26,6 +26,8 @@ Drug Levels:
 import pandas as pd
 from typing import Optional, List, Dict, Any
 
+from ..concept_output_sources import COMPOSITE_LOADER_SUPPORT
+
 
 # ============================================================================
 # Constants
@@ -394,19 +396,11 @@ def load_circ_failure(
     }
     id_col = id_col_map.get(database, 'stay_id')
     
-    # Concepts to load
-    core_concepts = ['lact', 'map']
-    optional_concepts = [
-        'norepi_rate',
-        'epi_rate',
-        'adh_rate',
-        'dobu_rate',
-        'dopa_rate',
-        'phn_rate',
-        'milrinone',
-        'levo_rate',
-        'theo_rate',
-    ]
+    # Concepts to load, declared once for this loader and for the
+    # cross-database availability owner.
+    support = COMPOSITE_LOADER_SUPPORT['circ_failure_loader']
+    core_concepts = list(support.required_concepts)
+    optional_concepts = list(support.optional_concepts)
     all_needed = core_concepts + optional_concepts
     
     if verbose:
