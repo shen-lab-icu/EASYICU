@@ -362,6 +362,166 @@ def study_time_origin_alignment(context: ResearchContext) -> StudyTimeOriginAlig
     return StudyTimeOriginAlignment(status, declared, declared_source, anchors, sources)
 
 
+#: "first-24h", "first 24-hour", "the initial 3 days", "first day".
+_FIRST_DURATION = (
+    r"\b(?:first|initial)[\s_-]+(?:(?P<number>\d+(?:\.\d+)?)[\s_-]*"
+    r"(?P<unit>hours?|hrs?|h|days?|d)|(?P<day>day))(?![a-z0-9])"
+)
+_TRAJECTORY_NOUN = r"(?:trajector(?:y|ies)|time[\s-]+courses?)"
+#: Words a modifier run never crosses: a duration before them belongs to
+#: another part of the question ("intubated within the first 24 h do SOFA-2
+#: trajectories cluster" bounds the cohort, not the trajectories).
+_CLAUSE_WORDS = (
+    r"(?:do|does|did|is|are|was|were|be|been|can|could|will|would|should|may|"
+    r"which|what|how|whether|who|that|than|and|or|but|if|when|while|"
+    r"among|in|within|with|without|during|for|to|by|at|on|of|after|before|"
+    r"following|since|from|post|over|across|throughout|"
+    r"patients?|people|adults?|children|cohort|cluster\w*|predict\w*|"
+    r"associat\w*|differ\w*|emerge\w*|identify|form|define\w*)"
+)
+_WORD = rf"(?!{_CLAUSE_WORDS}(?![a-z0-9]))[a-z0-9][a-z0-9/'-]*"
+_SEPARATOR = r"(?:\s*,\s*(?:(?:and|or)\s+)?|\s+(?:(?:and|or)\s+)?)"
+_DURATION_BEFORE_TRAJECTORY = re.compile(
+    rf"{_FIRST_DURATION}(?:[\s-]+{_WORD}){{0,4}}?[\s-]+{_TRAJECTORY_NOUN}(?![a-z])",
+    re.I,
+)
+#: The first of two coordinated windows: "first-24h and first-72h trajectories".
+_COORDINATED_DURATION = re.compile(
+    rf"{_FIRST_DURATION}\s+(?:and|or|versus|vs\.?)\s+(?:the\s+)?$", re.I
+)
+_TRAJECTORY_BEFORE_DURATION = re.compile(
+    rf"{_TRAJECTORY_NOUN}(?:\s+of(?:{_SEPARATOR}{_WORD}){{1,8}}?)?[\s,]+"
+    rf"(?:over|during|in|within|across|throughout|for)\s+(?:the\s+)?{_FIRST_DURATION}",
+    re.I,
+)
+_ANCHOR_AFTER = re.compile(
+    rf"\s+(?P<relation>of|after|following|since|from|post)[\s-]+(?:the\s+)?"
+    rf"(?P<anchor>{_WORD}(?:[\s-]+{_WORD}){{0,4}})",
+    re.I,
+)
+#: "首24小时生理轨迹", "入ICU后前72小时内的SOFA轨迹", "插管后48小时的轨迹".
+#: "前" after an event means "before" it ("入ICU前72小时"), so it reads as
+#: "first" only at the start of a phrase or after 的/在/于.
+_ZH_TRAJECTORY_WINDOW = re.compile(
+    r"(?:(?P<anchor>[一-鿿A-Za-z0-9-]{1,12}?)后的?\s*"
+    r"(?:(?:首|前|最初|头)\s*个?\s*)?"
+    r"|(?:首|最初|头|(?:(?<![一-鿿A-Za-z0-9])|(?<=[的在于]))前)\s*个?\s*)"
+    r"(?P<number>\d+(?:\.\d+)?)\s*个?\s*(?P<unit>小时|h|天|日)(?:以内|内)?"
+    r"(?P<gap>[^，。；、,.;:：？?！!()（）\s]{0,12}?)(?:轨迹|动态变化|时间序列)",
+    re.I,
+)
+_ZH_FIRST_DAY_TRAJECTORY = re.compile(
+    r"(?:首日|第一天)(?P<gap>[^，。；、,.;:：？?！!()（）\s]{0,12}?)(?:轨迹|动态变化|时间序列)"
+)
+#: A window before these words qualifies the patients, not the trajectories.
+_ZH_POPULATION_WORDS = ("患者", "病人", "人群", "者", "中")
+#: Words of an anchor that is ICU admission itself ("of the ICU stay").
+_ICU_TIME_ZERO_WORDS = frozenset(
+    {"icu", "intensive", "care", "unit", "stay", "course", "admission", "the",
+     "their", "first", "index", "initial", "observation", "monitoring"}
+)
+_ZH_ICU_TIME_ZERO = ("icu", "重症", "监护", "入科")
+
+
+@dataclass(frozen=True)
+class TrajectoryWindowStatement:
+    """A window a question states for its trajectories."""
+
+    hours: float
+    anchor: str
+    text: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"hours": self.hours, "anchor": self.anchor, "text": self.text}
+
+
+def _english_anchor(phrase: Optional[str]) -> str:
+    if not phrase:
+        return "icu_admission"
+    words = re.findall(r"[a-z0-9]+", phrase.lower())
+    if words and set(words) <= _ICU_TIME_ZERO_WORDS:
+        return "icu_admission"
+    return normalise_time_anchor(phrase)
+
+
+def trajectory_window_statements(
+    question: str,
+) -> tuple[TrajectoryWindowStatement, ...]:
+    """The windows a question states for its trajectories, in question order.
+
+    Only a first-N duration attached to the trajectory wording counts
+    ("first-24h trajectories", "trajectories over the first 72 hours",
+    "首24小时生理轨迹"): a window elsewhere can bound the cohort, an exposure
+    or an outcome and never binds the trajectory.  A window with no stated
+    anchor counts from ICU admission, as every first-N-hours phrase does here;
+    one stated from another event keeps that event.  A duration the reader
+    cannot attach is not read, so the design keeps its own default window.
+    """
+
+    text = str(question or "")
+    found: list[tuple[int, TrajectoryWindowStatement]] = []
+
+    def hours(match: re.Match[str], *, days: bool) -> float:
+        if match.groupdict().get("day"):
+            return 24.0
+        return float(match.group("number")) * (24.0 if days else 1.0)
+
+    for pattern, relations in (
+        (_DURATION_BEFORE_TRAJECTORY, {"after", "following", "since", "from", "post"}),
+        (_TRAJECTORY_BEFORE_DURATION, {"of", "after", "following", "since", "from", "post"}),
+    ):
+        for match in pattern.finditer(text):
+            anchored = _ANCHOR_AFTER.match(text, match.end())
+            if anchored and anchored.group("relation").lower() not in relations:
+                anchored = None
+            anchor = _english_anchor(anchored.group("anchor") if anchored else None)
+            end = anchored.end() if anchored else match.end()
+            durations = [match]
+            if pattern is _DURATION_BEFORE_TRAJECTORY:
+                coordinated = _COORDINATED_DURATION.search(text[: match.start()])
+                if coordinated:
+                    durations.insert(0, coordinated)
+            for duration in durations:
+                unit = (duration.group("unit") or "").lower()
+                found.append((
+                    duration.start(),
+                    TrajectoryWindowStatement(
+                        hours=hours(duration, days=unit.startswith("d")),
+                        anchor=anchor,
+                        text=text[duration.start() : end].strip(),
+                    ),
+                ))
+    for pattern in (_ZH_TRAJECTORY_WINDOW, _ZH_FIRST_DAY_TRAJECTORY):
+        for match in pattern.finditer(text):
+            if any(word in match.group("gap") for word in _ZH_POPULATION_WORDS):
+                continue
+            anchor_text = (match.groupdict().get("anchor") or "").strip()
+            icu = not anchor_text or any(
+                word in anchor_text.lower() for word in _ZH_ICU_TIME_ZERO
+            )
+            unit = match.groupdict().get("unit") or ""
+            found.append((
+                match.start(),
+                TrajectoryWindowStatement(
+                    hours=(
+                        24.0
+                        if pattern is _ZH_FIRST_DAY_TRAJECTORY
+                        else hours(match, days=unit in {"天", "日"})
+                    ),
+                    anchor="icu_admission" if icu else anchor_text,
+                    text=match.group(0).strip(),
+                ),
+            ))
+    statements: list[TrajectoryWindowStatement] = []
+    for _, statement in sorted(found, key=lambda item: item[0]):
+        if all(
+            (statement.hours, statement.anchor) != (seen.hours, seen.anchor)
+            for seen in statements
+        ):
+            statements.append(statement)
+    return tuple(statements)
+
+
 class TimeWindowSemanticParser:
     """Parse common ICU timing phrases into structured constraints."""
 

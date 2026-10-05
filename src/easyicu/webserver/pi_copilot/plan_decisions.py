@@ -67,6 +67,7 @@ _ONE_STAY_POPULATION_FINDING = "REPEATED_STAY_METHOD_NOT_DECLARED"
 #: clusters one value per stay of coordinates the signed fixed-window owner can
 #: model; its closure is the study's declared trajectory design.
 _TRAJECTORY_OWNER_FINDING = "TRAJECTORY_LONGITUDINAL_OWNER_NOT_SEALED"
+_TRAJECTORY_WINDOW_FIELDS = ("window_start_hours", "window_end_hours", "grid_width_hours")
 #: The reviewer hands this finding to the host only for a survival plan that
 #: names the landmark survival suite with coordinates that close from host
 #: owners; its closure is the study's declared survival design.
@@ -627,9 +628,12 @@ def _trajectory_design_configuration(
 ) -> CompiledAgentPlanConfiguration:
     """Declare the reviewed coordinates as the study's trajectory design.
 
-    The coordinates are the reviewer's published facts for this exact plan,
-    not a second reading of it here.  Window, grid and stability knobs keep
-    the design owner's defaults; the web owner validates the declaration.
+    The coordinates, and the window and grid, are the reviewer's published
+    facts for this exact plan, not a second reading of it here: the window the
+    question states, or the design owner's default.  Facts published before
+    the review read a window carry none and keep the default.  Stability
+    knobs keep the design owner's defaults; the web owner validates the
+    declaration.
     """
 
     from easyicu.webserver.trajectory_runtime_projection import (
@@ -673,9 +677,15 @@ def _trajectory_design_configuration(
             "agent_plan_trajectory_coordinates_unavailable",
             "The review publishes no executable trajectory coordinates for this plan.",
         )
+    window = representation.get("trajectory_window")
+    window_fields = (
+        {name: window[name] for name in _TRAJECTORY_WINDOW_FIELDS if name in window}
+        if isinstance(window, Mapping) and window.get("executable") is True
+        else {}
+    )
     try:
         design = normalize_trajectory_design(
-            {"coordinate_concepts": [str(value) for value in coordinates]}
+            {"coordinate_concepts": [str(value) for value in coordinates], **window_fields}
         )
     except TrajectoryDesignError as exc:
         raise PlanDecisionError(

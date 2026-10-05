@@ -64,6 +64,7 @@ from ..contracts.scientific_runtime_ownership import declared_runtime_outcomes
 from ..contracts.trajectory_design import (
     TRAJECTORY_PRIMARY_ACTION,
     trajectory_coordinate_proposal,
+    trajectory_window_design,
 )
 from ..contracts.source_feasibility_validation import (
     context_declares_source_feasibility_scope,
@@ -73,6 +74,7 @@ from ..research_context.temporal_semantics import (
     normalise_time_anchor,
     primary_exposure_time_anchor_alignment,
     study_time_origin_alignment,
+    trajectory_window_statements,
     window_extends_after_anchor,
 )
 from ..research_context.typed import declared_domain_for_variable
@@ -2251,7 +2253,9 @@ def trajectory_representation_facts(
     gates.  Otherwise the primary clusters one value per ICU stay, and the
     facts name what the signed owner could model instead, under the design
     owner's rule (``contracts.trajectory_design.trajectory_coordinate_proposal``):
-    the Host compiles exactly these coordinates.
+    the Host compiles exactly these coordinates, over the window the question
+    states for its trajectories (``trajectory_window_design``).  A stated
+    window the owner cannot count is not replaced by its default.
     """
 
     if canonical_analysis_family(plan.analysis_type) != "trajectory_clustering":
@@ -2282,14 +2286,20 @@ def trajectory_representation_facts(
         *context.cohort.outcome_columns,
         *([context.target_outcome] if context.target_outcome else []),
     )
+    proposal = trajectory_coordinate_proposal(
+        plan,
+        variables=context.variables,
+        outcomes=outcomes,
+        excluded=context.cohort.id_columns,
+    )
+    window = trajectory_window_design(
+        trajectory_window_statements(str(context.research_question or ""))
+    )
     return {
         "longitudinal_owner": longitudinal_owner,
-        **trajectory_coordinate_proposal(
-            plan,
-            variables=context.variables,
-            outcomes=outcomes,
-            excluded=context.cohort.id_columns,
-        ),
+        **proposal,
+        "trajectory_window": window,
+        "executable": bool(proposal["executable"] and window["executable"]),
     }
 
 
@@ -2415,26 +2425,45 @@ def landmark_survival_suite_findings(
     ]
 
 
+def _trajectory_window_clause(window: Mapping[str, Any]) -> str:
+    """Where the windows of the design the Host would compile lie."""
+
+    if window.get("executable") is not True:
+        return ""
+    span = (
+        f"{window['window_start_hours']}–{window['window_end_hours']} h after ICU "
+        f"admission on a {window['grid_width_hours']} h grid"
+    )
+    if window.get("source") == "question":
+        return f" over {span}, the window the question states"
+    return f" over its default {span}; the question states no trajectory window it reads"
+
+
 def trajectory_representation_findings(
     facts: Optional[Mapping[str, Any]],
 ) -> list[PlanScientificFinding]:
     """Say when claimed trajectory classes are built from one value per stay.
 
-    The Host can seal the signed owner over the plan's own coordinates, so
-    that case blocks until it does.  When the primary's time-varying
-    coordinates alone would be such a design and only the outcomes or
-    one-per-stay variables it also clusters on stand in the way, one Planner
-    revision reaches the owner, and an outcome in the clustering is leakage:
-    that case blocks until the plan is revised.  Otherwise the finding does
-    not push the plan toward other coordinates: a question about variables
-    the owner cannot model keeps them, with the limitation stated.
+    The Host can seal the signed owner over the plan's own coordinates and
+    the window the question states, so that case blocks until it does.  When
+    the primary's time-varying coordinates alone would be such a design and
+    only the outcomes or one-per-stay variables it also clusters on stand in
+    the way, one Planner revision reaches the owner, and an outcome in the
+    clustering is leakage: that case blocks until the plan is revised.
+    Otherwise the finding does not push the plan toward other coordinates or
+    another window: a question about variables, or a window, the owner
+    cannot model keeps them, with the limitation stated.
     """
 
     if facts is None or facts["longitudinal_owner"] is not None:
         return []
     coordinates = list(facts["proposed_coordinates"])
     prefix = str(facts["eligibility_coordinate_prefix"])
+    window = facts.get("trajectory_window") or {}
+    window_executable = window.get("executable", True) is not False
     refs = ["analysis_plan.json.steps", "research_context.json.variables"]
+    if window.get("source") == "question":
+        refs.append("research_context.json.research_question")
     if facts["executable"]:
         return [
             PlanScientificFinding(
@@ -2446,14 +2475,16 @@ def trajectory_representation_findings(
                     + ", ".join(coordinates)
                     + "; no step builds a per-timepoint representation, so its "
                     "classes would not describe trajectories. The signed "
-                    "fixed-window trajectory owner can model these coordinates."
+                    "fixed-window trajectory owner can model these coordinates"
+                    + _trajectory_window_clause(window)
+                    + "."
                 ),
                 evidence_refs=refs,
                 remediation=(
-                    "Compile these coordinates into the study's fixed-window "
-                    "trajectory design and replan on the signed trajectory suite. "
-                    "Keep the question and the coordinates; the researcher does "
-                    "not choose the method."
+                    "Compile these coordinates and this window into the study's "
+                    "fixed-window trajectory design and replan on the signed "
+                    "trajectory suite. Keep the question, the coordinates and the "
+                    "window; the researcher does not choose the method."
                 ),
                 remediation_route="runtime_capability",
             )
@@ -2482,9 +2513,13 @@ def trajectory_representation_findings(
             )
             + ")"
         )
+    if not window_executable:
+        reasons.append(str(window.get("reason") or "its window is not a fixed-window design"))
     if not reasons:
         reasons.append("its coordinates are not a valid trajectory design")
-    if facts.get("coordinates_executable"):
+    # A revision of the plan's inputs reaches the owner only when the
+    # question's own window is one the owner counts.
+    if facts.get("coordinates_executable") and window_executable:
         return [
             PlanScientificFinding(
                 code="TRAJECTORY_REPRESENTATION_NOT_LONGITUDINAL",
@@ -2518,7 +2553,7 @@ def trajectory_representation_findings(
             message=(
                 "The trajectory plan clusters one value per ICU stay, so its "
                 "classes summarize stays rather than describe trajectories, and "
-                "the signed fixed-window owner cannot model its coordinates: "
+                "the signed fixed-window owner cannot take it over: "
                 + "; ".join(reasons)
                 + "."
             ),
@@ -2532,6 +2567,12 @@ def trajectory_representation_findings(
                 "variable. Do not substitute another variable or score version "
                 "for the one the question names; otherwise state that the "
                 "classes summarize per-stay values."
+                + (
+                    ""
+                    if window_executable
+                    else " Keep the window the question states; do not count it "
+                    "from ICU admission or change its length to fit the owner."
+                )
             ),
             remediation_route="agent_plan_revision",
         )
