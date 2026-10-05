@@ -250,7 +250,8 @@ def test_the_audit_still_does_not_quote_the_value_it_caught(tmp_path):
 
 
 def test_the_previous_audit_version_no_longer_clears_a_figure(tmp_path):
-    """1.1.0 receipts were produced by the scanner that had these holes.
+    """1.1.0 receipts were produced by the scanner that had these holes, and
+    1.2.0 receipts by the one that checked only declared group-size names.
 
     The egress gate refuses an audit version it does not trust, which is what
     makes bumping the version the mechanism that retires those clearances
@@ -262,8 +263,8 @@ def test_the_previous_audit_version_no_longer_clears_a_figure(tmp_path):
         TRUSTED_AUDIT_VERSIONS,
     )
 
-    assert FIGURE_PRIVACY_AUDIT_VERSION == "1.2.0"
-    assert "1.1.0" not in TRUSTED_AUDIT_VERSIONS
+    assert FIGURE_PRIVACY_AUDIT_VERSION == "1.3.0"
+    assert {"1.1.0", "1.2.0"}.isdisjoint(TRUSTED_AUDIT_VERSIONS)
 
 
 # ---------------------------------------------------------------------------

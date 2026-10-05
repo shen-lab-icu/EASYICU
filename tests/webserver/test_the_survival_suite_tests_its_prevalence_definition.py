@@ -259,7 +259,7 @@ def test_each_cutoff_removes_the_early_exposed_records_and_keeps_the_comparator(
 
 def test_the_hours_table_suppresses_small_counts_so_no_subtraction_recovers_them(tmp_path):
     _context, authority = sealed_survival(tmp_path)
-    counts = {1: 30, 2: 5, 3: 25, 5: 40, 6: 22, 7: 3, 8: 7, 9: 50, 13: 12, 20: 60}
+    counts = {1: 30, 2: 5, 3: 25, 5: 40, 6: 22, 7: 3, 8: 7, 9: 50, 10: 11, 11: 10, 13: 4, 20: 60}
     onset = [hour - 0.5 for hour, n in counts.items() for _ in range(n)]
     onset[-1] = 20.0  # a record at the hour itself counts in that hour
     analysis = pd.DataFrame({
@@ -272,10 +272,12 @@ def test_the_hours_table_suppresses_small_counts_so_no_subtraction_recovers_them
     shown = dict(zip(table["first_record_by_hour"].astype(int), table["exposed_records"]))
     assert list(shown) == list(range(1, 25))
     hidden = {hour for hour, value in shown.items() if value == "suppressed"}
-    # Under the floor of 20: hours 2, 7, 8 and 13.  Hours 6 and 20 are the
-    # smallest other nonzero counts of the stretches that would otherwise
-    # hide one (up to 6 h, and from 12 h to the window's end).
-    assert hidden == {2, 6, 7, 8, 13, 20}
+    # Small cells, counts from 1 to 10 (gates.publication_disclosure): hours
+    # 2, 7, 8, 11 and 13.  Hours 6 and 20 are the smallest other nonzero
+    # counts of the stretches that would otherwise hide one (up to 6 h, and
+    # from 12 h to the window's end).  Eleven records are shown.
+    assert hidden == {2, 6, 7, 8, 11, 13, 20}
+    assert shown[10] == "11"
     assert all(shown[hour] == str(counts.get(hour, 0)) for hour in shown if hour not in hidden)
     for low, high in ((0, 6), (6, 12), (12, 24)):
         assert len([hour for hour in hidden if low < hour <= high]) != 1

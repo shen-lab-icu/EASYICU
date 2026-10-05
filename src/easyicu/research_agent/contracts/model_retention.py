@@ -23,8 +23,9 @@ from pydantic import BaseModel, ConfigDict, Field
 RETENTION_BLOCKER_BELOW = 0.50
 #: Below this share the loss is material and has to be addressed or disclosed.
 RETENTION_MAJOR_BELOW = 0.90
-#: The fewest unmeasured rows an explicit unmeasured state is estimated from;
-#: the same size the host suppresses in disclosed groups.
+#: The fewest unmeasured rows an explicit unmeasured state is estimated from.
+#: An estimation floor: it follows no disclosure rule (those are owned by
+#: gates.figure_privacy and gates.publication_disclosure).
 MISSING_CATEGORY_MIN_ROWS = 20
 #: The measured missing share from which a family template keeps a
 #: covariate's unmeasured rows as their own state instead of dropping them.
