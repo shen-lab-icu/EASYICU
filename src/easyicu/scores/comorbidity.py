@@ -18,7 +18,8 @@ convention used by the source paper and most ICU studies).
 Pure / data-source agnostic: :func:`flag_comorbidities` takes a tidy
 ``DataFrame[id, code, version]`` and returns one row per id. The
 EasyICU loader wiring lives in ``api.py`` / the concept layer; this
-module has no EasyICU imports so it stays unit-testable in isolation.
+module's only EasyICU import is the dependency-free loader-support
+declaration, so it stays unit-testable in isolation.
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ from __future__ import annotations
 from typing import Dict, List
 
 import pandas as pd
+
+from ..concept_output_sources import COMPOSITE_LOADER_SUPPORT
 
 
 # --------------------------------------------------------------------------
@@ -1201,8 +1204,6 @@ _STAY_ID_COL = {
     "sic": "CaseID",
     "sic_demo": "CaseID",
 }
-# Databases with no usable ICD diagnosis source.
-_NO_ICD_DATABASES = {"hirid", "aumc"}
 
 
 def _build_datasource(database: str, data_path: object):
@@ -1297,7 +1298,9 @@ def load_comorbidity(
     empty frame — comorbidity is genuinely unavailable there.
     """
     db = database.lower()
-    if db in _NO_ICD_DATABASES:
+    # Databases with no usable ICD diagnosis source, declared once for this
+    # loader and for the cross-database availability owner.
+    if db in COMPOSITE_LOADER_SUPPORT["comorbidity_loader"].no_source_databases:
         if verbose:
             print(f"[comorbidity] {database} ships no ICD diagnoses — N/A")
         return pd.DataFrame()

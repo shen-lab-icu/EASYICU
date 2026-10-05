@@ -9,7 +9,8 @@ The implementation reads EasyICU's packaged concept dictionary and data-source
 registry. Recursive and callback-derived concepts are resolved through their
 declared dependencies so external agents can reason over the cross-database
 standardization layer before calling ``easyicu.load_concepts``, without seeing
-database-specific item ids or tables.
+database-specific item ids or tables. Outputs of code loaders, which the
+dictionary lacks, are resolved through ``easyicu.concept_output_sources``.
 """
 
 from __future__ import annotations
@@ -553,6 +554,11 @@ def _explain_concept_availability_cached(
     registry = load_data_sources()
     definition = dictionary.get(canonical)
     if definition is None:
+        composite = _composite_output_availability(
+            canonical, db, requested_concept, dictionary
+        )
+        if composite is not None:
+            return composite
         return ConceptDatabaseAvailability(
             concept=canonical,
             requested_concept=requested_concept,
@@ -649,6 +655,80 @@ def _explain_concept_availability_cached(
 def _explain_dependency(dep: str, database: str) -> ConceptDatabaseAvailability:
     canonical = normalize_concept_name(dep)
     return _explain_concept_availability_cached(canonical, database, dep)
+
+
+def _composite_output_availability(
+    concept: str,
+    database: str,
+    requested_concept: str,
+    dictionary: Any,
+) -> Optional[ConceptDatabaseAvailability]:
+    """Availability of an output a declared loader emits; None if none does.
+
+    The dictionary has no entry for such an output.  An executable alias, or an
+    output of a dictionary concept, is available exactly where its source is.
+    An output of a provenance pseudo-loader follows that loader's declaration:
+    the databases without its source table, then its required and optional
+    inputs.
+    """
+
+    from easyicu.concept_output_sources import (
+        COMPOSITE_CONCEPT_OUTPUT_SOURCES,
+        COMPOSITE_LOADER_SUPPORT,
+        CONCEPT_OUTPUT_LOAD_SOURCES,
+    )
+
+    source = CONCEPT_OUTPUT_LOAD_SOURCES.get(
+        concept
+    ) or COMPOSITE_CONCEPT_OUTPUT_SOURCES.get(concept)
+    if source is None:
+        return None
+    if dictionary.get(source) is not None:
+        return _explain_dependency(source, database).model_copy(
+            update={"concept": concept, "requested_concept": requested_concept}
+        )
+    support = COMPOSITE_LOADER_SUPPORT.get(source)
+    if support is None:
+        return None
+    if database.removesuffix("_demo") in support.no_source_databases:
+        return ConceptDatabaseAvailability(
+            concept=concept,
+            requested_concept=requested_concept,
+            database=database,
+            status="blocked",
+            available=False,
+            reason=support.no_source_reason,
+            structural_unavailable=True,
+        )
+    required = [_explain_dependency(dep, database) for dep in support.required_concepts]
+    optional = [_explain_dependency(dep, database) for dep in support.optional_concepts]
+    cells = [*required, *optional]
+    blocked_required = [cell for cell in required if cell.status == "blocked"]
+    missing = [cell.concept for cell in cells if cell.status == "blocked"]
+    degraded = [cell.concept for cell in cells if cell.status == "degraded"]
+    if blocked_required:
+        status, reason = "blocked", "required_dependency_blocked"
+    elif missing or degraded:
+        status, reason = "degraded", "partial_dependency_availability"
+    elif cells:
+        status, reason = "full", "all_dependencies_available"
+    else:
+        status, reason = "full", "loader_source_available"
+    return ConceptDatabaseAvailability(
+        concept=concept,
+        requested_concept=requested_concept,
+        database=database,
+        status=status,
+        available=status != "blocked",
+        direct_source=False,
+        reason=reason,
+        structural_unavailable=any(
+            _cell_is_structural_unavailable(cell) for cell in blocked_required
+        ),
+        available_dependencies=[cell.concept for cell in cells if cell.status == "full"],
+        degraded_dependencies=degraded,
+        missing_dependencies=missing,
+    )
 
 
 def _concept_dependencies(definition: Any) -> List[str]:
