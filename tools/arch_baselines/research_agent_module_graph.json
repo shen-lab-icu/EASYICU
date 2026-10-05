@@ -5965,7 +5965,7 @@
     ],
     [
       "easyicu.research_agent.execution.runners.landmark_survival_executor",
-      "easyicu.research_agent.gates.figure_privacy"
+      "easyicu.research_agent.gates.publication_disclosure"
     ],
     [
       "easyicu.research_agent.execution.runners.landmark_survival_executor",
@@ -7538,6 +7538,10 @@
     [
       "easyicu.research_agent.gates.figure_privacy",
       "easyicu.research_agent.authority.evidence_store"
+    ],
+    [
+      "easyicu.research_agent.gates.figure_privacy",
+      "easyicu.research_agent.gates.publication_disclosure"
     ],
     [
       "easyicu.research_agent.gates.host_helper_result",
@@ -13304,7 +13308,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3318,
+    "edge_count": 3319,
     "largest_scc_size": 0,
     "module_count": 771,
     "package_count": 36,

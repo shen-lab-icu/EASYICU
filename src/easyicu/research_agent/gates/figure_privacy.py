@@ -21,8 +21,9 @@ producer:
 * no source artefact *value* is identifier-shaped, whatever its column is
   called — a ``label, predicted`` table holding ``patient_30042318`` per row
   passes every name-level check ever written;
-* no source artefact declares a group/stratum count below the small-cell
-  floor;
+* no source artefact holds a subject count below the small-cell floor: a
+  declared group size, or any column the publication owner reads as a count
+  (``at_risk``, ``count``, ``group_events``, ``n_*`` and the like);
 * no text the contract renders into the image (titles, claims, notes) carries
   an identifier-shaped token.
 
@@ -53,6 +54,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set
 
 from ..authority.evidence_store import sha256_of_file
+from .publication_disclosure import is_subject_count_name
 
 #: Minimum size for any group/stratum count a source artefact declares.
 MIN_DISCLOSED_GROUP_SIZE = 20
@@ -143,8 +145,8 @@ GROUP_SIZE_KEYS = frozenset(
 
 #: Keys/columns whose value is a magnitude, not an identity. A cohort total or
 #: a measurement count legitimately runs to six or more digits, so these are
-#: exempt from the identifier-token scan (they are still checked for small
-#: cells, which is the opposite direction).
+#: exempt from the identifier-token scan.  The subject counts among them are
+#: still checked for small cells, which is the opposite direction.
 _MAGNITUDE_NAME_RE = re.compile(
     r"(?:^|_)(?:count|n|num|number|rows|size|total|totals|sum|denominator)$",
     re.IGNORECASE,
@@ -233,9 +235,13 @@ class FigurePrivacyAudit:
 #: re-hashing; 1.2.0 closed the dtype holes in that scan — whole-number floats
 #: (a nullable Parquet id column), counts written as ``3.0``, event timestamps
 #: in generically named columns, and ``patient_number``-style identities that
-#: read as magnitudes. The egress gate refuses a clearance produced by an audit
-#: version it does not know, so a 1.1.0 receipt no longer authorizes an upload.
-FIGURE_PRIVACY_AUDIT_VERSION = "1.2.0"
+#: read as magnitudes. 1.3.0 checks every subject-count column against the
+#: floor (``at_risk``, ``count``, ``group_events``, ``n_*`` ...), not only the
+#: declared group-size names, and scans a declared group size's value like any
+#: other cell. The egress gate refuses a clearance produced by
+#: an audit version it does not know, so an older receipt no longer authorizes
+#: an upload.
+FIGURE_PRIVACY_AUDIT_VERSION = "1.3.0"
 
 FIGURE_PRIVACY_RECEIPT_SCHEMA = "easyicu.figure_privacy_audit/2"
 
@@ -385,11 +391,13 @@ class _ValueScanner:
     def add(self, name: Any, value: Any) -> None:
         self.cells_scanned += 1
         lowered = str(name).strip().lower()
-        if lowered in GROUP_SIZE_KEYS:
+        # Every subject count meets the floor, whatever the column is called
+        # (an at-risk table's ``at_risk``, a flow's ``count``); its value is
+        # then scanned like any other cell.
+        if is_subject_count_name(lowered):
             count = _as_count(value)
             if count is not None and 0 < count < MIN_DISCLOSED_GROUP_SIZE:
                 self.small_cells.add(f"{name}={count}")
-            return
         if value is None or isinstance(value, bool):
             return
         column = str(name)
@@ -413,7 +421,7 @@ class _ValueScanner:
         found: List[str] = []
         if self.small_cells:
             found.append(
-                f"declared group size(s) below {MIN_DISCLOSED_GROUP_SIZE}: "
+                f"group size(s) or subject count(s) below {MIN_DISCLOSED_GROUP_SIZE}: "
                 + ", ".join(sorted(self.small_cells))
             )
         if self.identifier_hits:

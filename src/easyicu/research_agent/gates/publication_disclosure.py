@@ -3,8 +3,9 @@
 One owner holds the rule every count-bearing publication product follows: the
 reader tables, the numbers the manuscript cites and the result tables a run
 exports.  Content handed to an external service is a different purpose with
-its own, stricter floor, owned by ``gates.figure_privacy`` (figure upload) and
-``mcp_policy`` (MCP responses); this module never changes what may leave.
+its own, stricter floor, owned by ``gates.figure_privacy`` (figure upload,
+which reads count columns by this module's name rule) and ``mcp_policy``
+(MCP responses); this module's floor never changes what may leave.
 
 A *small cell* is a subject count from 1 to 10, the cell-size convention of
 the CMS policy that most publication rules follow; zero is not a small cell.
@@ -20,8 +21,9 @@ What a run does with small cells depends on the licence of its data source:
   suppresses cells yet, so publication fails closed instead of printing them.
 
 A source without a declared profile also fails closed.  This module imports
-nothing beyond the standard library, so an execution-kernel owner may read
-``SMALL_CELL_BELOW`` without enlarging the kernel's identity.
+nothing beyond the standard library, so the execution-kernel owners that read
+it (the survival suite's first-record-hours table, the figure privacy audit)
+add only this file to the kernel's identity.
 """
 
 from __future__ import annotations

@@ -43,7 +43,7 @@ from ...contracts.manuscript_tables import (
     validate_manuscript_table_declarations,
 )
 from ...contracts.manuscript_result_structure import PRIMARY_RESULT_HEADINGS_BY_FAMILY
-from ...gates.figure_privacy import MIN_DISCLOSED_GROUP_SIZE
+from ...gates.publication_disclosure import SMALL_CELL_BELOW
 from ...schema import AnalysisPlan, AnalysisStep
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 from .typed_input_binding import sole_typed_cohort_input
@@ -588,7 +588,8 @@ def _exposure_onset_hours_table(sealed: LandmarkSurvivalRuntimeAuthority, analys
     """The exposed group's first-record hours: descriptive and outcome-blind.
 
     One row per whole hour of the exposure window after the prevalence
-    cutoff.  A count under the disclosed-group floor is suppressed.  The
+    cutoff.  A small cell (a count from 1 to 10, the publication rule of
+    ``gates.publication_disclosure``) is suppressed.  The
     stretch of hours up to each sensitivity cutoff, and from the last one to
     the window's end, has a total the suite reports elsewhere: the records
     that cutoff excludes, and the exposed group's size.  A stretch holding
@@ -610,7 +611,7 @@ def _exposure_onset_hours_table(sealed: LandmarkSurvivalRuntimeAuthority, analys
         hour: int((onset.gt(hour - 1) & onset.le(hour)).sum())
         for hour in range(start + 1, end + 1)
     }
-    hidden = {hour for hour, count in counts.items() if 0 < count < MIN_DISCLOSED_GROUP_SIZE}
+    hidden = {hour for hour, count in counts.items() if 0 < count < SMALL_CELL_BELOW}
     low = start
     for high in (*(int(hour) for hour in sealed.prevalence_sensitivity_cutoffs_hours or ()), end):
         stretch = [hour for hour in counts if low < hour <= high]
