@@ -101,7 +101,7 @@ def test_the_proposal_shows_no_binding_roster_and_the_guide_hands_it_to_the_plan
         prompt.split("Host-fixed design (binding, not editable):\n", 1)[1].split("\n", 1)[0]
     )
 
-    assert design["proposed_suite"]["exposure_onset_column"] == "rrt_first_time"
+    assert design["proposed_suite"]["exposure_onset_column"] == "rrt_onset_time"
     assert "adjustment_columns" not in design["proposed_suite"]
     assert "adjustment_columns" not in prompt
     assert "with a proposed_suite instead" in FAMILY_SPEC_GUIDE

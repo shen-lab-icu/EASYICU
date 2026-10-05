@@ -1,7 +1,7 @@
 """A survival exposure recorded once per stay gets no landmark suite.
 
 The landmark suite classifies each stay's exposure as prevalent or incident by
-the exposure's first recorded time.  A concept its owner records once per stay
+the exposure's first record as present.  A concept its owner records once per stay
 (sex, age, admission type) has no recorded time, so materialization emits no
 timing companion for it.  The host still proposed the suite for any two-level
 exposure: planning, review and the sealed replan passed, and the run failed
@@ -48,7 +48,7 @@ def test_a_time_stamped_exposure_keeps_its_proposed_suite():
 
     proposed = proposed_survival_suite_coordinates(context)
 
-    assert proposed is not None and proposed.exposure_onset_column == "rrt_first_time"
+    assert proposed is not None and proposed.exposure_onset_column == "rrt_onset_time"
     assert _template(context) == LANDMARK_SURVIVAL_FAMILY_ID
 
 

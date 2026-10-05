@@ -840,7 +840,7 @@ def _add(base, *, declared=False):
     concepts.append(b)
 
 _FAMILY_SUFFIXES = (
-    "_measured", "_first_time", "_last_time", "_first", "_last",
+    "_measured", "_first_time", "_last_time", "_onset_time", "_first", "_last",
     "_max", "_mean", "_min", "_n",
 )
 

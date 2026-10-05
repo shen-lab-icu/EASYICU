@@ -135,7 +135,7 @@ def test_the_next_candidate_binds_the_signed_suite_on_its_zero_row_catalog(tmp_p
     study = {**_study(), **_compile().patch}
     specs = normalize_prespecified_sensitivities(study["sensitivity_specs"])
     onset = survival_exposure_onset_column(study, sensitivity_specs=specs, primary_exposure_source="rrt")
-    assert onset == "rrt_first_time"
+    assert onset == "rrt_onset_time"
     columns = _metadata_planning_operationalized_columns(
         primary_exposure_source="rrt",
         primary_exposure_aggregation=None,
@@ -145,7 +145,7 @@ def test_the_next_candidate_binds_the_signed_suite_on_its_zero_row_catalog(tmp_p
         sensitivity_specs=specs,
         exposure_onset_column=onset,
     )
-    assert {"rrt_first_time", "followup_days_90d", "age", "sex"} <= set(columns)
+    assert {"rrt_onset_time", "followup_days_90d", "age", "sex"} <= set(columns)
     catalog = tmp_path / "planner_catalog.parquet"
     pd.DataFrame(
         {name: pd.Series(dtype="float64") for name in ("stay_id", "rrt", "mort_90d", *columns)}
@@ -167,7 +167,8 @@ def test_the_next_candidate_binds_the_signed_suite_on_its_zero_row_catalog(tmp_p
     assert projection is not None
     authority = load_current_case_scientific_runtime_authority(projection.authority)
     assert isinstance(authority, LandmarkSurvivalRuntimeAuthority)
-    assert (authority.exposure_status_column, authority.exposure_onset_column) == ("rrt", "rrt_first_time")
+    assert (authority.exposure_status_column, authority.exposure_onset_column) == ("rrt", "rrt_onset_time")
+    assert authority.exposure_onset_representation == "first_truthy_event_time"
     assert (authority.event_column, authority.followup_time_column) == ("mort_90d", "followup_days_90d")
     assert (authority.landmark_hours, authority.endpoint_horizon_days) == (24.0, 90.0)
     assert authority.adjustment_columns == ("age", "sex")
@@ -179,7 +180,7 @@ def test_only_a_declared_survival_landmark_names_an_onset_column() -> None:
     assert survival_exposure_onset_column(_study(), sensitivity_specs=specs, primary_exposure_source="rrt") is None
     assert survival_exposure_onset_column(study, sensitivity_specs=(), primary_exposure_source="rrt") is None
     assert survival_exposure_onset_column(study, sensitivity_specs=specs, primary_exposure_source="") is None
-    assert "rrt_first_time" not in _metadata_planning_operationalized_columns(
+    assert "rrt_onset_time" not in _metadata_planning_operationalized_columns(
         primary_exposure_source="rrt", primary_exposure_aggregation=None, covariates=(),
         covariate_selection="planner_selectable", covariate_operationalizations={},
         sensitivity_specs=specs,

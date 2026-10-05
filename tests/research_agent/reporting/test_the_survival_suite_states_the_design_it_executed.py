@@ -10,8 +10,10 @@ summary, also when the summary is larger than the per-step numeric cap.  The
 Writer is told that Methods numbers are the host's, so it describes the same
 choices in words instead of writing sentences the gate deletes.
 
-The fact says what the suite timed: the exposure source's first recorded time,
-not a verified onset, so exposure begun before that record is not observed.
+The fact says what the suite timed: the first time the exposure source
+recorded the exposure as present (a suite signed before that: its first
+record of any value), not a verified onset, so exposure begun before that
+record is not observed.
 And it names both analysis sets: the adjusted Cox models drop records with a
 missing covariate, while Kaplan-Meier and the restricted mean keep them.  It
 states the PH decision as the suite's typed rule makes it: the exposure term's
@@ -35,6 +37,7 @@ from easyicu.research_agent.authority.evidence_store import (
 from easyicu.research_agent.contracts.executed_method_design import (
     EXECUTED_METHOD_DESIGN_KEY,
     LandmarkSurvivalDesign,
+    executed_method_design_payload,
     validate_executed_method_design,
 )
 from easyicu.research_agent.authority.manuscript_claim_policy import filter_evidence_bound_scaffold
@@ -97,6 +100,8 @@ def test_the_summary_records_the_sealed_design(tmp_path):
     assert design.proportional_hazards_alpha == authority.proportional_hazards_alpha
     assert tuple(design.time_varying_cutpoints_days) == tuple(authority.time_varying_interval_cutpoints_days)
     assert (design.rmst_horizon_days is None) == (authority.rmst_product is None)
+    assert design.exposure_onset_representation == authority.exposure_onset_representation
+    assert design.exposure_onset_representation == "first_truthy_event_time"
 
 
 def test_the_design_is_one_exact_bound_methods_fact(tmp_path):
@@ -113,7 +118,9 @@ def test_the_design_is_one_exact_bound_methods_fact(tmp_path):
         "judged violated when the test of the exposure term or a "
         "Bonferroni-adjusted global test over all model terms rejected"
     ) in fact.text
-    assert "exposure timing was the first recorded time of the exposure source" in fact.text
+    assert (
+        "exposure timing was the first time the exposure source recorded the exposure as present"
+    ) in fact.text
     assert "exposure began" not in fact.text and "onset" not in fact.text
     assert "used the records with complete covariate data" in fact.text
     assert fact.evidence_id == EVIDENCE
@@ -160,6 +167,33 @@ BASE = {
     "time_varying_cutpoints_days": [7.0, 30.0],
     "rmst_horizon_days": 89.0,
 }
+
+
+
+@pytest.mark.parametrize(
+    ("representation", "timing", "recorded"),
+    [
+        (None, "the first recorded time of the exposure source", "first recorded"),
+        (
+            "first_truthy_event_time",
+            "the first time the exposure source recorded the exposure as present",
+            "first recorded as present",
+        ),
+    ],
+    ids=["signed_before_the_onset", "first_present_record"],
+)
+def test_the_design_says_which_record_timed_the_exposure(representation, timing, recorded):
+    payload = {**BASE, "exposure_onset_representation": representation} if representation else BASE
+    design = validate_executed_method_design(payload)
+    text = _design_text(design)
+
+    assert (
+        f"exposure timing was {timing}, which does not observe exposure begun before that record: "
+        f"exposed records {recorded} at or before hour 6 were excluded, and those {recorded} by "
+        "hour 24 formed the exposed group;"
+    ) in text
+    # A design written before the field neither states nor records it.
+    assert executed_method_design_payload(design) == payload
 
 
 @pytest.mark.parametrize(

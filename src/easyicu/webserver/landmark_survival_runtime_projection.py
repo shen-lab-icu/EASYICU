@@ -10,8 +10,9 @@ alternatives and the composite figure; the Planner only labels the reader
 display.  Every scientific coordinate comes from typed host vocabularies:
 
 * the exposure status column is the user's event-status exposure and its onset
-  is the producer-owned ``<concept>_first_time`` companion (hours from ICU
-  admission, ``ConceptColumnRole.FIRST_OBSERVATION_TIME``);
+  is the producer-owned ``<concept>_onset_time`` companion: the first time the
+  source recorded the exposure as present, in hours from ICU admission
+  (``ConceptColumnRole.EVENT_TIME``, ``first_truthy_event_time``);
 * the endpoint is one closed fixed-horizon mortality concept whose paired
   ``followup_days_<h>d`` time and horizon come from
   ``easyicu.outcome_availability``;
@@ -37,8 +38,13 @@ from easyicu.outcome_availability import (
 from easyicu.research_agent.authority.current_case_scientific_runtime import (
     build_current_case_scientific_runtime_authority,
 )
+from easyicu.concept.metadata_projection import ConceptColumnRole
 from easyicu.research_agent.concept_availability import concept_records_one_value_per_stay
 from easyicu.research_agent.icu_rules import VariableKind
+from easyicu.research_agent.intake.materialized_metadata import (
+    MaterializedMetadataError,
+    load_verified_materialized_cohort_authority,
+)
 from easyicu.research_agent.planning.analysis_types import canonical_analysis_family
 from easyicu.research_agent.planning.sensitivity_authority import (
     PrespecifiedSensitivitySpec,
@@ -61,8 +67,11 @@ from .scientific_runtime_projection import (
 #: owner here and must not be silently re-modelled.
 _SUPPORTED_ANALYSIS_UNIT = "icu_stay"
 _SUPPORTED_VARIANCE_ESTIMATOR = "model_based"
-#: Producer-owned first-observation companion of a materialized concept.
-_ONSET_SUFFIX = "_first_time"
+#: Producer-owned onset companion of a typed event status: the first time the
+#: materialization window recorded it present.  The first-observation
+#: companion (``_first_time``) can be an absent record and is not an onset.
+_ONSET_SUFFIX = "_onset_time"
+_ONSET_REPRESENTATION = "first_truthy_event_time"
 _ANALYSIS_UNIT_LABELS = {"icu_stay": "ICU stays"}
 #: One row per patient once the host keeps each patient's first ICU stay. The
 #: label is a reader noun phrase: claims and the cohort fact read it mid-sentence
@@ -112,6 +121,49 @@ def _schema_names(universe_path: Path) -> set[str]:
             "The materialized universe schema could not be read for runtime binding.",
             details={"artifact": universe_path.name, "reason": str(exc)[:500]},
         ) from exc
+
+
+def _require_present_onset(universe_path: Path, column: str) -> None:
+    """The onset column must be the materializer's first-present event time.
+
+    The suite classifies prevalent and incident exposure by this column, so a
+    column of another meaning under the onset name would misclassify both.  A
+    universe without materialized metadata, such as a zero-row planning
+    catalog, binds the column by its name: the materializer publishes it only
+    for a typed event status.
+    """
+
+    try:
+        verified = load_verified_materialized_cohort_authority(Path(universe_path))
+    except MaterializedMetadataError as exc:
+        raise WebScientificRuntimeProjectionError(
+            "web_scientific_runtime_metadata_unverified",
+            "The materialized universe's column metadata could not be verified "
+            "for the survival exposure onset.",
+            details={"artifact": Path(universe_path).name, "reason": str(exc)[:500]},
+        ) from exc
+    if verified is None:
+        return
+    binding = next(
+        (
+            file_binding.columns.get(column)
+            for file_binding in verified.sidecar.files
+            if file_binding.columns.get(column) is not None
+        ),
+        None,
+    )
+    if (
+        binding is not None
+        and binding.metadata.role is ConceptColumnRole.EVENT_TIME
+        and binding.representation_transform == _ONSET_REPRESENTATION
+    ):
+        return
+    raise WebScientificRuntimeProjectionError(
+        "web_landmark_survival_onset_unverified",
+        "The survival exposure onset is not the materializer's first record of "
+        "the exposure as present.",
+        details={"onset_column": column},
+    )
 
 
 def _supported_endpoint(target_outcome: str | None) -> Any:
@@ -265,7 +317,7 @@ def survival_exposure_onset_column(
     """The onset column a declared landmark survival design binds, else ``None``.
 
     Formal materialization emits the producer-owned onset companion for every
-    exposure; a zero-row planning catalog lists only the operational columns
+    typed event-status exposure; a zero-row planning catalog lists only the operational columns
     the host binds.  Naming the onset here lets a candidate plan bind the
     suite without reading patient rows.
     """
@@ -337,8 +389,8 @@ def compile_landmark_survival_runtime_projection(
     if concept_records_one_value_per_stay(str(primary_exposure_source)):
         raise WebScientificRuntimeProjectionError(
             "web_landmark_survival_exposure_incompatible",
-            "The sealed survival suite times the exposure by its first recorded "
-            "time; this exposure is recorded once per stay.",
+            "The sealed survival suite times the exposure by its first record as "
+            "present; this exposure is recorded once per stay.",
             details={
                 "primary_exposure": primary_exposure,
                 "primary_exposure_source": primary_exposure_source,
@@ -373,6 +425,7 @@ def compile_landmark_survival_runtime_projection(
             "materialized universe.",
             details={"missing_columns": absent},
         )
+    _require_present_onset(universe_path, onset_column)
 
     landmark_token = _hours_token(landmark_hours)
     exposure_name = _concept_display_name(str(primary_exposure_source))
@@ -408,6 +461,7 @@ def compile_landmark_survival_runtime_projection(
         "plan_outputs": outputs,
         "exposure_status_column": primary_exposure,
         "exposure_onset_column": onset_column,
+        "exposure_onset_representation": _ONSET_REPRESENTATION,
         "event_column": endpoint.event_concept,
         "followup_time_column": endpoint.followup_concept,
         "endpoint_time_origin": _TIME_ORIGIN_LABELS[endpoint.time_origin],

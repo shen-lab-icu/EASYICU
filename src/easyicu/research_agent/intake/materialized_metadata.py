@@ -1354,6 +1354,18 @@ class MaterializedColumnMetadataCollector:
                     time_origin="icu_admission",
                     time_unit="h",
                 )
+        # The first time the window recorded the event status present: an
+        # event time, where the first-time companion is an observation time.
+        if event_like and f"{concept}_onset_time" in names:
+            self._add(
+                source,
+                column_name=f"{concept}_onset_time",
+                role=ConceptColumnRole.EVENT_TIME,
+                derivation_window=derivation_window,
+                representation_transform="first_truthy_event_time",
+                time_origin="icu_admission",
+                time_unit="h",
+            )
 
     def add_host_derivation(
         self,

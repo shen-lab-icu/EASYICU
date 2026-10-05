@@ -29,6 +29,7 @@ class LiteratureConceptIdentity:
 _MATERIALIZED_SUFFIXES = (
     "_first_time",
     "_last_time",
+    "_onset_time",
     "_measured",
     "_first",
     "_mean",

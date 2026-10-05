@@ -23,7 +23,10 @@ plus timing columns ``<c>_first_time/_last_time`` carrying the ``charttime``
 (hours from ICU admission) of the first/last non-null observation inside the
 materialisation window. These are observation-coverage coordinates, not
 certified clinical onset, treatment initiation, resolution, or cessation
-times. Timing-dependent definitions must use an owner-authorized event time or
+times. A typed event status also gets ``<c>_onset_time``, the first time inside
+the window that its source recorded the event as present: the owner-authorized
+event time a landmark design times an exposure by.
+Timing-dependent definitions must use an owner-authorized event time or
 derive a qualifying transition from the bound long trajectory.
 Each outcome is emitted as a whole-stay binary ``<outcome>`` and, when its
 source carries a timestamp, an event time ``<outcome>_time`` (e.g.
@@ -685,6 +688,33 @@ def _timing_columns(w: pd.DataFrame, concept: str) -> pd.DataFrame:
     )
 
 
+def _event_onset_column(w: pd.DataFrame, concept: str) -> pd.DataFrame:
+    """Per-stay ``<c>_onset_time`` for one decoded typed event status.
+
+    The time index (``charttime``, hours from ICU admission) of the first record
+    inside the window whose status is present, so a stay first recorded absent
+    takes its later present record, where ``<c>_first_time`` keeps the absent
+    one.  A stay recorded in the window but never present gets NaN, so the
+    column is set exactly where ``<c>_max`` is 1.  Like the window it reads, it
+    does not observe a state that began before the window's first record.
+    """
+    if TIME_COL not in w.columns:
+        return pd.DataFrame(columns=[ID_COL])
+    recorded = w.loc[w[concept].notna(), [ID_COL, TIME_COL, concept]]
+    if recorded.empty:
+        return pd.DataFrame(columns=[ID_COL])
+    stays = pd.Index(recorded[ID_COL].unique())
+    onset = (
+        recorded.loc[recorded[concept].eq(1.0)]
+        .groupby(ID_COL)[TIME_COL]
+        .min()
+        .reindex(stays)
+    )
+    return pd.DataFrame(
+        {ID_COL: stays.to_numpy(), f"{concept}_onset_time": onset.to_numpy(dtype=float)}
+    )
+
+
 def _load_concept(
     source_mode: str,
     root: Union[Path, ExportPackage],
@@ -912,6 +942,7 @@ def _summarize_timeseries_with_representation(
     # event concept and we summarise its PRESENCE (1 = recorded in window), so
     # `_max` reads as "ever" and `_mean` as the within-window event fraction.
     col = w[concept]
+    onset = pd.DataFrame(columns=[ID_COL])
     if source_role is ConceptColumnRole.EVENT_STATUS:
         encoded = pd.Series(np.nan, index=col.index, dtype=float)
         nonnull = col.notna()
@@ -920,6 +951,7 @@ def _summarize_timeseries_with_representation(
         ).astype(float)
         w = w.assign(**{concept: encoded})
         presence_encoded = True
+        onset = _event_onset_column(w, concept)
     elif source_role is ConceptColumnRole.VALUE:
         if pd.api.types.is_bool_dtype(col):
             raise MaterializedMetadataError(
@@ -981,6 +1013,8 @@ def _summarize_timeseries_with_representation(
     out[f"{concept}_measured"] = (out[f"{concept}_n"].fillna(0) > 0).astype(int)
     if not timing.empty:
         out = out.merge(timing, on=ID_COL, how="left")
+    if not onset.empty:
+        out = out.merge(onset, on=ID_COL, how="left")
     return out, presence_encoded
 
 

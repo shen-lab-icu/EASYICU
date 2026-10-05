@@ -121,6 +121,17 @@ class LandmarkSurvivalDesign(_ExecutedDesign):
     proportional_hazards_alpha: float = Field(gt=0.0, lt=1.0)
     time_varying_cutpoints_days: list[float]
     rmst_horizon_days: float | None = Field(default=None, gt=0)
+    #: How the exposure was timed: by its first record as present.  A design
+    #: written before this field omits it; its suite timed the exposure by its
+    #: first record of any value.
+    exposure_onset_representation: Literal["first_truthy_event_time"] | None = None
+
+    @model_serializer(mode="wrap")
+    def _preserve_unstated_onset_representation(self, handler):
+        payload = handler(self)
+        if self.exposure_onset_representation is None:
+            payload.pop("exposure_onset_representation", None)
+        return payload
 
     @model_validator(mode="after")
     def _times_are_ordered(self) -> "LandmarkSurvivalDesign":

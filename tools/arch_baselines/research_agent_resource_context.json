@@ -1,18 +1,9 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/planning/analysis_types.py"
+      "src/easyicu/research_agent/research_context/outbound.py"
     ],
-    "summary_changes": {
-      "max_planner_with_resources_bytes": {
-        "now": 64201,
-        "was": 61166
-      },
-      "max_planner_without_resources_bytes": {
-        "now": 59701,
-        "was": 56526
-      }
-    }
+    "summary_changes": {}
   },
   "baseline_history": [
     {
@@ -660,9 +651,16 @@
           "was": 56526
         }
       }
+    },
+    {
+      "reason": "research_context/outbound.py sends a typed event status's first-present event time (S1): <c>_onset_time joins the companion suffixes and first_truthy_event_time joins the representations sent out. Only that file's source digest moves; every fixed task's planning contract, Planner prompt, resource selection and coder context are unchanged; provider-free and patient-data-free.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/research_context/outbound.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "planning/analysis_types.py reads outcome-free discovery wordings (OF-1): the fixed M3 question (\"Discover candidate sepsis subphenotypes from labs and vital signs.\") now infers trajectory_clustering instead of the data_quality_audit fallback, so its planning contract carries that family's guidance: M3 planning contract 5,224 -> 6,797 bytes, Planner prompt 55,410 -> 59,701 bytes without resources and 59,910 -> 64,201 with (limit 120,000). No other task, resource selection or coder context changes; provider-free and patient-data-free.",
+  "baseline_reason": "research_context/outbound.py sends a typed event status's first-present event time (S1): <c>_onset_time joins the companion suffixes and first_truthy_event_time joins the representations sent out. Only that file's source digest moves; every fixed task's planning contract, Planner prompt, resource selection and coder context are unchanged; provider-free and patient-data-free.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -688,7 +686,7 @@
     "src/easyicu/research_agent/planning/study_design_playbook.py": "fa07ee36a06d560ca9266999516bf1f394c4ac522d5b1436bf689d274b07888d",
     "src/easyicu/research_agent/providers/prompts/v1/system.txt": "cf9212ac318beac1b2690738506b0b9d658bc28db4b98a521022d57a317eb692",
     "src/easyicu/research_agent/reporting/article_contract.py": "e905dbc389d449630c87aba037adcc54cea5df3658cbd1504516e89d9453eec2",
-    "src/easyicu/research_agent/research_context/outbound.py": "1177d09e1513e6ebdf4cd5c7c3642717e8ff47b65435a4523acb3157d013cc40",
+    "src/easyicu/research_agent/research_context/outbound.py": "1019a35f2bf4ed055c4c274fbe29bf8b6cffcbe601fe3c0fa2096c54bb68efd6",
     "src/easyicu/research_agent/resources/capability.py": "3fc6dea8ffde23a358dfccd02b5f31620069fcccba8012807057a9913c70ca84",
     "src/easyicu/research_agent/resources/capability_runtime.py": "5e707e8a4b3a5f375ae579951b07c3e1f07d635b8db093109c613936c8b3bc71",
     "src/easyicu/research_agent/resources/catalog.py": "d1df9901759c3a323ac6a9bb4998cefa7ca2deb978ddd8409851a68f2beeff2f",

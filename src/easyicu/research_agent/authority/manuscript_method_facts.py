@@ -185,19 +185,27 @@ def _days(values: Sequence[float]) -> str:
 def _survival_design_text(design: LandmarkSurvivalDesign) -> str:
     """The landmark risk set, the model and the alternatives the suite ran."""
 
-    # The onset column is the exposure source's first recorded time, not a
-    # verified clinical onset: say so rather than "exposure began".  The PH
+    # The onset column is the exposure source's first record of the exposure as
+    # present (a suite signed before that: its first record of any value), not
+    # a verified clinical onset: say so rather than "exposure began".  The PH
     # decision is the suite's typed rule (ProportionalHazardsTestOutcome): the
     # exposure term's test or the Bonferroni global test below alpha.
+    present = design.exposure_onset_representation == "first_truthy_event_time"
+    timing = (
+        "the first time the exposure source recorded the exposure as present"
+        if present
+        else "the first recorded time of the exposure source"
+    )
+    recorded = "first recorded as present" if present else "first recorded"
     text = (
         "Executed survival design: the risk set comprised records alive and "
         f"observed at a landmark {design.landmark_hours:g} hours after "
         f"{_quoted_source(design.time_origin)}, with follow-up ending at day "
-        f"{design.endpoint_horizon_days:g}; exposure timing was the first recorded "
-        "time of the exposure source, which does not observe exposure begun before "
-        "that record: exposed records first recorded at or before hour "
-        f"{design.prevalent_exposure_cutoff_hours:g} were excluded, and those first "
-        f"recorded by hour {design.exposure_window_end_hours:g} formed the exposed group; "
+        f"{design.endpoint_horizon_days:g}; exposure timing was {timing}, which "
+        "does not observe exposure begun before that record: exposed records "
+        f"{recorded} at or before hour "
+        f"{design.prevalent_exposure_cutoff_hours:g} were excluded, and those "
+        f"{recorded} by hour {design.exposure_window_end_hours:g} formed the exposed group; "
         "a Cox proportional hazards model with Efron ties, adjusted for "
         f"{design.n_adjustment_covariates} prespecified covariates, estimated the "
         "exposure contrast with Wald intervals, and proportional hazards were "
