@@ -49,6 +49,7 @@ __all__ = [
     "time_varying_role",
     "trajectory_coordinate_measurement",
     "trajectory_coordinate_proposal",
+    "trajectory_window_design",
 ]
 
 _CONCEPT_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
@@ -575,6 +576,95 @@ def trajectory_coordinate_proposal(
             and not one_per_stay_inputs
             and executable_trajectory_coordinates(coordinates)
         ),
+    }
+
+
+#: The grid widths, in hours, a design takes for a window its question states.
+_CONVENTIONAL_GRID_WIDTHS = (1, 2, 3, 4, 6, 8, 12, 24, 48)
+_WINDOW_FIELDS = ("window_start_hours", "window_end_hours", "grid_width_hours")
+
+
+def trajectory_window_design(statements: Iterable[Any]) -> dict[str, Any]:
+    """The fixed window and grid a design takes from what its question states.
+
+    ``statements`` are the windows the question states for its trajectories
+    (``hours``, ``anchor`` and ``text`` fields; see
+    ``research_context.temporal_semantics.trajectory_window_statements``).
+    None keeps the default window.  One window from ICU admission becomes the
+    design's window, on the conventional grid width that divides it into the
+    number of windows nearest the default design's; a tie keeps the width
+    nearest the default's.  The signed owner counts every window from ICU
+    admission, so a window stated from another event, several windows, or one
+    no grid divides are not executable, and say why instead of falling back
+    to the default.
+    """
+
+    stated = [
+        {
+            "hours": float(_field(item, "hours")),
+            "anchor": str(_field(item, "anchor")),
+            "text": str(_field(item, "text") or ""),
+        }
+        for item in statements
+    ]
+    defaults = FIXED_WINDOW_TRAJECTORY_DEFAULTS
+    if not stated:
+        return {
+            "source": "design_default",
+            "stated": [],
+            **{name: defaults[name] for name in _WINDOW_FIELDS},
+            "executable": True,
+            "reason": None,
+        }
+
+    def refused(reason: str) -> dict[str, Any]:
+        return {"source": "question", "stated": stated, "executable": False, "reason": reason}
+
+    other_anchors = sorted({item["anchor"] for item in stated} - {"icu_admission"})
+    if other_anchors:
+        return refused(
+            "the question counts its trajectory window from "
+            + ", ".join(other_anchors)
+            + ", and the signed fixed-window owner counts every window from ICU admission"
+        )
+    stated_hours = sorted({item["hours"] for item in stated})
+    if len(stated_hours) > 1:
+        return refused(
+            "the question states several trajectory windows ("
+            + ", ".join(f"{value:g} h" for value in stated_hours)
+            + ")"
+        )
+    end = stated_hours[0]
+    if end != int(end):
+        return refused(f"the stated {end:g}-hour trajectory window is not a whole number of hours")
+    end = int(end)
+    minimum = int(defaults["minimum_available_windows"])
+    widths = [
+        width
+        for width in _CONVENTIONAL_GRID_WIDTHS
+        if end % width == 0 and minimum <= end // width <= _MAX_WINDOWS
+    ]
+    if not widths:
+        return refused(
+            f"no grid of {', '.join(map(str, _CONVENTIONAL_GRID_WIDTHS))} h divides the "
+            f"stated {end}-hour trajectory window into {minimum} to {_MAX_WINDOWS} windows"
+        )
+    default_count = defaults["window_end_hours"] // defaults["grid_width_hours"]
+    grid = min(
+        widths,
+        key=lambda width: (
+            abs(end // width - default_count),
+            abs(width - defaults["grid_width_hours"]),
+        ),
+    )
+    return {
+        "source": "question",
+        "stated": stated,
+        "window_start_hours": 0,
+        "window_end_hours": end,
+        "grid_width_hours": grid,
+        "executable": True,
+        "reason": None,
     }
 
 
