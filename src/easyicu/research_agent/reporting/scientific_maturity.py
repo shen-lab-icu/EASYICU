@@ -38,6 +38,7 @@ from ..planning.novelty_contract import NOVELTY_REVIEW_DIMENSIONS
 from ..figures.contracts import figure_contract_paths, figure_contract_tier
 from ..research_context.temporal_semantics import (
     primary_exposure_time_anchor_alignment,
+    study_time_origin_alignment,
 )
 from ..schema import AnalysisPlan, ResearchContext
 from .display_suite import panel_has_absolute_risk_context
@@ -1305,6 +1306,36 @@ def build_scientific_maturity_audit(
                     "Should the study adopt the owner-issued clinical-definition "
                     "anchor or issue a new exposure definition around the declared "
                     "clinical anchor?"
+                ),
+            )
+        )
+    if study_time_origin_alignment(context).status == "mismatch":
+        findings.append(
+            ScientificMaturityFinding(
+                code="STUDY_TIME_ZERO_MISMATCH",
+                severity="blocker",
+                dimension="icu_clinical_design",
+                message=(
+                    "The executed windows do not count from the study's declared "
+                    "time zero, and the study has no primary exposure whose "
+                    "definition could carry it."
+                ),
+                evidence_refs=[
+                    "research_context.json.research_question",
+                    "research_context.json.temporal_constraints",
+                    "research_context.json.user_preferences.timing_and_design",
+                    "research_context.json.variables.analysis_window",
+                ],
+                remediation=(
+                    "Supersede this run with a StudyContext revision whose time "
+                    "zero is the windows' origin, or a materialization whose "
+                    "windows count from the declared time zero."
+                ),
+                requires_user_authorization=True,
+                authorization_question=(
+                    "Should the study take the windows' origin as its time zero, "
+                    "or be revised so its windows count from the declared time "
+                    "zero?"
                 ),
             )
         )

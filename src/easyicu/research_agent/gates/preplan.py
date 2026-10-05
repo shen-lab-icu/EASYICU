@@ -8,6 +8,7 @@ from typing import Sequence
 from ..audits.validators import CohortAuditor
 from ..research_context.temporal_semantics import (
     primary_exposure_time_anchor_alignment,
+    study_time_origin_alignment,
 )
 from ..schema import ResearchContext, ValidationFinding
 from .data_answerability import analysis_answerability_findings
@@ -16,15 +17,21 @@ from .data_answerability import analysis_answerability_findings
 def clinical_time_authority_findings(
     context: ResearchContext,
 ) -> list[ValidationFinding]:
-    """Fail before Provider work when the exposure cannot honor time zero.
+    """Fail before Provider work when the study cannot honor time zero.
 
     A declared disease/event anchor and a physical ICU-admission observation
     window are different coordinates even if both contain the same number of
-    hours. The comparison target is the concept owner's typed clinical-
-    definition anchor. The gate reports both owner-issued identities and leaves
-    revision to StudyContext/concept authority; the Planner cannot repair it.
+    hours. For a primary exposure, the comparison target is the concept
+    owner's typed clinical-definition anchor; a study without one compares its
+    declared time zero with the event its materialized windows count from.
+    The gate reports both identities and leaves revision to StudyContext/
+    concept authority; the Planner cannot repair it.
     """
 
+    return [*_exposure_time_findings(context), *_study_time_origin_findings(context)]
+
+
+def _exposure_time_findings(context: ResearchContext) -> list[ValidationFinding]:
     alignment = primary_exposure_time_anchor_alignment(context)
     if alignment.status not in {"mismatch", "declared_only"}:
         return []
@@ -58,6 +65,35 @@ def clinical_time_authority_findings(
             evidence_ids=[],
             detail={
                 "kind": code,
+                **alignment.to_dict(),
+                "required_action": (
+                    "create_new_study_or_materialization_authority_with_matching_anchor"
+                ),
+                "provider_called": False,
+            },
+        )
+    ]
+
+
+def _study_time_origin_findings(context: ResearchContext) -> list[ValidationFinding]:
+    alignment = study_time_origin_alignment(context)
+    if alignment.status != "mismatch":
+        return []
+    origins = ", ".join(f"`{anchor}`" for anchor in alignment.window_anchors)
+    return [
+        ValidationFinding(
+            validator="clinical_time_authority_gate",
+            severity="error",
+            message=(
+                f"The study declares time zero `{alignment.declared_anchor}`, but "
+                f"its materialized windows count hours from {origins}, and it has "
+                "no primary exposure whose definition could carry that time zero. "
+                "Revise the study's time zero or its materialization; do not ask "
+                "the Planner to move a window's origin."
+            ),
+            evidence_ids=[],
+            detail={
+                "kind": "study_time_zero_mismatch",
                 **alignment.to_dict(),
                 "required_action": (
                     "create_new_study_or_materialization_authority_with_matching_anchor"
