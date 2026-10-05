@@ -2199,14 +2199,20 @@ def _inclusion_criteria(study: Mapping[str, Any]) -> List[str]:
     was the only consumer that had no exclusion channel. Across 52 recorded
     plans not one carried a single exclusion predicate, and a cohort-flow
     figure cannot draw an exclusion stage that was never declared as one.
+
+    Each criterion is a typed field that Data Extraction executes, so the
+    study's export already applies it. The study's own wording (``review``,
+    ``label``) is not one: nothing executes prose, and the Planner reads these
+    criteria as already applied to its input rows. A study whose cohort read
+    "Adults with septic shock" therefore kept every stay of an all-ICU export,
+    under a cohort named for the population it never selected. The wording
+    still reaches the Planner, in ``data_constraints.cohort``, as a population
+    its predicates apply.
     """
 
     raw = study.get("cohort")
     cohort = raw if isinstance(raw, Mapping) else {}
     rows: List[str] = []
-    review = _clean_text(cohort.get("review") or cohort.get("label"), 500)
-    if review:
-        rows.append(review)
     age_min = cohort.get("age_min")
     age_max = cohort.get("age_max")
     if age_min is not None or age_max is not None:
@@ -2227,21 +2233,19 @@ def _inclusion_criteria(study: Mapping[str, Any]) -> List[str]:
 def _exclusion_criteria(study: Mapping[str, Any]) -> List[str]:
     """Compile the criteria that say who is REMOVED from the cohort.
 
-    ``exclusion_statement`` is the prose half. Splitting the structured filter
-    fields was not enough: in practice the conversation writes the cohort as one
-    free-text ``review`` blob, and a removal stated there ("excluding stays that
-    ended before the landmark") arrived as an inclusion criterion because
-    ``review`` is the inclusion channel. Parsing that prose back apart would
-    just be another renderer guessing at study semantics, so the removal half
-    gets its own slot and the Copilot entrypoint is told to use it.
+    As with inclusion, only removals something applies are declared: the
+    host's first-ICU-stay restriction and the diagnosis exclusions the export
+    executes. ``exclusion_statement`` is the study's own wording of a removal.
+    It has its own slot because the conversation often writes the cohort as
+    one free-text ``review`` blob, where a removal ("excluding stays that ended
+    before the landmark") would read as an inclusion. Like the rest of the
+    wording it reaches the Planner in ``data_constraints.cohort``, as a removal
+    the plan applies, not one the input rows already reflect.
     """
 
     raw = study.get("cohort")
     cohort = raw if isinstance(raw, Mapping) else {}
     rows: List[str] = []
-    stated = _clean_text(cohort.get("exclusion_statement"), 500)
-    if stated:
-        rows.append(stated)
     if cohort.get("exclude_readmissions") is True:
         rows.append(
             "each patient's later ICU stays: the host keeps only the first ICU stay "

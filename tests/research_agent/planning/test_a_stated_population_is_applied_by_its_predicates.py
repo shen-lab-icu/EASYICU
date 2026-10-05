@@ -291,7 +291,7 @@ def test_the_free_contract_asks_for_the_criteria_and_a_bound_cohort_states_none(
         host_cohort=ProgressiveCohortIntent(name="source_cohort", selection_mode="all_input_rows"),
     )
 
-    assert "in population_criteria, in the question's words" in free
+    assert "in population_criteria, in the words that state it" in free
     assert "the host refuses a foundation in which no predicate reads the concepts" in free
     assert '"criterion":"<2-160 characters>"' in free
     assert '"population_criteria":[]' in bound
