@@ -2489,6 +2489,48 @@ def _trajectory_population_clause(population: Mapping[str, Any]) -> str:
     return clause
 
 
+def _sealed_trajectory_population_findings(
+    facts: Mapping[str, Any],
+) -> list[PlanScientificFinding]:
+    """Say so when a sealed trajectory design clusters every input row.
+
+    The plan that hands a trajectory question to the signed suite says which
+    stays the design would cluster; the plan on that suite is reviewed again,
+    and is the one a researcher approves, so it says the same.
+    """
+
+    # Only the signed suite replaces the plan's cohort with its sealed design's.
+    if facts["longitudinal_owner"] != "signed_fixed_window_suite":
+        return []
+    population = facts.get("trajectory_population") or {}
+    if population.get("source") != "none":
+        return []
+    return [
+        PlanScientificFinding(
+            code="TRAJECTORY_DESIGN_STATES_NO_POPULATION",
+            severity="minor",
+            dimension="icu_clinical_design",
+            message=(
+                "The sealed trajectory design clusters every input row of the "
+                "source cohort: it states no population predicate, so a "
+                "population that the question names is not applied to these "
+                "classes."
+            ),
+            evidence_refs=[
+                "analysis_plan.json.cohort",
+                "research_context.json.research_question",
+            ],
+            remediation=(
+                "When the question names a population, compile the study's "
+                "trajectory design again from a plan whose cohort states that "
+                "population as predicates; a plan on this design cannot add it."
+            ),
+            # The study's sealed design owns the population, not this plan.
+            remediation_route="study_authority_change",
+        )
+    ]
+
+
 def trajectory_representation_findings(
     facts: Optional[Mapping[str, Any]],
 ) -> list[PlanScientificFinding]:
@@ -2505,8 +2547,10 @@ def trajectory_representation_findings(
     cannot model keeps them, with the limitation stated.
     """
 
-    if facts is None or facts["longitudinal_owner"] is not None:
+    if facts is None:
         return []
+    if facts["longitudinal_owner"] is not None:
+        return _sealed_trajectory_population_findings(facts)
     coordinates = list(facts["proposed_coordinates"])
     prefix = str(facts["eligibility_coordinate_prefix"])
     window = facts.get("trajectory_window") or {}

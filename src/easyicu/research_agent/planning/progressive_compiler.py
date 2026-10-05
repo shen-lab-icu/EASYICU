@@ -403,6 +403,45 @@ def _validate_progressive_cohort_intent(
     return cohort
 
 
+def _require_stated_population_applied(
+    cohort_intent: ProgressiveCohortIntent,
+    *,
+    context: ResearchContext,
+) -> None:
+    """Each population criterion with concepts is applied by a predicate.
+
+    The Planner states whom the question restricts the study to; only its
+    predicates apply that restriction, so a stated criterion that none of
+    them reads would leave the plan analysing a broader population than the
+    one stated.  A criterion with no concepts records that no allowed cohort
+    concept expresses it.
+    """
+
+    allowed = set(_context_cohort_concept_ids(context))
+    applied = {
+        item.concept_id for item in (*cohort_intent.inclusion, *cohort_intent.exclusion)
+    }
+    for index, item in enumerate(cohort_intent.population_criteria):
+        path = f"cohort.population_criteria[{index}]"
+        unknown = [concept for concept in item.concept_ids if concept not in allowed]
+        if unknown:
+            raise _fail(
+                "progressive_population_concept_unavailable",
+                f"population criterion {item.criterion!r} names concepts that are "
+                f"not allowed cohort concepts: {unknown!r}",
+                path=f"{path}.concept_ids",
+            )
+        if item.concept_ids and not applied.intersection(item.concept_ids):
+            raise _fail(
+                "progressive_population_criterion_unapplied",
+                f"population criterion {item.criterion!r} is expressed by "
+                f"{item.concept_ids!r}, but no inclusion or exclusion predicate "
+                "reads any of them; write the predicate that applies it, over "
+                "one of those concepts and inside the host's time windows",
+                path=path,
+            )
+
+
 def validate_progressive_foundation(
     foundation: ProgressivePlanFoundation,
     *,
@@ -416,6 +455,7 @@ def validate_progressive_foundation(
     """Fail before step generation when a sealed Foundation cannot compile."""
 
     _validate_progressive_cohort_intent(foundation.cohort, context=context)
+    _require_stated_population_applied(foundation.cohort, context=context)
     labels = {
         str(item.key or "").strip(): " ".join(str(item.value or "").split())
         for item in foundation.display_labels

@@ -313,5 +313,11 @@ def test_a_longitudinal_owner_is_left_to_its_own_gates(case: str) -> None:
 
     review, findings = _review(context, plan)
 
-    assert findings == []
+    # The signed suite's sealed design states no population here, and the
+    # plan a researcher approves says so; nothing else is raised for an owner.
+    assert [item.code for item in findings] == (
+        ["TRAJECTORY_DESIGN_STATES_NO_POPULATION"]
+        if case == "signed_fixed_window_suite"
+        else []
+    )
     assert review.facts["trajectory_representation"]["longitudinal_owner"] == case

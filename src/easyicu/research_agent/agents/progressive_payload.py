@@ -812,6 +812,15 @@ def _bind_foundation_authorities(
     if str(analysis_type or "").strip().casefold() == "descriptive_epidemiology":
         foundation_properties["robustness_intents"]["maxItems"] = 0
     predicate_properties["concept_id"] = _string_enum(cohort_concept_ids)
+    criterion = definitions.get("ProgressivePopulationCriterion")
+    if not isinstance(criterion, dict) or not isinstance(
+        criterion.get("properties"), dict
+    ):
+        raise ProgressiveTransportSchemaError(
+            "progressive population criterion definition is unavailable"
+        )
+    # A stated criterion names the same concepts its predicates may read.
+    criterion["properties"]["concept_ids"]["items"] = _string_enum(cohort_concept_ids)
     if required_cohort_selection_mode is not None:
         if required_cohort_selection_mode not in {
             "all_input_rows",
@@ -832,6 +841,8 @@ def _bind_foundation_authorities(
         if required_cohort_selection_mode == "all_input_rows":
             cohort_properties["inclusion"]["maxItems"] = 0
             cohort_properties["exclusion"]["maxItems"] = 0
+            # A caller-bound cohort is the population; nothing is stated here.
+            cohort_properties["population_criteria"]["maxItems"] = 0
     decisions = foundation_properties["know_how_decisions"]
     if not know_how_authority:
         decisions["maxItems"] = 0
@@ -1093,6 +1104,9 @@ def _bind_initial_authorities(
     # column.  The compiler/materializer remains the final authority; the run
     # roster only prevents free-form inventions at transport.
     predicate["properties"]["concept_id"] = _string_enum(cohort_concept_ids)
+    criterion = definitions.get("ProgressivePopulationCriterion")
+    if isinstance(criterion, dict) and isinstance(criterion.get("properties"), dict):
+        criterion["properties"]["concept_ids"]["items"] = _string_enum(cohort_concept_ids)
 
     decisions = properties["know_how_decisions"]
     if not know_how_authority:
