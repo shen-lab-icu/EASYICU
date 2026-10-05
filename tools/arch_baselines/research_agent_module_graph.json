@@ -11796,6 +11796,22 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.reporting.publication_disclosure_review",
+      "easyicu.research_agent.authority.runtime_artifacts"
+    ],
+    [
+      "easyicu.research_agent.reporting.publication_disclosure_review",
+      "easyicu.research_agent.gates.publication_disclosure"
+    ],
+    [
+      "easyicu.research_agent.reporting.publication_disclosure_review",
+      "easyicu.research_agent.reporting.manuscript_tables"
+    ],
+    [
+      "easyicu.research_agent.reporting.publication_disclosure_review",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.reporting.publication_filesystem",
       "easyicu.research_agent.authority.filesystem"
     ],
@@ -12346,6 +12362,10 @@
     [
       "easyicu.research_agent.reporting.write_phase",
       "easyicu.research_agent.reporting.pdf_render"
+    ],
+    [
+      "easyicu.research_agent.reporting.write_phase",
+      "easyicu.research_agent.reporting.publication_disclosure_review"
     ],
     [
       "easyicu.research_agent.reporting.write_phase",
@@ -13284,9 +13304,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3313,
+    "edge_count": 3318,
     "largest_scc_size": 0,
-    "module_count": 769,
+    "module_count": 771,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -13700,6 +13720,7 @@
     "easyicu.research_agent.gates.preplan": "gates/preplan.py",
     "easyicu.research_agent.gates.product_promise": "gates/product_promise.py",
     "easyicu.research_agent.gates.provenance_fail_closed": "gates/provenance_fail_closed.py",
+    "easyicu.research_agent.gates.publication_disclosure": "gates/publication_disclosure.py",
     "easyicu.research_agent.gates.semantics": "gates/semantics.py",
     "easyicu.research_agent.gates.step_contract": "gates/step_contract.py",
     "easyicu.research_agent.gates.step_repair": "gates/step_repair.py",
@@ -13977,6 +13998,7 @@
     "easyicu.research_agent.reporting.p_values": "reporting/p_values.py",
     "easyicu.research_agent.reporting.pdf_render": "reporting/pdf_render.py",
     "easyicu.research_agent.reporting.publication_bundles": "reporting/publication_bundles.py",
+    "easyicu.research_agent.reporting.publication_disclosure_review": "reporting/publication_disclosure_review.py",
     "easyicu.research_agent.reporting.publication_filesystem": "reporting/publication_filesystem.py",
     "easyicu.research_agent.reporting.readiness": "reporting/readiness.py",
     "easyicu.research_agent.reporting.registered_report_inputs": "reporting/registered_report_inputs.py",

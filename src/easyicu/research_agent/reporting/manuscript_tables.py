@@ -43,6 +43,22 @@ class ManuscriptTable:
 
 
 @dataclass(frozen=True)
+class ReaderTableCount:
+    """One count a reader table prints, the cell that prints it and its source."""
+
+    table: str
+    caption: str
+    row: str
+    column: str
+    value: int
+    evidence_id: str
+
+
+#: The counts one projection prints: (row, column, recorded value).
+_PrintedCounts = list[tuple[str, str, str]]
+
+
+@dataclass(frozen=True)
 class ReaderTableCallout:
     """The reader's number for a declared table, its source and its Results subsection."""
 
@@ -111,7 +127,7 @@ def _same(rows: Sequence[dict[str, str]], field: str) -> str:
     return next(iter(values))
 
 
-def _group_columns(plan, spec, source):
+def _group_columns(plan, spec, source, printed: _PrintedCounts):
     """Pivot source identities, never human labels or recomputed statistics."""
     groups = ["Overall", *(str(level) for level in spec.group_levels)]
     if len(set(groups)) != len(groups) or {row["group"] for row in source} != set(groups):
@@ -124,13 +140,14 @@ def _group_columns(plan, spec, source):
         indexed[key] = row
     # The source contract uses the same eligible population for every variable.
     # Reject disagreement rather than putting a misleading common N in the header.
-    denominators = [
-        _count(_same([r for r in source if r["group"] == group], "denominator_n"))
-        for group in groups
-    ]
-    columns = ("Characteristic", *(plan.display_labels.get(
-        f"{spec.group_by}={group}", group,
-    ) for group in groups), "SMD")
+    recorded_denominators: list[str] = []
+    denominators: list[str] = []
+    for group in groups:
+        recorded_denominators.append(_same([r for r in source if r["group"] == group], "denominator_n"))
+        denominators.append(_count(recorded_denominators[-1]))
+    group_labels = [plan.display_labels.get(f"{spec.group_by}={group}", group) for group in groups]
+    printed.extend(("N", column, value) for column, value in zip(group_labels, recorded_denominators))
+    columns = ("Characteristic", *group_labels, "SMD")
     if spec.p_values_required:
         columns += ("P value",)
     blank = ("",) * (1 + int(spec.p_values_required))
@@ -154,6 +171,10 @@ def _group_columns(plan, spec, source):
                 rows.append(("  " + category, *(_count_percent(r["count"], r["percentage"])
                                               for r in cells), smd,
                              *(("",) if spec.p_values_required else ())))
+                printed.extend(
+                    (f"{label}: {category}", column, r["count"])
+                    for column, r in zip(group_labels, cells)
+                )
             else:
                 if variable.summary in {"mean_sd", "both"}:
                     rows.append((label + ", mean (SD)", *(f"{_number(r['mean'])} ({_number(r['sd'])})"
@@ -165,10 +186,11 @@ def _group_columns(plan, spec, source):
                     rows.append((row_label, *(f"{_number(r['median'])} [{_number(r['q25'])}, {_number(r['q75'])}]"
                                              for r in cells), *comparison))
         missing = []
-        for group in groups:
+        for group, column in zip(groups, group_labels):
             group_rows = [r for r in variable_rows if r["group"] == group]
-            missing.append(_count_percent(_same(group_rows, "missing_n"),
-                                          _same(group_rows, "missing_pct")))
+            missing_n = _same(group_rows, "missing_n")
+            missing.append(_count_percent(missing_n, _same(group_rows, "missing_pct")))
+            printed.append((f"{label}: Missing", column, missing_n))
         rows.append(("  Missing, n (%)", *missing, *blank))
     return columns, rows
 
@@ -181,13 +203,49 @@ def build_manuscript_tables(
 ) -> tuple[ManuscriptTable, ...]:
     """Project the plan's Table 1 steps, then each owner's declared tables."""
 
+    return tuple(table for table, _printed, _source in _projected_tables(
+        plan=plan, evidence_records=evidence_records, run_dir=run_dir,
+    ))
+
+
+def manuscript_table_counts(
+    *,
+    plan: AnalysisPlan,
+    evidence_records: Sequence[EvidenceRecord],
+    run_dir: Path,
+) -> tuple[ReaderTableCount, ...]:
+    """Every count the reader tables print, numbered as the reader numbers them.
+
+    The counts come from the projection that prints the cells, so the list
+    cannot name a count the reader does not see or miss one it does.
+    """
+
+    return tuple(
+        ReaderTableCount(
+            table=f"Table {number}", caption=table.caption, row=row, column=column,
+            value=int(Decimal(value)), evidence_id=source.evidence_id,
+        )
+        for number, (table, printed, source) in enumerate(_projected_tables(
+            plan=plan, evidence_records=evidence_records, run_dir=run_dir,
+        ), 1)
+        for row, column, value in printed
+        if value != ""
+    )
+
+
+def _projected_tables(
+    *,
+    plan: AnalysisPlan,
+    evidence_records: Sequence[EvidenceRecord],
+    run_dir: Path,
+) -> list[tuple[ManuscriptTable, _PrintedCounts, EvidenceRecord]]:
     tables = _table_one_tables(plan=plan, evidence_records=evidence_records, run_dir=run_dir)
     tables.extend(
-        table for table, _declaration, _source in _declared_tables(
+        (table, printed, source) for table, _declaration, source, printed in _declared_tables(
             plan=plan, evidence_records=evidence_records, run_dir=run_dir,
         )
     )
-    return tuple(tables)
+    return tables
 
 
 def declared_table_callouts(
@@ -214,7 +272,7 @@ def declared_table_callouts(
             label=f"Table {number}", caption=table.caption, evidence_id=source.evidence_id,
             subsection=_RESULTS_SUBSECTION_BY_LAYOUT[declaration.body.layout],
         )
-        for number, (table, declaration, source) in enumerate(declared, first)
+        for number, (table, declaration, source, _printed) in enumerate(declared, first)
     )
 
 
@@ -240,10 +298,10 @@ def _table_one_tables(
     plan: AnalysisPlan,
     evidence_records: Sequence[EvidenceRecord],
     run_dir: Path,
-) -> list[ManuscriptTable]:
+) -> list[tuple[ManuscriptTable, _PrintedCounts, EvidenceRecord]]:
     """Project the exact Table 1 owner from the current verified record set."""
 
-    tables: list[ManuscriptTable] = []
+    tables: list[tuple[ManuscriptTable, _PrintedCounts, EvidenceRecord]] = []
     for step in plan.steps:
         spec = step.table_one_spec
         if spec is None:
@@ -279,13 +337,15 @@ def _table_one_tables(
         variables = {item.name: item for item in spec.variables}
         if {row.get("variable") for row in source} != set(variables):
             raise ManuscriptTableProjectionError("Table 1 variable roster mismatch")
+        printed: _PrintedCounts = []
         try:
-            columns, rows = _group_columns(plan, spec, source)
+            columns, rows = _group_columns(plan, spec, source, printed)
         except KeyError as exc:
             raise ManuscriptTableProjectionError("Table 1 required source field is missing") from exc
         exclusions = {row.get("group_missing_excluded_n", "") for row in source}
         if len(exclusions) != 1 or "" in exclusions:
             raise ManuscriptTableProjectionError("Table 1 grouping exclusions are not explicit")
+        printed.append(("Rows excluded for missing grouping value", "", next(iter(exclusions))))
         notes = [
             f"Grouping variable: {spec.group_by}. Columns use the executed table population.",
             "Categorical percentages use non-missing observations; missing percentages use N.",
@@ -302,9 +362,9 @@ def _table_one_tables(
                 notes.append(f"Group {level}: {label}.")
         if not spec.p_values_required:
             notes.append("No inferential P values were planned or added by this reader.")
-        tables.append(ManuscriptTable(
+        tables.append((ManuscriptTable(
             caption="Baseline characteristics", columns=columns, rows=tuple(rows), notes=tuple(notes),
-        ))
+        ), printed, record))
     return tables
 
 
@@ -355,9 +415,10 @@ def _level_text(plan: AnalysisPlan, name: str, level: str) -> str:
     return plan.display_labels.get(f"{name}={text}") or text
 
 
-def _grouped_summary(plan: AnalysisPlan, body: GroupedSummaryLayout, rows):
+def _grouped_summary(plan: AnalysisPlan, body: GroupedSummaryLayout, rows, printed: _PrintedCounts):
     groups = body.groups
     columns = ("Characteristic", *(f"{group.label} (n = {group.n})" for group in groups), "SMD")
+    printed.extend(("n", group.label, str(group.n)) for group in groups)
     projected: list[tuple[str, ...]] = []
     opened: set[str] = set()
     for row in rows:
@@ -368,11 +429,13 @@ def _grouped_summary(plan: AnalysisPlan, body: GroupedSummaryLayout, rows):
             if name not in opened:
                 projected.append((f"{label}, n (%)", *("" for _ in groups), ""))
                 opened.add(name)
+            level = _level_text(plan, name, row["level"])
             projected.append((
-                "  " + _level_text(plan, name, row["level"]),
+                "  " + level,
                 *(_count_percent(row[f"{g.prefix}_n"], row[f"{g.prefix}_percent"]) for g in groups),
                 smd,
             ))
+            printed.extend((f"{label}: {level}", g.label, row[f"{g.prefix}_n"]) for g in groups)
         elif row["summary_type"] == "continuous_mean_sd":
             projected.append((
                 f"{label}, mean (SD)",
@@ -396,10 +459,11 @@ def _grouped_summary(plan: AnalysisPlan, body: GroupedSummaryLayout, rows):
             *(_count_percent(str(group.events), repr(group.events_percent)) for group in groups),
             "",
         ))
+        printed.extend((body.events_label, group.label, str(group.events)) for group in groups)
     return columns, projected
 
 
-def _stage_flow(body: StageFlowLayout, rows):
+def _stage_flow(body: StageFlowLayout, rows, printed: _PrintedCounts):
     try:
         ordered = sorted(rows, key=lambda row: int(row["stage_order"]))
     except ValueError as exc:
@@ -413,24 +477,28 @@ def _stage_flow(body: StageFlowLayout, rows):
             raise ManuscriptTableProjectionError("A recorded stage has no declared reader label")
         excluded = "" if index == 0 else _count(row["excluded_since_prior_stage"])
         projected.append((label, _count(row["count"]), excluded))
+        printed.append((label, "Records", row["count"]))
+        if index:
+            printed.append((label, "Excluded", row["excluded_since_prior_stage"]))
     return ("Stage", "Records", "Excluded"), projected
 
 
 def _declared_table(
     plan: AnalysisPlan, declaration: ManuscriptTableDeclaration, source: EvidenceRecord, run_dir: Path,
-) -> ManuscriptTable:
+) -> tuple[ManuscriptTable, _PrintedCounts]:
     rows = _source_rows(run_dir, source)
+    printed: _PrintedCounts = []
     try:
         if isinstance(declaration.body, GroupedSummaryLayout):
-            columns, projected = _grouped_summary(plan, declaration.body, rows)
+            columns, projected = _grouped_summary(plan, declaration.body, rows, printed)
         else:
-            columns, projected = _stage_flow(declaration.body, rows)
+            columns, projected = _stage_flow(declaration.body, rows, printed)
     except KeyError as exc:
         raise ManuscriptTableProjectionError("A declared table source lacks a required field") from exc
     return ManuscriptTable(
         caption=declaration.caption, columns=columns, rows=tuple(projected),
         notes=(*declaration.notes, f"Source SHA-256: {source.sha256}"),
-    )
+    ), printed
 
 
 def _declared_tables(
@@ -438,10 +506,10 @@ def _declared_tables(
     plan: AnalysisPlan,
     evidence_records: Sequence[EvidenceRecord],
     run_dir: Path,
-) -> list[tuple[ManuscriptTable, ManuscriptTableDeclaration, EvidenceRecord]]:
+) -> list[tuple[ManuscriptTable, ManuscriptTableDeclaration, EvidenceRecord, _PrintedCounts]]:
     """Project each reader table a plan step's signed owner declared, in plan order."""
 
-    tables: list[tuple[ManuscriptTable, ManuscriptTableDeclaration, EvidenceRecord]] = []
+    tables: list[tuple[ManuscriptTable, ManuscriptTableDeclaration, EvidenceRecord, _PrintedCounts]] = []
     for step in plan.steps:
         summaries = [
             _step_summary(run_dir, record) for record in evidence_records
@@ -481,5 +549,6 @@ def _declared_tables(
                 raise ManuscriptTableProjectionError(
                     f"Declared table {declaration.product!r} requires one current registered source"
                 )
-            tables.append((_declared_table(plan, declaration, sources[0], run_dir), declaration, sources[0]))
+            table, printed = _declared_table(plan, declaration, sources[0], run_dir)
+            tables.append((table, declaration, sources[0], printed))
     return tables

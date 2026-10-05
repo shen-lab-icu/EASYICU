@@ -64,6 +64,7 @@ from .manuscript_figures import (
     register_manuscript_figure_projection,
     select_figure_exports,
 )
+from .publication_disclosure_review import persist_publication_disclosure_review
 from .manuscript_literature import (
     audit_manuscript_literature,
     remove_sentences_with_unknown_literature_keys,
@@ -689,6 +690,32 @@ def _persist_manuscript_provenance_artifact(
             "claim_ceiling": payload["claim_ceiling"],
         },
         on_sha_change="new_id",
+    )
+
+
+def _persist_reader_artifacts(
+    *,
+    bound: str,
+    numeric_binding_map: Mapping[str, Any],
+    run_dir: Path,
+    evidence: Any,
+    findings: List[ValidationFinding],
+    context: ResearchContext | None,
+    plan: AnalysisPlan | None,
+    literature: LiteratureBundle | None,
+    evidence_records: Sequence[Any],
+) -> None:
+    """Persist what the reader and the signing reviewer read beside the bound text."""
+
+    _persist_manuscript_provenance_artifact(
+        bound=bound, numeric_binding_map=numeric_binding_map, run_dir=run_dir,
+        evidence=evidence, findings=findings, plan=plan, literature=literature,
+        evidence_records=evidence_records,
+    )
+    persist_publication_disclosure_review(
+        context=context, plan=plan, evidence_records=evidence_records,
+        numeric_binding_map=numeric_binding_map, run_dir=run_dir,
+        evidence=evidence, findings=findings,
     )
 
 
@@ -2577,13 +2604,9 @@ def _bind_and_review_manuscript(
         expected_baseline_mentions=baseline_reporting_mentions(context, reader_display_labels),
     )
     if not writer_probe_mode:
-        _persist_manuscript_provenance_artifact(
-            bound=bound,
-            numeric_binding_map=numeric_binding_map,
-            run_dir=run_dir,
-            evidence=evidence,
-            findings=findings,
-            plan=plan, literature=literature,
+        _persist_reader_artifacts(
+            bound=bound, numeric_binding_map=numeric_binding_map, run_dir=run_dir,
+            evidence=evidence, findings=findings, context=context, plan=plan, literature=literature,
             evidence_records=evidence.current_verified_records(per_step_records),
         )
 
