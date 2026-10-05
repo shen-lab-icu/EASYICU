@@ -213,6 +213,24 @@ class ProgressiveCohortPredicate(BaseModel):
         return self
 
 
+class ProgressivePopulationCriterion(BaseModel):
+    """One restriction the question places on whom the study includes."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    criterion: str = Field(min_length=2, max_length=160)
+    #: Allowed cohort concepts that express it; empty when none does.
+    concept_ids: list[str] = Field(default_factory=list, max_length=6)
+
+    @field_validator("concept_ids")
+    @classmethod
+    def _unique_concepts(cls, values: list[str]) -> list[str]:
+        cleaned = [str(value or "").strip() for value in values]
+        if any(not value for value in cleaned) or len(cleaned) != len(set(cleaned)):
+            raise ValueError("population criterion concepts must be unique and non-empty")
+        return cleaned
+
+
 class ProgressiveCohortIntent(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -220,9 +238,19 @@ class ProgressiveCohortIntent(BaseModel):
     selection_mode: Literal["all_input_rows", "predicate_filtered"]
     inclusion: list[ProgressiveCohortPredicate] = Field(default_factory=list)
     exclusion: list[ProgressiveCohortPredicate] = Field(default_factory=list)
+    #: The population the question names, stated by the Planner; each
+    #: criterion with concepts is applied by one of the predicates above
+    #: (``validate_progressive_foundation``).  Omitted from the digest when
+    #: empty, so intents sealed before it existed keep their identity.
+    population_criteria: list[ProgressivePopulationCriterion] = Field(
+        default_factory=list, max_length=6, exclude_if=lambda value: not value
+    )
 
     @model_validator(mode="after")
     def _selection_is_explicit(self) -> "ProgressiveCohortIntent":
+        criteria = [item.criterion.casefold() for item in self.population_criteria]
+        if len(criteria) != len(set(criteria)):
+            raise ValueError("population criteria must be unique")
         if self.selection_mode == "all_input_rows" and (
             self.inclusion or self.exclusion
         ):
@@ -1253,6 +1281,7 @@ __all__ = [
     "ProgressivePlanOutline",
     "ProgressivePlannerCheckpoint",
     "ProgressivePlanSkeleton",
+    "ProgressivePopulationCriterion",
     "PROGRESSIVE_ARTICLE_ROLES",
     "PROGRESSIVE_FIXED_MODULE_ACTION_IDS",
     "PROGRESSIVE_HOST_COMPILED_OUTPUTS",

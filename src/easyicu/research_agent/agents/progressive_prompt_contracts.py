@@ -258,14 +258,19 @@ def foundation_shape_contract(
             "number_list": [],
         },
     }
+    criterion_shape = {
+        "criterion": "<2-160 characters>",
+        "concept_ids": ["<copy an allowed cohort concept id>"],
+    }
     if host_cohort is not None:
-        cohort = host_cohort.model_dump(mode="json")
+        cohort = {**host_cohort.model_dump(mode="json"), "population_criteria": []}
     elif required_cohort_selection_mode == "predicate_filtered":
         cohort = {
             "name": required_cohort_name or "<1-128 characters>",
             "selection_mode": "predicate_filtered",
             "inclusion": [predicate_shape],
             "exclusion": [],
+            "population_criteria": [],
         }
     else:
         cohort = {
@@ -273,6 +278,7 @@ def foundation_shape_contract(
             "selection_mode": "<all_input_rows|predicate_filtered>",
             "inclusion": [],
             "exclusion": [],
+            "population_criteria": [],
         }
     required_labels = [
         {"key": key, "value": "<reader-facing clinical variable label>"}
@@ -314,15 +320,30 @@ def foundation_shape_contract(
             "are already applied. A population that the question or the outline "
             "names, and those contracts do not already select, is applied only "
             "by the predicates written here, over the allowed cohort concepts "
-            "and inside the host's time windows. Keep all_input_rows when the "
-            "input rows are that population or no allowed concept expresses it, "
-            "and then name the cohort for the rows it keeps."
+            "and inside the host's time windows. List each restriction it "
+            "places on whom the study includes (for example an age group, a "
+            "diagnosis or syndrome, or a treatment received) in "
+            "population_criteria, in the question's words, with the allowed "
+            "cohort concepts that express it; the host refuses a foundation in "
+            "which no predicate reads the concepts of a listed criterion. Give "
+            "a criterion no concepts only when no allowed concept expresses it, "
+            "and keep population_criteria empty when the question studies every "
+            "input row. Keep all_input_rows when no listed criterion has "
+            "concepts, and then name the cohort for the rows it keeps."
             "\nIf the candidate chooses predicate_filtered, every item in "
             "inclusion or exclusion must have this exact JSON shape:\n"
             + json.dumps(predicate_shape, ensure_ascii=False, separators=(",", ":"))
             + "\nThis shape does not require adding a cohort restriction; "
             "all_input_rows keeps both lists empty."
             if host_cohort is None and required_cohort_selection_mode is None
+            else ""
+        )
+        + (
+            "\npopulation_criteria must be a JSON array; each item has exactly "
+            + json.dumps(criterion_shape, ensure_ascii=False, separators=(",", ":"))
+            + ", and a criterion with concepts is applied by at least one "
+            "inclusion or exclusion predicate over one of them."
+            if host_cohort is None
             else ""
         )
         + (

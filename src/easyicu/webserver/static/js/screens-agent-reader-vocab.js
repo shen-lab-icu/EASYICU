@@ -77,6 +77,7 @@
     TABLE_ONE_INDEPENDENT_TESTS_IGNORE_REPEATED_UNITS: ['基线表检验忽略了重复单位', '队列保留了重复单位，基线表却要求按独立样本做检验。'],
     TIME_VARYING_RUNTIME_UNAVAILABLE: ['时变分析无法执行', '这个数据源或设计目前还不能执行时变分析。'],
     TOP_JOURNAL_LITERATURE_SEARCH_NOT_ESTABLISHED: ['顶刊可比研究检索未完成', '还没有完成针对顶刊可比研究的检索。'],
+    TRAJECTORY_DESIGN_STATES_NO_POPULATION: ['轨迹设计未写明人群', '封存的轨迹设计在源队列的全部输入行上聚类：它没有写明人群谓词，所以问题限定的人群没有施加到这些类别上。'],
     TRAJECTORY_LONGITUDINAL_OWNER_NOT_SEALED: ['轨迹尚未按时间窗建模', '计划的轨迹聚类只用了每次住院的一个值；这些变量可以交给固定时间窗轨迹组件建模，由系统编译执行设置后重新规划。'],
     TRAJECTORY_REPRESENTATION_NOT_LONGITUDINAL: ['轨迹类别只基于单个时点', '计划的轨迹聚类只用了每次住院的一个值，类别概括的是住院而不是轨迹；这些变量也不能交给固定时间窗轨迹组件建模。可以继续做分析级结果，需写明这一局限。'],
     UNADJUSTED_ASSOCIATION_NOT_ARTICLE_GRADE: ['主关联没有调整混杂', '主要关联未做调整，只能作描述性解读。'],
