@@ -10,6 +10,11 @@ to the restore, which states every primary estimate there, in Results order;
 the PH decision that chose them is a rule outcome and stays in Results.
 Without claims the first token still stands for the answer.
 
+A Conclusion the Writer wrote can cite part of the answer, too.  It keeps
+its paragraphs and gains the primary estimates it leaves out, each beside the
+nearest one it cites, so they still read in Results order.  Secondary
+intervals, sensitivity re-fits and the PH decision are never added.
+
 Synthetic study and seeded synthetic rows only (renal replacement therapy and
 90-day mortality); the crossing-hazard set rejects the PH test.
 """
@@ -63,8 +68,8 @@ def _registered_suite(tmp_path, rows):
     return plan, summary, store
 
 
-def _draft(plan, summary) -> str:
-    """A Writer draft that concludes with the caveat only, after the suite's projection."""
+def _draft(plan, summary, conclusion: str = CAVEAT) -> str:
+    """A Writer draft, by default concluding with the caveat only, after the suite's projection."""
 
     subsections = "".join(f"### {heading}\n\n" for heading in required_result_subsections(plan))
     draft = (
@@ -76,7 +81,7 @@ def _draft(plan, summary) -> str:
         "## Methods\n\n### Statistical analysis\n\nA prespecified landmark survival suite was fitted.\n\n"
         f"## Results\n\n{subsections}"
         "## Discussion\n\nInterpretation stays in the Discussion.\n\n"
-        f"## Conclusion\n\n{CAVEAT}\n"
+        f"## Conclusion\n\n{conclusion}\n"
     )
     record = {
         "step_id": STEP, "step_summary": summary,
@@ -138,3 +143,98 @@ def test_without_the_run_claims_the_first_token_stands_for_the_answer(tmp_path):
 
     first = next(claim for claim in claims if claim.analysis_role == "primary")
     assert TOKEN.findall(_conclusion(repaired)) == [first.placeholder]
+
+
+PROSE = "The difference between the groups was largest soon after the landmark."
+
+
+def _estimates(claims):
+    return [claim for claim in claims if claim.analysis_role == "primary" and claim.rule_outcome is None]
+
+
+def _codes(repairs) -> set[str]:
+    return {repair["code"] for repair in repairs}
+
+
+@pytest.mark.parametrize(
+    "cited",
+    [(1,), (2,), (4,), (1, 3), (1, 2, 3, 4)],
+    ids=["first", "second", "last", "first_and_third", "every"],
+)
+def test_a_written_conclusion_gains_the_primary_estimates_it_leaves_out(tmp_path, cited):
+    plan, summary, store = _registered_suite(tmp_path, synthetic_crossing_hazard_rows())
+    claims = store.authoritative_scientific_claims(LEDGER)
+    estimates = _estimates(claims)
+    assert len(estimates) == 4
+    # Each cited estimate in its own paragraph, the Writer's prose after the
+    # first, and the caveat last.
+    paragraphs = [estimates[cited[0] - 1].placeholder, PROSE,
+                  *(estimates[position - 1].placeholder for position in cited[1:]), CAVEAT]
+    placed = write_phase._place_host_claims_in_results(
+        _draft(plan, summary, "\n\n".join(paragraphs)), claims=claims, plan=plan, findings=[],
+    )
+
+    repaired, repairs = repair_reader_structure_from_existing_prose(placed, analysis_plan=plan, claims=claims)
+
+    conclusion = _conclusion(repaired)
+    # Every primary estimate, in Results order, whichever the Writer cited.
+    assert TOKEN.findall(conclusion) == [claim.placeholder for claim in estimates]
+    assert PROSE in conclusion and conclusion.rstrip().endswith(CAVEAT)
+    assert ("MANUSCRIPT_CONCLUSION_COMPLETED" in _codes(repairs)) is (len(cited) < 4)
+    assert "MANUSCRIPT_CONCLUSION_RESTORED" not in _codes(repairs)
+    # A second pass changes nothing.
+    again, more = repair_reader_structure_from_existing_prose(repaired, analysis_plan=plan, claims=claims)
+    assert again == repaired and "MANUSCRIPT_CONCLUSION_COMPLETED" not in _codes(more)
+
+
+def test_the_draft_stage_completes_a_written_conclusion(tmp_path):
+    plan, summary, store = _registered_suite(tmp_path, synthetic_crossing_hazard_rows())
+    claims = store.authoritative_scientific_claims(LEDGER)
+    estimates = _estimates(claims)
+    others = [claim for claim in claims if claim not in estimates]
+    # The PH decision and the prevalence-definition re-fits are in Results.
+    assert {claim.analysis_role for claim in others} >= {"primary", "sensitivity"}
+
+    scaffold = write_phase._place_host_claims_and_restore_structure(
+        SimpleNamespace(_evidence_enforcement_mode=EvidenceEnforcementMode.STRICT),
+        # In STRICT mode Writer prose must cite its evidence; a claim token
+        # and the caveat need none.
+        _draft(plan, summary, f"{estimates[0].placeholder}\n\n{CAVEAT}"),
+        evidence=store, per_step_records=LEDGER, plan=plan, findings=[],
+    )
+
+    assert TOKEN.findall(_conclusion(scaffold)) == [claim.placeholder for claim in estimates]
+    assert all(claim.placeholder in _results(scaffold) for claim in others)
+
+
+@pytest.mark.parametrize("cited", ["constant", "secondary"])
+def test_a_conclusion_without_a_missing_primary_estimate_is_left_alone(tmp_path, cited):
+    plan, summary, store = _registered_suite(tmp_path, synthetic_survival_rows())
+    claims = store.authoritative_scientific_claims(LEDGER)
+    (constant,) = _estimates(claims)
+    secondary = next(claim for claim in claims if claim.analysis_role == "secondary")
+    # The constant estimate is the whole answer; a Conclusion citing only a
+    # secondary interval cites no primary estimate to complete.
+    written = (constant if cited == "constant" else secondary).placeholder
+    placed = write_phase._place_host_claims_in_results(
+        _draft(plan, summary, f"{written}\n\n{PROSE}\n\n{CAVEAT}"), claims=claims, plan=plan, findings=[],
+    )
+
+    repaired, repairs = repair_reader_structure_from_existing_prose(placed, analysis_plan=plan, claims=claims)
+
+    assert TOKEN.findall(_conclusion(repaired)) == [written]
+    assert "MANUSCRIPT_CONCLUSION_COMPLETED" not in _codes(repairs)
+
+
+def test_without_the_run_claims_a_written_conclusion_stands(tmp_path):
+    plan, summary, store = _registered_suite(tmp_path, synthetic_crossing_hazard_rows())
+    claims = store.authoritative_scientific_claims(LEDGER)
+    first = _estimates(claims)[0].placeholder
+    placed = write_phase._place_host_claims_in_results(
+        _draft(plan, summary, f"{first}\n\n{CAVEAT}"), claims=claims, plan=plan, findings=[],
+    )
+
+    repaired, repairs = repair_reader_structure_from_existing_prose(placed, analysis_plan=plan)
+
+    assert TOKEN.findall(_conclusion(repaired)) == [first]
+    assert "MANUSCRIPT_CONCLUSION_COMPLETED" not in _codes(repairs)

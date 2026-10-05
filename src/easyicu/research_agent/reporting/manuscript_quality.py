@@ -372,18 +372,41 @@ def remove_empty_optional_subsections(manuscript: str) -> str:
     return text
 
 
-def _conclusion_claim_tokens(
-    tokens: Sequence[str], claims: Sequence["ScientificClaim"],
+def _primary_result_claim_tokens(
+    results: str, analysis_plan: AnalysisPlan | None,
 ) -> list[str]:
-    """The claim tokens a restored Conclusion states, in Results order.
+    """The host claim tokens of the family's primary Results subsection.
+
+    That subsection answers the question; a cohort claim placed before it is
+    not the study's conclusion.  Without it, the whole Results section.
+    """
+
+    subsections = _subsections(results)
+    primary = next(
+        (subsections[heading] for heading in _primary_result_headings(analysis_plan)
+         if heading in subsections and _CLAIM_PLACEHOLDER_RE.search(subsections[heading])),
+        "",
+    )
+    return [
+        sentence.strip()
+        # Placed host tokens are paragraphs without a full stop.
+        for sentence in re.split(r"(?<=[.!?])\s+|\n\s*\n", primary or results)
+        if _has_prose(sentence)
+        and (
+            _CLAIM_PLACEHOLDER_RE.fullmatch(sentence.rstrip(".!?"))
+        )
+    ]
+
+
+def _primary_estimate_tokens(
+    tokens: Sequence[str], claims: Sequence["ScientificClaim"],
+) -> dict[str, str]:
+    """The tokens of primary estimates, by claim reference, in Results order.
 
     A study can answer with several primary estimates: when the
     proportional-hazards test rejects, every interval's hazard ratio is
-    primary, and so is every point contrast of a spline model.  The first of
-    them alone states part of the answer as the whole, so the Conclusion
-    reads every primary estimate its source reports.  A rule outcome, such as
-    the test that chose the estimates, is not one.  Without the run's claims,
-    or without a primary estimate, the first token stands for the answer.
+    primary, and so is every point contrast of a spline model.  A rule
+    outcome, such as the test that chose the estimates, is not one.
     """
 
     by_ref = {claim.claim_ref: claim for claim in claims}
@@ -393,7 +416,57 @@ def _conclusion_claim_tokens(
         claim = by_ref.get(ref)
         if claim is not None and claim.analysis_role == "primary" and claim.rule_outcome is None:
             estimates.setdefault(ref, token)
-    return list(estimates.values()) or list(tokens[:1])
+    return estimates
+
+
+def _conclusion_claim_tokens(
+    tokens: Sequence[str], claims: Sequence["ScientificClaim"],
+) -> list[str]:
+    """The claim tokens a restored Conclusion states, in Results order.
+
+    The first primary estimate alone states part of the answer as the whole,
+    so the Conclusion reads every primary estimate its source reports.
+    Without the run's claims, or without a primary estimate, the first token
+    stands for the answer.
+    """
+
+    return list(_primary_estimate_tokens(tokens, claims).values()) or list(tokens[:1])
+
+
+def _completed_conclusion(conclusion: str, estimates: Mapping[str, str]) -> str | None:
+    """A Conclusion that cites part of the primary estimates, with the rest.
+
+    Each estimate the Writer left out is stated beside the nearest one it
+    cites: after the paragraph citing the closest earlier estimate in Results
+    order, or before the paragraph citing the first one when none is earlier.
+    So the estimates still read in Results order (an interval never precedes
+    an earlier one it follows) and the Writer's paragraphs keep their words
+    and order.  ``None`` when it cites none of them, or all.
+    """
+
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", conclusion) if part.strip()]
+    cited: dict[str, int] = {}
+    for index, paragraph in enumerate(paragraphs):
+        for match in _CLAIM_PLACEHOLDER_RE.finditer(paragraph):
+            cited.setdefault(match.group(0)[len("{claim:"):-1], index)
+    order = list(estimates)
+    if not any(ref in cited for ref in order) or all(ref in cited for ref in order):
+        return None
+    before: dict[int, list[str]] = {}
+    after: dict[int, list[str]] = {}
+    for position, ref in enumerate(order):
+        if ref in cited:
+            continue
+        earlier = [cited[name] for name in order[:position] if name in cited]
+        if earlier:
+            after.setdefault(earlier[-1], []).append(estimates[ref])
+        else:
+            later = next(cited[name] for name in order[position + 1:] if name in cited)
+            before.setdefault(later, []).append(estimates[ref])
+    completed: list[str] = []
+    for index, paragraph in enumerate(paragraphs):
+        completed += [*before.get(index, ()), paragraph, *after.get(index, ())]
+    return "\n\n".join(completed)
 
 
 def repair_reader_structure_from_existing_prose(
@@ -406,7 +479,8 @@ def repair_reader_structure_from_existing_prose(
 
     With a plan, a restored Conclusion takes its claim from the plan family's
     primary subsection, not from another family's heading the draft also uses.
-    With the run's claims it states every primary estimate found there.
+    With the run's claims it states every primary estimate found there, and a
+    Conclusion the Writer wrote that cites part of them gains the rest.
     """
 
     repaired = str(manuscript or "")
@@ -642,25 +716,7 @@ def repair_reader_structure_from_existing_prose(
         ))
     )
     if conclusion is not None and (not _has_prose(conclusion) or conclusion_caveat_only):
-        results = section_map.get("Results", "")
-        # The family's primary subsection answers the question; a cohort
-        # claim placed before it is not the study's conclusion.
-        subsections = _subsections(results)
-        primary = next(
-            (subsections[heading] for heading in _primary_result_headings(analysis_plan)
-             if heading in subsections and _CLAIM_PLACEHOLDER_RE.search(subsections[heading])),
-            "",
-        )
-        source = primary or results
-        tokens = [
-            sentence.strip()
-            # Placed host tokens are paragraphs without a full stop.
-            for sentence in re.split(r"(?<=[.!?])\s+|\n\s*\n", source)
-            if _has_prose(sentence)
-            and (
-                _CLAIM_PLACEHOLDER_RE.fullmatch(sentence.rstrip(".!?"))
-            )
-        ]
+        tokens = _primary_result_claim_tokens(section_map.get("Results", ""), analysis_plan)
         if tokens:
             candidate = "\n\n".join(_conclusion_claim_tokens(tokens, claims))
             if conclusion_caveat_only:
@@ -669,6 +725,21 @@ def repair_reader_structure_from_existing_prose(
             repairs.append(
                 {
                     "code": "MANUSCRIPT_CONCLUSION_RESTORED",
+                    "source": "existing_results_claim_token",
+                }
+            )
+    elif conclusion:
+        # A Conclusion the Writer wrote can cite part of the answer: when the
+        # PH test rejects, its first interval alone states days 0 to 7 as the
+        # whole result.  It gains the primary estimates it leaves out.
+        completed = _completed_conclusion(conclusion, _primary_estimate_tokens(
+            _primary_result_claim_tokens(section_map.get("Results", ""), analysis_plan), claims,
+        ))
+        if completed is not None:
+            repaired = _replace_section_body(repaired, "Conclusion", completed)
+            repairs.append(
+                {
+                    "code": "MANUSCRIPT_CONCLUSION_COMPLETED",
                     "source": "existing_results_claim_token",
                 }
             )
