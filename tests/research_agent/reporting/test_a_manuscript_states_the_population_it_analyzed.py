@@ -104,7 +104,10 @@ def _context(
 
     payload = dict(constraints or {})
     if recorded or host_applied:
-        payload["source_selection"] = {"recorded": recorded, "host_applied": list(host_applied)}
+        payload["source_selection"] = {
+            "basis": "export_contract" if recorded else "unrecorded",
+            "host_applied": list(host_applied),
+        }
     return ResearchContext(
         research_question=question,
         cohort=CohortDescriptor(
@@ -254,8 +257,18 @@ _LATER_STAYS = (
         {"source_selection": {"recorded": False, "host_applied": []}},
         {"source_selection": {"recorded": "true"}},
         {"source_selection": ["recorded"]},
+        {"source_selection": {"basis": "unrecorded", "host_applied": []}},
+        # The package's own selection is not one the host knows.
+        {"source_selection": {"basis": "package_declaration", "host_applied": []}},
     ],
-    ids=["no record", "recorded false", "not a boolean", "not a record"],
+    ids=[
+        "no record",
+        "recorded false",
+        "not a boolean",
+        "not a record",
+        "unrecorded",
+        "package declaration",
+    ],
 )
 def test_an_export_without_a_selection_record_is_not_every_icu_stay(
     constraints: dict | None,

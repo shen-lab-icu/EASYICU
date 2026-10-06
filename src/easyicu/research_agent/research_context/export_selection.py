@@ -13,15 +13,24 @@ by the export too (``concept_cohort_window``).
 
 Criteria the context does not state are not therefore unapplied: a preset
 such as ``adult_first`` applies its age bound and first-stay restriction
-without a typed field, and a prepared package may carry any selection.  So
-the selection counts as complete only when the host records it,
-``data_constraints.source_selection.recorded`` being ``true`` because the
-bound export's manifest states its cohort contract.  Without that record,
+without a typed field, and a prepared package may carry any selection.  The
+host records how it knows the export's selection in
+``data_constraints.source_selection.basis``:
+
+* ``export_contract``: the bound export's manifest states its cohort
+  contract, so the stated criteria are its whole selection, each applied;
+* ``package_declaration``: a prepared package declares itself the study's
+  cohort; the host accepted the declaration but knows none of its criteria;
+* ``unrecorded``: nothing records what the export selected.
+
+Only ``export_contract`` makes the selection known (``recorded``).  Otherwise
 what the export selected is unknown, not empty, and a stated criterion is
 declared, not known to be applied.  The exception is a criterion the host
 applies itself, whatever the export did (the first-stay restriction on
 verified stay coordinates): the record lists it in ``host_applied``, verbatim
-as the context states it.
+as the context states it.  A record written before the basis field states
+``recorded`` instead; one whose basis is unknown is read as unrecorded.  A
+context with no record at all (the CLI, a benchmark) has no basis.
 
 Planning and reporting read the export's selection here, so both state the
 same rows as already selected.
@@ -30,7 +39,7 @@ same rows as already selected.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any, Literal, Mapping, Sequence, get_args
 
 from ..schema import ResearchContext
 from .concept_population import (
@@ -42,6 +51,10 @@ from .concept_population import (
 
 #: ``data_constraints.cohort`` fields that hold the study's own words.
 _STUDY_COHORT_WORDING_FIELDS = ("label", "review", "exclusion_statement")
+
+#: How the host knows the export's selection
+#: (``data_constraints.source_selection.basis``).
+SelectionBasis = Literal["export_contract", "package_declaration", "unrecorded"]
 
 
 @dataclass(frozen=True)
@@ -58,13 +71,21 @@ class ExportAppliedSelection:
 
     contracts: AppliedContracts
     concept_population: ConceptCohortWindow | None
-    #: Whether the host recorded the export's whole selection.  When it did
-    #: not, the criteria above are what the context declares, not a complete
-    #: account, and an empty selection means unknown.
-    recorded: bool = False
+    #: How the host knows the export's selection; ``None`` without a record.
+    basis: SelectionBasis | None = None
     #: The contracts above that the host applied itself, whatever the export
     #: did; they are applied even when the selection is not recorded.
     host_applied: AppliedContracts = AppliedContracts()
+
+    @property
+    def recorded(self) -> bool:
+        """Whether the export's contract records its whole selection.
+
+        When it does not, the criteria above are what the context declares,
+        not a complete account, and an empty selection means unknown.
+        """
+
+        return self.basis == "export_contract"
 
     @property
     def selects_rows(self) -> bool:
@@ -105,15 +126,30 @@ def export_applied_selection(context: ResearchContext) -> ExportAppliedSelection
         inclusion=_contracts(context.cohort.inclusion_criteria, wording),
         exclusion=_contracts(context.cohort.exclusion_criteria, wording),
     )
-    record = context_data_constraints(context).get("source_selection")
-    if not isinstance(record, Mapping):
-        record = {}
+    constraints = context_data_constraints(context)
+    record = constraints.get("source_selection")
     return ExportAppliedSelection(
         contracts=contracts,
         concept_population=concept_cohort_window(context),
-        recorded=record.get("recorded") is True,
-        host_applied=_host_applied(record.get("host_applied"), contracts),
+        basis=_selection_basis(record) if "source_selection" in constraints else None,
+        host_applied=_host_applied(
+            record.get("host_applied") if isinstance(record, Mapping) else None, contracts
+        ),
     )
+
+
+def _selection_basis(record: Any) -> SelectionBasis:
+    """The record's basis; a record that names none known is unrecorded."""
+
+    if not isinstance(record, Mapping):
+        return "unrecorded"
+    basis = record.get("basis")
+    if basis in get_args(SelectionBasis):
+        return basis
+    if "basis" not in record and record.get("recorded") is True:
+        # Written before the basis field (460825b34).
+        return "export_contract"
+    return "unrecorded"
 
 
 def _host_applied(listed: Any, contracts: AppliedContracts) -> AppliedContracts:
@@ -147,5 +183,6 @@ def _contracts(values: Sequence[Any], wording: frozenset[str]) -> tuple[str, ...
 __all__ = [
     "AppliedContracts",
     "ExportAppliedSelection",
+    "SelectionBasis",
     "export_applied_selection",
 ]
