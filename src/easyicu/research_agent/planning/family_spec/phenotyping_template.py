@@ -56,6 +56,7 @@ from .landmark_categorical_template import (
     _method_card_ids,
     population_restricts,
     stated_population_sentence,
+    typed_bound_applies,
     typed_bound_predicates,
 )
 from .plan_language import bounded_roster, listing, plan_language, sentence
@@ -146,10 +147,9 @@ def _cohort_intent(request: FamilySpecRequest, spec: FamilyPlanSpec) -> Progress
                 value=ProgressivePredicateValue(mode="number", number_value=1.0),
             )
         )
-    if any(
-        bound is not None
-        for bound in (request.age_min, request.age_max, request.minimum_icu_hours)
-    ):
+    # A caller that binds every input row has decided the population; the
+    # typed bounds then describe it and are not applied again.
+    if typed_bound_applies(request):
         if end_hours is None:
             raise FamilySpecError(
                 "family_spec_cohort_window_unavailable",
@@ -202,11 +202,12 @@ def _design_selection(
     membership = (
         _label(spec, spec.cohort_membership_column) if spec.cohort_membership_column else None
     )
+    restricted = population_restricts(spec.population) or typed_bound_applies(request)
     population = (
         f"analysis rows of the study cohort with {membership} present in the window"
         if membership
         else "analysis rows of the study cohort"
-        if population_restricts(spec.population)
+        if restricted
         else "all analysis rows of the study cohort"
     )
     language = plan_language(request.research_question)
@@ -214,7 +215,7 @@ def _design_selection(
         f"研究队列中窗口内存在 {membership} 的分析行"
         if membership
         else "研究队列的分析行"
-        if population_restricts(spec.population)
+        if restricted
         else "研究队列的全部分析行"
     )
     hours_zh = (

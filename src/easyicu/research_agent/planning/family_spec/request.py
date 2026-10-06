@@ -2153,7 +2153,13 @@ def _build_phenotyping_request(
             context, analysis_type="trajectory_clustering"
         ),
         feature_candidates=feature_candidates,
-        membership_candidates=membership_candidates,
+        # A caller-bound all-rows cohort is the population; a membership flag
+        # would filter it against that contract.
+        membership_candidates=(
+            []
+            if required_primary_cohort_selection_mode == "all_input_rows"
+            else membership_candidates
+        ),
         adjustment_selection="planner_selectable",
         adjustment_candidates=baseline_candidates,
         measurement_audit_columns=measurement_audit_columns,
