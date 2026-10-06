@@ -10,11 +10,15 @@ no one.  Rows enter an analysis in two typed ways only:
 
 This module reads those owners and says which population the manuscript
 describes.  The Writer receives it as the ANALYZED POPULATION block, so no
-section calls the analyzed stays a population only the question names.  The
-host cites a population statement where the manuscript states its population
-only when the plan selected its rows by predicate.  Otherwise the registered
-owners such a statement could cite record the export or the question, not a
-selection.
+section calls the analyzed stays a population only the question names.  An
+export whose selection the host did not record may have applied criteria the
+context does not state (a preset's age bound, a prepared package's own
+cohort), so the block then asserts neither that it applied any nor that the
+analysis was unrestricted; only a criterion the host applied itself is stated
+as applied.  The host cites a population statement where the
+manuscript states its population only when the plan selected its rows by
+predicate.  Otherwise the registered owners such a statement could cite
+record the export or the question, not a selection.
 
 The execution kernel's authority is to own the same record, with these field
 names, for the manuscript's population method fact and its claim check; this
@@ -40,6 +44,7 @@ SourceScope = Literal[
     "predicate_selected",
     "all_input_rows_of_contracted_export",
     "all_icu_stays_of_source_export",
+    "all_input_rows_of_unrecorded_export",
 ]
 
 #: Receipt reason for a population statement the host declined to cite.
@@ -88,9 +93,17 @@ class AnalyzedPopulation:
     selection_mode: Literal["all_input_rows", "predicate_filtered"]
     inclusion_predicates: tuple[Mapping[str, Any], ...]
     exclusion_predicates: tuple[Mapping[str, Any], ...]
+    #: The export's contracts known to be applied
+    #: (``ExportAppliedSelection.known_applied``).
     applied_contracts: AppliedContracts
     concept_population: Optional[ConceptCohortWindow]
     source_scope: SourceScope
+    #: Whether the host recorded the export's whole selection
+    #: (``ExportAppliedSelection.recorded``).  Without it the concept
+    #: population is declared, not known to be applied.
+    source_selection_recorded: bool = False
+    #: The contracts declared but not known to be applied.
+    unverified_contracts: AppliedContracts = AppliedContracts()
 
     def record(self) -> dict[str, Any]:
         """The JSON shape both owners of this record agree on."""
@@ -100,10 +113,8 @@ class AnalyzedPopulation:
             "selection_mode": self.selection_mode,
             "inclusion_predicates": [dict(item) for item in self.inclusion_predicates],
             "exclusion_predicates": [dict(item) for item in self.exclusion_predicates],
-            "applied_contracts": {
-                "inclusion": list(self.applied_contracts.inclusion),
-                "exclusion": list(self.applied_contracts.exclusion),
-            },
+            "applied_contracts": _contracts_record(self.applied_contracts),
+            "unverified_contracts": _contracts_record(self.unverified_contracts),
             "concept_population": (
                 {
                     "definition": concept.definition,
@@ -113,6 +124,7 @@ class AnalyzedPopulation:
                 else None
             ),
             "source_scope": self.source_scope,
+            "source_selection_recorded": self.source_selection_recorded,
         }
 
 
@@ -126,7 +138,9 @@ def analyzed_population(
     A plan without a cohort, or an export whose concept-population record is
     unreadable, gives ``None``: the host then states no population and vouches
     for no population statement.  A predicate-filtered cohort with no
-    predicate selects every row, as the trajectory design reads it.
+    predicate selects every row, as the trajectory design reads it.  Without
+    the host's record of the export's selection, an export with no stated
+    criterion is not every ICU stay: what it selected is unknown.
     """
 
     cohort = plan.cohort if plan is not None else None
@@ -143,6 +157,8 @@ def analyzed_population(
     scope: SourceScope
     if cohort.selection_mode != "all_input_rows" and (inclusion or exclusion):
         scope = "predicate_selected"
+    elif not selection.recorded:
+        scope = "all_input_rows_of_unrecorded_export"
     elif contracts.inclusion or contracts.exclusion or concept is not None:
         scope = "all_input_rows_of_contracted_export"
     else:
@@ -151,9 +167,11 @@ def analyzed_population(
         selection_mode=cohort.selection_mode,
         inclusion_predicates=inclusion,
         exclusion_predicates=exclusion,
-        applied_contracts=contracts,
+        applied_contracts=selection.known_applied,
         concept_population=concept,
         source_scope=scope,
+        source_selection_recorded=selection.recorded,
+        unverified_contracts=selection.unverified,
     )
 
 
@@ -198,18 +216,28 @@ _SCOPE_TEXT: dict[str, str] = {
         "every ICU stay in the source export; neither the export nor the plan "
         "applied an inclusion or exclusion criterion."
     ),
+    "all_input_rows_of_unrecorded_export": (
+        "every input row of the source export, which the plan did not filter."
+    ),
 }
 
-_WRITER_POPULATION_RULES = (
-    "- Describe this study's population only as stated here, in every section. "
-    "Eligibility for one analysis (a landmark risk set, observed windows, "
-    "complete data) comes from the executed method boundary.",
+_DESCRIBE_RULE = (
+    "- Describe this study's population only as stated here. Eligibility for one "
+    "analysis (a landmark risk set, observed windows, complete data) comes from "
+    "the executed method boundary."
+)
+_QUESTION_RULE = (
     "- The research question, and any criterion or cohort wording in RESEARCH "
     "CONTEXT, select no one: never call this study's rows, stays, patients or "
     "cohort a narrower population they name (a condition, treatment, procedure, "
-    "setting or age group) that is not listed here; in Methods, say once that "
-    "the analysis was not restricted to it. Background about that condition is "
-    "allowed.",
+    "setting or age group) that is not listed here; {consequence} Background "
+    "about that condition is allowed."
+)
+#: Only a recorded selection shows the analysis was not restricted to it.
+_RECORDED_CONSEQUENCE = "in Methods, say once that the analysis was not restricted to it."
+_UNRECORDED_CONSEQUENCE = (
+    "the export's selection is not recorded, so never say whether the analysis "
+    "was restricted to it."
 )
 
 
@@ -217,18 +245,27 @@ def writer_population_block(population: AnalyzedPopulation | None) -> str:
     """The ANALYZED POPULATION block every Writer section receives."""
 
     lines = ["ANALYZED POPULATION (host-stated; the only population this study analyzed):"]
+    recorded = population is not None and population.source_selection_recorded
     if population is None:
         lines.append(
             "- Rows analyzed: not stated by the host, because the plan states no "
             "cohort or the export's selection record cannot be read. State no "
-            "criterion beyond the export criteria in RESEARCH CONTEXT."
+            "criterion as applied."
         )
     else:
         lines.append("- Rows analyzed: " + _SCOPE_TEXT[population.source_scope])
-        lines.append(
-            "- Criteria the source export applied before analysis: "
-            + _listed(_contract_items(population))
-        )
+        concept = _concept_items(population.concept_population)
+        applied = _contract_items(population.applied_contracts)
+        if recorded:
+            lines.append("- Criteria applied before analysis: " + _listed(applied + concept))
+        else:
+            # Only the host's own criteria are known; "none" would claim more.
+            if applied:
+                lines.append("- Criteria applied before analysis: " + _listed(applied))
+            lines.append(
+                "- Export's selection: not recorded; declared criteria (unverified): "
+                + _listed(_contract_items(population.unverified_contracts) + concept)
+            )
         if population.source_scope == "predicate_selected":
             lines.append(
                 "- Plan inclusion predicates: "
@@ -238,21 +275,33 @@ def writer_population_block(population: AnalyzedPopulation | None) -> str:
                 "- Plan exclusion predicates: "
                 + _listed([_predicate_text(item) for item in population.exclusion_predicates])
             )
-    lines.extend(_WRITER_POPULATION_RULES)
+    lines.append(_DESCRIBE_RULE)
+    lines.append(
+        _QUESTION_RULE.format(
+            consequence=_RECORDED_CONSEQUENCE if recorded else _UNRECORDED_CONSEQUENCE
+        )
+    )
     return "\n".join(lines) + "\n\n"
 
 
-def _contract_items(population: AnalyzedPopulation) -> list[str]:
-    items = [f"inclusion: {item}" for item in population.applied_contracts.inclusion]
-    items.extend(f"exclusion: {item}" for item in population.applied_contracts.exclusion)
-    concept = population.concept_population
-    if concept is not None:
-        items.append(
-            f"concept-derived population {concept.definition}: a stay entered on a "
-            f"positive {concept.definition} record at or before "
-            f"{concept.window_end_hours:g} h after ICU admission"
-        )
+def _contracts_record(contracts: AppliedContracts) -> dict[str, list[str]]:
+    return {"inclusion": list(contracts.inclusion), "exclusion": list(contracts.exclusion)}
+
+
+def _contract_items(contracts: AppliedContracts) -> list[str]:
+    items = [f"inclusion: {item}" for item in contracts.inclusion]
+    items.extend(f"exclusion: {item}" for item in contracts.exclusion)
     return items
+
+
+def _concept_items(concept: ConceptCohortWindow | None) -> list[str]:
+    if concept is None:
+        return []
+    return [
+        f"concept-derived population {concept.definition}: a stay entered on a "
+        f"positive {concept.definition} record at or before "
+        f"{concept.window_end_hours:g} h after ICU admission"
+    ]
 
 
 def _listed(items: Sequence[str]) -> str:

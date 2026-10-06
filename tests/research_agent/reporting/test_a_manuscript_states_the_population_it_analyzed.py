@@ -6,7 +6,10 @@ population included) and the plan's cohort predicates.  Every Writer section
 receives that population, and the host cites a population statement on the
 Writer's behalf only when the plan selected its rows by predicate: otherwise
 every owner such a statement could cite records the export or the question,
-not a selection.  Fixtures are synthetic; the populations they name vary so
+not a selection.  An export whose selection the host did not record is
+stated as such: its criteria are declared, not applied, except the ones the
+host applied itself, and the analysis is called neither restricted nor
+unrestricted.  Fixtures are synthetic; the populations they name vary so
 that no rule keys on one condition.
 """
 
@@ -94,7 +97,14 @@ def _context(
     inclusion: tuple[str, ...] = (),
     exclusion: tuple[str, ...] = (),
     constraints: dict | None = None,
+    recorded: bool = True,
+    host_applied: tuple[str, ...] = (),
 ) -> ResearchContext:
+    """A Web context; unrecorded without a host criterion, it has no selection record."""
+
+    payload = dict(constraints or {})
+    if recorded or host_applied:
+        payload["source_selection"] = {"recorded": recorded, "host_applied": list(host_applied)}
     return ResearchContext(
         research_question=question,
         cohort=CohortDescriptor(
@@ -112,7 +122,7 @@ def _context(
         ],
         target_outcome="death",
         user_preferences=UserPreferences(
-            data_constraints=json.dumps(constraints) if constraints is not None else None
+            data_constraints=json.dumps(payload) if payload else None
         ),
     )
 
@@ -145,8 +155,10 @@ def test_a_plan_keeping_every_row_of_an_uncontracted_export_analyzes_every_icu_s
         "inclusion_predicates": [],
         "exclusion_predicates": [],
         "applied_contracts": {"inclusion": [], "exclusion": []},
+        "unverified_contracts": {"inclusion": [], "exclusion": []},
         "concept_population": None,
         "source_scope": "all_icu_stays_of_source_export",
+        "source_selection_recorded": True,
     }
 
 
@@ -195,7 +207,7 @@ def test_the_studys_own_wording_is_not_a_criterion_the_export_applied(
     assert population.source_scope == "all_icu_stays_of_source_export"
     assert population.record()["applied_contracts"] == {"inclusion": [], "exclusion": []}
     block = writer_population_block(population)
-    assert "- Criteria the source export applied before analysis: none." in block
+    assert "- Criteria applied before analysis: none." in block
     for words in wording.values():
         assert words not in block
 
@@ -224,6 +236,135 @@ def test_a_concept_derived_export_is_not_called_every_icu_stay(
     assert "every ICU stay" not in block
     assert f"concept-derived population {definition}" in block
     assert f"at or before {hours:g} h after ICU admission" in block
+
+
+# An unrecorded selection ------------------------------------------------
+
+#: The host's first-stay restriction, as the Web caller states it.
+_LATER_STAYS = (
+    "each patient's later ICU stays: the host keeps only the first ICU stay per "
+    "patient across the bound source, before planning"
+)
+
+
+@pytest.mark.parametrize(
+    "constraints",
+    [
+        None,
+        {"source_selection": {"recorded": False, "host_applied": []}},
+        {"source_selection": {"recorded": "true"}},
+        {"source_selection": ["recorded"]},
+    ],
+    ids=["no record", "recorded false", "not a boolean", "not a record"],
+)
+def test_an_export_without_a_selection_record_is_not_every_icu_stay(
+    constraints: dict | None,
+) -> None:
+    # A preset such as adult_first, or a prepared package, applies criteria
+    # that no context field states.
+    context = _context(constraints=constraints, recorded=False)
+
+    population = analyzed_population(plan=_plan(_ALL_ROWS), context=context)
+
+    assert population is not None
+    assert population.source_scope == "all_input_rows_of_unrecorded_export"
+    assert population.record()["source_selection_recorded"] is False
+    block = writer_population_block(population)
+    assert "every ICU stay" not in block
+    assert "- Criteria applied before analysis" not in block
+    assert "- Export's selection: not recorded; declared criteria (unverified): none." in block
+    assert "never say whether the analysis was restricted to it." in block
+    assert "say once that the analysis was not restricted" not in block
+
+
+@pytest.mark.parametrize(
+    ("definition", "hours"), [("sepsis3", 720.0), ("aki", 48.0), ("ventilation", 12.0)]
+)
+def test_without_a_record_the_stated_criteria_are_declared_not_applied(
+    definition: str, hours: float
+) -> None:
+    context = _context(
+        inclusion=("age range: 18 to *",),
+        constraints={"concept_cohort_window": {"definition": definition, "window_end_hours": hours}},
+        recorded=False,
+    )
+
+    population = analyzed_population(plan=_plan(_ALL_ROWS), context=context)
+
+    assert population is not None
+    record = population.record()
+    assert record["applied_contracts"] == {"inclusion": [], "exclusion": []}
+    assert record["unverified_contracts"] == {"inclusion": ["age range: 18 to *"], "exclusion": []}
+    block = writer_population_block(population)
+    assert (
+        "- Export's selection: not recorded; declared criteria (unverified): "
+        f"inclusion: age range: 18 to *; concept-derived population {definition}: "
+    ) in block
+    assert "- Criteria applied before analysis" not in block
+
+
+def test_a_criterion_the_host_applied_itself_is_applied_without_a_record() -> None:
+    context = _context(
+        inclusion=("age range: 18 to *",),
+        exclusion=(_LATER_STAYS, "chronic dialysis"),
+        recorded=False,
+        # Named as the context states it; a name it does not state adds nothing.
+        host_applied=(f" {_LATER_STAYS} ", "a criterion no context field states"),
+    )
+
+    population = analyzed_population(plan=_plan(_ALL_ROWS), context=context)
+
+    assert population is not None
+    assert population.source_scope == "all_input_rows_of_unrecorded_export"
+    record = population.record()
+    assert record["applied_contracts"] == {"inclusion": [], "exclusion": [_LATER_STAYS]}
+    assert record["unverified_contracts"] == {
+        "inclusion": ["age range: 18 to *"],
+        "exclusion": ["chronic dialysis"],
+    }
+    block = writer_population_block(population)
+    assert f"- Criteria applied before analysis: exclusion: {_LATER_STAYS}." in block
+    assert (
+        "declared criteria (unverified): inclusion: age range: 18 to *; "
+        "exclusion: chronic dialysis."
+    ) in block
+    assert "a criterion no context field states" not in block
+    assert "never say whether the analysis was restricted to it." in block
+
+
+def test_a_recorded_selection_states_every_criterion_as_applied() -> None:
+    context = _context(
+        inclusion=("age range: 18 to *",), exclusion=(_LATER_STAYS,), host_applied=(_LATER_STAYS,)
+    )
+
+    population = analyzed_population(plan=_plan(_ALL_ROWS), context=context)
+
+    assert population is not None
+    assert population.source_scope == "all_input_rows_of_contracted_export"
+    record = population.record()
+    assert record["applied_contracts"] == {
+        "inclusion": ["age range: 18 to *"],
+        "exclusion": [_LATER_STAYS],
+    }
+    assert record["unverified_contracts"] == {"inclusion": [], "exclusion": []}
+    block = writer_population_block(population)
+    assert (
+        f"- Criteria applied before analysis: inclusion: age range: 18 to *; exclusion: {_LATER_STAYS}."
+    ) in block
+    assert "not recorded" not in block
+    assert "in Methods, say once that the analysis was not restricted to it." in block
+
+
+def test_plan_predicates_over_an_unrecorded_export_select_the_rows_they_admit() -> None:
+    population = analyzed_population(
+        plan=_plan(_SELECTED), context=_context(inclusion=("age range: 18 to *",), recorded=False)
+    )
+
+    assert population is not None
+    assert population.source_scope == "predicate_selected"
+    block = writer_population_block(population)
+    assert "rows that meet the plan's cohort predicates" in block
+    assert "declared criteria (unverified): inclusion: age range: 18 to *." in block
 
 
 def test_a_plan_stating_predicates_selects_the_rows_they_admit() -> None:
@@ -427,7 +568,9 @@ def _methods(sentence: str) -> str:
 
 
 @pytest.mark.parametrize("sentence", _POPULATION_SENTENCES)
-@pytest.mark.parametrize("scope", ["every ICU stay", "contracted export", "no typed population"])
+@pytest.mark.parametrize(
+    "scope", ["every ICU stay", "contracted export", "unrecorded export", "no typed population"]
+)
 def test_the_host_does_not_cite_a_population_the_plan_did_not_select(
     tmp_path: Path, sentence: str, scope: str
 ) -> None:
@@ -437,7 +580,10 @@ def test_the_host_does_not_cite_a_population_the_plan_did_not_select(
         "04_primary_adjusted_association_model",
         "research_context",
     )
-    context = _context(inclusion=("age range: 18 to *",) if scope == "contracted export" else ())
+    context = _context(
+        inclusion=("age range: 18 to *",) if scope == "contracted export" else (),
+        recorded=scope != "unrecorded export",
+    )
     population = (
         None
         if scope == "no typed population"
