@@ -80,13 +80,20 @@
         latestFailedAgentJob
         && latestFailedAgentJob.error_code === 'research_pipeline_plan_contract_exhausted'
       );
-      // The card used to say only "the previous task did not complete". The
-      // archived job carries the failure code; say what stopped the run and
-      // what to change, so regeneration is a decision rather than a guess.
-      const failureReason = latestFailedAgentJob && !planContractExhausted
-        && typeof host.runFailureText === 'function'
-        ? String(host.runFailureText(latestFailedAgentJob.error_code) || '')
-        : '';
+      // The card used to say only "the previous task did not complete". Say
+      // what stopped the run and what to change, so regeneration is a
+      // decision rather than a guess. The failed run this action comes from
+      // records the cause with its typed detail; a job keeps only its bare
+      // code, which names the generic cause of a typed stop.
+      const failedRun = (Array.isArray(workflow.runs) ? workflow.runs : []).find(run => (
+        run && run.authoritative && ['failed', 'blocked'].includes(String(run.run_status || ''))
+        && /^research_pipeline_|^data_foundation_blocked$/.test(String(run.gate_reason_code || ''))
+      ));
+      const failureReason = planContractExhausted || typeof host.runFailureText !== 'function'
+        ? ''
+        : failedRun
+          ? String(host.runFailureText(failedRun.gate_reason_code, { code: failedRun.gate_detail_code, missing: failedRun.gate_missing_concepts }) || '')
+          : latestFailedAgentJob ? String(host.runFailureText(latestFailedAgentJob.error_code) || '') : '';
       if (code === 'extraction_ready') return {
         code, grants: ['extract'],
         message: tr('I confirm the current study setup. Start data extraction and quality review.', '我确认当前研究配置，请开始数据提取和质量审阅。'),
@@ -129,9 +136,13 @@
           'I confirm that the old plan must not be reused. Start a fresh Research Agent planning run from the current study configuration, and pause again for my review before analysis.',
           '我确认旧计划不能复用。请按当前研究配置启动一次全新的 Research Agent 规划，并在分析前再次停下让我审核。',
         ),
+        // Only a superseded plan comes from a changed study; a plan whose
+        // review authority is gone was approved or paused on the same one.
         title: code === 'scientific_plan_review_policy_stale'
           ? tr('The scientific review policy was updated. Regenerate the plan?', '科学审阅规则已更新，是否重新生成计划？')
-          : tr('The study changed. Generate a fresh analysis plan?', '研究配置已更新，是否重新生成分析计划？'),
+          : code === 'plan_review_not_resumable'
+            ? tr('This plan can no longer be approved or resumed. Generate a fresh analysis plan?', '这份计划已不能再批准或恢复执行，是否重新生成分析计划？')
+            : tr('The study changed. Generate a fresh analysis plan?', '研究配置已更新，是否重新生成分析计划？'),
         note: code === 'scientific_plan_review_policy_stale'
           ? tr('The prepared data remain available. Only the old review and plan execution authority are stale; no extraction or analysis will be repeated automatically.', '已准备的数据仍可继续使用；只有旧审阅和计划执行权限已过期，不会自动重复提取或开始分析。')
           : tr('The old run stays as history. The new run receives a new id and current configuration digest.', '旧 run 仅保留为历史；新 run 使用新的标识和当前配置摘要。'),

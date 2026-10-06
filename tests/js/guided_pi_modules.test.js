@@ -82,6 +82,13 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   assert.doesNotMatch(stale, /Docker Desktop|colima/);
   assert.match(runFailure('research_pipeline_runner_image_mismatch'), /runner image did not match/);
 
+  // An approved run that failed for good is not offered for approval again;
+  // one whose review stayed open is.
+  const unresumable = runFailure('research_pipeline_approved_run_failed');
+  assert.match(unresumable, /cannot resume/);
+  assert.doesNotMatch(unresumable, /approved again/);
+  assert.match(runFailure('research_pipeline_review_resume_failed'), /can be approved again/);
+
   // A launch refusing the bound export names what comes first, not its code
   // (the transport puts the bare code in the message).
   const exportCohort = live({
