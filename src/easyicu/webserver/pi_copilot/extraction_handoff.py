@@ -130,16 +130,18 @@ def compile_registered_export_handoff(
     )
     manifest = binding["manifest"]
     requested_cohort = compile_study_cohort(study)
+    requested_format = str(study.get("export_format") or "parquet").strip().lower()
+    observed_format = str(manifest.get("format") or "").strip().lower()
+    observed_modules = _manifest_modules(manifest)
+    # A study that states no modules took this export's modules as its data;
+    # extracting its own cohort keeps them.
     requested_modules = tuple(
         dict.fromkeys(
             str(value).strip().lower()
             for value in (study.get("modules") or [])
             if str(value).strip()
         )
-    )
-    requested_format = str(study.get("export_format") or "parquet").strip().lower()
-    observed_format = str(manifest.get("format") or "").strip().lower()
-    observed_modules = _manifest_modules(manifest)
+    ) or tuple(sorted(observed_modules))
 
     mismatches = list(bound_export_mismatches(study, manifest))
     if requested_format != observed_format:
@@ -157,6 +159,38 @@ def compile_registered_export_handoff(
         reusable=not mismatches,
         mismatch_codes=tuple(mismatches),
     )
+
+
+def study_binding_for_export(
+    study: Mapping[str, Any], registered_source: Optional[Mapping[str, Any]]
+) -> Optional[dict[str, str]]:
+    """The data source a study binds when this export is its own extraction.
+
+    An extraction submitted for a study registers a new export, while the
+    study stays bound to the source it was extracted from.  A study whose
+    bound export cannot serve its cohort is told to extract that cohort; once
+    it has, its binding must follow, or the launch keeps refusing the old
+    export.  The study binds the new export only when the export holds the
+    cohort, window and format its setup requests and every module it
+    requests (the reuse decision above).  A study whose setup changed
+    meanwhile, or an extraction made for another setup, keeps its binding.
+    """
+
+    if not isinstance(registered_source, Mapping) or not registered_source.get("ok"):
+        return None
+    path = str(registered_source.get("path") or "").strip()
+    if not path:
+        return None
+    try:
+        handoff = compile_registered_export_handoff(study, registered_source)
+    except dataio.ExportCohortError:
+        return None
+    if not handoff.reusable:
+        return None
+    source = study.get("data_source")
+    source = source if isinstance(source, Mapping) else {}
+    label = str(registered_source.get("label") or source.get("label") or "").strip()
+    return {"path": path, "database": handoff.database, "label": label[:160]}
 
 
 def submit_study_extraction(
@@ -193,6 +227,8 @@ def submit_study_extraction(
                 handoff_receipt=handoff_receipt,
                 submitted=None,
             )
+        if not handoff.modules:
+            raise dataio.ExportCohortError("registered_export_modules_unrecorded")
         registered_export_path = source_path
         source_path = handoff.source_data_path
         database = handoff.database
@@ -240,5 +276,6 @@ __all__ = [
     "bound_export_mismatches",
     "compile_registered_export_handoff",
     "compile_study_cohort",
+    "study_binding_for_export",
     "submit_study_extraction",
 ]

@@ -116,6 +116,45 @@ def _study_source_matches(
     return bool(sealed_raw_path and sealed_raw_path == normalized_request)
 
 
+def _registered_active_source(registry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The registry row of the export that registration just made active."""
+
+    if not registry.get("ok"):
+        return None
+    active_path = str(registry.get("active_path") or "")
+    return next(
+        (
+            row
+            for row in registry.get("sources") or []
+            if isinstance(row, dict) and active_path and row.get("path") == active_path
+        ),
+        None,
+    )
+
+
+def _study_binding_for_extraction(
+    study_context_id: str, registered: Dict[str, Any]
+) -> Optional[tuple[int, Dict[str, str]]]:
+    """``(revision, data_source)`` when the export is the study's own extraction.
+
+    The extraction handoff owner decides whether the export holds what the
+    study's setup requests; the StudyContext owner binds it only at the
+    revision read here.
+    """
+
+    from easyicu.webserver.pi_copilot.extraction_handoff import (
+        study_binding_for_export,
+    )
+
+    study = context_store.get_context(study_context_id)
+    if not study:
+        return None
+    data_source = study_binding_for_export(study, registered)
+    if data_source is None:
+        return None
+    return int(study.get("revision") or 0), data_source
+
+
 def submit_job(kind: str, runner: Any):
     """Submit a local job while preserving the public capacity error contract."""
     try:
@@ -230,6 +269,7 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
             raise RuntimeError(f"extract_start_blocked:{error}")
         terminal_stage = "extract_failed"
         result: Dict[str, Any] | None = None
+        registered: Optional[Dict[str, Any]] = None
         try:
             result = export_runner(job)
             out_path = str((result or {}).get("out_dir") or "")
@@ -245,23 +285,35 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
                     "active_path": registry.get("active_path"),
                     "source_count": len(registry.get("sources") or []),
                 }
+                registered = _registered_active_source(registry)
             terminal_stage = (
                 "extract_cancelled" if job.cancel_requested else "extract_review"
             )
             return result
         finally:
             if study_context is not None:
+                bind_export = None
+                if terminal_stage == "extract_review" and registered is not None:
+                    try:
+                        bind_export = _study_binding_for_extraction(
+                            study_context_id, registered
+                        )
+                    except Exception:
+                        # The job pointer is still cleared below.
+                        bind_export = None
                 try:
                     cleanup = context_store.clear_active_job_if(
                         study_context_id,
                         job.id,
                         current_stage=terminal_stage,
                         last_route="extract",
+                        bind_export=bind_export,
                     )
                     if isinstance(result, dict):
                         result["study_context_revision"] = int(
                             cleanup["context"].get("revision") or 0
                         )
+                        result["study_context_rebound"] = bool(cleanup.get("rebound"))
                 except Exception:
                     pass
 

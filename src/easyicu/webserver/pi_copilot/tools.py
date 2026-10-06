@@ -3670,13 +3670,16 @@ def _start_extraction(
     )
     database = str(source.get("database") or "").strip()
     modules = [str(item) for item in (study.get("modules") or []) if str(item).strip()]
-    if not source_path or not database or not modules:
+    # A study bound to a registered export without stated modules is extracted
+    # with that export's modules; extraction_handoff resolves them.
+    modules_known = bool(modules) or registered_source is not None
+    if not source_path or not database or not modules_known:
         missing = [
             name
             for name, ready in (
                 ("data_source.path", bool(source_path)),
                 ("data_source.database", bool(database)),
-                ("modules", bool(modules)),
+                ("modules", modules_known),
             )
             if not ready
         ]
@@ -3770,7 +3773,11 @@ def _start_extraction(
         context,
         status="ok",
         code="easyicu_extraction_submitted",
-        summary=f"Submitted EasyICU feature extraction job {submitted.get('job_id')} from the bound typed study setup.",
+        summary=(
+            f"Submitted EasyICU feature extraction job {submitted.get('job_id')} from the "
+            "bound typed study setup. When it finishes with the export this setup "
+            "requests, the study binds that export."
+        ),
         owner="easyicu.webserver.routes.jobs",
         details={
             key: submitted.get(key)
