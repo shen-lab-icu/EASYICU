@@ -17,7 +17,9 @@ from contextlib import contextmanager
 from functools import lru_cache
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any, Dict, Iterator, Literal, Optional, Sequence
+from typing import Annotated, Any, Dict, Iterator, Literal, Optional, Sequence
+
+from pydantic import Field
 
 # Framework-owned anchors stay deliberately small and generic. Disease- or
 # intervention-specific anchors such as "sepsis_onset" or "vent_start" are
@@ -157,6 +159,20 @@ class ConceptPredicate:
         )
 
 
+def _criteria(value: Any) -> tuple[str, ...]:
+    """Read unapplied population criteria: each a non-empty string."""
+
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)) or not all(
+        isinstance(item, str) and item.strip() for item in value
+    ):
+        raise CohortSchemaError(
+            "unapplied_population_criteria must be a list of non-empty strings"
+        )
+    return tuple(" ".join(item.split()) for item in value)
+
+
 @dataclass(frozen=True)
 class CohortDefinition:
     name: str
@@ -165,6 +181,13 @@ class CohortDefinition:
     derived_from_named: Optional[str] = None
     locked_at: str = "not_locked"
     selection_mode: CohortSelectionMode = "predicate_filtered"
+    #: Population criteria the plan states that no predicate applies:
+    #: no allowed cohort concept expresses them.  They select no row, so
+    #: they stay out of ``to_dict`` and the cohort's digest, and a plan
+    #: serializes them only when it has one.
+    unapplied_population_criteria: Annotated[
+        tuple[str, ...], Field(exclude_if=lambda value: not value)
+    ] = ()
 
     def to_dict(self) -> Dict[str, Any]:
         payload = {
@@ -178,6 +201,17 @@ class CohortDefinition:
         # coordinate is serialized only for an explicit all-row decision.
         if self.selection_mode != "predicate_filtered":
             payload["selection_mode"] = self.selection_mode
+        return payload
+
+    def plan_dict(self) -> Dict[str, Any]:
+        """The cohort as a plan states it: the record above, and the
+        population criteria it does not apply when it has any."""
+
+        payload = self.to_dict()
+        if self.unapplied_population_criteria:
+            payload["unapplied_population_criteria"] = list(
+                self.unapplied_population_criteria
+            )
         return payload
 
     @classmethod
@@ -205,6 +239,9 @@ class CohortDefinition:
             selection_mode=str(
                 data.get("selection_mode") or "predicate_filtered"
             ),  # type: ignore[arg-type]
+            unapplied_population_criteria=_criteria(
+                data.get("unapplied_population_criteria")
+            ),
         )
 
 

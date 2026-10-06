@@ -421,6 +421,13 @@ def _compile_cohort_intent(
         inclusion=tuple(predicate(item) for item in cohort_intent.inclusion),
         exclusion=tuple(predicate(item) for item in cohort_intent.exclusion),
         selection_mode=cohort_intent.selection_mode,
+        # A criterion with concepts is applied by one of the predicates
+        # (``_require_stated_population_applied``); one without is not.
+        unapplied_population_criteria=tuple(
+            item.criterion
+            for item in cohort_intent.population_criteria
+            if not item.concept_ids
+        ),
     )
 
 
@@ -3051,7 +3058,7 @@ def compile_progressive_plan(
                         else None
                     ),
                     "steps": [step.model_dump(mode="json") for step in compiled_steps],
-                    "cohort": cohort.to_dict(),
+                    "cohort": cohort.plan_dict(),
                     "endpoint": (
                         context.endpoint.model_dump(mode="json")
                         if context.endpoint is not None

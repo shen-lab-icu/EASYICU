@@ -1,7 +1,7 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/research_context/outbound.py"
+      "src/easyicu/research_agent/planning/cohort_contract.py"
     ],
     "summary_changes": {}
   },
@@ -658,9 +658,16 @@
         "src/easyicu/research_agent/research_context/outbound.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "planning/cohort_contract.py: CohortDefinition carries the population criteria a plan states and no predicate applies (UP); they stay out of the cohort's record and digest and out of the Planner's transport schema. Only that file's source digest moves; every fixed task's planning contract, Planner prompt, resource selection and coder context are unchanged; provider-free and patient-data-free.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/planning/cohort_contract.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "research_context/outbound.py sends a typed event status's first-present event time (S1): <c>_onset_time joins the companion suffixes and first_truthy_event_time joins the representations sent out. Only that file's source digest moves; every fixed task's planning contract, Planner prompt, resource selection and coder context are unchanged; provider-free and patient-data-free.",
+  "baseline_reason": "planning/cohort_contract.py: CohortDefinition carries the population criteria a plan states and no predicate applies (UP); they stay out of the cohort's record and digest and out of the Planner's transport schema. Only that file's source digest moves; every fixed task's planning contract, Planner prompt, resource selection and coder context are unchanged; provider-free and patient-data-free.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -680,7 +687,7 @@
     "src/easyicu/research_agent/learning/store.py": "2a951e221b413c6e0c251382224acd3bba7bde8e23cca25812def65df0ef26d0",
     "src/easyicu/research_agent/planning/analysis_blueprint.py": "5330a604f9894c879ba400bee3b3ac1b617de1ce24425506139a5a29bb4020b2",
     "src/easyicu/research_agent/planning/analysis_types.py": "936b11fe41791a06369a20d930e6e1b3ec29a16c3bd71197f916e8fb9948bc4b",
-    "src/easyicu/research_agent/planning/cohort_contract.py": "4c9e01922aa5a10632f2711241242bc212a921f985d8f3d5092f79a06d3e7a54",
+    "src/easyicu/research_agent/planning/cohort_contract.py": "559d20fb3b2f434764843c3557c4e62047cb479ef514418636a4e9f751aabdc1",
     "src/easyicu/research_agent/planning/figure_strategy.py": "f6c2cb10e1af641787fb7de1da29cfee99d869f56a3116ec3c1b2881fd3b93bf",
     "src/easyicu/research_agent/planning/study_design.py": "84e7d9c0974ca3d1f9deadcc22de065586a9be20fcdf66f101f931469b64cad0",
     "src/easyicu/research_agent/planning/study_design_playbook.py": "fa07ee36a06d560ca9266999516bf1f394c4ac522d5b1436bf689d274b07888d",

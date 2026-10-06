@@ -54,6 +54,7 @@
     PLANNER_ADJUSTMENT_PROPOSAL_INCOMPLETE: ['调整变量方案不完整', 'Agent 提出的调整变量缺少混杂理由或基线时间证明；由 Agent 修订，不需要你补填。'],
     PLAN_INPUT_STRUCTURALLY_UNAVAILABLE: ['所需变量在数据源中不可得', '计划需要的科学变量在这个数据源中结构性缺失；不会改用别的结局或暴露替代。'],
     PLAN_POPULATION_REQUIREMENT_DRIFT: ['研究人群发生了变化', '描述性结果改变了研究人群；需要在新计划中审阅这一变更。'],
+    POPULATION_CRITERION_NOT_APPLIED: ['写明的人群条件没有施加', '方案写明了问题限定的这条人群条件，但没有可用的队列概念能表达它，所以没有谓词施加它：分析保留了其余入组条件选出的全部输入行，人群比写明的更宽。方案修订无法补上；需要为研究提供能表达这条条件的概念，或由研究者接受更宽的人群。结果与稿件按实际分析的人群表述。'],
     POPULATION_SCOPE_AMENDMENT_DECLARED: ['研究人群已声明变更', '描述性结果改变了研究人群；需要在新计划中审阅这一变更。'],
     POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED: ['暴露在时间零点之后才判定', '暴露在入 ICU 之后才判定，但计划没有可执行的 landmark 或时变设计来处理暴露机会和早期事件。'],
     PRIMARY_EXPOSURE_TIME_ANCHOR_MISMATCH: ['暴露定义的时间锚点不一致', '主暴露临床定义的时间锚点与研究声明的时间零点不一致。'],

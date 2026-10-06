@@ -2944,6 +2944,47 @@ def cohort_predicate_domain_findings(
     ]
 
 
+def unapplied_population_findings(plan: AnalysisPlan) -> list[PlanScientificFinding]:
+    """Say so for each population criterion the plan states and does not apply.
+
+    The Planner states each restriction the question places on whom the
+    study includes.  One that no allowed cohort concept expresses is
+    applied by no predicate (``CohortDefinition.unapplied_population_criteria``),
+    so the analysis keeps a broader population than the one stated.  A plan
+    revision cannot apply it: a concept that expresses it, or the
+    researcher's acceptance of the broader population, comes from the study.
+    """
+
+    cohort = plan.cohort
+    if cohort is None:
+        return []
+    return [
+        PlanScientificFinding(
+            code="POPULATION_CRITERION_NOT_APPLIED",
+            severity="major",
+            dimension="icu_clinical_design",
+            message=(
+                f"The plan states the population criterion {criterion!r}, but no "
+                "allowed cohort concept expresses it, so no predicate applies it: "
+                "the analysis keeps every input row that the other cohort "
+                "criteria keep, a broader population than the one stated."
+            ),
+            evidence_refs=[
+                "analysis_plan.json.cohort",
+                "research_context.json.research_question",
+            ],
+            remediation=(
+                "Make a concept that expresses this criterion available to the "
+                "study, so that a predicate can apply it, or have the researcher "
+                "accept the broader population. The results and the manuscript "
+                "describe the population the analysis actually kept."
+            ),
+            remediation_route="study_authority_change",
+        )
+        for criterion in cohort.unapplied_population_criteria
+    ]
+
+
 def build_plan_scientific_review(
     *,
     context: ResearchContext,
@@ -3128,6 +3169,7 @@ def build_plan_scientific_review(
         cohort_predicate_findings(context, plan, trajectory_representation, runtime_authority)
     )
     findings.extend(cohort_predicate_domain_findings(context, plan))
+    findings.extend(unapplied_population_findings(plan))
     required_source_columns = {
         context.primary_exposure, context.target_outcome,
         *context.cohort.outcome_columns,
