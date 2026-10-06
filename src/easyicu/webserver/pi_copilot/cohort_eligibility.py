@@ -223,7 +223,7 @@ def apply_option_to_cohort(current: Any, option_id: Any) -> Dict[str, Any]:
 
     existing = dict(current) if isinstance(current, Mapping) else {}
     preset = str(existing.get("preset") or "").strip().lower()
-    if not preset or preset in {"adult_first", "adult_all"}:
+    if not preset or preset in primary_cohort.ADULT_COHORT_PRESETS:
         existing["preset"] = "all_icu"
     for field in primary_cohort.ADMISSION_ELIGIBILITY_FIELDS:
         existing.pop(field, None)

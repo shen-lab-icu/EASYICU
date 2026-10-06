@@ -40,6 +40,12 @@ SUPPORTED_COHORT_PRESETS: Tuple[str, ...] = (
 CONCEPT_DERIVED_PRESETS = frozenset(
     {"aki", "respiratory", "sepsis3", "vasopressor", "ventilation"}
 )
+#: Presets whose name states an adult population.  The adult age floor is
+#: part of the preset, as one stay per patient is part of ``adult_first``:
+#: the preset alone, or a stated minimum age below the floor, would otherwise
+#: admit children under a label that says adults.
+ADULT_COHORT_PRESETS = frozenset({"adult_all", "adult_first"})
+ADULT_AGE_FLOOR_YEARS = 18
 #: A concept-derived population admits a stay on a positive concept row timed
 #: at or before the end of its window, in hours after ICU admission.  Rows the
 #: loader reads before admission count; rows after the window do not, so who
@@ -188,17 +194,18 @@ def normalize_execution_cohort(cohort: Any) -> Dict[str, Any]:
     if preset == "icd" and not include and not exclude:
         raise PrimaryCohortContractError("empty_icd_filter", {"preset": preset})
 
+    adult = preset in ADULT_COHORT_PRESETS
     age_min = _coerce_int(
         raw.get("age_min"),
-        18 if preset == "adult_first" else 0,
+        ADULT_AGE_FLOOR_YEARS if adult else 0,
         0,
         120,
     )
     age_max = _coerce_int(raw.get("age_max"), 100, 0, 120)
     if age_min > age_max:
         age_min, age_max = age_max, age_min
-    if preset == "adult_first":
-        age_min = max(18, age_min)
+    if adult:
+        age_min = max(ADULT_AGE_FLOOR_YEARS, age_min)
     min_los = _coerce_int(raw.get("min_icu_los_hours"), 0, 0, 24 * 30)
     observation_window = _coerce_int(
         raw.get("observation_window_hours"),
@@ -319,7 +326,7 @@ def normalize_primary_cohort_scope(
     raw = dict(cohort) if isinstance(cohort, Mapping) else {}
     execution = normalize_execution_cohort(raw)
     preset = str(execution["preset"])
-    if preset in {"adult_first", "adult_all"}:
+    if preset in ADULT_COHORT_PRESETS:
         population = {"kind": "all_icu", "definition": "all_bound_icu_stays"}
     elif preset in CONCEPT_DERIVED_PRESETS:
         population = {"kind": "concept_derived", "definition": preset}
@@ -441,6 +448,8 @@ def planning_selection_mode(cohort: Any) -> Optional[str]:
 __all__ = [
     "cohort_required_concepts",
     "ADMISSION_ELIGIBILITY_FIELDS",
+    "ADULT_AGE_FLOOR_YEARS",
+    "ADULT_COHORT_PRESETS",
     "CONCEPT_DERIVED_PRESETS",
     "DEFAULT_OBSERVATION_WINDOW_HOURS",
     "DIAGNOSIS_ELIGIBILITY_FIELDS",
