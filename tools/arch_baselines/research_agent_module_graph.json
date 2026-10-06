@@ -1217,6 +1217,10 @@
     ],
     [
       "easyicu.research_agent.agents.progressive_prompt_contracts",
+      "easyicu.research_agent.research_context.typed"
+    ],
+    [
+      "easyicu.research_agent.agents.progressive_prompt_contracts",
       "easyicu.research_agent.schema"
     ],
     [
@@ -13436,7 +13440,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3351,
+    "edge_count": 3352,
     "largest_scc_size": 0,
     "module_count": 777,
     "package_count": 36,

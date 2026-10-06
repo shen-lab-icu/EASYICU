@@ -164,6 +164,7 @@ from .family_spec_planner import FAMILY_SPEC_STRATEGY, run_family_spec_attempt
 from .progressive_prompt_contracts import (
     custom_analysis_step_shape as _custom_analysis_step_shape,
     foundation_shape_contract as _foundation_shape_contract,
+    declared_cohort_concept_domains,
     source_selection_statement,
     outline_shape_contract as _outline_shape_contract,
     selected_counts_only_inference_coordinate as _selected_counts_only_inference_coordinate,
@@ -2875,6 +2876,7 @@ class ProgressivePlannerAgent:
             context,
             outline.design_selection,
         )
+        cohort_concept_ids = progressive_cohort_concept_ids(context, variables)
         blocks = [
             "PROGRESSIVE PLAN-FOUNDATION AUTHORITY",
             "Host-validated outline and digest:\n"
@@ -2895,8 +2897,11 @@ class ProgressivePlannerAgent:
                 required_cohort_name=required_cohort_name,
                 required_binary_display_label_scopes=required_label_scopes,
                 required_reader_display_label_keys=required_label_keys,
-                cohort_concept_ids=progressive_cohort_concept_ids(context, variables),
+                cohort_concept_ids=cohort_concept_ids,
                 source_selection=source_selection_statement(context),
+                cohort_concept_domains=declared_cohort_concept_domains(
+                    context, cohort_concept_ids
+                ),
             ),
         ]
         if required_label_keys:
@@ -4937,6 +4942,7 @@ class ProgressivePlannerAgent:
                 )
                 return parsed
 
+            reminder_concept_ids = progressive_cohort_concept_ids(context, variables)
             foundation_materialization = call_llm_with_structured_retry(
                 self.llm,
                 foundation_messages,
@@ -4961,8 +4967,11 @@ class ProgressivePlannerAgent:
                     ),
                     required_binary_display_label_scopes=required_label_scopes,
                     required_reader_display_label_keys=required_label_keys,
-                    cohort_concept_ids=progressive_cohort_concept_ids(context, variables),
+                    cohort_concept_ids=reminder_concept_ids,
                     source_selection=source_selection_statement(context),
+                    cohort_concept_domains=declared_cohort_concept_domains(
+                        context, reminder_concept_ids
+                    ),
                 )
                 + "\nReturn exactly one ProgressiveFoundationMaterialization; "
                 "never flatten foundation fields into the response root.",
