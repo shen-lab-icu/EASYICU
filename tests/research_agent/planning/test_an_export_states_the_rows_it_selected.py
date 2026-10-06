@@ -4,8 +4,11 @@ A context's inclusion and exclusion criteria are the contracts the source
 export applied.  A context written before the Web caller declared only typed
 criteria also carries the study's own cohort wording there, and the same
 words, verbatim, in ``data_constraints.cohort``.  Nothing executes prose, so
-those words select no row.  Fixtures are synthetic; the populations they name
-vary so that no rule keys on one condition.
+those words select no row.  The criteria are known to be applied, and to be
+the whole selection, only when the host records the export's selection
+(``data_constraints.source_selection``); without that record only the
+criteria the host applied itself are.  Fixtures are synthetic; the
+populations they name vary so that no rule keys on one condition.
 """
 
 from __future__ import annotations
@@ -191,3 +194,106 @@ def test_an_export_without_criteria_or_concept_selects_no_row() -> None:
     assert selection.contracts == AppliedContracts()
     assert selection.concept_population is None
     assert not selection.selects_rows
+
+
+# The host's record of the selection --------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("record", "recorded"),
+    [
+        ({"recorded": True, "host_applied": []}, True),
+        ({"recorded": True}, True),
+        ({"recorded": False, "host_applied": []}, False),
+        ({"recorded": "true"}, False),
+        ({"recorded": 1}, False),
+        (["recorded"], False),
+        (None, False),
+    ],
+    ids=["recorded", "recorded, no host list", "not recorded", "a string", "a number", "a list", "no record"],
+)
+def test_a_selection_is_whole_and_applied_only_when_the_host_records_it(
+    record: object, recorded: bool
+) -> None:
+    selection = export_applied_selection(
+        _context(
+            inclusion=_TYPED_INCLUSION,
+            exclusion=_TYPED_EXCLUSION,
+            constraints={"source_selection": record} if record is not None else None,
+        )
+    )
+
+    assert selection.recorded is recorded
+    assert selection.contracts == AppliedContracts(
+        inclusion=_TYPED_INCLUSION, exclusion=_TYPED_EXCLUSION
+    )
+    assert selection.known_applied == (selection.contracts if recorded else AppliedContracts())
+    assert selection.unverified == (AppliedContracts() if recorded else selection.contracts)
+
+
+def test_the_hosts_own_criteria_are_applied_without_a_record() -> None:
+    selection = export_applied_selection(
+        _context(
+            inclusion=_TYPED_INCLUSION,
+            exclusion=_TYPED_EXCLUSION,
+            constraints={
+                "source_selection": {
+                    "recorded": False,
+                    # Named as the context states them; other names add nothing.
+                    "host_applied": [
+                        f"  {_TYPED_EXCLUSION[0]}\n",
+                        "a criterion no context field states",
+                        7,
+                    ],
+                }
+            },
+        )
+    )
+
+    assert selection.host_applied == AppliedContracts(exclusion=_TYPED_EXCLUSION)
+    assert selection.known_applied == AppliedContracts(exclusion=_TYPED_EXCLUSION)
+    assert selection.unverified == AppliedContracts(inclusion=_TYPED_INCLUSION)
+
+
+def test_a_criterion_the_host_names_is_applied_on_the_side_the_context_states_it() -> None:
+    selection = export_applied_selection(
+        _context(
+            inclusion=("first ICU stay per patient", *_TYPED_INCLUSION),
+            constraints={"source_selection": {"host_applied": ["first ICU stay per patient"]}},
+        )
+    )
+
+    assert selection.known_applied == AppliedContracts(inclusion=("first ICU stay per patient",))
+    assert selection.unverified == AppliedContracts(inclusion=_TYPED_INCLUSION)
+
+
+@pytest.mark.parametrize(
+    "listed",
+    [_TYPED_EXCLUSION[0], {"exclusion": list(_TYPED_EXCLUSION)}, None],
+    ids=["a string", "a mapping", "none"],
+)
+def test_a_host_list_of_another_shape_names_no_criterion(listed: object) -> None:
+    selection = export_applied_selection(
+        _context(exclusion=_TYPED_EXCLUSION, constraints={"source_selection": {"host_applied": listed}})
+    )
+
+    assert selection.host_applied == AppliedContracts()
+    assert selection.unverified == AppliedContracts(exclusion=_TYPED_EXCLUSION)
+
+
+@pytest.mark.parametrize("wording", _WORDING)
+def test_the_studys_wording_named_by_the_host_is_still_wording(wording: dict[str, str]) -> None:
+    words = next(iter(wording.values()))
+
+    selection = export_applied_selection(
+        _context(
+            inclusion=(words,),
+            constraints={
+                "cohort": wording,
+                "source_selection": {"recorded": False, "host_applied": [words]},
+            },
+        )
+    )
+
+    assert selection.contracts == AppliedContracts()
+    assert selection.host_applied == AppliedContracts()

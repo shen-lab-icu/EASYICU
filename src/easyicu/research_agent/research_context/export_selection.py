@@ -11,6 +11,18 @@ Nothing executes prose.  The same words reach the Planner verbatim in
 study's wording, not a contract.  A concept-derived population is selected
 by the export too (``concept_cohort_window``).
 
+Criteria the context does not state are not therefore unapplied: a preset
+such as ``adult_first`` applies its age bound and first-stay restriction
+without a typed field, and a prepared package may carry any selection.  So
+the selection counts as complete only when the host records it,
+``data_constraints.source_selection.recorded`` being ``true`` because the
+bound export's manifest states its cohort contract.  Without that record,
+what the export selected is unknown, not empty, and a stated criterion is
+declared, not known to be applied.  The exception is a criterion the host
+applies itself, whatever the export did (the first-stay restriction on
+verified stay coordinates): the record lists it in ``host_applied``, verbatim
+as the context states it.
+
 Planning and reporting read the export's selection here, so both state the
 same rows as already selected.
 """
@@ -46,6 +58,13 @@ class ExportAppliedSelection:
 
     contracts: AppliedContracts
     concept_population: ConceptCohortWindow | None
+    #: Whether the host recorded the export's whole selection.  When it did
+    #: not, the criteria above are what the context declares, not a complete
+    #: account, and an empty selection means unknown.
+    recorded: bool = False
+    #: The contracts above that the host applied itself, whatever the export
+    #: did; they are applied even when the selection is not recorded.
+    host_applied: AppliedContracts = AppliedContracts()
 
     @property
     def selects_rows(self) -> bool:
@@ -57,6 +76,22 @@ class ExportAppliedSelection:
             or self.concept_population is not None
         )
 
+    @property
+    def known_applied(self) -> AppliedContracts:
+        """The contracts known to be applied: all when recorded, else the host's."""
+
+        return self.contracts if self.recorded else self.host_applied
+
+    @property
+    def unverified(self) -> AppliedContracts:
+        """The contracts declared but not known to be applied."""
+
+        known = self.known_applied
+        return AppliedContracts(
+            inclusion=tuple(item for item in self.contracts.inclusion if item not in known.inclusion),
+            exclusion=tuple(item for item in self.contracts.exclusion if item not in known.exclusion),
+        )
+
 
 def export_applied_selection(context: ResearchContext) -> ExportAppliedSelection:
     """The selection the source export applied to the context's input rows.
@@ -66,12 +101,30 @@ def export_applied_selection(context: ResearchContext) -> ExportAppliedSelection
     """
 
     wording = _study_cohort_wording(context)
+    contracts = AppliedContracts(
+        inclusion=_contracts(context.cohort.inclusion_criteria, wording),
+        exclusion=_contracts(context.cohort.exclusion_criteria, wording),
+    )
+    record = context_data_constraints(context).get("source_selection")
+    if not isinstance(record, Mapping):
+        record = {}
     return ExportAppliedSelection(
-        contracts=AppliedContracts(
-            inclusion=_contracts(context.cohort.inclusion_criteria, wording),
-            exclusion=_contracts(context.cohort.exclusion_criteria, wording),
-        ),
+        contracts=contracts,
         concept_population=concept_cohort_window(context),
+        recorded=record.get("recorded") is True,
+        host_applied=_host_applied(record.get("host_applied"), contracts),
+    )
+
+
+def _host_applied(listed: Any, contracts: AppliedContracts) -> AppliedContracts:
+    """The contracts the record marks as the host's own; other names are ignored."""
+
+    if not isinstance(listed, Sequence) or isinstance(listed, str):
+        return AppliedContracts()
+    names = {value.strip() for value in listed if isinstance(value, str)}
+    return AppliedContracts(
+        inclusion=tuple(item for item in contracts.inclusion if item in names),
+        exclusion=tuple(item for item in contracts.exclusion if item in names),
     )
 
 
