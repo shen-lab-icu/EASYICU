@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from ..research_context.concept_population import ConceptCohortWindowError
 from ..research_context.export_selection import export_applied_selection
+from ..research_context.typed import declared_domain_for_variable
 from ..schema import ResearchContext
 from ..planning.progressive_contract import (
     COORDINATE_OWNED_STEP_FIELDS,
@@ -300,6 +301,49 @@ def source_selection_statement(context: ResearchContext) -> str | None:
     return "contracts" if selection.selects_rows else "none"
 
 
+def declared_cohort_concept_domains(
+    context: ResearchContext, cohort_concept_ids: Sequence[str]
+) -> dict[str, list[Any]]:
+    """The declared value set of each allowed cohort concept that has one.
+
+    A predicate whose concept is itself a context column compares that
+    column's value, so under max, min, first or last it can only meet a value
+    the column's owner declares.  The set is the one
+    ``declared_domain_for_variable`` gives the Planner's data cards, the
+    compiler and the plan review: a declared ordinal scale, or the concept
+    dictionary's levels (a logical event status declares 0 and 1).  A level
+    observed in the cohort is never listed, since the outbound boundary
+    describes observed values by shape only.  A concept that is not itself a
+    column, or whose column has no declared set, has no entry.
+    """
+
+    domains: dict[str, list[Any]] = {}
+    for concept_id in cohort_concept_ids:
+        variable = context.variable(concept_id)
+        if variable is None:
+            continue
+        declared, _basis = declared_domain_for_variable(variable)
+        if declared:
+            domains[concept_id] = list(declared)
+    return domains
+
+
+#: A declared set longer than this that is a run of consecutive integers is
+#: shown by its ends, so a wide ordinal scale does not crowd the prompt.
+_LISTED_DECLARED_LEVELS = 16
+
+
+def _declared_domain_projection(levels: Sequence[Any]) -> Any:
+    values = list(levels)
+    if (
+        len(values) > _LISTED_DECLARED_LEVELS
+        and all(isinstance(value, int) and not isinstance(value, bool) for value in values)
+        and values == list(range(values[0], values[0] + len(values)))
+    ):
+        return {"integers_from": values[0], "to": values[-1]}
+    return values
+
+
 def foundation_shape_contract(
     *,
     outline_sha256: str,
@@ -310,6 +354,7 @@ def foundation_shape_contract(
     required_reader_display_label_keys: Sequence[str] = (),
     cohort_concept_ids: Sequence[str] = (),
     source_selection: str | None = None,
+    cohort_concept_domains: Mapping[str, Sequence[Any]] | None = None,
 ) -> str:
     """Project the exact foundation envelope without adding case science.
 
@@ -326,6 +371,11 @@ def foundation_shape_contract(
     once attributed the population the study names to "the supplied
     source-cohort eligibility" and left it unapplied.  A context without a
     record is not described either way.
+
+    The declared value set of an allowed concept
+    (``declared_cohort_concept_domains``) is listed beside the ids.  Without
+    it, a Planner read "SOFA >=2" in a 0/1 diagnosis flag's description and
+    required the flag to be at least 2, a predicate no row meets.
     """
 
     predicate_shape = {
@@ -402,6 +452,11 @@ def foundation_shape_contract(
             "know_how_decisions": [],
         },
     }
+    listed_domains = {
+        concept_id: _declared_domain_projection(levels)
+        for concept_id, levels in (cohort_concept_domains or {}).items()
+        if concept_id in cohort_concept_ids and levels
+    }
     cohort_instruction = (
         "The cohort object shown above is caller-bound; copy it exactly."
         if host_cohort is not None
@@ -454,6 +509,19 @@ def foundation_shape_contract(
             + json.dumps(list(cohort_concept_ids), ensure_ascii=False)
             + "."
             if states_population and cohort_concept_ids
+            else ""
+        )
+        + (
+            "\nDeclared value sets of allowed cohort concepts (each concept "
+            "owner's declaration, not values observed in any row): "
+            + json.dumps(listed_domains, ensure_ascii=False, separators=(",", ":"))
+            + ". Under max, min, first or last, a predicate on one of these "
+            "concepts reads one of its declared values: compare it with those "
+            "values, never with a number from the concept's description, which "
+            "states how the concept is defined. A comparison that no declared "
+            "value meets selects no row, and one that every declared value "
+            "meets restricts nothing."
+            if states_population and listed_domains
             else ""
         )
         + (
@@ -652,8 +720,10 @@ def step_materialization_shape_contract(
 
 __all__ = [
     "custom_analysis_step_shape",
+    "declared_cohort_concept_domains",
     "foundation_shape_contract",
     "outline_shape_contract",
     "selected_counts_only_inference_coordinate",
+    "source_selection_statement",
     "step_materialization_shape_contract",
 ]
