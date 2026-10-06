@@ -71,6 +71,11 @@ from ..contracts.source_feasibility_validation import (
     context_declares_source_feasibility_scope,
 )
 from ..literature import LiteratureBundle, manuscript_citable_records
+from ..research_context.concept_population import (
+    ConceptCohortWindowError,
+    concept_cohort_window,
+)
+from ..research_context.minimum_stay import minimum_icu_stay_hours
 from ..research_context.temporal_semantics import (
     normalise_time_anchor,
     primary_exposure_time_anchor_alignment,
@@ -86,6 +91,7 @@ from ..trajectory.runtime_validation import (
     signed_trajectory_plan_claimed,
     signed_trajectory_plan_contract_errors,
 )
+from .cohort_eligibility import eligibility_after_time_zero
 from .figure_strategy import ArticleFigureStrategy
 from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
 
@@ -93,6 +99,7 @@ from .adjustment_authority import (
     AdjustmentSetAuthority,
     host_outer_feature_window_end_hours,
     owner_declared_baseline_static,
+    primary_landmark_hours,
 )
 from .analysis_types import (
     canonical_analysis_family,
@@ -2700,6 +2707,102 @@ def trajectory_representation_findings(
     ]
 
 
+def plan_time_zero_hours(
+    context: ResearchContext,
+    trajectory_representation: Optional[Mapping[str, Any]],
+    runtime_authority: CurrentCaseScientificRuntimeAuthority | None,
+) -> Optional[float]:
+    """Hours after ICU admission at which the plan's analysis starts, if typed.
+
+    A trajectory plan's time zero is its window's end: the trajectory
+    population design decides the plan's own predicates by then too.
+    Otherwise the family-spec request's order (``cohort_time_zero_hours``)
+    holds: the study's declared landmark, else the signed runtime authority's,
+    else the end of the host-bound feature window.
+    """
+
+    window = (trajectory_representation or {}).get("trajectory_window") or {}
+    if window.get("executable") and window.get("window_end_hours") is not None:
+        return float(window["window_end_hours"])
+    signed = getattr(runtime_authority, "landmark_hours", None)
+    signed_landmark = (
+        float(signed) if isinstance(signed, (int, float)) and not isinstance(signed, bool) else None
+    )
+    return (
+        primary_landmark_hours(context)
+        or signed_landmark
+        or host_outer_feature_window_end_hours(context)
+    )
+
+
+def cohort_eligibility_findings(
+    context: ResearchContext,
+    trajectory_representation: Optional[Mapping[str, Any]],
+    runtime_authority: CurrentCaseScientificRuntimeAuthority | None,
+) -> list[PlanScientificFinding]:
+    """Refuse a plan whose source export decides membership after its time zero.
+
+    The export's concept population and typed minimum ICU stay must be decided
+    by the plan's time zero (``planning.cohort_eligibility``, the rule the
+    family-spec request applies before planning).  A concept-population record
+    the review cannot read is refused on its own: its remedy is the export's
+    record, not the window.
+    """
+
+    try:
+        concept = concept_cohort_window(context)
+    except ConceptCohortWindowError as exc:
+        return [
+            PlanScientificFinding(
+                code="CONCEPT_POPULATION_RECORD_UNREADABLE",
+                severity="blocker",
+                dimension="icu_clinical_design",
+                message=(
+                    "The source export's concept-population record cannot be read "
+                    f"({exc}), so the review cannot confirm when the export decided "
+                    "who is in the cohort."
+                ),
+                evidence_refs=["research_context.json.user_preferences.data_constraints"],
+                remediation=(
+                    "Prepare the study's export again so the host restates its "
+                    "concept-population record, then review a fresh plan."
+                ),
+                remediation_route="study_authority_change",
+            )
+        ]
+    return [
+        PlanScientificFinding(
+            code="COHORT_ELIGIBILITY_AFTER_TIME_ZERO",
+            severity="blocker",
+            dimension="icu_clinical_design",
+            message=(
+                f"Cohort eligibility is decided after the plan's time zero: {found.message()}. "
+                f"Membership decided by {found.time_zero_hours:g} h, such as a positive "
+                "record within the window, is allowed; only a criterion decided later is not."
+            ),
+            evidence_refs=[
+                "research_context.json.user_preferences.data_constraints",
+                "analysis_plan.json",
+            ],
+            remediation=(
+                "Change the study so the export decides membership by "
+                f"{found.time_zero_hours:g} h after ICU admission (end its concept window or "
+                f"minimum ICU stay there), or move the analysis time zero to "
+                f"{found.decided_by_hours:g} h or later; then prepare the export again and "
+                "review a fresh plan."
+            ),
+            remediation_route="study_authority_change",
+        )
+        for found in eligibility_after_time_zero(
+            time_zero_hours=plan_time_zero_hours(
+                context, trajectory_representation, runtime_authority
+            ),
+            minimum_icu_hours=minimum_icu_stay_hours(context),
+            concept_population=concept,
+        )
+    ]
+
+
 def build_plan_scientific_review(
     *,
     context: ResearchContext,
@@ -2877,6 +2980,9 @@ def build_plan_scientific_review(
     findings.extend(trajectory_representation_findings(trajectory_representation))
     survival_suite = landmark_survival_suite_facts(context, plan)
     findings.extend(landmark_survival_suite_findings(survival_suite))
+    findings.extend(
+        cohort_eligibility_findings(context, trajectory_representation, runtime_authority)
+    )
     required_source_columns = {
         context.primary_exposure, context.target_outcome,
         *context.cohort.outcome_columns,

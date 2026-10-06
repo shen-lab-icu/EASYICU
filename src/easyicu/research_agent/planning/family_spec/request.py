@@ -24,10 +24,12 @@ from ...contracts.sealed_suite_robustness import (
     prevalence_sensitivity_cutoffs_hours,
 )
 from ...research_context.concept_population import (
+    ConceptCohortWindow,
     ConceptCohortWindowError,
     concept_cohort_window,
     context_data_constraints,
 )
+from ...research_context.minimum_stay import minimum_icu_stay_hours
 from ...schema import ResearchContext
 from ...trajectory.plan_contract import trajectory_context_is_bound
 from ..accepted_analysis_inputs import analysis_input_value_columns
@@ -36,6 +38,7 @@ from ..analysis_types import (
     requested_exposure_occurrence_cues,
 )
 from ..baseline_requirements import baseline_requirement_projection
+from ..cohort_eligibility import eligibility_after_time_zero
 from ..adjustment_authority import (
     AdjustmentSetAuthority,
     adjusted_model_term_planning_authority,
@@ -367,8 +370,7 @@ def _typed_cohort_fields(
     cohort = _typed_cohort_constraints(context)
     age_min = _optional_number(cohort.get("age_min"))
     age_max = _optional_number(cohort.get("age_max"))
-    minimum = _optional_number(cohort.get("min_icu_los_hours"))
-    minimum_icu_hours = minimum if minimum is not None and minimum > 0 else None
+    minimum_icu_hours = minimum_icu_stay_hours(context)
     typed = any(value is not None for value in (age_min, age_max, minimum_icu_hours))
     if required_primary_cohort_selection_mode in {"all_input_rows", "predicate_filtered"}:
         selection_mode = required_primary_cohort_selection_mode
@@ -1100,34 +1102,26 @@ def _refuse_unfilterable_cohort(request: FamilySpecRequest) -> None:
 def _refuse_eligibility_after_time_zero(request: FamilySpecRequest) -> None:
     """Cohort eligibility must be decided by the plan's time zero.
 
-    A stay reaches a typed minimum ICU stay exactly when it is still in the
-    ICU at that hour, so a minimum beyond time zero would select on survival
-    after it.  A concept-derived population admits a stay on a positive row up
-    to its window's end, so a window ending after time zero would select on
-    what happens after it; a window ending at time zero has decided membership
-    by then.  The host refuses either selection instead of fitting a plan on
-    that population.
+    The rule is ``planning.cohort_eligibility``'s, which the scientific review
+    also applies to a plan from any planner.  The host refuses the request's
+    first such selection instead of fitting a plan on that population.
     """
 
-    minimum = request.minimum_icu_hours
-    time_zero = request.cohort_time_zero_hours
-    if minimum is not None and time_zero is not None and minimum > time_zero:
-        raise FamilySpecError(
-            "family_spec_cohort_eligibility_after_time_zero",
-            f"a minimum ICU stay of {minimum:g} h ends after the plan's time zero at "
-            f"{time_zero:g} h after ICU admission; eligibility would depend on survival "
-            "after time zero",
-            path="cohort",
-        )
     window_end = request.concept_cohort_window_end_hours
-    if window_end is not None and time_zero is not None and window_end > time_zero:
+    concept = (
+        ConceptCohortWindow(
+            definition=request.concept_cohort_definition, window_end_hours=window_end
+        )
+        if window_end is not None
+        else None
+    )
+    for found in eligibility_after_time_zero(
+        time_zero_hours=request.cohort_time_zero_hours,
+        minimum_icu_hours=request.minimum_icu_hours,
+        concept_population=concept,
+    ):
         raise FamilySpecError(
-            "family_spec_cohort_eligibility_after_time_zero",
-            f"the {request.concept_cohort_definition} population admits a stay on a positive "
-            f"row up to {window_end:g} h after ICU admission, after the plan's time zero at "
-            f"{time_zero:g} h; eligibility would depend on what happens after time zero, so "
-            f"the study's cohort window must end by {time_zero:g} h",
-            path="cohort",
+            "family_spec_cohort_eligibility_after_time_zero", found.message(), path="cohort"
         )
 
 
