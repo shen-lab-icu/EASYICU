@@ -64,6 +64,7 @@ from .landmark_categorical_template import (
     _label,
     _method_card_elements,
     _method_card_ids,
+    stated_population_sentence,
 )
 from .plan_language import listing, plan_language, sentence
 
@@ -305,7 +306,8 @@ def _design_selection(
         ),
         reviewable_plan=(
             [
-                f"研究队列；{unit_text_zh}；纳入在 {landmark_zh} landmark 时存活且终点有效的入住。",
+                f"研究队列；{unit_text_zh}；纳入在 {landmark_zh} landmark 时存活且终点有效的入住。"
+                + stated_population_sentence(spec.population, language),
                 (
                     f"截至 {landmark_zh} 新发的 {exposure}，以暴露首次记录为阳性的时间计；首次阳性记录在"
                     "时间零点及以前的暴露按已存在暴露排除。"
@@ -324,7 +326,8 @@ def _design_selection(
             if language == "zh"
             else [
                 f"The study cohort; {unit_text}; stays alive at the {landmark} landmark with a valid "
-                "endpoint.",
+                "endpoint."
+                + stated_population_sentence(spec.population, language),
                 f"Incident {exposure} by {landmark}, timed by its first record"
                 + (" as present; exposure first recorded as present " if present
                    else "; exposure first recorded ")
@@ -619,7 +622,7 @@ def build_landmark_survival_skeleton(
     foundation = ProgressiveFoundationMaterialization(
         outline_sha256=outline_sha256,
         foundation=ProgressivePlanFoundation(
-            cohort=_cohort_intent(request),
+            cohort=_cohort_intent(request, spec.population),
             display_labels=[
                 ProgressiveDisplayLabel(key=key, value=value)
                 for key, value in spec.labels.items()

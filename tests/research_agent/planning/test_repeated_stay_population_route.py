@@ -77,6 +77,9 @@ def _request_for(context):
         select_progressive_variables,
     )
     from easyicu.research_agent.planning.family_spec import build_family_spec_request
+    from easyicu.research_agent.planning.progressive_compiler import (
+        progressive_cohort_concept_ids,
+    )
 
     from .family_spec_fixtures import ALLOWED_CITATIONS, DIRECT_COMPARATORS
 
@@ -87,6 +90,7 @@ def _request_for(context):
         allowed_literature_citation_keys=ALLOWED_CITATIONS,
         direct_comparator_literature_keys=DIRECT_COMPARATORS,
         comparison_literature_keys=DIRECT_COMPARATORS,
+        cohort_concept_ids=progressive_cohort_concept_ids(context, select_progressive_variables(context)),
     )
 
 

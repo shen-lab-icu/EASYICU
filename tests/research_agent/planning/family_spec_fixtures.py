@@ -15,6 +15,7 @@ from easyicu.research_agent.agents.progressive_planner import (
 )
 from easyicu.research_agent.contracts.endpoint import EndpointSpec
 from easyicu.research_agent.planning.family_spec import build_family_spec_request
+from easyicu.research_agent.planning.progressive_compiler import progressive_cohort_concept_ids
 from easyicu.research_agent.planning.sensitivity_authority import (
     PrespecifiedSensitivitySpec,
 )
@@ -486,6 +487,8 @@ def _context(*, exact: bool = True) -> ResearchContext:
 
 
 def _request(context: ResearchContext, *, cohort_mode: str = "predicate_filtered"):
+    """The request the family Planner seals for this context, cohort concepts included."""
+
     types = candidate_analysis_types(context)
     variables = select_progressive_variables(context)
     return build_family_spec_request(
@@ -496,6 +499,7 @@ def _request(context: ResearchContext, *, cohort_mode: str = "predicate_filtered
         direct_comparator_literature_keys=DIRECT_COMPARATORS,
         comparison_literature_keys=DIRECT_COMPARATORS,
         required_primary_cohort_selection_mode=cohort_mode,
+        cohort_concept_ids=progressive_cohort_concept_ids(context, variables),
     )
 
 

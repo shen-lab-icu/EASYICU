@@ -48,7 +48,7 @@ def _signed_before_the_onset(authority):
 
 def _selected_design(context, authorities):
     request = sealed_request(context, authorities)
-    spec = SimpleNamespace(labels={}, literature_design_decisions=[])
+    spec = SimpleNamespace(labels={}, literature_design_decisions=[], population=None)
     selection = survival_template._design_selection(
         request, spec, method_keys=["strobe_2007"], roster=[]
     )

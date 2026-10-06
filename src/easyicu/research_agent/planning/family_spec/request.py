@@ -63,6 +63,7 @@ from .contract import (
     PREDICTION_FAMILY_ID,
     MAX_EXPOSURE_LEVELS,
     MAX_FIT_FEATURES,
+    POPULATION_FAMILY_IDS,
     SEALED_SUITE_FAMILY_IDS,
     SOURCE_FEASIBILITY_FAMILY_ID,
     AcceptedBaselineRow,
@@ -352,15 +353,15 @@ def _concept_cohort_window(context: ResearchContext) -> dict[str, Any]:
 def _typed_cohort_fields(
     context: ResearchContext,
     required_primary_cohort_selection_mode: str | None,
-    *,
-    require_typed_bound: bool,
 ) -> dict[str, Any]:
     """The primary cohort's typed row bounds and the selection mode they imply.
 
     Age bounds and a minimum ICU stay are the only typed predicates a family
-    template applies; prose criteria are not authority.  A minimum stay is
-    checked against ``los_icu``, the stay-level duration the predicate reads,
-    so a roster without it fails here instead of losing the criterion.
+    template applies itself; prose criteria are not authority.  A minimum stay
+    is checked against ``los_icu``, the stay-level duration the predicate
+    reads, so a roster without it fails here instead of losing the criterion.
+    Whether a caller-bound filtered cohort has anything to filter it by is
+    decided once its population authority is bound.
     """
 
     cohort = _typed_cohort_constraints(context)
@@ -373,13 +374,6 @@ def _typed_cohort_fields(
         selection_mode = required_primary_cohort_selection_mode
     else:
         selection_mode = "predicate_filtered" if typed else "all_input_rows"
-    if require_typed_bound and selection_mode == "predicate_filtered" and not typed:
-        raise FamilySpecError(
-            "family_spec_cohort_predicate_unavailable",
-            "a predicate-filtered primary cohort needs a typed age bound or minimum ICU "
-            "stay in data_constraints.cohort; prose criteria are not authority",
-            path="cohort",
-        )
     if minimum_icu_hours is not None and not any(
         variable.name == "los_icu" for variable in context.variables
     ):
@@ -768,8 +762,13 @@ def build_family_spec_request(
     required_primary_cohort_selection_mode: str | None = None,
     planning_contract_context: str = "",
     literature_design_cards: Sequence[LiteratureDesignEvidenceCard] = (),
+    cohort_concept_ids: Sequence[str] = (),
 ) -> FamilySpecRequest:
-    """Seal the host authority for one family attempt, before any Planner call."""
+    """Seal the host authority for one family attempt, before any Planner call.
+
+    ``cohort_concept_ids`` are the run's cohort concepts, the roster the
+    progressive transport offers; without them no population is offered.
+    """
 
     request = _family_spec_request(
         context,
@@ -785,8 +784,72 @@ def build_family_spec_request(
     request = _bind_accepted_feature_groups(context, request)
     request = _bind_accepted_baseline_rows(context, request)
     request = _bind_literature_design_cards(request, literature_design_cards)
+    request = _bind_population_authority(
+        context,
+        request,
+        cohort_concept_ids=cohort_concept_ids,
+        required_primary_cohort_selection_mode=required_primary_cohort_selection_mode,
+    )
+    _refuse_unfilterable_cohort(request)
     _refuse_eligibility_after_time_zero(request)
     return request
+
+
+#: The study's own cohort wording the Planner reads as a population source.
+_STUDY_COHORT_WORDING_KEYS = ("label", "review", "exclusion_statement")
+_STUDY_COHORT_WORDING_MAX = 1200
+
+
+def _study_cohort_wording(context: ResearchContext) -> dict[str, str]:
+    """The study's cohort in its own words, each at most 1,200 characters."""
+
+    cohort = _typed_cohort_constraints(context)
+    wording: dict[str, str] = {}
+    for key in _STUDY_COHORT_WORDING_KEYS:
+        value = cohort.get(key)
+        if isinstance(value, str) and value.strip():
+            wording[key] = " ".join(value.split())[:_STUDY_COHORT_WORDING_MAX]
+    return wording
+
+
+def _bind_population_authority(
+    context: ResearchContext,
+    request: FamilySpecRequest,
+    *,
+    cohort_concept_ids: Sequence[str],
+    required_primary_cohort_selection_mode: str | None,
+) -> FamilySpecRequest:
+    """Offer the cohort concepts a population the study states may read.
+
+    The template applies only the typed cohort bounds.  A population the
+    question or the study's own cohort wording states beyond them is applied
+    only by predicates the Planner writes, so the request offers the run's
+    cohort concepts and that wording.  Nothing is offered when the caller
+    binds every input row (that cohort is the population), when the family's
+    cohort is its sealed suite's, or when the family decides nothing by a time
+    zero.
+    """
+
+    concepts = list(
+        dict.fromkeys(
+            str(value).strip() for value in cohort_concept_ids if str(value or "").strip()
+        )
+    )
+    if (
+        not concepts
+        or required_primary_cohort_selection_mode == "all_input_rows"
+        or request.family_id not in POPULATION_FAMILY_IDS
+        or request.sealed_suite is not None
+        or request.cohort_time_zero_hours is None
+    ):
+        return request
+    return FamilySpecRequest.model_validate(
+        {
+            **request.model_dump(mode="json"),
+            "population_concepts": concepts,
+            "study_cohort_wording": _study_cohort_wording(context),
+        }
+    )
 
 
 def _bind_literature_design_cards(
@@ -995,6 +1058,42 @@ def _require_sealed_table_one(request: FamilySpecRequest, projection: Mapping[st
             f"describes only its adjustment columns {sorted(described)!r}, not "
             + ", ".join(repr(name) for name in dict.fromkeys(lost)),
             path="accepted_baseline_rows",
+        )
+
+
+#: Families whose template filters its cohort only by the typed bounds and the
+#: population its Planner states; the phenotyping template may also filter by
+#: its membership flag, which its spec decides.
+_BOUND_OR_STATED_FAMILY_IDS = POPULATION_FAMILY_IDS - {PHENOTYPING_FAMILY_ID}
+
+
+def _refuse_unfilterable_cohort(request: FamilySpecRequest) -> None:
+    """A caller-bound filtered cohort needs something to filter it by.
+
+    A reviewed candidate may have filtered its cohort by a population its
+    Planner stated, so the next pass is bound to a predicate-filtered cohort
+    with no typed bound.  The population the Planner states then filters it,
+    over the offered concepts.  Without typed bounds or offered concepts the
+    plan would keep every row against the caller's contract, so the host
+    refuses before any Provider call.
+    """
+
+    if (
+        request.family_id in _BOUND_OR_STATED_FAMILY_IDS
+        and request.sealed_suite is None
+        and request.cohort_selection_mode == "predicate_filtered"
+        and all(
+            value is None
+            for value in (request.age_min, request.age_max, request.minimum_icu_hours)
+        )
+        and not request.population_concepts
+    ):
+        raise FamilySpecError(
+            "family_spec_cohort_predicate_unavailable",
+            "a predicate-filtered primary cohort needs a typed age bound or minimum ICU "
+            "stay in data_constraints.cohort, or cohort concepts over which the Planner "
+            "states the study's population; prose criteria are not authority",
+            path="cohort",
         )
 
 
@@ -1271,9 +1370,7 @@ def _family_spec_request(
         )
         if name in variables and name != context.cohort.id_columns[0]
     ]
-    cohort_fields = _typed_cohort_fields(
-        context, required_primary_cohort_selection_mode, require_typed_bound=True
-    )
+    cohort_fields = _typed_cohort_fields(context, required_primary_cohort_selection_mode)
     reference_index = 0
     contrast_index = len(exposure_levels) - 1 if exposure_levels else 0
     occurrence = (
@@ -1429,9 +1526,7 @@ def _build_descriptive_request(
         for name in dict.fromkeys([exposure, outcome, *(item.name for item in candidates if item.selectable)])
         if name in variables and name != context.cohort.id_columns[0]
     ]
-    cohort_fields = _typed_cohort_fields(
-        context, required_primary_cohort_selection_mode, require_typed_bound=True
-    )
+    cohort_fields = _typed_cohort_fields(context, required_primary_cohort_selection_mode)
     return FamilySpecRequest(
         family_id=DESCRIPTIVE_FAMILY_ID,
         analysis_type="descriptive_epidemiology",
@@ -1510,9 +1605,7 @@ def _build_feasibility_request(
         if name and name != identity and name in variables
     ][:3]
     dependence = context_dependence_authority(context)
-    cohort_fields = _typed_cohort_fields(
-        context, required_primary_cohort_selection_mode, require_typed_bound=False
-    )
+    cohort_fields = _typed_cohort_fields(context, required_primary_cohort_selection_mode)
     return FamilySpecRequest(
         family_id=SOURCE_FEASIBILITY_FAMILY_ID,
         analysis_type="causal_inference",
@@ -1589,9 +1682,7 @@ def _build_trajectory_request(
         for name in dict.fromkeys([outcome, *sealed.coordinate_concepts, *sealed.descriptive_only_concepts])
         if name in variables and name != context.cohort.id_columns[0]
     ]
-    cohort_fields = _typed_cohort_fields(
-        context, required_primary_cohort_selection_mode, require_typed_bound=False
-    )
+    cohort_fields = _typed_cohort_fields(context, required_primary_cohort_selection_mode)
     return FamilySpecRequest(
         family_id=FIXED_WINDOW_TRAJECTORY_FAMILY_ID,
         analysis_type="trajectory_clustering",
@@ -1696,9 +1787,7 @@ def _build_survival_request(
         for name in dict.fromkeys([exposure, outcome, *sealed.source_columns])
         if name in variables and name != context.cohort.id_columns[0]
     ]
-    cohort_fields = _typed_cohort_fields(
-        context, required_primary_cohort_selection_mode, require_typed_bound=False
-    )
+    cohort_fields = _typed_cohort_fields(context, required_primary_cohort_selection_mode)
     return FamilySpecRequest(
         family_id=LANDMARK_SURVIVAL_FAMILY_ID,
         analysis_type="survival",
@@ -1794,9 +1883,7 @@ def _build_survival_proposal_request(
         if name in variables and name != context.cohort.id_columns[0]
     ]
     dependence = context_dependence_authority(context)
-    cohort_fields = _typed_cohort_fields(
-        context, required_primary_cohort_selection_mode, require_typed_bound=False
-    )
+    cohort_fields = _typed_cohort_fields(context, required_primary_cohort_selection_mode)
     return FamilySpecRequest(
         family_id=LANDMARK_SURVIVAL_FAMILY_ID,
         analysis_type="survival",
@@ -1940,9 +2027,7 @@ def _build_prediction_request(
         and name not in feature_names
         and str(getattr(variables[name].role, "value", variables[name].role)) == "other"
     ]
-    cohort_fields = _typed_cohort_fields(
-        context, required_primary_cohort_selection_mode, require_typed_bound=False
-    )
+    cohort_fields = _typed_cohort_fields(context, required_primary_cohort_selection_mode)
     return FamilySpecRequest(
         family_id=PREDICTION_FAMILY_ID,
         analysis_type="prediction_model",
@@ -2044,9 +2129,7 @@ def _build_phenotyping_request(
         and str(getattr(variables[name].role, "value", variables[name].role)) == "other"
     ]
     required_label_keys = [name for name in dict.fromkeys([exposure, outcome]) if name in variables]
-    cohort_fields = _typed_cohort_fields(
-        context, required_primary_cohort_selection_mode, require_typed_bound=False
-    )
+    cohort_fields = _typed_cohort_fields(context, required_primary_cohort_selection_mode)
     return FamilySpecRequest(
         family_id=PHENOTYPING_FAMILY_ID,
         analysis_type="trajectory_clustering",

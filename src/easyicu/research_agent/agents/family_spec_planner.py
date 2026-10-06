@@ -14,7 +14,7 @@ first request; on every route the parser re-validates each coordinate.
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Mapping, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence, get_args
 
 from ..canonical_json import canonical_sha256
 from ..planning.family_spec import (
@@ -39,10 +39,12 @@ from ..contracts.model_retention import MISSING_CATEGORY_SHARE_THRESHOLD
 from ..planning.family_spec.contract import (
     FAMILY_SPEC_SCHEMA_VERSION,
     LANDMARK_FAMILY_IDS,
+    POPULATION_ANCHOR,
     FamilyPlanSpec,
     FamilySpecRequest,
     literature_design_card_keys_by_dimension,
     planner_selects_adjustment,
+    population_required,
     validate_family_plan_spec,
 )
 from ..planning.literature_bindings import missing_required_method_layers
@@ -53,12 +55,15 @@ from ..planning.literature_design_authority import (
 )
 from ..planning.progressive_artifacts import ProgressivePlannerCheckpointEmitter
 from ..planning.progressive_compiler import (
+    progressive_cohort_concept_ids,
     required_binary_display_label_scopes,
     required_reader_display_label_keys,
     validate_progressive_foundation,
 )
 from ..planning.progressive_contract import (
+    ProgressiveCohortPredicate,
     ProgressivePlanCompileError,
+    ProgressivePredicateValue,
     ProgressivePlanCompileReceipt,
     ProgressivePlanOutline,
 )
@@ -86,7 +91,7 @@ FAMILY_SPEC_MAX_OUTPUT_TOKENS = 6000
 
 FAMILY_SPEC_GUIDE = """You are the EasyICU study statistician completing one typed planning spec.
 
-The host has already fixed the study family, exposure, outcome, time zero, cohort eligibility, dependence handling, sensitivity axes, and every executable step. You decide only what a statistician decides at this point:
+The host has already fixed the study family, exposure, outcome, time zero, the typed cohort bounds, dependence handling, sensitivity axes, and every executable step. You decide only what a statistician decides at this point:
 
 1. For a landmark association family: the adjustment set. Choose covariates ONLY from the candidates marked selectable, at least one whenever any is selectable. For each, give one concise clinical confounding rationale (why it can cause both the exposure and the outcome, and that it is fixed before time zero). Do not adjust for a consequence of the exposure or for the outcome. A candidate marked not selectable cannot be used, whatever the rationale; explain any omission in roster_decision_note. If the roster is an exact user-reviewed roster, return it unchanged.
    Code each covariate with one of that candidate's allowed_codings. A binary or categorical coding needs reference_level_index, the 0-based index of the reference level (below the candidate's closed_domain_size); a continuous coding takes reference_level_index null.
@@ -99,6 +104,7 @@ The host has already fixed the study family, exposure, outcome, time zero, cohor
    For the sealed source-feasibility family: no adjustment set, no roster and no labels. The reviewed protocol found the requested treatment contrast not identifiable from the current source, so the host executes only the sealed fail-closed decision; you write the comparator applications (how each screened study's design differs from what this source can support) and nothing else.
 2. Reader labels: a concise clinical label for every required variable key, derived from the sealed variable descriptions (never a restatement of the identifier). When level label keys such as `<exposure>=0` and `<exposure>=1` are required, give the two groups distinct clinical names.
 3. Comparator applications: for each screened direct comparator, one sentence on how this study is compared with it (population, exposure, time zero, estimand) without copying its design and without claiming novelty.
+4. Population, only when the request offers population concepts (otherwise omit it or return null): the host applies only the typed cohort bounds and the source export's own population. A population that the research question or the study's own cohort wording names beyond them (for example an age group, a diagnosis or syndrome, or a treatment received) is applied only by the population you state. List each restriction in population.criteria in the words that state it, with the offered concepts that express it, and apply every criterion that has concepts with at least one inclusion or exclusion predicate over one of them, anchored at icu_admission and decided by time zero (end_offset_hours at most the time zero shown). Every predicate applies a listed criterion. Give a criterion no concepts only when no offered concept expresses it. Return population null when the study includes every row the typed bounds keep. When population_required is true, the caller has bound a filtered cohort that no typed bound filters: state the population with at least one inclusion or exclusion predicate (a phenotyping plan may restrict by its membership flag instead).
 
 Return exactly one JSON object and nothing else, in the response contract attached to the request: the provided schema, or the written response shape when no schema is attached. Copy request_sha256 exactly. Never invent variables, citations, results, or significance.
 """
@@ -285,6 +291,12 @@ def family_spec_user_prompt(
                 ]
             )
         )
+    if request.population_concepts:
+        sections.append(
+            "Population authority (the host applies only what already_applied lists; a "
+            "population stated beyond it is applied only by the population you write):\n"
+            + json.dumps(_population_authority(request), ensure_ascii=False)
+        )
     if know_how_context:
         sections.append("Know-how context:\n" + know_how_context)
     if planning_contract_context:
@@ -321,6 +333,124 @@ def family_spec_messages(
 def _enum(values: Sequence[str]) -> dict[str, Any]:
     normalized = list(dict.fromkeys(str(value) for value in values if str(value)))
     return {"type": "string", "enum": normalized}
+
+
+_PREDICATE_AGGREGATIONS = list(get_args(ProgressiveCohortPredicate.model_fields["aggregation"].annotation))
+_PREDICATE_OPS = list(get_args(ProgressiveCohortPredicate.model_fields["op"].annotation))
+_PREDICATE_VALUE_MODES = list(get_args(ProgressivePredicateValue.model_fields["mode"].annotation))
+
+
+def _population_authority(request: FamilySpecRequest) -> dict[str, Any]:
+    """What the population the Planner states may read, and what is already applied."""
+
+    typed = request.cohort_selection_mode == "predicate_filtered"
+    applied = {
+        key: value
+        for key, value in (
+            ("age_min", request.age_min if typed else None),
+            ("age_max", request.age_max if typed else None),
+            ("minimum_icu_hours", request.minimum_icu_hours if typed else None),
+            ("source_concept_population", request.concept_cohort_definition),
+            ("source_concept_population_window_end_hours", request.concept_cohort_window_end_hours),
+        )
+        if value is not None
+    }
+    return {
+        "time_zero_hours_after_icu_admission": request.cohort_time_zero_hours,
+        "already_applied": applied,
+        "study_cohort_wording": dict(request.study_cohort_wording),
+        "population_concepts": list(request.population_concepts),
+        "population_required": population_required(request),
+    }
+
+
+def _population_predicate_shape() -> dict[str, Any]:
+    return {
+        "concept_id": "<one of the population concepts>",
+        "anchor": POPULATION_ANCHOR,
+        "start_offset_hours": "<number>",
+        "end_offset_hours": "<greater number, at most the time zero>",
+        "aggregation": "<" + "|".join(_PREDICATE_AGGREGATIONS) + ">",
+        "op": "<" + "|".join(_PREDICATE_OPS) + ">",
+        "value": {
+            "mode": "<" + "|".join(_PREDICATE_VALUE_MODES) + ">",
+            "string_value": None,
+            "number_value": None,
+            "boolean_value": None,
+            "string_list": [],
+            "number_list": [],
+        },
+    }
+
+
+def _population_schema(concepts: Sequence[str]) -> dict[str, Any]:
+    """The strict shape of a stated population over the offered concepts."""
+
+    predicate = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "concept_id",
+            "anchor",
+            "start_offset_hours",
+            "end_offset_hours",
+            "aggregation",
+            "op",
+            "value",
+        ],
+        "properties": {
+            "concept_id": _enum(concepts),
+            "anchor": _enum([POPULATION_ANCHOR]),
+            "start_offset_hours": {"type": "number"},
+            "end_offset_hours": {"type": "number"},
+            "aggregation": _enum(_PREDICATE_AGGREGATIONS),
+            "op": _enum(_PREDICATE_OPS),
+            "value": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "mode",
+                    "string_value",
+                    "number_value",
+                    "boolean_value",
+                    "string_list",
+                    "number_list",
+                ],
+                "properties": {
+                    "mode": _enum(_PREDICATE_VALUE_MODES),
+                    "string_value": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "number_value": {"anyOf": [{"type": "number"}, {"type": "null"}]},
+                    "boolean_value": {"anyOf": [{"type": "boolean"}, {"type": "null"}]},
+                    "string_list": {"type": "array", "items": {"type": "string"}},
+                    "number_list": {"type": "array", "items": {"type": "number"}},
+                },
+            },
+        },
+    }
+    criterion = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["criterion", "concept_ids"],
+        "properties": {
+            "criterion": {"type": "string"},
+            "concept_ids": {"type": "array", "items": _enum(concepts)},
+        },
+    }
+    return {
+        "anyOf": [
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["criteria", "inclusion", "exclusion"],
+                "properties": {
+                    "criteria": {"type": "array", "items": criterion},
+                    "inclusion": {"type": "array", "items": predicate},
+                    "exclusion": {"type": "array", "items": predicate},
+                },
+            },
+            {"type": "null"},
+        ]
+    }
 
 
 def family_spec_structured_output_request(
@@ -363,6 +493,7 @@ def family_spec_structured_output_request(
             "comparator_applications",
             *(["literature_design_decisions"] if design_cards else []),
             "roster_decision_note",
+            *(["population"] if request.population_concepts else []),
         ],
         "properties": {
             "schema_version": {"type": "string", "enum": [FAMILY_SPEC_SCHEMA_VERSION]},
@@ -463,6 +594,11 @@ def family_spec_structured_output_request(
                 else {}
             ),
             "roster_decision_note": {"type": "string"},
+            **(
+                {"population": _population_schema(request.population_concepts)}
+                if request.population_concepts
+                else {}
+            ),
         },
     }
     strictify_json_schema(schema)
@@ -586,6 +722,19 @@ def family_spec_response_shape(request: FamilySpecRequest) -> str:
             + ', and "rationale" is 12-800 characters'
         )
     lines.append('- "roster_decision_note": one or more sentences (8-1200 characters)')
+    if request.population_concepts:
+        lines.append(
+            '- "population": null, or an object with exactly the keys "criteria", "inclusion" '
+            'and "exclusion". "criteria" is an array of 1-6 objects, each exactly '
+            '{"criterion": "<2-160 characters, in the words that state it>", "concept_ids": '
+            "[0-6 distinct names from "
+            + json.dumps(list(request.population_concepts), ensure_ascii=False)
+            + ']}; "inclusion" and "exclusion" are arrays of predicates, each exactly '
+            + json.dumps(_population_predicate_shape(), ensure_ascii=False, separators=(",", ":"))
+            + ", with only the value field its mode selects filled. Every criterion with "
+            "concepts is applied by at least one predicate over one of them, and every "
+            "predicate reads a concept that a criterion names"
+        )
     return "\n".join(lines)
 
 
@@ -643,6 +792,7 @@ def run_family_spec_attempt(
         required_primary_cohort_selection_mode=required_primary_cohort_selection_mode,
         planning_contract_context=planning_contract_context,
         literature_design_cards=design_cards,
+        cohort_concept_ids=progressive_cohort_concept_ids(context, variables),
     )
     descriptions = {
         name: " ".join(
