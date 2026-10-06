@@ -164,6 +164,7 @@ from .family_spec_planner import FAMILY_SPEC_STRATEGY, run_family_spec_attempt
 from .progressive_prompt_contracts import (
     custom_analysis_step_shape as _custom_analysis_step_shape,
     foundation_shape_contract as _foundation_shape_contract,
+    recorded_source_selection,
     outline_shape_contract as _outline_shape_contract,
     selected_counts_only_inference_coordinate as _selected_counts_only_inference_coordinate,
     step_materialization_shape_contract as _step_materialization_shape_contract,
@@ -2895,6 +2896,7 @@ class ProgressivePlannerAgent:
                 required_binary_display_label_scopes=required_label_scopes,
                 required_reader_display_label_keys=required_label_keys,
                 cohort_concept_ids=progressive_cohort_concept_ids(context, variables),
+                source_selection=recorded_source_selection(context),
             ),
         ]
         if required_label_keys:
@@ -4960,6 +4962,7 @@ class ProgressivePlannerAgent:
                     required_binary_display_label_scopes=required_label_scopes,
                     required_reader_display_label_keys=required_label_keys,
                     cohort_concept_ids=progressive_cohort_concept_ids(context, variables),
+                    source_selection=recorded_source_selection(context),
                 )
                 + "\nReturn exactly one ProgressiveFoundationMaterialization; "
                 "never flatten foundation fields into the response root.",

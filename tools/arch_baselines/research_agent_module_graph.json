@@ -1208,6 +1208,18 @@
       "easyicu.research_agent.planning.progressive_contract"
     ],
     [
+      "easyicu.research_agent.agents.progressive_prompt_contracts",
+      "easyicu.research_agent.research_context.concept_population"
+    ],
+    [
+      "easyicu.research_agent.agents.progressive_prompt_contracts",
+      "easyicu.research_agent.research_context.export_selection"
+    ],
+    [
+      "easyicu.research_agent.agents.progressive_prompt_contracts",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.agents.replanner",
       "easyicu.research_agent.agents._support"
     ],
@@ -13352,7 +13364,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3330,
+    "edge_count": 3333,
     "largest_scc_size": 0,
     "module_count": 774,
     "package_count": 36,
