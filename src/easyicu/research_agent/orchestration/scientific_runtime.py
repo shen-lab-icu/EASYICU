@@ -22,6 +22,7 @@ from ..contracts.primary_cohort import (
     HOST_BOUND_COHORT_METHOD,
     HOST_BOUND_COHORT_PRODUCT,
 )
+from ..planning.cohort_contract import cohort_concept_id_scope
 from ..schema import AnalysisPlan, AnalysisStep, ValidationFinding
 from ..trajectory.runtime_validation import signed_trajectory_plan_contract_errors
 from ..trajectory.scientific_runtime_authority import (
@@ -177,6 +178,30 @@ def _compile_current_case_plan(
     else:
         bound = authority.bind_plan(plan)
     return bound, spec
+
+
+def _project_trajectory_owners(
+    authority: TrajectoryScientificRuntimeAuthority, *, research_question: str
+) -> AnalysisPlan:
+    """The four signed owners, parsed with the sealed population's concepts known.
+
+    A sealed population may filter on a column the run materialized (a
+    derived flag, say), which only the run's roster makes known, and the
+    projection is parsed outside that roster's scope.  The design fixed what
+    each predicate says and left whether its concept exists to the
+    materializing run, whose cohort lock checks the bound plan against that
+    roster; so the projection knows exactly the population's own concepts, as
+    ``cohort_definition_sha`` does for its round trip.
+    """
+
+    population = authority.population_definition
+    with cohort_concept_id_scope(
+        str(predicate["concept_id"])
+        for predicate in (*population["inclusion"], *population["exclusion"])
+    ):
+        return authority.development_execution_only_plan(
+            research_question=research_question
+        )
 
 
 def _carry_owner_literature(
@@ -488,8 +513,8 @@ class ScientificRuntimeAuthorities:
             # classes, are kept.
             bound, literature_step_ids = _carry_owner_literature(
                 draft=plan,
-                bound=trajectory_authority.development_execution_only_plan(
-                    research_question=plan.research_question
+                bound=_project_trajectory_owners(
+                    trajectory_authority, research_question=plan.research_question
                 ),
             )
             bound, description = _carry_frozen_class_description(
@@ -551,8 +576,8 @@ class ScientificRuntimeAuthorities:
         authority = self.current_case
         trajectory_authority = self.trajectory
         if authority is None and trajectory_authority is not None:
-            plan = trajectory_authority.development_execution_only_plan(
-                research_question=research_question
+            plan = _project_trajectory_owners(
+                trajectory_authority, research_question=research_question
             )
             return plan, ValidationFinding(
                 validator="scientific_runtime_plan_compiler",
