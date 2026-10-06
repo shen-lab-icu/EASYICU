@@ -2119,11 +2119,18 @@ def clear_active_job_if(
     *,
     current_stage: Any,
     last_route: Any = "agent",
+    bind_export: Optional[tuple[int, Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Clear one job pointer only if it is still the context's active job.
 
     Multiple runs may overlap for one study. A terminal callback from an older
     run must not clear the pointer or stage written by a newer run.
+
+    ``bind_export`` is ``(revision, data_source)``: the finished job is an
+    extraction that produced the export the study's setup requests.  The same
+    write binds that export and records the extraction as completed, but only
+    while the study is still at the revision the decision read; otherwise
+    only the pointer is cleared.
     """
     clean_id = _identifier(context_id, field="id")
     clean_job_id = _identifier(job_id, field="active_job_id")
@@ -2141,20 +2148,30 @@ def clear_active_job_if(
                 {"error": "study_context_not_found", "study_context_id": clean_id}
             )
         if current.get("active_job_id") != clean_job_id:
-            return {"context": current, "cleared": False}
+            return {"context": current, "cleared": False, "rebound": False}
+        revision = int(current.get("revision") or 0)
+        patch: Dict[str, Any] = {
+            "id": clean_id,
+            "current_stage": current_stage,
+            "last_route": last_route,
+            "active_job_id": None,
+        }
+        rebound = bool(bind_export is not None and bind_export[0] == revision)
+        if rebound:
+            confirmations = current.get("confirmations")
+            patch["data_source"] = dict(bind_export[1])
+            patch["confirmations"] = {
+                **(confirmations if isinstance(confirmations, dict) else {}),
+                "extraction_completed": True,
+            }
         context = upsert_context(
-            {
-                "id": clean_id,
-                "current_stage": current_stage,
-                "last_route": last_route,
-                "active_job_id": None,
-            },
+            patch,
             active=False,
-            expected_revision=int(current.get("revision") or 0),
+            expected_revision=revision,
             require_revision=True,
             lifecycle_write=True,
         )
-        return {"context": context, "cleared": True}
+        return {"context": context, "cleared": True, "rebound": rebound}
 
 
 def build_agent_context_binding(
