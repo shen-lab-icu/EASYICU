@@ -21,8 +21,12 @@ fixed at admission passes: a demographic or identifier variable, or a
 stay-level concept the dictionary files under demographics.  An outcome the
 stay records at its end does not, an ICU length of stay of ``x`` is known at
 ``x``, and any other stay-level value (a first-day severity score) carries no
-time the host can compare.  Predicates are read as data, so a column only the
-run's roster knows is judged by the same rule.
+time the host can compare.  A column that holds an event's time after ICU
+admission is not summarized over a window: ``< x`` and ``<= x`` are known at
+``x``, and any other test only once the event happens.  A last observation
+time is a window summary like any other, since a later observation moves it.
+Predicates are read as data, so a column only the run's roster knows is judged
+by the same rule.
 """
 
 from __future__ import annotations
@@ -34,6 +38,7 @@ from typing import Any, Iterable, Literal, Mapping
 from ..concept_availability import stay_level_concept_category
 from ..research_context.concept_population import ConceptCohortWindow
 from ..research_context.materialization_window import host_materialization_window_hours
+from ..research_context.temporal_semantics import normalise_time_anchor
 from ..schema import ResearchContext
 from .adjustment_authority import host_window_bound_roles
 
@@ -132,6 +137,13 @@ _ADMISSION_CATEGORY = "demographics"
 _STAY_END_CATEGORY = "outcome"
 _ANCHOR_WORDS = {"icu_admission": "ICU admission", "icu_admit": "ICU admission"}
 _HOUR_UNITS = frozenset({"h", "hr", "hrs", "hour", "hours"})
+#: Hours per unit of the export's event-time units; any other unit is unread.
+_TIME_UNIT_HOURS = {"h": 1.0, "d": 24.0, "min": 1 / 60}
+#: Tests an event time decides once the threshold hour passes.
+_BY_THRESHOLD_OPS = frozenset({"<", "<="})
+#: The representation of a window's last observation time, which a later
+#: observation moves until the window ends.
+_LAST_TIME_TRANSFORM = "window_last_time"
 
 PredicateReason = Literal[
     "anchor",
@@ -141,6 +153,8 @@ PredicateReason = Literal[
     "icu_stay_length",
     "stay_outcome",
     "stay_level",
+    "event_time",
+    "event_time_unrecorded",
 ]
 
 
@@ -178,6 +192,21 @@ class PredicateAfterTimeZero:
             return (
                 f"{subject} filters a column the host summarized over {self.column_window}, "
                 f"which it cannot show ended by {zero}"
+            )
+        if self.reason == "event_time":
+            if self.decided_by_hours is None:
+                return (
+                    f"{subject} tests an event time it knows only once the event happens "
+                    f"or its window ends, after {zero}"
+                )
+            return (
+                f"{subject} tests an event time that is decided when "
+                f"{self.decided_by_hours:g} h after ICU admission pass, after {zero}"
+            )
+        if self.reason == "event_time_unrecorded":
+            return (
+                f"{subject} tests a time whose origin or unit the context does not "
+                f"record, so the host cannot show it was decided by {zero}"
             )
         if self.reason == "unrecorded":
             return (
@@ -229,7 +258,9 @@ def cohort_predicates_after_time_zero(
     for kind, predicates in (("inclusion", inclusion), ("exclusion", exclusion)):
         for predicate in predicates:
             concept = str(predicate.get("concept_id") or "")
-            column = _predicate_column(variables, concept, predicate.get("aggregation"))
+            column = predicate_context_column(
+                variables, concept, predicate.get("aggregation")
+            )
             variable = variables.get(column)
             role = _role(variable)
             item = PredicateAfterTimeZero(
@@ -267,11 +298,26 @@ def cohort_predicates_after_time_zero(
             # The column first: what the host filters was decided when its
             # window ended, so no window the predicate states can repair it.
             label = str(getattr(variable, "analysis_window", None) or "").strip()
-            if proven.get(column) is None:
+            event_time, hours_per_unit = _event_time(variable)
+            by_threshold = False
+            if event_time and hours_per_unit is not None and proven.get(column) is None:
+                # An event's time is no window summary: its test decides it.
+                decided = _event_time_decided_hours(predicate, hours_per_unit)
+                if decided is None or decided > time_zero_hours:
+                    found.append(
+                        _with(item, reason="event_time", decided_by_hours=decided)
+                    )
+                    continue
+                by_threshold = True
+            if proven.get(column) is None and not by_threshold:
                 if label:
                     found.append(
                         _with(item, reason="column_window", column_window=label)
                     )
+                    continue
+                if event_time:
+                    # No window bounds an event time the host did not date.
+                    found.append(_with(item, reason="event_time_unrecorded"))
                     continue
                 if materialized is None:
                     found.append(_with(item, reason="unrecorded"))
@@ -302,17 +348,67 @@ def cohort_predicates_after_time_zero(
     return tuple(found)
 
 
-def _predicate_column(
+def predicate_context_column(
     variables: Mapping[str, Any], concept: str, aggregation: Any
 ) -> str:
-    """The context column a predicate filters: its bare concept, else its summary.
+    """The context column a plan predicate filters: its bare concept, else its summary.
 
     These are the first two names ``cohort.schema`` tries for a universe
     column; a column it binds otherwise is judged by the bare concept's.
+    Plan review reads a predicate's column here, so every check judges the
+    column the host will filter.
     """
 
     summary = f"{concept}_{aggregation}"
     return summary if concept not in variables and summary in variables else concept
+
+
+def _event_time(variable: Any) -> tuple[bool, float | None]:
+    """Whether a column holds an event's time, and its hours per unit after ICU admission.
+
+    The research context types an event time as ``conditional_event_time``
+    observation semantics, with the export's ``relative to <origin> in
+    <unit>`` resolution read as ``observation_semantics`` reads it; a
+    ``time`` role is an event time too.  Its hours per unit are known only
+    when its origin is ICU admission and its unit one the export writes.  A
+    last observation time is no event time here: its window decides it.
+    """
+
+    if str(getattr(variable, "unit_normalization", None) or "") == _LAST_TIME_TRANSFORM:
+        return False, None
+    semantics = getattr(variable, "observation_semantics", None)
+    origin = getattr(semantics, "time_origin", None)
+    unit = getattr(semantics, "time_unit", None)
+    resolution = str(getattr(variable, "temporal_resolution", None) or "")
+    relative = (
+        resolution.removeprefix("relative to ")
+        if resolution.startswith("relative to ")
+        else ""
+    )
+    parsed_origin, separator, parsed_unit = relative.rpartition(" in ")
+    if separator:
+        origin, unit = origin or parsed_origin, unit or parsed_unit
+    event_time = (
+        getattr(semantics, "kind", None) == "conditional_event_time"
+        or bool(separator)
+        or _role(variable) == "time"
+    )
+    if not event_time or not origin:
+        return event_time, None
+    if normalise_time_anchor(str(origin)) != "icu_admission":
+        return True, None
+    return True, _TIME_UNIT_HOURS.get(str(unit or "").strip())
+
+
+def _event_time_decided_hours(
+    predicate: Mapping[str, Any], hours_per_unit: float
+) -> float | None:
+    """The hour an event-time test is known; None until the event happens."""
+
+    value = _number(predicate.get("value"))
+    if str(predicate.get("op") or "") not in _BY_THRESHOLD_OPS or value is None:
+        return None
+    return max(value * hours_per_unit, 0.0)
 
 
 def _with(item: PredicateAfterTimeZero, **changes: Any) -> PredicateAfterTimeZero:
@@ -373,4 +469,5 @@ __all__ = [
     "PredicateAfterTimeZero",
     "cohort_predicates_after_time_zero",
     "eligibility_after_time_zero",
+    "predicate_context_column",
 ]
