@@ -80,11 +80,15 @@ def test_a_readmission_exclusion_alone_still_produces_an_exclusion() -> None:
 def test_the_pipeline_call_passes_the_exclusion_channel() -> None:
     """Compiling exclusions and not sending them changes nothing."""
 
-    source = Path("src/easyicu/webserver/agent_pipeline_runs.py").read_text(
-        encoding="utf-8"
+    source = " ".join(
+        Path("src/easyicu/webserver/agent_pipeline_runs.py").read_text(encoding="utf-8").split()
     )
-    assert "inclusion_criteria=_inclusion_criteria(study)," in source
-    assert "exclusion_criteria=_exclusion_criteria(study)," in source
+    # Both sides, as the bound export's record allows them to be declared.
+    for side in ("inclusion", "exclusion"):
+        assert (
+            f"{side}_criteria=_{side}_criteria( study, "
+            "export_recorded=source_selection_recorded ),"
+        ) in source
     # the reviewer-facing cohort summary reports both sides too
     assert '"exclusion_criteria": _exclusion_criteria(study),' in source
 
@@ -180,8 +184,11 @@ def test_a_diagnosis_criterion_is_declared_only_when_the_owner_can_run_it() -> N
         "include_diagnoses": ["stale-condition-a"],
         "exclude_diagnoses": ["stale-condition-b"],
     }
-    assert _inclusion_criteria({"cohort": explicitly_disabled}) == []
-    assert _exclusion_criteria({"cohort": explicitly_disabled}) == []
+    # The preset still executes its adult bound and first stay; only the
+    # stale diagnosis lists stay undeclared.
+    assert _inclusion_criteria({"cohort": explicitly_disabled}) == ["age range: 18 to *"]
+    exclusion = _exclusion_criteria({"cohort": explicitly_disabled})
+    assert len(exclusion) == 1 and "keeps only the first ICU stay" in exclusion[0]
     assert primary_cohort.normalize_execution_cohort(explicitly_disabled)[
         "icd_include"
     ] == []

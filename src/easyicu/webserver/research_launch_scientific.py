@@ -670,6 +670,37 @@ def _require_export_holds_study_cohort(
         )
 
 
+def bound_export_records_study_cohort(
+    study: Mapping[str, Any], export_path: Optional[str]
+) -> bool:
+    """Whether the bound export records the selection of the cohort this study states.
+
+    True only when the export's manifest records the cohort contract it was
+    extracted for, and that contract selects this study's rows under the rule
+    Data Extraction executes now (``bound_export_mismatches``): the study's
+    executed criteria are then what selected the export's rows.  A package
+    that records no contract (a study-local prepared cohort, or an export
+    from before contracts were recorded), a folder without a manifest, or a
+    contract that does not hold the study's rows is unrecorded: what
+    selected its rows is not known, so nothing may be declared as already
+    applied to them, nor that nothing was.
+    """
+
+    from easyicu.webserver.pi_copilot.extraction_handoff import (
+        bound_export_mismatches,
+    )
+
+    if not export_path:
+        return False
+    manifest = dataio.read_prepared_export_manifest(str(export_path))
+    if manifest is None or not isinstance(manifest.get("cohort_contract"), Mapping):
+        return False
+    try:
+        return not bound_export_mismatches(study, manifest)
+    except dataio.ExportCohortError:
+        return False
+
+
 def _neutral_materialization_scope(
     study: Mapping[str, Any], *, export_path: str
 ) -> Dict[str, Any]:
