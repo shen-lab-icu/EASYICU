@@ -435,6 +435,12 @@ def _planner_transport_schema(
         definitions.pop("ResearchDesignSelection", None)
         definitions.pop("ResearchDesignCandidate", None)
         definitions.pop("CandidateLiteratureDesignDecision", None)
+        # The population criteria a plan states and no predicate applies
+        # are compiled by the host from the criteria no allowed cohort
+        # concept expresses; the Planner never writes them.
+        definitions["CohortDefinition"]["properties"].pop(
+            "unapplied_population_criteria", None
+        )
         robustness = definitions["RobustnessSpec"]["properties"]
         missing_override = _closed_object_schema(
             {
