@@ -9,8 +9,10 @@ every owner such a statement could cite records the export or the question,
 not a selection.  An export whose selection the host did not record is
 stated as such: its criteria are declared, not applied, except the ones the
 host applied itself, and the analysis is called neither restricted nor
-unrestricted.  Fixtures are synthetic; the populations they name vary so
-that no rule keys on one condition.
+unrestricted.  A prepared package that declares itself the study's cohort is
+named only as that declaration, which the host accepted without verifying
+it.  Fixtures are synthetic; the populations they name vary so that no rule
+keys on one condition.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from easyicu.research_agent.reporting.population_selection import (
     POPULATION_STATEMENT_NOT_HOST_CITED,
     POPULATION_SUBSECTION,
     analyzed_population,
+    host_may_cite_population_statement,
     writer_population_block,
 )
 from easyicu.research_agent.reporting.writer_evidence import _render_writer_evidence_digest
@@ -99,15 +102,15 @@ def _context(
     constraints: dict | None = None,
     recorded: bool = True,
     host_applied: tuple[str, ...] = (),
+    basis: str | None = None,
 ) -> ResearchContext:
-    """A Web context; unrecorded without a host criterion, it has no selection record."""
+    """A Web context; unrecorded without a host criterion or a basis, it has no selection record."""
 
     payload = dict(constraints or {})
-    if recorded or host_applied:
-        payload["source_selection"] = {
-            "basis": "export_contract" if recorded else "unrecorded",
-            "host_applied": list(host_applied),
-        }
+    if basis is None and (recorded or host_applied):
+        basis = "export_contract" if recorded else "unrecorded"
+    if basis is not None:
+        payload["source_selection"] = {"basis": basis, "host_applied": list(host_applied)}
     return ResearchContext(
         research_question=question,
         cohort=CohortDescriptor(
@@ -162,6 +165,7 @@ def test_a_plan_keeping_every_row_of_an_uncontracted_export_analyzes_every_icu_s
         "concept_population": None,
         "source_scope": "all_icu_stays_of_source_export",
         "source_selection_recorded": True,
+        "source_selection_basis": "export_contract",
     }
 
 
@@ -251,15 +255,15 @@ _LATER_STAYS = (
 
 
 @pytest.mark.parametrize(
-    "constraints",
+    ("constraints", "basis"),
     [
-        None,
-        {"source_selection": {"recorded": False, "host_applied": []}},
-        {"source_selection": {"recorded": "true"}},
-        {"source_selection": ["recorded"]},
-        {"source_selection": {"basis": "unrecorded", "host_applied": []}},
-        # The package's own selection is not one the host knows.
-        {"source_selection": {"basis": "package_declaration", "host_applied": []}},
+        (None, None),
+        ({"source_selection": {"recorded": False, "host_applied": []}}, "unrecorded"),
+        ({"source_selection": {"recorded": "true"}}, "unrecorded"),
+        ({"source_selection": ["recorded"]}, "unrecorded"),
+        ({"source_selection": {"basis": "unrecorded", "host_applied": []}}, "unrecorded"),
+        # A basis the host does not know says nothing about the selection.
+        ({"source_selection": {"basis": "package", "host_applied": []}}, "unrecorded"),
     ],
     ids=[
         "no record",
@@ -267,21 +271,23 @@ _LATER_STAYS = (
         "not a boolean",
         "not a record",
         "unrecorded",
-        "package declaration",
+        "unknown basis",
     ],
 )
 def test_an_export_without_a_selection_record_is_not_every_icu_stay(
-    constraints: dict | None,
+    constraints: dict | None, basis: str | None
 ) -> None:
-    # A preset such as adult_first, or a prepared package, applies criteria
-    # that no context field states.
+    # A preset such as adult_first applies criteria that no context field
+    # states.
     context = _context(constraints=constraints, recorded=False)
 
     population = analyzed_population(plan=_plan(_ALL_ROWS), context=context)
 
     assert population is not None
     assert population.source_scope == "all_input_rows_of_unrecorded_export"
-    assert population.record()["source_selection_recorded"] is False
+    record = population.record()
+    assert record["source_selection_recorded"] is False
+    assert record["source_selection_basis"] == basis
     block = writer_population_block(population)
     assert "every ICU stay" not in block
     assert "- Criteria applied before analysis" not in block
@@ -343,6 +349,107 @@ def test_a_criterion_the_host_applied_itself_is_applied_without_a_record() -> No
     ) in block
     assert "a criterion no context field states" not in block
     assert "never say whether the analysis was restricted to it." in block
+
+
+# A declared package ----------------------------------------------------
+
+_DECLARED_ROWS = (
+    "- Rows analyzed: every input row of a prepared cohort package that declares "
+    "itself this study's cohort; the plan did not filter it."
+)
+_DECLARATION = (
+    "- Package's declaration (accepted, not verified by the host): it holds this "
+    "study's cohort, as the cohort wording in RESEARCH CONTEXT states it"
+)
+_DECLARED_CONSEQUENCE = (
+    "the package declares itself this study's cohort, so name that cohort only as "
+    "the package's declaration, never as selected or verified by this study."
+)
+
+
+@pytest.mark.parametrize(
+    "wording",
+    [
+        {"label": "Adults with septic shock", "review": "Adult ICU stays with septic shock"},
+        {"review": "Older adults with acute kidney injury", "exclusion_statement": "Excluding dialysis"},
+    ],
+)
+def test_a_package_declaring_itself_the_studys_cohort_is_that_declared_cohort(
+    wording: dict[str, str],
+) -> None:
+    # As the Web caller records it: no criterion of its own, and the host's
+    # first-stay restriction, which the host applies whatever the package did.
+    context = _context(
+        exclusion=(_LATER_STAYS,),
+        constraints={"cohort": wording},
+        basis="package_declaration",
+        host_applied=(_LATER_STAYS,),
+    )
+
+    population = analyzed_population(plan=_plan(_ALL_ROWS), context=context)
+
+    assert population is not None
+    assert population.source_scope == "all_input_rows_of_declared_package"
+    record = population.record()
+    assert record["source_selection_basis"] == "package_declaration"
+    assert record["source_selection_recorded"] is False
+    assert record["applied_contracts"] == {"inclusion": [], "exclusion": [_LATER_STAYS]}
+    assert record["unverified_contracts"] == {"inclusion": [], "exclusion": []}
+    block = writer_population_block(population)
+    assert _DECLARED_ROWS in block
+    assert f"- Criteria applied before analysis: exclusion: {_LATER_STAYS}." in block
+    assert _DECLARATION + "." in block
+    assert _DECLARED_CONSEQUENCE in block
+    # Neither an export whose selection is unknown nor one the host knows.
+    assert "not recorded" not in block
+    assert "never say whether the analysis was restricted" not in block
+    assert "say once that the analysis was not restricted" not in block
+    assert "every ICU stay" not in block
+    # The block names where the wording is; it does not state it as its own.
+    for words in wording.values():
+        assert words not in block
+
+
+@pytest.mark.parametrize(("definition", "hours"), [("sepsis3", 24.0), ("aki", 48.0)])
+def test_the_criteria_a_package_states_are_its_declaration(definition: str, hours: float) -> None:
+    context = _context(
+        inclusion=("age range: 18 to *",),
+        constraints={"concept_cohort_window": {"definition": definition, "window_end_hours": hours}},
+        basis="package_declaration",
+    )
+
+    population = analyzed_population(plan=_plan(_ALL_ROWS), context=context)
+
+    assert population is not None
+    assert population.source_scope == "all_input_rows_of_declared_package"
+    record = population.record()
+    assert record["applied_contracts"] == {"inclusion": [], "exclusion": []}
+    assert record["unverified_contracts"] == {"inclusion": ["age range: 18 to *"], "exclusion": []}
+    block = writer_population_block(population)
+    assert (
+        _DECLARATION + "; declared criteria: inclusion: age range: 18 to *; "
+        f"concept-derived population {definition}: "
+    ) in block
+    assert f"at or before {hours:g} h after ICU admission." in block
+    assert "- Criteria applied before analysis" not in block
+    assert _DECLARED_CONSEQUENCE in block
+
+
+def test_plan_predicates_over_a_declared_package_select_the_rows_they_admit() -> None:
+    population = analyzed_population(
+        plan=_plan(_SELECTED), context=_context(basis="package_declaration")
+    )
+
+    assert population is not None
+    assert population.source_scope == "predicate_selected"
+    assert population.record()["source_selection_basis"] == "package_declaration"
+    assert host_may_cite_population_statement(population)
+    block = writer_population_block(population)
+    assert "rows that meet the plan's cohort predicates" in block
+    assert _DECLARATION + "." in block
+    assert "- Plan inclusion predicates: sep3 == True" in block
+    assert _DECLARED_CONSEQUENCE in block
+    assert _DECLARED_ROWS not in block
 
 
 def test_a_recorded_selection_states_every_criterion_as_applied() -> None:
@@ -582,7 +689,8 @@ def _methods(sentence: str) -> str:
 
 @pytest.mark.parametrize("sentence", _POPULATION_SENTENCES)
 @pytest.mark.parametrize(
-    "scope", ["every ICU stay", "contracted export", "unrecorded export", "no typed population"]
+    "scope",
+    ["every ICU stay", "contracted export", "unrecorded export", "declared package", "no typed population"],
 )
 def test_the_host_does_not_cite_a_population_the_plan_did_not_select(
     tmp_path: Path, sentence: str, scope: str
@@ -596,6 +704,7 @@ def test_the_host_does_not_cite_a_population_the_plan_did_not_select(
     context = _context(
         inclusion=("age range: 18 to *",) if scope == "contracted export" else (),
         recorded=scope != "unrecorded export",
+        basis="package_declaration" if scope == "declared package" else None,
     )
     population = (
         None
