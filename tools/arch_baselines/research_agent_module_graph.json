@@ -9761,6 +9761,10 @@
     ],
     [
       "easyicu.research_agent.planning.family_spec.request",
+      "easyicu.research_agent.planning.progressive_compiler"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.request",
       "easyicu.research_agent.planning.scientific_review"
     ],
     [
@@ -13464,7 +13468,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3358,
+    "edge_count": 3359,
     "largest_scc_size": 0,
     "module_count": 778,
     "package_count": 36,

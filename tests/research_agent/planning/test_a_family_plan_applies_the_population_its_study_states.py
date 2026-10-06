@@ -51,7 +51,10 @@ from easyicu.research_agent.planning.family_spec.phenotyping_template import (
     _cohort_intent as _phenotype_cohort_intent,
 )
 from easyicu.research_agent.planning.family_spec.request import _bind_population_authority
-from easyicu.research_agent.planning.progressive_compiler import progressive_cohort_concept_ids
+from easyicu.research_agent.planning.progressive_compiler import (
+    progressive_cohort_concept_ids,
+    progressive_population_concept_ids,
+)
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.schema import ResearchContext
 
@@ -157,7 +160,10 @@ def test_a_family_applying_its_own_cohort_is_offered_the_population_authority() 
     request = _offered_request(context, cohort_mode=None)
     variables = select_progressive_variables(context)
 
-    assert request.population_concepts == list(progressive_cohort_concept_ids(context, variables))
+    # The request offers the roster without its row identifiers.
+    assert request.population_concepts == list(
+        progressive_population_concept_ids(context, variables)
+    )
     assert {"age", "comorbidity_index"} <= set(request.population_concepts)
     assert request.study_cohort_wording == _WORDING
     prompt = family_spec_user_prompt(request, variable_descriptions={})

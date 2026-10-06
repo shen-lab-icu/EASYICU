@@ -56,6 +56,7 @@ from ..literature_design_authority import (
     LiteratureDesignEvidenceCard,
 )
 from ..ordinal_multi_outcome import resolve_ordinal_multi_outcome_contract
+from ..progressive_compiler import cohort_identity_columns
 from ..scientific_review import post_baseline_exposure
 from .contract import (
     DESCRIPTIVE_FAMILY_ID,
@@ -838,9 +839,13 @@ def _bind_population_authority(
     that nothing records is not applied.
     """
 
+    # A row identifier states no population (``cohort_identity_columns``).
+    identity = cohort_identity_columns(context)
     concepts = list(
         dict.fromkeys(
-            str(value).strip() for value in cohort_concept_ids if str(value or "").strip()
+            str(value).strip()
+            for value in cohort_concept_ids
+            if str(value or "").strip() and str(value).strip() not in identity
         )
     )
     if (
