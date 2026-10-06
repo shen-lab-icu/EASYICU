@@ -809,11 +809,17 @@ def _closed_observed_levels(variable: Any) -> list[Any]:
     return []
 
 
-def _predicate_accepts_closed_level(
+def predicate_accepts_closed_level(
     predicate: ConceptPredicate,
     level: Any,
 ) -> Optional[bool]:
-    """Evaluate one typed predicate on a local closed level, if comparable."""
+    """Evaluate one typed predicate on a local closed level, if comparable.
+
+    Each comparison is the one ``build_cohort`` applies to a column value
+    (``_apply_op``), so a check that judges a predicate against a column's
+    closed levels reads it as the cohort builder does.  ``None`` when the
+    level and the value cannot be compared.
+    """
 
     op = str(predicate.op or "").strip().casefold()
     target = predicate.value
@@ -918,7 +924,7 @@ def _primary_cohort_contrast_preservation_issues(
         for level in levels:
             include = True
             for predicate in predicate_sets.get("inclusion", ()):
-                accepted = _predicate_accepts_closed_level(predicate, level)
+                accepted = predicate_accepts_closed_level(predicate, level)
                 if accepted is None:
                     indeterminate = True
                     break
@@ -926,7 +932,7 @@ def _primary_cohort_contrast_preservation_issues(
             if indeterminate:
                 break
             for predicate in predicate_sets.get("exclusion", ()):
-                excluded = _predicate_accepts_closed_level(predicate, level)
+                excluded = predicate_accepts_closed_level(predicate, level)
                 if excluded is None:
                     indeterminate = True
                     break
@@ -1790,6 +1796,7 @@ __all__ = [
     "expand_named_cohort",
     "known_concept_ids",
     "materialized_input_column_authority",
+    "predicate_accepts_closed_level",
     "register_cohort_concept_ids",
     "registered_run_cohort_concept_ids",
     "register_pattern",

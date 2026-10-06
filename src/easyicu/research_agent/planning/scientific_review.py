@@ -96,6 +96,7 @@ from .cohort_eligibility import (
     cohort_predicates_after_time_zero,
     eligibility_after_time_zero,
 )
+from .cohort_predicate_domain import cohort_predicates_outside_column_domain
 from .figure_strategy import ArticleFigureStrategy
 from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
 
@@ -2916,6 +2917,55 @@ def cohort_predicate_findings(
     return [_cohort_predicate_finding(item, source) for item in found]
 
 
+_COHORT_PREDICATE_DOMAIN_REMEDIATION = (
+    "Rewrite the comparison against the values the column takes, so that the "
+    "predicate applies the restriction its population criterion names: a 0/1 "
+    "flag compares with 1 and a declared scale with one of its levels, never "
+    "with a number from the concept's description. A criterion that only "
+    "asks whether the column is recorded is written with missing or "
+    "not_missing. Keep the predicate: deleting it, or moving the restriction "
+    "to another column, changes whom the study includes."
+)
+
+
+def cohort_predicate_domain_findings(
+    context: ResearchContext, plan: AnalysisPlan
+) -> list[PlanScientificFinding]:
+    """Refuse a cohort predicate that empties the cohort; doubt one that applies nothing.
+
+    ``planning.cohort_predicate_domain`` judges each predicate against the
+    closed values of the column it filters.  One that keeps no row with a
+    value, or removes every such row, empties the cohort: a blocker.  One
+    that keeps every row with a value, or removes none, cannot separate rows
+    by value.  The criterion it was written for is then not applied, unless
+    the study states a bound that every value meets, so it is a major
+    finding.  Either way the Planner rewrites the comparison; it does not
+    drop the predicate.
+    """
+
+    cohort = plan.cohort
+    if cohort is None:
+        return []
+    found = cohort_predicates_outside_column_domain(
+        context, inclusion=cohort.inclusion, exclusion=cohort.exclusion
+    )
+    return [
+        PlanScientificFinding(
+            code="COHORT_PREDICATE_OUTSIDE_COLUMN_DOMAIN",
+            severity="blocker" if item.empties_cohort else "major",
+            dimension="icu_clinical_design",
+            message=item.message() + ".",
+            evidence_refs=[
+                "analysis_plan.json.cohort",
+                "research_context.json.variables",
+            ],
+            remediation=_COHORT_PREDICATE_DOMAIN_REMEDIATION,
+            remediation_route="agent_plan_revision",
+        )
+        for item in found
+    ]
+
+
 def build_plan_scientific_review(
     *,
     context: ResearchContext,
@@ -3099,6 +3149,7 @@ def build_plan_scientific_review(
     findings.extend(
         cohort_predicate_findings(context, plan, trajectory_representation, runtime_authority)
     )
+    findings.extend(cohort_predicate_domain_findings(context, plan))
     required_source_columns = {
         context.primary_exposure, context.target_outcome,
         *context.cohort.outcome_columns,
