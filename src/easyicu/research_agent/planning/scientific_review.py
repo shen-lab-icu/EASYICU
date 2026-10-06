@@ -2829,7 +2829,9 @@ _COHORT_PREDICATE_FINDINGS: dict[str, tuple[str, ScientificRemediationRoute]] = 
     "icu_stay_length": ("COHORT_PREDICATE_DECIDED_AFTER_TIME_ZERO", "study_authority_change"),
     "stay_outcome": ("COHORT_PREDICATE_DECIDED_AFTER_TIME_ZERO", "study_authority_change"),
     "stay_level": ("COHORT_PREDICATE_DECIDED_AFTER_TIME_ZERO", "study_authority_change"),
+    "event_time": ("COHORT_PREDICATE_DECIDED_AFTER_TIME_ZERO", "study_authority_change"),
     "unrecorded": ("COHORT_PREDICATE_COLUMN_WINDOW_UNRECORDED", "runtime_capability"),
+    "event_time_unrecorded": ("COHORT_PREDICATE_COLUMN_WINDOW_UNRECORDED", "runtime_capability"),
 }
 
 
@@ -2856,10 +2858,15 @@ def _cohort_predicate_finding(item: PredicateAfterTimeZero, source: str) -> Plan
         )
     else:
         message = f"The host cannot date a column the plan's cohort filters: {item.message()}."
+        record = (
+            "this column's time origin and unit, as its typed relative-time resolution,"
+            if item.reason == "event_time_unrecorded"
+            else "the window it summarized this column over, as the column's analysis "
+            "window or the study's materialization window,"
+        )
         remediation = (
-            "The host must record the window it summarized this column over, as the "
-            "column's analysis window or the study's materialization window, before "
-            "a plan can select on it; a plan revision cannot supply that record."
+            f"The host must record {record} before a plan can select on it; a plan "
+            "revision cannot supply that record."
         )
     return PlanScientificFinding(
         code=code,

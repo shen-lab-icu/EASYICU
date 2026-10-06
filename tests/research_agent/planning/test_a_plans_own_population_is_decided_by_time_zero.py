@@ -7,10 +7,14 @@ every feature column over.  The analysis time windows of a context are not
 such a record.  A predicate is decided by time zero only when its column and
 its window both end by then.  A value fixed at admission passes; an outcome
 the stay records at its end does not, an ICU length of stay of x is known at
-x, and a stay-level score carries no time to compare.  The review says who
-repairs each: the Planner restates a window, the study decides a selection
-made after time zero, and the host records a column window.  Fixtures are
-synthetic and vary the concepts so that no rule keys on one condition.
+x, and a stay-level score carries no time to compare.  An event's time after
+ICU admission is decided by a test below an hour once that hour passes, and
+by any other test only once the event happens; a last observation time, which
+a later observation moves, only by its window.  The review says who repairs
+each: the Planner restates a window, the study decides a selection made after
+time zero, and the host records a column window or an event time's origin and
+unit.  Fixtures are synthetic and vary the concepts so that no rule keys on
+one condition.
 """
 
 from __future__ import annotations
@@ -23,7 +27,7 @@ from pathlib import Path
 import pytest
 
 from easyicu.research_agent.planning import scientific_review
-from easyicu.research_agent.planning.cohort_contract import CohortDefinition
+from easyicu.research_agent.planning.cohort_contract import CohortDefinition, cohort_concept_id_scope
 from easyicu.research_agent.planning.cohort_eligibility import (
     PredicateAfterTimeZero,
     cohort_predicates_after_time_zero,
@@ -41,6 +45,7 @@ from easyicu.research_agent.schema import (
     AnalysisPlan,
     CohortDescriptor,
     ConceptDescriptor,
+    ObservationSemantics,
     ResearchContext,
     TimeWindow,
     UserPreferences,
@@ -375,6 +380,130 @@ def test_the_messages_name_the_predicate_and_both_hours() -> None:
     assert "is not counted from ICU admission" in anchor.message()
 
 
+def _event_time(name: str = "vent_first_time", *, unit: str | None = "h", origin: str = "icu_admission", **fields) -> ConceptDescriptor:
+    resolution = f"relative to {origin} in {unit}" if unit is not None else None
+    return ConceptDescriptor(name=name, role=VariableRole.TIME, dtype="float64", temporal_resolution=resolution, **fields)
+
+
+@pytest.mark.parametrize(
+    ("op", "value", "unit", "decided", "refused"),
+    [
+        ("<", 6, "h", 6.0, False),
+        ("<=", 24, "h", 24.0, False),
+        ("<", 48, "h", 48.0, True),
+        ("<", 1, "d", 24.0, False),
+        ("<", 2, "d", 48.0, True),
+        ("<=", 600, "min", 10.0, False),
+        ("<", 2880, "min", 48.0, True),
+        (">", 6, "h", None, True),
+        (">=", 0, "h", None, True),
+        ("==", 12, "h", None, True),
+        ("not_missing", None, "h", None, True),
+    ],
+)
+def test_an_event_time_is_decided_by_its_threshold(op, value, unit, decided, refused) -> None:
+    found = _rule(_predicate("vent_first_time", op, value), context=_ctx(_event_time(unit=unit)))
+
+    assert _reasons(found) == ([("event_time", None if decided is None else decided)] if refused else [])
+
+
+def test_an_event_time_is_no_window_summary() -> None:
+    # The host's 24 h window does not bound the time a stay died.
+    died_late = _predicate("death_time_hours", ">", 48, aggregation="first")
+    died_early = _predicate("death_time_hours", "<=", 24, aggregation="first")
+    context = _ctx(_event_time("death_time_hours"))
+
+    assert _reasons(_rule(died_late, context=context)) == [("event_time", None)]
+    assert _rule(died_early, context=context) == ()
+    assert "only once the event happens" in _rule(died_late, context=context)[0].message()
+
+
+def test_a_test_below_time_zero_holds_whatever_the_columns_window() -> None:
+    windowed = _event_time(analysis_window="icu_admission[0,72]h")
+
+    assert _rule(_predicate("vent_first_time", "<", 6), context=_ctx(windowed)) == ()
+    assert _reasons(_rule(_predicate("vent_first_time", ">", 6), context=_ctx(windowed))) == [("event_time", None)]
+
+
+def test_an_event_time_summarized_by_time_zero_is_decided_by_its_window() -> None:
+    # Every time its window holds is known when the window ends.
+    early = _event_time(analysis_window="icu_admission[0,24]h")
+
+    assert _rule(_predicate("vent_first_time", "<", 48), context=_ctx(early)) == ()
+    assert _rule(_predicate("vent_first_time", ">", 6), context=_ctx(early)) == ()
+
+
+def test_the_predicates_own_window_still_counts() -> None:
+    late = _predicate("vent_first_time", "<", 6, end=48.0)
+
+    assert _reasons(_rule(late, context=_ctx(_event_time()))) == [("window", 48.0)]
+
+
+@pytest.mark.parametrize(
+    "variable",
+    [
+        ConceptDescriptor(name="vent_first_time", role=VariableRole.TIME, dtype="float64"),
+        _event_time(origin="hospital admission"),
+        _event_time(unit="hours"),
+        _event_time(unit="weeks"),
+    ],
+    ids=["untyped time role", "another origin", "an unwritten unit", "an unknown unit"],
+)
+def test_an_event_time_the_context_cannot_place_is_unrecorded(variable: ConceptDescriptor) -> None:
+    (found,) = _rule(_predicate("vent_first_time", "<", 6), context=_ctx(variable))
+
+    assert found.reason == "event_time_unrecorded"
+    assert "whose origin or unit the context does not record" in found.message()
+
+
+def test_typed_observation_semantics_date_an_event_time() -> None:
+    semantics = ObservationSemantics(
+        kind="conditional_event_time",
+        event_status_column="vent_ind",
+        representative_column="vent_first_time",
+        time_origin="icu_admission",
+        time_unit="h",
+    )
+    typed = ConceptDescriptor(
+        name="vent_first_time", role=VariableRole.OTHER, dtype="float64", observation_semantics=semantics
+    )
+
+    assert _rule(_predicate("vent_first_time", "<", 6), context=_ctx(typed)) == ()
+    assert _reasons(_rule(_predicate("vent_first_time", "<", 48), context=_ctx(typed))) == [("event_time", 48.0)]
+
+
+def test_a_last_observation_time_is_decided_by_its_window() -> None:
+    # A later observation moves a last time; a first time is known at the hour.
+    last = _event_time(
+        "lact_last_time", unit_normalization="window_last_time", analysis_window="icu_admission[0,72]h"
+    )
+    first = _event_time(
+        "lact_first_time", unit_normalization="window_first_time", analysis_window="icu_admission[0,72]h"
+    )
+    early = last.model_copy(update={"analysis_window": "icu_admission[0,24]h"})
+    host_windowed = last.model_copy(update={"analysis_window": None})
+
+    (found,) = _rule(_predicate("lact_last_time", "<", 6), context=_ctx(last))
+    assert (found.reason, found.column_window) == ("column_window", "icu_admission[0,72]h")
+    assert _rule(_predicate("lact_first_time", "<", 6), context=_ctx(first)) == ()
+    assert _rule(_predicate("lact_last_time", "<", 6), context=_ctx(early)) == ()
+    assert _rule(_predicate("lact_last_time", "<", 6), context=_ctx(host_windowed)) == ()
+    assert _reasons(
+        _rule(_predicate("lact_last_time", "<", 6), context=_ctx(host_windowed, materialized=None))
+    ) == [("unrecorded", None)]
+
+
+def test_an_undated_event_time_keeps_its_own_window() -> None:
+    labeled = ConceptDescriptor(
+        name="vent_first_time", role=VariableRole.TIME, dtype="float64", analysis_window="icu_admission[0,72]h"
+    )
+    early = labeled.model_copy(update={"analysis_window": "icu_admission[0,24]h"})
+
+    (found,) = _rule(_predicate("vent_first_time", "<", 6), context=_ctx(labeled))
+    assert (found.reason, found.column_window) == ("column_window", "icu_admission[0,72]h")
+    assert _rule(_predicate("vent_first_time", "<", 6), context=_ctx(early)) == ()
+
+
 # The review --------------------------------------------------------------
 
 
@@ -469,6 +598,21 @@ def test_without_a_time_zero_the_review_compares_nothing() -> None:
     assert cohort_predicate_findings(context, _with_cohort(_predicate("lact", end=720.0)), None, None) == []
 
 
+def test_an_event_time_after_time_zero_is_the_studys_and_an_undated_one_the_hosts() -> None:
+    with cohort_concept_id_scope(["vent_ind_first_time"]):
+        plan = _with_cohort(_predicate("vent_ind_first_time", "<", 48))
+    typed = _event_time("vent_ind_first_time")
+    untyped = ConceptDescriptor(name="vent_ind_first_time", role=VariableRole.TIME, dtype="float64")
+
+    (decided,) = cohort_predicate_findings(_study(typed), plan, None, None)
+    (unrecorded,) = cohort_predicate_findings(_study(untyped), plan, None, None)
+
+    assert (decided.code, decided.remediation_route) == (_DECIDED, "study_authority_change")
+    assert "(48 h or later)" in decided.remediation
+    assert (unrecorded.code, unrecorded.remediation_route) == (_UNRECORDED, "runtime_capability")
+    assert "time origin and unit" in unrecorded.remediation
+
+
 def test_a_trajectory_plan_says_its_time_zero_is_its_windows_end() -> None:
     trajectory = {"trajectory_window": {"executable": True, "window_end_hours": 24.0}}
     plan = _with_cohort(_predicate("lact", end=48.0))
@@ -511,17 +655,19 @@ def test_the_review_reads_the_plan_and_its_time_zero_sources() -> None:
 
 
 @pytest.mark.parametrize(
-    ("code", "title"),
+    ("code", "title", "detail"),
     [
-        (_WINDOW, "入组谓词的窗口晚于分析时间零点"),
-        (_DECIDED, "入组选择晚于分析时间零点"),
-        (_UNRECORDED, "入组条件所用列的物化窗口未记录"),
+        (_WINDOW, "入组谓词的窗口晚于分析时间零点", "改为从入 ICU 到时间零点"),
+        (_DECIDED, "入组选择晚于分析时间零点", "要等事件发生才知道的事件时间"),
+        (_UNRECORDED, "入组条件所用列的物化窗口未记录", "没有记录事件时间的起点与单位"),
     ],
 )
-def test_each_finding_reads_in_chinese(code: str, title: str) -> None:
+def test_each_finding_reads_in_chinese(code: str, title: str, detail: str) -> None:
     vocab = (
         Path(scientific_review.__file__).resolve().parents[2]
         / "webserver/static/js/screens-agent-reader-vocab.js"
     ).read_text(encoding="utf-8")
 
-    assert f"{code}: ['{title}'" in vocab
+    (entry,) = [line for line in vocab.splitlines() if line.strip().startswith(f"{code}: [")]
+    assert f"{code}: ['{title}'" in entry
+    assert detail in entry
