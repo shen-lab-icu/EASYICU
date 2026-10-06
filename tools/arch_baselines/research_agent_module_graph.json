@@ -10633,6 +10633,10 @@
     ],
     [
       "easyicu.research_agent.planning.scientific_review",
+      "easyicu.research_agent.research_context.materialization_window"
+    ],
+    [
+      "easyicu.research_agent.planning.scientific_review",
       "easyicu.research_agent.research_context.minimum_stay"
     ],
     [
@@ -13460,7 +13464,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3357,
+    "edge_count": 3358,
     "largest_scc_size": 0,
     "module_count": 778,
     "package_count": 36,
