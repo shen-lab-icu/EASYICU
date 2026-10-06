@@ -5,8 +5,8 @@ export applied.  A context written before the Web caller declared only typed
 criteria also carries the study's own cohort wording there, and the same
 words, verbatim, in ``data_constraints.cohort``.  Nothing executes prose, so
 those words select no row.  The criteria are known to be applied, and to be
-the whole selection, only when the host records the export's selection
-(``data_constraints.source_selection``); without that record only the
+the whole selection, only when the host records that the export's contract
+states it (``data_constraints.source_selection.basis``); otherwise only the
 criteria the host applied itself are.  Fixtures are synthetic; the
 populations they name vary so that no rule keys on one condition.
 """
@@ -200,35 +200,70 @@ def test_an_export_without_criteria_or_concept_selects_no_row() -> None:
 
 
 @pytest.mark.parametrize(
-    ("record", "recorded"),
+    ("record", "basis"),
     [
-        ({"recorded": True, "host_applied": []}, True),
-        ({"recorded": True}, True),
-        ({"recorded": False, "host_applied": []}, False),
-        ({"recorded": "true"}, False),
-        ({"recorded": 1}, False),
-        (["recorded"], False),
-        (None, False),
+        ({"basis": "export_contract", "host_applied": []}, "export_contract"),
+        ({"basis": "package_declaration", "host_applied": []}, "package_declaration"),
+        ({"basis": "unrecorded", "host_applied": []}, "unrecorded"),
+        # Written before the basis field.
+        ({"recorded": True, "host_applied": []}, "export_contract"),
+        ({"recorded": True}, "export_contract"),
+        ({"recorded": False, "host_applied": []}, "unrecorded"),
+        # A record that names no known basis is not trusted.
+        ({"basis": "contract"}, "unrecorded"),
+        ({"basis": None, "recorded": True}, "unrecorded"),
+        ({"basis": "unrecorded", "recorded": True}, "unrecorded"),
+        ({"recorded": "true"}, "unrecorded"),
+        ({"recorded": 1}, "unrecorded"),
+        (["recorded"], "unrecorded"),
+        (None, "unrecorded"),
     ],
-    ids=["recorded", "recorded, no host list", "not recorded", "a string", "a number", "a list", "no record"],
+    ids=[
+        "export contract",
+        "package declaration",
+        "unrecorded",
+        "recorded",
+        "recorded, no host list",
+        "not recorded",
+        "an unknown basis",
+        "a null basis",
+        "the basis over the old field",
+        "a string",
+        "a number",
+        "a list",
+        "a null record",
+    ],
 )
-def test_a_selection_is_whole_and_applied_only_when_the_host_records_it(
-    record: object, recorded: bool
+def test_a_selection_is_whole_and_applied_only_on_the_exports_contract(
+    record: object, basis: str
 ) -> None:
     selection = export_applied_selection(
         _context(
             inclusion=_TYPED_INCLUSION,
             exclusion=_TYPED_EXCLUSION,
-            constraints={"source_selection": record} if record is not None else None,
+            constraints={"source_selection": record},
         )
     )
 
+    recorded = basis == "export_contract"
+    assert selection.basis == basis
     assert selection.recorded is recorded
     assert selection.contracts == AppliedContracts(
         inclusion=_TYPED_INCLUSION, exclusion=_TYPED_EXCLUSION
     )
     assert selection.known_applied == (selection.contracts if recorded else AppliedContracts())
     assert selection.unverified == (AppliedContracts() if recorded else selection.contracts)
+
+
+def test_a_context_without_a_record_has_no_basis() -> None:
+    # The CLI and a benchmark write no source_selection record.
+    selection = export_applied_selection(
+        _context(inclusion=_TYPED_INCLUSION, constraints={"cohort": {"age_min": 18}})
+    )
+
+    assert selection.basis is None
+    assert not selection.recorded
+    assert selection.unverified == AppliedContracts(inclusion=_TYPED_INCLUSION)
 
 
 def test_the_hosts_own_criteria_are_applied_without_a_record() -> None:
