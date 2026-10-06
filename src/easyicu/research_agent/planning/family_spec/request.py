@@ -82,6 +82,7 @@ from .contract import (
     SealedTrajectoryCoordinates,
     SensitivityAxisBinding,
     StudyPopulationOccurrence,
+    sealed_cohort_predicate,
     table_one_group_column,
 )
 
@@ -140,6 +141,10 @@ def sealed_trajectory_suite_coordinates(
         return None
     try:
         window = payload.get("window_hours") or []
+        # The population the suite seals, as the plan cohort states it.
+        population = payload.get("population") or {}
+        if not isinstance(population, Mapping):
+            raise TypeError("a sealed trajectory population is an object")
         return SealedTrajectoryCoordinates(
             representation_owner=str(payload.get("sealed_representation_owner") or ""),
             candidate_owner=str(payload.get("sealed_candidate_owner") or ""),
@@ -154,6 +159,12 @@ def sealed_trajectory_suite_coordinates(
             ],
             representation_outputs=[
                 str(value) for value in payload.get("representation_outputs") or []
+            ],
+            population_inclusion=[
+                sealed_cohort_predicate(item) for item in population.get("inclusion") or []
+            ],
+            population_exclusion=[
+                sealed_cohort_predicate(item) for item in population.get("exclusion") or []
             ],
         )
     except (TypeError, ValueError, IndexError):
