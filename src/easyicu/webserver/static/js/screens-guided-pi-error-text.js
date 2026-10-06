@@ -59,6 +59,12 @@
       if (error.code === 'research_pipeline_runner_image_mismatch') {
         return tr('The analysis runner image does not match this EasyICU version. Rebuild it from the current commit, restart EasyICU, and run again.', '分析运行镜像与当前 EasyICU 版本不一致。请按当前提交重建运行镜像并重启 EasyICU，然后重新运行。');
       }
+      if (error.code === 'research_pipeline_export_cohort_mismatch') {
+        return tr('The bound data package was not extracted for this study’s cohort under the current rule, so it cannot serve as this study’s data. Extract this study’s cohort, or choose another data source, then generate the plan.', '绑定的数据包不是按本研究的人群和当前规则提取的，不能作为本研究的数据。请先为本研究的人群提取数据，或改用其他数据源，再生成计划。');
+      }
+      if (error.code === 'research_pipeline_export_cohort_invalid') {
+        return tr('The study’s cohort or the bound data package’s recorded cohort cannot be executed as an extraction. Check the study’s cohort, or choose another data source.', '本研究的人群设置或绑定数据包记录的人群无法按提取规则执行。请检查人群设置，或改用其他数据源。');
+      }
       // D-P3-5: keep the URL as plain text (no <a>) — errorText() returns RAW
       // copy esc'd by callers per D-P2-2, so embedded HTML would be escaped and
       // never clickable. Copy the address into the browser manually. Terminology
