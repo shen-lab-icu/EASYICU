@@ -104,7 +104,7 @@ The host has already fixed the study family, exposure, outcome, time zero, the t
    For the sealed source-feasibility family: no adjustment set, no roster and no labels. The reviewed protocol found the requested treatment contrast not identifiable from the current source, so the host executes only the sealed fail-closed decision; you write the comparator applications (how each screened study's design differs from what this source can support) and nothing else.
 2. Reader labels: a concise clinical label for every required variable key, derived from the sealed variable descriptions (never a restatement of the identifier). When level label keys such as `<exposure>=0` and `<exposure>=1` are required, give the two groups distinct clinical names.
 3. Comparator applications: for each screened direct comparator, one sentence on how this study is compared with it (population, exposure, time zero, estimand) without copying its design and without claiming novelty.
-4. Population, only when the request offers population concepts (otherwise omit it or return null): the host applies only the typed cohort bounds and the source export's own population. A population that the research question or the study's own cohort wording names beyond them (for example an age group, a diagnosis or syndrome, or a treatment received) is applied only by the population you state. List each restriction in population.criteria in the words that state it, with the offered concepts that express it, and apply every criterion that has concepts with at least one inclusion or exclusion predicate over one of them, anchored at icu_admission and decided by time zero (end_offset_hours at most the time zero shown). Every predicate applies a listed criterion. Give a criterion no concepts only when no offered concept expresses it. Return population null when the study includes every row the typed bounds keep. When population_required is true, the caller has bound a filtered cohort that no typed bound filters: state the population with at least one inclusion or exclusion predicate (a phenotyping plan may restrict by its membership flag instead).
+4. Population, only when the request offers population concepts (otherwise omit it or return null): the host applies only the typed cohort bounds and the source export's own population. A population that the research question or the study's own cohort wording names beyond them (for example an age group, a diagnosis or syndrome, or a treatment received) is applied only by the population you state. List each restriction in population.criteria in the words that state it, with the offered concepts that express it, and apply every criterion that has concepts with at least one inclusion or exclusion predicate over one of them, anchored at icu_admission and decided by time zero (end_offset_hours at most the time zero shown). Every predicate applies a listed criterion. Give a criterion no concepts only when no offered concept expresses it. Return population null when the study includes every row the typed bounds keep. When population_required is true, the caller has bound a filtered cohort that no typed bound filters: state the population with at least one inclusion or exclusion predicate (a phenotyping plan may restrict by its membership flag instead). A restriction already_applied states (a typed bound, the source concept population, or a source inclusion or exclusion contract) is applied already: do not state it again. When source_selection_recorded is true, already_applied is everything that selected the input rows, and no other condition, treatment or age restriction has.
 
 Return exactly one JSON object and nothing else, in the response contract attached to the request: the provided schema, or the written response shape when no schema is attached. Copy request_sha256 exactly. Never invent variables, citations, results, or significance.
 """
@@ -341,7 +341,12 @@ _PREDICATE_VALUE_MODES = list(get_args(ProgressivePredicateValue.model_fields["m
 
 
 def _population_authority(request: FamilySpecRequest) -> dict[str, Any]:
-    """What the population the Planner states may read, and what is already applied."""
+    """What the population the Planner states may read, and what is already applied.
+
+    already_applied lists the typed bounds the template applies and what the
+    source export is known to have applied: its concept population and its
+    contracts (all of them when its selection is recorded, else the host's).
+    """
 
     typed = request.cohort_selection_mode == "predicate_filtered"
     applied = {
@@ -352,12 +357,17 @@ def _population_authority(request: FamilySpecRequest) -> dict[str, Any]:
             ("minimum_icu_hours", request.minimum_icu_hours if typed else None),
             ("source_concept_population", request.concept_cohort_definition),
             ("source_concept_population_window_end_hours", request.concept_cohort_window_end_hours),
+            ("source_inclusion_contracts", list(request.source_applied_inclusion) or None),
+            ("source_exclusion_contracts", list(request.source_applied_exclusion) or None),
         )
         if value is not None
     }
     return {
         "time_zero_hours_after_icu_admission": request.cohort_time_zero_hours,
         "already_applied": applied,
+        # Stated only when recorded: an unrecorded selection may hold more
+        # than already_applied lists, and nothing is claimed about it.
+        **({"source_selection_recorded": True} if request.source_selection_recorded else {}),
         "study_cohort_wording": dict(request.study_cohort_wording),
         "population_concepts": list(request.population_concepts),
         "population_required": population_required(request),
