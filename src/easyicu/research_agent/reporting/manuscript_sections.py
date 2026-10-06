@@ -22,6 +22,7 @@ from .administrative_authority import (
 from .manuscript_baseline import baseline_naming_instruction, baseline_reporting_mentions
 from .manuscript_result_structure import required_result_subsections, result_section_instruction
 from .manuscript_surface import MANUSCRIPT_SECTION_LENGTH_TARGETS
+from .population_selection import analyzed_population, writer_population_block
 from ..schema import AnalysisPlan
 
 
@@ -97,7 +98,8 @@ MANUSCRIPT_SECTION_SPECS = (
         section_name="Title and Keywords",
         instruction=(
             "Write:\n"
-            "1. `# <title>` — 12-20 words, include study design + cohort + "
+            "1. `# <title>` — 12-20 words, include study design + the analyzed "
+            "population as ANALYZED POPULATION states it + "
             "primary scientific question, but no numeric result, effect direction, "
             "association claim, or verdict.\n"
             "2. On the next line: `**Keywords:** keyword1, keyword2, ...` "
@@ -115,8 +117,9 @@ MANUSCRIPT_SECTION_SPECS = (
             "Write `## Abstract` with four labelled paragraphs:\n"
             "- **Background:** 2-3 sentences (clinical importance, knowledge "
             "gap).\n"
-            "- **Methods:** 3-4 sentences (cohort, design, primary analysis, "
-            "ICU-aware aggregation).\n"
+            "- **Methods:** 3-4 sentences (the analyzed population as ANALYZED "
+            "POPULATION states it, design, primary analysis, ICU-aware "
+            "aggregation).\n"
             "- **Results:** Report N, the endpoint summary, and the primary "
             "result appropriate to the approved analysis. Include effect sizes, "
             "confidence intervals, and p-values only when explicitly supplied "
@@ -183,8 +186,10 @@ MANUSCRIPT_SECTION_SPECS = (
         instruction=(
             "Write `## Methods` with sub-sections:\n"
             "### Study design and cohort\n"
-            "  Database, setting (ICU type), inclusion/exclusion criteria, time "
-            "period.\n"
+            "  Database, setting, and time period. State the analyzed population "
+            "exactly as ANALYZED POPULATION does: the criteria the source export "
+            "applied and the plan's predicates, or that every input row was "
+            "analyzed. State no inclusion or exclusion criterion it does not list.\n"
             "### Variables\n"
             "  Primary predictor, outcome, covariates. For each, state only the "
             "verified precomputed representation and analysis window. A "
@@ -412,7 +417,7 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "29"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "30"
 
 
 def manuscript_section_specs(analysis_plan: AnalysisPlan | None = None):
@@ -677,6 +682,27 @@ def _baseline_mentions_for_common(common: Mapping[str, Any]) -> dict[str, tuple[
     )
 
 
+def _leading_with_analyzed_population(
+    call_section: Callable[..., str], common: Mapping[str, Any],
+) -> Callable[..., str]:
+    """Lead every section request with the population the instructions name.
+
+    The instructions ask for the analyzed population as ANALYZED POPULATION
+    states it.  The block is built once per manuscript from the plan and
+    context the requests already carry, so a draft, its structural retry and
+    each bounded repair read the same population.
+    """
+
+    block = writer_population_block(
+        analyzed_population(plan=common.get("analysis_plan"), context=common.get("context"))
+    )
+
+    def call(*, instruction: str, **kwargs: Any) -> str:
+        return call_section(instruction=block + instruction, **kwargs)
+
+    return call
+
+
 def _existing_scientific_sections(manuscript: str) -> dict[str, str]:
     """Project an existing scaffold back onto the eight Writer owners."""
 
@@ -711,6 +737,7 @@ def repair_existing_manuscript_sections(
 ) -> tuple[str, tuple[str, ...]]:
     """Regenerate only section owners named by deterministic quality errors."""
 
+    call_section = _leading_with_analyzed_population(call_section, common)
     from .manuscript_quality import (
         repair_reader_internal_phrases,
         repair_reader_structure_from_existing_prose,
@@ -841,6 +868,7 @@ def repair_named_manuscript_sections(
     checks and final reader-quality validation in the manuscript owner.
     """
 
+    call_section = _leading_with_analyzed_population(call_section, common)
     sections = _existing_scientific_sections(manuscript)
     specs = {spec.key: spec for spec in manuscript_section_specs(common.get("analysis_plan"))}
     unknown = sorted(set(section_errors) - set(specs))
@@ -947,6 +975,7 @@ def render_manuscript_sections(
     one reservation in flight and stops immediately on the first failure.
     """
 
+    call_section = _leading_with_analyzed_population(call_section, common)
     sections: dict[str, str] = {}
     from .manuscript_quality import expected_manuscript_display_labels
 

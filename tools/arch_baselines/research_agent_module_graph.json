@@ -11589,6 +11589,10 @@
     ],
     [
       "easyicu.research_agent.reporting.manuscript_post",
+      "easyicu.research_agent.reporting.population_selection"
+    ],
+    [
+      "easyicu.research_agent.reporting.manuscript_post",
       "easyicu.research_agent.reporting.side_findings"
     ],
     [
@@ -11725,6 +11729,10 @@
     ],
     [
       "easyicu.research_agent.reporting.manuscript_sections",
+      "easyicu.research_agent.reporting.population_selection"
+    ],
+    [
+      "easyicu.research_agent.reporting.manuscript_sections",
       "easyicu.research_agent.schema"
     ],
     [
@@ -11769,6 +11777,14 @@
     ],
     [
       "easyicu.research_agent.reporting.novelty_positioning",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.reporting.population_selection",
+      "easyicu.research_agent.research_context.concept_population"
+    ],
+    [
+      "easyicu.research_agent.reporting.population_selection",
       "easyicu.research_agent.schema"
     ],
     [
@@ -12373,6 +12389,10 @@
     ],
     [
       "easyicu.research_agent.reporting.write_phase",
+      "easyicu.research_agent.reporting.population_selection"
+    ],
+    [
+      "easyicu.research_agent.reporting.write_phase",
       "easyicu.research_agent.reporting.publication_disclosure_review"
     ],
     [
@@ -12426,6 +12446,10 @@
     [
       "easyicu.research_agent.reporting.writer_evidence",
       "easyicu.research_agent.reporting.p_values"
+    ],
+    [
+      "easyicu.research_agent.reporting.writer_evidence",
+      "easyicu.research_agent.reporting.population_selection"
     ],
     [
       "easyicu.research_agent.reporting.writer_evidence",
@@ -13316,9 +13340,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3321,
+    "edge_count": 3327,
     "largest_scc_size": 0,
-    "module_count": 772,
+    "module_count": 773,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -14009,6 +14033,7 @@
     "easyicu.research_agent.reporting.novelty_positioning": "reporting/novelty_positioning.py",
     "easyicu.research_agent.reporting.p_values": "reporting/p_values.py",
     "easyicu.research_agent.reporting.pdf_render": "reporting/pdf_render.py",
+    "easyicu.research_agent.reporting.population_selection": "reporting/population_selection.py",
     "easyicu.research_agent.reporting.publication_bundles": "reporting/publication_bundles.py",
     "easyicu.research_agent.reporting.publication_disclosure_review": "reporting/publication_disclosure_review.py",
     "easyicu.research_agent.reporting.publication_filesystem": "reporting/publication_filesystem.py",
