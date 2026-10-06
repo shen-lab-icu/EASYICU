@@ -126,6 +126,7 @@ from easyicu.webserver.research_launch_scientific import (
     _runtime_projection_sensitivity_specs,
     _target_outcome,
     _validate_trajectory_design,
+    bound_export_records_study_cohort,
     resolve_study_analysis_design,
     validate_analysis_design_for_execution,
 )
@@ -1967,8 +1968,20 @@ def _research_user_preferences(
     study: Mapping[str, Any],
     *,
     patient_grouping: Optional[PatientGroupingBinding] = None,
+    cohort_study: Optional[Mapping[str, Any]] = None,
+    source_selection_recorded: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    """Compile StudyContext into the existing strict preference contract."""
+    """Compile StudyContext into the existing strict preference contract.
+
+    ``cohort_study`` is the StudyContext whose cohort the bound export was
+    extracted for and the launch compared it with: the study before the
+    neutral materialization scope fills an absent ``time_window``.  A
+    concept-derived population is selected by that study's window, never by
+    the neutral one.  ``source_selection_recorded`` says whether the bound
+    export records that selection (``bound_export_records_study_cohort``);
+    ``data_constraints.source_selection`` carries it, with the declared
+    criteria the host applies itself.
+    """
 
     preferences: Dict[str, Any] = {}
     purpose = _clean_text(study.get("purpose"), 1_200)
@@ -2059,10 +2072,24 @@ def _research_user_preferences(
     cohort = study.get("cohort")
     if isinstance(cohort, Mapping) and cohort:
         constraints["cohort"] = dict(cohort)
-    concept_window = _study_concept_cohort_window(study)
+    concept_window = _study_concept_cohort_window(
+        cohort_study if cohort_study is not None else study
+    )
     if concept_window is not None:
         # Planning refuses a plan whose time zero comes before this window ends.
         constraints["concept_cohort_window"] = concept_window
+    if source_selection_recorded is not None:
+        # Whether the criteria and the concept population in this context are
+        # the selection the bound export records, and which declared criteria
+        # the host applies itself.  Without it, a context that declares none
+        # cannot tell an export that selected no one from one whose selection
+        # is not known.
+        constraints["source_selection"] = {
+            "recorded": bool(source_selection_recorded),
+            "host_applied": _host_applied_criteria(
+                cohort_study if cohort_study is not None else study
+            ),
+        }
     if isinstance(confirmations, Mapping) and confirmations:
         constraints["confirmations"] = dict(confirmations)
     if analysis_design:
@@ -2215,7 +2242,9 @@ def _diagnosis_criteria(
     return []
 
 
-def _inclusion_criteria(study: Mapping[str, Any]) -> List[str]:
+def _inclusion_criteria(
+    study: Mapping[str, Any], *, export_recorded: bool = True
+) -> List[str]:
     """Compile only the criteria that say who ENTERS the cohort.
 
     Everything the researcher set used to arrive here, exclusions included:
@@ -2236,19 +2265,33 @@ def _inclusion_criteria(study: Mapping[str, Any]) -> List[str]:
     under a cohort named for the population it never selected. The wording
     still reaches the Planner, in ``data_constraints.cohort``, as a population
     its predicates apply.
+
+    Each field is declared as Data Extraction executes it
+    (``primary_cohort.normalize_execution_cohort``), not as the raw field
+    reads: a legacy ``adult_first`` preset executes an adult age bound with
+    no age field set, and an age bound of 0 or 100 executes none.  Only an
+    export whose manifest records the contract it was extracted for
+    (``bound_export_records_study_cohort``) is known to have applied them.
+    For any other package (``export_recorded`` false) nothing is declared:
+    the typed bounds reach the Planner only in ``data_constraints.cohort``,
+    where a family template re-applies them and a progressive plan applies
+    them through its predicates.
     """
 
     raw = study.get("cohort")
     cohort = raw if isinstance(raw, Mapping) else {}
+    executed = _executed_cohort(cohort)
+    if not export_recorded or executed is None:
+        return []
     rows: List[str] = []
-    age_min = cohort.get("age_min")
-    age_max = cohort.get("age_max")
+    age_min = executed["age_min"] if executed["age_min"] > 0 else None
+    age_max = executed["age_max"] if executed["age_max"] < 100 else None
     if age_min is not None or age_max is not None:
         rows.append(
             f"age range: {age_min if age_min is not None else '*'} to {age_max if age_max is not None else '*'}"
         )
-    minimum_los = cohort.get("min_icu_los_hours")
-    if minimum_los is not None:
+    minimum_los = executed["min_icu_los_hours"]
+    if minimum_los > 0:
         rows.append(f"minimum ICU length of stay: {minimum_los} hours")
     rows.extend(
         _diagnosis_criteria(
@@ -2258,7 +2301,9 @@ def _inclusion_criteria(study: Mapping[str, Any]) -> List[str]:
     return rows[:32]
 
 
-def _exclusion_criteria(study: Mapping[str, Any]) -> List[str]:
+def _exclusion_criteria(
+    study: Mapping[str, Any], *, export_recorded: bool = True
+) -> List[str]:
     """Compile the criteria that say who is REMOVED from the cohort.
 
     As with inclusion, only removals something applies are declared: the
@@ -2269,22 +2314,56 @@ def _exclusion_criteria(study: Mapping[str, Any]) -> List[str]:
     before the landmark") would read as an inclusion. Like the rest of the
     wording it reaches the Planner in ``data_constraints.cohort``, as a removal
     the plan applies, not one the input rows already reflect.
+
+    The host keeps the first stay whenever ``primary_cohort.first_icu_stay_only``
+    says so (a legacy ``adult_first`` preset included), whatever the export
+    holds; the diagnosis exclusions are declared only for an export that
+    records the contract it was extracted for (see ``_inclusion_criteria``).
     """
 
     raw = study.get("cohort")
     cohort = raw if isinstance(raw, Mapping) else {}
-    rows: List[str] = []
-    if cohort.get("exclude_readmissions") is True:
-        rows.append(
-            "each patient's later ICU stays: the host keeps only the first ICU stay "
-            "per patient across the bound source, before planning"
+    rows: List[str] = list(_host_applied_criteria(study))
+    if export_recorded:
+        rows.extend(
+            _diagnosis_criteria(
+                cohort, ("icd_exclude", "exclude_diagnoses"), "exclude diagnoses"
+            )
         )
-    rows.extend(
-        _diagnosis_criteria(
-            cohort, ("icd_exclude", "exclude_diagnoses"), "exclude diagnoses"
-        )
-    )
     return rows[:32]
+
+
+#: The first-stay restriction as the context declares it; the host applies it
+#: with its verified coordinate before planning (``_first_icu_stay_for_cohort``).
+_FIRST_ICU_STAY_EXCLUSION = (
+    "each patient's later ICU stays: the host keeps only the first ICU stay "
+    "per patient across the bound source, before planning"
+)
+
+
+def _host_applied_criteria(study: Mapping[str, Any]) -> List[str]:
+    """The declared criteria the host applies itself, whatever the export holds.
+
+    Each is the exact string the context's criteria declare, so a reader can
+    tell it from a criterion only the export could have applied.
+    """
+
+    raw = study.get("cohort")
+    cohort = raw if isinstance(raw, Mapping) else {}
+    return [_FIRST_ICU_STAY_EXCLUSION] if primary_cohort.first_icu_stay_only(cohort) else []
+
+
+def _executed_cohort(cohort: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """The cohort as Data Extraction executes it, or ``None`` when it cannot.
+
+    A cohort extraction cannot execute is refused at launch with its own
+    reason; here, like an unverifiable diagnosis filter, it declares nothing.
+    """
+
+    try:
+        return primary_cohort.normalize_execution_cohort(dict(cohort))
+    except primary_cohort.PrimaryCohortContractError:
+        return None
 
 
 def _verified_first_icu_stay_or_none(study: Mapping[str, Any]) -> Any:
@@ -5967,9 +6046,14 @@ def make_research_pipeline_run_runner(
                 # bounded reconciliation can still discover the exact pause.
                 register_pipeline_work_root(root)
                 put_recovery_seed(recovery_seed)
+            source_selection_recorded = bound_export_records_study_cohort(
+                study, export_path
+            )
             preferences = _research_user_preferences(
                 candidate_planning_study,
                 patient_grouping=patient_grouping,
+                cohort_study=study,
+                source_selection_recorded=source_selection_recorded,
             )
             _progress(
                 job,
@@ -6025,8 +6109,12 @@ def make_research_pipeline_run_runner(
                 outcome_columns=pipeline_outcome_columns,
                 endpoint=acquisition.endpoint,
                 primary_exposure=resolved_primary_exposure,
-                inclusion_criteria=_inclusion_criteria(study),
-                exclusion_criteria=_exclusion_criteria(study),
+                inclusion_criteria=_inclusion_criteria(
+                    study, export_recorded=source_selection_recorded
+                ),
+                exclusion_criteria=_exclusion_criteria(
+                    study, export_recorded=source_selection_recorded
+                ),
                 time_windows=_declared_time_windows(window, study),
                 id_columns=(
                     [patient_grouping.output_identity_column]
