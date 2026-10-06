@@ -171,6 +171,36 @@ def test_the_criteria_an_export_applied_are_its_population() -> None:
 
 
 @pytest.mark.parametrize(
+    "wording",
+    [
+        {"label": "Adults with septic shock", "review": "Adult ICU stays with septic shock"},
+        {"review": "Older adults with acute kidney injury", "exclusion_statement": "Excluding dialysis"},
+    ],
+)
+def test_the_studys_own_wording_is_not_a_criterion_the_export_applied(
+    wording: dict[str, str],
+) -> None:
+    # A context written before the Web caller declared only typed criteria
+    # filed the study's wording as criteria, and the same words in
+    # data_constraints.cohort.
+    context = _context(
+        inclusion=tuple(wording[key] for key in ("label", "review") if key in wording),
+        exclusion=(wording["exclusion_statement"],) if "exclusion_statement" in wording else (),
+        constraints={"cohort": wording},
+    )
+
+    population = analyzed_population(plan=_plan(_ALL_ROWS), context=context)
+
+    assert population is not None
+    assert population.source_scope == "all_icu_stays_of_source_export"
+    assert population.record()["applied_contracts"] == {"inclusion": [], "exclusion": []}
+    block = writer_population_block(population)
+    assert "- Criteria the source export applied before analysis: none." in block
+    for words in wording.values():
+        assert words not in block
+
+
+@pytest.mark.parametrize(
     ("definition", "hours"), [("sepsis3", 24.0), ("aki", 48.0), ("ventilation", 12.0)]
 )
 def test_a_concept_derived_export_is_not_called_every_icu_stay(
@@ -243,7 +273,7 @@ def test_without_typed_owners_the_host_states_no_population(case: str) -> None:
     assert population is None
     block = writer_population_block(population)
     assert "not stated by the host" in block
-    assert "The research question selects no one" in block
+    assert "any criterion or cohort wording in RESEARCH CONTEXT, select no one" in block
 
 
 # The Writer -----------------------------------------------------------
@@ -356,7 +386,7 @@ def test_every_writer_section_states_the_analyzed_population(
         prompt = llm.calls[-1][0][1].content
         assert prompt.count(block) == 1
         assert "every ICU stay in the source export" in prompt
-        assert "The research question selects no one" in prompt
+        assert "any criterion or cohort wording in RESEARCH CONTEXT, select no one" in prompt
         assert "around the ANALYZED POPULATION above" in prompt
         assert "this research question's population" not in prompt
         # The question still reaches the Writer, as the question.
