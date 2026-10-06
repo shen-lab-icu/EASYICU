@@ -29,6 +29,7 @@ from ...research_context.concept_population import (
     concept_cohort_window,
     context_data_constraints,
 )
+from ...research_context.export_selection import export_applied_selection
 from ...research_context.minimum_stay import minimum_icu_stay_hours
 from ...schema import ResearchContext
 from ...trajectory.plan_contract import trajectory_context_is_bound
@@ -830,6 +831,11 @@ def _bind_population_authority(
     binds every input row (that cohort is the population), when the family's
     cohort is its sealed suite's, or when the family decides nothing by a time
     zero.
+
+    With them come the criteria the source export is known to have applied
+    and whether its selection is recorded (``export_applied_selection``): a
+    restriction already applied is not the Planner's to restate, and one
+    that nothing records is not applied.
     """
 
     concepts = list(
@@ -845,11 +851,21 @@ def _bind_population_authority(
         or request.cohort_time_zero_hours is None
     ):
         return request
+    try:
+        selection = export_applied_selection(context)
+    except ConceptCohortWindowError as exc:
+        raise FamilySpecError(
+            "family_spec_concept_cohort_window_invalid", str(exc), path="cohort",
+        ) from exc
+    known = selection.known_applied
     return FamilySpecRequest.model_validate(
         {
             **request.model_dump(mode="json"),
             "population_concepts": concepts,
             "study_cohort_wording": _study_cohort_wording(context),
+            "source_applied_inclusion": list(known.inclusion),
+            "source_applied_exclusion": list(known.exclusion),
+            "source_selection_recorded": selection.recorded,
         }
     )
 

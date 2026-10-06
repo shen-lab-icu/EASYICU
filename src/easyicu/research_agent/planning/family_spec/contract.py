@@ -455,6 +455,22 @@ class FamilySpecRequest(BaseModel):
     study_cohort_wording: dict[str, str] = Field(
         default_factory=dict, exclude_if=lambda value: not value
     )
+    #: The criteria the source export is known to have applied, verbatim:
+    #: its whole recorded selection, or only the host's own criteria when
+    #: that selection is not recorded (``export_applied_selection``'s
+    #: ``known_applied``), and whether it is recorded.  Offered with the
+    #: population, so the Planner neither restates a criterion already
+    #: applied nor takes as applied one that nothing records.  Omitted from
+    #: the digest when empty or false.
+    source_applied_inclusion: list[str] = Field(
+        default_factory=list, max_length=64, exclude_if=lambda value: not value
+    )
+    source_applied_exclusion: list[str] = Field(
+        default_factory=list, max_length=64, exclude_if=lambda value: not value
+    )
+    source_selection_recorded: bool = Field(
+        default=False, exclude_if=lambda value: not value
+    )
 
     @field_validator(
         "exposure_levels",
@@ -468,6 +484,8 @@ class FamilySpecRequest(BaseModel):
         "comparison_literature_keys",
         "variable_roster",
         "population_concepts",
+        "source_applied_inclusion",
+        "source_applied_exclusion",
     )
     @classmethod
     def _unique_nonblank(cls, values: list[str]) -> list[str]:

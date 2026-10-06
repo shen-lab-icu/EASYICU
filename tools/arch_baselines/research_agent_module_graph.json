@@ -9725,6 +9725,10 @@
     ],
     [
       "easyicu.research_agent.planning.family_spec.request",
+      "easyicu.research_agent.research_context.export_selection"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.request",
       "easyicu.research_agent.research_context.minimum_stay"
     ],
     [
@@ -13396,7 +13400,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3341,
+    "edge_count": 3342,
     "largest_scc_size": 0,
     "module_count": 776,
     "package_count": 36,
