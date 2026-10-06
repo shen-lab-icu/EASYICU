@@ -170,18 +170,16 @@ def test_every_option_is_applicable_and_lands_where_it_claims() -> None:
 
 
 def test_an_adult_option_states_its_age_floor_instead_of_trusting_the_preset() -> None:
-    """The `adult_all` preset normalises `age_min` to 0 unless it is stated.
+    """An adult option carries its age floor as a field.
 
-    An option that sent the preset alone would include children under a label
-    that says adults, so the age floor is carried explicitly.
+    The adult presets also imply the floor now
+    (test_an_adult_preset_admits_no_child); the options state it anyway, so
+    the confirmed contract does not depend on a preset's meaning.
     """
 
     by_id = {option["id"]: option for option in cohort_eligibility.ELIGIBILITY_OPTIONS}
     for option_id in ("adults_first_admission", "adults_all_admissions"):
         assert by_id[option_id]["cohort"]["age_min"] == 18, option_id
-    # the trap is real: the preset alone normalises the floor away
-    without_floor = dataio._normalize_export_cohort({"preset": "adult_all"})  # noqa: SLF001
-    assert without_floor["age_min"] == 0
     with_floor = dataio._normalize_export_cohort(by_id["adults_all_admissions"]["cohort"])  # noqa: SLF001
     assert with_floor["age_min"] == 18
 

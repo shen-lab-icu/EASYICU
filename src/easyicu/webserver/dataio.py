@@ -2001,14 +2001,35 @@ def export_cohort_execution(cohort: Optional[Mapping[str, Any]]) -> Dict[str, An
     }
 
 
+def _recorded_adult_floor_holds(contract: Any) -> bool:
+    """Whether a recorded adult preset executed with the adult age floor."""
+
+    if not isinstance(contract, Mapping):
+        return True
+    preset = str(contract.get("preset") or "").strip().lower()
+    if preset not in primary_cohort.ADULT_COHORT_PRESETS:
+        return True
+    try:
+        recorded = int(float(contract.get("age_min")))
+    except (TypeError, ValueError):
+        return False
+    return recorded >= primary_cohort.ADULT_AGE_FLOOR_YEARS
+
+
 def export_cohort_execution_current(manifest: Mapping[str, Any]) -> bool:
     """Whether an export's cohort and scores mean what this owner executes now.
 
     A manifest without a record predates version 2.  Its rows still agree when
     neither change could have reached them: no concept-derived cohort, and an
     observation window equal to the scores' own window.
+
+    The manifest records the contract as it executed.  An adult preset
+    recorded with a minimum age below the adult floor was extracted before
+    the floor was part of the preset, so its rows may include children.
     """
 
+    if not _recorded_adult_floor_holds(manifest.get("cohort_contract")):
+        return False
     record = manifest.get("cohort_execution")
     if isinstance(record, Mapping):
         return record.get("schema_version") == EXPORT_COHORT_EXECUTION_SCHEMA
