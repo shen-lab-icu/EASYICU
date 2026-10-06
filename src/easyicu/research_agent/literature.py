@@ -1614,9 +1614,40 @@ def _normalise_clinical_text(value: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).split())
 
 
+def _stated_study_cohort(context: ResearchContext) -> dict[str, Any]:
+    """The study's own cohort, as the Web host sends it in ``data_constraints``.
+
+    Its wording (``label``, ``review``) states whom the study includes. The
+    host keeps that wording out of the cohort's inclusion criteria, which list
+    only what the input rows already meet, because nothing executes prose.
+    """
+
+    raw = getattr(context.user_preferences, "data_constraints", None)
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    cohort = payload.get("cohort") if isinstance(payload, dict) else None
+    return cohort if isinstance(cohort, dict) else {}
+
+
+#: Study cohort presets whose name states an adult population; Data
+#: Extraction applies the adult age floor with them whether or not an age
+#: bound is set (the host's ``primary_cohort.ADULT_COHORT_PRESETS``).
+_ADULT_STUDY_PRESETS = frozenset({"adult_all", "adult_first"})
+
+
 def _adult_population_required(context: ResearchContext) -> bool:
     """Recognize declared adult scope or a fully age-observed adult cohort.
 
+    The scope is declared wherever the study states whom it includes: the
+    question, the criteria the input rows meet, and the study's own cohort
+    wording, typed age floor and adult preset. Before planning, the catalog
+    has no rows, so a scope stated only in the question or the wording would
+    otherwise leave a pediatric study eligible as a design analogue for an
+    adult one.
     Observed ages constrain comparison to this bound cohort, not eligibility
     for a future cohort. A sample, empty catalog, partial age coverage, or the
     dictionary's physiological range cannot establish that population.
@@ -1624,10 +1655,18 @@ def _adult_population_required(context: ResearchContext) -> bool:
 
     cohort = context.cohort
     provenance = cohort.provenance if isinstance(cohort.provenance, dict) else {}
+    stated = _stated_study_cohort(context)
+    age_floor = stated.get("age_min")
+    if isinstance(age_floor, (int, float)) and age_floor >= 18:
+        return True
+    if str(stated.get("preset") or "").strip().lower() in _ADULT_STUDY_PRESETS:
+        return True
     values = [
+        context.research_question,
         cohort.cohort_name,
         *cohort.inclusion_criteria,
         *[str(value) for value in list(provenance.get("inclusion_criteria") or [])],
+        *[str(stated[key]) for key in ("label", "review") if isinstance(stated.get(key), str)],
     ]
     raw_text = " ".join(values)
     text = _normalise_clinical_text(raw_text)
