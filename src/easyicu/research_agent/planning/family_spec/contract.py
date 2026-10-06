@@ -32,6 +32,7 @@ from ..progressive_contract import (
     ModelTermCoding,
     ProgressiveCohortPredicate,
     ProgressivePopulationCriterion,
+    ProgressivePredicateValue,
 )
 
 FAMILY_SPEC_SCHEMA_VERSION = "easyicu.family_plan_spec/1"
@@ -246,6 +247,15 @@ class SealedTrajectoryCoordinates(BaseModel):
     grid_width_hours: int = Field(gt=0)
     candidate_cluster_counts: list[int] = Field(min_length=2)
     representation_outputs: list[str] = Field(min_length=1)
+    #: The population the suite seals: the reviewed plan's cohort predicates,
+    #: which ``bind_plan`` gives the signed plan.  Empty when the owners keep
+    #: every input row, and then left out of the request digest.
+    population_inclusion: list[ProgressiveCohortPredicate] = Field(
+        default_factory=list, exclude_if=lambda value: not value
+    )
+    population_exclusion: list[ProgressiveCohortPredicate] = Field(
+        default_factory=list, exclude_if=lambda value: not value
+    )
 
     @field_validator("coordinate_concepts", "descriptive_only_concepts", "representation_outputs")
     @classmethod
@@ -260,6 +270,49 @@ class SealedTrajectoryCoordinates(BaseModel):
         if self.window_hours[0] >= self.window_hours[1]:
             raise ValueError("sealed trajectory window must have positive width")
         return self
+
+
+def sealed_cohort_predicate(item: Any) -> ProgressiveCohortPredicate:
+    """One cohort predicate a sealed authority discloses, as a plan predicate.
+
+    The disclosure carries the predicate in the canonical form the plan cohort
+    states it; every coordinate is kept, and the value takes its closed form.
+    A predicate without that form raises, so the caller treats the disclosure
+    as unreadable instead of planning on part of a population.
+    """
+
+    window = item.get("time_window") if isinstance(item, Mapping) else None
+    if not isinstance(window, Mapping):
+        raise TypeError("a sealed cohort predicate is an object with a time window")
+    return ProgressiveCohortPredicate(
+        concept_id=item.get("concept_id"),
+        anchor=window.get("anchor"),
+        start_offset_hours=window.get("start_offset_hours"),
+        end_offset_hours=window.get("end_offset_hours"),
+        aggregation=item.get("aggregation"),
+        op=item.get("op"),
+        value=_closed_predicate_value(item.get("value")),
+    )
+
+
+def _closed_predicate_value(value: Any) -> ProgressivePredicateValue:
+    if value is None:
+        return ProgressivePredicateValue(mode="none")
+    if isinstance(value, bool):
+        return ProgressivePredicateValue(mode="boolean", boolean_value=value)
+    if isinstance(value, (int, float)):
+        return ProgressivePredicateValue(mode="number", number_value=float(value))
+    if isinstance(value, str):
+        return ProgressivePredicateValue(mode="string", string_value=value)
+    if isinstance(value, list) and value and all(isinstance(item, str) for item in value):
+        return ProgressivePredicateValue(mode="string_list", string_list=list(value))
+    if isinstance(value, list) and value and all(
+        isinstance(item, (int, float)) and not isinstance(item, bool) for item in value
+    ):
+        return ProgressivePredicateValue(
+            mode="number_list", number_list=[float(item) for item in value]
+        )
+    raise ValueError("a sealed cohort predicate value has no closed form")
 
 
 class SealedFeasibilityCoordinates(BaseModel):
@@ -1420,6 +1473,7 @@ __all__ = [
     "accepted_baseline_additions",
     "literature_design_card_keys_by_dimension",
     "population_required",
+    "sealed_cohort_predicate",
     "spec_from_mapping",
     "table_one_group_column",
     "validate_family_plan_spec",

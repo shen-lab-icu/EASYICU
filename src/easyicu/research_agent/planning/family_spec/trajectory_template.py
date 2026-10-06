@@ -34,6 +34,7 @@ from ...trajectory.plan_contract import (
 )
 from ..design_selection import ResearchDesignCandidate, ResearchDesignSelection
 from ..progressive_contract import (
+    ProgressiveCohortIntent,
     ProgressiveDisplayLabel,
     ProgressiveFoundationMaterialization,
     ProgressiveLiteratureBinding,
@@ -336,6 +337,33 @@ def _ref(producer: str, product: str) -> ProgressiveProductRef:
     return ProgressiveProductRef(producer_step_id=producer, product_id=product)
 
 
+def _suite_cohort_intent(request: FamilySpecRequest) -> ProgressiveCohortIntent:
+    """The plan's cohort: the population the suite seals, for a filtered study.
+
+    ``bind_plan`` gives the signed plan the sealed population, and the
+    representation owner counts it.  A study that states a population filter
+    plans a filtered cohort; its rows were extracted by that filter, and the
+    suite seals the population its reviewed plan applied.  The template states
+    that population, since the host's typed bounds cannot express a
+    concept-derived filter.  Any other study keeps the shared cohort: every
+    input row, or the typed bounds.
+    """
+
+    sealed = request.sealed_trajectory
+    if (
+        request.cohort_selection_mode == "predicate_filtered"
+        and sealed is not None
+        and (sealed.population_inclusion or sealed.population_exclusion)
+    ):
+        return ProgressiveCohortIntent(
+            name=request.cohort_name,
+            selection_mode="predicate_filtered",
+            inclusion=list(sealed.population_inclusion),
+            exclusion=list(sealed.population_exclusion),
+        )
+    return _cohort_intent(request)
+
+
 def build_fixed_window_trajectory_skeleton(
     request: FamilySpecRequest,
     spec: FamilyPlanSpec,
@@ -629,7 +657,7 @@ def build_fixed_window_trajectory_skeleton(
     foundation = ProgressiveFoundationMaterialization(
         outline_sha256=outline_sha256,
         foundation=ProgressivePlanFoundation(
-            cohort=_cohort_intent(request),
+            cohort=_suite_cohort_intent(request),
             display_labels=[
                 ProgressiveDisplayLabel(key=key, value=value)
                 for key, value in spec.labels.items()
