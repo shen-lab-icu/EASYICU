@@ -9452,6 +9452,22 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.planning.cohort_predicate_domain",
+      "easyicu.research_agent.authority.declared_levels"
+    ],
+    [
+      "easyicu.research_agent.planning.cohort_predicate_domain",
+      "easyicu.research_agent.cohort.schema"
+    ],
+    [
+      "easyicu.research_agent.planning.cohort_predicate_domain",
+      "easyicu.research_agent.planning.cohort_eligibility"
+    ],
+    [
+      "easyicu.research_agent.planning.cohort_predicate_domain",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.planning.dependence_authority",
       "easyicu.research_agent.contracts.analysis_design"
     ],
@@ -10570,6 +10586,10 @@
     [
       "easyicu.research_agent.planning.scientific_review",
       "easyicu.research_agent.planning.cohort_eligibility"
+    ],
+    [
+      "easyicu.research_agent.planning.scientific_review",
+      "easyicu.research_agent.planning.cohort_predicate_domain"
     ],
     [
       "easyicu.research_agent.planning.scientific_review",
@@ -13440,9 +13460,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3352,
+    "edge_count": 3357,
     "largest_scc_size": 0,
-    "module_count": 777,
+    "module_count": 778,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -13961,6 +13981,7 @@
     "easyicu.research_agent.planning.capability_registry": "planning/capability_registry.py",
     "easyicu.research_agent.planning.cohort_contract": "planning/cohort_contract.py",
     "easyicu.research_agent.planning.cohort_eligibility": "planning/cohort_eligibility.py",
+    "easyicu.research_agent.planning.cohort_predicate_domain": "planning/cohort_predicate_domain.py",
     "easyicu.research_agent.planning.dependence_authority": "planning/dependence_authority.py",
     "easyicu.research_agent.planning.design_selection": "planning/design_selection.py",
     "easyicu.research_agent.planning.distribution_authority": "planning/distribution_authority.py",
