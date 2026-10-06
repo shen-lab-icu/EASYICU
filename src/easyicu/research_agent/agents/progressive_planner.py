@@ -71,6 +71,7 @@ from ..planning.primary_result_contract import (
 from ..planning.progressive_compiler import (
     compile_progressive_plan,
     progressive_cohort_concept_ids,
+    progressive_population_concept_ids,
     progressive_output_roles_for_module,
     required_binary_display_label_scopes,
     required_reader_display_label_keys,
@@ -2876,7 +2877,7 @@ class ProgressivePlannerAgent:
             context,
             outline.design_selection,
         )
-        cohort_concept_ids = progressive_cohort_concept_ids(context, variables)
+        cohort_concept_ids = progressive_population_concept_ids(context, variables)
         blocks = [
             "PROGRESSIVE PLAN-FOUNDATION AUTHORITY",
             "Host-validated outline and digest:\n"
@@ -4840,7 +4841,7 @@ class ProgressivePlannerAgent:
                 outline_sha256=outline_sha256,
                 variable_names=variables,
                 complete_case_variable_names=complete_case_variables,
-                cohort_concept_ids=progressive_cohort_concept_ids(context, variables),
+                cohort_concept_ids=progressive_population_concept_ids(context, variables),
                 allowed_know_how_decisions=allowed_know_how_decisions,
                 required_cohort_selection_mode=(required_primary_cohort_selection_mode),
                 required_cohort_name=(
@@ -4942,7 +4943,7 @@ class ProgressivePlannerAgent:
                 )
                 return parsed
 
-            reminder_concept_ids = progressive_cohort_concept_ids(context, variables)
+            reminder_concept_ids = progressive_population_concept_ids(context, variables)
             foundation_materialization = call_llm_with_structured_retry(
                 self.llm,
                 foundation_messages,

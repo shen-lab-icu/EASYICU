@@ -5100,10 +5100,10 @@ def test_compiler_scopes_sealed_materialized_columns_for_cohort_validation() -> 
         update={
             "variables": [
                 ConceptDescriptor(
-                    name="stay_id",
-                    role=VariableRole.ID,
+                    name="run_local_flag",
+                    role=VariableRole.INTERVENTION,
                     dtype="int64",
-                    observed_domain={"n_unique": 120},
+                    observed_domain={"n_unique": 2},
                 ),
                 *context.variables,
             ]
@@ -5115,7 +5115,7 @@ def test_compiler_scopes_sealed_materialized_columns_for_cohort_validation() -> 
         "selection_mode": "predicate_filtered",
         "inclusion": [
             {
-                "concept_id": "stay_id",
+                "concept_id": "run_local_flag",
                 "anchor": "icu_admission",
                 "start_offset_hours": 0,
                 "end_offset_hours": 24,
@@ -5126,7 +5126,7 @@ def test_compiler_scopes_sealed_materialized_columns_for_cohort_validation() -> 
         ],
         "exclusion": [],
     }
-    prior_registry_answer = concept_id_exists("stay_id")
+    prior_registry_answer = concept_id_exists("run_local_flag")
 
     plan, _receipt = compile_progressive_plan(
         skeleton=ProgressivePlanSkeleton.model_validate(payload),
@@ -5134,8 +5134,8 @@ def test_compiler_scopes_sealed_materialized_columns_for_cohort_validation() -> 
     )
 
     assert plan.cohort is not None
-    assert plan.cohort.inclusion[0].concept_id == "stay_id"
-    assert concept_id_exists("stay_id") is prior_registry_answer
+    assert plan.cohort.inclusion[0].concept_id == "run_local_flag"
+    assert concept_id_exists("run_local_flag") is prior_registry_answer
 
 
 def test_compiler_keeps_navigation_identity_out_of_executable_step_inputs() -> None:

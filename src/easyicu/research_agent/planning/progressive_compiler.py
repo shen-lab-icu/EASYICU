@@ -336,6 +336,45 @@ def progressive_cohort_concept_ids(
     return sealed_cohort_concept_ids(context, variable_names)
 
 
+def cohort_identity_columns(context: ResearchContext) -> frozenset[str]:
+    """The columns that identify the analysis input's rows.
+
+    Every row has its identifier, so a predicate over one keeps every row (a
+    value that is not missing, a count of at least one) or an arbitrary
+    subset of them: it states no population.
+    """
+
+    return frozenset(
+        {
+            *(str(name) for name in context.cohort.id_columns),
+            *(
+                variable.name
+                for variable in context.variables
+                if variable.role.value == "id"
+            ),
+        }
+    )
+
+
+def progressive_population_concept_ids(
+    context: ResearchContext,
+    variable_names: Sequence[str],
+) -> tuple[str, ...]:
+    """The cohort concepts a Planner may restrict the population by.
+
+    The sealed roster (:func:`progressive_cohort_concept_ids`) without the row
+    identifiers.  The Foundation transport offers this list; the roster that
+    seals and re-parses a plan keeps every column.
+    """
+
+    identity = cohort_identity_columns(context)
+    return tuple(
+        concept
+        for concept in progressive_cohort_concept_ids(context, variable_names)
+        if concept not in identity
+    )
+
+
 def _context_cohort_concept_ids(context: ResearchContext) -> tuple[str, ...]:
     return sealed_cohort_concept_ids(context)
 
@@ -403,6 +442,34 @@ def _validate_progressive_cohort_intent(
     return cohort
 
 
+def _refuse_identity_predicates(
+    cohort_intent: ProgressiveCohortIntent,
+    *,
+    context: ResearchContext,
+) -> None:
+    """A cohort predicate reads a concept, never the row identifier.
+
+    A predicate over the identifier holds for every row, or picks rows by
+    their id, so a cohort it filters claims a restriction that it does not
+    apply.
+    """
+
+    identity = cohort_identity_columns(context)
+    for side in ("inclusion", "exclusion"):
+        for index, item in enumerate(getattr(cohort_intent, side)):
+            if item.concept_id in identity:
+                raise _fail(
+                    "progressive_cohort_predicate_on_identity",
+                    f"{item.concept_id!r} identifies the input rows: every row has "
+                    "one, so a predicate over it keeps every row or an arbitrary "
+                    "subset and applies no population restriction. Write the "
+                    "predicate over the concept that records the restriction; "
+                    "when no allowed cohort concept records it, state its "
+                    "criterion with no concepts and keep all_input_rows",
+                    path=f"cohort.{side}[{index}].concept_id",
+                )
+
+
 def _require_stated_population_applied(
     cohort_intent: ProgressiveCohortIntent,
     *,
@@ -417,7 +484,9 @@ def _require_stated_population_applied(
     concept expresses it.
     """
 
-    allowed = set(_context_cohort_concept_ids(context))
+    allowed = set(_context_cohort_concept_ids(context)) - cohort_identity_columns(
+        context
+    )
     applied = {
         item.concept_id for item in (*cohort_intent.inclusion, *cohort_intent.exclusion)
     }
@@ -455,6 +524,7 @@ def validate_progressive_foundation(
     """Fail before step generation when a sealed Foundation cannot compile."""
 
     _validate_progressive_cohort_intent(foundation.cohort, context=context)
+    _refuse_identity_predicates(foundation.cohort, context=context)
     _require_stated_population_applied(foundation.cohort, context=context)
     labels = {
         str(item.key or "").strip(): " ".join(str(item.value or "").split())
@@ -3028,7 +3098,9 @@ def compile_progressive_plan(
 __all__ = [
     "assert_immutable_prefix",
     "compile_progressive_plan",
+    "cohort_identity_columns",
     "progressive_cohort_concept_ids",
+    "progressive_population_concept_ids",
     "required_binary_display_label_scopes",
     "required_reader_display_label_keys",
     "validate_progressive_foundation",
