@@ -15,8 +15,10 @@ extracted for (720 h when the study states no window).
 The criteria are now read as Data Extraction executes them; they are declared
 as applied only for an export that records the study's contract, the first
 stay always (the host applies it); ``data_constraints.source_selection`` says
-which case holds and which criteria the host applies; and the window is the
-one the export executed.  Fixtures are generic.
+how the host knows the export's selection (its ``basis``: the export's
+contract, a prepared package's declaration that it is the study's cohort, or
+nothing) and which criteria the host applies; and the window is the one the
+export executed.  Fixtures are generic.
 """
 
 from __future__ import annotations
@@ -50,7 +52,7 @@ from easyicu.webserver.agent_pipeline_runs import (
 )
 from easyicu.webserver.pi_copilot.extraction_handoff import compile_study_cohort
 from easyicu.webserver.research_launch_scientific import (
-    bound_export_records_study_cohort,
+    bound_export_selection_basis,
     launch_materialization_window,
 )
 from tests.webserver.copilot.research_workflow_fixtures import (
@@ -155,37 +157,53 @@ def test_an_unrecorded_export_declares_only_what_the_host_applies() -> None:
     assert _exclusion_criteria(study) == [_FIRST_STAY, "exclude diagnoses: condition-b"]
 
 
-def test_only_an_export_that_records_the_study_cohort_is_recorded(tmp_path: Path) -> None:
+def test_the_basis_says_how_the_host_knows_the_export_selection(tmp_path: Path) -> None:
     study = _study(preset="all_icu", age_min=18)
 
-    assert bound_export_records_study_cohort(study, str(_export(tmp_path / "held", study)))
+    def basis(path: Path | str | None, of: dict[str, Any] = study) -> str:
+        return bound_export_selection_basis(of, None if path is None else str(path))
+
+    assert basis(_export(tmp_path / "held", study)) == "export_contract"
     # Extracted for another cohort.
-    other = _export(tmp_path / "other", _study(preset="all_icu", age_min=65))
-    assert not bound_export_records_study_cohort(study, str(other))
-    # No contract: a study-local prepared cohort, or an export from before
-    # contracts were recorded.
+    assert basis(_export(tmp_path / "other", _study(preset="all_icu", age_min=65))) == (
+        "unrecorded"
+    )
+    # A study-local prepared cohort declares itself the study's input; a
+    # package that records a contract is judged by its contract.
     prepared = _export(tmp_path / "prepared", None, entry_mode="study_local_prepared_cohort")
-    assert not bound_export_records_study_cohort(study, str(prepared))
-    assert not bound_export_records_study_cohort(study, str(_export(tmp_path / "older", None)))
+    assert basis(prepared) == "package_declaration"
+    contracted = _export(
+        tmp_path / "contracted", _study(preset="all_icu", age_min=65),
+        entry_mode="study_local_prepared_cohort",
+    )
+    assert basis(contracted) == "unrecorded"
+    # An export from before contracts were recorded, or one whose recorded
+    # contract is not an executable extraction contract.
+    assert basis(_export(tmp_path / "older", None)) == "unrecorded"
+    unreadable = _export(
+        tmp_path / "unreadable", None, cohort_contract={"preset": "no_such_preset"}
+    )
+    assert basis(unreadable) == "unrecorded"
     # No manifest, no folder, no path.
     (tmp_path / "bare").mkdir()
-    assert not bound_export_records_study_cohort(study, str(tmp_path / "bare"))
-    assert not bound_export_records_study_cohort(study, str(tmp_path / "missing"))
-    assert not bound_export_records_study_cohort(study, None)
+    assert basis(tmp_path / "bare") == "unrecorded"
+    assert basis(tmp_path / "missing") == "unrecorded"
+    assert basis(None) == "unrecorded"
     # A concept population executed under the earlier rule (no execution record).
     concept = _study(preset="sepsis3")
-    assert bound_export_records_study_cohort(concept, str(_export(tmp_path / "now", concept)))
+    assert basis(_export(tmp_path / "now", concept), concept) == "export_contract"
     earlier = _export(tmp_path / "earlier", concept)
     manifest = json.loads((earlier / "_manifest.json").read_text(encoding="utf-8"))
     del manifest["cohort_execution"]
     (earlier / "_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-    assert not bound_export_records_study_cohort(concept, str(earlier))
+    assert basis(earlier, concept) == "unrecorded"
 
 
 def test_the_source_selection_reaches_the_planner_context() -> None:
     study = _study(preset="adult_first", label="Adults with condition-x")
 
-    for recorded in (True, False):
+    for basis in ("export_contract", "unrecorded", "package_declaration"):
+        recorded = basis == "export_contract"
         context = build_research_context(
             research_question="Among adults with condition-x, is an early marker associated with an outcome?",
             cohort=pd.DataFrame({"stay_id": [1, 2], "age": [34.0, 61.0]}),
@@ -194,14 +212,14 @@ def test_the_source_selection_reaches_the_planner_context() -> None:
             inclusion_criteria=_inclusion_criteria(study, export_recorded=recorded),
             exclusion_criteria=_exclusion_criteria(study, export_recorded=recorded),
             user_preferences=_research_user_preferences(
-                study, cohort_study=study, source_selection_recorded=recorded
+                study, cohort_study=study, source_selection_basis=basis
             ),
         )
         payload = outbound_safe_context_payload(context)
         stated = json.loads(payload["study_preferences"]["data_constraints"])
 
         assert stated["source_selection"] == {
-            "recorded": recorded,
+            "basis": basis,
             "host_applied": [_FIRST_STAY],
         }
         # Each host-applied criterion is one the context declares, verbatim.
@@ -212,6 +230,7 @@ def test_the_source_selection_reaches_the_planner_context() -> None:
         # The research-context reader knows the host's criterion is applied
         # either way, and the export's only when its selection is recorded.
         selection = export_applied_selection(context)
+        assert selection.basis == basis
         assert selection.recorded is recorded
         assert selection.host_applied == AppliedContracts(exclusion=(_FIRST_STAY,))
         assert selection.known_applied == AppliedContracts(
@@ -222,11 +241,11 @@ def test_the_source_selection_reaches_the_planner_context() -> None:
     # A study without the first stay has nothing the host applies.
     plain = _study(age_min=18)
     stated = json.loads(
-        _research_user_preferences(plain, cohort_study=plain, source_selection_recorded=True)[
-            "data_constraints"
-        ]
+        _research_user_preferences(
+            plain, cohort_study=plain, source_selection_basis="export_contract"
+        )["data_constraints"]
     )
-    assert stated["source_selection"] == {"recorded": True, "host_applied": []}
+    assert stated["source_selection"] == {"basis": "export_contract", "host_applied": []}
     # A caller that does not know the bound export states nothing about it.
     assert "source_selection" not in json.loads(
         _research_user_preferences(study)["data_constraints"]
@@ -240,7 +259,7 @@ def test_a_concept_population_keeps_the_window_its_export_executed() -> None:
 
     stated = json.loads(
         _research_user_preferences(
-            neutral, cohort_study=study, source_selection_recorded=True
+            neutral, cohort_study=study, source_selection_basis="export_contract"
         )["data_constraints"]
     )
 
@@ -257,7 +276,7 @@ def test_a_concept_population_keeps_the_window_its_export_executed() -> None:
     windowed = {**study, "time_window": {"observation_hours": 48, "anchor": "ICU admission"}}
     stated = json.loads(
         _research_user_preferences(
-            windowed, cohort_study=windowed, source_selection_recorded=True
+            windowed, cohort_study=windowed, source_selection_basis="export_contract"
         )["data_constraints"]
     )
     assert stated["concept_cohort_window"]["window_end_hours"] == 48
@@ -284,9 +303,9 @@ def _adult_study() -> dict[str, Any]:
     return study
 
 
-@pytest.mark.parametrize("recorded", [True, False])
+@pytest.mark.parametrize("basis", ["export_contract", "unrecorded", "package_declaration"])
 def test_the_web_runner_declares_what_its_bound_export_records(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recorded: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, basis: str
 ) -> None:
     from easyicu.research_agent.acquisition import foundation
     from easyicu.research_agent.execution import runner as runner_module
@@ -343,7 +362,16 @@ def test_the_web_runner_declares_what_its_bound_export_records(
     )
     study = _adult_study()
     del study["time_window"]  # the launch's neutral scope fills an outer window
-    export = _export(tmp_path / "export", study if recorded else None)
+    recorded = basis == "export_contract"
+    export = _export(
+        tmp_path / "export",
+        study if recorded else None,
+        **(
+            {"entry_mode": "study_local_prepared_cohort"}
+            if basis == "package_declaration"
+            else {}
+        ),
+    )
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
         export_path=str(export),
         study_context=study,
@@ -366,7 +394,7 @@ def test_the_web_runner_declares_what_its_bound_export_records(
 
     run = calls["run"]
     stated = json.loads(run["user_preferences"]["data_constraints"])
-    assert stated["source_selection"] == {"recorded": recorded, "host_applied": []}
+    assert stated["source_selection"] == {"basis": basis, "host_applied": []}
     assert run["inclusion_criteria"] == (["age range: 18 to *"] if recorded else [])
     assert run["exclusion_criteria"] == []
     # The planning study carries the neutral outer window; the population's

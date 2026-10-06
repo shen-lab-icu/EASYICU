@@ -13,9 +13,11 @@ population), so no other condition, treatment or age restriction selected
 the rows; the study's wording is an intent, and a criterion without concepts
 is applied by nothing.  An empty contract list alone proves nothing: a
 legacy preset or a prepared package may have selected rows it never
-declared, so an unrecorded selection is not described either way.  Nothing
-is claimed when the concept-population record cannot be read, or when the
-caller binds the cohort.  Fixtures are generic.
+declared, so these sentences describe a recorded selection only (an
+unrecorded selection and a package's declaration have their own,
+``test_a_planner_is_told_how_the_source_selection_is_known``).  Nothing is
+claimed when the context has no record or its concept-population record
+cannot be read, or when the caller binds the cohort.  Fixtures are generic.
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ import pytest
 from easyicu.research_agent.agents.progressive_planner import ProgressivePlannerAgent
 from easyicu.research_agent.agents.progressive_prompt_contracts import (
     foundation_shape_contract,
-    recorded_source_selection,
+    source_selection_statement,
 )
 from easyicu.research_agent.planning.progressive_contract import ProgressiveCohortIntent
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
@@ -68,36 +70,37 @@ def _with_constraints(context: ResearchContext, constraints: dict) -> ResearchCo
     )
 
 
-def test_only_a_recorded_selection_is_described() -> None:
+def test_a_recorded_selection_says_what_it_applied() -> None:
     context = _context()
     recorded = _with_constraints(context, {"source_selection": _RECORDED})
 
-    assert recorded_source_selection(recorded) == "none"
+    assert source_selection_statement(recorded) == "none"
     contracted = _with(recorded, inclusion_criteria=["age >= 18"])
-    assert recorded_source_selection(contracted) == "contracts"
+    assert source_selection_statement(contracted) == "contracts"
     windowed = _with_constraints(
         context, {"source_selection": _RECORDED, "concept_cohort_window": _WINDOW}
     )
-    assert recorded_source_selection(windowed) == "contracts"
+    assert source_selection_statement(windowed) == "contracts"
     # The study's own wording, copied into the criteria by an older context,
     # is an intent, not a criterion the export applied.
     worded = _with_constraints(
         _with(context, inclusion_criteria=["Adults with a named syndrome"]),
         {"source_selection": _RECORDED, "cohort": {"label": "Adults with a named syndrome"}},
     )
-    assert recorded_source_selection(worded) == "none"
-    # Empty lists alone prove nothing: an unrecorded selection is not described.
-    assert recorded_source_selection(context) is None
-    assert recorded_source_selection(_with(context, inclusion_criteria=["age >= 18"])) is None
+    assert source_selection_statement(worded) == "none"
+    # Empty lists alone prove nothing: a context without a record is not
+    # described, and an unrecorded selection is not described as recorded.
+    assert source_selection_statement(context) is None
+    assert source_selection_statement(_with(context, inclusion_criteria=["age >= 18"])) is None
     for marker in ({"recorded": False, "host_applied": []}, {"recorded": "yes"}):
-        assert recorded_source_selection(
+        assert source_selection_statement(
             _with_constraints(context, {"source_selection": marker})
-        ) is None
+        ) == "unrecorded"
     # An unreadable record claims nothing either way.
     unreadable = _with_constraints(
         context, {"source_selection": _RECORDED, "concept_cohort_window": {"definition": "x"}}
     )
-    assert recorded_source_selection(unreadable) is None
+    assert source_selection_statement(unreadable) is None
 
 
 @pytest.mark.parametrize(
@@ -134,7 +137,7 @@ def test_only_a_recorded_selection_is_described() -> None:
             None,
         ),
     ],
-    ids=["none", "contracts", "unrecorded", "required_filter", "all_rows", "caller_bound"],
+    ids=["none", "contracts", "no_record", "required_filter", "all_rows", "caller_bound"],
 )
 def test_the_contract_says_so_only_where_the_planner_states_a_population(
     kwargs: dict, shown: str | None
@@ -157,7 +160,7 @@ def test_the_contract_says_so_only_where_the_planner_states_a_population(
         ({"source_selection": _RECORDED}, {"inclusion_criteria": ["age >= 18"]}, _ONLY_THE_CONTRACTS),
         (None, {}, None),
     ],
-    ids=["selected_no_one", "contracted", "unrecorded"],
+    ids=["selected_no_one", "contracted", "no_record"],
 )
 def test_the_planner_states_it_in_the_prompt_and_on_a_retry(
     constraints: dict | None, update: dict, shown: str | None

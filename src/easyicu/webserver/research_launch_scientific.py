@@ -10,6 +10,7 @@ from easyicu.research_agent.acquisition.first_icu_stay import FirstIcuStayBindin
 from easyicu.research_agent.acquisition.patient_grouping import PatientGroupingBinding
 from easyicu.research_agent.contracts.trajectory_design import FixedWindowTrajectoryDesign
 from easyicu.research_agent.icu_rules import VariableKind
+from easyicu.research_agent.research_context.export_selection import SelectionBasis
 from easyicu.webserver import dataio, primary_cohort, source_identity_authority
 from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
@@ -670,18 +671,22 @@ def _require_export_holds_study_cohort(
         )
 
 
-def bound_export_records_study_cohort(
+def bound_export_selection_basis(
     study: Mapping[str, Any], export_path: Optional[str]
-) -> bool:
-    """Whether the bound export records the selection of the cohort this study states.
+) -> SelectionBasis:
+    """How the host knows what selected the bound export's rows.
 
-    True only when the export's manifest records the cohort contract it was
-    extracted for, and that contract selects this study's rows under the rule
-    Data Extraction executes now (``bound_export_mismatches``): the study's
-    executed criteria are then what selected the export's rows.  A package
-    that records no contract (a study-local prepared cohort, or an export
-    from before contracts were recorded), a folder without a manifest, or a
-    contract that does not hold the study's rows is unrecorded: what
+    ``export_contract`` only when the export's manifest records the cohort
+    contract it was extracted for, and that contract selects this study's
+    rows under the rule Data Extraction executes now
+    (``bound_export_mismatches``): the study's executed criteria are then
+    what selected the export's rows.  ``package_declaration`` when a
+    study-local prepared cohort records no contract but declares itself the
+    study's complete input, which the launch accepts
+    (``_require_export_holds_study_cohort``): its rows are the study's
+    population by criteria the host does not know.  Anything else (an export
+    from before contracts were recorded, a folder without a manifest, a
+    contract that does not hold the study's rows) is ``unrecorded``: what
     selected its rows is not known, so nothing may be declared as already
     applied to them, nor that nothing was.
     """
@@ -691,14 +696,19 @@ def bound_export_records_study_cohort(
     )
 
     if not export_path:
-        return False
+        return "unrecorded"
     manifest = dataio.read_prepared_export_manifest(str(export_path))
-    if manifest is None or not isinstance(manifest.get("cohort_contract"), Mapping):
-        return False
-    try:
-        return not bound_export_mismatches(study, manifest)
-    except dataio.ExportCohortError:
-        return False
+    if manifest is None:
+        return "unrecorded"
+    if isinstance(manifest.get("cohort_contract"), Mapping):
+        try:
+            mismatches = bound_export_mismatches(study, manifest)
+        except dataio.ExportCohortError:
+            return "unrecorded"
+        return "unrecorded" if mismatches else "export_contract"
+    if str(manifest.get("entry_mode") or "") == _STUDY_LOCAL_PREPARED_COHORT:
+        return "package_declaration"
+    return "unrecorded"
 
 
 def _neutral_materialization_scope(

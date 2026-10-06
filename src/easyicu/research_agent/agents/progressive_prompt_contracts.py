@@ -236,7 +236,7 @@ def outline_shape_contract(
 
 #: What the foundation contract states when the source export records its
 #: selection, by what that selection applied.
-_RECORDED_SOURCE_SELECTION = {
+_SOURCE_SELECTION_STATEMENTS = {
     "none": (
         "\nThe source export records its selection, and it applied no inclusion "
         "or exclusion contract and no concept-derived population: no condition, "
@@ -249,26 +249,54 @@ _RECORDED_SOURCE_SELECTION = {
         "when one is given, selected these input rows; no other condition, "
         "treatment or age restriction did."
     ),
+    "unrecorded": (
+        "\nNothing records which rows the source export selected, so no "
+        "restriction is the source's eligibility: apply each restriction the "
+        "research question or the study's cohort wording names with predicates "
+        "over the allowed concepts."
+    ),
+    "declared": (
+        "\nThe source package declares itself this study's prepared cohort, and "
+        "the host accepted that declaration: its rows are the population the "
+        "study's cohort wording states, selected by criteria not shown here. Do "
+        "not restate a restriction that wording names, through any definition; "
+        "that would narrow the rows to an intersection nobody chose. A "
+        "restriction only the research question adds is applied by your "
+        "predicates."
+    ),
 }
+#: Except under a package's declaration, the study's wording selected no row.
+_WORDING_IS_AN_INTENT = (
+    " The study's cohort wording states whom it intends to include, not a "
+    "restriction already applied, and a criterion without concepts is applied "
+    "by nothing."
+)
 
 
-def recorded_source_selection(context: ResearchContext) -> str | None:
-    """What selected the input rows, when the source export records it.
+def source_selection_statement(context: ResearchContext) -> str | None:
+    """What the foundation contract says selected the input rows.
 
-    ``"none"`` when the export records its selection and that selection
-    applied no contract and no concept-derived population; ``"contracts"``
-    when the contracts the data authority shows, with any concept-derived
-    population, are its whole recorded selection.  ``None`` when the
-    selection is not recorded, or its concept-population record cannot be
-    read: what selected the rows is then not known, and nothing is claimed.
+    ``"none"`` or ``"contracts"`` when the source export's contract records
+    its selection: nothing, or only the contracts and concept-derived
+    population the data authority shows.  ``"unrecorded"`` when nothing
+    records it, so the Planner applies what the study and the question name.
+    ``"declared"`` when a prepared package declares itself the study's
+    cohort, so the Planner does not restate the study's restrictions.
+    ``None`` when the context carries no record (a caller that does not know
+    its source, such as the CLI) or its concept-population record cannot be
+    read: nothing is claimed either way.
     """
 
     try:
         selection = export_applied_selection(context)
     except ConceptCohortWindowError:
         return None
-    if not selection.recorded:
+    if selection.basis is None:
         return None
+    if selection.basis == "package_declaration":
+        return "declared"
+    if not selection.recorded:
+        return "unrecorded"
     return "contracts" if selection.selects_rows else "none"
 
 
@@ -289,12 +317,15 @@ def foundation_shape_contract(
     here as well as in the structured-output schema. A Provider without strict
     JSON schema never receives that schema, and a Planner told only to "copy an
     allowed cohort concept id" from a list it cannot see kept every input row
-    rather than risk a refused predicate.  When the source export records its
-    selection (``source_selection``, from ``recorded_source_selection``), the
-    contract says what that selection applied: a Planner shown empty contract
-    lists still attributed the population the study names to "the supplied
-    source-cohort eligibility" and left it unapplied.  An unrecorded
-    selection is not described either way.
+    rather than risk a refused predicate.  The contract also says how the
+    input rows were selected (``source_selection``, from
+    ``source_selection_statement``): by a recorded selection, and what it
+    applied; by nothing on record, so the Planner applies what the study
+    names; or by a package that declares itself the study's cohort, whose
+    restrictions are not restated.  A Planner shown empty contract lists
+    once attributed the population the study names to "the supplied
+    source-cohort eligibility" and left it unapplied.  A context without a
+    record is not described either way.
     """
 
     predicate_shape = {
@@ -426,11 +457,9 @@ def foundation_shape_contract(
             else ""
         )
         + (
-            _RECORDED_SOURCE_SELECTION[source_selection]
-            + " The study's cohort wording states whom it intends to include, not a "
-            "restriction already applied, and a criterion without concepts is "
-            "applied by nothing."
-            if states_population and source_selection in _RECORDED_SOURCE_SELECTION
+            _SOURCE_SELECTION_STATEMENTS[source_selection]
+            + ("" if source_selection == "declared" else _WORDING_IS_AN_INTENT)
+            if states_population and source_selection in _SOURCE_SELECTION_STATEMENTS
             else ""
         )
         + (

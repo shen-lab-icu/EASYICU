@@ -65,6 +65,7 @@ from easyicu.research_agent.planning.baseline_requirements import (
     candidate_baseline_requirements,
 )
 from easyicu.research_agent.schema import TimeWindow
+from easyicu.research_agent.research_context.export_selection import SelectionBasis
 from easyicu.research_agent.reporting.system_validation_report import (
     SystemValidationReport,
     build_system_validation_receipt,
@@ -126,7 +127,7 @@ from easyicu.webserver.research_launch_scientific import (
     _runtime_projection_sensitivity_specs,
     _target_outcome,
     _validate_trajectory_design,
-    bound_export_records_study_cohort,
+    bound_export_selection_basis,
     resolve_study_analysis_design,
     validate_analysis_design_for_execution,
 )
@@ -1969,7 +1970,7 @@ def _research_user_preferences(
     *,
     patient_grouping: Optional[PatientGroupingBinding] = None,
     cohort_study: Optional[Mapping[str, Any]] = None,
-    source_selection_recorded: Optional[bool] = None,
+    source_selection_basis: Optional[SelectionBasis] = None,
 ) -> Dict[str, Any]:
     """Compile StudyContext into the existing strict preference contract.
 
@@ -1977,10 +1978,10 @@ def _research_user_preferences(
     extracted for and the launch compared it with: the study before the
     neutral materialization scope fills an absent ``time_window``.  A
     concept-derived population is selected by that study's window, never by
-    the neutral one.  ``source_selection_recorded`` says whether the bound
-    export records that selection (``bound_export_records_study_cohort``);
-    ``data_constraints.source_selection`` carries it, with the declared
-    criteria the host applies itself.
+    the neutral one.  ``source_selection_basis`` says how the host knows the
+    selection that produced the bound export's rows
+    (``bound_export_selection_basis``); ``data_constraints.source_selection``
+    carries it, with the declared criteria the host applies itself.
     """
 
     preferences: Dict[str, Any] = {}
@@ -2078,14 +2079,14 @@ def _research_user_preferences(
     if concept_window is not None:
         # Planning refuses a plan whose time zero comes before this window ends.
         constraints["concept_cohort_window"] = concept_window
-    if source_selection_recorded is not None:
-        # Whether the criteria and the concept population in this context are
-        # the selection the bound export records, and which declared criteria
-        # the host applies itself.  Without it, a context that declares none
-        # cannot tell an export that selected no one from one whose selection
-        # is not known.
+    if source_selection_basis is not None:
+        # How the host knows what selected the bound export's rows, and which
+        # declared criteria the host applies itself.  Without it, a context
+        # that declares none cannot tell an export that selected no one from
+        # one whose selection is not known, or from a package that declares
+        # itself the study's cohort.
         constraints["source_selection"] = {
-            "recorded": bool(source_selection_recorded),
+            "basis": source_selection_basis,
             "host_applied": _host_applied_criteria(
                 cohort_study if cohort_study is not None else study
             ),
@@ -2271,7 +2272,8 @@ def _inclusion_criteria(
     reads: a legacy ``adult_first`` preset executes an adult age bound with
     no age field set, and an age bound of 0 or 100 executes none.  Only an
     export whose manifest records the contract it was extracted for
-    (``bound_export_records_study_cohort``) is known to have applied them.
+    (``bound_export_selection_basis`` is ``export_contract``) is known to
+    have applied them.
     For any other package (``export_recorded`` false) nothing is declared:
     the typed bounds reach the Planner only in ``data_constraints.cohort``,
     where a family template re-applies them and a progressive plan applies
@@ -6046,14 +6048,15 @@ def make_research_pipeline_run_runner(
                 # bounded reconciliation can still discover the exact pause.
                 register_pipeline_work_root(root)
                 put_recovery_seed(recovery_seed)
-            source_selection_recorded = bound_export_records_study_cohort(
+            source_selection_basis = bound_export_selection_basis(
                 study, export_path
             )
+            source_selection_recorded = source_selection_basis == "export_contract"
             preferences = _research_user_preferences(
                 candidate_planning_study,
                 patient_grouping=patient_grouping,
                 cohort_study=study,
-                source_selection_recorded=source_selection_recorded,
+                source_selection_basis=source_selection_basis,
             )
             _progress(
                 job,
