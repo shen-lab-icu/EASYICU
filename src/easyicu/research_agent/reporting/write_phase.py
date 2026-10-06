@@ -107,6 +107,11 @@ from .manuscript_post import (
     repair_miscited_numeric_citations,
     repair_single_variant_robustness_metric_prose,
 )
+from .population_selection import (
+    POPULATION_STATEMENT_NOT_HOST_CITED,
+    AnalyzedPopulation,
+    analyzed_population,
+)
 from .readiness import _is_cosmetic_visual_error, current_validation_findings, execution_gate_status
 from .writer_evidence import (
     _preferred_writer_evidence_names,
@@ -1616,6 +1621,50 @@ def _place_host_claims_and_restore_structure(
     return scaffold
 
 
+def _citation_repair_findings(
+    citation_repairs: Sequence[Mapping[str, str]],
+    *,
+    population: AnalyzedPopulation | None,
+) -> List[ValidationFinding]:
+    """Report the citations the host appended and the population statements it did not cite."""
+
+    appended = [dict(item) for item in citation_repairs if "evidence_id" in item]
+    declined = [item["sentence"] for item in citation_repairs if "reason_code" in item]
+    findings: List[ValidationFinding] = []
+    if appended:
+        findings.append(
+            ValidationFinding(
+                validator="evidence_bound_writer",
+                severity="warning",
+                message=(
+                    "Repaired common uncited manuscript methods sentence(s): "
+                    f"{len(appended)} citation(s) appended."
+                ),
+                detail={"citation_repairs": appended},
+            )
+        )
+    if declined:
+        findings.append(
+            ValidationFinding(
+                validator="evidence_bound_writer",
+                severity="warning",
+                message=(
+                    f"Left {len(declined)} population statement(s) with only the "
+                    "Writer's own citations: the host vouches for one only when "
+                    "the plan's predicates selected the rows."
+                ),
+                detail={
+                    "reason_code": POPULATION_STATEMENT_NOT_HOST_CITED,
+                    "source_scope": (
+                        population.source_scope if population is not None else None
+                    ),
+                    "sentences": declined,
+                },
+            )
+        )
+    return findings
+
+
 def _draft_manuscript(
     pipeline: Any,
     *,
@@ -1660,6 +1709,9 @@ def _draft_manuscript(
         evidence,
         per_step_records,
     )
+    # The population the plan analyzed: the Writer's digest records it and the
+    # citation repair reads it.  The Writer's sections state it themselves.
+    population = analyzed_population(plan=execute_result.plan, context=context)
     _ensure_unsigned_novelty_positioning_packet(
         evidence=evidence,
         context=context,
@@ -1727,6 +1779,7 @@ def _draft_manuscript(
                 run_dir=run_dir,
                 evidence=evidence,
                 secondary_cap_per_step=pipeline._writer_digest_secondary_cap_per_step,
+                population=population,
             )
         else:
             writer_evidence_digest = _render_writer_evidence_digest(
@@ -1734,6 +1787,7 @@ def _draft_manuscript(
                 run_dir=run_dir,
                 per_step_records=writer_authority_records,
                 evidence=evidence,
+                population=population,
             )
         if reader_tables:
             writer_evidence_digest = (
@@ -1886,19 +1940,9 @@ def _draft_manuscript(
         scaffold,
         evidence=evidence,
         allowed_evidence_names=current_evidence_names,
+        population=population,
     )
-    if citation_repairs:
-        findings.append(
-            ValidationFinding(
-                validator="evidence_bound_writer",
-                severity="warning",
-                message=(
-                    "Repaired common uncited manuscript methods sentence(s): "
-                    f"{len(citation_repairs)} citation(s) appended."
-                ),
-                detail={"citation_repairs": citation_repairs},
-            )
-        )
+    findings.extend(_citation_repair_findings(citation_repairs, population=population))
     scaffold, miscitation_repairs = repair_miscited_numeric_citations(
         scaffold,
         evidence=evidence,

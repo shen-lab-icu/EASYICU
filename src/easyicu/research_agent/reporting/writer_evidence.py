@@ -28,6 +28,7 @@ from ..authority.runtime_artifacts import (
 )
 from ..scalar_utils import _first_present_scalar, _flatten_scalar_dict
 from .p_values import prepare_p_values_for_writer, render_claim_value_for_writer
+from .population_selection import AnalyzedPopulation
 
 __all__ = [
     "_resolve_writer_aux_path",
@@ -661,6 +662,7 @@ def _render_writer_evidence_digest(
     run_dir: Path | None = None,
     include_robustness_panel: bool = True,
     evidence: EvidenceStore | None = None,
+    population: AnalyzedPopulation | None = None,
 ) -> str:
     lines: List[str] = []
     if context is not None:
@@ -676,6 +678,13 @@ def _render_writer_evidence_digest(
                     "source_export_n_patients": context.cohort.n_patients,
                     "source_population_role": "pre_analysis_source_export",
                     "target_outcome": context.target_outcome,
+                    # The population the analysis selected; the question
+                    # above names one and selects no one.
+                    **(
+                        {"population_selection": population.record()}
+                        if population is not None
+                        else {}
+                    ),
                 },
                 ensure_ascii=False,
                 sort_keys=True,
@@ -943,6 +952,7 @@ def _render_writer_evidence_digest_v2(
     run_dir: Path | None = None,
     evidence: EvidenceStore | None = None,
     secondary_cap_per_step: int = 20,
+    population: AnalyzedPopulation | None = None,
 ) -> str:
     """Phase-1 wider writer-evidence digest.
 
@@ -982,6 +992,7 @@ def _render_writer_evidence_digest_v2(
         run_dir=run_dir,
         include_robustness_panel=False,
         evidence=evidence,
+        population=population,
     )
     all_records = list(per_step_records or [])
     records = [dict(record) for record in current_step_records(all_records)]

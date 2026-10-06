@@ -40,6 +40,13 @@ from .writer_repair_decision import coerce_writer_repair_decisions
 from .manuscript_sentence_context import contextual_sentence_deletion
 from .manuscript_surface import claim_token_stands_in_block
 from .manuscript_bibliographic_years import bibliographic_year_spans
+from .population_selection import (
+    POPULATION_STATEMENT_NOT_HOST_CITED,
+    AnalyzedPopulation,
+    host_may_cite_population_statement,
+    is_population_place,
+    states_population_selection,
+)
 from .side_findings import (
     SideFinding,
     annotate_side_finding_leaks,
@@ -594,6 +601,7 @@ def _repair_common_writer_citation_omissions(
     *,
     evidence: EvidenceStore,
     allowed_evidence_names: Optional[Sequence[str]] = None,
+    population: AnalyzedPopulation | None = None,
 ) -> tuple[str, List[Dict[str, str]]]:
     """Append evidence citations to common uncited Methods-style sentences.
 
@@ -602,19 +610,33 @@ def _repair_common_writer_citation_omissions(
     family, missingness/data-quality handling, or sensitivity design. It does
     not invent citations for free-form conclusions; if no matching registered
     evidence id is available, the strict evidence gate still blocks the draft.
+
+    Where the manuscript states its population (Methods' study design and
+    cohort, the Abstract's Methods), a sentence saying who was selected is
+    cited only when the plan selected its rows by predicate (``population``).
+    Otherwise every owner it could cite records the export or the research
+    question, not a selection, so the host adds nothing: the sentence keeps
+    the Writer's own citations, and the receipt lists it under
+    ``population_statement_not_host_cited``.
     """
     resolvable = set(
         evidence.resolvable_names()
         if allowed_evidence_names is None
         else allowed_evidence_names
     )
+    cite_population = host_may_cite_population_statement(population)
     repairs: List[Dict[str, str]] = []
     out_lines: List[str] = []
     in_metadata_section = False
+    section = subsection = ""
     for raw_line in scaffold.splitlines():
         stripped = raw_line.strip()
         if re.match(r"^#{1,6}\s+", stripped):
             in_metadata_section = bool(_MANUSCRIPT_METADATA_LINE_RE.match(stripped))
+            if re.match(r"^##\s", stripped):
+                section, subsection = stripped, ""
+            elif re.match(r"^###\s", stripped):
+                subsection = stripped
             out_lines.append(raw_line)
             continue
         if (
@@ -648,6 +670,19 @@ def _repair_common_writer_citation_omissions(
                 continue
             evidence_id = _best_methods_citation(sentence, resolvable)
             if not evidence_id:
+                fixed.append(sentence)
+                continue
+            if (
+                not cite_population
+                and is_population_place(section=section, subsection=subsection, line=stripped)
+                and states_population_selection(sentence)
+            ):
+                repairs.append(
+                    {
+                        "reason_code": POPULATION_STATEMENT_NOT_HOST_CITED,
+                        "sentence": sentence.strip()[:500],
+                    }
+                )
                 fixed.append(sentence)
                 continue
             repaired = _append_evidence_citation(sentence, evidence_id)
