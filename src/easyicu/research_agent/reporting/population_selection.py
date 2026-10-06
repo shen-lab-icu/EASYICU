@@ -15,7 +15,10 @@ export whose selection the host did not record may have applied criteria the
 context does not state (a preset's age bound, a prepared package's own
 cohort), so the block then asserts neither that it applied any nor that the
 analysis was unrestricted; only a criterion the host applied itself is stated
-as applied.  The host cites a population statement where the
+as applied.  A prepared package that declares itself the study's cohort is
+that cohort by its own declaration, which the host accepted without verifying
+it, so the block names the cohort only as the package's declaration.  The
+host cites a population statement where the
 manuscript states its population only when the plan selected its rows by
 predicate.  Otherwise the registered owners such a statement could cite
 record the export or the question, not a selection.
@@ -45,6 +48,7 @@ SourceScope = Literal[
     "all_input_rows_of_contracted_export",
     "all_icu_stays_of_source_export",
     "all_input_rows_of_unrecorded_export",
+    "all_input_rows_of_declared_package",
 ]
 
 #: Receipt reason for a population statement the host declined to cite.
@@ -104,6 +108,9 @@ class AnalyzedPopulation:
     source_selection_recorded: bool = False
     #: The contracts declared but not known to be applied.
     unverified_contracts: AppliedContracts = AppliedContracts()
+    #: How the host knows the export's selection (``ExportAppliedSelection.basis``);
+    #: ``None`` without a record.
+    source_selection_basis: Optional[str] = None
 
     def record(self) -> dict[str, Any]:
         """The JSON shape both owners of this record agree on."""
@@ -125,6 +132,7 @@ class AnalyzedPopulation:
             ),
             "source_scope": self.source_scope,
             "source_selection_recorded": self.source_selection_recorded,
+            "source_selection_basis": self.source_selection_basis,
         }
 
 
@@ -140,7 +148,8 @@ def analyzed_population(
     for no population statement.  A predicate-filtered cohort with no
     predicate selects every row, as the trajectory design reads it.  Without
     the host's record of the export's selection, an export with no stated
-    criterion is not every ICU stay: what it selected is unknown.
+    criterion is not every ICU stay: what it selected is unknown.  A package
+    that declares itself the study's cohort is all of that declared cohort.
     """
 
     cohort = plan.cohort if plan is not None else None
@@ -157,6 +166,8 @@ def analyzed_population(
     scope: SourceScope
     if cohort.selection_mode != "all_input_rows" and (inclusion or exclusion):
         scope = "predicate_selected"
+    elif selection.basis == "package_declaration":
+        scope = "all_input_rows_of_declared_package"
     elif not selection.recorded:
         scope = "all_input_rows_of_unrecorded_export"
     elif contracts.inclusion or contracts.exclusion or concept is not None:
@@ -172,6 +183,7 @@ def analyzed_population(
         source_scope=scope,
         source_selection_recorded=selection.recorded,
         unverified_contracts=selection.unverified,
+        source_selection_basis=selection.basis,
     )
 
 
@@ -219,6 +231,10 @@ _SCOPE_TEXT: dict[str, str] = {
     "all_input_rows_of_unrecorded_export": (
         "every input row of the source export, which the plan did not filter."
     ),
+    "all_input_rows_of_declared_package": (
+        "every input row of a prepared cohort package that declares itself this "
+        "study's cohort; the plan did not filter it."
+    ),
 }
 
 _DESCRIBE_RULE = (
@@ -239,6 +255,11 @@ _UNRECORDED_CONSEQUENCE = (
     "the export's selection is not recorded, so never say whether the analysis "
     "was restricted to it."
 )
+#: A declared package is the study's cohort only by its own word.
+_DECLARED_CONSEQUENCE = (
+    "the package declares itself this study's cohort, so name that cohort only as "
+    "the package's declaration, never as selected or verified by this study."
+)
 
 
 def writer_population_block(population: AnalyzedPopulation | None) -> str:
@@ -246,6 +267,10 @@ def writer_population_block(population: AnalyzedPopulation | None) -> str:
 
     lines = ["ANALYZED POPULATION (host-stated; the only population this study analyzed):"]
     recorded = population is not None and population.source_selection_recorded
+    declared = (
+        population is not None
+        and population.source_selection_basis == "package_declaration"
+    )
     if population is None:
         lines.append(
             "- Rows analyzed: not stated by the host, because the plan states no "
@@ -258,6 +283,15 @@ def writer_population_block(population: AnalyzedPopulation | None) -> str:
         applied = _contract_items(population.applied_contracts)
         if recorded:
             lines.append("- Criteria applied before analysis: " + _listed(applied + concept))
+        elif declared:
+            if applied:
+                lines.append("- Criteria applied before analysis: " + _listed(applied))
+            stated = _contract_items(population.unverified_contracts) + concept
+            lines.append(
+                "- Package's declaration (accepted, not verified by the host): it holds "
+                "this study's cohort, as the cohort wording in RESEARCH CONTEXT states it"
+                + ("; declared criteria: " + _listed(stated) if stated else ".")
+            )
         else:
             # Only the host's own criteria are known; "none" would claim more.
             if applied:
@@ -278,7 +312,13 @@ def writer_population_block(population: AnalyzedPopulation | None) -> str:
     lines.append(_DESCRIBE_RULE)
     lines.append(
         _QUESTION_RULE.format(
-            consequence=_RECORDED_CONSEQUENCE if recorded else _UNRECORDED_CONSEQUENCE
+            consequence=(
+                _RECORDED_CONSEQUENCE
+                if recorded
+                else _DECLARED_CONSEQUENCE
+                if declared
+                else _UNRECORDED_CONSEQUENCE
+            )
         )
     )
     return "\n".join(lines) + "\n\n"
