@@ -6,6 +6,9 @@ import json
 import re
 from typing import Mapping, Sequence
 
+from ..research_context.concept_population import ConceptCohortWindowError
+from ..research_context.export_selection import export_applied_selection
+from ..schema import ResearchContext
 from ..planning.progressive_contract import (
     COORDINATE_OWNED_STEP_FIELDS,
     ProgressiveCohortIntent,
@@ -231,6 +234,44 @@ def outline_shape_contract(
     )
 
 
+#: What the foundation contract states when the source export records its
+#: selection, by what that selection applied.
+_RECORDED_SOURCE_SELECTION = {
+    "none": (
+        "\nThe source export records its selection, and it applied no inclusion "
+        "or exclusion contract and no concept-derived population: no condition, "
+        "treatment or age restriction has selected these input rows."
+    ),
+    "contracts": (
+        "\nThe source export records its selection: only the inclusion and "
+        "exclusion contracts shown in the data authority, and the concept-derived "
+        "population in study_preferences.data_constraints.concept_cohort_window "
+        "when one is given, selected these input rows; no other condition, "
+        "treatment or age restriction did."
+    ),
+}
+
+
+def recorded_source_selection(context: ResearchContext) -> str | None:
+    """What selected the input rows, when the source export records it.
+
+    ``"none"`` when the export records its selection and that selection
+    applied no contract and no concept-derived population; ``"contracts"``
+    when the contracts the data authority shows, with any concept-derived
+    population, are its whole recorded selection.  ``None`` when the
+    selection is not recorded, or its concept-population record cannot be
+    read: what selected the rows is then not known, and nothing is claimed.
+    """
+
+    try:
+        selection = export_applied_selection(context)
+    except ConceptCohortWindowError:
+        return None
+    if not selection.recorded:
+        return None
+    return "contracts" if selection.selects_rows else "none"
+
+
 def foundation_shape_contract(
     *,
     outline_sha256: str,
@@ -240,6 +281,7 @@ def foundation_shape_contract(
     required_binary_display_label_scopes: Sequence[str] = (),
     required_reader_display_label_keys: Sequence[str] = (),
     cohort_concept_ids: Sequence[str] = (),
+    source_selection: str | None = None,
 ) -> str:
     """Project the exact foundation envelope without adding case science.
 
@@ -247,7 +289,12 @@ def foundation_shape_contract(
     here as well as in the structured-output schema. A Provider without strict
     JSON schema never receives that schema, and a Planner told only to "copy an
     allowed cohort concept id" from a list it cannot see kept every input row
-    rather than risk a refused predicate.
+    rather than risk a refused predicate.  When the source export records its
+    selection (``source_selection``, from ``recorded_source_selection``), the
+    contract says what that selection applied: a Planner shown empty contract
+    lists still attributed the population the study names to "the supplied
+    source-cohort eligibility" and left it unapplied.  An unrecorded
+    selection is not described either way.
     """
 
     predicate_shape = {
@@ -376,6 +423,14 @@ def foundation_shape_contract(
             + json.dumps(list(cohort_concept_ids), ensure_ascii=False)
             + "."
             if states_population and cohort_concept_ids
+            else ""
+        )
+        + (
+            _RECORDED_SOURCE_SELECTION[source_selection]
+            + " The study's cohort wording states whom it intends to include, not a "
+            "restriction already applied, and a criterion without concepts is "
+            "applied by nothing."
+            if states_population and source_selection in _RECORDED_SOURCE_SELECTION
             else ""
         )
         + (
