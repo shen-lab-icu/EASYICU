@@ -17,6 +17,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from easyicu.webserver import agent_pipeline_runs, agent_runs, jobs, sources
 from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.research_evidence_preview import project_review_evidence_refs
+from easyicu.webserver.research_launch_scientific import (
+    ExportCohortRefusal,
+    bound_export_cohort_refusal,
+)
 from easyicu.webserver.study_scientific_configuration import (
     ScientificConfiguration,
     SetupFacts,
@@ -107,6 +111,9 @@ class ResearchWorkflowSnapshot(BaseModel):
     #: Path-free retry assessment for a failed approved execution: whether a
     #: retry could change the outcome, and the counts and codes saying why.
     execution_retry: Optional[Mapping[str, Any]] = None
+    #: The launch's refusal of the bound export as this study's rows: the
+    #: error a new plan or run on it meets and the codes saying why.
+    bound_export_cohort_refusal: Optional[Mapping[str, Any]] = None
 
 
 class ProjectWorkflowProjection(BaseModel):
@@ -281,6 +288,17 @@ _PLANNER_PROPOSAL_FINDING_CODES = frozenset(
 )
 
 
+#: Plan-stage actions that continue a sealed run on the package it bound.  The
+#: launch exempts them from its bound-export cohort check; any other start is
+#: a new plan or run on the bound export's rows.
+_RESUMING_PLAN_ACTIONS = frozenset(
+    {
+        "planner_checkpoint_resume_available",
+        "failed_pipeline_execution_retry_available",
+    }
+)
+
+
 def _identified_data_source(study: Mapping[str, Any]) -> bool:
     """Whether the study is bound to a data source EasyICU has identified."""
 
@@ -301,6 +319,7 @@ def build_research_workflow_snapshot(
     latest_attempt: Optional[Mapping[str, Any]] = None,
     report_revision_ready: bool = False,
     execution_retry: Optional[Mapping[str, Any]] = None,
+    export_cohort_refusal: Optional[ExportCohortRefusal] = None,
 ) -> ResearchWorkflowSnapshot:
     """Compile owner receipts into one deterministic Copilot workflow state."""
 
@@ -795,6 +814,27 @@ def build_research_workflow_snapshot(
         if failed_pipeline_regeneration_required
         else plan_review_reason_code
     )
+    # A new plan or run analyzes the bound export's rows as the study's own,
+    # and the launch refuses an export extracted for another cohort or under
+    # an earlier rule (``bound_export_cohort_refusal``); only a resumed run
+    # keeps the package its sealed plan bound.  A fresh plan the launch would
+    # refuse is not offered: the study's cohort is extracted, or another
+    # source chosen, first.
+    export_cohort_reason_code = (
+        ""
+        if export_cohort_refusal is None
+        else "bound_export_cohort_invalid"
+        if export_cohort_refusal.code == "research_pipeline_export_cohort_invalid"
+        else "bound_export_cohort_mismatch"
+    )
+    # The plan step offers a regeneration ahead of a first plan (a failed
+    # planning run may have left no plan behind).
+    fresh_plan_offered = (
+        plan_regeneration_reason_code not in _RESUMING_PLAN_ACTIONS
+        if plan_regeneration_required
+        else plan_generation_ready
+    )
+    export_cohort_blocks_plan = bool(export_cohort_reason_code and fresh_plan_offered)
     legacy_full_scaffold = bool(full_run and not pipeline_run and has_plan)
 
     stages = [
@@ -854,6 +894,8 @@ def build_research_workflow_snapshot(
                 if plan_attention_required
                 else "running"
                 if planning_running
+                else "blocked"
+                if export_cohort_blocks_plan
                 else "ready"
                 if plan_regeneration_required
                 else "complete"
@@ -870,6 +912,8 @@ def build_research_workflow_snapshot(
                 if plan_attention_required
                 else "research_planning_running"
                 if planning_running
+                else export_cohort_reason_code
+                if export_cohort_blocks_plan
                 else plan_regeneration_reason_code
                 if plan_regeneration_required
                 else "agent_plan_ready"
@@ -1056,6 +1100,14 @@ def build_research_workflow_snapshot(
         execution_retry=(
             dict(execution_retry)
             if failed_execution_retry_available and isinstance(execution_retry, Mapping)
+            else None
+        ),
+        bound_export_cohort_refusal=(
+            {
+                "code": export_cohort_refusal.code,
+                "reason_codes": list(export_cohort_refusal.reason_codes),
+            }
+            if export_cohort_refusal is not None
             else None
         ),
     )
@@ -1317,6 +1369,8 @@ def build_project_workflow_projection(
         review,
         review_evidence_refs=review_evidence,
     )
+    bound_source = study.get("data_source")
+    bound_source = bound_source if isinstance(bound_source, Mapping) else {}
 
     snapshot_inputs: Dict[str, Any] = dict(
         study=study,
@@ -1328,6 +1382,10 @@ def build_project_workflow_projection(
         plan_review_authority=plan_review_authority,
         continuing_review_choices=plan_review_progress.has_pending_choices(
             study, latest_run or {}, review,
+        ),
+        # The launch reads the study's bound export by this same path.
+        export_cohort_refusal=bound_export_cohort_refusal(
+            study, str(bound_source.get("path") or "").strip()
         ),
     )
     snapshot = build_research_workflow_snapshot(**snapshot_inputs)

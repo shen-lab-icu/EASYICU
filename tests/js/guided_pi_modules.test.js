@@ -82,6 +82,16 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   assert.doesNotMatch(stale, /Docker Desktop|colima/);
   assert.match(runFailure('research_pipeline_runner_image_mismatch'), /runner image did not match/);
 
+  // A launch refusing the bound export names what comes first, not its code
+  // (the transport puts the bare code in the message).
+  const exportCohort = live({
+    code: 'research_pipeline_export_cohort_mismatch',
+    message: 'research_pipeline_export_cohort_mismatch',
+  });
+  assert.match(exportCohort, /Extract this study’s cohort, or choose another data source/);
+  assert.doesNotMatch(exportCohort, /research_pipeline_export_cohort_mismatch/);
+  assert.match(live({ code: 'research_pipeline_export_cohort_invalid' }), /Check the study’s cohort/);
+
   // Fallback branch: raw transport text verbatim.
   assert.equal(live({ message: 'Failed to fetch' }), 'Failed to fetch');
   assert.equal(live({ message: 'boom' }), 'boom');

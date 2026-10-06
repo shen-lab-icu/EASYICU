@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
 
 from easyicu.research_agent.acquisition.first_icu_stay import FirstIcuStayBinding
 from easyicu.research_agent.acquisition.patient_grouping import PatientGroupingBinding
@@ -607,10 +608,48 @@ def launch_materialization_window(study: Mapping[str, Any]) -> Optional[Dict[str
 _STUDY_LOCAL_PREPARED_COHORT = "study_local_prepared_cohort"
 
 
-def _require_export_holds_study_cohort(
-    study: Mapping[str, Any], export_path: str
-) -> None:
-    """Refuse an export whose rows are not the population the study states.
+@dataclasses.dataclass(frozen=True)
+class ExportCohortRefusal:
+    """Why a new plan or run may not analyze the bound export's rows.
+
+    ``code`` is the error the launch raises.  ``reason_codes`` is its cause:
+    the mismatch codes, or the reason a cohort is not an executable
+    extraction contract.
+    """
+
+    code: Literal[
+        "research_pipeline_export_cohort_mismatch",
+        "research_pipeline_export_cohort_invalid",
+    ]
+    reason_codes: tuple[str, ...]
+    cause: Optional[BaseException] = dataclasses.field(
+        default=None, compare=False, repr=False
+    )
+
+    def error(self) -> ResearchPipelineRunError:
+        if self.code == "research_pipeline_export_cohort_invalid":
+            return ResearchPipelineRunError(
+                self.code,
+                "The study's cohort or the bound export's recorded cohort is not an "
+                "executable extraction contract.",
+                details={"reason_code": self.reason_codes[0]},
+            )
+        return ResearchPipelineRunError(
+            self.code,
+            "The bound export does not hold the rows of the cohort this study "
+            "states (details.mismatch_codes): it was extracted for another "
+            "cohort or under an earlier rule, or it records no population for a "
+            "cohort that only extraction applies. Retrying will fail "
+            "identically; run easyicu_start_extraction to extract the study's "
+            "cohort.",
+            details={"mismatch_codes": list(self.reason_codes)},
+        )
+
+
+def bound_export_cohort_refusal(
+    study: Mapping[str, Any], export_path: Optional[str]
+) -> Optional[ExportCohortRefusal]:
+    """The refusal a new plan or run on the bound export meets, or ``None``.
 
     Data Extraction records in each manifest the cohort contract the export
     was extracted for and the rule that executed it.  A study changed after
@@ -629,6 +668,10 @@ def _require_export_holds_study_cohort(
     or diagnosis population, which nothing after extraction applies.  A
     study-local prepared cohort
     declares itself the study's complete input.
+
+    The launch raises this refusal (``_require_export_holds_study_cohort``).
+    The Copilot workflow reads it before offering a plan, so it never offers
+    a start that the launch refuses.
     """
 
     from easyicu.webserver.pi_copilot.extraction_handoff import (
@@ -636,9 +679,11 @@ def _require_export_holds_study_cohort(
         compile_study_cohort,
     )
 
-    manifest = dataio.read_prepared_export_manifest(export_path)
+    if not export_path:
+        return None
+    manifest = dataio.read_prepared_export_manifest(str(export_path))
     if manifest is None:
-        return
+        return None
     try:
         if isinstance(manifest.get("cohort_contract"), Mapping):
             mismatches = bound_export_mismatches(study, manifest)
@@ -652,23 +697,27 @@ def _require_export_holds_study_cohort(
             )
             mismatches = ("registered_export_cohort_unrecorded",) if unreapplied else ()
     except dataio.ExportCohortError as exc:
-        raise ResearchPipelineRunError(
-            "research_pipeline_export_cohort_invalid",
-            "The study's cohort or the bound export's recorded cohort is not an "
-            "executable extraction contract.",
-            details={"reason_code": exc.error},
-        ) from exc
-    if mismatches:
-        raise ResearchPipelineRunError(
-            "research_pipeline_export_cohort_mismatch",
-            "The bound export does not hold the rows of the cohort this study "
-            "states (details.mismatch_codes): it was extracted for another "
-            "cohort or under an earlier rule, or it records no population for a "
-            "cohort that only extraction applies. Retrying will fail "
-            "identically; run easyicu_start_extraction to extract the study's "
-            "cohort.",
-            details={"mismatch_codes": list(mismatches)},
+        return ExportCohortRefusal(
+            code="research_pipeline_export_cohort_invalid",
+            reason_codes=(str(exc.error),),
+            cause=exc,
         )
+    if not mismatches:
+        return None
+    return ExportCohortRefusal(
+        code="research_pipeline_export_cohort_mismatch",
+        reason_codes=tuple(mismatches),
+    )
+
+
+def _require_export_holds_study_cohort(
+    study: Mapping[str, Any], export_path: str
+) -> None:
+    """Refuse an export whose rows are not the population the study states."""
+
+    refusal = bound_export_cohort_refusal(study, export_path)
+    if refusal is not None:
+        raise refusal.error() from refusal.cause
 
 
 def bound_export_selection_basis(

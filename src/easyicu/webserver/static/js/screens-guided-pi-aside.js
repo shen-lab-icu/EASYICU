@@ -253,6 +253,8 @@
         research_input_preparation_required: tr('The source is registered; prepare this question’s research input', '数据源已登记，仍需准备本次研究输入'),
         plan_ready: tr('Ready to create the analysis plan', '可以生成分析计划'),
         provider_ready_to_generate_plan: tr('Question and data source are ready; generate a candidate plan for review', '问题和数据源已就绪，可以生成候选计划供审阅'),
+        bound_export_cohort_mismatch: tr('The bound data package was not extracted for this study’s cohort under the current rule; extract this study’s cohort, or choose another data source, before planning', '绑定的数据包不是按本研究的人群和当前规则提取的；请先为本研究的人群提取数据，或改用其他数据源，再生成计划'),
+        bound_export_cohort_invalid: tr('The study’s cohort or the bound data package’s recorded cohort cannot be executed; check the study’s cohort, or choose another data source', '本研究的人群设置或绑定数据包记录的人群无法执行；请检查人群设置，或改用其他数据源'),
         agent_plan_ready: tr('The digest-bound analysis plan is ready', '摘要绑定分析计划已就绪'),
         operator_plan_approval_required: tr('Review and approve the digest-bound plan before analysis', '请在分析前审核并批准摘要绑定的计划'),
         plan_execution_upgrade_required: tr('Generate one package-bound plan before analysis', '需要先生成一份与数据包绑定的可执行计划'),
