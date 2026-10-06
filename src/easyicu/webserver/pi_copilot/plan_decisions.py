@@ -685,16 +685,31 @@ def _trajectory_design_configuration(
         else {}
     )
     population = representation.get("trajectory_population")
+    population = population if isinstance(population, Mapping) else {}
+    # Criteria the plan states and does not apply select no stay; the
+    # design keeps them so the plan on the signed owners states them too.
+    unapplied = [
+        str(item) for item in population.get("unapplied_criteria") or ()
+    ]
+    applied = bool(
+        population.get("source") == "plan"
+        and population.get("executable") is True
+    )
     population_field = (
         {
             "population": {
-                "inclusion": list(population.get("inclusion") or ()),
-                "exclusion": list(population.get("exclusion") or ()),
+                **(
+                    {
+                        "inclusion": list(population.get("inclusion") or ()),
+                        "exclusion": list(population.get("exclusion") or ()),
+                    }
+                    if applied
+                    else {}
+                ),
+                **({"unapplied_criteria": unapplied} if unapplied else {}),
             }
         }
-        if isinstance(population, Mapping)
-        and population.get("source") == "plan"
-        and population.get("executable") is True
+        if applied or unapplied
         else {}
     )
     try:
