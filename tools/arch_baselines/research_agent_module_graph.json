@@ -9425,7 +9425,23 @@
     ],
     [
       "easyicu.research_agent.planning.cohort_eligibility",
+      "easyicu.research_agent.concept_availability"
+    ],
+    [
+      "easyicu.research_agent.planning.cohort_eligibility",
+      "easyicu.research_agent.planning.adjustment_authority"
+    ],
+    [
+      "easyicu.research_agent.planning.cohort_eligibility",
       "easyicu.research_agent.research_context.concept_population"
+    ],
+    [
+      "easyicu.research_agent.planning.cohort_eligibility",
+      "easyicu.research_agent.research_context.materialization_window"
+    ],
+    [
+      "easyicu.research_agent.planning.cohort_eligibility",
+      "easyicu.research_agent.schema"
     ],
     [
       "easyicu.research_agent.planning.dependence_authority",
@@ -12672,6 +12688,18 @@
       "easyicu.research_agent.canonical_json"
     ],
     [
+      "easyicu.research_agent.research_context.materialization_window",
+      "easyicu.research_agent.research_context.concept_population"
+    ],
+    [
+      "easyicu.research_agent.research_context.materialization_window",
+      "easyicu.research_agent.research_context.temporal_semantics"
+    ],
+    [
+      "easyicu.research_agent.research_context.materialization_window",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.research_context.minimum_stay",
       "easyicu.research_agent.research_context.concept_population"
     ],
@@ -13404,9 +13432,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3343,
+    "edge_count": 3350,
     "largest_scc_size": 0,
-    "module_count": 776,
+    "module_count": 777,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -14129,6 +14157,7 @@
     "easyicu.research_agent.research_context.concept_population": "research_context/concept_population.py",
     "easyicu.research_agent.research_context.export_selection": "research_context/export_selection.py",
     "easyicu.research_agent.research_context.implementation_identity": "research_context/implementation_identity.py",
+    "easyicu.research_agent.research_context.materialization_window": "research_context/materialization_window.py",
     "easyicu.research_agent.research_context.minimum_stay": "research_context/minimum_stay.py",
     "easyicu.research_agent.research_context.observation_semantics": "research_context/observation_semantics.py",
     "easyicu.research_agent.research_context.outbound": "research_context/outbound.py",
