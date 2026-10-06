@@ -281,6 +281,26 @@ def concept_records_one_value_per_stay(concept: str) -> bool:
     return getattr(definition, "target", None) == "id_tbl"
 
 
+@lru_cache(maxsize=1024)
+def stay_level_concept_category(concept: str) -> Optional[str]:
+    """The owner's category for a concept with one value per stay, else None.
+
+    The dictionary files each stay-level concept under a category:
+    ``demographics`` describes the admission itself (age, sex, admission
+    type); ``outcome`` (a length of stay) and ``severity`` (a score over the
+    first ICU day) are not fixed at admission.  A stay-level concept without
+    a category gives ``""``.  A time-indexed concept, or one the dictionary
+    does not know, gives None.
+    """
+
+    from easyicu.resources import load_dictionary
+
+    definition = load_dictionary(include_sofa2=True).get(normalize_concept_name(concept))
+    if getattr(definition, "target", None) != "id_tbl":
+        return None
+    return str(getattr(definition, "category", None) or "").strip().casefold()
+
+
 def cross_database_concept_availability(
     *,
     concepts: Sequence[str],

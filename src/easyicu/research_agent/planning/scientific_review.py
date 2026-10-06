@@ -91,7 +91,11 @@ from ..trajectory.runtime_validation import (
     signed_trajectory_plan_claimed,
     signed_trajectory_plan_contract_errors,
 )
-from .cohort_eligibility import eligibility_after_time_zero
+from .cohort_eligibility import (
+    PredicateAfterTimeZero,
+    cohort_predicates_after_time_zero,
+    eligibility_after_time_zero,
+)
 from .figure_strategy import ArticleFigureStrategy
 from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
 
@@ -2707,6 +2711,17 @@ def trajectory_representation_findings(
     ]
 
 
+def _trajectory_window_end_hours(
+    trajectory_representation: Optional[Mapping[str, Any]],
+) -> Optional[float]:
+    """The end of a trajectory plan's executable window, its time zero."""
+
+    window = (trajectory_representation or {}).get("trajectory_window") or {}
+    if window.get("executable") and window.get("window_end_hours") is not None:
+        return float(window["window_end_hours"])
+    return None
+
+
 def plan_time_zero_hours(
     context: ResearchContext,
     trajectory_representation: Optional[Mapping[str, Any]],
@@ -2721,9 +2736,9 @@ def plan_time_zero_hours(
     else the end of the host-bound feature window.
     """
 
-    window = (trajectory_representation or {}).get("trajectory_window") or {}
-    if window.get("executable") and window.get("window_end_hours") is not None:
-        return float(window["window_end_hours"])
+    trajectory_end = _trajectory_window_end_hours(trajectory_representation)
+    if trajectory_end is not None:
+        return trajectory_end
     signed = getattr(runtime_authority, "landmark_hours", None)
     signed_landmark = (
         float(signed) if isinstance(signed, (int, float)) and not isinstance(signed, bool) else None
@@ -2801,6 +2816,97 @@ def cohort_eligibility_findings(
             concept_population=concept,
         )
     ]
+
+
+#: Who repairs a plan predicate the host cannot show decided by time zero.
+#: The Planner restates a predicate's window over a column decided by then.  A
+#: selection decided later is the study's population or time zero, which the
+#: Agent may not revise; a column window nothing records is the host's to record.
+_COHORT_PREDICATE_FINDINGS: dict[str, tuple[str, ScientificRemediationRoute]] = {
+    "anchor": ("COHORT_PREDICATE_WINDOW_AFTER_TIME_ZERO", "agent_plan_revision"),
+    "window": ("COHORT_PREDICATE_WINDOW_AFTER_TIME_ZERO", "agent_plan_revision"),
+    "column_window": ("COHORT_PREDICATE_DECIDED_AFTER_TIME_ZERO", "study_authority_change"),
+    "icu_stay_length": ("COHORT_PREDICATE_DECIDED_AFTER_TIME_ZERO", "study_authority_change"),
+    "stay_outcome": ("COHORT_PREDICATE_DECIDED_AFTER_TIME_ZERO", "study_authority_change"),
+    "stay_level": ("COHORT_PREDICATE_DECIDED_AFTER_TIME_ZERO", "study_authority_change"),
+    "unrecorded": ("COHORT_PREDICATE_COLUMN_WINDOW_UNRECORDED", "runtime_capability"),
+}
+
+
+def _cohort_predicate_finding(item: PredicateAfterTimeZero, source: str) -> PlanScientificFinding:
+    code, route = _COHORT_PREDICATE_FINDINGS[item.reason]
+    zero = f"{item.time_zero_hours:g} h after ICU admission"
+    if code == "COHORT_PREDICATE_WINDOW_AFTER_TIME_ZERO":
+        message = f"A cohort predicate's window does not end by the plan's time zero: {item.message()}."
+        remediation = (
+            f"Restate the predicate's window from ICU admission to {zero}. The column "
+            "it filters is decided by then, so the selection stays the same and the "
+            "plan states what the host executes."
+        )
+    elif code == "COHORT_PREDICATE_DECIDED_AFTER_TIME_ZERO":
+        message = f"The plan's cohort decides membership after its time zero: {item.message()}."
+        later = (
+            f" ({item.decided_by_hours:g} h or later)" if item.decided_by_hours is not None else ""
+        )
+        remediation = (
+            "Change the study, not only the plan: move its time zero to when this "
+            f"selection is known{later}, or select by what is known at {zero}: a "
+            "column the host summarizes by then, an ICU length of stay tested only up "
+            "to that hour, and no outcome or undated stay-level score."
+        )
+    else:
+        message = f"The host cannot date a column the plan's cohort filters: {item.message()}."
+        remediation = (
+            "The host must record the window it summarized this column over, as the "
+            "column's analysis window or the study's materialization window, before "
+            "a plan can select on it; a plan revision cannot supply that record."
+        )
+    return PlanScientificFinding(
+        code=code,
+        severity="blocker",
+        dimension="icu_clinical_design",
+        message=message + source,
+        evidence_refs=[
+            "analysis_plan.json.cohort",
+            "research_context.json.variables",
+            "research_context.json.user_preferences.data_constraints",
+        ],
+        remediation=remediation,
+        remediation_route=route,
+    )
+
+
+def cohort_predicate_findings(
+    context: ResearchContext,
+    plan: AnalysisPlan,
+    trajectory_representation: Optional[Mapping[str, Any]],
+    runtime_authority: CurrentCaseScientificRuntimeAuthority | None,
+) -> list[PlanScientificFinding]:
+    """Refuse a plan whose own cohort predicates decide membership after its time zero.
+
+    ``planning.cohort_eligibility`` judges each predicate as data against the
+    run's own variables and the window the host records it materialized the
+    column over, so a column only the run's roster knows is judged too.  The
+    finding names who can repair it (``_COHORT_PREDICATE_FINDINGS``).
+    """
+
+    cohort = plan.cohort
+    if cohort is None:
+        return []
+    found = cohort_predicates_after_time_zero(
+        context,
+        inclusion=[predicate.to_dict() for predicate in cohort.inclusion],
+        exclusion=[predicate.to_dict() for predicate in cohort.exclusion],
+        time_zero_hours=plan_time_zero_hours(context, trajectory_representation, runtime_authority),
+    )
+    # The trajectory population design reads the same predicates against the
+    # same hour; saying where it comes from keeps the two findings consistent.
+    source = (
+        " A trajectory plan's time zero is the end of its trajectory window."
+        if _trajectory_window_end_hours(trajectory_representation) is not None
+        else ""
+    )
+    return [_cohort_predicate_finding(item, source) for item in found]
 
 
 def build_plan_scientific_review(
@@ -2982,6 +3088,9 @@ def build_plan_scientific_review(
     findings.extend(landmark_survival_suite_findings(survival_suite))
     findings.extend(
         cohort_eligibility_findings(context, trajectory_representation, runtime_authority)
+    )
+    findings.extend(
+        cohort_predicate_findings(context, plan, trajectory_representation, runtime_authority)
     )
     required_source_columns = {
         context.primary_exposure, context.target_outcome,
