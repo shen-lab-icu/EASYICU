@@ -15,7 +15,6 @@ plan cannot be approved first and downgraded only after provider work has run.
 from __future__ import annotations
 
 import json
-import math
 import re
 from datetime import datetime, timezone
 from typing import Any, Literal, Mapping, Optional, Sequence
@@ -75,9 +74,9 @@ from ..research_context.concept_population import (
     ConceptCohortWindowError,
     concept_cohort_window,
 )
+from ..research_context.materialization_window import host_materialization_window_hours
 from ..research_context.minimum_stay import minimum_icu_stay_hours
 from ..research_context.temporal_semantics import (
-    normalise_time_anchor,
     primary_exposure_time_anchor_alignment,
     study_time_origin_alignment,
     trajectory_window_statements,
@@ -452,7 +451,9 @@ def post_baseline_exposure(context: ResearchContext) -> tuple[bool, Optional[str
     example while candidate planning is metadata-only).  That outer window is
     *not* promoted to a clinical-definition anchor; it only establishes that
     a primary feature can be observed after ICU admission, so association
-    plans must close early-event/exposure opportunity.
+    plans must close early-event/exposure opportunity.  The window is read by
+    ``host_materialization_window_hours``, as the cohort-predicate rule reads
+    it.
     """
 
     exposure = str(context.primary_exposure or "").strip()
@@ -471,33 +472,10 @@ def post_baseline_exposure(context: ResearchContext) -> tuple[bool, Optional[str
         # physical window evidence.
         return False, None
 
-    preferences = context.user_preferences
-    raw_constraints = getattr(preferences, "data_constraints", None)
-    if not isinstance(raw_constraints, str) or not raw_constraints.strip():
-        return False, None
-    try:
-        constraints = json.loads(raw_constraints)
-    except json.JSONDecodeError:
-        return False, None
-    if not isinstance(constraints, Mapping):
-        return False, None
-    materialization = constraints.get("materialization_window")
-    if (
-        not isinstance(materialization, Mapping)
-        or materialization.get("role") != "outer_observation_window"
-        or normalise_time_anchor(str(materialization.get("anchor") or ""))
-        != "icu_admission"
-    ):
-        return False, None
     # This detects a risk in the host-declared physical window; it grants no
     # execution authority. An absent confirmation cannot hide that risk.
-    if isinstance(materialization.get("hours"), bool):
-        return False, None
-    try:
-        hours = float(materialization["hours"])
-    except (KeyError, TypeError, ValueError):
-        return False, None
-    if not math.isfinite(hours) or hours <= 0:
+    hours = host_materialization_window_hours(context)
+    if hours is None:
         return False, None
     # This label deliberately names the physical coordinate, rather than
     # implying a phenotype definition or a follow-up horizon.
