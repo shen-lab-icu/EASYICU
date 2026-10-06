@@ -11785,6 +11785,10 @@
     ],
     [
       "easyicu.research_agent.reporting.population_selection",
+      "easyicu.research_agent.research_context.export_selection"
+    ],
+    [
+      "easyicu.research_agent.reporting.population_selection",
       "easyicu.research_agent.schema"
     ],
     [
@@ -12612,6 +12616,14 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.research_context.export_selection",
+      "easyicu.research_agent.research_context.concept_population"
+    ],
+    [
+      "easyicu.research_agent.research_context.export_selection",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.research_context.implementation_identity",
       "easyicu.research_agent.canonical_json"
     ],
@@ -13340,9 +13352,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3327,
+    "edge_count": 3330,
     "largest_scc_size": 0,
-    "module_count": 773,
+    "module_count": 774,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -14062,6 +14074,7 @@
     "easyicu.research_agent.research_context.clinical_definition": "research_context/clinical_definition.py",
     "easyicu.research_agent.research_context.cohort_granularity": "research_context/cohort_granularity.py",
     "easyicu.research_agent.research_context.concept_population": "research_context/concept_population.py",
+    "easyicu.research_agent.research_context.export_selection": "research_context/export_selection.py",
     "easyicu.research_agent.research_context.implementation_identity": "research_context/implementation_identity.py",
     "easyicu.research_agent.research_context.observation_semantics": "research_context/observation_semantics.py",
     "easyicu.research_agent.research_context.outbound": "research_context/outbound.py",

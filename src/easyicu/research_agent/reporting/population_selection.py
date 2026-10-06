@@ -3,9 +3,9 @@
 A research question names the population a researcher has in mind; it selects
 no one.  Rows enter an analysis in two typed ways only:
 
-* the source export's applied criteria, which Data Extraction executes: the
-  context's inclusion and exclusion criteria and a concept-derived population
-  (``data_constraints.concept_cohort_window``);
+* the selection the source export applied
+  (``research_context.export_selection``): its inclusion and exclusion
+  contracts and a concept-derived population;
 * the plan's cohort predicates, when it states any.
 
 This module reads those owners and says which population the manuscript
@@ -31,8 +31,8 @@ from typing import Any, Literal, Mapping, Optional, Sequence
 from ..research_context.concept_population import (
     ConceptCohortWindow,
     ConceptCohortWindowError,
-    concept_cohort_window,
 )
+from ..research_context.export_selection import AppliedContracts, export_applied_selection
 from ..schema import AnalysisPlan, ResearchContext
 
 
@@ -79,14 +79,6 @@ _POPULATION_SUBSECTION_RE = re.compile(
 )
 _ABSTRACT_HEADING_RE = re.compile(r"##\s+abstract\s*", re.I)
 _ABSTRACT_METHODS_LABEL_RE = re.compile(r"(?:[-*]\s*)?\*\*methods:?\*\*", re.I)
-
-
-@dataclass(frozen=True)
-class AppliedContracts:
-    """Criteria the source export states it applied, verbatim."""
-
-    inclusion: tuple[str, ...] = ()
-    exclusion: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -141,15 +133,13 @@ def analyzed_population(
     if cohort is None or context is None:
         return None
     try:
-        concept = concept_cohort_window(context)
+        selection = export_applied_selection(context)
     except ConceptCohortWindowError:
         return None
     inclusion = tuple(predicate.to_dict() for predicate in cohort.inclusion)
     exclusion = tuple(predicate.to_dict() for predicate in cohort.exclusion)
-    contracts = AppliedContracts(
-        inclusion=_criteria(context.cohort.inclusion_criteria),
-        exclusion=_criteria(context.cohort.exclusion_criteria),
-    )
+    contracts = selection.contracts
+    concept = selection.concept_population
     scope: SourceScope
     if cohort.selection_mode != "all_input_rows" and (inclusion or exclusion):
         scope = "predicate_selected"
@@ -214,11 +204,12 @@ _WRITER_POPULATION_RULES = (
     "- Describe this study's population only as stated here, in every section. "
     "Eligibility for one analysis (a landmark risk set, observed windows, "
     "complete data) comes from the executed method boundary.",
-    "- The research question selects no one: never call this study's rows, "
-    "stays, patients or cohort a narrower population it names (a condition, "
-    "treatment, procedure, setting or age group) that is not listed here; in "
-    "Methods, say once that the analysis was not restricted to it. Background "
-    "about that condition is allowed.",
+    "- The research question, and any criterion or cohort wording in RESEARCH "
+    "CONTEXT, select no one: never call this study's rows, stays, patients or "
+    "cohort a narrower population they name (a condition, treatment, procedure, "
+    "setting or age group) that is not listed here; in Methods, say once that "
+    "the analysis was not restricted to it. Background about that condition is "
+    "allowed.",
 )
 
 
@@ -249,10 +240,6 @@ def writer_population_block(population: AnalyzedPopulation | None) -> str:
             )
     lines.extend(_WRITER_POPULATION_RULES)
     return "\n".join(lines) + "\n\n"
-
-
-def _criteria(values: Sequence[Any]) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
 
 
 def _contract_items(population: AnalyzedPopulation) -> list[str]:
