@@ -17,8 +17,11 @@ cohort), so the block then asserts neither that it applied any nor that the
 analysis was unrestricted; only a criterion the host applied itself is stated
 as applied.  A prepared package that declares itself the study's cohort is
 that cohort by its own declaration, which the host accepted without verifying
-it, so the block names the cohort only as the package's declaration.  The
-host cites a population statement where the
+it, so the block names the cohort only as the package's declaration.  A
+population criterion the plan names but no predicate applies
+(``CohortDefinition.unapplied_population_criteria``) selected no one: the
+block lists it as not applied, so the manuscript says so and never calls the
+rows by it.  The host cites a population statement where the
 manuscript states its population only when the plan selected its rows by
 predicate.  Otherwise the registered owners such a statement could cite
 record the export or the question, not a selection.
@@ -111,6 +114,9 @@ class AnalyzedPopulation:
     #: How the host knows the export's selection (``ExportAppliedSelection.basis``);
     #: ``None`` without a record.
     source_selection_basis: Optional[str] = None
+    #: Population criteria the plan names that no predicate applies
+    #: (``CohortDefinition.unapplied_population_criteria``); they select no row.
+    unapplied_population_criteria: tuple[str, ...] = ()
 
     def record(self) -> dict[str, Any]:
         """The JSON shape both owners of this record agree on."""
@@ -133,6 +139,7 @@ class AnalyzedPopulation:
             "source_scope": self.source_scope,
             "source_selection_recorded": self.source_selection_recorded,
             "source_selection_basis": self.source_selection_basis,
+            "unapplied_population_criteria": list(self.unapplied_population_criteria),
         }
 
 
@@ -184,6 +191,9 @@ def analyzed_population(
         source_selection_recorded=selection.recorded,
         unverified_contracts=selection.unverified,
         source_selection_basis=selection.basis,
+        unapplied_population_criteria=tuple(
+            getattr(cohort, "unapplied_population_criteria", None) or ()
+        ),
     )
 
 
@@ -255,6 +265,12 @@ _UNRECORDED_CONSEQUENCE = (
     "the export's selection is not recorded, so never say whether the analysis "
     "was restricted to it."
 )
+#: A criterion the plan names but did not apply selected no one.
+_UNAPPLIED_RULE = (
+    "- A criterion listed as not applied is not part of this study's population: "
+    "say it was not applied, and never call this study's rows, stays, patients or "
+    "cohort by it."
+)
 #: A declared package is the study's cohort only by its own word.
 _DECLARED_CONSEQUENCE = (
     "the package declares itself this study's cohort, so name that cohort only as "
@@ -309,7 +325,15 @@ def writer_population_block(population: AnalyzedPopulation | None) -> str:
                 "- Plan exclusion predicates: "
                 + _listed([_predicate_text(item) for item in population.exclusion_predicates])
             )
+        if population.unapplied_population_criteria:
+            lines.append(
+                "- Population criteria the plan names but did not apply (no data "
+                "concept expresses them, so they selected no one): "
+                + _listed(list(population.unapplied_population_criteria))
+            )
     lines.append(_DESCRIBE_RULE)
+    if population is not None and population.unapplied_population_criteria:
+        lines.append(_UNAPPLIED_RULE)
     lines.append(
         _QUESTION_RULE.format(
             consequence=(

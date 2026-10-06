@@ -11,8 +11,9 @@ stated as such: its criteria are declared, not applied, except the ones the
 host applied itself, and the analysis is called neither restricted nor
 unrestricted.  A prepared package that declares itself the study's cohort is
 named only as that declaration, which the host accepted without verifying
-it.  Fixtures are synthetic; the populations they name vary so that no rule
-keys on one condition.
+it.  A population criterion the plan names but no predicate applies is stated
+as not applied.  Fixtures are synthetic; the populations they name vary so
+that no rule keys on one condition.
 """
 
 from __future__ import annotations
@@ -166,6 +167,7 @@ def test_a_plan_keeping_every_row_of_an_uncontracted_export_analyzes_every_icu_s
         "source_scope": "all_icu_stays_of_source_export",
         "source_selection_recorded": True,
         "source_selection_basis": "export_contract",
+        "unapplied_population_criteria": [],
     }
 
 
@@ -450,6 +452,78 @@ def test_plan_predicates_over_a_declared_package_select_the_rows_they_admit() ->
     assert "- Plan inclusion predicates: sep3 == True" in block
     assert _DECLARED_CONSEQUENCE in block
     assert _DECLARED_ROWS not in block
+
+
+# Criteria the plan did not apply ------------------------------------------
+
+_NOT_APPLIED = (
+    "- Population criteria the plan names but did not apply (no data concept "
+    "expresses them, so they selected no one): "
+)
+_NOT_APPLIED_RULE = (
+    "- A criterion listed as not applied is not part of this study's population: "
+    "say it was not applied, and never call this study's rows, stays, patients or "
+    "cohort by it."
+)
+
+
+@pytest.mark.parametrize(
+    ("cohort", "context", "criteria", "scope", "cites"),
+    [
+        (_SELECTED, {}, ("Patients with septic shock",), "predicate_selected", True),
+        (
+            _ALL_ROWS,
+            {"recorded": False},
+            ("Admitted after elective surgery", "Receiving vasopressors"),
+            "all_input_rows_of_unrecorded_export",
+            False,
+        ),
+        (
+            _ALL_ROWS,
+            {"basis": "package_declaration"},
+            ("Older adults with acute kidney injury",),
+            "all_input_rows_of_declared_package",
+            False,
+        ),
+    ],
+    ids=["plan predicates", "unrecorded export", "declared package"],
+)
+def test_a_criterion_the_plan_did_not_apply_is_stated_as_not_applied(
+    cohort: dict, context: dict, criteria: tuple[str, ...], scope: str, cites: bool
+) -> None:
+    plan = _plan({**cohort, "unapplied_population_criteria": list(criteria)})
+
+    population = analyzed_population(plan=plan, context=_context(**context))
+
+    assert population is not None
+    # Selecting no row, it changes neither the scope nor the host's citation.
+    assert population.source_scope == scope
+    assert host_may_cite_population_statement(population) is cites
+    assert population.record()["unapplied_population_criteria"] == list(criteria)
+    block = writer_population_block(population)
+    assert _NOT_APPLIED + "; ".join(criteria) + "." in block
+    assert _NOT_APPLIED_RULE in block
+
+
+def test_a_plan_applying_every_criterion_names_none_as_unapplied() -> None:
+    population = analyzed_population(plan=_plan(_SELECTED), context=_context())
+
+    assert population is not None
+    assert population.record()["unapplied_population_criteria"] == []
+    block = writer_population_block(population)
+    assert "did not apply" not in block
+    assert _NOT_APPLIED_RULE not in block
+
+
+def test_the_criteria_reach_the_block_through_the_plans_json() -> None:
+    plan = _plan({**_SELECTED, "unapplied_population_criteria": ["Patients  with\tseptic shock"]})
+
+    restored = AnalysisPlan.model_validate(json.loads(plan.model_dump_json()))
+    population = analyzed_population(plan=restored, context=_context())
+
+    assert population is not None
+    assert population.unapplied_population_criteria == ("Patients with septic shock",)
+    assert _NOT_APPLIED + "Patients with septic shock." in writer_population_block(population)
 
 
 def test_a_recorded_selection_states_every_criterion_as_applied() -> None:
