@@ -28,7 +28,11 @@ from ..literature_design_authority import (
     CandidateLiteratureDesignDecision,
     LiteratureDesignEvidenceCard,
 )
-from ..progressive_contract import ModelTermCoding
+from ..progressive_contract import (
+    ModelTermCoding,
+    ProgressiveCohortPredicate,
+    ProgressivePopulationCriterion,
+)
 
 FAMILY_SPEC_SCHEMA_VERSION = "easyicu.family_plan_spec/1"
 FAMILY_SPEC_REQUEST_SCHEMA_VERSION = "easyicu.family_spec_request/1"
@@ -41,6 +45,22 @@ LANDMARK_SURVIVAL_FAMILY_ID = "landmark_survival_suite"
 FIXED_WINDOW_TRAJECTORY_FAMILY_ID = "fixed_window_trajectory_suite"
 SOURCE_FEASIBILITY_FAMILY_ID = "source_feasibility_fail_closed"
 LANDMARK_FAMILY_IDS = frozenset({LANDMARK_CATEGORICAL_FAMILY_ID, LANDMARK_SPLINE_FAMILY_ID})
+#: Families whose template applies the plan's own cohort, so a population the
+#: study states can be applied there; the survival family only for a proposed
+#: suite.  A sealed suite's cohort is its study design's, and the feasibility
+#: family decides nothing by a time zero.
+POPULATION_FAMILY_IDS = frozenset(
+    {
+        *LANDMARK_FAMILY_IDS,
+        DESCRIPTIVE_FAMILY_ID,
+        PHENOTYPING_FAMILY_ID,
+        PREDICTION_FAMILY_ID,
+        LANDMARK_SURVIVAL_FAMILY_ID,
+    }
+)
+#: The anchor a population predicate counts from: the family's time zero is
+#: stated in hours after ICU admission.
+POPULATION_ANCHOR = "icu_admission"
 #: Families whose every scientific coordinate is a sealed runtime authority's;
 #: the Planner only labels columns and writes comparator applications.
 SEALED_SUITE_FAMILY_IDS = frozenset(
@@ -422,6 +442,19 @@ class FamilySpecRequest(BaseModel):
     study_population_occurrence: Optional[StudyPopulationOccurrence] = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    #: The cohort concepts a population the study states may read.  Offered
+    #: only to a family that applies its plan's own cohort by a known time
+    #: zero, and only when the caller has not bound every input row; empty
+    #: otherwise.  Omitted from the digest when empty, like the fields above.
+    population_concepts: list[str] = Field(
+        default_factory=list, max_length=1024, exclude_if=lambda value: not value
+    )
+    #: The study's own cohort wording (label, review, exclusion statement):
+    #: a source of that population, applied by nothing until the Planner
+    #: states it as predicates.  Omitted from the digest when empty.
+    study_cohort_wording: dict[str, str] = Field(
+        default_factory=dict, exclude_if=lambda value: not value
+    )
 
     @field_validator(
         "exposure_levels",
@@ -434,6 +467,7 @@ class FamilySpecRequest(BaseModel):
         "direct_comparator_literature_keys",
         "comparison_literature_keys",
         "variable_roster",
+        "population_concepts",
     )
     @classmethod
     def _unique_nonblank(cls, values: list[str]) -> list[str]:
@@ -772,6 +806,29 @@ def accepted_baseline_additions(
     ]
 
 
+class SpecPopulation(BaseModel):
+    """The population a study states beyond the host's typed cohort bounds.
+
+    Each criterion is written in the words that state it, with the offered
+    population concepts that express it, and the predicates apply it, each
+    decided by the family's time zero.  A criterion that no offered concept
+    expresses carries none: it is stated, and nothing applies it.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    criteria: list[ProgressivePopulationCriterion] = Field(min_length=1, max_length=6)
+    inclusion: list[ProgressiveCohortPredicate] = Field(default_factory=list, max_length=8)
+    exclusion: list[ProgressiveCohortPredicate] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def _unique_criteria(self) -> "SpecPopulation":
+        stated = [item.criterion.casefold() for item in self.criteria]
+        if len(stated) != len(set(stated)):
+            raise ValueError("population criteria must be unique")
+        return self
+
+
 class FamilyPlanSpec(BaseModel):
     """The Planner's complete output for one family-spec attempt."""
 
@@ -796,6 +853,11 @@ class FamilyPlanSpec(BaseModel):
         exclude_if=lambda value: not value,
     )
     roster_decision_note: str = Field(min_length=8, max_length=1200)
+    #: The population the question or the study's own cohort wording states
+    #: beyond the typed bounds.  Omitted from the spec digest when absent.
+    population: Optional[SpecPopulation] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @field_validator("reader_display_labels", mode="before")
     @classmethod
@@ -1132,6 +1194,117 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
             path="comparator_applications",
         )
     _validate_literature_design_decisions(spec, request)
+    _validate_population(spec, request)
+
+
+def population_required(request: FamilySpecRequest) -> bool:
+    """Whether only a population the Planner states can filter this cohort.
+
+    The caller binds a predicate-filtered cohort (a reviewed candidate chose
+    one), no typed age or stay bound applies, and population concepts are
+    offered.  A phenotyping plan may filter by its membership flag instead.
+    """
+
+    return (
+        bool(request.population_concepts)
+        and request.cohort_selection_mode == "predicate_filtered"
+        and all(
+            value is None
+            for value in (request.age_min, request.age_max, request.minimum_icu_hours)
+        )
+    )
+
+
+def _validate_population(spec: FamilyPlanSpec, request: FamilySpecRequest) -> None:
+    """A stated population reads offered concepts only, by time zero, and is applied.
+
+    Every predicate applies a stated criterion, and every criterion that has
+    concepts is applied by at least one predicate over one of them, so no
+    restriction goes unstated and no stated restriction goes unapplied.  When
+    only the stated population can filter a caller-bound filtered cohort, it
+    must apply a predicate.
+    """
+
+    population = spec.population
+    if (
+        population_required(request)
+        and spec.cohort_membership_column is None
+        and not (population is not None and (population.inclusion or population.exclusion))
+    ):
+        raise FamilySpecError(
+            "family_spec_population_required",
+            "the caller binds a predicate-filtered cohort and no typed age or stay bound "
+            "applies, so only the population you state can filter it: state the "
+            "population the question or the study's wording names, with at least one "
+            "inclusion or exclusion predicate",
+            path="population",
+        )
+    if population is None:
+        return
+    if not request.population_concepts:
+        raise FamilySpecError(
+            "family_spec_population_not_applicable",
+            "this request offers no population concepts: the caller binds every input "
+            "row, or the family applies no plan cohort by a time zero; population must "
+            "be null",
+            path="population",
+        )
+    offered = set(request.population_concepts)
+    stated: set[str] = set()
+    for index, item in enumerate(population.criteria):
+        unknown = [concept for concept in item.concept_ids if concept not in offered]
+        if unknown:
+            raise FamilySpecError(
+                "family_spec_population_concept_unavailable",
+                f"criterion {item.criterion!r} names concepts that are not offered: "
+                f"{unknown!r}",
+                path=f"population.criteria[{index}].concept_ids",
+            )
+        stated.update(item.concept_ids)
+    time_zero = request.cohort_time_zero_hours
+    for side in ("inclusion", "exclusion"):
+        for index, predicate in enumerate(getattr(population, side)):
+            path = f"population.{side}[{index}]"
+            if predicate.concept_id not in offered:
+                raise FamilySpecError(
+                    "family_spec_population_concept_unavailable",
+                    f"{predicate.concept_id!r} is not an offered population concept",
+                    path=f"{path}.concept_id",
+                )
+            if predicate.concept_id not in stated:
+                raise FamilySpecError(
+                    "family_spec_population_predicate_unstated",
+                    f"no criterion names {predicate.concept_id!r}; state the restriction "
+                    "this predicate applies",
+                    path=path,
+                )
+            if predicate.anchor != POPULATION_ANCHOR:
+                raise FamilySpecError(
+                    "family_spec_population_anchor_unavailable",
+                    f"a population predicate counts from {POPULATION_ANCHOR}, the anchor "
+                    "of the family's time zero",
+                    path=f"{path}.anchor",
+                )
+            if time_zero is None or predicate.end_offset_hours > time_zero:
+                raise FamilySpecError(
+                    "family_spec_population_after_time_zero",
+                    "a population predicate must be decided by time zero "
+                    f"({time_zero if time_zero is not None else 'unknown'} h after ICU "
+                    f"admission); its window ends at {predicate.end_offset_hours:g} h",
+                    path=f"{path}.end_offset_hours",
+                )
+    read = {
+        predicate.concept_id for predicate in (*population.inclusion, *population.exclusion)
+    }
+    for index, item in enumerate(population.criteria):
+        if item.concept_ids and not read.intersection(item.concept_ids):
+            raise FamilySpecError(
+                "family_spec_population_criterion_unapplied",
+                f"criterion {item.criterion!r} names {item.concept_ids!r}, but no inclusion "
+                "or exclusion predicate reads one of them; apply it, or give it no "
+                "concepts only when no offered concept expresses it",
+                path=f"population.criteria[{index}]",
+            )
 
 
 def literature_design_card_keys_by_dimension(
@@ -1203,6 +1376,8 @@ __all__ = [
     "LANDMARK_FAMILY_IDS",
     "LANDMARK_SPLINE_FAMILY_ID",
     "PHENOTYPING_FAMILY_ID",
+    "POPULATION_ANCHOR",
+    "POPULATION_FAMILY_IDS",
     "PREDICTION_FAMILY_ID",
     "SOURCE_FEASIBILITY_FAMILY_ID",
     "AdjustmentCandidate",
@@ -1215,10 +1390,12 @@ __all__ = [
     "SensitivityAxisBinding",
     "SpecComparatorApplication",
     "SpecCovariateDecision",
+    "SpecPopulation",
     "SpecReaderLabel",
     "StudyPopulationOccurrence",
     "accepted_baseline_additions",
     "literature_design_card_keys_by_dimension",
+    "population_required",
     "spec_from_mapping",
     "table_one_group_column",
     "validate_family_plan_spec",

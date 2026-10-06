@@ -102,7 +102,7 @@ def _selected_design(context, authorities, *, question=None):
     request = sealed_request(context, authorities)
     if question is not None:
         request = request.model_copy(update={"research_question": question})
-    spec = SimpleNamespace(labels={}, literature_design_decisions=[])
+    spec = SimpleNamespace(labels={}, literature_design_decisions=[], population=None)
     selection = survival_template._design_selection(
         request, spec, method_keys=["strobe_2007"], roster=[]
     )

@@ -57,6 +57,9 @@ from .landmark_categorical_template import (
     _label,
     _method_card_elements,
     _method_card_ids,
+    population_restricts,
+    stated_population_sentence,
+    typed_bound_applies,
 )
 from .plan_language import bounded_roster, listing, plan_language, sentence
 
@@ -222,7 +225,15 @@ def _design_selection(
         ),
         reviewable_plan=(
             [
-                f"研究队列的全部输入行；{unit_text_zh}。",
+                (
+                    "研究队列中"
+                    + ("满足类型化纳入界限的" if typed_bound_applies(request) else "")
+                    + "分析行"
+                    if typed_bound_applies(request) or population_restricts(spec.population)
+                    else "研究队列的全部输入行"
+                )
+                + f"；{unit_text_zh}。"
+                + stated_population_sentence(spec.population, language),
                 f"预测变量为 {listing([_label(spec, name) for name in predictors], language)}，"
                 f"每项均在 {hours_zh} 内测量，并按行汇总。",
                 f"{outcome}，取自观察窗口之后。",
@@ -232,7 +243,14 @@ def _design_selection(
             ]
             if language == "zh"
             else [
-                f"All input rows of the study cohort; {unit_text}.",
+                (
+                    "Analysis rows of the study cohort"
+                    + (" that meet the typed eligibility bound" if typed_bound_applies(request) else "")
+                    if typed_bound_applies(request) or population_restricts(spec.population)
+                    else "All input rows of the study cohort"
+                )
+                + f"; {unit_text}."
+                + stated_population_sentence(spec.population, language),
                 f"Predictors {predictor_text}, each measured inside {hours} and aggregated per row.",
                 sentence(f"{outcome}, taken after the observation window."),
                 "Prespecified static model with host-owned preprocessing fitted on the training split "
@@ -573,7 +591,7 @@ def build_prediction_skeleton(
     foundation = ProgressiveFoundationMaterialization(
         outline_sha256=outline_sha256,
         foundation=ProgressivePlanFoundation(
-            cohort=_cohort_intent(request),
+            cohort=_cohort_intent(request, spec.population),
             display_labels=[
                 ProgressiveDisplayLabel(key=key, value=value)
                 for key, value in spec.labels.items()

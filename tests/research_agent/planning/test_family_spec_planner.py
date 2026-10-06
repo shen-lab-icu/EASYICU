@@ -22,6 +22,7 @@ from easyicu.research_agent.agents.family_spec_planner import (
     family_spec_user_prompt,
     parse_family_plan_spec,
 )
+from easyicu.research_agent.planning.progressive_compiler import progressive_cohort_concept_ids
 from easyicu.research_agent.agents.progressive_planner import (
     FAMILY_SPEC_STRATEGY,
     ProgressivePlannerAgent,
@@ -1796,6 +1797,7 @@ def test_logistic_landmark_plan_never_cites_a_survival_method_card() -> None:
         direct_comparator_literature_keys=DIRECT_COMPARATORS,
         comparison_literature_keys=DIRECT_COMPARATORS,
         required_primary_cohort_selection_mode="predicate_filtered",
+        cohort_concept_ids=progressive_cohort_concept_ids(context, select_progressive_variables(context)),
     )
     llm = ScriptedMockLLMClient(
         [json.dumps(_spec_payload(request, adjustment_set=PLANNER_ROSTER))]

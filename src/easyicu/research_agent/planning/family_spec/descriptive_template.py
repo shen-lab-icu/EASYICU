@@ -54,6 +54,8 @@ from .landmark_categorical_template import (
     _label,
     _method_card_elements,
     _method_card_ids,
+    population_restricts,
+    stated_population_sentence,
 )
 
 TABLE_ONE_ACTION = "descriptive.table_one"
@@ -187,13 +189,18 @@ def _design_selection(
         ),
         reviewable_plan=(
             [
-                "研究队列的全部输入行"
+                (
+                    "研究队列的分析行"
+                    if population_restricts(spec.population)
+                    else "研究队列的全部输入行"
+                )
                 + (
                     "中满足类型化纳入界限者"
                     if request.cohort_selection_mode == "predicate_filtered"
                     else ""
                 )
-                + f"；{unit_text_zh}。",
+                + f"；{unit_text_zh}。"
+                + stated_population_sentence(spec.population, language),
                 f"{exposure}，封闭水平为 {listing(request.exposure_levels, language)}；"
                 "无法评估水平的行单独计数并报告，不重编码。",
                 f"{outcome}；报告总体及按暴露水平的计数与比例。",
@@ -203,13 +210,18 @@ def _design_selection(
             ]
             if language == "zh"
             else [
-                "All input rows of the study cohort"
+                (
+                    "Analysis rows of the study cohort"
+                    if population_restricts(spec.population)
+                    else "All input rows of the study cohort"
+                )
                 + (
                     " that meet the typed eligibility bound"
                     if request.cohort_selection_mode == "predicate_filtered"
                     else ""
                 )
-                + f"; {unit_text}.",
+                + f"; {unit_text}."
+                + stated_population_sentence(spec.population, language),
                 sentence(
                     f"{exposure} with closed levels {levels}; rows without an evaluable level are "
                     "counted and reported, never recoded."
@@ -490,7 +502,7 @@ def build_descriptive_skeleton(
     foundation = ProgressiveFoundationMaterialization(
         outline_sha256=outline_sha256,
         foundation=ProgressivePlanFoundation(
-            cohort=_cohort_intent(request),
+            cohort=_cohort_intent(request, spec.population),
             display_labels=[
                 ProgressiveDisplayLabel(key=key, value=value)
                 for key, value in spec.labels.items()

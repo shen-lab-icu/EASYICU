@@ -54,6 +54,8 @@ from .landmark_categorical_template import (
     _label,
     _method_card_elements,
     _method_card_ids,
+    population_restricts,
+    stated_population_sentence,
     typed_bound_predicates,
 )
 from .plan_language import bounded_roster, listing, plan_language, sentence
@@ -155,12 +157,27 @@ def _cohort_intent(request: FamilySpecRequest, spec: FamilyPlanSpec) -> Progress
                 path="cohort",
             )
         inclusion.extend(typed_bound_predicates(request, end_hours=float(end_hours)))
-    if not inclusion:
+    # The population the study states follows the host's bounds; its criteria
+    # travel with the intent, where the foundation check applies them.
+    stated = spec.population
+    exclusion = list(stated.exclusion) if stated is not None else []
+    criteria = list(stated.criteria) if stated is not None else []
+    if stated is not None:
+        inclusion.extend(stated.inclusion)
+    if not (inclusion or exclusion):
         return ProgressiveCohortIntent(
-            name=request.cohort_name, selection_mode="all_input_rows", inclusion=[], exclusion=[]
+            name=request.cohort_name,
+            selection_mode="all_input_rows",
+            inclusion=[],
+            exclusion=[],
+            population_criteria=criteria,
         )
     return ProgressiveCohortIntent(
-        name=request.cohort_name, selection_mode="predicate_filtered", inclusion=inclusion, exclusion=[]
+        name=request.cohort_name,
+        selection_mode="predicate_filtered",
+        inclusion=inclusion,
+        exclusion=exclusion,
+        population_criteria=criteria,
     )
 
 
@@ -188,11 +205,17 @@ def _design_selection(
     population = (
         f"analysis rows of the study cohort with {membership} present in the window"
         if membership
+        else "analysis rows of the study cohort"
+        if population_restricts(spec.population)
         else "all analysis rows of the study cohort"
     )
     language = plan_language(request.research_question)
     population_zh = (
-        f"研究队列中窗口内存在 {membership} 的分析行" if membership else "研究队列的全部分析行"
+        f"研究队列中窗口内存在 {membership} 的分析行"
+        if membership
+        else "研究队列的分析行"
+        if population_restricts(spec.population)
+        else "研究队列的全部分析行"
     )
     hours_zh = (
         f"ICU 入院后 0–{request.observation_window_hours:g} h"
@@ -252,7 +275,8 @@ def _design_selection(
         ),
         reviewable_plan=(
             [
-                f"{population_zh}；每行为一次 ICU 入住。",
+                f"{population_zh}；每行为一次 ICU 入住。"
+                + stated_population_sentence(spec.population, language),
                 f"聚类特征为 {listing([_label(spec, name) for name in features], language)}，"
                 f"每项均为 {hours_zh} 内预先设定的数值测量。",
                 f"{outcome}，按聚类描述，作为下游的非因果分布。",
@@ -262,7 +286,8 @@ def _design_selection(
             ]
             if language == "zh"
             else [
-                sentence(f"{population}; each analysis row is one ICU stay."),
+                sentence(f"{population}; each analysis row is one ICU stay.")
+                + stated_population_sentence(spec.population, language),
                 f"Clustering features {feature_text}, each a prespecified numeric measurement inside {hours}.",
                 sentence(f"{outcome}, described by cluster as a downstream non-causal distribution."),
                 "Prespecified unsupervised clustering with candidate-k comparison, feature-profile "

@@ -70,6 +70,7 @@ from .contract import (
     FamilySpecError,
     FamilySpecRequest,
     SpecCovariateDecision,
+    SpecPopulation,
     accepted_baseline_additions,
     design_field_max_length,
     landmark_design_roster,
@@ -493,8 +494,11 @@ def _design_selection(
         reviewable_plan=(
             [
                 (
-                    f"研究队列中满足类型化纳入界限、且在 {hours} h landmark 时仍在观察中的分析行；"
+                    "研究队列中"
+                    + ("满足类型化纳入界限、" if typed_bound_applies(request) else "")
+                    + f"且在 {hours} h landmark 时仍在观察中的分析行；"
                     f"每行为一次 ICU 入住，{cluster_text_zh}。"
+                    + stated_population_sentence(spec.population, language)
                 ),
                 (
                     f"{exposure} 取 0–{hours} h 窗口内的测量值；无测量的行作为单独的未测量状态在审计中"
@@ -524,9 +528,11 @@ def _design_selection(
             if language == "zh"
             else [
                 (
-                    "Analysis rows of the study cohort that meet the typed eligibility bound and survive "
-                    f"under observation to the {hours} h landmark; each analysis row is one ICU stay, "
-                    f"{cluster_text}."
+                    "Analysis rows of the study cohort"
+                    + (" that meet the typed eligibility bound" if typed_bound_applies(request) else "")
+                    + f" that survive under observation to the {hours} h landmark; each analysis row "
+                    f"is one ICU stay, {cluster_text}."
+                    + stated_population_sentence(spec.population, language)
                 ),
                 sentence(
                     f"{exposure} measured in the 0–{hours} h window; rows without a measurement stay a "
@@ -647,10 +653,78 @@ def typed_bound_predicates(
     return predicates
 
 
-def _cohort_intent(request: FamilySpecRequest) -> ProgressiveCohortIntent:
-    if request.cohort_selection_mode == "all_input_rows":
+def typed_bound_applies(request: FamilySpecRequest) -> bool:
+    """Whether the plan's cohort applies the request's typed age or stay bounds."""
+
+    return request.cohort_selection_mode == "predicate_filtered" and any(
+        value is not None
+        for value in (request.age_min, request.age_max, request.minimum_icu_hours)
+    )
+
+
+def population_restricts(population: SpecPopulation | None) -> bool:
+    """Whether the population a study states applies a predicate to the cohort."""
+
+    return population is not None and bool(population.inclusion or population.exclusion)
+
+
+def stated_population_sentence(population: SpecPopulation | None, language: str) -> str:
+    """The plan's words for the population its study states, appended to its cohort item.
+
+    The criteria a predicate applies are named as applied; a criterion that no
+    available concept expresses is named as stated and not applied.
+    """
+
+    if population is None:
+        return ""
+    applied = [item.criterion for item in population.criteria if item.concept_ids]
+    unapplied = [item.criterion for item in population.criteria if not item.concept_ids]
+    if language == "zh":
+        return (
+            ("计划施加研究陈述的人群：" + "；".join(applied) + "。" if applied else "")
+            + (
+                "研究陈述、但没有可用概念表达而未施加的条件：" + "；".join(unapplied) + "。"
+                if unapplied
+                else ""
+            )
+        )
+    return (
+        (" The plan applies the population the study states: " + "; ".join(applied) + "."
+         if applied else "")
+        + (
+            " Stated but not applied, as no available concept expresses it: "
+            + "; ".join(unapplied)
+            + "."
+            if unapplied
+            else ""
+        )
+    )
+
+
+def _cohort_intent(
+    request: FamilySpecRequest, population: SpecPopulation | None = None
+) -> ProgressiveCohortIntent:
+    """The plan's cohort: the host's typed bounds, then the population its study states.
+
+    The stated population's predicates follow the typed bounds, and its
+    criteria travel with the intent, where ``validate_progressive_foundation``
+    checks that each one with concepts is applied.  Any predicate makes the
+    cohort predicate-filtered; a request offers a population only when the
+    caller has not bound every input row.
+    """
+
+    stated_inclusion = list(population.inclusion) if population is not None else []
+    stated_exclusion = list(population.exclusion) if population is not None else []
+    criteria = list(population.criteria) if population is not None else []
+    if request.cohort_selection_mode == "all_input_rows" and not (
+        stated_inclusion or stated_exclusion
+    ):
         return ProgressiveCohortIntent(
-            name=request.cohort_name, selection_mode="all_input_rows", inclusion=[], exclusion=[]
+            name=request.cohort_name,
+            selection_mode="all_input_rows",
+            inclusion=[],
+            exclusion=[],
+            population_criteria=criteria,
         )
     end_hours = request.cohort_time_zero_hours
     if end_hours is None:
@@ -659,18 +733,27 @@ def _cohort_intent(request: FamilySpecRequest) -> ProgressiveCohortIntent:
             "a predicate-filtered cohort needs a typed landmark or observation window",
             path="cohort",
         )
-    inclusion = typed_bound_predicates(request, end_hours=end_hours)
-    if not inclusion:
+    inclusion = [
+        *(
+            typed_bound_predicates(request, end_hours=end_hours)
+            if request.cohort_selection_mode == "predicate_filtered"
+            else []
+        ),
+        *stated_inclusion,
+    ]
+    if not (inclusion or stated_exclusion):
         raise FamilySpecError(
             "family_spec_cohort_predicate_unavailable",
-            "predicate-filtered cohort intent needs a typed age bound or minimum ICU stay",
+            "predicate-filtered cohort intent needs a typed age bound, a minimum ICU stay "
+            "or a stated population predicate",
             path="cohort",
         )
     return ProgressiveCohortIntent(
         name=request.cohort_name,
         selection_mode="predicate_filtered",
         inclusion=inclusion,
-        exclusion=[],
+        exclusion=stated_exclusion,
+        population_criteria=criteria,
     )
 
 
@@ -1296,7 +1379,7 @@ def build_landmark_categorical_skeleton(
     foundation = ProgressiveFoundationMaterialization(
         outline_sha256=outline_sha256,
         foundation=ProgressivePlanFoundation(
-            cohort=_cohort_intent(request),
+            cohort=_cohort_intent(request, spec.population),
             display_labels=[
                 ProgressiveDisplayLabel(key=key, value=value)
                 for key, value in spec.labels.items()
@@ -1347,4 +1430,7 @@ __all__ = [
     "build_landmark_association_skeleton",
     "build_landmark_categorical_skeleton",
     "keeps_unmeasured_covariate_rows",
+    "population_restricts",
+    "stated_population_sentence",
+    "typed_bound_applies",
 ]

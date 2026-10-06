@@ -23,6 +23,7 @@ from easyicu.research_agent.agents.family_spec_planner import (
     family_spec_structured_output_request,
     family_spec_user_prompt,
 )
+from easyicu.research_agent.planning.progressive_compiler import progressive_cohort_concept_ids
 from easyicu.research_agent.agents.progressive_planner import (
     candidate_analysis_types,
     select_progressive_variables,
@@ -181,6 +182,7 @@ def test_a_decision_cites_only_a_card_that_states_its_dimension() -> None:
         comparison_literature_keys=(COMPARATOR, second),
         required_primary_cohort_selection_mode="predicate_filtered",
         literature_design_cards=[_card(), _card(second, dimensions=("study_population",))],
+        cohort_concept_ids=progressive_cohort_concept_ids(context, select_progressive_variables(context)),
     )
     base = _spec_payload(request, adjustment_set=PLANNER_ROSTER)
 
@@ -251,4 +253,5 @@ def _sealed_request(context, cohort_mode, *, cards):
         comparison_literature_keys=DIRECT_COMPARATORS,
         required_primary_cohort_selection_mode=cohort_mode,
         literature_design_cards=cards,
+        cohort_concept_ids=progressive_cohort_concept_ids(context, select_progressive_variables(context)),
     )
