@@ -1021,6 +1021,7 @@ def _write_review_resume_failure_diagnostic(
     *,
     wrapper_dir: Path,
     exc: BaseException,
+    code: str,
     review_resumable: bool,
 ) -> Optional[str]:
     """Persist a private, bounded diagnostic for one failed review resume."""
@@ -1037,7 +1038,7 @@ def _write_review_resume_failure_diagnostic(
     payload = {
         "schema_version": "easyicu.web-research-review-resume-failure/1",
         "status": "failed",
-        "code": "research_pipeline_review_resume_failed",
+        "code": code,
         "failure_type": _pipeline_failure_category(exc),
         "exception_type": exception_type,
         "typed_failure": _safe_pipeline_typed_failure(exc),
@@ -1058,6 +1059,72 @@ def _write_review_resume_failure_diagnostic(
     except OSError:
         return None
     return relative
+
+
+def _record_unresumable_review_failure(
+    *,
+    wrapper_dir: Path,
+    code: str,
+    failure_type: str,
+    diagnostic: Optional[str],
+    detail_reason_code: Optional[str] = None,
+) -> bool:
+    """Record a paused run whose approved resume failed and cannot resume.
+
+    The paused projection still says that its plan awaits review. Once the
+    failed resume has ended that review, no one can give the approval, and the
+    workflow would read the missing authority as a plan that has to be
+    regenerated for some other reason. The plan, its review and its literature
+    stay as they were; the gate and the run status record, as codes, that the
+    approved run failed and why.
+    """
+
+    quality = _read_json(wrapper_dir / "quality_gate.json", {})
+    manifest = _read_json(wrapper_dir / "source_run_manifest.json", {})
+    if (
+        not isinstance(quality, dict)
+        or not isinstance(manifest, dict)
+        or manifest.get("status") != "human_review_pending"
+    ):
+        return False
+    gate = {
+        key: value
+        for key, value in dict(quality.get("gate") or {}).items()
+        if key != "detail"
+    }
+    gate.update(status="blocked", reason=code, reportable=False, draft_unlocked=False)
+    if detail_reason_code:
+        gate["detail"] = {"reason_code": detail_reason_code}
+    payloads: Dict[str, Dict[str, Any]] = {
+        "quality_gate.json": {**quality, "gate": gate},
+        "source_run_manifest.json": {
+            **manifest,
+            "status": "failed",
+            "failure_code": code,
+            "failure_type": failure_type,
+            "diagnostic_available": bool(diagnostic),
+            "pending_reviews": [],
+            "plan_approval_allowed": False,
+        },
+    }
+    if not run_artifact_disclosure.scan_browser_projection(payloads)["passed"]:
+        return False
+    ledger_path = wrapper_dir / "evidence_ledger.json"
+    try:
+        for name, payload in payloads.items():
+            _write_json(wrapper_dir / name, payload)
+        ledger = _read_json(ledger_path, {})
+        if isinstance(ledger, dict):
+            ledger["artifacts"] = [
+                _artifact_record(wrapper_dir / str(row.get("name")))
+                if isinstance(row, Mapping) and row.get("name") in payloads
+                else row
+                for row in list(ledger.get("artifacts") or [])
+            ]
+            _write_json(ledger_path, ledger)
+    except OSError:
+        return False
+    return True
 
 
 def _safe_relative(root: Path, raw: Any) -> Optional[Path]:
@@ -6543,9 +6610,30 @@ def resume_research_pipeline(
     except PendingReviewResumeFailure as failure:
         exc = failure.cause
         remains_resumable = failure.resumable
+        typed_failure = _safe_pipeline_typed_failure(exc)
+        runtime_unavailable = (
+            typed_failure.get("owner") == _EXECUTION_RUNTIME_DIAGNOSTIC_OWNER
+        )
+        image_mismatch = (
+            runtime_unavailable
+            and typed_failure.get("reason_code") in _RUNNER_IMAGE_MISMATCH_REASONS
+        )
+        # A failure that leaves the review open keeps the paused run, so the
+        # same plan can be approved again. One that ends the review is the
+        # approved run's own failure, recorded on the run under this code.
+        code = (
+            "research_pipeline_runner_image_mismatch"
+            if image_mismatch
+            else "research_pipeline_execution_runtime_unavailable"
+            if runtime_unavailable
+            else "research_pipeline_review_resume_failed"
+            if remains_resumable
+            else "research_pipeline_approved_run_failed"
+        )
         diagnostic = _write_review_resume_failure_diagnostic(
             wrapper_dir=entry.wrapper_dir,
             exc=exc,
+            code=code,
             review_resumable=remains_resumable,
         )
         if not remains_resumable:
@@ -6555,34 +6643,34 @@ def resume_research_pipeline(
             )
             remove_review_recovery_record(key)
             _remove_local_recovery(entry.wrapper_dir)
-        runtime_failure = _safe_pipeline_typed_failure(exc)
-        runtime_unavailable = (
-            runtime_failure.get("owner") == _EXECUTION_RUNTIME_DIAGNOSTIC_OWNER
-        )
-        image_mismatch = (
-            runtime_unavailable
-            and runtime_failure.get("reason_code") in _RUNNER_IMAGE_MISMATCH_REASONS
-        )
+            reason_code = typed_failure.get("reason_code")
+            _record_unresumable_review_failure(
+                wrapper_dir=entry.wrapper_dir,
+                code=code,
+                failure_type=_pipeline_failure_category(exc),
+                diagnostic=diagnostic,
+                detail_reason_code=(
+                    reason_code if isinstance(reason_code, str) else None
+                ),
+            )
+        next_step = "resume again" if remains_resumable else "generate a fresh plan"
         raise ResearchPipelineRunError(
-            (
-                "research_pipeline_runner_image_mismatch"
-                if image_mismatch
-                else "research_pipeline_execution_runtime_unavailable"
-                if runtime_unavailable
-                else "research_pipeline_review_resume_failed"
-            ),
+            code,
             (
                 "The analysis runner image was built from different EasyICU "
                 "source or dependencies than this checkout, so the approved "
                 "plan did not run. Rebuild it from the current commit, restart "
-                "the service, and resume again."
+                f"the service, and {next_step}."
                 if image_mismatch
                 else "The container runtime that executes analysis code was not "
                 "available, so the approved plan did not run. Start it and "
-                "resume again."
+                f"{next_step}."
                 if runtime_unavailable
                 else "The governed Research Agent run could not resume after "
                 "plan review."
+                if remains_resumable
+                else "The approved Research Agent run stopped before it "
+                "finished and cannot resume; it is recorded as failed."
             ),
             details={
                 "failure_type": _pipeline_failure_category(exc),

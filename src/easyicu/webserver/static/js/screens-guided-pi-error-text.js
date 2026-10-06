@@ -202,6 +202,14 @@
           'The analysis runner image did not match this EasyICU version.',
           '分析运行镜像与当前 EasyICU 版本不一致。',
         ),
+        research_pipeline_approved_run_failed: tr(
+          'The approved analysis stopped before it finished and cannot resume. The failure is recorded for diagnosis.',
+          '已批准的分析在完成前停止，且无法恢复；失败已记录，供排查。',
+        ),
+        research_pipeline_review_resume_failed: tr(
+          'The approved plan could not resume. Its review is still open, so it can be approved again.',
+          '已批准的计划未能恢复执行；审阅仍然有效，可以再次批准。',
+        ),
         data_foundation_blocked: tr(
           'Data preparation did not pass, so no plan was generated.',
           '数据准备未通过，因此没有生成计划。',

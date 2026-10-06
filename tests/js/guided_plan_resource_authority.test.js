@@ -36,6 +36,22 @@ function confirmationOwner(workflow) {
   });
 }
 
+function confirmationWithFailureText(workflow, session) {
+  const context = { window: {} };
+  vm.createContext(context);
+  for (const name of ['modules', 'confirmation']) {
+    vm.runInContext(fs.readFileSync(path.resolve(__dirname,
+      `../../src/easyicu/webserver/static/js/screens-guided-pi-${name}.js`), 'utf8'), context);
+  }
+  return context.window.EasyICU.guidedPi.require('confirmation').create({
+    workflow: () => workflow, session: () => session, busy: () => false,
+    tr: en => en, esc: String, iconHtml: () => '', resourceButton: () => '',
+    sessionIsStale: () => false,
+    // Echo which cause the card asked for: the code and its typed detail.
+    runFailureText: (code, detail) => [code, detail && detail.code].filter(Boolean).join(' / '),
+  }).workflowConfirmation();
+}
+
 test('plan evidence keeps the reviewed run when a later child fails before planning', () => {
   const card = confirmation({ run_id: 'reviewed-plan', remediation_buckets: {} });
   assert.equal(card.reviewResources.length, 3);
@@ -65,6 +81,40 @@ test('a preserved candidate and its failed preparation have separate evidence li
   assert.match(html, /reviewed-plan:agent_plan.json/);
   assert.doesNotMatch(html, /private response|failed-preparation:agent_plan.json/);
   assert.equal(owner.workflowConfirmation().grants.includes('extract'), false);
+});
+
+test('a plan that can no longer resume is not blamed on a changed study', () => {
+  const card = code => confirmationOwner({
+    next_action_code: code, plan_review_summary: { run_id: 'old-plan' },
+  }).workflowConfirmation();
+  const lost = card('plan_review_not_resumable');
+  assert.match(lost.title, /can no longer be approved or resumed/);
+  assert.doesNotMatch(lost.title, /study changed/);
+  assert.match(card('plan_configuration_superseded').title, /The study changed/);
+});
+
+test('the fresh-plan card names the cause its failed run recorded', () => {
+  // The workflow's action comes from the authoritative failed run; its typed
+  // detail names a cause that the job's bare code would generalize.
+  const failedJob = { kind: 'agent-run', status: 'failed', error_code: 'research_pipeline_progressive_compile_failed' };
+  const card = workflow => confirmationWithFailureText(workflow, { archived_child_jobs: [failedJob] });
+  const recorded = card({
+    next_action_code: 'failed_pipeline_requires_fresh_plan',
+    runs: [
+      { run_id: 'other', authoritative: false, run_status: 'failed',
+        gate_reason_code: 'research_pipeline_execution_failed' },
+      { run_id: 'failed-plan', authoritative: true, run_status: 'failed', gate_status: 'blocked',
+        gate_reason_code: 'research_pipeline_progressive_compile_failed',
+        gate_detail_code: 'progressive_family_result_contract_unwritable' },
+    ],
+  });
+  assert.equal(recorded.reason, 'research_pipeline_progressive_compile_failed / progressive_family_result_contract_unwritable');
+  // A run awaiting review is not a failure; the job's code is all there is.
+  const pending = card({
+    next_action_code: 'failed_pipeline_requires_fresh_plan',
+    runs: [{ run_id: 'paused', authoritative: true, run_status: 'human_review_pending', gate_reason_code: 'human_plan_review_required' }],
+  });
+  assert.equal(pending.reason, 'research_pipeline_progressive_compile_failed');
 });
 
 test('failure notice cannot drift onto another reviewed candidate', () => {
