@@ -528,6 +528,11 @@ class FamilySpecRequest(BaseModel):
         elif self.family_id == FIXED_WINDOW_TRAJECTORY_FAMILY_ID and not self.outcome:
             if self.outcome_levels or self.event_level_index:
                 raise ValueError("a trajectory suite without an outcome has no outcome levels")
+        elif self.family_id == PHENOTYPING_FAMILY_ID and not self.outcome:
+            # Phenotypes are discovered from their features; an outcome the
+            # study has is only described by cluster.
+            if self.outcome_levels or self.event_level_index:
+                raise ValueError("a phenotyping study without an outcome has no outcome levels")
         elif not self.outcome or len(self.outcome_levels) != 2:
             raise ValueError("every result-bearing family needs one two-level outcome")
         if self.family_id == SOURCE_FEASIBILITY_FAMILY_ID:
@@ -618,12 +623,13 @@ class FamilySpecRequest(BaseModel):
         if self.exposure_kind == "none":
             if self.family_id not in {
                 PREDICTION_FAMILY_ID,
+                PHENOTYPING_FAMILY_ID,
                 FIXED_WINDOW_TRAJECTORY_FAMILY_ID,
                 SOURCE_FEASIBILITY_FAMILY_ID,
             }:
                 raise ValueError(
-                    "only the prediction, sealed trajectory and sealed feasibility "
-                    "families have no exposure"
+                    "only the prediction, phenotyping, sealed trajectory and sealed "
+                    "feasibility families have no exposure"
                 )
             if self.exposure_levels or self.exposure_is_ordered or self.exposure_companion_columns:
                 raise ValueError("an absent exposure carries no levels or companions")
@@ -979,7 +985,7 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
             )
         design_limit = design_field_max_length("required_variables")
         roster = (
-            2  # the row identity and the outcome
+            (2 if request.outcome else 1)  # the row identity and any outcome
             + (1 if spec.cohort_membership_column else 0)
             + len(spec.baseline_variables)
             + len(features)
@@ -988,7 +994,7 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
             raise FamilySpecError(
                 "family_spec_roster_exceeds_design",
                 f"the design names at most {design_limit} variables including the row identity "
-                f"and the outcome; this roster needs {roster}: keep the most informative features "
+                f"and any outcome; this roster needs {roster}: keep the most informative features "
                 "and baseline descriptors",
                 path="feature_variables",
             )

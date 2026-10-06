@@ -18,6 +18,10 @@ Step layout (mirrors the family's reference workflow):
 4. ``cluster_number_selection``    prespecified candidate-k comparison
 5. ``cluster_stability``           prespecified resampling stability
 6. ``cluster_characterization``    outcome and clinical profile by cluster (secondary)
+
+A study without an outcome discovers phenotypes from their features alone: the
+host describes no outcome, and step 6, whose comparison reads an outcome,
+is not projected.
 """
 
 from __future__ import annotations
@@ -198,7 +202,7 @@ def _design_selection(
     required_variables: list[str],
     method_keys: list[str],
 ) -> ResearchDesignSelection:
-    outcome = _label(spec, request.outcome)
+    outcome = _label(spec, request.outcome) if request.outcome else None
     membership = (
         _label(spec, spec.cohort_membership_column) if spec.cohort_membership_column else None
     )
@@ -239,11 +243,15 @@ def _design_selection(
             f"The descriptive structure of candidate phenotypes among {population}, formed from "
             f"{len(features)} prespecified features measured in {hours}",
             [_label(spec, name) for name in features],
-            f", with each cluster's size, feature profile, and {outcome} distribution.",
+            f", with each cluster's size, feature profile, and {outcome} distribution."
+            if outcome
+            else ", with each cluster's size and feature profile.",
         ),
         time_zero="ICU admission for every analysis row; features use only the sealed window.",
         observation_window=(
             f"Features measured in {hours}; {outcome} taken from the available hospital outcome record."
+            if outcome
+            else f"Features measured in {hours}; the question names no outcome."
         ),
         primary_method=(
             "Prespecified unsupervised clustering of standardized, median-imputed features with "
@@ -265,10 +273,16 @@ def _design_selection(
         figure_role=(
             "Cluster structure as the main display, with the feature profile by cluster, the "
             "stability diagnostic, and the outcome distribution as downstream descriptive context."
+            if outcome
+            else "Cluster structure as the main display, with the feature profile by cluster and "
+            "the stability diagnostic."
         ),
         supports=(
             "Cluster sizes, standardized feature profiles, candidate-k and stability diagnostics, "
             f"and the {outcome} distribution by cluster."
+            if outcome
+            else "Cluster sizes, standardized feature profiles, and candidate-k and stability "
+            "diagnostics."
         ),
         cannot_prove=(
             "No causal role, prognostic advantage, or treatment effect of any cluster; no established "
@@ -280,7 +294,9 @@ def _design_selection(
                 + stated_population_sentence(spec.population, language),
                 f"聚类特征为 {listing([_label(spec, name) for name in features], language)}，"
                 f"每项均为 {hours_zh} 内预先设定的数值测量。",
-                f"{outcome}，按聚类描述，作为下游的非因果分布。",
+                f"{outcome}，按聚类描述，作为下游的非因果分布。"
+                if outcome
+                else "问题不含结局；聚类只按其特征描述。",
                 "预先设定的无监督聚类，比较候选 k 值，描述特征谱，并评估重抽样稳定性；不设因果调整集。",
                 "审计特征的可得性与缺失情况；插补规则在聚类前固定并报告。",
                 "聚类前检查特征的可得性、量纲与极端值；以不同 k 值和重抽样稳定性检验稳健性。",
@@ -290,7 +306,9 @@ def _design_selection(
                 sentence(f"{population}; each analysis row is one ICU stay.")
                 + stated_population_sentence(spec.population, language),
                 f"Clustering features {feature_text}, each a prespecified numeric measurement inside {hours}.",
-                sentence(f"{outcome}, described by cluster as a downstream non-causal distribution."),
+                sentence(f"{outcome}, described by cluster as a downstream non-causal distribution.")
+                if outcome
+                else "No outcome; clusters are described by their features only.",
                 "Prespecified unsupervised clustering with candidate-k comparison, feature-profile "
                 "description, and resampling stability; no causal adjustment set.",
                 "Feature availability and missingness are audited; the imputation rule is fixed before "
@@ -313,6 +331,8 @@ def _design_selection(
         analysis_type="trajectory_clustering",
         estimand=(
             f"Univariate summaries of each feature and {outcome} without any grouping structure."
+            if outcome
+            else "Univariate summaries of each feature without any grouping structure."
         ),
         time_zero="ICU admission for every analysis row.",
         observation_window=f"Features measured in {hours}.",
@@ -325,7 +345,9 @@ def _design_selection(
         literature_design_decisions=[],
         novelty_positioning="Recorded as the non-clustering alternative for audit; no novelty is claimed.",
         figure_role="Feature distributions only.",
-        supports="Marginal feature and outcome descriptions.",
+        supports=(
+            "Marginal feature and outcome descriptions." if outcome else "Marginal feature descriptions."
+        ),
         cannot_prove=(
             "It cannot answer the question of candidate phenotypes because it forms no groups."
         ),
@@ -404,10 +426,11 @@ def build_phenotyping_skeleton(
             )
         )[:12]
 
-    cohort_variables = [identity, *([membership] if membership else []), outcome]
-    characterization_variables = list(dict.fromkeys([identity, outcome, *baseline, *features]))
+    described = [outcome] if outcome else []
+    cohort_variables = [identity, *([membership] if membership else []), *described]
+    characterization_variables = list(dict.fromkeys([identity, *described, *baseline, *features]))
     required_variables = list(
-        dict.fromkeys([identity, *([membership] if membership else []), outcome, *baseline, *features])
+        dict.fromkeys([identity, *([membership] if membership else []), *described, *baseline, *features])
     )
     design = _design_selection(
         request,
@@ -416,7 +439,7 @@ def build_phenotyping_skeleton(
         required_variables=required_variables,
         method_keys=[k for k in method_keys if k in set(keys_for("cluster_solution"))][:6],
     )
-    outcome_label = _label(spec, outcome)
+    outcome_label = _label(spec, outcome) if outcome else None
     objectives = {
         "cohort_accounting": (
             "Account for every analysis row and record the cohort flow and denominators the "
@@ -439,9 +462,15 @@ def build_phenotyping_skeleton(
             "Assess phenotype reproducibility with the host's prespecified resampling stability "
             "diagnostic; unstable solutions are reported, not hidden."
         ),
-        "cluster_characterization": (
-            f"Describe each cluster's {outcome_label} distribution and clinical profile with "
-            "standardized differences only; no causal or predictive claim."
+        **(
+            {
+                "cluster_characterization": (
+                    f"Describe each cluster's {outcome_label} distribution and clinical profile "
+                    "with standardized differences only; no causal or predictive claim."
+                ),
+            }
+            if outcome
+            else {}
         ),
     }
     outline_steps = [
@@ -477,20 +506,32 @@ def build_phenotyping_skeleton(
             variable_names=[identity, *features], citations=keys_for("stability"),
             action=STABILITY_ACTION,
         ),
-        _outline_step(
-            step_id="cluster_characterization", role="secondary", module_id="custom_analysis",
-            objective=objectives["cluster_characterization"],
-            depends_on=["cohort_accounting", "primary_cluster_solution"],
-            variable_names=characterization_variables, citations=keys_for("characterization"),
-            action=OUTCOME_BY_CLUSTER_ACTION,
+        # The comparison describes the outcome by cluster; without one, the
+        # primary step's feature profiles are the description.
+        *(
+            [
+                _outline_step(
+                    step_id="cluster_characterization", role="secondary", module_id="custom_analysis",
+                    objective=objectives["cluster_characterization"],
+                    depends_on=["cohort_accounting", "primary_cluster_solution"],
+                    variable_names=characterization_variables, citations=keys_for("characterization"),
+                    action=OUTCOME_BY_CLUSTER_ACTION,
+                ),
+            ]
+            if outcome
+            else []
         ),
     ]
     outline = ProgressivePlanOutline(
         analysis_type="trajectory_clustering",
         cohort_objective=(
             "Describe candidate phenotypes of the study cohort from prespecified "
-            f"window-bound features and their {outcome_label} distribution, keeping feature "
-            "availability, stability, and repeated stays visible for review."
+            + (
+                f"window-bound features and their {outcome_label} distribution, keeping feature "
+                if outcome_label
+                else "window-bound features, keeping feature "
+            )
+            + "availability, stability, and repeated stays visible for review."
         ),
         design_selection=design,
         steps=outline_steps,
@@ -562,25 +603,34 @@ def build_phenotyping_skeleton(
                 bound["cluster_stability"], module="stability", comparator_applications=applications,
             ),
         ),
-        ProgressiveSkeletonStep(
-            step_id="cluster_characterization", planned_analysis_role="secondary", module_id="custom_analysis",
-            objective=objectives["cluster_characterization"],
-            depends_on=["cohort_accounting", "primary_cluster_solution"],
-            raw_inputs=characterization_variables,
-            product_inputs=[
-                _ref("cohort_accounting", "artifact:analysis_cohort"),
-                _ref("primary_cluster_solution", "table:phenotype_assignments"),
-            ],
-            outputs=[ProgressiveOutputIntent(product_id="table:outcome_by_cluster", semantic_role="custom")],
-            scientific_action_id=OUTCOME_BY_CLUSTER_ACTION, custom_method=OUTCOME_BY_CLUSTER_METHOD,
-            phenotyping_comparison_variables=[
-                ProgressiveTableOneVariable(name=name, summary=_summary_for(request, name))
-                for name in dict.fromkeys([outcome, *baseline, *features])
-            ],
-            literature_bindings=_bindings(
-                bound["cluster_characterization"], module="characterization",
-                comparator_applications=applications,
-            ),
+        *(
+            [
+                ProgressiveSkeletonStep(
+                    step_id="cluster_characterization", planned_analysis_role="secondary",
+                    module_id="custom_analysis",
+                    objective=objectives["cluster_characterization"],
+                    depends_on=["cohort_accounting", "primary_cluster_solution"],
+                    raw_inputs=characterization_variables,
+                    product_inputs=[
+                        _ref("cohort_accounting", "artifact:analysis_cohort"),
+                        _ref("primary_cluster_solution", "table:phenotype_assignments"),
+                    ],
+                    outputs=[
+                        ProgressiveOutputIntent(product_id="table:outcome_by_cluster", semantic_role="custom")
+                    ],
+                    scientific_action_id=OUTCOME_BY_CLUSTER_ACTION, custom_method=OUTCOME_BY_CLUSTER_METHOD,
+                    phenotyping_comparison_variables=[
+                        ProgressiveTableOneVariable(name=name, summary=_summary_for(request, name))
+                        for name in dict.fromkeys([outcome, *baseline, *features])
+                    ],
+                    literature_bindings=_bindings(
+                        bound["cluster_characterization"], module="characterization",
+                        comparator_applications=applications,
+                    ),
+                ),
+            ]
+            if outcome
+            else []
         ),
     ]
     if [step.step_id for step in steps] != [step.step_id for step in outline.steps]:
