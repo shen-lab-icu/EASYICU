@@ -535,6 +535,19 @@ def family_template_id_for_context(
         # Discovery needs no outcome: a binary outcome the study has is only
         # described by frozen class.
         return FIXED_WINDOW_TRAJECTORY_FAMILY_ID
+    if (
+        headline == "trajectory_clustering"
+        and not (outcome and exposure)
+        and len(context.cohort.id_columns) == 1
+        and not trajectory_context_is_bound(context)
+        and not longitudinal_trajectory_requested(context)
+        and (not outcome or _binary_outcome_levels(context, outcome) is not None)
+        and (not exposure or _exposure_kind(context, exposure) == "categorical")
+    ):
+        # Cross-sectional phenotypes are discovered from their features, so a
+        # study without an outcome, or without a population-defining flag,
+        # is templated too; a binary outcome is only described by cluster.
+        return PHENOTYPING_FAMILY_ID
     if not outcome or context.variable(outcome) is None:
         return None
     if _binary_outcome_levels(context, outcome) is None:
@@ -2097,12 +2110,14 @@ def _build_phenotyping_request(
     variables = {item.name: item for item in context.variables}
     exposure = str(context.primary_exposure or "").strip()
     outcome = str(context.target_outcome or "").strip()
-    exposure_levels = _levels(context, exposure)
-    outcome_levels = _levels(context, outcome)
+    exposure_levels = _levels(context, exposure) if exposure else []
+    outcome_levels = _levels(context, outcome) if outcome else []
     identity = context.cohort.id_columns[0]
     dependence = context_dependence_authority(context)
     optional_roster = _structurally_available_roster(context, roster)
-    design_columns = frozenset({exposure, outcome, identity, *context.cohort.outcome_columns})
+    design_columns = frozenset(
+        name for name in (exposure, outcome, identity, *context.cohort.outcome_columns) if name
+    )
     # A membership flag defines the population (an inclusion predicate evaluated
     # inside the sealed window), not a covariate, so a binary flag may inherit
     # the outer window like any other materialized measurement.
@@ -2154,14 +2169,14 @@ def _build_phenotyping_request(
         identity_column=identity,
         cluster_unit="patient" if dependence is not None else None,
         primary_exposure=exposure,
-        exposure_kind="categorical",
+        exposure_kind="categorical" if exposure else "none",
         exposure_levels=exposure_levels,
         reference_level_index=0,
-        primary_contrast_level_index=len(exposure_levels) - 1,
+        primary_contrast_level_index=max(len(exposure_levels) - 1, 0),
         exposure_is_ordered=False,
         outcome=outcome,
         outcome_levels=outcome_levels,
-        event_level_index=len(outcome_levels) - 1,
+        event_level_index=max(len(outcome_levels) - 1, 0),
         observation_window_hours=host_outer_feature_window_end_hours(context),
         level_label_keys=[],
         counts_only=descriptive_counts_only_required(
@@ -2176,7 +2191,9 @@ def _build_phenotyping_request(
             else membership_candidates
         ),
         adjustment_selection="planner_selectable",
-        adjustment_candidates=baseline_candidates,
+        # The characterization that reads baseline variables describes the
+        # outcome by cluster; without an outcome the features describe it.
+        adjustment_candidates=baseline_candidates if outcome else [],
         measurement_audit_columns=measurement_audit_columns,
         required_reader_label_keys=required_label_keys,
         allowed_literature_citation_keys=list(dict.fromkeys(allowed_literature_citation_keys)),
