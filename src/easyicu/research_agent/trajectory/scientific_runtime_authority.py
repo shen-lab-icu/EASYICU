@@ -264,6 +264,11 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
     population: Optional[TrajectoryPopulationAuthority] = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    #: The criteria the reviewed plan stated and did not apply; they select
+    #: no stay, and the plan cohort states them for its review.
+    unapplied_population_criteria: tuple[str, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
     execution_contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
@@ -380,17 +385,24 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
     def population_definition(self) -> dict[str, Any]:
         """The plan cohort these owners analyze: the sealed population, else every row."""
 
+        unapplied = (
+            {"unapplied_population_criteria": list(self.unapplied_population_criteria)}
+            if self.unapplied_population_criteria
+            else {}
+        )
         if self.population is None:
             return {
                 **SIGNED_TRAJECTORY_POPULATION,
                 "inclusion": [],
                 "exclusion": [],
+                **unapplied,
             }
         return {
             "name": "primary",
             "selection_mode": "predicate_filtered",
             "inclusion": [dict(item) for item in self.population.inclusion],
             "exclusion": [dict(item) for item in self.population.exclusion],
+            **unapplied,
         }
 
     @property

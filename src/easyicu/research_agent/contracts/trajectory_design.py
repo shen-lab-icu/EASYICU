@@ -141,7 +141,7 @@ _MAX_WINDOWS = 48
 #: every trajectory window from ICU admission, so eligibility counts from it
 #: too; ``icu_admission`` is the materializer's spelling of the same anchor.
 _POPULATION_ANCHORS = frozenset({"icu_admit", "icu_admission"})
-_POPULATION_FIELDS = frozenset({"inclusion", "exclusion"})
+_POPULATION_FIELDS = frozenset({"inclusion", "exclusion", "unapplied_criteria"})
 _ANCHOR_WORDS = {
     "icu_admit": "ICU admission",
     "icu_admission": "ICU admission",
@@ -181,6 +181,10 @@ class FixedWindowTrajectoryDesign:
     #: host-restricted source universe.
     population_inclusion: tuple[Mapping[str, Any], ...] = ()
     population_exclusion: tuple[Mapping[str, Any], ...] = ()
+    #: Population criteria the reviewed plan states and does not apply:
+    #: no allowed cohort concept expresses them.  They select no stay; the
+    #: plan on the signed owners states them so its review reports them.
+    population_unapplied_criteria: tuple[str, ...] = ()
 
     @property
     def window_count(self) -> int:
@@ -262,9 +266,16 @@ class FixedWindowTrajectoryDesign:
                     "population": {
                         "inclusion": [dict(item) for item in self.population_inclusion],
                         "exclusion": [dict(item) for item in self.population_exclusion],
+                        **(
+                            {"unapplied_criteria": list(self.population_unapplied_criteria)}
+                            if self.population_unapplied_criteria
+                            else {}
+                        ),
                     }
                 }
-                if self.population_inclusion or self.population_exclusion
+                if self.population_inclusion
+                or self.population_exclusion
+                or self.population_unapplied_criteria
                 else {}
             ),
         }
@@ -407,11 +418,33 @@ def _canonical_predicates(value: Any, *, field: str) -> tuple[dict[str, Any], ..
     return tuple(canonical)
 
 
+def _criteria(value: Any, *, field: str) -> tuple[str, ...]:
+    """Unapplied population criteria: each a non-empty string."""
+
+    if value is None:
+        return ()
+    if isinstance(value, (str, bytes, Mapping)) or not isinstance(value, Sequence):
+        raise TrajectoryDesignError(
+            "study_trajectory_population_invalid",
+            f"{field} must be a list of population criteria.",
+            field=field,
+        )
+    if not all(isinstance(item, str) and item.strip() for item in value):
+        raise TrajectoryDesignError(
+            "study_trajectory_population_invalid",
+            f"{field} must name each criterion as non-empty text.",
+            field=field,
+        )
+    return tuple(dict.fromkeys(" ".join(item.split()) for item in value))
+
+
 def _population(
     value: Any,
-) -> tuple[tuple[dict[str, Any], ...], tuple[dict[str, Any], ...]]:
+) -> tuple[
+    tuple[dict[str, Any], ...], tuple[dict[str, Any], ...], tuple[str, ...]
+]:
     if value is None:
-        return (), ()
+        return (), (), ()
     if not isinstance(value, Mapping):
         raise TrajectoryDesignError(
             "study_trajectory_design_field_type",
@@ -431,6 +464,10 @@ def _population(
         ),
         _canonical_predicates(
             value.get("exclusion"), field="trajectory_design.population.exclusion"
+        ),
+        _criteria(
+            value.get("unapplied_criteria"),
+            field="trajectory_design.population.unapplied_criteria",
         ),
     )
 
@@ -505,9 +542,12 @@ def normalize_trajectory_design(
             for name, default in FIXED_WINDOW_TRAJECTORY_DEFAULTS.items()
         },
     )
-    inclusion, exclusion = _population(value.get("population"))
+    inclusion, exclusion, criteria = _population(value.get("population"))
     design = replace(
-        design, population_inclusion=inclusion, population_exclusion=exclusion
+        design,
+        population_inclusion=inclusion,
+        population_exclusion=exclusion,
+        population_unapplied_criteria=criteria,
     )
     if enforce_design_rules:
         design = _validate(design)
@@ -520,7 +560,7 @@ def load_trajectory_design(value: Any) -> FixedWindowTrajectoryDesign | None:
     normalized = normalize_trajectory_design(value)
     if not normalized:
         return None
-    inclusion, exclusion = _population(normalized.get("population"))
+    inclusion, exclusion, criteria = _population(normalized.get("population"))
     return _validate(
         FixedWindowTrajectoryDesign(
             coordinate_concepts=tuple(normalized["coordinate_concepts"]),
@@ -533,6 +573,7 @@ def load_trajectory_design(value: Any) -> FixedWindowTrajectoryDesign | None:
             },
             population_inclusion=inclusion,
             population_exclusion=exclusion,
+            population_unapplied_criteria=criteria,
         )
     )
 
@@ -896,9 +937,20 @@ def trajectory_population_design(
     concepts (every concept not in ``static_concepts``) that are evaluated
     inside the trajectory window.  Membership then depends on the hours the
     classes describe, which a plan states rather than hides.
+
+    ``unapplied_criteria`` names the criteria the plan states and no
+    predicate applies: no allowed cohort concept expresses them.  They
+    select no stay; the design carries them so the plan on the signed
+    owners states them too.
     """
 
     selection_mode = str(_field(cohort, "selection_mode") or "predicate_filtered")
+    # A criterion no allowed concept expresses selects no stay; the design
+    # carries it so the plan on the signed owners still states it.
+    stated = (
+        _field(cohort, "unapplied_population_criteria") if cohort is not None else None
+    )
+    unapplied = [" ".join(str(item).split()) for item in stated or () if str(item).strip()]
     inclusion = _canonical_predicates(
         _field(cohort, "inclusion") if cohort is not None else None,
         field="cohort.inclusion",
@@ -914,6 +966,7 @@ def trajectory_population_design(
             "exclusion": [],
             "concepts": [],
             "within_trajectory_window": [],
+            "unapplied_criteria": unapplied,
             "executable": True,
             "reason": None,
         }
@@ -942,6 +995,7 @@ def trajectory_population_design(
             dict.fromkeys(str(item["concept_id"]) for item in (*inclusion, *exclusion))
         ),
         "within_trajectory_window": within,
+        "unapplied_criteria": unapplied,
         "executable": not issues,
         "reason": "; ".join(issues) or None,
     }
@@ -1207,6 +1261,11 @@ def sealed_trajectory_authority_body(
                 }
             }
             if design.population_definition is not None
+            else {}
+        ),
+        **(
+            {"unapplied_population_criteria": list(design.population_unapplied_criteria)}
+            if design.population_unapplied_criteria
             else {}
         ),
     }
