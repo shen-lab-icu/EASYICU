@@ -191,7 +191,7 @@ def test_the_design_says_which_record_timed_the_exposure(representation, timing,
 
     assert (
         f"exposure timing was {timing}, which does not observe exposure begun before that record: "
-        f"exposed records {recorded} at or before hour 6 were excluded, and those {recorded} by "
+        f"exposed records {recorded} at or before hour 6 were excluded, and those {recorded} before "
         "hour 24 formed the exposed group;"
     ) in text
     # A design written before the field neither states nor records it.
