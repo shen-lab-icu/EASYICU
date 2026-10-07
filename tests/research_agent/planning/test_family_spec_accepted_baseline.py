@@ -23,6 +23,7 @@ from easyicu.research_agent.planning.baseline_requirements import (
 )
 from easyicu.research_agent.planning.family_spec import FamilySpecError
 from easyicu.research_agent.planning.family_spec.contract import table_one_group_column
+from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
 from easyicu.research_agent.schema import ConceptDescriptor, VariableRole
 
 from .family_spec_fixtures import (
@@ -217,10 +218,12 @@ def test_a_roster_grouped_by_another_column_is_refused_before_the_provider() -> 
         _request(context)
     assert caught.value.reason_code == "family_spec_accepted_baseline_grouping_unsupported"
     # The scripted client holds no answer, so any Provider call would fail
-    # differently: the planner refuses while sealing the request.
-    with pytest.raises(FamilySpecError) as planned:
+    # differently: the planner refuses while sealing the request, as a typed
+    # planning stop.
+    with pytest.raises(ProgressivePlanCompileError) as planned:
         _run(context, [])
-    assert planned.value.reason_code == "family_spec_accepted_baseline_grouping_unsupported"
+    assert planned.value.reason_code == "progressive_family_spec_accepted_baseline_grouping_unsupported"
+    assert planned.value.__cause__.reason_code == "family_spec_accepted_baseline_grouping_unsupported"
 
 
 def test_a_row_with_no_prepared_column_is_refused_before_the_provider() -> None:

@@ -38,6 +38,7 @@ from easyicu.research_agent.planning.literature_design_authority import (
     LITERATURE_DESIGN_DIMENSIONS,
     LiteratureDesignEvidenceCard,
 )
+from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
 from tests.research_agent.planning.family_spec_fixtures import (
     ALLOWED_CITATIONS,
     DIRECT_COMPARATORS,
@@ -208,10 +209,15 @@ def test_a_decision_cites_only_a_card_that_states_its_dimension() -> None:
 def test_cards_that_cannot_support_every_dimension_fail_before_the_provider(cards) -> None:
     context = _context(exact=False)
 
-    with pytest.raises(FamilySpecError) as refused:
+    with pytest.raises(ProgressivePlanCompileError) as refused:
         _run(context, [], literature_design_evidence_cards=cards)
 
-    assert refused.value.reason_code == "family_spec_literature_design_dimensions_unsupported"
+    assert refused.value.reason_code == (
+        "progressive_family_spec_literature_design_dimensions_unsupported"
+    )
+    assert refused.value.__cause__.reason_code == (
+        "family_spec_literature_design_dimensions_unsupported"
+    )
 
 
 def test_a_request_without_cards_keeps_its_digest_schema_and_shape() -> None:

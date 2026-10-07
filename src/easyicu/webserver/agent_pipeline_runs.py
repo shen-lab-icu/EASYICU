@@ -494,14 +494,27 @@ def _pipeline_failure_code(
 def _progressive_compile_failure_message(exc: BaseException) -> str:
     """Say what stopped planning; the typed reason decides which sentence is true."""
 
-    if (
-        _safe_pipeline_typed_failure(exc).get("reason_code")
-        == "progressive_family_result_contract_unwritable"
-    ):
+    typed = _safe_pipeline_typed_failure(exc)
+    reason_code = typed.get("reason_code")
+    if reason_code == "progressive_family_result_contract_unwritable":
         return (
             "No executable EasyICU method can yet produce the primary result this "
             "causal or survival question needs, so planning stopped before its "
             "analysis steps were drafted. No analysis was run."
+        )
+    if reason_code == "progressive_family_spec_cohort_eligibility_after_time_zero":
+        return (
+            "This study decides who is in its cohort after the analysis time zero: "
+            "its concept window or minimum ICU stay ends later. Planning stopped "
+            "before the Planner was called, and no analysis was run. Change the "
+            "study so its cohort is decided by time zero (end the concept window or "
+            "minimum ICU stay there), or move time zero later; then prepare the "
+            "export again and generate a fresh plan."
+        )
+    if (typed.get("metrics") or {}).get("planner_provider_calls") == 0:
+        return (
+            "The host refused this study's planning request before the Planner was "
+            "called, so no plan was drafted and no analysis was run."
         )
     return (
         "The deterministic host compiler rejected the bounded Planner repairs. A "

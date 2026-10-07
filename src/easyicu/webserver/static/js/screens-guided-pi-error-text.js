@@ -160,8 +160,16 @@
         concept_selection_failed: tr('The model did not return a usable variable selection; retry or narrow the question.', '模型没有给出可用的变量选择；请重试或收窄问题。'),
         no_available_concepts: tr('None of the selected variables is available in this data.', '所选变量在这份数据里都不可用。'),
         progressive_family_result_contract_unwritable: tr('No executable EasyICU method can yet produce the primary result this causal or survival question needs, so planning stopped before its analysis steps were drafted. Ask an association question, or choose a design EasyICU can execute.', 'EasyICU 目前没有能给出这个因果或生存问题所需主结果的可执行方法，规划在起草分析步骤之前停止。可以改为关联性问题，或选用 EasyICU 能执行的设计。'),
+        progressive_family_spec_cohort_eligibility_after_time_zero: tr('This study decides who is in its cohort after the analysis time zero (its concept window or minimum ICU stay ends later), so planning stopped before the model was called and no analysis was run. End the concept window or minimum ICU stay by time zero, or move time zero later; then prepare the export again and generate a fresh plan.', '这项研究在分析时间零点之后才确定谁入组（概念人群的窗口或最短 ICU 住院时长晚于时间零点），规划在调用模型之前停止，没有运行分析。请让概念窗口或最短住院时长在时间零点前结束，或把时间零点后移；然后重新准备导出，再生成计划。'),
       };
-      return detailCopy[code] || '';
+      if (detailCopy[code]) return detailCopy[code];
+      // Every family-template stop is an EasyICU check that ran no analysis;
+      // the generic compile sentence would name a candidate plan step that a
+      // refused request never drafted.
+      if (code.startsWith('progressive_family_spec_')) {
+        return tr(`Planning stopped at an EasyICU check of the study's template plan (code: ${code}); no analysis was run.`, `模板规划没有通过 EasyICU 的检查（代码：${code}），没有运行分析。`);
+      }
+      return '';
     }
 
     function runFailureText(code, detail) {
