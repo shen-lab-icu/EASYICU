@@ -105,6 +105,32 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   });
   assert.match(runFailureZh('research_pipeline_progressive_compile_failed', { code: 'progressive_family_spec_prediction_risk_set_unavailable' }), /声明为预测模型/);
 
+  // A failed-closed run says which check it did not pass. A stop its executor
+  // named carries its own cause, and the remedy follows that cause.
+  const failedClosed = 'research_agent_pipeline_failed_closed';
+  const intervalStop = 'continuous_survival_interval_result_not_estimable';
+  assert.match(runFailure(failedClosed), /did not pass EasyICU's checks/);
+  const noEvents = runFailure(failedClosed, { code: intervalStop, cause: 'interval_without_event' });
+  assert.match(noEvents, /could not be estimated: an interval had no events/);
+  assert.match(noEvents, /Choose interval cut points with events in every interval/);
+  assert.doesNotMatch(noEvents, /did not pass EasyICU's checks/);
+  const notConverged = runFailure(failedClosed, { code: intervalStop, cause: 'did_not_converge' });
+  assert.match(notConverged, /the interval model did not converge/);
+  assert.match(notConverged, /Adjust for fewer variables or merge sparse categories/);
+  const unnamed = runFailure(failedClosed, { code: intervalStop, cause: 'unregistered_cause' });
+  assert.match(unnamed, /could not be estimated\. The run has no primary result/);
+  assert.match(unnamed, /follow-up intervals or its adjustment/);
+  assert.match(runFailureZh(failedClosed, { code: intervalStop, cause: 'follow_up_ends_by_final_cutpoint' }), /随访在最后一个切点之前就结束了/);
+  const axisSentences = {
+    execution_complete_not_satisfied: /An analysis step did not finish/,
+    analysis_validated_not_satisfied: /automated validation did not pass/,
+    evidence_complete_not_satisfied: /lack the evidence they rest on/,
+    numeric_verified_not_satisfied: /could not be checked against the results/,
+  };
+  Object.entries(axisSentences).forEach(([code, sentence]) => {
+    assert.match(runFailure(failedClosed, { code }), sentence);
+  });
+
   // A runner image built from other EasyICU source needs a rebuild; telling the
   // researcher to start Docker would send them to a runtime that is already up.
   const stale = live({ code: 'research_pipeline_runner_image_mismatch' });
@@ -143,6 +169,44 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   const harness = fs.readFileSync(harnessPath, 'utf8');
   assert.match(harness, /EU_GUIDED_PI_ERROR_TEXT/);
   assert.match(harness, /['"]errorText['"]/);
+})();
+
+// The workspace panel reads a failed-closed run as a failure, and both its
+// failure line and the run's row in the run record ask for the run's own cause.
+(function testAsideFailedClosedRun() {
+  const dir = path.dirname(path.resolve(process.argv[2]));
+  const asideSource = fs.readFileSync(path.join(dir, 'screens-guided-pi-aside.js'), 'utf8');
+  const head = { innerHTML: '' };
+  const body = { innerHTML: '', querySelector: () => null, querySelectorAll: () => [] };
+  const context = { window: {}, document: { getElementById: id => (
+    id === 'gdStudyAside' ? { querySelector: () => head } : id === 'gdAsideBody' ? body : null) } };
+  vm.createContext(context);
+  vm.runInContext(source, context);
+  vm.runInContext(asideSource, context);
+  const render = run => {
+    context.window.EasyICU.guidedPi.require('aside').create({
+      tr: en => en, esc: value => String(value ?? ''), iconHtml: () => '',
+      projectId: () => 'project', displayProjectTitle: value => value,
+      demoMode: () => false, shell: () => 'pi', project: () => ({}),
+      workflow: () => ({ current_stage: 'analysis', runs: [run],
+        stages: [{ id: 'analysis', status: 'blocked', reason_code: 'failed_pipeline_requires_fresh_plan' }] }),
+      latestRun: () => run,
+      runFailureText: (code, detail) => [code, detail && detail.code, detail && detail.cause].filter(Boolean).join(' / '),
+    }).syncProjectWorkflowAside();
+    return body.innerHTML;
+  };
+  const run = { run_id: 'run_closed', present: true, authoritative: true, run_type: 'full',
+    run_status: 'blocked', gate_status: 'blocked', gate_reason_code: 'research_agent_pipeline_failed_closed',
+    gate_detail_code: 'continuous_survival_interval_result_not_estimable',
+    gate_detail_cause_code: 'interval_without_event' };
+  const cause = 'research_agent_pipeline_failed_closed / continuous_survival_interval_result_not_estimable / interval_without_event';
+  const closed = render(run);
+  assert.ok(closed.includes(`<div class="si-s gpi-run-failure"><code>run_closed</code> ${cause}</div>`), closed);
+  assert.ok(closed.includes(`<small class="gpi-run-cause">${cause}</small>`), closed);
+  // A run waiting for its interpretation review has not failed.
+  const waiting = render({ ...run, gate_reason_code: 'research_agent_pipeline_complete_human_interpretation_required',
+    gate_detail_code: undefined, gate_detail_cause_code: undefined });
+  assert.ok(!waiting.includes('gpi-run-failure'), waiting);
 })();
 
 process.stdout.write(JSON.stringify({ ok: true, fail_closed_cases: 5 }));

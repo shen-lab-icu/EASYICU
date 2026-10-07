@@ -47,8 +47,9 @@ function confirmationWithFailureText(workflow, session) {
     workflow: () => workflow, session: () => session, busy: () => false,
     tr: en => en, esc: String, iconHtml: () => '', resourceButton: () => '',
     sessionIsStale: () => false,
-    // Echo which cause the card asked for: the code and its typed detail.
-    runFailureText: (code, detail) => [code, detail && detail.code].filter(Boolean).join(' / '),
+    // Echo which cause the card asked for: the code, its typed detail and
+    // that detail's own cause.
+    runFailureText: (code, detail) => [code, detail && detail.code, detail && detail.cause].filter(Boolean).join(' / '),
   }).workflowConfirmation();
 }
 
@@ -115,6 +116,27 @@ test('the fresh-plan card names the cause its failed run recorded', () => {
     runs: [{ run_id: 'paused', authoritative: true, run_status: 'human_review_pending', gate_reason_code: 'human_plan_review_required' }],
   });
   assert.equal(pending.reason, 'research_pipeline_progressive_compile_failed');
+});
+
+test('a failed-closed run is a failure whose recorded cause the card names', () => {
+  // A run that did not pass a check after it started records which check and
+  // why; the bare gate code alone would name no cause.
+  const card = workflow => confirmationWithFailureText(workflow, { archived_child_jobs: [] });
+  const closed = card({
+    next_action_code: 'failed_pipeline_requires_fresh_plan',
+    runs: [{ run_id: 'closed', authoritative: true, run_status: 'blocked', gate_status: 'blocked',
+      gate_reason_code: 'research_agent_pipeline_failed_closed',
+      gate_detail_code: 'continuous_survival_interval_result_not_estimable',
+      gate_detail_cause_code: 'interval_without_event' }],
+  });
+  assert.equal(closed.reason, 'research_agent_pipeline_failed_closed / continuous_survival_interval_result_not_estimable / interval_without_event');
+  // Another research_agent_pipeline_* gate is not read as a failure.
+  const other = card({
+    next_action_code: 'failed_pipeline_requires_fresh_plan',
+    runs: [{ run_id: 'done', authoritative: true, run_status: 'blocked', gate_status: 'blocked',
+      gate_reason_code: 'research_agent_pipeline_complete_human_interpretation_required' }],
+  });
+  assert.equal(other.reason, '');
 });
 
 test('failure notice cannot drift onto another reviewed candidate', () => {

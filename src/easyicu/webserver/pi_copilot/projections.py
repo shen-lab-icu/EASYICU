@@ -560,7 +560,7 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             "artifact_refs": artifact_refs,
             "gate_status": stable_code(gate.get("status")),
             "gate_reason_code": stable_code(gate.get("reason")),
-            **_gate_detail_projection(gate.get("detail")),
+            **gate_detail_projection(gate.get("detail")),
             "execution_complete": gate_checks.get("execution_complete") is True,
             "analysis_validated": gate_checks.get("analysis_validated") is True,
             "numeric_verified": gate_checks.get("numeric_verified") is True,
@@ -684,6 +684,7 @@ def project_run_outcome(
                 "gate_status",
                 "gate_reason_code",
                 "gate_detail_code",
+                "gate_detail_cause_code",
                 "gate_missing_concepts",
                 "execution_complete",
                 "analysis_validated",
@@ -1295,8 +1296,15 @@ def _safe_error_code(value: Any) -> Optional[str]:
     return stable_code(str(value or "").split(":", 1)[0])
 
 
-def _gate_detail_projection(detail: Any) -> Dict[str, Any]:
-    """Codes-only projection of a blocked gate's cause; empty when absent."""
+def gate_detail_projection(detail: Any) -> Dict[str, Any]:
+    """Project a blocked gate's lower-layer cause as codes, or nothing.
+
+    ``detail`` is the gate owner's ``{reason_code, cause_code,
+    missing_concepts}``: a data foundation's reason and the concept ids it
+    could not source, or what stopped a failed-closed run and that stop's own
+    cause.  Only codes and concept ids cross; a gate without a detail adds no
+    keys, so ordinary rows keep their shape.
+    """
 
     if not isinstance(detail, Mapping):
         return {}
@@ -1308,7 +1316,11 @@ def _gate_detail_projection(detail: Any) -> Dict[str, Any]:
         for concept in (stable_code(item) for item in (detail.get("missing_concepts") or []))
         if concept
     ][:16]
-    return {"gate_detail_code": code, "gate_missing_concepts": missing}
+    projected: Dict[str, Any] = {"gate_detail_code": code, "gate_missing_concepts": missing}
+    cause = stable_code(detail.get("cause_code"))
+    if cause:
+        projected["gate_detail_cause_code"] = cause
+    return projected
 
 
 def stable_code(value: Any) -> Optional[str]:
@@ -1325,6 +1337,7 @@ __all__ = [
     "project_transcript",
     "bounded_json_projection",
     "ensure_safe_projection",
+    "gate_detail_projection",
     "path_digest",
     "project_artifacts",
     "project_capabilities",

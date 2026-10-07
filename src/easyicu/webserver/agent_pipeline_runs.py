@@ -33,6 +33,7 @@ from easyicu.research_agent.authority.run_input import (
     RunInputIdentityError,
     load_verified_run_input_capsule,
 )
+from easyicu.research_agent.contracts.executor_stop import registered_executor_stop
 from easyicu.research_agent.providers.structured_retry import (
     safe_provider_error_category,
     safe_structured_attempt_metadata,
@@ -2892,6 +2893,42 @@ def _provider_usage_projection(wrapper_dir: Path) -> Optional[Dict[str, Any]]:
     return research_run_usage(wrapper_dir)
 
 
+#: The axes a finished run must satisfy, in the order it reaches them; the
+#: first one a failed-closed run did not satisfy names what stopped it.
+_FAILED_CLOSED_AXES = (
+    "execution_complete",
+    "analysis_validated",
+    "evidence_complete",
+    "numeric_verified",
+)
+
+
+def _failed_closed_detail(axes: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """What stopped a failed-closed run, as codes.
+
+    When the first failed step's executor named its stop
+    (``contracts.executor_stop``), readiness carries the stop's reason and
+    lower-layer cause on that step.  Otherwise the first axis the run did not
+    satisfy names it: a run can complete every step and still not be
+    reportable.
+    """
+
+    failed = [entry for entry in axes.get("failed_steps") or [] if isinstance(entry, Mapping)]
+    if failed:
+        stop = registered_executor_stop(
+            failed[0].get("reason_code"), failed[0].get("cause_code")
+        )
+        if stop is not None:
+            detail: Dict[str, Any] = {"reason_code": stop[0]}
+            if stop[1] is not None:
+                detail["cause_code"] = stop[1]
+            return detail
+    for axis in _FAILED_CLOSED_AXES:
+        if not axes.get(axis):
+            return {"reason_code": f"{axis}_not_satisfied"}
+    return None
+
+
 def _gate_from_axes(axes: Mapping[str, Any], *, pending: bool) -> Dict[str, Any]:
     if pending:
         status = "blocked"
@@ -3463,6 +3500,12 @@ def _write_projection(
                 )[:16]
             ],
         }
+    # Read after any blocked reason replaced the gate's own: a detail names
+    # the cause of the reason it sits beside.
+    if gate.get("reason") == "research_agent_pipeline_failed_closed":
+        failed_closed = _failed_closed_detail(axes)
+        if failed_closed is not None:
+            gate["detail"] = failed_closed
     run_context = {
         "run_id": run_id,
         "study_id": _clean_text(study.get("id"), 160),
