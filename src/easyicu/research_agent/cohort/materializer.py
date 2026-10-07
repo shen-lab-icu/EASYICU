@@ -1157,6 +1157,24 @@ def _binary_event_column(
     return out
 
 
+def _export_concept_is_stay_level(package: ExportPackage, concept: str) -> bool:
+    """Whether an export records ``concept`` at its stay's coordinate only.
+
+    A native export publishes its outcome module as stay-level rows at one
+    coordinate, 0 h from ICU admission. That coordinate is the stay's: no event
+    happened and nothing was measured there, so such a concept has no reading
+    within a window of the stay.
+    """
+
+    index = package.concept_index
+    resolved = resolve_exported_concept(index, concept)
+    if resolved is None:
+        return False
+    return (
+        package.manifest_kind == "native" and index[resolved].get("module") == "outcome"
+    )
+
+
 def _export_event_time_source(
     package: ExportPackage, concept: str
 ) -> Tuple[Optional[str], bool]:
@@ -1205,10 +1223,7 @@ def _export_event_time_source(
                 f"export event time {issued[0]!r} is not in hours from ICU admission"
             )
         return issued[0], False
-    stay_level = (
-        package.manifest_kind == "native" and primary.get("module") == "outcome"
-    )
-    return None, not stay_level
+    return None, not _export_concept_is_stay_level(package, concept)
 
 
 def _event_time_column(
@@ -1575,12 +1590,27 @@ def _materialize_cohort_from_resolved_source(
                     str(getattr(tw, "anchor", "icu_admission")),
                 )
             )
+    # A stay-level concept carries no windowed derivation (see below), so
+    # predicates over different windows of it do not compete for one column.
+    stay_level_predicates = (
+        {
+            concept
+            for concept, *_spec in pred_specs
+            if _export_concept_is_stay_level(export_package, concept)
+        }
+        if export_package is not None
+        else set()
+    )
     if metadata_collector.enabled:
         by_concept: dict[str, tuple[Window, str, str]] = {}
         for concept, window, aggregation, anchor in pred_specs:
             spec = (window, str(aggregation), anchor)
             previous = by_concept.get(concept)
-            if previous is not None and previous != spec:
+            if (
+                previous is not None
+                and previous != spec
+                and concept not in stay_level_predicates
+            ):
                 raise MaterializedMetadataError(
                     f"typed predicate {concept!r} has multiple incompatible derivations"
                 )
@@ -1624,6 +1654,62 @@ def _materialize_cohort_from_resolved_source(
             "positive-only event concepts must be unique materialized features"
         )
 
+    # A native export records its outcome module at the stay's coordinate
+    # (``_export_concept_is_stay_level``).  Requested as a feature or a cohort
+    # predicate, such a concept is read as the stay-level fact it is: an event
+    # status as its whole-stay status with the event time the export issues
+    # beside it, a value as the stay's value -- the columns an outcome and a
+    # static concept get.  Its coordinate is never summarized over a window:
+    # a 0 h row inside the window made a death at any time a death within it,
+    # and a window that left 0 h out lost the stay's value.  The cohort
+    # builder applies a predicate's window to the event by its issued time,
+    # as it does for an outcome.
+    stay_level_issued_times: Dict[str, Optional[str]] = {}
+    if export_package is not None:
+        for concept in dict.fromkeys([*feature_set, *(spec[0] for spec in pred_specs)]):
+            if concept not in static_set and _export_concept_is_stay_level(
+                export_package, concept
+            ):
+                stay_level_issued_times[concept] = _export_event_time_source(
+                    export_package, concept
+                )[0]
+    stay_level_sources: Dict[str, Dict[str, Any]] = {}
+    stay_level_untyped_events: List[str] = []
+
+    def read_at_stay_level(concept: str) -> List[pd.DataFrame]:
+        issued_event_time = stay_level_issued_times[concept]
+        loaded = load(concept, event_time_column=issued_event_time)
+        source_role = metadata_collector.require_source_role(concept)
+        is_event = (
+            source_role is ConceptColumnRole.EVENT_STATUS
+            if source_role is not None
+            else concept in declared_positive_only
+        )
+        if not is_event:
+            value = _static_column(loaded, concept, source_role=source_role)
+            metadata_collector.add_static(concept, output_columns=value.columns)
+            stay_level_sources[concept] = {"source": "stay_level_value"}
+            return [value]
+        status = _binary_event_column(loaded, concept, source_role=source_role)
+        event_time = _event_time_column(
+            loaded,
+            concept,
+            source_role=source_role,
+            row_time_is_event_time=False,
+        )
+        metadata_collector.add_outcome(
+            concept,
+            output_columns=tuple(status.columns) + tuple(event_time.columns),
+        )
+        if source_role is None:
+            stay_level_untyped_events.append(concept)
+        stay_level_sources[concept] = (
+            {"source": "issued_event_time", "column": issued_event_time}
+            if f"{concept}_time" in loaded.columns
+            else {"source": "untimed_stay_level_event"}
+        )
+        return [status] if event_time.empty else [status, event_time]
+
     # ---- base = every ICU stay (denominator); take from the first static concept
     base: Optional[pd.DataFrame] = None
     static_frames: List[pd.DataFrame] = []
@@ -1642,6 +1728,11 @@ def _materialize_cohort_from_resolved_source(
 
     # ---- time-series features -> wide per-stay summaries (over cohort_window)
     for c in feature_set:
+        if c in stay_level_issued_times:
+            # An outcome already carries the same stay-level columns.
+            if c not in outcome_set:
+                frames.extend(read_at_stay_level(c))
+            continue
         df = load(c)
         source_role = metadata_collector.require_source_role(c)
         if TIME_COL in df.columns:
@@ -1748,9 +1839,13 @@ def _materialize_cohort_from_resolved_source(
         )
 
     # ---- bare predicate columns for 纳排 (skip concepts already materialised bare)
-    produced_bare = set(static_set) | set(outcome_set)
+    produced_bare = set(static_set) | set(outcome_set) | set(stay_level_sources)
     for concept, win, agg, anchor in pred_specs:
         if concept in produced_bare:
+            continue
+        if concept in stay_level_issued_times:
+            frames.extend(read_at_stay_level(concept))
+            produced_bare.add(concept)
             continue
         loaded = load(concept)
         source_role = metadata_collector.require_source_role(concept)
@@ -1771,6 +1866,18 @@ def _materialize_cohort_from_resolved_source(
             anchor=anchor,
         )
         produced_bare.add(concept)
+    # The cohort builder times a stay-level event by the time the export
+    # issues for it, in hours from ICU admission: a window from another
+    # anchor cannot be read from it.
+    for concept, _win, _agg, anchor in pred_specs:
+        if stay_level_sources.get(concept, {}).get("source") not in (
+            None,
+            "stay_level_value",
+        ) and str(anchor or "").strip().lower() not in {"icu_admit", "icu_admission"}:
+            raise MaterializedMetadataError(
+                f"predicate on stay-level event {concept!r} is anchored at "
+                f"{anchor!r}; the export times it from ICU admission"
+            )
 
     wide = _merge_left(base, frames)
     if metadata_collector.enabled:
@@ -1779,7 +1886,7 @@ def _materialize_cohort_from_resolved_source(
             collector=metadata_collector,
         )
     else:
-        for c in outcome_set:
+        for c in [*outcome_set, *stay_level_untyped_events]:
             if c in wide.columns:
                 wide[c] = (
                     wide[c].astype("Int8") if c in dense_status_outcomes
@@ -1799,7 +1906,11 @@ def _materialize_cohort_from_resolved_source(
                 *event_indicator_columns,
                 *_normalize_declared_positive_only_event_concepts(
                     wide,
-                    concepts=declared_positive_only,
+                    concepts=[
+                        concept
+                        for concept in declared_positive_only
+                        if concept not in stay_level_issued_times
+                    ],
                 ),
             ]
         )
@@ -1839,6 +1950,7 @@ def _materialize_cohort_from_resolved_source(
             legacy_export_domain_normalizations
         ),
         "outcome_event_time_sources": outcome_event_time_sources,
+        "stay_level_concepts": stay_level_sources,
         "columns": list(cohort.columns),
         "cohort_sha256": _hash_df(cohort.reset_index(drop=True)),
         "build_seconds": round(time.time() - t0, 2),
