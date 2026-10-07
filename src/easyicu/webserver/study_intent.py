@@ -38,6 +38,9 @@ from easyicu.outcome_availability import (
     mortality_horizon_spans,
     stated_mortality_horizon_mentions,
 )
+from easyicu.research_agent.research_context.temporal_semantics import (
+    stated_event_time_zeros,
+)
 from easyicu.webserver import provider_adapter
 from easyicu.webserver.provider_gate import ProviderGateError, resolve_provider_gate
 
@@ -816,13 +819,26 @@ def deterministic_intent(question: str) -> Dict[str, Any]:
             break
 
     # The hours of "48-hour mortality" or "excluding deaths within 24 hours"
-    # time an endpoint or an exclusion, not the window.
-    horizons = mortality_horizon_spans(lowered)
+    # time an endpoint or an exclusion, not the window.  Those of "the first 24
+    # hours after suspected infection onset" count from that event, not from
+    # ICU admission, so they are not the study's ICU window either.
+    elsewhere = [
+        *mortality_horizon_spans(lowered),
+        *((event.start, event.end) for event in stated_event_time_zeros(lowered)),
+    ]
     window = next(
         (
             match
             for match in re.finditer(r"(?:first\s*)?(\d{1,3})\s*(?:h\b|hr|hour|小时)", lowered)
-            if not any(start <= match.start(1) < end for start, end in horizons)
+            if not any(start <= match.start(1) < end for start, end in elsewhere)
+        ),
+        None,
+    )
+    first_day = next(
+        (
+            match
+            for match in re.finditer(r"首日|第一天|first day", lowered)
+            if not any(start <= match.start() < end for start, end in elsewhere)
         ),
         None,
     )
@@ -830,7 +846,7 @@ def deterministic_intent(question: str) -> Dict[str, Any]:
         slots["time_window_hours"] = _slot(
             int(window.group(1)), "user_text", window.group(0)
         )
-    elif re.search(r"首日|第一天|first day", lowered):
+    elif first_day:
         slots["time_window_hours"] = _slot(24, "user_text", "first day")
 
     for pattern, family in _FAMILY_PATTERNS:
