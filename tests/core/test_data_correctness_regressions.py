@@ -1176,6 +1176,15 @@ def test_converter_distinguishes_mimic_generations_and_rejects_ambiguity(tmp_pat
         DataConverter(ambiguous, verbose=False)
 
 
+def _mimic_iv_tables(icu, patients):
+    """The MIMIC-IV tables the outcome loader reads; no admission records a
+    death time."""
+
+    admissions = pd.DataFrame({"hadm_id": icu["hadm_id"].unique(), "deathtime": None})
+    tables = {"icustays": icu, "patients": patients, "admissions": admissions}
+    return lambda database, data_path, table: tables[table]
+
+
 def test_mimic_same_calendar_day_death_is_not_lost_to_midnight_precision(
     monkeypatch,
 ):
@@ -1192,11 +1201,7 @@ def test_mimic_same_calendar_day_death_is_not_lost_to_midnight_precision(
     )
     # MIMIC patients.dod is a DATE, represented at midnight after loading.
     patients = pd.DataFrame({"subject_id": [1], "dod": ["2020-01-01"]})
-    monkeypatch.setattr(
-        outcomes,
-        "_raw_table",
-        lambda database, data_path, table: icu if table == "icustays" else patients,
-    )
+    monkeypatch.setattr(outcomes, "_raw_table", _mimic_iv_tables(icu, patients))
 
     result = outcomes.load_outcomes("miiv").set_index("stay_id")
 
@@ -1219,11 +1224,7 @@ def test_mimic_absent_death_date_has_documented_one_year_followup(monkeypatch):
         }
     )
     patients = pd.DataFrame({"subject_id": [1], "dod": [None]})
-    monkeypatch.setattr(
-        outcomes,
-        "_raw_table",
-        lambda database, data_path, table: icu if table == "icustays" else patients,
-    )
+    monkeypatch.setattr(outcomes, "_raw_table", _mimic_iv_tables(icu, patients))
 
     result = outcomes.load_outcomes("miiv").set_index("stay_id")
 
@@ -1251,11 +1252,7 @@ def test_fixed_horizon_followup_time_pairs_events_and_censoring(monkeypatch):
             "dod": ["2020-01-06", "2020-02-10", None],
         }
     )
-    monkeypatch.setattr(
-        outcomes,
-        "_raw_table",
-        lambda database, data_path, table: icu if table == "icustays" else patients,
-    )
+    monkeypatch.setattr(outcomes, "_raw_table", _mimic_iv_tables(icu, patients))
 
     result = outcomes.load_outcomes("miiv").set_index("stay_id")
 
@@ -1282,11 +1279,7 @@ def test_unverified_stay_history_does_not_publish_free_days_or_readmission(
         }
     )
     patients = pd.DataFrame({"subject_id": [1], "dod": [None]})
-    monkeypatch.setattr(
-        outcomes,
-        "_raw_table",
-        lambda database, data_path, table: icu if table == "icustays" else patients,
-    )
+    monkeypatch.setattr(outcomes, "_raw_table", _mimic_iv_tables(icu, patients))
 
     result = outcomes.load_outcomes("miiv")
     assert "icu_free_days_28" not in result.columns

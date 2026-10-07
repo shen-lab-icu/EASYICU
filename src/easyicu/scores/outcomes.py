@@ -3,12 +3,15 @@
 Trial-style endpoints that the concept layer did not previously expose:
 
 * ``mort_28d`` / ``mort_90d`` / ``mort_365d`` — fixed-horizon mortality
-  measured from **ICU admission** (intime). Requires post-discharge
-  death follow-up, available in MIMIC-III/IV (``patients.dod``),
-  SICdb (``cases.OffsetOfDeath``) and AmsterdamUMCdb
-  (``admissions.dateofdeath``). eICU and HiRID carry only in-hospital
-  mortality (use the existing ``death`` concept) -> these horizons are
-  returned empty for them, by design, not as an error.
+  measured from **ICU admission** (intime). A horizon needs post-discharge
+  follow-up of survivors as well as dates of death: MIMIC-IV
+  (``patients.dod``, censored one year after the last hospital discharge)
+  and SICdb (``cases.OffsetOfDeath`` with each case's survival observation
+  time) carry both. MIMIC-III and AmsterdamUMCdb record dates of death but
+  no follow-up of survivors, so a horizon there would be defined for the
+  dead only; eICU and HiRID carry only in-hospital mortality (use the
+  existing ``death`` concept). These horizons are returned empty for them,
+  by design, not as an error.
 * ``followup_days_28d`` / ``followup_days_90d`` /
   ``followup_days_365d`` — the event-or-administrative-censoring time paired
   with each fixed-horizon endpoint. Unknown follow-up remains missing.
@@ -131,7 +134,7 @@ def _parse_source_dates(values: pd.Series) -> pd.Series:
 
 
 def _mimic_stay_death_days(database, data_path) -> pd.DataFrame:
-    """MIMIC-III/IV: stay_id/icustay_id + days_from_icu_admit_to_death + los."""
+    """MIMIC-IV: stay_id + days_from_icu_admit_to_death + los."""
     icu = lower_cols(_raw_table(database, data_path, "icustays"))
     stay_col = "stay_id" if "stay_id" in icu.columns else "icustay_id"
     icu = icu[["subject_id", "hadm_id", stay_col, "intime", "los"]].copy()
@@ -147,14 +150,35 @@ def _mimic_stay_death_days(database, data_path) -> pd.DataFrame:
     pat["dod"] = _parse_source_dates(pat["dod"])
     if (pat["dod"].isna() & ~pat["_dod_absent"]).any():
         raise ValueError("patients.dod contains non-empty unparseable death dates")
+    adm = lower_cols(_raw_table(database, data_path, "admissions"))[
+        ["hadm_id", "deathtime"]
+    ].copy()
+    require_unique_keys(adm, ["hadm_id"], table="admissions")
+    deathtime_absent = adm["deathtime"].isna() | adm["deathtime"].astype(
+        "string"
+    ).str.strip().eq("")
+    adm["deathtime"] = _parse_source_dates(adm["deathtime"])
+    if (adm["deathtime"].isna() & ~deathtime_absent).any():
+        raise ValueError(
+            "admissions.deathtime contains non-empty unparseable death times"
+        )
     df = icu.merge(pat, on="subject_id", how="left", validate="many_to_one", indicator=True)
-    # MIMIC patients.dod is a DATE, not a death timestamp.  Keep the endpoint
-    # at the source-supported calendar-day resolution; subtracting an exact
-    # ICU intime from a midnight DATE makes same-day deaths negative and then
+    df = df.merge(adm, on="hadm_id", how="left", validate="many_to_one")
+    # MIMIC patients.dod is a DATE, not a death timestamp; admissions.deathtime
+    # records the time of a death in that hospital admission.  Time a death by
+    # its recorded time when the stay's own admission records one at or after
+    # ICU admission: a calendar day counts a death 25 hours after admission as
+    # one day, inside a 24-hour landmark, and one 2 hours after a late-evening
+    # admission as one day too.  Otherwise keep the source-supported
+    # calendar-day resolution of the date of death; subtracting an exact ICU
+    # intime from a midnight DATE makes same-day deaths negative and then
     # incorrectly censors them below.
-    df["days_to_death"] = (
-        df["dod"] - df["intime"].dt.normalize()
+    death_date = df["dod"].fillna(df["deathtime"].dt.normalize())
+    calendar_days = (
+        death_date - df["intime"].dt.normalize()
     ).dt.total_seconds() / 86400.0
+    recorded_days = (df["deathtime"] - df["intime"]).dt.total_seconds() / 86400.0
+    df["days_to_death"] = recorded_days.where(recorded_days >= 0, calendar_days)
     df["los_days"] = pd.to_numeric(df["los"], errors="coerce")
     # MIMIC-IV v3.1 documents a one-year post-discharge censoring window and
     # states that a null patients.dod means the patient survived at least one
@@ -167,8 +191,8 @@ def _mimic_stay_death_days(database, data_path) -> pd.DataFrame:
         & df["_merge"].eq("both")
         & df["_dod_absent"].eq(True)
     )
-    # Do not borrow the MIMIC-IV 2.0+ contract for MIMIC-III, failed joins,
-    # or date parsing failures. Those do not establish follow-up.
+    # Do not borrow the MIMIC-IV 2.0+ contract for failed joins or date
+    # parsing failures. Those do not establish follow-up.
     df["followup_days"] = np.where(documented_absence, 365.0, np.nan)
     return df.rename(columns={stay_col: "_stay", "intime": "_intime"})[
         [
@@ -209,33 +233,11 @@ def _sic_stay_death_days(database, data_path) -> pd.DataFrame:
     return df
 
 
-def _aumc_stay_death_days(database, data_path) -> pd.DataFrame:
-    adm = lower_cols(_raw_table(database, data_path, "admissions"))
-    df = pd.DataFrame({"_stay": adm["admissionid"].values})
-    # admittedat is the 0 reference; dateofdeath / dischargedat are ms offsets.
-    dod = pd.to_numeric(adm["dateofdeath"], errors="coerce")
-    admit = pd.to_numeric(adm.get("admittedat", 0), errors="coerce").fillna(0)
-    df["days_to_death"] = (dod - admit) / 86400000.0  # ms -> days
-    if "dischargedat" in adm.columns:
-        df["los_days"] = (
-            pd.to_numeric(adm["dischargedat"], errors="coerce") - admit
-        ) / 86400000.0
-    elif "lengthofstay" in adm.columns:
-        df["los_days"] = pd.to_numeric(adm["lengthofstay"], errors="coerce") / 24.0
-    else:
-        df["los_days"] = np.nan
-    df["hadm_id"] = np.nan
-    return df
-
-
 _STAY_OUT_COL = {
     "miiv": "stay_id",
     "miiv_demo": "stay_id",
-    "mimic": "icustay_id",
-    "mimic_demo": "icustay_id",
     "sic": "CaseID",
     "sic_demo": "CaseID",
-    "aumc": "admissionid",
 }
 
 
@@ -267,13 +269,11 @@ def load_outcomes(
             )
         return pd.DataFrame()
 
-    if db in ("miiv", "miiv_demo", "mimic", "mimic_demo"):
+    if db in ("miiv", "miiv_demo"):
         base = _mimic_stay_death_days(database, data_path)
     elif db in ("sic", "sic_demo"):
         base = _sic_stay_death_days(database, data_path)
-    elif db == "aumc":
-        base = _aumc_stay_death_days(database, data_path)
-    else:  # pragma: no cover - guarded by _FOLLOWUP_DATABASES
+    else:  # pragma: no cover - guarded by FOLLOWUP_OUTCOME_DATABASES
         return pd.DataFrame()
 
     out = pd.DataFrame({_STAY_OUT_COL[db]: base["_stay"].values})
@@ -283,6 +283,14 @@ def load_outcomes(
         base.get("followup_days", pd.Series(np.nan, index=base.index)),
         errors="coerce",
     ).to_numpy()
+    # A survivor reaches a horizon only through follow-up.  Without follow-up
+    # for any stay that records no death, every survivor would be missing and
+    # the horizon would be defined for the dead only.
+    if (~has_death).any() and not np.isfinite(followup_days[~has_death]).any():
+        raise ValueError(
+            f"{database}: fixed-horizon mortality has no follow-up for any "
+            "stay without a recorded death"
+        )
     for name, horizon in _HORIZONS.items():
         died_by = has_death & (dtd <= horizon) & (dtd >= 0)
         known_alive = (has_death & (dtd > horizon)) | (

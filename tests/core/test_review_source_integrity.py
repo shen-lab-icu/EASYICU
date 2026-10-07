@@ -57,6 +57,7 @@ def _mortality_tables(monkeypatch, dod, subjects=None):
             "stay_id": [100, 200], "icustay_id": [100, 200],
             "intime": ["2180-01-01"] * 2, "los": [2, 2]}),
         "patients": pd.DataFrame({"subject_id": subjects or [1, 2], "dod": dod}),
+        "admissions": pd.DataFrame({"hadm_id": [10, 20], "deathtime": [None, None]}),
     }
     monkeypatch.setattr(outcomes, "_raw_table", lambda db, path, name: tables[name].copy())
 
@@ -91,7 +92,8 @@ def test_mortality_parses_date_and_timestamp_without_pandas_2_only_format(monkey
 
 def test_mimic_iii_does_not_borrow_mimic_iv_null_followup_contract(monkeypatch):
     _mortality_tables(monkeypatch, [None, None])
-    assert outcomes.load_outcomes("mimic")["mort_28d"].isna().all()
+    # MIMIC-III follows no survivor, so it carries no horizon at all.
+    assert outcomes.load_outcomes("mimic").empty
 
 
 def test_demographics_preserves_io_failure(monkeypatch):

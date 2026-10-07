@@ -16,9 +16,7 @@ import pytest
     "database,lo28,hi28",
     [
         ("miiv", 0.08, 0.25),
-        ("mimic", 0.06, 0.22),
         ("sic", 0.03, 0.15),
-        ("aumc", 0.05, 0.20),
     ],
 )
 def test_horizon_mortality_plausible_and_monotonic(database, lo28, hi28):
@@ -35,10 +33,11 @@ def test_horizon_mortality_plausible_and_monotonic(database, lo28, hi28):
 
 
 @pytest.mark.needs_real_data
-@pytest.mark.parametrize("database", ["hirid"])
+@pytest.mark.parametrize("database", ["hirid", "mimic", "aumc"])
 def test_no_followup_returns_empty(database):
     # eICU is excluded: it has no horizon mortality but DOES expose a native
     # ventilator-free-days endpoint (see test_eicu_ventilator_free_days).
+    # MIMIC-III and AmsterdamUMCdb record dates of death but follow no survivor.
     from easyicu.scores.outcomes import load_outcomes
 
     assert load_outcomes(database).empty
