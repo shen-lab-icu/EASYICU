@@ -16,9 +16,12 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
 
-FOLLOWUP_OUTCOME_DATABASES = frozenset(
-    {"miiv", "miiv_demo", "mimic", "mimic_demo", "sic", "sic_demo", "aumc"}
-)
+# A fixed horizon needs post-discharge follow-up of survivors as well as
+# dates of death.  MIMIC-IV censors a null date of death one year after the
+# last hospital discharge, and SICdb records each case's survival observation
+# time.  MIMIC-III and AmsterdamUMCdb record dates of death but no follow-up
+# of survivors, so a horizon there would be defined for the dead only.
+FOLLOWUP_OUTCOME_DATABASES = frozenset({"miiv", "miiv_demo", "sic", "sic_demo"})
 # Reserved compatibility sets. They remain empty until an owner can prove
 # complete ICU/ventilation trajectories and endpoint-specific day-28 survival.
 MIMIC_READMISSION_DATABASES = frozenset()
