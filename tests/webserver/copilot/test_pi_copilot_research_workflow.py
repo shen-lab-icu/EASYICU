@@ -1531,17 +1531,17 @@ def test_metadata_only_planning_grounds_aliases_and_drops_unsupported_optional_n
 
     assert acquisition.blocked is False
     assert acquisition.coverage.sufficient is True
-    assert acquisition.selection.selected_concepts == ["aki_stage", "death", "lact"]
+    assert acquisition.selection.selected_concepts == ["aki_stage", "death", "lact", "charlson"]
     assert list(pd.read_parquet(acquisition.universe_path).columns) == [
         "stay_id",
         "aki_stage",
         "death",
         "lact",
+        "charlson",  # a comorbidity index is on the menu where its loader runs
     ]
     receipt = json.loads(acquisition.provenance_path.read_text(encoding="utf-8"))
-    assert receipt["selected_concepts"] == ["aki_stage", "death", "lact"]
+    assert receipt["selected_concepts"] == ["aki_stage", "death", "lact", "charlson"]
     assert receipt["unavailable_model_concepts"] == [
-        "charlson",
         "icu_readmission",
     ]
 

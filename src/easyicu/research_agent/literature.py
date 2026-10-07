@@ -1254,13 +1254,25 @@ def _protocol_search_term(context: ResearchContext, name: Optional[str]) -> str:
     candidates: List[str] = []
     if variable is not None:
         description = " ".join(str(variable.description or "").strip().split())
-        # An export display label names the implementation, not the construct.
+        # An export display label names the implementation, not the construct:
+        # the output's catalog identity names the construct instead.
         if not is_export_display_label(
             description, (variable.source_concept, variable.name)
         ):
             semantic_description = _clinical_phrase_from_description(description)
             if semantic_description:
                 candidates.append(semantic_description)
+        else:
+            identity = next(
+                (
+                    found
+                    for concept in (variable.source_concept, variable.name)
+                    if concept and (found := literature_concept_identity(concept))
+                ),
+                None,
+            )
+            if identity is not None:
+                candidates.append(identity.canonical_phrase)
         candidates.extend([variable.source_concept or "", variable.name])
     else:
         candidates.append(name)

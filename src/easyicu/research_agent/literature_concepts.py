@@ -14,7 +14,7 @@ import re
 from typing import Any, Iterable, Optional
 
 from .concept_availability import normalize_concept_name
-from .concept_catalog import ConceptCatalog, load_concept_catalog
+from .concept_catalog import ConceptCatalog, concept_dictionary_ids, load_concept_catalog
 
 
 @dataclass(frozen=True)
@@ -209,13 +209,14 @@ def is_export_display_label(text: Any, concepts: Iterable[Any]) -> bool:
     implementation (a reference or source-native variant, one component of a
     composite score) rather than the clinical construct, so it is never a
     retrieval phrase.  The description of a dictionary concept is dictionary
-    text and is unaffected.
+    text and is unaffected.  Membership is the dictionaries' own: the concept
+    catalog also lists code-derived outputs under their clinical synonyms.
     """
 
     value = " ".join(str(text or "").split()).casefold()
     if not value:
         return False
-    dictionary = set(_shared_concept_catalog().available_concepts)
+    dictionary = concept_dictionary_ids()
     labels = _export_display_labels()
     for concept in concepts:
         key = str(concept or "").strip()
