@@ -644,6 +644,7 @@ def acquire_universe_for_question(
     # They still need the same public analysis-column projection after
     # materialization; otherwise a valid event-status exposure is silently
     # treated as an unaggregated repeated measure and Web planning stops.
+    stay_level_concepts = materialized_provenance.get("stay_level_concepts")
     for concept in event_status_feature_concepts:
         canonical_event_column = f"{concept}_max"
         if canonical_event_column in materialized_columns:
@@ -651,6 +652,14 @@ def acquire_universe_for_question(
             # status after owner normalization. ``_max`` is the stable public
             # coordinate, not a newly inferred scientific aggregation.
             analysis_columns[concept] = canonical_event_column
+        elif (
+            isinstance(stay_level_concepts, dict)
+            and concept in stay_level_concepts
+            and concept in materialized_columns
+        ):
+            # An event the export records at stay level is materialized as
+            # its whole-stay status, as an outcome is: the bare column.
+            analysis_columns[concept] = concept
     # A declared host derivation publishes cohort columns that are not concept
     # projections, so they need their own public coordinate.  The column name
     # IS the analysis coordinate: there is no aggregation left to choose, the
