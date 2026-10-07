@@ -1636,7 +1636,7 @@ def _predicate_mask(
         )
     series = data[column]
     mask = _apply_op(series, pred.op, pred.value)
-    return _refine_occurrence_mask_by_event_time(data, pred, mask)
+    return _refine_occurrence_mask_by_event_time(data, pred, mask, status=series)
 
 
 @dataclass(frozen=True)
@@ -1656,11 +1656,15 @@ class AppliedEventTimeWindow:
     written straight into the ledger row, leaving no second place for the two
     to drift apart. ``None`` means the predicate was applied exactly as the
     ledger's ordinary fields state.
+
+    ``reading`` says which question the window answered: ``"occurrence"``
+    (the event happened within it) or ``"absence"`` (it did not).
     """
 
     event_time_column: str
     start_offset_hours: float
     end_offset_hours: float
+    reading: str
 
 
 def _event_time_flow_fields(
@@ -1683,27 +1687,84 @@ def _event_time_flow_fields(
         "event_time_end_hours": (
             float(refinement.end_offset_hours) if refinement else None
         ),
+        "event_time_reading": refinement.reading if refinement else None,
     }
 
 
+#: Every ``<concept>_time`` column is in hours from ICU admission.
+_EVENT_TIME_ANCHORS = frozenset({"icu_admit", "icu_admission"})
+
+
+def _event_level(value: Any) -> Optional[int]:
+    """The event-status level (0 or 1) a predicate value names, if any."""
+
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return int(value)
+    return None
+
+
+def _event_time_reading(pred: ConceptPredicate) -> Optional[str]:
+    """Whether a predicate asks that an event happened, or that it did not.
+
+    An event status takes the levels 0 and 1. An equality predicate naming one
+    level reads the event's occurrence (``== 1``, ``!= 0``, ``in [1]``) or its
+    absence (``== 0``, ``!= 1``, ``not_in [1]``). Any other predicate -- a
+    magnitude filter, a missingness check, a value naming no level or both --
+    reads no occurrence, and no event window applies to it.
+    """
+
+    if pred.op in {"==", "!="}:
+        values = [pred.value]
+    elif pred.op in {"in", "not_in"}:
+        values = pred.value if isinstance(pred.value, list) else [pred.value]
+    else:
+        return None
+    levels = {_event_level(value) for value in values}
+    if len(levels) != 1 or None in levels:
+        return None
+    (level,) = levels
+    occurs = (level == 1) == (pred.op in {"==", "in"})
+    return "occurrence" if occurs else "absence"
+
+
 def _refine_occurrence_mask_by_event_time(
-    data: Any, pred: ConceptPredicate, mask: Any
+    data: Any,
+    pred: ConceptPredicate,
+    mask: Any,
+    *,
+    status: Any,
 ) -> tuple[Any, Optional[AppliedEventTimeWindow]]:
-    """Intersect an event-occurrence predicate with its event-time window.
+    """Read an event predicate over its window by the event's own time.
 
     ``build_cohort`` filters an already-materialised wide table and, by design,
     does not re-window the summary columns. That is correct for a concept whose
     column was summarised WITHIN the predicate window, but an OUTCOME concept is
     materialised whole-stay (``death`` is 1 whenever the patient ever died)
-    alongside an event-time column (``death_time`` = hours from the anchor). A
-    bounded-window occurrence predicate on such a concept — for example, a
-    landmark exclusion written to avoid immortal-time bias — must therefore
-    consult the event time. Otherwise the whole-stay flag drops every event,
-    not just the in-window ones.
+    alongside an event-time column (``death_time`` = hours from ICU admission).
+    A bounded-window predicate on such a concept -- a landmark exclusion written
+    to avoid immortal-time bias, or an inclusion of the stays that survived the
+    window -- must therefore consult the event time. Otherwise the whole-stay
+    flag decides for every event, not just the in-window ones: "no death within
+    24 h" would keep only the stays that never died.
 
-    Scope is deliberately narrow: only a truthy ``==`` occurrence check over a
-    finite window on a concept that actually carries a ``<concept>_time`` sibling
-    column is refined. Magnitude filters (age>=18, los>=1) and concepts without
+    A predicate that names one event level (``_event_time_reading``) over a
+    finite window on a concept carrying a ``<concept>_time`` sibling is read by
+    that time:
+
+    - ``occurrence``: the op and value hold AND the event time lies within the
+      window;
+    - ``absence``: the op and value hold OR the stay's event (status 1) lies
+      outside the window.
+
+    A missing event time lies outside every window. A window that no recorded
+    time could place is refused rather than read as "no event in it": every
+    event in the table lacks a time (a source that records none), or the
+    predicate is anchored elsewhere than at ICU admission, the origin of every
+    ``<concept>_time``.
+
+    Magnitude filters (age>=18, los>=1), missingness checks and concepts without
     an event-time column are untouched, so association runs with no event-time
     columns behave exactly as before.
 
@@ -1720,28 +1781,39 @@ def _refine_occurrence_mask_by_event_time(
     deliberately unbounded window, which refines nothing and could not be
     published as a finite bound.
     """
-    tw = pred.time_window
-    if pred.op != "==" or pred.value in (0, 0.0, False, None):
+    reading = _event_time_reading(pred)
+    if reading is None:
         return mask, None
+    tw = pred.time_window
     end = float(tw.end_offset_hours)
     if not math.isfinite(end):
         return mask, None
+    start = float(tw.start_offset_hours)
     event_time_col = f"{pred.concept_id}_time"
     if event_time_col not in data.columns:
         return mask, None
+    if str(tw.anchor).strip().lower() not in _EVENT_TIME_ANCHORS:
+        raise CohortDataError(
+            f"cohort predicate on {pred.concept_id!r} is anchored at "
+            f"{tw.anchor!r}, but {event_time_col!r} is in hours from ICU admission"
+        )
+    event = (status == 1).fillna(False).astype(bool)
     event_time = data[event_time_col]
-    start = float(tw.start_offset_hours)
-    in_window = (event_time >= start) & (event_time <= end)
-    # NaN event time (no event) -> not in window; keep the row's occurrence flag
-    # from deciding membership only when the event genuinely falls in the window.
-    try:
-        in_window = in_window.fillna(False)
-    except Exception:
-        pass
-    return mask & in_window, AppliedEventTimeWindow(
+    if bool(event.any()) and not bool(event_time[event].notna().any()):
+        raise CohortDataError(
+            f"cohort predicate on {pred.concept_id!r} reads its event within "
+            f"[{start:g}, {end:g}] h, but no event in {event_time_col!r} has a "
+            "recorded time"
+        )
+    in_window = ((event_time >= start) & (event_time <= end)).fillna(False)
+    refined = (
+        mask & in_window if reading == "occurrence" else mask | (event & ~in_window)
+    )
+    return refined, AppliedEventTimeWindow(
         event_time_column=event_time_col,
         start_offset_hours=start,
         end_offset_hours=end,
+        reading=reading,
     )
 
 
