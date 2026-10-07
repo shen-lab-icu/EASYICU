@@ -3,16 +3,18 @@
 The caller-reviewed runtime authority
 (``LandmarkContinuousSurvivalRuntimeAuthority``) owns every scientific
 coordinate.  This module executes the sealed risk-set rule, a descriptive
-Table 1 and Kaplan-Meier curves by exposure tertile, the adjusted Cox model
-per exposure unit with its interval model, the restricted cubic spline check
-of the linear term, and the proportional-hazards audit.  It contains no case
+Table 1 and Kaplan-Meier curves by exposure tertile, the Cox model per
+exposure step with its interval model, the restricted cubic spline check of
+the linear term, and the proportional-hazards audit.  The step is read from
+the modelled exposure alone, before any model is fitted.  It contains no case
 identifier and no model-editable code.  The composite figure is rendered by
 ``landmark_continuous_survival_figure`` from the tables written here.
 
-Exposure tertiles the risk set cannot form, and a secondary model the data
-leave without an estimate, are reported with the reason; the suite fails only
-when its result, the estimate the PH decision authorizes, has none.  It then
-stops with ``ExecutorStop`` and leaves the stop's record, codes only, for the
+Two prespecified rules choose the result: the PH test, then the spline
+check.  Exposure tertiles the risk set cannot form, and a secondary model the
+data leave without an estimate, are reported with the reason.  The suite
+stops only when its result has no estimate, or its exposure takes one value:
+it raises ``ExecutorStop`` and leaves the stop's record, codes only, for the
 host (``contracts.executor_stop``).
 """
 
@@ -24,14 +26,15 @@ import math
 import re
 import textwrap
 import warnings
+from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 from ...authority.continuous_survival_scientific_claims import (
     CONTINUOUS_SURVIVAL_REPORTING_KEY,
     CONTINUOUS_SURVIVAL_REPORTING_SCHEMA_VERSION,
-    PER_UNIT_HAZARD_RATIO_CLAIM_ID,
-    interval_per_unit_hazard_ratio_claim_id,
+    primary_claim_ids,
 )
 from ...authority.current_case_scientific_runtime import (
     load_current_case_scientific_runtime_authority,
@@ -76,6 +79,13 @@ _WHOLE_LABEL = "Landmark analysis cohort"
 #: The model column of the spline's one nonlinear term.
 _SPLINE_TERM = "__exposure_rcs_s1"
 _SPLINE_METHOD = "restricted_cubic_spline_likelihood_ratio_test"
+#: The spreads of the modelled exposure a reporting step is read from, in
+#: order: a later one only when every one before it is zero.
+_STEP_SPREADS = (
+    ("interquartile_range", (0.25, 0.75)),
+    ("central_eighty_percent_range", (0.10, 0.90)),
+    ("range", (0.0, 1.0)),
+)
 _FILES = {
     "table_one": "continuous_landmark_table_one.csv",
     "risk_set": "continuous_landmark_risk_set_flow.csv",
@@ -490,20 +500,111 @@ def _proportional_hazards_decision(
     return table, global_p, exposure_p, rejected
 
 
+@dataclass(frozen=True)
+class _ExposureStep:
+    """One readable step of the exposure's scale: a mantissa times a power of ten."""
+
+    mantissa: int
+    exponent: int
+    #: The spread of the modelled exposure the step was read from, and its width.
+    spread: str
+    spread_width: float
+
+    @property
+    def text(self) -> str:
+        return format(Decimal(self.mantissa).scaleb(self.exponent), "f")
+
+    @property
+    def value(self) -> float:
+        # Parsed from its decimal text, so a step of 5e-2 is 0.05, not 5 * 0.01.
+        return float(self.text)
+
+
+def _exposure_step(exposure: Any) -> Optional[_ExposureStep]:
+    """The step the hazard ratios are reported per, read from the exposure alone.
+
+    It is the largest one, two or five times a power of ten within the
+    interquartile range of the modelled exposure; a heaped exposure whose
+    interquartile range is zero reads its 10th-90th percentile range, then
+    its range.  The outcome is never read, and the step changes no test: it
+    rescales the estimate only.  An exposure with one value has no step
+    (``None``), and no association can be estimated from it.
+    """
+
+    for spread, quantiles in _STEP_SPREADS:
+        low, high = (float(value) for value in exposure.quantile(list(quantiles)))
+        width = high - low
+        if math.isfinite(width) and width > 0:
+            break
+    else:
+        return None
+    exponent = math.floor(math.log10(width))
+    for mantissa in (5, 2, 1):
+        candidate = _ExposureStep(mantissa, exponent, spread, width)
+        if candidate.value <= width:
+            return candidate
+    # The logarithm can round a width just below a power of ten up to it.
+    return _ExposureStep(5, exponent - 1, spread, width)
+
+
+def _overall_association_test(
+    model_frame: Any,
+    *,
+    sealed: LandmarkContinuousSurvivalRuntimeAuthority,
+    spline_fitter: Any,
+) -> Optional[float]:
+    """The likelihood-ratio statistic of the spline terms against no exposure term.
+
+    The reference model keeps the covariates without the exposure, or has no
+    term at all when there are none.  ``None`` when it has no result.
+    """
+
+    covariates = [
+        column
+        for column in model_frame.columns
+        if column
+        not in {
+            sealed.derived_time_column,
+            sealed.derived_event_column,
+            sealed.exposure_column,
+        }
+    ]
+    if not covariates:
+        statistic = float(spline_fitter.log_likelihood_ratio_test().test_statistic)
+    else:
+        reference, nonconvergence = _cox_fit(
+            model_frame.drop(columns=[sealed.exposure_column]),
+            duration_col=sealed.derived_time_column,
+            event_col=sealed.derived_event_column,
+        )
+        if nonconvergence is not None:
+            return None
+        statistic = 2.0 * (
+            float(spline_fitter.log_likelihood_) - float(reference.log_likelihood_)
+        )
+    return max(statistic, 0.0) if math.isfinite(statistic) else None
+
+
 def _spline_check(
     model_frame: Any,
     *,
     sealed: LandmarkContinuousSurvivalRuntimeAuthority,
     linear_fitter: Any,
-) -> tuple[Any, dict[str, Any]]:
-    """The spline check of the linear term and the curves the figure draws.
+    increment: float,
+) -> tuple[Any, dict[str, Any], list[dict[str, Any]]]:
+    """The spline check of the linear term, its curves, and its percentile contrasts.
 
     Harrell's three knots sit at the 10th, 50th and 90th percentiles of the
     modelled exposure.  The spline model adds the one nonlinear term to the
     linear model, so the two are nested and a likelihood-ratio test on one
-    degree of freedom compares them.  Both curves are hazard ratios against
-    the median, over the 10th to 90th percentile.  The check is reported; it
-    chooses no estimate.  Tied knots or a spline fit without a result leave
+    degree of freedom compares them, judged at the sealed alpha; the test of
+    the spline terms against no exposure term says whether there is an
+    association at all.  Both curves are hazard ratios against the median,
+    over the 10th to 90th percentile.  The spline curve's two ends are its
+    percentile contrasts, each from its contrast vector and the spline terms'
+    joint covariance.  The linear model was fitted per exposure step, so its
+    coefficient is divided by the step here, where values are in the
+    exposure's own units.  Tied knots or a spline fit without a result leave
     the linear curve alone and say why.
     """
 
@@ -513,14 +614,25 @@ def _spline_check(
 
     from ...methods.rcs_dose_response import rcs_basis
 
+    alpha = float(sealed.functional_form_alpha)
+    percentiles = [100.0 * value for value in sealed.spline_knot_quantiles]
     exposure = model_frame[sealed.exposure_column]
-    knots = [float(value) for value in exposure.quantile(list(sealed.spline_knot_quantiles))]
+    knots = [
+        float(value) for value in exposure.quantile(list(sealed.spline_knot_quantiles))
+    ]
     reference = float(exposure.median())
-    low, high = (float(value) for value in exposure.quantile(list(sealed.curve_quantile_range)))
+    low, high = (
+        float(value) for value in exposure.quantile(list(sealed.curve_quantile_range))
+    )
     points = np.linspace(low, high, sealed.curve_points)
-    linear_beta = float(linear_fitter.params_[sealed.exposure_column])
-    linear_variance = float(
-        linear_fitter.variance_matrix_.loc[sealed.exposure_column, sealed.exposure_column]
+    linear_beta = float(linear_fitter.params_[sealed.exposure_column]) / increment
+    linear_variance = (
+        float(
+            linear_fitter.variance_matrix_.loc[
+                sealed.exposure_column, sealed.exposure_column
+            ]
+        )
+        / increment**2
     )
     linear_log = linear_beta * (points - reference)
     linear_se = np.abs(points - reference) * math.sqrt(linear_variance)
@@ -554,12 +666,19 @@ def _spline_check(
         for column in ("spline_hazard_ratio", "spline_ci_low", "spline_ci_high"):
             curve[column] = None
         curve["spline_status"] = not_estimable
-        return curve, {
-            "method": _SPLINE_METHOD,
-            "status": "not_estimable",
-            "reason": not_estimable,
-            "knot_percentiles": [100.0 * value for value in sealed.spline_knot_quantiles],
-        }
+        curve["functional_form_disposition"] = "not_assessable"
+        return (
+            curve,
+            {
+                "method": _SPLINE_METHOD,
+                "status": "not_estimable",
+                "reason": not_estimable,
+                "knot_percentiles": percentiles,
+                "alpha": alpha,
+                "disposition": "not_assessable",
+            },
+            [],
+        )
     evaluation = rcs_basis(np.append(points, reference), knots=knots)
     nonlinear = np.asarray([row[1] for row in evaluation.matrix], dtype=float)
     terms = [sealed.exposure_column, _SPLINE_TERM]
@@ -575,16 +694,50 @@ def _spline_check(
     statistic = max(statistic, 0.0)
     if not np.isfinite(curve[["spline_hazard_ratio", "spline_ci_low", "spline_ci_high"]].to_numpy(dtype=float)).all():
         raise ValueError("continuous survival spline curve is non-finite")
-    return curve, {
-        "method": _SPLINE_METHOD,
-        "status": "estimated",
-        "knot_percentiles": [100.0 * value for value in sealed.spline_knot_quantiles],
-        "knots": knots,
-        "reference_value": reference,
-        "likelihood_ratio_statistic": statistic,
-        "degrees_of_freedom": 1,
-        "p_value": float(chi2.sf(statistic, 1)),
-    }
+    p_value = float(chi2.sf(statistic, 1))
+    disposition = "linearity_rejected" if p_value < alpha else "linearity_not_rejected"
+    curve["functional_form_disposition"] = disposition
+    # The curve runs from the 10th to the 90th percentile, so its first and
+    # last rows are the two contrasts against the median.
+    percentile_contrasts = [
+        {
+            "percentile": 100.0 * quantile,
+            "exposure_value": float(curve["exposure_value"].iloc[index]),
+            "reference_value": reference,
+            "hazard_ratio": float(curve["spline_hazard_ratio"].iloc[index]),
+            "ci_low": float(curve["spline_ci_low"].iloc[index]),
+            "ci_high": float(curve["spline_ci_high"].iloc[index]),
+        }
+        for index, quantile in zip((0, -1), sealed.curve_quantile_range)
+    ]
+    overall = _overall_association_test(
+        model_frame, sealed=sealed, spline_fitter=spline_fitter
+    )
+    return (
+        curve,
+        {
+            "method": _SPLINE_METHOD,
+            "status": "estimated",
+            "knot_percentiles": percentiles,
+            "knots": knots,
+            "reference_value": reference,
+            "likelihood_ratio_statistic": statistic,
+            "degrees_of_freedom": 1,
+            "p_value": p_value,
+            "alpha": alpha,
+            "disposition": disposition,
+            **(
+                {}
+                if overall is None
+                else {
+                    "overall_likelihood_ratio_statistic": overall,
+                    "overall_degrees_of_freedom": 2,
+                    "overall_p_value": float(chi2.sf(overall, 2)),
+                }
+            ),
+        },
+        percentile_contrasts,
+    )
 
 
 def _manuscript_tables(
@@ -709,59 +862,78 @@ def _measurement_audit_table(
 
 def build_continuous_survival_manuscript_projection(
     *,
+    primary_estimate: str,
     interval_count: int,
-    proportional_hazards_rejected: bool,
+    contrast_percentiles: Sequence[float],
     functional_form_estimated: bool,
+    overall_test_estimated: bool,
 ) -> dict[str, object]:
     """Build the reporting projection owned by the signed continuous suite.
 
-    The per-unit hazard ratios and the PH decision are host scientific claims
+    The hazard ratios and the two rule outcomes are host scientific claims
     compiled from the envelope; host placement reports each in the survival
-    results.  The projection adds the primary tokens to the abstract Results
+    results.  The projection adds the result's claims to the abstract Results
     and one neutral numeric sentence on the spline check, which has no claim
-    type: its likelihood-ratio statistic and degrees of freedom, not a p value
-    the numeric binder could not trace below 0.001.  Only a rejected PH test
-    makes the interval estimates the result, so only it requires them.
+    type: its likelihood-ratio statistics and degrees of freedom, not p values
+    the numeric binder could not trace below 0.001.  The result's own
+    estimates are required: the interval estimates when the PH test rejected,
+    the two percentile contrasts when the spline check rejected linearity.
     """
 
-    if proportional_hazards_rejected and interval_count <= 1:
-        raise ValueError("continuous survival projection requires intervals")
+    primary_claims = primary_claim_ids(
+        primary_estimate,
+        interval_count=interval_count,
+        contrast_percentiles=contrast_percentiles,
+    )
     abstract = {"kind": "abstract_label", "label": "Results"}
     survival = {
         "kind": "markdown_heading",
         "label": PRIMARY_RESULT_HEADINGS_BY_FAMILY["survival"],
     }
-    primary_claims = (
-        tuple(
-            interval_per_unit_hazard_ratio_claim_id(position)
-            for position in range(1, interval_count + 1)
-        )
-        if proportional_hazards_rejected
-        else (PER_UNIT_HAZARD_RATIO_CLAIM_ID,)
-    )
+    fragments: list[dict[str, str]] = [
+        {
+            "text": (
+                "The likelihood-ratio test of a restricted cubic spline of the "
+                "exposure against its linear term gave a chi-square statistic of "
+            )
+        },
+        {
+            "numeric_path": "functional_form.likelihood_ratio_statistic",
+            "format_spec": ".3f",
+        },
+        {"text": " on "},
+        {
+            "numeric_path": "functional_form.degrees_of_freedom",
+            "format_spec": ".0f",
+        },
+    ]
+    if overall_test_estimated:
+        fragments += [
+            {
+                "text": (
+                    " degree of freedom, and the test of the spline terms against no "
+                    "exposure term gave a chi-square statistic of "
+                )
+            },
+            {
+                "numeric_path": "functional_form.overall_likelihood_ratio_statistic",
+                "format_spec": ".3f",
+            },
+            {"text": " on "},
+            {
+                "numeric_path": "functional_form.overall_degrees_of_freedom",
+                "format_spec": ".0f",
+            },
+            {"text": " degrees of freedom."},
+        ]
+    else:
+        fragments.append({"text": " degree of freedom."})
     spline = (
         [
             {
                 "claim_id": "restricted_cubic_spline_check",
                 "targets": [survival],
-                "fragments": [
-                    {
-                        "text": (
-                            "The likelihood-ratio test of a restricted cubic spline of the "
-                            "exposure against its linear term gave a chi-square statistic of "
-                        )
-                    },
-                    {
-                        "numeric_path": "functional_form.likelihood_ratio_statistic",
-                        "format_spec": ".3f",
-                    },
-                    {"text": " on "},
-                    {
-                        "numeric_path": "functional_form.degrees_of_freedom",
-                        "format_spec": ".0f",
-                    },
-                    {"text": " degree of freedom."},
-                ],
+                "fragments": fragments,
             }
         ]
         if functional_form_estimated
@@ -786,12 +958,14 @@ def build_continuous_survival_manuscript_projection(
 def _executed_design(
     sealed: LandmarkContinuousSurvivalRuntimeAuthority,
     *,
+    exposure_step: _ExposureStep,
     descriptive_grouping: str,
     descriptive_grouping_reason: Optional[str],
     interval_not_estimable_reason: Optional[str],
 ) -> dict[str, Any]:
-    """The design this run applied: the sealed contract it executed, the groups
-    it described, and why its interval model had no estimate when it had none."""
+    """The design this run applied: the sealed contract it executed, the step it
+    reported per, the groups it described, and why its interval model had no
+    estimate when it had none."""
 
     start, end = sealed.exposure_window_hours
     return executed_method_design_payload(
@@ -804,7 +978,8 @@ def _executed_design(
             exposure_window_start_hours=float(start),
             exposure_window_end_hours=float(end),
             exposure_window_summary=sealed.exposure_window_summary,
-            exposure_increment=float(sealed.exposure_increment),
+            exposure_increment=exposure_step.value,
+            exposure_increment_spread=exposure_step.spread,
             exposure_unit=sealed.exposure_unit,
             n_adjustment_covariates=len(sealed.adjustment_columns),
             effect_model="cox_proportional_hazards_efron_ties",
@@ -817,6 +992,7 @@ def _executed_design(
             spline_knot_percentiles=[
                 100.0 * value for value in sealed.spline_knot_quantiles
             ],
+            functional_form_alpha=float(sealed.functional_form_alpha),
             descriptive_grouping=descriptive_grouping,
             descriptive_grouping_reason=descriptive_grouping_reason,
             interval_model_not_estimable_reason=interval_not_estimable_reason,
@@ -933,15 +1109,34 @@ def run_landmark_continuous_survival_suite(
     )
 
     model_frame, covariates = _model_frame(analysis, sealed)
+    # The models are fitted per exposure step, read from the modelled
+    # exposure alone; the spline check keeps the exposure's own units.
+    step = _exposure_step(model_frame[sealed.exposure_column])
+    if step is None:
+        stop = ExecutorStop(
+            "continuous_survival_exposure_has_one_value",
+            detail=(
+                "the modelled exposure takes one value, so no association "
+                "with it can be estimated"
+            ),
+        )
+        write_executor_stop_record(out_dir, stop)
+        raise stop
+    stepped_frame = model_frame.copy()
+    stepped_frame[sealed.exposure_column] = (
+        model_frame[sealed.exposure_column] / step.value
+    )
     fitter, nonconvergence = _cox_fit(
-        model_frame,
+        stepped_frame,
         duration_col=sealed.derived_time_column,
         event_col=sealed.derived_event_column,
     )
     if nonconvergence is not None:
         raise ValueError(f"continuous survival Cox model did not converge: {nonconvergence}")
     cox_table = _cox_table(fitter)
-    primary_rows = cox_table.loc[cox_table["term"].eq(sealed.exposure_column)]
+    exposure_term = cox_table["term"].eq(sealed.exposure_column)
+    cox_table["exposure_increment"] = np.where(exposure_term, step.value, np.nan)
+    primary_rows = cox_table.loc[exposure_term]
     if len(primary_rows) != 1:
         raise ValueError("continuous survival Cox result lacks one exposure row")
     primary_row = primary_rows.iloc[0].to_dict()
@@ -949,7 +1144,7 @@ def run_landmark_continuous_survival_suite(
         coerce_finite_float(primary_row[name], label=f"continuous survival {name}")
 
     ph_table, global_p, exposure_p, ph_violation = _proportional_hazards_decision(
-        model_frame, sealed=sealed, covariates=covariates
+        stepped_frame, sealed=sealed, covariates=covariates
     )
     if ph_violation:
         ph_status = (
@@ -971,7 +1166,7 @@ def run_landmark_continuous_survival_suite(
     interval_reason: Optional[str] = None
     try:
         time_varying_table = fit_piecewise_time_varying_cox(
-            model_frame,
+            stepped_frame,
             duration_col=sealed.derived_time_column,
             event_col=sealed.derived_event_column,
             covariates=covariates,
@@ -1020,22 +1215,34 @@ def run_landmark_continuous_survival_suite(
             model_status="estimated", not_estimable_reason=None
         )
 
-    spline_curve, functional_form = _spline_check(
-        model_frame, sealed=sealed, linear_fitter=fitter
+    time_varying_table["exposure_increment"] = np.where(
+        time_varying_table["is_exposure"].astype(bool), step.value, np.nan
+    )
+
+    spline_curve, functional_form, percentile_contrasts = _spline_check(
+        model_frame, sealed=sealed, linear_fitter=fitter, increment=step.value
     )
     functional_form_estimated = functional_form["status"] == "estimated"
+    # The PH test chooses first, the spline check second.
+    if ph_violation:
+        primary_estimate = "interval_per_step_hazard_ratios"
+    elif functional_form["disposition"] == "linearity_rejected":
+        primary_estimate = "spline_percentile_contrasts"
+        functional_form["contrasts"] = percentile_contrasts
+    else:
+        primary_estimate = "per_step_hazard_ratio"
 
-    # When the prespecified PH test rejects, the constant per-unit hazard ratio
-    # is not a result: it stays a diagnostic row of the Cox table and never
-    # becomes a summary leaf the manuscript could bind.
+    # The per-step hazard ratio is a result only when both rules leave it.
+    # Otherwise it stays a diagnostic row of the Cox table and never becomes
+    # a summary leaf the manuscript could bind.
     constant = (
-        {}
-        if ph_violation
-        else {
+        {
             "hazard_ratio": float(primary_row["hazard_ratio"]),
             "ci_low": float(primary_row["ci_low"]),
             "ci_high": float(primary_row["ci_high"]),
         }
+        if primary_estimate == "per_step_hazard_ratio"
+        else {}
     )
     reportable = {
         "schema_version": CONTINUOUS_SURVIVAL_REPORTING_SCHEMA_VERSION,
@@ -1045,9 +1252,10 @@ def run_landmark_continuous_survival_suite(
         "outcome": sealed.event_column,
         "analysis_unit": sealed.analysis_unit_label,
         "landmark_hours": float(sealed.landmark_hours),
-        "exposure_increment": float(sealed.exposure_increment),
+        "exposure_increment": step.value,
         "exposure_unit": sealed.exposure_unit,
         "adjustment_columns": list(sealed.adjustment_columns),
+        "primary_estimate": primary_estimate,
         **({"adjusted_hazard_ratio_per_unit": dict(constant)} if constant else {}),
         "constant_hazard_ratio_authorized": not ph_violation,
         "proportional_hazards_status": ph_status,
@@ -1087,9 +1295,15 @@ def run_landmark_continuous_survival_suite(
         },
         "functional_form": functional_form,
         "manuscript_projection": build_continuous_survival_manuscript_projection(
+            primary_estimate=primary_estimate,
             interval_count=len(exposure_intervals),
-            proportional_hazards_rejected=ph_violation,
+            contrast_percentiles=[
+                item["percentile"] for item in functional_form.get("contrasts", [])
+            ],
             functional_form_estimated=functional_form_estimated,
+            overall_test_estimated=(
+                "overall_likelihood_ratio_statistic" in functional_form
+            ),
         ),
     }
 
@@ -1124,10 +1338,25 @@ def run_landmark_continuous_survival_suite(
         "input_sha256": input_sha256,
         "analysis_frame_sha256": _canonical_frame_sha256(model_frame),
         "exposure_tertile_cutpoints": [tertile_low, tertile_high],
+        "exposure_increment": step.value,
+        "exposure_increment_text": step.text,
+        "exposure_increment_mantissa": step.mantissa,
+        "exposure_increment_exponent": step.exponent,
+        "exposure_increment_spread": step.spread,
+        "exposure_increment_spread_width": step.spread_width,
+        # The spline's contrast coordinates: its curve's two ends and the
+        # median it is measured against.
+        "spline_contrast_coordinates": {
+            "lower_percentile_value": float(spline_curve["exposure_value"].iloc[0]),
+            "median": float(spline_curve["reference_value"].iloc[0]),
+            "upper_percentile_value": float(spline_curve["exposure_value"].iloc[-1]),
+        },
+        "primary_estimate": primary_estimate,
         "proportional_hazards_status": ph_status,
         "functional_form_status": (
             "estimated" if functional_form_estimated else str(functional_form["reason"])
         ),
+        "functional_form_disposition": functional_form["disposition"],
         "descriptive_grouping": descriptive_grouping,
         **(
             {}
@@ -1174,6 +1403,7 @@ def run_landmark_continuous_survival_suite(
         "interpretation_class": "descriptive_prognostic_association",
         EXECUTED_METHOD_DESIGN_KEY: _executed_design(
             sealed,
+            exposure_step=step,
             descriptive_grouping=descriptive_grouping,
             descriptive_grouping_reason=grouping_reason,
             interval_not_estimable_reason=interval_reason,

@@ -9,7 +9,9 @@ and the exact roster.  When the study's exposure is continuous it hands those
 validated coordinates here, and this owner compiles the digest-bound
 ``LandmarkContinuousSurvivalRuntimeAuthority``: the exposure is one window
 summary the materializer recorded from ICU admission to the landmark, modelled
-per one unit of its source's scale.
+per one readable step of its source's scale that the suite reads from the
+modelled exposure, with the spline check that replaces the per-step estimate
+when it rejects a linear term.
 
 A value recorded after the landmark would let the future enter the exposure,
 so the column must be the summary of a window that ends at the landmark.  The
@@ -239,13 +241,13 @@ def compile_landmark_continuous_survival_runtime_projection(
     label = f"{name}, {_SUMMARY_WORDS[summary]} in hours 0 to {landmark_hours:g}"
     outputs = list(CONTINUOUS_SURVIVAL_OUTPUTS)
     authority_body: dict[str, Any] = {
-        "schema_version": "easyicu.landmark_continuous_survival_runtime_authority/1",
+        "schema_version": "easyicu.landmark_continuous_survival_runtime_authority/2",
         "authority_kind": "landmark_continuous_survival_suite",
         "protocol_content_sha256": scientific_configuration_sha256,
         "plan_method": "signed_landmark_continuous_survival_suite",
         "plan_intent": (
             f"Execute the signed {token}-hour landmark survival suite of {label} "
-            f"per unit for {endpoint.horizon_days}-day mortality with PH auditing."
+            f"per exposure step for {endpoint.horizon_days}-day mortality with PH auditing."
         ),
         "plan_outputs": outputs,
         "development_execution_only_allowed": False,
@@ -254,7 +256,7 @@ def compile_landmark_continuous_survival_runtime_projection(
         "exposure_unit": unit,
         "exposure_window_summary": summary,
         "exposure_window_hours": [0.0, float(landmark_hours)],
-        "exposure_increment": 1.0,
+        "exposure_increment_rule": "largest_round_step_within_interquartile_range",
         "event_column": endpoint.event_concept,
         "followup_time_column": endpoint.followup_concept,
         "endpoint_time_origin": _TIME_ORIGIN_LABELS[endpoint.time_origin],
@@ -268,7 +270,7 @@ def compile_landmark_continuous_survival_runtime_projection(
         "categorical_adjustment_columns": list(categorical),
         "table_one_columns": list(covariates),
         "estimator": "cox_ph_lifelines_efron",
-        "effect_measure": "hazard_ratio_per_unit",
+        "effect_measure": "hazard_ratio_per_exposure_step",
         "uncertainty_method": "wald_95_ci",
         "proportional_hazards_diagnostic": "schoenfeld_residual_test",
         "proportional_hazards_alpha": 0.05,
@@ -279,6 +281,8 @@ def compile_landmark_continuous_survival_runtime_projection(
         "spline_reference": "median_in_model_population",
         "curve_quantile_range": [0.1, 0.9],
         "curve_points": 41,
+        "functional_form_alpha": 0.05,
+        "functional_form_policy": "spline_contrasts_replace_linear_estimate",
         "descriptive_grouping": "value_tertiles",
         "interpretation": "descriptive_prognostic_association_not_causal",
         "table_one_product": outputs[0],

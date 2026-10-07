@@ -4,9 +4,10 @@ The renderer reads only the digest-bound result tables the sealed authority
 declares and fits nothing.  Panel (a) draws the descriptive groups its
 Kaplan-Meier table records: the exposure tertiles, or the whole risk set when
 the suite could not form them.  Panel (b) follows the suite's own PH decision:
-the adjusted hazard-ratio curve of a model with a constant effect is drawn only
-when the prespecified test did not reject the assumption, and the per-unit
-hazard ratios of the interval model replace it when it did.
+the hazard-ratio curve of a model with a constant effect is drawn only when
+the prespecified test did not reject the assumption, and the per-step hazard
+ratios of the interval model replace it when it did.  Its words follow the
+spline check's disposition and whether the models adjusted for covariates.
 """
 
 from __future__ import annotations
@@ -25,7 +26,10 @@ from ...authority.landmark_continuous_survival_runtime import (
     CONTINUOUS_SURVIVAL_FIGURE_METHOD,
     LandmarkContinuousSurvivalRuntimeAuthority,
 )
-from ...contracts.executed_method_design import WHOLE_RISK_SET_REASON_WORDS
+from ...contracts.executed_method_design import (
+    WHOLE_RISK_SET_REASON_WORDS,
+    exposure_step_text,
+)
 from ...schema import AnalysisPlan, AnalysisStep
 
 LANDMARK_CONTINUOUS_SURVIVAL_FIGURE_ANALYSIS_KIND = CONTINUOUS_SURVIVAL_FIGURE_METHOD
@@ -86,6 +90,25 @@ def _whole_risk_set_reason(km_table: Any) -> str | None:
     )
 
 
+def _functional_form_disposition(spline_table: Any, *, spline_estimated: bool) -> str:
+    """The spline check's recorded disposition, consistent with its status."""
+
+    dispositions = {
+        str(value) for value in spline_table.get("functional_form_disposition", [])
+    }
+    allowed = (
+        {"linearity_rejected", "linearity_not_rejected"}
+        if spline_estimated
+        else {"not_assessable"}
+    )
+    if len(dispositions) != 1 or not dispositions <= allowed:
+        raise ValueError(
+            "continuous survival spline table lacks one stated functional-form disposition"
+        )
+    (disposition,) = dispositions
+    return disposition
+
+
 def _ph_rejected(ph_table: Any) -> bool:
     statuses = {
         str(value).strip() for value in ph_table.get("ph_status", []) if str(value).strip()
@@ -123,6 +146,8 @@ def _reader_legend(
     *,
     ph_rejected: bool,
     spline_estimated: bool,
+    linearity_rejected: bool,
+    adjusted: bool,
     exposure: str,
     unit: str | None,
     whole_risk_set_reason: str | None,
@@ -130,6 +155,7 @@ def _reader_legend(
     """The figure's source-bound legend: what each drawn panel shows, and no value."""
 
     scale = f"{exposure} ({unit})" if unit else exposure
+    ratio = "Adjusted hazard ratio" if adjusted else "Hazard ratio"
     survival = (
         "(a) Unadjusted Kaplan-Meier survival after the landmark by tertile of the "
         "exposure, with the number at risk below."
@@ -142,21 +168,31 @@ def _reader_legend(
     )
     if ph_rejected:
         estimate = (
-            f"(b) Adjusted hazard ratios per unit of {scale} for each follow-up "
-            "interval, with their confidence intervals, from the prespecified "
-            "interval model, drawn instead of one constant hazard ratio because the "
-            "proportional-hazards assumption was rejected."
+            f"(b) {ratio}s per step of {scale}, the step the axis states, for each "
+            "follow-up interval, with their confidence intervals, from the "
+            "prespecified interval model, drawn instead of hazard ratios constant "
+            "over follow-up because the proportional-hazards assumption was rejected."
         )
+        if linearity_rejected:
+            estimate += (
+                " The spline check rejected a linear term, so each describes an "
+                "average log-linear trend within its interval."
+            )
     elif spline_estimated:
         estimate = (
-            f"(b) Adjusted hazard ratio across {scale} relative to its median, from "
+            f"(b) {ratio} across {scale} relative to its median, from "
             "the restricted cubic spline model (solid line, shaded confidence band) "
             "and the linear model (dashed line), between the 10th and 90th "
             "percentiles of the exposure."
         )
+        if linearity_rejected:
+            estimate += (
+                " The spline check rejected a linear term, so the spline's hazard "
+                "ratios at those two percentiles are the primary estimates."
+            )
     else:
         estimate = (
-            f"(b) Adjusted hazard ratio across {scale} relative to its median from "
+            f"(b) {ratio} across {scale} relative to its median from "
             "the linear model, with its confidence band, between the 10th and 90th "
             "percentiles of the exposure; the spline check had no result."
         )
@@ -208,6 +244,16 @@ def _render(
     if len(statuses) != 1:
         raise ValueError("continuous survival spline table lacks one status")
     spline_estimated = statuses == {"estimated"}
+    linearity_rejected = (
+        _functional_form_disposition(spline_table, spline_estimated=spline_estimated)
+        == "linearity_rejected"
+    )
+    adjusted = bool(sealed.adjustment_columns)
+    ratio_words = "Adjusted HR" if adjusted else "HR"
+    curve_title = "Adjusted hazard ratio curve" if adjusted else "Hazard ratio curve"
+    interval_title = (
+        "Time-varying adjusted association" if adjusted else "Time-varying association"
+    )
 
     # Panel d lists one row per model term; beyond what its share of the
     # page holds, the figure grows rather than overlap the labels.
@@ -305,6 +351,10 @@ def _render(
         intervals = len(sealed.time_varying_interval_cutpoints_days) + 1
         if statuses != {"estimated"} or len(rows) != intervals:
             raise ValueError("continuous survival figure lacks every interval estimate")
+        steps = {float(value) for value in rows["exposure_increment"]}
+        if len(steps) != 1:
+            raise ValueError("continuous survival interval rows lack one exposure step")
+        (step,) = steps
         rows = rows.sort_values("interval_index")
         estimates = rows["hazard_ratio"].to_numpy(dtype=float)
         lows = rows["ci_low"].to_numpy(dtype=float)
@@ -322,8 +372,14 @@ def _render(
             [f"{row.interval_start_days:g}–{row.interval_end_days:g} d" for row in rows.itertuples()],
         )
         ax_hr.invert_yaxis()
-        ax_hr.set_xlabel("Adjusted HR per unit (95% CI)")
-        ax_hr.set_title("Time-varying adjusted association", loc="left")
+        step_text = exposure_step_text(step)
+        step_words = (
+            f"{step_text} {sealed.exposure_unit}"
+            if sealed.exposure_unit
+            else f"{step_text} units"
+        )
+        ax_hr.set_xlabel(f"{ratio_words} per {step_words} (95% CI)")
+        ax_hr.set_title(interval_title, loc="left")
     else:
         curve = spline_table.sort_values("exposure_value")
         x = curve["exposure_value"].to_numpy(dtype=float)
@@ -354,8 +410,8 @@ def _render(
         _ratio_y_axis(ax_hr, low=float(np.min(lows)), high=float(np.max(highs)))
         ax_hr.set_xlim(float(x.min()), float(x.max()))
         ax_hr.set_xlabel(textwrap.fill(exposure_axis, width=48), fontsize=6.4)
-        ax_hr.set_ylabel("Adjusted HR vs median (95% CI)")
-        ax_hr.set_title("Adjusted hazard ratio curve", loc="left")
+        ax_hr.set_ylabel(f"{ratio_words} vs median (95% CI)")
+        ax_hr.set_title(curve_title, loc="left")
     add_panel_label(ax_hr, "b", x=-0.18, y=1.04, fontsize=8.0)
 
     stage_labels = {
@@ -449,12 +505,17 @@ def _render(
                 else "of the whole risk set"
             )
             + " and risk-set accounting are "
-            "shown with the signed proportional-hazards decision; a constant "
-            "per-unit Cox effect is "
+            "shown with the signed proportional-hazards decision; a per-step Cox "
+            "effect constant over follow-up is "
             + (
                 "withheld because the assumption was rejected."
                 if ph_rejected
-                else "shown only because the assumption was not rejected."
+                else (
+                    "replaced by the spline's percentile contrasts because the "
+                    "spline check rejected a linear term."
+                    if linearity_rejected
+                    else "shown only because the assumption was not rejected."
+                )
             )
         ),
         panels=[
@@ -478,19 +539,15 @@ def _render(
             },
             {
                 "panel_id": "b",
-                "title": (
-                    "Time-varying adjusted association"
-                    if ph_rejected
-                    else "Adjusted hazard ratio curve"
-                ),
+                "title": interval_title if ph_rejected else curve_title,
                 "role": "survival_effect",
                 "chart_type": (
                     "time_varying_hazard_ratio_forest" if ph_rejected else "hazard_ratio_curve"
                 ),
                 "claim": (
-                    "The prespecified interval model reports adjusted per-unit hazard ratios by follow-up interval instead of one constant estimate."
+                    "The prespecified interval model reports per-step hazard ratios by follow-up interval instead of one constant estimate."
                     if ph_rejected
-                    else "The adjusted hazard ratio is shown across the exposure range relative to its median, with the spline check of the linear term."
+                    else "The hazard ratio is shown across the exposure range relative to its median, with the spline check of the linear term."
                 ),
                 "evidence_ids": [],
                 "review_risk": (
@@ -525,15 +582,18 @@ def _render(
         source_data=tuple(_source_filenames(sealed).values()),
         statistics_note=(
             "Kaplan-Meier estimates are unadjusted and use the post-landmark clock. "
-            "The Cox model reports a Wald 95% confidence interval per unit of the "
+            "The Cox model reports a Wald 95% confidence interval per step of the "
             "exposure and a Schoenfeld residual audit; prespecified interval-specific "
             "estimates replace the constant estimate when the signed PH policy "
-            "rejects it. The spline check is reported and chooses no estimate."
+            "rejects it, and otherwise the spline's percentile contrasts replace it "
+            "when the spline check rejects a linear term."
         ),
         image_integrity_note="All plotted values are rendered from digest-bound upstream result tables.",
         reader_caption=_reader_legend(
             ph_rejected=ph_rejected,
             spline_estimated=spline_estimated,
+            linearity_rejected=linearity_rejected,
+            adjusted=adjusted,
             exposure=sealed.exposure_label,
             unit=sealed.exposure_unit,
             whole_risk_set_reason=whole_reason,
@@ -602,13 +662,15 @@ def run_landmark_continuous_survival_figure(
                 "adjustment_columns": list(sealed.adjustment_columns),
                 "effect_measure": sealed.effect_measure,
                 "promoted_adjustment_columns": list(sealed.adjustment_columns),
-                "promoted_effect_measure": (
-                    "interval_specific_hazard_ratio_per_unit"
-                    if ph_rejected
-                    else sealed.effect_measure
+                "promoted_effect_measure": _promoted_effect_measure(
+                    sealed,
+                    ph_rejected=ph_rejected,
+                    spline_table=pd.DataFrame(spline_table),
                 ),
                 "source_sha256": {
-                    product: hashlib.sha256(Path(source_paths[product]).read_bytes()).hexdigest()
+                    product: hashlib.sha256(
+                        Path(source_paths[product]).read_bytes()
+                    ).hexdigest()
                     for product in sealed.figure_input_products
                 },
             },
@@ -630,6 +692,25 @@ def run_landmark_continuous_survival_figure(
         "figure_assets": {key: value.name for key, value in outputs.items()},
         "output_files": {sealed.figure_product: figure_file.name},
     }
+
+
+def _promoted_effect_measure(
+    sealed: LandmarkContinuousSurvivalRuntimeAuthority,
+    *,
+    ph_rejected: bool,
+    spline_table: Any,
+) -> str:
+    """The estimate the suite's two rules left as its result, as the figure drew it."""
+
+    if ph_rejected:
+        return "interval_specific_hazard_ratio_per_exposure_step"
+    statuses = {str(value) for value in spline_table.get("spline_status", [])}
+    disposition = _functional_form_disposition(
+        spline_table, spline_estimated=statuses == {"estimated"}
+    )
+    if disposition == "linearity_rejected":
+        return "spline_percentile_contrasts"
+    return sealed.effect_measure
 
 
 def landmark_continuous_survival_figure_executor_code(

@@ -121,6 +121,11 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   assert.match(unnamed, /could not be estimated\. The run has no primary result/);
   assert.match(unnamed, /follow-up intervals or its adjustment/);
   assert.match(runFailureZh(failedClosed, { code: intervalStop, cause: 'follow_up_ends_by_final_cutpoint' }), /随访在最后一个切点之前就结束了/);
+  const oneValue = runFailure(failedClosed, { code: 'continuous_survival_exposure_has_one_value' });
+  assert.match(oneValue, /had the same value of the continuous exposure/);
+  assert.match(oneValue, /Choose an exposure, summary or window whose values differ between stays/);
+  assert.doesNotMatch(oneValue, /did not pass EasyICU's checks/);
+  assert.match(runFailureZh(failedClosed, { code: 'continuous_survival_exposure_has_one_value' }), /取值都相同/);
   const axisSentences = {
     execution_complete_not_satisfied: /An analysis step did not finish/,
     analysis_validated_not_satisfied: /automated validation did not pass/,

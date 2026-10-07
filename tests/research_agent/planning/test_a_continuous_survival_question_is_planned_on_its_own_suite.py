@@ -145,7 +145,8 @@ def test_the_planner_selects_the_roster_and_the_plan_names_the_continuous_owner(
     assert "table:landmark_continuous_cox_summary" in primary.expected_outputs
     selected = plan.design_selection.selected
     assert selected.design_id == "fixed_landmark_continuous_survival_suite"
-    assert "per 1 mg/dL increase in" in selected.estimand
+    assert "per step of" in selected.estimand
+    assert "(1, 2 or 5 x 10^n mg/dL, within its IQR)" in selected.estimand
     assert "(its highest value from ICU admission to the 24 h landmark)" in selected.estimand
     rejected = next(
         item for item in plan.design_selection.candidates if item.disposition == "rejected"
@@ -253,7 +254,9 @@ def test_a_continuous_suite_sealed_for_another_exposure_keeps_planning_open():
     disclosure = SEALED_CONTINUOUS_SURVIVAL_SUITE_MARKER + "\n" + json.dumps({
         "sealed_primary_owner": "signed_landmark_continuous_survival_suite",
         "exposure_column": "another_lab_max", "exposure_window_summary": "max",
-        "exposure_window_hours": [0.0, 24.0], "exposure_increment": 1.0, "exposure_unit": None,
+        "exposure_window_hours": [0.0, 24.0],
+        "exposure_increment_rule": "largest_round_step_within_interquartile_range",
+        "exposure_unit": None,
         "event_column": "mort_90d", "followup_time_column": "followup_days_90d",
         "landmark_hours": 24.0, "endpoint_horizon_days": 90.0,
         "adjustment_columns": [], "plan_outputs": ["table:landmark_continuous_cox_summary"],

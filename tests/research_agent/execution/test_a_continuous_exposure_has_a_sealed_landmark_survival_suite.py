@@ -274,7 +274,8 @@ def test_the_suite_reports_one_per_unit_hazard_ratio_when_ph_holds(tmp_path) -> 
     authority, summary = _run(tmp_path, _rows())
 
     envelope = summary["reportable_survival_results"]
-    assert envelope["schema_version"] == "easyicu.continuous_survival_reporting/1"
+    assert envelope["schema_version"] == "easyicu.continuous_survival_reporting/2"
+    assert envelope["primary_estimate"] == "per_step_hazard_ratio"
     assert envelope["proportional_hazards_test"]["disposition"] == "assumption_not_rejected"
     assert envelope["constant_hazard_ratio_authorized"] is True
     per_unit = envelope["adjusted_hazard_ratio_per_unit"]
@@ -289,10 +290,10 @@ def test_the_suite_reports_one_per_unit_hazard_ratio_when_ph_holds(tmp_path) -> 
         ("interval_2_adjusted_hazard_ratio_per_unit", "secondary"),
         ("interval_3_adjusted_hazard_ratio_per_unit", "secondary"),
         ("proportional_hazards_rule", "primary"),
+        ("functional_form_rule", "primary"),
     ]
     assert claims[0].estimand == (
-        "adjusted hazard ratio per 1 mmol/L increase in the exposure over the "
-        "post-landmark follow-up"
+        "per-1 mmol/L adjusted hazard ratio over the post-landmark follow-up"
     )
     assert claims[0].direction == "positive"
     assert claims[0].adjusted_for == ["age", "sex"]
@@ -326,6 +327,7 @@ def test_a_rejected_ph_test_withholds_the_constant_per_unit_estimate(tmp_path) -
         "interval_2_adjusted_hazard_ratio_per_unit",
         "interval_3_adjusted_hazard_ratio_per_unit",
         "proportional_hazards_rule",
+        "functional_form_rule",
     ]
     abstract = [
         claim["scientific_claim_id"]
@@ -368,6 +370,8 @@ def test_a_spline_check_without_a_result_is_reported_without_one(tmp_path) -> No
         "status": "not_estimable",
         "reason": "tied_knots",
         "knot_percentiles": [10.0, 50.0, 90.0],
+        "alpha": 0.05,
+        "disposition": "not_assessable",
     }
     assert all(
         claim["claim_id"] != "restricted_cubic_spline_check"

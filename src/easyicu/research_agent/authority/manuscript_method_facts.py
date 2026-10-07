@@ -21,11 +21,13 @@ from typing import Sequence
 
 from ..contracts.executed_method_design import (
     EXECUTED_METHOD_DESIGN_KEY,
+    EXPOSURE_INCREMENT_SPREAD_WORDS,
     WHOLE_RISK_SET_REASON_WORDS,
     FixedWindowRepresentationDesign,
     LandmarkContinuousSurvivalDesign,
     LandmarkSurvivalDesign,
     LatentClassModelDesign,
+    exposure_step_text,
     validate_executed_method_design,
 )
 from ..research_context.typed import (
@@ -310,6 +312,21 @@ def _continuous_survival_design_text(design: LandmarkContinuousSurvivalDesign) -
         if design.n_adjustment_covariates
         else ""
     )
+    step = design.exposure_increment
+    spread = EXPOSURE_INCREMENT_SPREAD_WORDS[design.exposure_increment_spread]
+    per_step = (
+        f"per {exposure_step_text(step)} unit{'' if step == 1 else 's'} of the "
+        "exposure's recorded "
+        f"scale{unit}, the largest step of one, two or five times a power of ten "
+        f"within the exposure's {spread} in the modelled records"
+    )
+    lower, upper = (
+        f"{value:g}th"
+        for value in (
+            design.spline_knot_percentiles[0],
+            design.spline_knot_percentiles[-1],
+        )
+    )
     cutpoints = _days(design.time_varying_cutpoints_days)
     split = f"split at days {cutpoints} after the landmark"
     reason = design.interval_model_not_estimable_reason
@@ -338,9 +355,8 @@ def _continuous_survival_design_text(design: LandmarkContinuousSurvivalDesign) -
         f"{design.endpoint_horizon_days:g}, and a recorded exposure value: the "
         f"{_WINDOW_SUMMARY_WORDS[design.exposure_window_summary]} value of the "
         f"exposure source {window} after that origin; a Cox proportional hazards "
-        f"model with Efron ties{adjustment} estimated the association per "
-        f"{design.exposure_increment:g} unit of the exposure's recorded "
-        f"scale{unit} with Wald intervals, and proportional hazards were tested "
+        f"model with Efron ties{adjustment} estimated the association {per_step}, "
+        "with Wald intervals, and proportional hazards were tested "
         "with Schoenfeld residuals, judged violated when the test of the exposure "
         "term or a Bonferroni-adjusted global test over all model terms rejected "
         f"at a prespecified alpha of {design.proportional_hazards_alpha:g}; "
@@ -349,8 +365,14 @@ def _continuous_survival_design_text(design: LandmarkContinuousSurvivalDesign) -
         "with knots at the "
         + ", ".join(f"{value:g}th" for value in design.spline_knot_percentiles[:-1])
         + f" and {design.spline_knot_percentiles[-1]:g}th percentiles of the "
-        "exposure by a likelihood-ratio test; the descriptive tables and the "
-        f"Kaplan-Meier curves {grouping}"
+        "exposure by a likelihood-ratio test at a prespecified alpha of "
+        f"{design.functional_form_alpha:g}, and when it rejected linearity while "
+        f"proportional hazards held, the spline's contrasts at the {lower} and "
+        f"{upper} percentiles against the median replaced the per-step "
+        "association; the spline terms were also tested together against no "
+        "exposure term; the proportional-hazards test used the linear term, so a "
+        "misspecified linear form can appear as non-proportional hazards; the "
+        f"descriptive tables and the Kaplan-Meier curves {grouping}"
     )
     if design.n_adjustment_covariates:
         # The adjusted models drop records with a missing covariate; the

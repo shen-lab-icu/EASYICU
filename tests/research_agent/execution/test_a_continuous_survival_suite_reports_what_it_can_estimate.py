@@ -431,6 +431,7 @@ def test_an_interval_model_without_an_event_is_not_estimable_while_ph_holds(
     assert [claim.claim_id for claim in derive_scientific_claim_drafts(summary)] == [
         "adjusted_hazard_ratio_per_unit",
         "proportional_hazards_rule",
+        "functional_form_rule",
     ]
     abstract = [
         claim["scientific_claim_id"]
@@ -635,6 +636,7 @@ def _design(**overrides) -> dict:
         "exposure_window_end_hours": 24.0,
         "exposure_window_summary": "max",
         "exposure_increment": 1.0,
+        "exposure_increment_spread": "interquartile_range",
         "exposure_unit": "mmol/L",
         "n_adjustment_covariates": 2,
         "effect_model": "cox_proportional_hazards_efron_ties",
@@ -643,6 +645,7 @@ def _design(**overrides) -> dict:
         "proportional_hazards_alpha": 0.05,
         "time_varying_cutpoints_days": [7.0, 14.0],
         "spline_knot_percentiles": [10.0, 50.0, 90.0],
+        "functional_form_alpha": 0.05,
         "descriptive_grouping": "value_tertiles",
     }
     summary_design.update(overrides)

@@ -3,10 +3,12 @@
 A time-to-event question whose exposure is continuous -- a laboratory value or
 a vital sign summarised over the window from ICU admission to the landmark --
 is planned on the continuous survival suite: the risk set alive at the
-landmark, Table 1 and Kaplan-Meier curves by exposure tertile, the adjusted Cox
-model per unit of the exposure with its Schoenfeld audit, a prespecified
-interval model and a restricted cubic spline check of the linear term.  The
-suite is sealed by a ``LandmarkContinuousSurvivalRuntimeAuthority``; before
+landmark, Table 1 and Kaplan-Meier curves by exposure tertile, the Cox model
+per readable step of the exposure with its Schoenfeld audit, a prespecified
+interval model and a restricted cubic spline check of the linear term, whose
+percentile contrasts replace the per-step estimate when it rejects linearity
+while the PH test holds.  The suite is sealed by a
+``LandmarkContinuousSurvivalRuntimeAuthority``; before
 that, the host proposes it (``request.proposed_continuous_suite``) and the
 Planner selects the adjustment roster, which the host keeps with its
 rationales and timing as the plan's ``adjustment_proposal``.  Review compiles
@@ -116,12 +118,13 @@ def _design_selection(
     exposure = _label(spec, request.primary_exposure)
     outcome = _label(spec, request.outcome)
     summary_en, summary_zh = _SUMMARY_WORDS[suite.exposure_window_summary]
-    increment = (
-        f"per 1 {suite.exposure_unit} increase in {exposure}"
-        if suite.exposure_unit
-        else f"per 1-unit increase in {exposure}"
+    unit = suite.exposure_unit or "units"
+    increment = f"per step of {exposure} (1, 2 or 5 x 10^n {unit}, within its IQR)"
+    increment_zh = (
+        f"{exposure}每增加一步（模型人群中暴露四分位距以内最大的 1、2 或 5×10^n "
+        f"{suite.exposure_unit or '个单位'}）"
     )
-    increment_zh = f"{exposure}每增加 1 {suite.exposure_unit or '个单位'}"
+    adjusted = bool(roster)
     adjustment_text = ", ".join(_label(spec, name) for name in roster) or "no covariates"
     landmark = f"{suite.landmark_hours:g} h after ICU admission"
     window_end = f"the {suite.landmark_hours:g} h landmark"
@@ -148,10 +151,16 @@ def _design_selection(
         design_id="fixed_landmark_continuous_survival_suite",
         analysis_type="survival",
         estimand=(
-            f"The adjusted hazard ratio for {outcome} through {horizon} {increment} (its "
-            f"{summary_en} from ICU admission to {window_end}), among stays alive "
-            f"and event-free at the landmark, adjusted for {adjustment_text}; reported as a "
-            "descriptive prognostic association, not a causal effect."
+            f"The {'adjusted ' if adjusted else ''}hazard ratio for {outcome} through "
+            f"{horizon} {increment} (its {summary_en} from ICU admission to "
+            f"{window_end}), among stays alive and event-free at the landmark, "
+            + (
+                f"adjusted for {adjustment_text}"
+                if adjusted
+                else "without covariate adjustment"
+            )
+            + "; the spline's 10th- and 90th-percentile contrasts replace it if linearity "
+            "is rejected; a descriptive prognostic association, not a causal effect."
         ),
         time_zero=f"ICU admission; follow-up starts at the {landmark} landmark.",
         observation_window=(
@@ -164,16 +173,18 @@ def _design_selection(
                 if proposed
                 else "Sealed continuous-exposure landmark survival suite"
             )
-            + ": tertile Table 1 and Kaplan-Meier, adjusted Cox per exposure unit with a "
-            "Schoenfeld audit, a prespecified interval model and a spline check of the linear "
-            "term, in one composite figure."
+            + f": tertile Table 1 and Kaplan-Meier, {'adjusted ' if adjusted else ''}Cox per "
+            "exposure step with a Schoenfeld audit, a prespecified interval model and a spline "
+            "check of the linear term, in one composite figure."
         ),
         required_variables=[request.identity_column, *columns],
         assumptions=[
             "Stays without a recorded exposure value by the landmark leave the risk set, so the "
             "estimate describes stays in which the exposure was measured.",
-            "The log hazard is linear in the exposure; a restricted cubic spline checks this "
-            "and is reported, not substituted for the prespecified estimate.",
+            "A restricted cubic spline checks whether the log hazard is linear in the exposure; "
+            "when it rejects linearity at alpha 0.05 while proportional hazards hold, the "
+            "spline's hazard ratios at the 10th and 90th percentiles relative to the median "
+            "are the estimate.",
             f"{unit_text[0].upper()}{unit_text[1:]}.",
         ],
         literature_citation_keys=[*method_keys, *comparator_keys][:8],
@@ -183,12 +194,14 @@ def _design_selection(
             "comparator on population, exposure measurement, landmark, and endpoint."
         ),
         figure_role=(
-            "Kaplan-Meier survival by exposure tertile with the adjusted per-unit hazard-ratio "
-            "curve, risk-set accounting, and proportional-hazards diagnostics in one composite figure."
+            f"Kaplan-Meier survival by exposure tertile with the {'adjusted ' if adjusted else ''}"
+            "hazard-ratio curve across the exposure, risk-set accounting, and "
+            "proportional-hazards diagnostics in one composite figure."
         ),
         supports=(
             f"A prespecified landmark survival association between {exposure} and {outcome} per "
-            "unit of the exposure, with its risk-set accounting and assumption audit."
+            "step of the exposure, or at two of its percentiles when the spline check rejects a "
+            "linear term, with its risk-set accounting and assumption audit."
         ),
         cannot_prove=(
             f"No causal effect of {exposure}, no threshold or dose-response shape beyond the "
@@ -201,11 +214,13 @@ def _design_selection(
                 + stated_population_sentence(spec.population, language),
                 f"暴露为 {exposure} 自 ICU 入院至 {landmark_zh} landmark 的{summary_zh}，按连续变量建模。",
                 f"自 ICU 入院起 {horizon_zh} 内的 {outcome}，按行政截尾处理。",
-                f"调整 {adjustment_zh} 的 Cox 比例风险模型，报告{increment_zh}的风险比；Wald 95% CI；"
+                (f"调整 {adjustment_zh} 的" if adjusted else "不调整协变量的")
+                + f" Cox 比例风险模型，报告{increment_zh}的风险比；Wald 95% CI；"
                 "按封印的处理政策做 Schoenfeld 残差审计。",
-                "按暴露三分位描述基线表与 Kaplan-Meier 曲线；校正模型对封印的列做完整病例分析，并审计分母。",
+                "按暴露三分位描述基线表与 Kaplan-Meier 曲线；Cox 模型对封印的列做完整病例分析，并审计分母。",
                 "比例风险假设被拒绝时，以预先设定的分段 Cox 模型给出各随访区间的风险比，替代恒定的风险比；"
-                "以限制性立方样条检验线性项，只报告不替换。",
+                "以限制性立方样条检验线性项：线性在 α=0.05 被拒且比例风险成立时，以样条在第 10、90 "
+                "百分位相对中位数的风险比替代每步风险比。",
             ]
             if language == "zh"
             else [
@@ -215,13 +230,20 @@ def _design_selection(
                 f"{exposure}: its {summary_en} from ICU admission to {window_end}, "
                 "modelled as a continuous variable.",
                 sentence(f"{outcome} through {horizon} from ICU admission, censored administratively."),
-                f"Adjusted Cox proportional-hazards model for {adjustment_text}, reported {increment}; "
+                (
+                    f"Adjusted Cox proportional-hazards model for {adjustment_text}"
+                    if adjusted
+                    else "Cox proportional-hazards model without covariates"
+                )
+                + f", reported {increment}; "
                 "Wald 95% CI; Schoenfeld residual audit with the sealed handling policy.",
-                "Table 1 and Kaplan-Meier curves by exposure tertile; complete-case adjusted models on "
+                "Table 1 and Kaplan-Meier curves by exposure tertile; complete-case models on "
                 "the sealed columns with an audited denominator.",
                 "A prespecified interval-specific Cox model replaces a constant hazard ratio when "
                 "proportional hazards is rejected; a restricted cubic spline checks the linear term "
-                "and is reported, not substituted.",
+                "and its hazard ratios at the 10th and 90th percentiles relative to the median "
+                "replace the per-step estimate when it rejects linearity at alpha 0.05 while "
+                "proportional hazards hold.",
             ]
         ),
         disposition="selected",
@@ -345,8 +367,8 @@ def build_landmark_continuous_survival_skeleton(
         ),
         "primary_survival_suite": (
             f"Execute the {state} {suite.landmark_hours:g} h landmark survival suite for "
-            f"{exposure_label} per unit and {outcome_label}: risk-set accounting, Table 1 and "
-            "Kaplan-Meier curves by exposure tertile, the adjusted Cox model with the Schoenfeld "
+            f"{exposure_label} per exposure step and {outcome_label}: risk-set accounting, Table 1 "
+            "and Kaplan-Meier curves by exposure tertile, the Cox model with the Schoenfeld "
             "audit, its interval model and the spline check"
             + ("; it runs once review compiles the design and the host seals it." if proposed else ".")
         ),

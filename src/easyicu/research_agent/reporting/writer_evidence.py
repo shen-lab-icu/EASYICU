@@ -539,22 +539,33 @@ def _survival_reporting_is_authorized(
     """Authorize the deterministic non-PH survival projection for Writer.
 
     A continuous-exposure suite reports no top-level estimate, so its whole
-    envelope is the result whatever the PH decision: the per-unit hazard
-    ratio when it is authorized, and the interval estimates when the interval
-    model had them.  An envelope with neither carries no result.
+    envelope is the result whatever its rules decided: the per-step hazard
+    ratio when it is the result, the spline's percentile contrasts when the
+    spline check rejected a linear term, and the interval estimates when the
+    interval model had them.  An envelope with none of them carries no result.
     """
 
     if not isinstance(payload, Mapping):
         return False
-    if payload.get("schema_version") == "easyicu.continuous_survival_reporting/1":
+    if payload.get("schema_version") == "easyicu.continuous_survival_reporting/2":
         time_varying = payload.get("time_varying_adjusted_association")
         intervals = (
             time_varying.get("intervals") if isinstance(time_varying, Mapping) else None
         )
+        functional_form = payload.get("functional_form")
+        contrasts = (
+            functional_form.get("contrasts")
+            if isinstance(functional_form, Mapping)
+            else None
+        )
         constant = payload.get(
             "constant_hazard_ratio_authorized"
         ) is True and isinstance(payload.get("adjusted_hazard_ratio_per_unit"), Mapping)
-        if not constant and (not isinstance(intervals, list) or not intervals):
+        if not (
+            constant
+            or (isinstance(contrasts, list) and contrasts)
+            or (isinstance(intervals, list) and intervals)
+        ):
             return False
         return bool(
             payload.get("execution_owner") == "landmark_continuous_survival_executor_v1"
