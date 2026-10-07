@@ -516,13 +516,6 @@ _PLANNING_STOP_SENTENCES = {
         "Declare the study's analysis as a prediction model, then generate a "
         "fresh plan."
     ),
-    "progressive_family_spec_prediction_risk_set_conflicts_with_population": (
-        "This study keeps every input row, but a prediction model is made only "
-        "for the stays still in the ICU when it predicts. Planning stopped "
-        "before the Planner was called, and no analysis was run. Give the study "
-        "a population that filters, such as a minimum ICU stay up to the "
-        "prediction time or an adult preset, then generate a fresh plan."
-    ),
     "progressive_family_spec_icu_stay_unit_unread": (
         "The prepared data records the ICU length of stay in a unit EasyICU "
         "reads as neither days nor hours. Planning stopped before the Planner "
