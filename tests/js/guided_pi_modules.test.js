@@ -95,7 +95,6 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   // family-template sentence.
   const predictionStops = {
     progressive_family_spec_prediction_risk_set_unavailable: /Declare the study's analysis as a prediction model/,
-    progressive_family_spec_prediction_risk_set_conflicts_with_population: /a population that filters/,
     progressive_family_spec_icu_stay_unit_unread: /Prepare the export again with the unit recorded/,
   };
   Object.entries(predictionStops).forEach(([code, remedy]) => {
