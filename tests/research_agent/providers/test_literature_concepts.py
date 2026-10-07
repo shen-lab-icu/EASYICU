@@ -189,7 +189,8 @@ def test_an_export_display_label_is_never_a_search_phrase() -> None:
     from easyicu.research_agent.literature_concepts import is_export_display_label
 
     # The Elixhauser index is a code-derived public output: it has no
-    # dictionary entry, so its description is the export display label.
+    # dictionary entry, so its description is the export display label, and
+    # its catalog identity names the construct.
     context = _derived_column_context(
         name="elixhauser", source_concept="elixhauser",
         description="Elixhauser (van Walraven) Score",
@@ -199,8 +200,8 @@ def test_an_export_display_label_is_never_a_search_phrase() -> None:
     queries = build_pubmed_protocol_queries_for_context(context)
 
     assert is_export_display_label("Elixhauser (van Walraven) Score", ["elixhauser"])
-    assert _protocol_search_term(context, "elixhauser") == "elixhauser"
-    assert '"elixhauser"[Title/Abstract]' in queries[0]
+    assert _protocol_search_term(context, "elixhauser") == "Elixhauser comorbidity index"
+    assert '"Elixhauser comorbidity index"[Title/Abstract]' in queries[0]
     assert all("van Walraven" not in query for query in queries)
     # A dictionary concept's description is dictionary text and still used.
     assert not is_export_display_label("in hospital mortality", ["death"])

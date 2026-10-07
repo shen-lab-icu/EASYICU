@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -192,6 +193,27 @@ DERIVED_CONCEPT_HINTS: Dict[str, Tuple[List[str], bool]] = {
         ],
         True,
     ),
+    # --- Comorbidity indices: the comorbidity loader derives them from ICD
+    # diagnoses wherever a database has a diagnosis source; the dictionary
+    # has no entry for either. No bare "CCI" (also chronic critical illness).
+    "charlson": (
+        [
+            "Charlson comorbidity index",
+            "Charlson index",
+            "Charlson score",
+            "Charlson comorbidity score",
+        ],
+        False,
+    ),
+    "elixhauser": (
+        [
+            "Elixhauser comorbidity index",
+            "Elixhauser index",
+            "Elixhauser score",
+            "van Walraven score",
+        ],
+        False,
+    ),
 }
 
 # ``False`` in DERIVED_CONCEPT_HINTS means only "not a clean 0/1 outcome". Most
@@ -324,6 +346,17 @@ class ConceptCatalog:
     # plain dicts: run_idea_mining_dry_run accepts Mapping[str, Mapping] here,
     # so we avoid importing the (in-flux) idea_mining module.
     outcome_determinability: Dict[str, Dict[str, str]] = field(default_factory=dict)
+
+
+@lru_cache(maxsize=1)
+def concept_dictionary_ids() -> frozenset[str]:
+    """The concepts with an entry in the packaged concept dictionaries.
+
+    The catalog also lists code-derived outputs (``DERIVED_CONCEPT_HINTS``
+    without a dictionary entry); they have no dictionary text of their own.
+    """
+
+    return frozenset(_load_dicts(None))
 
 
 def _load_dicts(dict_paths: Optional[Sequence[str | Path]]) -> Dict[str, dict]:
@@ -636,5 +669,6 @@ def load_concept_catalog(
 __all__ = [
     "ConceptCatalog",
     "DERIVED_CONCEPT_HINTS",
+    "concept_dictionary_ids",
     "load_concept_catalog",
 ]
