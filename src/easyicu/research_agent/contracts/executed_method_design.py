@@ -22,8 +22,33 @@ from pydantic import (
     model_validator,
 )
 
+from ..methods.time_varying_cox import TimeVaryingNotEstimableReason
+
 EXECUTED_METHOD_DESIGN_KEY = "executed_method_design"
 EXECUTED_METHOD_DESIGN_SCHEMA_VERSION = "easyicu.executed_method_design/1"
+
+#: Which exposure tertile a risk set left empty, and so why a continuous suite
+#: described the whole risk set.
+WholeRiskSetReason = Literal[
+    "upper_tertile_cutpoint_at_maximum",
+    "no_value_between_tertile_cutpoints",
+    "lower_tertile_cutpoint_at_maximum",
+]
+#: The one reader clause for each reason; a table note, a figure legend and
+#: the Methods state it alike.
+WHOLE_RISK_SET_REASON_WORDS: dict[str, str] = {
+    "upper_tertile_cutpoint_at_maximum": (
+        "the upper tertile cutpoint of the exposure was its largest recorded value, "
+        "so no record lay above it"
+    ),
+    "no_value_between_tertile_cutpoints": (
+        "no recorded value of the exposure lay between its two tertile cutpoints"
+    ),
+    "lower_tertile_cutpoint_at_maximum": (
+        "the lower tertile cutpoint of the exposure was its largest recorded value, "
+        "so no record lay above it"
+    ),
+}
 
 
 class _ExecutedDesign(BaseModel):
@@ -195,7 +220,24 @@ class LandmarkContinuousSurvivalDesign(_ExecutedDesign):
     proportional_hazards_alpha: float = Field(gt=0.0, lt=1.0)
     time_varying_cutpoints_days: list[float] = Field(min_length=1)
     spline_knot_percentiles: list[float]
-    descriptive_grouping: Literal["value_tertiles"]
+    #: The groups Table 1 and the Kaplan-Meier curves described: the sealed
+    #: value tertiles, or the whole risk set when a tertile would be empty.
+    descriptive_grouping: Literal["value_tertiles", "whole_risk_set"]
+    descriptive_grouping_reason: WholeRiskSetReason | None = None
+    #: Why the prespecified interval model had no estimate; a design whose
+    #: interval model was estimated omits it, as one written before it does.
+    interval_model_not_estimable_reason: TimeVaryingNotEstimableReason | None = None
+
+    @model_serializer(mode="wrap")
+    def _preserve_unstated_fields(self, handler):
+        payload = handler(self)
+        for name in (
+            "descriptive_grouping_reason",
+            "interval_model_not_estimable_reason",
+        ):
+            if getattr(self, name) is None:
+                payload.pop(name, None)
+        return payload
 
     @model_validator(mode="after")
     def _times_are_ordered(self) -> "LandmarkContinuousSurvivalDesign":
@@ -215,6 +257,12 @@ class LandmarkContinuousSurvivalDesign(_ExecutedDesign):
             raise ValueError("time-varying cutpoints must increase within follow-up")
         if self.spline_knot_percentiles != [10.0, 50.0, 90.0]:
             raise ValueError("the spline knots are the 10th, 50th and 90th percentiles")
+        if (self.descriptive_grouping == "whole_risk_set") != (
+            self.descriptive_grouping_reason is not None
+        ):
+            raise ValueError(
+                "the whole risk set is described for a stated reason, and only then"
+            )
         return self
 
 
@@ -243,11 +291,13 @@ def executed_method_design_payload(design: Any) -> dict[str, Any]:
 __all__ = [
     "EXECUTED_METHOD_DESIGN_KEY",
     "EXECUTED_METHOD_DESIGN_SCHEMA_VERSION",
+    "WHOLE_RISK_SET_REASON_WORDS",
     "ExecutedMethodDesign",
     "FixedWindowRepresentationDesign",
     "LandmarkContinuousSurvivalDesign",
     "LandmarkSurvivalDesign",
     "LatentClassModelDesign",
+    "WholeRiskSetReason",
     "executed_method_design_payload",
     "validate_executed_method_design",
 ]

@@ -8,6 +8,10 @@ per exposure unit with its interval model, the restricted cubic spline check
 of the linear term, and the proportional-hazards audit.  It contains no case
 identifier and no model-editable code.  The composite figure is rendered by
 ``landmark_continuous_survival_figure`` from the tables written here.
+
+Exposure tertiles the risk set cannot form, and a secondary model the data
+leave without an estimate, are reported with the reason; the suite fails only
+when its result, the estimate the PH decision authorizes, has none.
 """
 
 from __future__ import annotations
@@ -39,6 +43,7 @@ from ...authority.prespecified_rule_outcomes import RULE_OUTCOME_SCHEMA_VERSION
 from ...contracts.executed_method_design import (
     EXECUTED_METHOD_DESIGN_KEY,
     EXECUTED_METHOD_DESIGN_SCHEMA_VERSION,
+    WHOLE_RISK_SET_REASON_WORDS,
     LandmarkContinuousSurvivalDesign,
     executed_method_design_payload,
 )
@@ -61,6 +66,10 @@ _MINIMUM_MODEL_EVENTS = 10
 #: The descriptive groups: value tertiles of the risk set, right-closed.
 _TERTILE_PREFIXES = ("t1", "t2", "t3")
 _TERTILE_NAMES = ("Lowest tertile", "Middle tertile", "Highest tertile")
+#: The one descriptive group of a risk set whose tertiles would leave one empty.
+_WHOLE_RISK_SET = "whole_risk_set"
+_WHOLE_PREFIX = "all"
+_WHOLE_LABEL = "Landmark analysis cohort"
 #: The model column of the spline's one nonlinear term.
 _SPLINE_TERM = "__exposure_rcs_s1"
 _SPLINE_METHOD = "restricted_cubic_spline_likelihood_ratio_test"
@@ -240,12 +249,15 @@ def _cox_fit(
     return fitter, (nonconvergence[0] if nonconvergence else None)
 
 
-def _tertile_groups(values: Any) -> tuple[Any, float, float]:
+def _tertile_groups(values: Any) -> tuple[Any | None, float, float, Optional[str]]:
     """Right-closed value tertiles of the risk set's exposure, numbered 1 to 3.
 
-    A cutpoint shared by two tertiles leaves one empty: the exposure then has
-    too few distinct values for three groups, and the suite refuses rather
-    than describe two groups as three.
+    The lowest tertile always holds the smallest value.  The highest is empty
+    when the upper cutpoint is the largest value, the middle one when no value
+    lies between the cutpoints, and both when the lower cutpoint is the largest
+    value: the exposure then has too few distinct values for three groups.  The
+    groups are then ``None`` with the reason, and the suite describes the whole
+    risk set rather than describe two groups, or one, as three.
     """
 
     import numpy as np
@@ -253,13 +265,14 @@ def _tertile_groups(values: Any) -> tuple[Any, float, float]:
 
     low, high = (float(value) for value in values.quantile([1.0 / 3.0, 2.0 / 3.0]))
     groups = np.where(values.le(low), 1, np.where(values.le(high), 2, 3))
-    counts = np.bincount(groups, minlength=4)[1:]
-    if (counts == 0).any():
-        raise ValueError(
-            "continuous survival exposure tertiles are tied; the exposure has too "
-            "few distinct values for three descriptive groups"
-        )
-    return pd.Series(groups, index=values.index, dtype=int), low, high
+    _lowest, middle, highest = np.bincount(groups, minlength=4)[1:]
+    if not middle and not highest:
+        return None, low, high, "lower_tertile_cutpoint_at_maximum"
+    if not highest:
+        return None, low, high, "upper_tertile_cutpoint_at_maximum"
+    if not middle:
+        return None, low, high, "no_value_between_tertile_cutpoints"
+    return pd.Series(groups, index=values.index, dtype=int), low, high, None
 
 
 def _tertile_labels(
@@ -273,12 +286,21 @@ def _tertile_labels(
     }
 
 
-def _table_one(frame: Any, groups: Any, sealed: LandmarkContinuousSurvivalRuntimeAuthority):
-    """Characteristics by exposure tertile; the SMD compares the highest with the lowest."""
+def _table_one(
+    frame: Any,
+    groups: Any,
+    prefixes: Mapping[int, str],
+    sealed: LandmarkContinuousSurvivalRuntimeAuthority,
+):
+    """Characteristics by descriptive group; the SMD compares the last with the first.
+
+    The whole risk set is one group, compared with none: it has no SMD.
+    """
 
     import numpy as np
     import pandas as pd
 
+    first, last = min(prefixes), max(prefixes)
     rows: list[dict[str, Any]] = []
     for column in sealed.table_one_columns:
         source = frame[column]
@@ -290,7 +312,7 @@ def _table_one(frame: Any, groups: Any, sealed: LandmarkContinuousSurvivalRuntim
                     "summary_type": "categorical_n_percent",
                 }
                 proportions: dict[int, float] = {}
-                for group, prefix in enumerate(_TERTILE_PREFIXES, start=1):
+                for group, prefix in prefixes.items():
                     subset = source.loc[groups.eq(group)]
                     denominator = int(len(subset))
                     count = int(subset.astype("string").eq(level).sum())
@@ -301,11 +323,11 @@ def _table_one(frame: Any, groups: Any, sealed: LandmarkContinuousSurvivalRuntim
                         100.0 * proportion if math.isfinite(proportion) else None
                     )
                     proportions[group] = proportion
-                pooled = (proportions[1] + proportions[3]) / 2.0
+                pooled = (proportions[first] + proportions[last]) / 2.0
                 spread = math.sqrt(pooled * (1.0 - pooled))
                 row["standardized_mean_difference"] = (
-                    (proportions[3] - proportions[1]) / spread
-                    if spread > 0 and math.isfinite(spread)
+                    (proportions[last] - proportions[first]) / spread
+                    if first != last and spread > 0 and math.isfinite(spread)
                     else None
                 )
                 rows.append(row)
@@ -314,7 +336,7 @@ def _table_one(frame: Any, groups: Any, sealed: LandmarkContinuousSurvivalRuntim
         row = {"variable": column, "level": "", "summary_type": "continuous_mean_sd"}
         means: dict[int, float] = {}
         variances: dict[int, float] = {}
-        for group, prefix in enumerate(_TERTILE_PREFIXES, start=1):
+        for group, prefix in prefixes.items():
             values = numeric.loc[groups.eq(group)].dropna()
             row[f"{prefix}_n"] = int(len(values))
             row[f"{prefix}_mean"] = float(values.mean()) if len(values) else None
@@ -324,23 +346,33 @@ def _table_one(frame: Any, groups: Any, sealed: LandmarkContinuousSurvivalRuntim
             row[f"{prefix}_q3"] = float(values.quantile(0.75)) if len(values) else None
             means[group] = float(values.mean()) if len(values) else float("nan")
             variances[group] = float(values.var(ddof=1)) if len(values) > 1 else float("nan")
-        pooled_sd = math.sqrt(np.nanmean([variances[1], variances[3]]))
+        pooled_sd = math.sqrt(np.nanmean([variances[first], variances[last]]))
         row["standardized_mean_difference"] = (
-            (means[3] - means[1]) / pooled_sd
-            if pooled_sd > 0 and math.isfinite(pooled_sd)
+            (means[last] - means[first]) / pooled_sd
+            if first != last and pooled_sd > 0 and math.isfinite(pooled_sd)
             else None
         )
         rows.append(row)
     return pd.DataFrame(rows)
 
 
-def _km_table(analysis: Any, groups: Any, labels: Mapping[int, str], *, sealed):
+def _km_table(
+    analysis: Any,
+    groups: Any,
+    labels: Mapping[int, str],
+    *,
+    sealed,
+    grouping: str,
+    grouping_reason: Optional[str],
+):
+    """One curve per descriptive group; every row names the grouping it drew and why."""
+
     import pandas as pd
 
     from ...figures.base import km_estimate
 
     rows: list[dict[str, Any]] = []
-    for group in (1, 2, 3):
+    for group in labels:
         subset = analysis.loc[groups.eq(group)]
         estimate = km_estimate(
             subset[sealed.derived_time_column], subset[sealed.derived_event_column]
@@ -350,6 +382,8 @@ def _km_table(analysis: Any, groups: Any, labels: Mapping[int, str], *, sealed):
         ):
             rows.append(
                 {
+                    "descriptive_grouping": grouping,
+                    "descriptive_grouping_reason": grouping_reason,
                     "exposure_group": group,
                     "exposure_group_label": labels[group],
                     "time_from_landmark_days": float(time),
@@ -555,6 +589,8 @@ def _manuscript_tables(
     analysis: Any,
     groups: Any,
     labels: Mapping[int, str],
+    prefixes: Mapping[int, str],
+    grouping_reason: Optional[str],
 ) -> list[dict[str, Any]]:
     """Declare the suite's Table 1 and risk-set accounting as reader tables."""
 
@@ -566,32 +602,47 @@ def _manuscript_tables(
         return {"n": n, "events": deaths, "events_percent": 100.0 * deaths / n if n else 0.0}
 
     exposure = _reader_words(sealed.exposure_label)
+    whole = grouping_reason is not None
+    caption = (
+        f"Characteristics of the {sealed.analysis_unit_label} in the landmark analysis cohort"
+        + ("" if whole else f", by tertile of {exposure}")
+    )
+    notes = (
+        [
+            "The table describes the whole cohort: exposure tertiles were not formed, "
+            f"because {WHOLE_RISK_SET_REASON_WORDS[grouping_reason]}.",
+            "Categorical percentages use every record of the cohort as the denominator, "
+            "so levels need not sum to 100% when a value is missing.",
+        ]
+        if whole
+        else [
+            "Tertiles divide the landmark analysis cohort by the recorded exposure "
+            "value; they describe the cohort and enter no model.",
+            "Categorical percentages use every record of the tertile as the "
+            "denominator, so levels need not sum to 100% when a value is missing.",
+        ]
+    )
+    notes.append("Continuous variables are summarized over their recorded values.")
+    if not whole:
+        notes.append(
+            "The standardized mean difference compares the highest with the lowest "
+            "tertile; it is not a significance test."
+        )
+    notes.append("Deaths are counted from the landmark to the end of follow-up.")
     declarations = [
         {
             "schema_version": MANUSCRIPT_TABLE_SCHEMA_VERSION,
             "product": sealed.table_one_product,
-            "caption": _reader_words(
-                f"Characteristics of the {sealed.analysis_unit_label} in the landmark "
-                f"analysis cohort, by tertile of {exposure}"
-            ),
+            "caption": _reader_words(caption),
             "body": {
                 "layout": "grouped_summary",
                 "groups": [
                     {"prefix": prefix, "label": _reader_words(labels[group]), **counts(group)}
-                    for group, prefix in enumerate(_TERTILE_PREFIXES, start=1)
+                    for group, prefix in prefixes.items()
                 ],
                 "events_label": f"Deaths by day {sealed.endpoint_horizon_days:g}, n (%)",
             },
-            "notes": [
-                "Tertiles divide the landmark analysis cohort by the recorded exposure "
-                "value; they describe the cohort and enter no model.",
-                "Categorical percentages use every record of the tertile as the "
-                "denominator, so levels need not sum to 100% when a value is missing.",
-                "Continuous variables are summarized over their recorded values.",
-                "The standardized mean difference compares the highest with the lowest "
-                "tertile; it is not a significance test.",
-                "Deaths are counted from the landmark to the end of follow-up.",
-            ],
+            "notes": notes,
         },
         {
             "schema_version": MANUSCRIPT_TABLE_SCHEMA_VERSION,
@@ -666,10 +717,11 @@ def build_continuous_survival_manuscript_projection(
     results.  The projection adds the primary tokens to the abstract Results
     and one neutral numeric sentence on the spline check, which has no claim
     type: its likelihood-ratio statistic and degrees of freedom, not a p value
-    the numeric binder could not trace below 0.001.
+    the numeric binder could not trace below 0.001.  Only a rejected PH test
+    makes the interval estimates the result, so only it requires them.
     """
 
-    if interval_count <= 1:
+    if proportional_hazards_rejected and interval_count <= 1:
         raise ValueError("continuous survival projection requires intervals")
     abstract = {"kind": "abstract_label", "label": "Results"}
     survival = {
@@ -728,8 +780,15 @@ def build_continuous_survival_manuscript_projection(
     }
 
 
-def _executed_design(sealed: LandmarkContinuousSurvivalRuntimeAuthority) -> dict[str, Any]:
-    """The design this run applied, read from the sealed contract it executed."""
+def _executed_design(
+    sealed: LandmarkContinuousSurvivalRuntimeAuthority,
+    *,
+    descriptive_grouping: str,
+    descriptive_grouping_reason: Optional[str],
+    interval_not_estimable_reason: Optional[str],
+) -> dict[str, Any]:
+    """The design this run applied: the sealed contract it executed, the groups
+    it described, and why its interval model had no estimate when it had none."""
 
     start, end = sealed.exposure_window_hours
     return executed_method_design_payload(
@@ -755,7 +814,9 @@ def _executed_design(sealed: LandmarkContinuousSurvivalRuntimeAuthority) -> dict
             spline_knot_percentiles=[
                 100.0 * value for value in sealed.spline_knot_quantiles
             ],
-            descriptive_grouping=sealed.descriptive_grouping,
+            descriptive_grouping=descriptive_grouping,
+            descriptive_grouping_reason=descriptive_grouping_reason,
+            interval_model_not_estimable_reason=interval_not_estimable_reason,
         )
     )
 
@@ -775,7 +836,11 @@ def run_landmark_continuous_survival_suite(
     import numpy as np
     import pandas as pd
 
-    from ...methods.time_varying_cox import fit_piecewise_time_varying_cox
+    from ...methods.time_varying_cox import (
+        TIME_VARYING_NOT_ESTIMABLE_REASONS,
+        TimeVaryingCoxError,
+        fit_piecewise_time_varying_cox,
+    )
 
     sealed = _sealed(authority)
     if sealed is None:
@@ -822,8 +887,17 @@ def run_landmark_continuous_survival_suite(
     if int(analysis[sealed.derived_event_column].sum()) < _MINIMUM_MODEL_EVENTS:
         raise ValueError("continuous survival risk set has insufficient event support")
 
-    groups, tertile_low, tertile_high = _tertile_groups(analysis[sealed.exposure_column])
-    labels = _tertile_labels(sealed, tertile_low, tertile_high)
+    groups, tertile_low, tertile_high, grouping_reason = _tertile_groups(
+        analysis[sealed.exposure_column]
+    )
+    if groups is None:
+        descriptive_grouping = _WHOLE_RISK_SET
+        groups = pd.Series(0, index=analysis.index, dtype=int)
+        prefixes, labels = {0: _WHOLE_PREFIX}, {0: _WHOLE_LABEL}
+    else:
+        descriptive_grouping = sealed.descriptive_grouping
+        prefixes = dict(enumerate(_TERTILE_PREFIXES, start=1))
+        labels = _tertile_labels(sealed, tertile_low, tertile_high)
     risk_rows = [
         ("source_rows", len(working)),
         ("valid_fixed_horizon_endpoint", int(endpoint_valid.sum())),
@@ -845,8 +919,15 @@ def run_landmark_continuous_survival_suite(
             for index, (stage, count) in enumerate(risk_rows)
         ]
     )
-    table_one = _table_one(analysis, groups, sealed)
-    km_table = _km_table(analysis, groups, labels, sealed=sealed)
+    table_one = _table_one(analysis, groups, prefixes, sealed)
+    km_table = _km_table(
+        analysis,
+        groups,
+        labels,
+        sealed=sealed,
+        grouping=descriptive_grouping,
+        grouping_reason=grouping_reason,
+    )
 
     model_frame, covariates = _model_frame(analysis, sealed)
     fitter, nonconvergence = _cox_fit(
@@ -881,17 +962,53 @@ def run_landmark_continuous_survival_suite(
     ph_table["ph_status"] = ph_status
     ph_table["paper_authorization_allowed"] = not ph_violation
 
-    time_varying_table = fit_piecewise_time_varying_cox(
-        model_frame,
-        duration_col=sealed.derived_time_column,
-        event_col=sealed.derived_event_column,
-        covariates=covariates,
-        interval_cutpoints=sealed.time_varying_interval_cutpoints_days,
-        exposure_col=sealed.exposure_column,
-    )
-    exposure_intervals = time_varying_table.loc[time_varying_table["is_exposure"]]
-    if len(exposure_intervals) != len(sealed.time_varying_interval_cutpoints_days) + 1:
-        raise ValueError("continuous survival interval model lacks every exposure interval")
+    # The interval estimates are the result when the PH test rejects the
+    # constant one.  Otherwise they are a prespecified secondary model, which
+    # data may leave without an estimate: it is then reported as such.
+    interval_reason: Optional[str] = None
+    try:
+        time_varying_table = fit_piecewise_time_varying_cox(
+            model_frame,
+            duration_col=sealed.derived_time_column,
+            event_col=sealed.derived_event_column,
+            covariates=covariates,
+            interval_cutpoints=sealed.time_varying_interval_cutpoints_days,
+            exposure_col=sealed.exposure_column,
+        )
+    except TimeVaryingCoxError as error:
+        if error.reason not in TIME_VARYING_NOT_ESTIMABLE_REASONS:
+            raise
+        if ph_violation:
+            raise ValueError(
+                "continuous_survival_interval_result_not_estimable: the PH test rejected "
+                "the constant hazard ratio, and the interval model that replaces it is "
+                f"not estimable ({error.reason})"
+            ) from error
+        interval_reason = error.reason
+        exposure_intervals = pd.DataFrame()
+        time_varying_table = pd.DataFrame(
+            [
+                {
+                    "term": sealed.exposure_column,
+                    "is_exposure": True,
+                    "method": sealed.time_varying_effect_method,
+                    "model_status": "not_estimable",
+                    "not_estimable_reason": interval_reason,
+                }
+            ]
+        )
+    else:
+        exposure_intervals = time_varying_table.loc[time_varying_table["is_exposure"]]
+        if (
+            len(exposure_intervals)
+            != len(sealed.time_varying_interval_cutpoints_days) + 1
+        ):
+            raise ValueError(
+                "continuous survival interval model lacks every exposure interval"
+            )
+        time_varying_table = time_varying_table.assign(
+            model_status="estimated", not_estimable_reason=None
+        )
 
     spline_curve, functional_form = _spline_check(
         model_frame, sealed=sealed, linear_fitter=fitter
@@ -936,19 +1053,27 @@ def run_landmark_continuous_survival_suite(
             ),
         },
         "time_varying_adjusted_association": {
+            "status": "estimated" if interval_reason is None else "not_estimable",
+            **({} if interval_reason is None else {"reason": interval_reason}),
             "method": sealed.time_varying_effect_method,
             "adjustment_columns": list(sealed.adjustment_columns),
-            "intervals": [
-                {
-                    "start_days": float(row.interval_start_days),
-                    "end_days": float(row.interval_end_days),
-                    "hazard_ratio": float(row.hazard_ratio),
-                    "ci_low": float(row.ci_low),
-                    "ci_high": float(row.ci_high),
-                    "p_value": float(row.p_value),
+            **(
+                {}
+                if interval_reason is not None
+                else {
+                    "intervals": [
+                        {
+                            "start_days": float(row.interval_start_days),
+                            "end_days": float(row.interval_end_days),
+                            "hazard_ratio": float(row.hazard_ratio),
+                            "ci_low": float(row.ci_low),
+                            "ci_high": float(row.ci_high),
+                            "p_value": float(row.p_value),
+                        }
+                        for row in exposure_intervals.itertuples(index=False)
+                    ]
                 }
-                for row in exposure_intervals.itertuples(index=False)
-            ],
+            ),
         },
         "functional_form": functional_form,
         "manuscript_projection": build_continuous_survival_manuscript_projection(
@@ -993,6 +1118,13 @@ def run_landmark_continuous_survival_suite(
         "functional_form_status": (
             "estimated" if functional_form_estimated else str(functional_form["reason"])
         ),
+        "descriptive_grouping": descriptive_grouping,
+        **(
+            {}
+            if grouping_reason is None
+            else {"descriptive_grouping_reason": grouping_reason}
+        ),
+        "time_varying_status": interval_reason or "estimated",
         "paper_authorization_allowed": not ph_violation,
         "interpretation": sealed.interpretation,
         "analysis_only": True,
@@ -1030,7 +1162,12 @@ def run_landmark_continuous_survival_suite(
         "analysis_role": "primary",
         "deterministic_standard_analysis": LANDMARK_CONTINUOUS_SURVIVAL_ANALYSIS_KIND,
         "interpretation_class": "descriptive_prognostic_association",
-        EXECUTED_METHOD_DESIGN_KEY: _executed_design(sealed),
+        EXECUTED_METHOD_DESIGN_KEY: _executed_design(
+            sealed,
+            descriptive_grouping=descriptive_grouping,
+            descriptive_grouping_reason=grouping_reason,
+            interval_not_estimable_reason=interval_reason,
+        ),
         CONTINUOUS_SURVIVAL_REPORTING_KEY: reportable,
         **counts,
         "typed_cohort_input": input_product,
@@ -1043,7 +1180,9 @@ def run_landmark_continuous_survival_suite(
         "human_attestation_required": True,
         "analysis_cohort_file": paths["analysis"].name,
         "scientific_runtime_receipt": receipt,
-        MANUSCRIPT_TABLES_KEY: _manuscript_tables(sealed, analysis, groups, labels),
+        MANUSCRIPT_TABLES_KEY: _manuscript_tables(
+            sealed, analysis, groups, labels, prefixes, grouping_reason
+        ),
         "missingness_measurement_audit": missingness_measurement_audit,
         "output_files": output_files,
     }

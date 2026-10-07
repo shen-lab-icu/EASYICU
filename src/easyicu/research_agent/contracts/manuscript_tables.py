@@ -56,14 +56,15 @@ class GroupedSummaryLayout(_Closed):
 
     A categorical row records ``<prefix>_n``, ``<prefix>_denominator`` and
     ``<prefix>_percent``; a continuous row ``<prefix>_mean``, ``<prefix>_sd``,
-    ``<prefix>_median``, ``<prefix>_q1`` and ``<prefix>_q3``; every row a
-    ``standardized_mean_difference``.  A variable reads by the plan's display
-    label for it.  ``events_label`` names the outcome whose recorded events
-    every group carries; its row closes the table.
+    ``<prefix>_median``, ``<prefix>_q1`` and ``<prefix>_q3``; every row of
+    two or more groups a ``standardized_mean_difference``.  One group describes
+    a whole population and compares nothing.  A variable reads by the plan's
+    display label for it.  ``events_label`` names the outcome whose recorded
+    events every group carries; its row closes the table.
     """
 
     layout: Literal["grouped_summary"]
-    groups: list[TableGroup] = Field(min_length=2, max_length=6)
+    groups: list[TableGroup] = Field(min_length=1, max_length=6)
     events_label: str | None = Field(default=None, pattern=_READER_TEXT)
 
     @model_validator(mode="after")

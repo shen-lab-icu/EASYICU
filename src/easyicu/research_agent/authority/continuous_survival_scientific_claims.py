@@ -3,7 +3,8 @@
 The continuous-exposure landmark suite reports one adjusted hazard ratio per
 unit of the exposure when its prespecified proportional-hazards test does not
 reject the assumption, and the per-unit hazard ratios of its prespecified
-interval model in every case.  It opts in with a versioned
+interval model whenever the data allow them.  Without them the envelope says
+why; a rejected test then leaves the suite without a result, so it fails.  It opts in with a versioned
 ``easyicu.continuous_survival_reporting/1`` envelope under the same key as the
 binary suite's; the two schemas never read each other.  The reported estimate
 follows from the envelope's own test result, and every sentence is the fixed
@@ -19,6 +20,7 @@ from typing import Annotated, Any, Literal, Mapping, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..methods.time_varying_cox import TimeVaryingNotEstimableReason
 from .prespecified_rule_outcomes import (
     RULE_OUTCOMES_KEY,
     ProportionalHazardsTestOutcome,
@@ -74,6 +76,7 @@ class _IntervalPerUnitHazardRatio(_PerUnitHazardRatio):
 class _IntervalModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
+    status: Literal["estimated"]
     method: Literal["piecewise_time_varying_cox"]
     adjustment_columns: list[str]
     intervals: list[_IntervalPerUnitHazardRatio] = Field(min_length=2)
@@ -122,6 +125,17 @@ class _FunctionalFormNotEstimable(BaseModel):
     knot_percentiles: list[float]
 
 
+class _IntervalModelNotEstimable(BaseModel):
+    """A prespecified interval model the data left without an estimate, and why."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    status: Literal["not_estimable"]
+    reason: TimeVaryingNotEstimableReason
+    method: Literal["piecewise_time_varying_cox"]
+    adjustment_columns: list[str]
+
+
 class ContinuousSurvivalReporting(BaseModel):
     """The suite's reporting envelope; fields the claims do not read pass through."""
 
@@ -142,7 +156,10 @@ class ContinuousSurvivalReporting(BaseModel):
     constant_hazard_ratio_authorized: bool
     proportional_hazards_status: str = Field(min_length=1)
     proportional_hazards_test: ProportionalHazardsTestOutcome
-    time_varying_adjusted_association: _IntervalModel
+    time_varying_adjusted_association: Annotated[
+        Union[_IntervalModel, _IntervalModelNotEstimable],
+        Field(discriminator="status"),
+    ]
     functional_form: Annotated[
         Union[_FunctionalFormCheck, _FunctionalFormNotEstimable],
         Field(discriminator="status"),
@@ -164,6 +181,11 @@ class ContinuousSurvivalReporting(BaseModel):
             )
         if self.proportional_hazards_status.startswith("violation_") != rejected:
             raise ValueError("the PH status contradicts the PH test outcome")
+        if rejected and self.time_varying_adjusted_association.status != "estimated":
+            raise ValueError(
+                "a rejected PH test leaves the interval estimates as the result, so "
+                "they must exist"
+            )
         if self.time_varying_adjusted_association.adjustment_columns != self.adjustment_columns:
             raise ValueError("the interval model must adjust for the sealed covariates")
         if len(set(self.adjustment_columns)) != len(self.adjustment_columns) or any(
@@ -171,6 +193,13 @@ class ContinuousSurvivalReporting(BaseModel):
         ):
             raise ValueError("survival adjustment columns must be unique and non-empty")
         return self
+
+    @property
+    def interval_estimates(self) -> tuple[_IntervalPerUnitHazardRatio, ...]:
+        """The interval model's per-unit hazard ratios; none when it had no estimate."""
+
+        model = self.time_varying_adjusted_association
+        return tuple(model.intervals) if isinstance(model, _IntervalModel) else ()
 
     @property
     def per_unit_words(self) -> str:
@@ -201,9 +230,7 @@ def continuous_survival_claim_ids(reporting: ContinuousSurvivalReporting) -> tup
     )
     return constant + tuple(
         interval_per_unit_hazard_ratio_claim_id(position)
-        for position in range(
-            1, len(reporting.time_varying_adjusted_association.intervals) + 1
-        )
+        for position in range(1, len(reporting.interval_estimates) + 1)
     )
 
 
@@ -260,9 +287,7 @@ def derive_continuous_survival_claim_payloads(
     # When the assumption is rejected the interval estimates replace the
     # constant one; otherwise they are the prespecified secondary model.
     interval_role = "secondary" if reporting.constant_hazard_ratio_authorized else "primary"
-    for position, interval in enumerate(
-        reporting.time_varying_adjusted_association.intervals, start=1
-    ):
+    for position, interval in enumerate(reporting.interval_estimates, start=1):
         payloads.append(association(
             interval_per_unit_hazard_ratio_claim_id(position), interval,
             estimand=(

@@ -1,8 +1,10 @@
 """Source-bound composite figure of the continuous-exposure survival suite.
 
 The renderer reads only the digest-bound result tables the sealed authority
-declares and fits nothing.  Panel (b) follows the suite's own PH decision: the
-adjusted hazard-ratio curve of a model with a constant effect is drawn only
+declares and fits nothing.  Panel (a) draws the descriptive groups its
+Kaplan-Meier table records: the exposure tertiles, or the whole risk set when
+the suite could not form them.  Panel (b) follows the suite's own PH decision:
+the adjusted hazard-ratio curve of a model with a constant effect is drawn only
 when the prespecified test did not reject the assumption, and the per-unit
 hazard ratios of the interval model replace it when it did.
 """
@@ -23,6 +25,7 @@ from ...authority.landmark_continuous_survival_runtime import (
     CONTINUOUS_SURVIVAL_FIGURE_METHOD,
     LandmarkContinuousSurvivalRuntimeAuthority,
 )
+from ...contracts.executed_method_design import WHOLE_RISK_SET_REASON_WORDS
 from ...schema import AnalysisPlan, AnalysisStep
 
 LANDMARK_CONTINUOUS_SURVIVAL_FIGURE_ANALYSIS_KIND = CONTINUOUS_SURVIVAL_FIGURE_METHOD
@@ -63,6 +66,26 @@ def _source_filenames(sealed: LandmarkContinuousSurvivalRuntimeAuthority) -> dic
     }
 
 
+def _whole_risk_set_reason(km_table: Any) -> str | None:
+    """The reason the suite described its whole risk set; ``None`` for tertiles."""
+
+    groupings = {str(value) for value in km_table.get("descriptive_grouping", [])}
+    reasons = {
+        str(value)
+        for value in km_table.get("descriptive_grouping_reason", [])
+        if isinstance(value, str) and value
+    }
+    if groupings == {"value_tertiles"} and not reasons:
+        return None
+    if groupings == {"whole_risk_set"} and len(reasons) == 1:
+        (reason,) = reasons
+        if reason in WHOLE_RISK_SET_REASON_WORDS:
+            return reason
+    raise ValueError(
+        "continuous survival KM table lacks one stated descriptive grouping"
+    )
+
+
 def _ph_rejected(ph_table: Any) -> bool:
     statuses = {
         str(value).strip() for value in ph_table.get("ph_status", []) if str(value).strip()
@@ -97,11 +120,26 @@ def _ratio_y_axis(axes: Any, *, low: float, high: float) -> None:
 
 
 def _reader_legend(
-    *, ph_rejected: bool, spline_estimated: bool, exposure: str, unit: str | None
+    *,
+    ph_rejected: bool,
+    spline_estimated: bool,
+    exposure: str,
+    unit: str | None,
+    whole_risk_set_reason: str | None,
 ) -> str:
     """The figure's source-bound legend: what each drawn panel shows, and no value."""
 
     scale = f"{exposure} ({unit})" if unit else exposure
+    survival = (
+        "(a) Unadjusted Kaplan-Meier survival after the landmark by tertile of the "
+        "exposure, with the number at risk below."
+        if whole_risk_set_reason is None
+        else (
+            "(a) Unadjusted Kaplan-Meier survival after the landmark for the whole risk "
+            "set, with the number at risk below; exposure tertiles were not formed, "
+            f"because {WHOLE_RISK_SET_REASON_WORDS[whole_risk_set_reason]}."
+        )
+    )
     if ph_rejected:
         estimate = (
             f"(b) Adjusted hazard ratios per unit of {scale} for each follow-up "
@@ -123,8 +161,7 @@ def _reader_legend(
             "percentiles of the exposure; the spline check had no result."
         )
     return " ".join((
-        "(a) Unadjusted Kaplan-Meier survival after the landmark by tertile of the "
-        "exposure, with the number at risk below.",
+        survival,
         estimate,
         "(c) Risk-set accounting from the source records through the endpoint, "
         "landmark and exposure-value gates to the analysis population.",
@@ -164,6 +201,8 @@ def _render(
     )
 
     palette = apply_publication_style()
+    whole_reason = _whole_risk_set_reason(km_table)
+    group_ids = (1, 2, 3) if whole_reason is None else (0,)
     ph_rejected = _ph_rejected(ph_table)
     statuses = {str(value) for value in spline_table.get("spline_status", [])}
     if len(statuses) != 1:
@@ -190,14 +229,21 @@ def _render(
     ax_ph = fig.add_subplot(right[1])
 
     horizon = sealed.endpoint_horizon_days - sealed.landmark_hours / 24.0
-    colors = {1: palette["blue"], 2: palette["teal"], 3: palette["red"]}
+    colors = {
+        0: palette["blue"],
+        1: palette["blue"],
+        2: palette["teal"],
+        3: palette["red"],
+    }
     labels: dict[int, str] = {}
-    for group in (1, 2, 3):
+    if set(km_table["exposure_group"].astype(int)) != set(group_ids):
+        raise ValueError(
+            "continuous survival KM table holds other groups than it states"
+        )
+    for group in group_ids:
         rows = km_table.loc[km_table["exposure_group"].eq(group)].sort_values(
             "time_from_landmark_days"
         )
-        if rows.empty:
-            raise ValueError("continuous survival figure lacks a tertile's curve")
         labels[group] = str(rows["exposure_group_label"].iloc[0])
         ax_km.step(
             rows["time_from_landmark_days"],
@@ -211,13 +257,16 @@ def _render(
     ax_km.set_xlim(0.0, horizon)
     ax_km.set_xlabel(f"Days after the {sealed.landmark_hours:g}-hour landmark")
     ax_km.set_ylabel("Survival probability")
-    ax_km.set_title("Unadjusted Kaplan-Meier survival by tertile", loc="left")
+    km_title = "Unadjusted Kaplan-Meier survival" + (
+        " by tertile" if whole_reason is None else ""
+    )
+    ax_km.set_title(km_title, loc="left")
     ax_km.legend(loc="lower left", fontsize=5.8)
     add_panel_label(ax_km, "a", x=-0.09, fontsize=8.0)
 
     risk_times = np.linspace(0.0, horizon, 5)
     risk_rows: list[list[str]] = []
-    for group in (1, 2, 3):
+    for group in group_ids:
         rows = km_table.loc[km_table["exposure_group"].eq(group)].sort_values(
             "time_from_landmark_days"
         )
@@ -229,7 +278,11 @@ def _render(
     ax_risk.axis("off")
     table = ax_risk.table(
         cellText=risk_rows,
-        rowLabels=["Tertile 1", "Tertile 2", "Tertile 3"],
+        rowLabels=(
+            ["Tertile 1", "Tertile 2", "Tertile 3"]
+            if whole_reason is None
+            else ["Risk set"]
+        ),
         colLabels=[f"{value:g}" for value in risk_times],
         cellLoc="center",
         rowLoc="right",
@@ -247,11 +300,12 @@ def _render(
     unit = f" ({sealed.exposure_unit})" if sealed.exposure_unit else ""
     exposure_axis = f"{sealed.exposure_label}{unit}"
     if ph_rejected:
-        rows = time_varying_table.loc[
-            time_varying_table["is_exposure"].astype(bool)
-        ].sort_values("interval_index")
-        if len(rows) != len(sealed.time_varying_interval_cutpoints_days) + 1:
+        rows = time_varying_table.loc[time_varying_table["is_exposure"].astype(bool)]
+        statuses = {str(value) for value in rows.get("model_status", [])}
+        intervals = len(sealed.time_varying_interval_cutpoints_days) + 1
+        if statuses != {"estimated"} or len(rows) != intervals:
             raise ValueError("continuous survival figure lacks every interval estimate")
+        rows = rows.sort_values("interval_index")
         estimates = rows["hazard_ratio"].to_numpy(dtype=float)
         lows = rows["ci_low"].to_numpy(dtype=float)
         highs = rows["ci_high"].to_numpy(dtype=float)
@@ -388,7 +442,13 @@ def _render(
     contract = make_figure_contract(
         figure_id=_FIGURE_STEM,
         core_claim=(
-            "Post-landmark survival by exposure tertile and risk-set accounting are "
+            "Post-landmark survival "
+            + (
+                "by exposure tertile"
+                if whole_reason is None
+                else "of the whole risk set"
+            )
+            + " and risk-set accounting are "
             "shown with the signed proportional-hazards decision; a constant "
             "per-unit Cox effect is "
             + (
@@ -400,12 +460,20 @@ def _render(
         panels=[
             {
                 "panel_id": "a",
-                "title": "Unadjusted Kaplan-Meier survival by tertile",
+                "title": km_title,
                 "role": "temporal_absolute_risk",
                 "chart_type": "kaplan_meier_curve",
-                "claim": "Unadjusted post-landmark survival is displayed by descriptive exposure tertile.",
+                "claim": (
+                    "Unadjusted post-landmark survival is displayed by descriptive exposure tertile."
+                    if whole_reason is None
+                    else "Unadjusted post-landmark survival is displayed for the whole risk set, without exposure tertiles."
+                ),
                 "evidence_ids": [],
-                "review_risk": "Tertiles describe the cohort; they are not the modelled exposure and do not identify a causal effect.",
+                "review_risk": (
+                    "Tertiles describe the cohort; they are not the modelled exposure and do not identify a causal effect."
+                    if whole_reason is None
+                    else "The curve describes the whole risk set; it shows no exposure contrast and identifies no causal effect."
+                ),
                 "metadata": metadata("a"),
             },
             {
@@ -468,6 +536,7 @@ def _render(
             spline_estimated=spline_estimated,
             exposure=sealed.exposure_label,
             unit=sealed.exposure_unit,
+            whole_risk_set_reason=whole_reason,
         ),
     )
     # The risk-set stage names are the leftmost text; the wider export gutter

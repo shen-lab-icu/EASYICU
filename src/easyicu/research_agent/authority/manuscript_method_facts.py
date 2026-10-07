@@ -21,6 +21,7 @@ from typing import Sequence
 
 from ..contracts.executed_method_design import (
     EXECUTED_METHOD_DESIGN_KEY,
+    WHOLE_RISK_SET_REASON_WORDS,
     FixedWindowRepresentationDesign,
     LandmarkContinuousSurvivalDesign,
     LandmarkSurvivalDesign,
@@ -280,6 +281,16 @@ _WINDOW_SUMMARY_WORDS = {
 }
 
 
+#: Why a prespecified interval model had no estimate, in the Methods' words.
+_INTERVAL_NOT_ESTIMABLE_WORDS = {
+    "follow_up_ends_by_final_cutpoint": "follow-up ended by its last cut point",
+    "interval_without_event": "a follow-up interval had no event",
+    "did_not_converge": "its fit did not converge",
+    "invalid_contrast_variance": "an interval contrast had no valid variance",
+    "non_finite_estimate": "its fit was not finite",
+}
+
+
 def _continuous_survival_design_text(design: LandmarkContinuousSurvivalDesign) -> str:
     """The landmark risk set of a continuous exposure, its model and its checks."""
 
@@ -299,6 +310,25 @@ def _continuous_survival_design_text(design: LandmarkContinuousSurvivalDesign) -
         if design.n_adjustment_covariates
         else ""
     )
+    cutpoints = _days(design.time_varying_cutpoints_days)
+    split = f"split at days {cutpoints} after the landmark"
+    reason = design.interval_model_not_estimable_reason
+    intervals = (
+        f"interval-specific associations came from a piecewise Cox model {split}"
+        if reason is None
+        else (
+            f"a piecewise Cox model {split} was prespecified for interval-specific "
+            f"associations and was not estimable, because {_INTERVAL_NOT_ESTIMABLE_WORDS[reason]}"
+        )
+    )
+    grouping = (
+        "grouped the risk set by exposure tertile"
+        if design.descriptive_grouping_reason is None
+        else (
+            "described the whole risk set, without exposure tertiles, because "
+            + WHOLE_RISK_SET_REASON_WORDS[design.descriptive_grouping_reason]
+        )
+    )
     # No result vocabulary ("hazard ratio", "confidence interval"): the numeric
     # binder would then accept only result fields for this sentence's numbers.
     text = (
@@ -314,14 +344,13 @@ def _continuous_survival_design_text(design: LandmarkContinuousSurvivalDesign) -
         "with Schoenfeld residuals, judged violated when the test of the exposure "
         "term or a Bonferroni-adjusted global test over all model terms rejected "
         f"at a prespecified alpha of {design.proportional_hazards_alpha:g}; "
-        "interval-specific associations came from a piecewise Cox model split at "
-        f"days {_days(design.time_varying_cutpoints_days)} after the landmark; "
+        f"{intervals}; "
         "the linear exposure term was compared with a restricted cubic spline "
         "with knots at the "
         + ", ".join(f"{value:g}th" for value in design.spline_knot_percentiles[:-1])
         + f" and {design.spline_knot_percentiles[-1]:g}th percentiles of the "
         "exposure by a likelihood-ratio test; the descriptive tables and the "
-        "Kaplan-Meier curves grouped the risk set by exposure tertile"
+        f"Kaplan-Meier curves {grouping}"
     )
     if design.n_adjustment_covariates:
         # The adjusted models drop records with a missing covariate; the

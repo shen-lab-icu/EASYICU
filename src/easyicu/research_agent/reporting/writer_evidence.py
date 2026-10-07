@@ -540,7 +540,8 @@ def _survival_reporting_is_authorized(
 
     A continuous-exposure suite reports no top-level estimate, so its whole
     envelope is the result whatever the PH decision: the per-unit hazard
-    ratio when it is authorized, and the interval estimates in every case.
+    ratio when it is authorized, and the interval estimates when the interval
+    model had them.  An envelope with neither carries no result.
     """
 
     if not isinstance(payload, Mapping):
@@ -550,7 +551,10 @@ def _survival_reporting_is_authorized(
         intervals = (
             time_varying.get("intervals") if isinstance(time_varying, Mapping) else None
         )
-        if not isinstance(intervals, list) or not intervals:
+        constant = payload.get(
+            "constant_hazard_ratio_authorized"
+        ) is True and isinstance(payload.get("adjusted_hazard_ratio_per_unit"), Mapping)
+        if not constant and (not isinstance(intervals, list) or not intervals):
             return False
         return bool(
             payload.get("execution_owner") == "landmark_continuous_survival_executor_v1"

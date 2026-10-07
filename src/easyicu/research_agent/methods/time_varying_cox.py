@@ -3,18 +3,44 @@
 The caller owns the interval cut points and model columns.  This module only
 expands one-row-per-subject survival data into start/stop form, fits the sealed
 extended Cox model, and returns interval-specific linear contrasts.  It does
-not choose cut points, covariates, or a headline estimand.
+not choose cut points, covariates, or a headline estimand.  A refusal says
+whether the data left the design without an estimate or the caller passed an
+input the design does not accept; the caller decides what each means.
 """
 
 from __future__ import annotations
 
 import math
 import warnings
-from typing import Any, Sequence
+from typing import Any, Literal, Sequence, get_args
+
+#: Data conditions under which the sealed design has no estimate.
+TimeVaryingNotEstimableReason = Literal[
+    "follow_up_ends_by_final_cutpoint",
+    "interval_without_event",
+    "did_not_converge",
+    "invalid_contrast_variance",
+    "non_finite_estimate",
+]
+TIME_VARYING_NOT_ESTIMABLE_REASONS = frozenset(get_args(TimeVaryingNotEstimableReason))
 
 
 class TimeVaryingCoxError(ValueError):
-    """The sealed piecewise-Cox design could not be estimated."""
+    """The sealed piecewise-Cox design could not be estimated.
+
+    ``reason`` is a ``TimeVaryingNotEstimableReason`` when the data leave the
+    design without an estimate, else ``invalid_input``: columns, cut points or
+    rows the design does not accept.
+    """
+
+    def __init__(self, message: str, *, reason: str = "invalid_input") -> None:
+        if (
+            reason != "invalid_input"
+            and reason not in TIME_VARYING_NOT_ESTIMABLE_REASONS
+        ):
+            raise ValueError(f"unknown time-varying Cox refusal reason {reason!r}")
+        super().__init__(message)
+        self.reason = reason
 
 
 def fit_piecewise_time_varying_cox(
@@ -76,7 +102,8 @@ def fit_piecewise_time_varying_cox(
         )
     if cutpoints[-1] >= float(duration.max()):
         raise TimeVaryingCoxError(
-            "time-varying Cox final cut point must precede observed follow-up"
+            "time-varying Cox final cut point must precede observed follow-up",
+            reason="follow_up_ends_by_final_cutpoint",
         )
 
     interval_starts = (0.0, *cutpoints)
@@ -97,7 +124,8 @@ def fit_piecewise_time_varying_cox(
             if empty:
                 raise TimeVaryingCoxError(
                     f"time-varying Cox exposure group {level:g} has no event in "
-                    f"interval {', '.join(empty)}"
+                    f"interval {', '.join(empty)}",
+                    reason="interval_without_event",
                 )
     else:
         # A continuous exposure's interval coefficient rests on that
@@ -106,7 +134,8 @@ def fit_piecewise_time_varying_cox(
         empty = [str(index + 1) for index, count in enumerate(counts) if count == 0]
         if empty:
             raise TimeVaryingCoxError(
-                f"time-varying Cox has no event in interval {', '.join(empty)}"
+                f"time-varying Cox has no event in interval {', '.join(empty)}",
+                reason="interval_without_event",
             )
     records: list[dict[str, Any]] = []
     values = source[columns].to_numpy(dtype=float)
@@ -152,7 +181,8 @@ def fit_piecewise_time_varying_cox(
     ]
     if nonconvergence:
         raise TimeVaryingCoxError(
-            f"time-varying Cox model did not converge: {nonconvergence[0]}"
+            f"time-varying Cox model did not converge: {nonconvergence[0]}",
+            reason="did_not_converge",
         )
     terms = [str(value) for value in fitter.params_.index]
     term_index = {term: index for index, term in enumerate(terms)}
@@ -181,7 +211,8 @@ def fit_piecewise_time_varying_cox(
             variance = float(contrast @ covariance @ contrast)
             if not math.isfinite(variance) or variance <= 0:
                 raise TimeVaryingCoxError(
-                    f"time-varying Cox contrast variance is invalid for {column!r}"
+                    f"time-varying Cox contrast variance is invalid for {column!r}",
+                    reason="invalid_contrast_variance",
                 )
             standard_error = math.sqrt(variance)
             z_value = coefficient / standard_error
@@ -215,8 +246,16 @@ def fit_piecewise_time_varying_cox(
         ]
     ].to_numpy(dtype=float)
     if not np.isfinite(numeric).all():
-        raise TimeVaryingCoxError("time-varying Cox produced non-finite estimates")
+        raise TimeVaryingCoxError(
+            "time-varying Cox produced non-finite estimates",
+            reason="non_finite_estimate",
+        )
     return result
 
 
-__all__ = ["TimeVaryingCoxError", "fit_piecewise_time_varying_cox"]
+__all__ = [
+    "TIME_VARYING_NOT_ESTIMABLE_REASONS",
+    "TimeVaryingCoxError",
+    "TimeVaryingNotEstimableReason",
+    "fit_piecewise_time_varying_cox",
+]
