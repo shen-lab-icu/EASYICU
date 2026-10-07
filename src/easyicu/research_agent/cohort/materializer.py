@@ -71,6 +71,7 @@ from ..intake.export_package import (
     open_export_package,
     read_exported_concept,
     require_canonical_time_projection,
+    resolve_exported_concept,
     verify_export_package,
 )
 from ..intake.materialized_metadata import MaterializedColumnMetadataCollector
@@ -722,13 +723,16 @@ def _load_concept(
     database: str,
     patient_ids: Optional[Sequence[int]],
     unavailable: List[str],
+    event_time_column: Optional[str] = None,
 ) -> pd.DataFrame:
     """Load one concept from an export package or a converted database.
 
     Shared by the wide-summary path and the long-trajectory path so they read
     the source identically. Appends to ``unavailable`` and returns an empty
     stay-keyed frame when the concept is absent (fail-soft); re-raises other
-    errors with concept context.
+    errors with concept context. ``event_time_column`` names the event time an
+    export issues beside the concept; it is read with the concept as
+    ``<concept>_time``.
     """
     try:
         if source_mode == "export":
@@ -737,15 +741,23 @@ def _load_concept(
             extra_columns = (
                 [f"{concept}_observed", f"{concept}_available"]
                 if str(concept).startswith("sofa2")
-                else None
+                else []
             )
-            return _coerce_int_stay(
-                read_exported_concept(
-                    root,
-                    concept,
-                    extra_columns=extra_columns,
-                )
+            if event_time_column is not None:
+                extra_columns.append(event_time_column)
+            loaded = read_exported_concept(
+                root,
+                concept,
+                extra_columns=extra_columns or None,
             )
+            if event_time_column is not None:
+                if event_time_column not in loaded.columns:
+                    raise MaterializedMetadataError(
+                        f"export event time {event_time_column!r} of {concept!r} "
+                        "was not read with it"
+                    )
+                loaded = loaded.rename(columns={event_time_column: f"{concept}_time"})
+            return _coerce_int_stay(loaded)
         from ...api import load_concepts  # local import: heavy module
 
         return _coerce_int_stay(
@@ -1145,13 +1157,68 @@ def _binary_event_column(
     return out
 
 
+def _export_event_time_source(
+    package: ExportPackage, concept: str
+) -> Tuple[Optional[str], bool]:
+    """Where an export records the time of an outcome event.
+
+    Returns ``(companion, row_time)``: the typed event time the export issues
+    beside ``concept`` (``death_time`` beside ``death``), and whether the
+    concept's own row coordinate may stand for the event's time when there is
+    no companion.
+
+    A native export publishes its outcome module as stay-level rows at one
+    coordinate, 0 h from ICU admission, and issues an event's own time as a
+    typed ``event_time`` companion in the same file. That coordinate is the
+    stay's, not the event's: an outcome-module event is timed by its companion
+    or not at all. A concept from a longitudinal module keeps its recorded rows,
+    where the first row recording the event is when its source recorded it.
+    """
+
+    index = package.concept_index
+    resolved = resolve_exported_concept(index, concept)
+    if resolved is None:
+        return None, True
+    primary = index[resolved]
+    issued = [
+        column
+        for column, info in index.items()
+        if info.get("column_metadata_v2") is True
+        and info.get("column_metadata_role") == ConceptColumnRole.EVENT_TIME.value
+        and info.get("source_concept") == primary.get("source_concept")
+        and info.get("file") == primary.get("file")
+    ]
+    if len(issued) > 1:
+        raise MaterializedMetadataError(
+            f"export concept {concept!r} issues more than one event time: "
+            f"{sorted(issued)!r}"
+        )
+    if issued:
+        metadata = getattr(
+            index[issued[0]].get("column_metadata_binding"), "metadata", None
+        )
+        if (
+            getattr(metadata, "time_origin", None) != "icu_admission"
+            or getattr(metadata, "time_unit", None) != "h"
+        ):
+            raise MaterializedMetadataError(
+                f"export event time {issued[0]!r} is not in hours from ICU admission"
+            )
+        return issued[0], False
+    stay_level = (
+        package.manifest_kind == "native" and primary.get("module") == "outcome"
+    )
+    return None, not stay_level
+
+
 def _event_time_column(
     df: pd.DataFrame,
     concept: str,
     *,
     source_role: Optional[ConceptColumnRole] = None,
+    row_time_is_event_time: bool = True,
 ) -> pd.DataFrame:
-    """Per-stay ``<concept>_time``: the ``charttime`` of the event itself.
+    """Per-stay ``<concept>_time``: the time of the event itself.
 
     ``_binary_event_column`` collapses an outcome to a whole-stay 0/1 and drops
     its time index. For an event concept whose source carries a timestamp (e.g.
@@ -1160,6 +1227,12 @@ def _event_time_column(
     event never occurred) is what lets a downstream analysis guard against
     immortal-time bias or fit a survival model — without it an agent sees only a
     binary outcome and must block any timing-aware effect estimate.
+
+    A companion the source issues beside the event (``death_time`` beside
+    ``death``) is the event's own time, and it times only a row recording the
+    event. Without one, the row's ``charttime`` stands for the event's time only
+    when ``row_time_is_event_time``: a stay-level outcome module records every
+    stay at 0 h, which is when no event happened.
 
     Symmetric to ``_timing_columns`` for features. Returns an empty frame when
     the source has no usable time index (purely stay-level derived flags).
@@ -1170,10 +1243,28 @@ def _event_time_column(
         )
     companion = f"{concept}_time"
     if companion in df and ID_COL in df:
-        # A producer-issued companion is not the module's synthetic 0 h index.
-        return df[[ID_COL, companion]].groupby(ID_COL, dropna=True).min().reset_index()
+        times = _require_finite_numeric(
+            pd.to_numeric(df[companion], errors="coerce"),
+            original=df[companion],
+            concept=concept,
+            purpose="source event time",
+        )
+        if concept in df:
+            event = (
+                _strict_event_status_series(df[concept], concept=concept)
+                if source_role is ConceptColumnRole.EVENT_STATUS
+                else _truthy_series(df[concept])
+            )
+            times = times.where(event)
+        return (
+            pd.DataFrame({ID_COL: df[ID_COL], companion: times.astype(float)})
+            .groupby(ID_COL, dropna=True)[companion]
+            .min()
+            .reset_index()
+        )
     if (
-        TIME_COL not in df.columns
+        not row_time_is_event_time
+        or TIME_COL not in df.columns
         or concept not in df.columns
         or ID_COL not in df.columns
     ):
@@ -1402,9 +1493,15 @@ def _materialize_cohort_from_resolved_source(
 
     unavailable: List[str] = []
 
-    def load(concept: str) -> pd.DataFrame:
+    def load(concept: str, *, event_time_column: Optional[str] = None) -> pd.DataFrame:
         loaded = _load_concept(
-            source_mode, source_handle, concept, database, patient_ids, unavailable
+            source_mode,
+            source_handle,
+            concept,
+            database,
+            patient_ids,
+            unavailable,
+            event_time_column=event_time_column,
         )
         loaded, normalization_receipt = _normalize_legacy_export_categorical(
             loaded,
@@ -1608,8 +1705,16 @@ def _materialize_cohort_from_resolved_source(
     # the event time (<c>_time, e.g. death_time = time-of-death hours from ICU
     # admission) when the source carries a timestamp, so timing-aware analyses
     # (immortal-time guards, survival models) are possible.
+    # An export times an outcome-module event by the companion it issues for
+    # it; the module's stay-level coordinate is never the event's time.
+    outcome_event_time_sources: Dict[str, Dict[str, Any]] = {}
     for c in outcome_set:
-        loaded = load(c)
+        issued_event_time, row_time_is_event_time = (
+            _export_event_time_source(export_package, c)
+            if export_package is not None
+            else (None, True)
+        )
+        loaded = load(c, event_time_column=issued_event_time)
         source_role = metadata_collector.require_source_role(c)
         event_column = _binary_event_column(
             loaded,
@@ -1622,9 +1727,21 @@ def _materialize_cohort_from_resolved_source(
             loaded,
             c,
             source_role=source_role,
+            row_time_is_event_time=row_time_is_event_time,
         )
         if not event_time.empty:
             frames.append(event_time)
+        if f"{c}_time" in loaded.columns:
+            outcome_event_time_sources[c] = {
+                "source": "issued_event_time",
+                "column": issued_event_time or f"{c}_time",
+            }
+        elif not row_time_is_event_time:
+            outcome_event_time_sources[c] = {"source": "untimed_stay_level_outcome"}
+        elif not event_time.empty:
+            outcome_event_time_sources[c] = {"source": "first_recorded_event_row"}
+        else:
+            outcome_event_time_sources[c] = {"source": "untimed"}
         metadata_collector.add_outcome(
             c,
             output_columns=tuple(event_column.columns) + tuple(event_time.columns),
@@ -1721,6 +1838,7 @@ def _materialize_cohort_from_resolved_source(
         "legacy_export_domain_normalizations": (
             legacy_export_domain_normalizations
         ),
+        "outcome_event_time_sources": outcome_event_time_sources,
         "columns": list(cohort.columns),
         "cohort_sha256": _hash_df(cohort.reset_index(drop=True)),
         "build_seconds": round(time.time() - t0, 2),
