@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Callable, Dict, Iterator, List, Literal, Mapping, Optional, Tuple
 
 from easyicu.ai_optin import AIOptInError
@@ -535,42 +536,83 @@ def explicit_landmark_hours(question: str) -> Optional[float]:
     return next(iter(stated)) if len(stated) == 1 else None
 
 
+@lru_cache(maxsize=256)
+def _concept_name_pattern(concept_id: str) -> Optional[str]:
+    """The concept's own catalog names, read as whole concept phrases.
+
+    "Total Bilirubin" and "总胆红素" name one analyte: "total" is part of the
+    name there, not a cumulative operation.
+    """
+
+    try:
+        from easyicu.concept.catalog import CONCEPT_DICTIONARY
+    except Exception:  # pragma: no cover - catalog is optional at import time
+        return None
+    entry = CONCEPT_DICTIONARY.get(concept_id)
+    names = [
+        str(value).strip()
+        for value in (entry[:2] if isinstance(entry, tuple) else ())
+        if value is not None and str(value).strip()
+    ]
+    if not names:
+        return None
+    return "|".join(
+        rf"(?<![a-z0-9]){re.escape(name)}(?![a-z0-9])" for name in names
+    )
+
+
 def explicit_exposure_aggregation(
     question: str, *, concept_id: str,
 ) -> Optional[ExplicitExposureAggregation]:
     """Read only an adjacent, unambiguous measurement operation.
 
     Match the concept phrase as a whole before looking outside it: the word
-    "mean" in "mean arterial pressure" does not request temporal averaging.
-    A remote table-summary instruction or another variable's operation cannot
-    bind this exposure. Negated and conflicting operations remain unread for
-    complete-plan resolution, never an internal-field questionnaire.
+    "mean" in "mean arterial pressure" does not request temporal averaging,
+    and "total" in "total bilirubin", the analyte's own name, requests no
+    sum.  A phrase inside a longer phrase of the same concept is that
+    phrase.  A remote table-summary instruction or another variable's
+    operation cannot bind this exposure. Negated and conflicting operations
+    remain unread for complete-plan resolution, never an internal-field
+    questionnaire.
     """
 
     text = _clean_question(question)
     lowered = text.lower()
     matches: Dict[str, str] = {}
-    for pattern, concept in _PHRASE_TO_CONCEPT:
-        if concept != concept_id:
-            continue
-        for named in re.finditer(pattern, text, re.IGNORECASE):
-            for operation, expression in _MEASUREMENT_OPERATIONS:
-                before = re.search(
-                    rf"(?:{expression})\s*(?:(?:serum|blood|plasma)\s+|血清|血浆)?$",
-                    text[:named.start()], re.IGNORECASE,
-                )
-                after = re.match(
-                    rf"\s*(?:(?:levels?|values?)\s+|的|值|水平)?(?:{expression})",
-                    text[named.end():], re.IGNORECASE,
-                )
-                if before is not None:
-                    start, end = before.start(), named.end()
-                elif after is not None:
-                    start, end = named.start(), named.end() + after.end()
-                else:
-                    continue
-                if not _negated(lowered, start):
-                    matches[operation] = text[start:end]
+    patterns = [pattern for pattern, concept in _PHRASE_TO_CONCEPT if concept == concept_id]
+    name_pattern = _concept_name_pattern(concept_id)
+    if name_pattern is not None:
+        patterns.append(name_pattern)
+    spans = {
+        (named.start(), named.end())
+        for pattern in patterns
+        for named in re.finditer(pattern, text, re.IGNORECASE)
+    }
+    spans = {
+        span
+        for span in spans
+        if not any(
+            other != span and other[0] <= span[0] and span[1] <= other[1] for other in spans
+        )
+    }
+    for begin, finish in sorted(spans):
+        for operation, expression in _MEASUREMENT_OPERATIONS:
+            before = re.search(
+                rf"(?:{expression})\s*(?:(?:serum|blood|plasma)\s+|血清|血浆)?$",
+                text[:begin], re.IGNORECASE,
+            )
+            after = re.match(
+                rf"\s*(?:(?:levels?|values?)\s+|的|值|水平)?(?:{expression})",
+                text[finish:], re.IGNORECASE,
+            )
+            if before is not None:
+                start, end = before.start(), finish
+            elif after is not None:
+                start, end = begin, finish + after.end()
+            else:
+                continue
+            if not _negated(lowered, start):
+                matches[operation] = text[start:end]
     if len(matches) != 1:
         return None
     operation, evidence = next(iter(matches.items()))

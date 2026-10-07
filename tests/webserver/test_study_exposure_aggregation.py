@@ -20,6 +20,9 @@ from easyicu.webserver import study_intent
         ("研究乳酸中位数与院内死亡", "lact", "median"),
         ("研究末次乳酸与院内死亡", "lact", "last"),
         ("Cumulative urine output and mortality", "urine", "sum"),
+        # The analyte's own name is read whole: "total" is part of it.
+        ("The highest total bilirubin in the first 24 hours and 90-day mortality", "bili", "max"),
+        ("前24小时最高总胆红素与90天死亡", "bili", "max"),
     ],
 )
 def test_explicit_measurement_operation_has_exact_text_provenance(
@@ -44,6 +47,7 @@ def test_explicit_measurement_operation_has_exact_text_provenance(
         ("不研究最高乳酸；研究乳酸与死亡", "lact"),
         ("研究血乳酸趋势与死亡", "lact"),
         ("研究所有指标的最高值与死亡", "lact"),
+        ("Total bilirubin and hospital mortality", "bili"),
     ],
 )
 def test_ambiguous_absent_or_other_variable_operations_remain_unbound(
