@@ -75,6 +75,22 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   assert.doesNotMatch(unwritable, /variable level or model term/);
   assert.match(runFailure('research_pipeline_progressive_compile_failed'), /variable level or model term/);
 
+  // A family request refused before the model call names the study change
+  // that lifts it; any other family-template stop says only what is true of
+  // every such stop, with its code, and names no plan step.
+  const lateCohort = { code: 'progressive_family_spec_cohort_eligibility_after_time_zero' };
+  const late = runFailure('research_pipeline_progressive_compile_failed', lateCohort);
+  assert.match(late, /before the model was called/);
+  assert.match(late, /move time zero later/);
+  assert.doesNotMatch(late, /variable level or model term/);
+  const runFailureZh = guided.require('errorText').create({ tr: (en, zh) => zh, staticPreview: () => false }).runFailureText;
+  assert.match(runFailureZh('research_pipeline_progressive_compile_failed', lateCohort), /把时间零点后移/);
+  const familyStop = runFailure('research_pipeline_progressive_compile_failed', { code: 'progressive_family_spec_accepted_baseline_grouping_unsupported' });
+  assert.match(familyStop, /progressive_family_spec_accepted_baseline_grouping_unsupported/);
+  assert.match(familyStop, /no analysis was run/);
+  assert.doesNotMatch(familyStop, /variable level or model term/);
+  assert.match(runFailure('research_pipeline_progressive_compile_failed', { code: 'progressive_step_invalid' }), /variable level or model term/);
+
   // A runner image built from other EasyICU source needs a rebuild; telling the
   // researcher to start Docker would send them to a runtime that is already up.
   const stale = live({ code: 'research_pipeline_runner_image_mismatch' });

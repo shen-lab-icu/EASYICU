@@ -789,21 +789,29 @@ def run_family_spec_attempt(
     validator, prefix compiler, and final acceptance run unchanged (they are
     injected by the Progressive agent).  A projection that any of them rejects
     raises the validator's own reason code: there is no Provider suffix repair
-    on this path.
+    on this path.  A request the host refuses stops the same way, so the run
+    records the request's own reason code, and states that the Planner made no
+    Provider call (``planner_provider_calls`` 0).
     """
 
-    request = build_family_spec_request(
-        context,
-        analysis_types=analysis_types,
-        variable_roster=variables,
-        allowed_literature_citation_keys=allowed_citations,
-        direct_comparator_literature_keys=direct_keys,
-        comparison_literature_keys=comparison_keys,
-        required_primary_cohort_selection_mode=required_primary_cohort_selection_mode,
-        planning_contract_context=planning_contract_context,
-        literature_design_cards=design_cards,
-        cohort_concept_ids=progressive_cohort_concept_ids(context, variables),
-    )
+    try:
+        request = build_family_spec_request(
+            context,
+            analysis_types=analysis_types,
+            variable_roster=variables,
+            allowed_literature_citation_keys=allowed_citations,
+            direct_comparator_literature_keys=direct_keys,
+            comparison_literature_keys=comparison_keys,
+            required_primary_cohort_selection_mode=required_primary_cohort_selection_mode,
+            planning_contract_context=planning_contract_context,
+            literature_design_cards=design_cards,
+            cohort_concept_ids=progressive_cohort_concept_ids(context, variables),
+        )
+    except FamilySpecError as exc:
+        raise ProgressivePlanCompileError(
+            f"progressive_{exc.reason_code}", str(exc), path=exc.path or "family_spec",
+            metrics={"planner_provider_calls": 0},
+        ) from exc
     descriptions = {
         name: " ".join(
             part

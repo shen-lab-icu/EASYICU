@@ -60,6 +60,7 @@ from easyicu.research_agent.planning.figure_strategy import build_article_figure
 from easyicu.research_agent.planning.primary_result_contract import (
     validate_required_primary_result,
 )
+from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
 from easyicu.research_agent.planning.publication_readiness import (
     build_publication_readiness_facts,
 )
@@ -446,9 +447,9 @@ def test_a_sealed_suite_keeps_only_an_accepted_roster_its_own_table_one_describe
     assert build_family_spec_request(context, **request_kwargs).family_id == family_id
 
     # The scripted client holds no answer: the planner refuses while sealing
-    # the request, before any Provider call.
+    # the request, before any Provider call, as a typed planning stop.
     llm = ScriptedMockLLMClient([])
-    with pytest.raises(FamilySpecError) as planned:
+    with pytest.raises(ProgressivePlanCompileError) as planned:
         ProgressivePlannerAgent(llm).run_attempt(
             accepting, planner_strategy=FAMILY_SPEC_STRATEGY,
             allowed_literature_citation_keys=ALLOWED,
@@ -457,7 +458,8 @@ def test_a_sealed_suite_keeps_only_an_accepted_roster_its_own_table_one_describe
             planning_contract_context=disclosure,
             required_primary_cohort_selection_mode="all_input_rows",
         )
-    assert planned.value.reason_code == "family_spec_accepted_baseline_unsatisfiable"
+    assert planned.value.reason_code == "progressive_family_spec_accepted_baseline_unsatisfiable"
+    assert planned.value.__cause__.reason_code == "family_spec_accepted_baseline_unsatisfiable"
     assert llm.calls == []
 
 
