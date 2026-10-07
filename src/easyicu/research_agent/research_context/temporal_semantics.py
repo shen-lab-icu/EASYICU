@@ -105,6 +105,233 @@ def _normalise_anchor(anchor: str) -> str:
     return normalise_time_anchor(anchor)
 
 
+#: The admissions every materialized window and follow-up can count from.
+ADMISSION_TIME_ZEROS = frozenset({"icu_admission", "hospital_admission"})
+
+
+@dataclass(frozen=True)
+class _EventTimeZero:
+    """One clinical event a question can count its time from.
+
+    ``punctual`` events name their own time ("after intubation"); a condition
+    or a therapy names it only with an onset or start word ("after sepsis
+    onset", "开始机械通气后") or a duration ("within 6 h of sepsis"), so
+    "mortality after sepsis" states no time zero.  ``at_names_time`` is False
+    where "at <event>" reads a status ("mortality at discharge").
+    """
+
+    identity: str
+    english: str
+    chinese: str
+    punctual: bool = False
+    at_names_time: bool = True
+
+
+#: A closed vocabulary: an event outside it is never read as a time zero.
+#: Longer spellings come first, so "septic shock" is not read as "shock".
+_EVENT_TIME_ZEROS = (
+    _EventTimeZero("suspected_infection_onset", r"suspected[\s_-]+infection", r"疑似感染"),
+    _EventTimeZero(
+        "septic_shock_onset", r"septic[\s_-]+shock", r"脓毒性休克|感染性休克|脓毒症休克"
+    ),
+    _EventTimeZero("sepsis_onset", r"sepsis", r"脓毒症"),
+    _EventTimeZero("shock_onset", r"(?:circulatory[\s_-]+)?shock", r"休克"),
+    _EventTimeZero(
+        "intubation", r"(?:endotracheal[\s_-]+)?intubation", r"气管插管|插管", punctual=True
+    ),
+    _EventTimeZero("extubation", r"extubation", r"拔管", punctual=True),
+    _EventTimeZero(
+        "mechanical_ventilation_start",
+        r"(?:invasive[\s_-]+)?mechanical[\s_-]+ventilation|invasive[\s_-]+ventilation",
+        r"有创机械通气|机械通气|有创通气",
+    ),
+    _EventTimeZero(
+        "vasopressor_start",
+        r"vasopressors?(?:[\s_-]+(?:therapy|support))?",
+        r"血管活性药物?|血管升压药物?|升压药物?",
+    ),
+    _EventTimeZero(
+        "rrt_start",
+        r"(?:continuous[\s_-]+)?renal[\s_-]+replacement[\s_-]+therapy|c?rrt|(?:hemo)?dialysis",
+        r"连续性肾脏替代治疗|肾脏替代治疗|CRRT|RRT|血液透析|透析",
+    ),
+    _EventTimeZero("aki_onset", r"acute[\s_-]+kidney[\s_-]+injury|aki", r"急性肾损伤|AKI"),
+    _EventTimeZero(
+        "ards_onset",
+        r"acute[\s_-]+respiratory[\s_-]+distress[\s_-]+syndrome|ards",
+        r"急性呼吸窘迫综合征|ARDS",
+    ),
+    _EventTimeZero(
+        "cardiac_arrest", r"(?:in[\s_-]+hospital[\s_-]+)?cardiac[\s_-]+arrest",
+        r"心脏骤停|心搏骤停", punctual=True,
+    ),
+    _EventTimeZero(
+        "rosc", r"return[\s_-]+of[\s_-]+spontaneous[\s_-]+circulation|rosc",
+        r"自主循环恢复|ROSC", punctual=True,
+    ),
+    _EventTimeZero(
+        "ed_arrival",
+        r"(?:emergency[\s_-]+department|ed)[\s_-]+(?:arrival|presentation|triage)",
+        r"急诊(?:到达|就诊|分诊)", punctual=True,
+    ),
+    _EventTimeZero(
+        "icu_discharge",
+        r"(?:icu|intensive[\s_-]+care(?:[\s_-]+unit)?)[\s_-]+discharge",
+        r"转出ICU|出ICU|出重症监护室|出科", punctual=True, at_names_time=False,
+    ),
+    _EventTimeZero(
+        "hospital_discharge", r"(?:hospital[\s_-]+)?discharge", r"出院",
+        punctual=True, at_names_time=False,
+    ),
+)
+
+
+def _event_group(event: _EventTimeZero) -> str:
+    return f"event_{event.identity}"
+
+
+def _event_alternation(
+    events: Sequence[_EventTimeZero], language: Literal["english", "chinese"]
+) -> str:
+    return "|".join(
+        f"(?P<{_event_group(event)}>{getattr(event, language)})" for event in events
+    )
+
+
+_ONSET_WORDS = (
+    r"(?:onset|start|initiation|commencement|diagnosis|recognition|development)"
+)
+_AFTER_WORDS = r"(?:after|following|since|from|post)"
+_DURATION = (
+    r"(?P<number>\d+(?:\.\d+)?)[\s_-]*(?P<unit>hours?|hrs?|h|days?|d)(?![a-z0-9])"
+)
+_EN_EVENTS = _event_alternation(_EVENT_TIME_ZEROS, "english")
+_EN_PUNCTUAL = _event_alternation([e for e in _EVENT_TIME_ZEROS if e.punctual], "english")
+_EN_PUNCTUAL_AT = _event_alternation(
+    [e for e in _EVENT_TIME_ZEROS if e.punctual and e.at_names_time], "english"
+)
+_EN_ONSET_EVENTS = _event_alternation(
+    [e for e in _EVENT_TIME_ZEROS if e.at_names_time], "english"
+)
+#: "within 6 h of intubation", "the first 24 hours of septic shock",
+#: "48 h after sepsis onset": a duration counted from the event.  "Of" and
+#: "day" need a leading "within"/"first": "6 h of vasopressor therapy" is a
+#: duration of the therapy, not a time counted from it.
+_EN_DURATION_FROM_EVENT = re.compile(
+    rf"\b(?P<lead>(?:within|first|initial)[\s_-]+(?:the[\s_-]+)?(?:first[\s_-]+)?)?"
+    rf"(?:{_DURATION}|(?P<day>day))"
+    rf"[\s_-]+(?P<relation>of|after|following|from|since|post)"
+    rf"[\s_-]+(?:the[\s_-]+)?(?:{_ONSET_WORDS}[\s_-]+of[\s_-]+(?:the[\s_-]+)?)?"
+    rf"(?:{_EN_EVENTS})(?:[\s_-]+{_ONSET_WORDS})?(?![a-z0-9])",
+    re.I,
+)
+_EN_EVENT_TIME_ZERO_PATTERNS = (
+    _EN_DURATION_FROM_EVENT,
+    # "after the onset of sepsis", "since vasopressor initiation".
+    re.compile(
+        rf"\b(?:{_AFTER_WORDS}|at|upon)[\s_-]+(?:the[\s_-]+)?{_ONSET_WORDS}[\s_-]+of"
+        rf"[\s_-]+(?:the[\s_-]+)?(?:{_EN_ONSET_EVENTS})(?![a-z0-9])",
+        re.I,
+    ),
+    re.compile(
+        rf"\b(?:{_AFTER_WORDS}|at|upon)[\s_-]+(?:the[\s_-]+)?(?:{_EN_ONSET_EVENTS})"
+        rf"[\s_-]+{_ONSET_WORDS}(?![a-z0-9])",
+        re.I,
+    ),
+    # "after intubation", "post-intubation", "at ROSC", "30 days after discharge".
+    re.compile(
+        rf"\b{_AFTER_WORDS}[\s_-]+(?:the[\s_-]+)?(?:{_EN_PUNCTUAL})(?![a-z0-9])", re.I
+    ),
+    re.compile(rf"\b(?:at|upon)[\s_-]+(?:the[\s_-]+)?(?:{_EN_PUNCTUAL_AT})(?![a-z0-9])", re.I),
+)
+_ZH_ONSET_WORDS = r"(?:发生|出现|开始|启动|起始|诊断|确诊|识别)"
+_ZH_AFTER = r"(?:以后|之后|后)"
+_ZH_DURATION = (
+    r"(?P<number>\d+(?:\.\d+)?)\s*个?\s*(?P<unit>小时|h|天|日)"
+)
+_ZH_EVENTS = _event_alternation(_EVENT_TIME_ZEROS, "chinese")
+_ZH_PUNCTUAL = _event_alternation([e for e in _EVENT_TIME_ZEROS if e.punctual], "chinese")
+_ZH_EVENT_TIME_ZERO_PATTERNS = (
+    # "脓毒症发生后24小时内", "插管后6小时", "机械通气开始后前48小时".
+    re.compile(
+        rf"(?:{_ZH_EVENTS}){_ZH_ONSET_WORDS}?{_ZH_AFTER}\s*的?\s*"
+        rf"(?:(?:首|前|最初|头)\s*个?\s*)?{_ZH_DURATION}",
+        re.I,
+    ),
+    # "脓毒症发生后", "机械通气开始时", "自插管起".
+    re.compile(rf"(?:{_ZH_EVENTS}){_ZH_ONSET_WORDS}(?:{_ZH_AFTER}|起|时)", re.I),
+    re.compile(rf"自\s*(?:{_ZH_EVENTS}){_ZH_ONSET_WORDS}?(?:起|开始)", re.I),
+    # "开始机械通气后", "启动肾脏替代治疗后".
+    re.compile(
+        rf"(?:开始|启动|使用|接受|进行)(?:{_ZH_EVENTS})(?:治疗)?{_ZH_AFTER}", re.I
+    ),
+    # "插管后", "心脏骤停后", "出院后".
+    re.compile(rf"(?:{_ZH_PUNCTUAL}){_ZH_AFTER}", re.I),
+)
+
+
+@dataclass(frozen=True)
+class EventTimeZeroStatement:
+    """A clinical event, other than an admission, a question counts time from."""
+
+    anchor: str
+    hours: Optional[float]
+    start: int
+    end: int
+    text: str
+
+
+def _matched_event(match: re.Match[str]) -> str:
+    for event in _EVENT_TIME_ZEROS:
+        if match.groupdict().get(_event_group(event)) is not None:
+            return event.identity
+    raise ValueError("an event time-zero pattern matched no event")  # pragma: no cover
+
+
+def stated_event_time_zeros(text: str) -> tuple[EventTimeZeroStatement, ...]:
+    """The clinical events a question counts time from, in question order.
+
+    Only the closed event vocabulary is read, and a condition or therapy only
+    with an onset word or a duration, so a population ("patients with septic
+    shock") or a status ("mortality at discharge") states no time zero.  The
+    admissions are not read here: ``relative_to_anchor`` owns them, and every
+    materialized window already counts from one.  Overlapping readings keep
+    the earliest, longest one.
+    """
+
+    text = str(text or "")
+    found: list[EventTimeZeroStatement] = []
+    for pattern in (*_EN_EVENT_TIME_ZERO_PATTERNS, *_ZH_EVENT_TIME_ZERO_PATTERNS):
+        for match in pattern.finditer(text):
+            groups = match.groupdict()
+            if pattern is _EN_DURATION_FROM_EVENT and not groups.get("lead") and (
+                groups.get("day") or str(groups.get("relation")).lower() == "of"
+            ):
+                continue
+            hours: Optional[float] = None
+            if groups.get("day"):
+                hours = 24.0
+            elif groups.get("number"):
+                unit = str(groups.get("unit") or "").lower()
+                days = unit.startswith("d") or unit in {"天", "日"}
+                hours = float(groups["number"]) * (24.0 if days else 1.0)
+            found.append(
+                EventTimeZeroStatement(
+                    anchor=_matched_event(match),
+                    hours=hours,
+                    start=match.start(),
+                    end=match.end(),
+                    text=match.group(0).strip(),
+                )
+            )
+    statements: list[EventTimeZeroStatement] = []
+    for statement in sorted(found, key=lambda item: (item.start, -item.end)):
+        if any(seen.start <= statement.start < seen.end for seen in statements):
+            continue
+        statements.append(statement)
+    return tuple(statements)
+
+
 @dataclass(frozen=True)
 class PrimaryExposureTimeAnchorAlignment:
     """Digest-friendly decision about declared versus materialized time zero.
@@ -172,24 +399,53 @@ def _declared_primary_anchor(
     if explicit:
         return normalise_time_anchor(explicit), "user_preferences.timing_and_design.anchor"
 
-    relative = {
-        normalise_time_anchor(item.anchor_event)
-        for item in context.temporal_constraints
-        if item.relation == "relative_to_anchor" and str(item.anchor_event).strip()
-    }
-    if len(relative) == 1:
-        return next(iter(relative)), "temporal_constraints.relative_to_anchor"
-
-    # Historical contexts may contain the exact request but predate the typed
-    # constraint projection.  Parsing is acceptable here because it recovers
-    # only an explicit phrase; it does not invent a clinical anchor.
-    parsed = {
-        normalise_time_anchor(item.anchor_event)
-        for item in TimeWindowSemanticParser().parse(context.research_question)
-        if item.relation == "relative_to_anchor" and str(item.anchor_event).strip()
-    }
-    if len(parsed) == 1:
-        return next(iter(parsed)), "research_question.explicit_relative_anchor"
+    # The typed constraints come first.  Historical contexts may contain the
+    # exact request but predate the typed constraint projection, so the
+    # question is parsed too: that recovers only an explicit phrase and never
+    # invents a clinical anchor.
+    question = str(context.research_question or "")
+    stated: list[tuple[int, str, str]] = []
+    sources = (
+        (context.temporal_constraints, "temporal_constraints"),
+        (TimeWindowSemanticParser().parse(question), "research_question"),
+    )
+    for constraints, origin in sources:
+        for item in constraints:
+            if item.relation not in {"relative_to_anchor", "after_event"}:
+                continue
+            if not str(item.anchor_event).strip():
+                continue
+            if origin == "temporal_constraints":
+                source = f"temporal_constraints.{item.relation}"
+            elif item.relation == "relative_to_anchor":
+                source = "research_question.explicit_relative_anchor"
+            else:
+                source = "research_question.stated_event_time_zero"
+            position = question.find(item.raw_text)
+            stated.append((
+                position if position >= 0 else len(question),
+                normalise_time_anchor(item.anchor_event),
+                source,
+            ))
+    anchors: dict[str, tuple[int, str]] = {}
+    for position, anchor, source in stated:
+        first = anchors.setdefault(anchor, (position, source))
+        if position < first[0]:
+            anchors[anchor] = (position, first[1])
+    if len(anchors) == 1:
+        [(anchor, (_, source))] = anchors.items()
+        return anchor, source
+    # A question that counts from an admission and from another event cannot
+    # be honoured by windows that all count from an admission: the earliest
+    # stated event is its time zero.  Two admissions alone stay unresolved.
+    events = sorted(
+        (position, anchor, source)
+        for anchor, (position, source) in anchors.items()
+        if anchor not in ADMISSION_TIME_ZEROS
+    )
+    if events:
+        _, anchor, source = events[0]
+        return anchor, source
     return None, None
 
 
@@ -266,6 +522,17 @@ def primary_exposure_time_anchor_alignment(
     comparison_anchor = definition_anchor
     comparison_source = definition_source
     if comparison_anchor is None and observation_role == "exposure_definition":
+        comparison_anchor = observation
+        comparison_source = observation_source
+    if (
+        comparison_anchor is None
+        and declared in ADMISSION_TIME_ZEROS
+        and observation == declared
+    ):
+        # An admission is no clinical definition: an exposure with none,
+        # whose window counts its hours from the admission the study declares,
+        # is measured from that time zero.  A disease or event anchor still
+        # needs the owner-issued definition above.
         comparison_anchor = observation
         comparison_source = observation_source
 
@@ -529,8 +796,15 @@ class TimeWindowSemanticParser:
         out: List[TemporalConstraint] = []
         if not text:
             return out
+        events = stated_event_time_zeros(text)
         for relation, pattern in _PATTERNS:
             for match in pattern.finditer(text):
+                if relation == "first_window" and any(
+                    event.start <= match.start() < event.end for event in events
+                ):
+                    # "the first 24 h after sepsis onset" counts from that
+                    # event; ICU admission is not its default here.
+                    continue
                 groups = match.groupdict()
                 anchor = _normalise_anchor(groups.get("anchor") or "icu_admission")
                 hours = float(groups["hours"]) if groups.get("hours") else None
@@ -561,6 +835,22 @@ class TimeWindowSemanticParser:
                     ),
                 )
                 out.append(constraint)
+        for event in events:
+            out.append(
+                TemporalConstraint(
+                    raw_text=event.text,
+                    relation="after_event",
+                    anchor_event=event.anchor,
+                    start_hours=0.0 if event.hours is not None else None,
+                    end_hours=event.hours,
+                    executable_repr=_render_constraint_repr(
+                        relation="after_event",
+                        anchor=event.anchor,
+                        hours=event.hours,
+                        concept=None,
+                    ),
+                )
+            )
         return _deduplicate_constraints(out)
 
 
