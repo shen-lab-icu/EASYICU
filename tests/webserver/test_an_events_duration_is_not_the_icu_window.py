@@ -30,6 +30,9 @@ def _window(question: str):
         "插管后6小时内的乳酸与院内死亡",
         "Is the lactate 24 h after sepsis onset associated with in-hospital mortality?",
         "Is the lactate in the first day after intubation associated with in-hospital mortality?",
+        # An excluded event's duration counts from the event too.
+        "Is the first-day lactate, excluding values measured within 6 hours after "
+        "intubation, associated with in-hospital mortality?",
     ],
 )
 def test_an_events_duration_is_not_the_window(question):

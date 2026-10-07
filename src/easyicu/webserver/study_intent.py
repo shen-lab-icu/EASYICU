@@ -39,7 +39,7 @@ from easyicu.outcome_availability import (
     stated_mortality_horizon_mentions,
 )
 from easyicu.research_agent.research_context.temporal_semantics import (
-    stated_event_time_zeros,
+    event_anchored_spans,
 )
 from easyicu.webserver import provider_adapter
 from easyicu.webserver.provider_gate import ProviderGateError, resolve_provider_gate
@@ -821,11 +821,9 @@ def deterministic_intent(question: str) -> Dict[str, Any]:
     # The hours of "48-hour mortality" or "excluding deaths within 24 hours"
     # time an endpoint or an exclusion, not the window.  Those of "the first 24
     # hours after suspected infection onset" count from that event, not from
-    # ICU admission, so they are not the study's ICU window either.
-    elsewhere = [
-        *mortality_horizon_spans(lowered),
-        *((event.start, event.end) for event in stated_event_time_zeros(lowered)),
-    ]
+    # ICU admission, whether or not the event is the study's time zero, so
+    # they are not the study's ICU window either.
+    elsewhere = [*mortality_horizon_spans(lowered), *event_anchored_spans(lowered)]
     window = next(
         (
             match
