@@ -9437,6 +9437,10 @@
     ],
     [
       "easyicu.research_agent.planning.adjustment_authority",
+      "easyicu.research_agent.research_context.materialization_window"
+    ],
+    [
+      "easyicu.research_agent.planning.adjustment_authority",
       "easyicu.research_agent.research_context.typed"
     ],
     [
@@ -12893,6 +12897,10 @@
     ],
     [
       "easyicu.research_agent.research_context.materialization_window",
+      "easyicu.research_agent.icu_rules"
+    ],
+    [
+      "easyicu.research_agent.research_context.materialization_window",
       "easyicu.research_agent.research_context.concept_population"
     ],
     [
@@ -13636,7 +13644,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3401,
+    "edge_count": 3403,
     "largest_scc_size": 0,
     "module_count": 783,
     "package_count": 36,
