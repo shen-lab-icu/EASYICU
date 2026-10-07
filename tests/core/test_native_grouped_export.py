@@ -251,7 +251,7 @@ def test_native_sofa2_receipts_survive_producer_to_trajectory(
         data_path=tmp_path,
         database="miiv",
         concepts=["sofa2_resp"],
-        window=(0.0, 24.0),
+        window=(0.0, 48.0),
     )
     assert trajectory["charttime"].tolist() == [12.0, 24.0]
     assert trajectory["evidence_state"].tolist() == [

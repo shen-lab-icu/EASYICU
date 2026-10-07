@@ -4851,7 +4851,7 @@ def test_export_runner_applies_concept_derived_cohort_prefilter(
     def fake_load_concepts(concepts, **kwargs):
         loaded.append({"concepts": concepts, "kwargs": kwargs})
         if concepts == loaded_concepts:
-            return pd.DataFrame({"stay_id": [1, 2, 3], "charttime": [0.0, 1.0, 72.0], positive_column: [0, 1, True]})
+            return pd.DataFrame({"stay_id": [1, 2, 3], "charttime": [0.0, 1.0, 71.0], positive_column: [0, 1, True]})
         ids = (kwargs.get("patient_ids") or {}).get("stay_id", [])
         payload: dict[str, object] = {"stay_id": ids}
         for concept in concepts:

@@ -1758,7 +1758,11 @@ def _refine_occurrence_mask_by_event_time(
     - ``absence``: the op and value hold OR the stay's event (status 1) lies
       outside the window.
 
-    A missing event time lies outside every window. A window that no recorded
+    The window is ``[start_offset_hours, end_offset_hours)``, as
+    ``TimeWindow`` states it.  An event time may be a row's chart time on the
+    hourly grid, where a row at hour ``h`` was charted in ``[h, h + 1)``, so an
+    event at the window's end happened after it, as an event at a landmark
+    happens after the landmark.  A missing event time lies outside every window. A window that no recorded
     time could place is refused rather than read as "no event in it": every
     event in the table lacks a time (a source that records none), or the
     predicate is anchored elsewhere than at ICU admission, the origin of every
@@ -1802,10 +1806,10 @@ def _refine_occurrence_mask_by_event_time(
     if bool(event.any()) and not bool(event_time[event].notna().any()):
         raise CohortDataError(
             f"cohort predicate on {pred.concept_id!r} reads its event within "
-            f"[{start:g}, {end:g}] h, but no event in {event_time_col!r} has a "
+            f"[{start:g}, {end:g}) h, but no event in {event_time_col!r} has a "
             "recorded time"
         )
-    in_window = ((event_time >= start) & (event_time <= end)).fillna(False)
+    in_window = ((event_time >= start) & (event_time < end)).fillna(False)
     refined = (
         mask & in_window if reading == "occurrence" else mask | (event & ~in_window)
     )

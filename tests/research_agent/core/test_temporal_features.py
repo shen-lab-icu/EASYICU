@@ -109,10 +109,10 @@ def test_landmark_cohort_excludes_pre_landmark_events_and_flags_exposure():
     assert by.loc[1, "eligible_at_landmark"] == 0  # event before landmark
     assert by.loc[2, "eligible_at_landmark"] == 1
     assert by.loc[2, "event_after_landmark"] == 1
-    assert by.loc[2, "exposed_by_landmark"] == 1  # exposed at t=4 <= 6
+    assert by.loc[2, "exposed_by_landmark"] == 1  # exposed at t=4 < 6
     assert by.loc[3, "eligible_at_landmark"] == 1
     assert by.loc[3, "event_after_landmark"] == 0
-    assert by.loc[3, "exposed_by_landmark"] == 0  # exposed at t=9 > 6 (not counted)
+    assert by.loc[3, "exposed_by_landmark"] == 0  # exposed at t=9 >= 6 (not counted)
 
 
 def test_onset_times_present_mode_for_categorical_concept():

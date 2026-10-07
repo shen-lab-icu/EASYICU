@@ -26,6 +26,13 @@ building blocks instead of reinventing them:
 All functions are pure (DataFrame in, DataFrame out), concept/threshold-agnostic,
 and never call an LLM. ``window`` (hours from ICU admission) optionally bounds
 the trajectory; ``None`` uses the full series.
+
+Chart times are floored to the hourly grid (``io.ts_utils.round_to_interval``),
+so a row at hour ``h`` was charted in ``[h, h + 1)``. A window ``(start, end)``
+keeps the rows charted in ``[start, end)``, and a landmark ``L`` splits a
+trajectory into what was charted before it (``charttime < L``) and what was
+charted at or after it (``charttime >= L``): the row at ``L`` was charted
+after the landmark, not by it.
 """
 from __future__ import annotations
 
@@ -80,7 +87,8 @@ def _concept_slice(
     sub = sub[[ID_COL, TIME_COL, "value_num", "value_str"]]
     if window is not None:
         lo, hi = window
-        sub = sub[(sub[TIME_COL] >= lo) & (sub[TIME_COL] <= hi)]
+        # The row at ``hi`` was charted in [hi, hi + 1), after the window.
+        sub = sub[(sub[TIME_COL] >= lo) & (sub[TIME_COL] < hi)]
     return sub.sort_values([ID_COL, TIME_COL])
 
 
@@ -258,14 +266,18 @@ def landmark_cohort(
     The standard immortal-time-bias guard: only stays still event-free and
     alive/observed at ``landmark_hours`` enter the at-risk set, and exposure is
     classified by what happened BEFORE the landmark. Returns per stay:
-    ``stay_id, outcome_onset_time, eligible_at_landmark`` (outcome did not occur
-    at or before the landmark), ``event_after_landmark`` (1/0 among eligible),
+    ``stay_id, outcome_onset_time, eligible_at_landmark`` (outcome not charted
+    before the landmark), ``event_after_landmark`` (1/0 among eligible),
     ``time_from_landmark`` (outcome_onset - landmark for events).
 
     ``exposure_onset`` (optional ``[stay_id, <onset_col>]`` from
-    :func:`onset_times`) adds ``exposed_by_landmark`` = onset at or before the
+    :func:`onset_times`) adds ``exposed_by_landmark`` = onset charted before the
     landmark, the early-vs-not contrast assessed at the landmark — never using
-    post-landmark exposure, which is what causes immortal-time bias.
+    post-landmark exposure, which is what causes immortal-time bias.  An onset
+    at the landmark's own hour was charted in ``[L, L + 1)``: after the
+    landmark, so it neither exposes the stay by the landmark nor takes it out
+    of the at-risk set.  Such an outcome is an event after the landmark with
+    ``time_from_landmark`` 0, as the hourly grid states it.
     """
     out = onset_times(
         trajectory, outcome_concept, op=outcome_op, threshold=outcome_threshold,
@@ -282,10 +294,10 @@ def landmark_cohort(
     )
     df = stays.to_frame().merge(out, on=ID_COL, how="left")
     onset = df["outcome_onset_time"]
-    df["eligible_at_landmark"] = (onset.isna() | (onset > landmark_hours)).astype(int)
+    df["eligible_at_landmark"] = (onset.isna() | (onset >= landmark_hours)).astype(int)
     df["event_after_landmark"] = np.where(
         df["eligible_at_landmark"] == 1,
-        (onset > landmark_hours).fillna(False).astype(int),
+        (onset >= landmark_hours).fillna(False).astype(int),
         np.nan,
     )
     df["time_from_landmark"] = np.where(
@@ -302,5 +314,5 @@ def landmark_cohort(
             )
         df = df.merge(exposure_onset, on=ID_COL, how="left")
         eo = df[exp_col[0]]
-        df["exposed_by_landmark"] = (eo.notna() & (eo <= landmark_hours)).astype(int)
+        df["exposed_by_landmark"] = (eo.notna() & (eo < landmark_hours)).astype(int)
     return df.reset_index(drop=True)

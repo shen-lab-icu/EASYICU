@@ -5,7 +5,7 @@ features, imputation strategy, or validation split.  Those are scientific
 choices owned by the Plan.  It owns three error-prone mechanical operations
 that generated analysis code must not reimplement:
 
-* build feature rows using measurements available at or before a landmark;
+* build feature rows using measurements charted before a landmark;
 * label only target horizons that are actually observable under event/censoring;
 * evaluate supplied probabilities separately at each landmark and horizon.
 
@@ -82,8 +82,11 @@ def build_landmark_feature_matrix(
     ``trajectory`` must use the standard long representation
     ``stay_id, charttime, concept, value_num`` with ``charttime`` measured in
     hours from the declared time zero.  Each feature uses only rows in
-    ``(landmark-lookback, landmark]``.  Missing values remain missing; this
-    owner never performs imputation outside a training-only model pipeline.
+    ``[landmark - lookback, landmark)``: chart times are floored to the hourly
+    grid (``io.ts_utils.round_to_interval``), so the row at ``landmark`` was
+    charted in ``[landmark, landmark + 1)``, after the prediction is made.
+    Missing values remain missing; this owner never performs imputation
+    outside a training-only model pipeline.
     """
 
     _require_columns(
@@ -139,8 +142,8 @@ def build_landmark_feature_matrix(
     frames: list[pd.DataFrame] = []
     for landmark in landmarks:
         window = working.loc[
-            (working[TIME_COL] > landmark - lookback)
-            & (working[TIME_COL] <= landmark)
+            (working[TIME_COL] >= landmark - lookback)
+            & (working[TIME_COL] < landmark)
         ]
         if window.empty:
             continue
@@ -190,9 +193,12 @@ def attach_landmark_outcomes(
 ) -> pd.DataFrame:
     """Attach binary future outcomes without treating censoring as non-events.
 
-    A row is observable when an event occurs in ``(landmark, landmark+horizon]``
-    or follow-up reaches the end of that horizon.  Prevalent events are not at
-    risk.  Unobservable horizons remain explicitly marked with a missing label.
+    A row is observable when an event occurs in ``[landmark, landmark+horizon)``
+    or follow-up reaches the end of that horizon.  Prevalent events, those
+    before the landmark, are not at risk.  An event at the landmark's own hour
+    happened after the prediction, as a feature row at that hour was charted
+    after it (``build_landmark_feature_matrix``).  Unobservable horizons remain
+    explicitly marked with a missing label.
     """
 
     _require_columns(
@@ -251,9 +257,9 @@ def attach_landmark_outcomes(
     horizon_end = prediction_time + expanded[HORIZON_COL]
     under_observation = expanded[followup_end_col].ge(prediction_time)
     at_risk = under_observation & (
-        event_time.isna() | event_time.gt(prediction_time)
+        event_time.isna() | event_time.ge(prediction_time)
     )
-    event_in_horizon = event_time.gt(prediction_time) & event_time.le(horizon_end)
+    event_in_horizon = event_time.ge(prediction_time) & event_time.lt(horizon_end)
     horizon_observed = event_in_horizon | expanded[followup_end_col].ge(horizon_end)
     expanded["eligible_at_landmark"] = at_risk.astype(int)
     expanded["horizon_observed"] = (at_risk & horizon_observed).astype(int)

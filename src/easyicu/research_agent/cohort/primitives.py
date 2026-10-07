@@ -11,12 +11,17 @@ TIME_COL = "charttime"
 
 
 def window(df: pd.DataFrame, start_hour: float, end_hour: float) -> pd.DataFrame:
-    """Return rows inside the inclusive chart-time window."""
+    """Return the rows charted in ``[start_hour, end_hour)``.
+
+    Chart times are floored to the hourly grid (``io.ts_utils.round_to_interval``),
+    so a row at hour ``h`` was charted in ``[h, h + 1)``.  The row at
+    ``end_hour`` was charted after the window ends.
+    """
     if TIME_COL not in df.columns:
         return df.copy()
     out = df.copy()
     out[TIME_COL] = pd.to_numeric(out[TIME_COL], errors="coerce")
-    return out[(out[TIME_COL] >= start_hour) & (out[TIME_COL] <= end_hour)].copy()
+    return out[(out[TIME_COL] >= start_hour) & (out[TIME_COL] < end_hour)].copy()
 
 
 def first_nonnull(series: pd.Series):
