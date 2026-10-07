@@ -154,7 +154,11 @@ def _bound_columns(request: FamilySpecRequest, roster: list[str]) -> list[str]:
 
 
 def _adjustment_proposal(
-    request: FamilySpecRequest, spec: FamilyPlanSpec, roster: list[str]
+    request: FamilySpecRequest,
+    spec: FamilyPlanSpec,
+    roster: list[str],
+    *,
+    requirement_id: str = "proposed_landmark_survival_suite",
 ) -> AdjustmentProposal:
     """Keep the proposal's roster with its rationale and host-proven timing."""
 
@@ -171,7 +175,7 @@ def _adjustment_proposal(
                 roles[name] = role
     return AdjustmentProposal(
         source_step_id="primary_survival_suite",
-        source_requirement_id="proposed_landmark_survival_suite",
+        source_requirement_id=requirement_id,
         covariates=roster,
         covariate_rationales={name: rationales[name] for name in roster if name in rationales},
         covariate_temporal_roles={name: roles[name] for name in roster if name in roles},

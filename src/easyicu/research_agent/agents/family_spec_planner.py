@@ -22,6 +22,7 @@ from ..planning.family_spec import (
     build_family_spec_request,
     DESCRIPTIVE_FAMILY_ID,
     FIXED_WINDOW_TRAJECTORY_FAMILY_ID,
+    LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID,
     LANDMARK_SURVIVAL_FAMILY_ID,
     PHENOTYPING_FAMILY_ID,
     PREDICTION_FAMILY_ID,
@@ -30,6 +31,7 @@ from ..planning.family_spec import (
     build_landmark_association_skeleton,
     build_phenotyping_skeleton,
     build_fixed_window_trajectory_skeleton,
+    build_landmark_continuous_survival_skeleton,
     build_landmark_survival_skeleton,
     build_prediction_skeleton,
     build_source_feasibility_skeleton,
@@ -100,6 +102,7 @@ The host has already fixed the study family, exposure, outcome, time zero, the t
    For the prediction family: no adjustment set. Choose feature_variables (at least two predictors) ONLY from the feature candidates marked selectable; do not include the outcome or anything measured after the observation window. Label every selected predictor.
    For the landmark survival suite family with a sealed_suite: no adjustment set and no other roster. The host has sealed the exposure status and onset columns, the event and follow-up columns, the landmark, the horizon, the adjustment set and the PH policy; you only label the sealed columns and write the comparator applications.
    For the landmark survival suite family with a proposed_suite instead: the host has proposed the exposure status, event and follow-up columns, the landmark and the horizon, but the adjustment set is yours: choose it as for a landmark association family (time zero is the landmark; the onset column is named but not yet materialized) and label every selected covariate.
+   For the continuous landmark survival suite family: the exposure is one continuous value (its window summary from ICU admission to the landmark), modelled per unit. With a sealed_continuous_suite: no adjustment set and no other roster; you only label the sealed columns and write the comparator applications. With a proposed_continuous_suite instead: the host has proposed the exposure, event and follow-up columns, the landmark and the horizon, but the adjustment set is yours: choose it as for a landmark association family (time zero is the landmark) and label every selected covariate.
    For the sealed fixed-window trajectory suite family: no adjustment set and no other roster. The host has sealed the coordinate concepts, the fixed grid, the candidate cluster grid, the selection rule and the stability design; you only label the sealed concepts and the outcome and write the comparator applications.
    For the sealed source-feasibility family: no adjustment set, no roster and no labels. The reviewed protocol found the requested treatment contrast not identifiable from the current source, so the host executes only the sealed fail-closed decision; you write the comparator applications (how each screened study's design differs from what this source can support) and nothing else.
 2. Reader labels: a concise clinical label for every required variable key, derived from the sealed variable descriptions (never a restatement of the identifier). When level label keys such as `<exposure>=0` and `<exposure>=1` are required, give the two groups distinct clinical names.
@@ -193,6 +196,16 @@ def family_spec_user_prompt(
         # as a binding empty roster beside the host-fixed coordinates.
         host_design["proposed_suite"] = request.proposed_suite.model_dump(
             mode="json", exclude={"adjustment_columns"}
+        )
+    if request.sealed_continuous_suite is not None:
+        host_design["sealed_continuous_suite"] = request.sealed_continuous_suite.model_dump(
+            mode="json"
+        )
+    if request.proposed_continuous_suite is not None:
+        host_design["proposed_continuous_suite"] = (
+            request.proposed_continuous_suite.model_dump(
+                mode="json", exclude={"adjustment_columns"}
+            )
         )
     sections.append(
         "Host-fixed design (binding, not editable):\n"
@@ -660,7 +673,7 @@ def family_spec_response_shape(request: FamilySpecRequest) -> str:
     ]
     planner_roster = planner_selects_adjustment(request)
     # A proposed survival suite adjusts like a landmark association family.
-    if request.family_id not in LANDMARK_FAMILY_IDS and request.proposed_suite is None:
+    if request.family_id not in LANDMARK_FAMILY_IDS and request.suite_proposal is None:
         lines.append('- "adjustment_set": [] (this family fits no adjusted model)')
     else:
         if request.adjustment_selection == "exact":
@@ -927,6 +940,7 @@ def run_family_spec_attempt(
         PHENOTYPING_FAMILY_ID: build_phenotyping_skeleton,
         PREDICTION_FAMILY_ID: build_prediction_skeleton,
         LANDMARK_SURVIVAL_FAMILY_ID: build_landmark_survival_skeleton,
+        LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID: build_landmark_continuous_survival_skeleton,
         FIXED_WINDOW_TRAJECTORY_FAMILY_ID: build_fixed_window_trajectory_skeleton,
         SOURCE_FEASIBILITY_FAMILY_ID: build_source_feasibility_skeleton,
     }.get(request.family_id, build_landmark_association_skeleton)

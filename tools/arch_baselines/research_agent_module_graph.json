@@ -9645,6 +9645,10 @@
     ],
     [
       "easyicu.research_agent.planning.family_spec",
+      "easyicu.research_agent.planning.family_spec.continuous_survival_template"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec",
       "easyicu.research_agent.planning.family_spec.contract"
     ],
     [
@@ -9678,6 +9682,34 @@
     [
       "easyicu.research_agent.planning.family_spec",
       "easyicu.research_agent.planning.family_spec.trajectory_template"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.continuous_survival_template",
+      "easyicu.research_agent.canonical_json"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.continuous_survival_template",
+      "easyicu.research_agent.planning.design_selection"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.continuous_survival_template",
+      "easyicu.research_agent.planning.family_spec.contract"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.continuous_survival_template",
+      "easyicu.research_agent.planning.family_spec.landmark_categorical_template"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.continuous_survival_template",
+      "easyicu.research_agent.planning.family_spec.plan_language"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.continuous_survival_template",
+      "easyicu.research_agent.planning.family_spec.survival_template"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.continuous_survival_template",
+      "easyicu.research_agent.planning.progressive_contract"
     ],
     [
       "easyicu.research_agent.planning.family_spec.contract",
@@ -13604,9 +13636,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3393,
+    "edge_count": 3401,
     "largest_scc_size": 0,
-    "module_count": 782,
+    "module_count": 783,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -14135,6 +14167,7 @@
     "easyicu.research_agent.planning.distribution_authority": "planning/distribution_authority.py",
     "easyicu.research_agent.planning.endpoint_contract": "planning/endpoint_contract.py",
     "easyicu.research_agent.planning.family_spec": "planning/family_spec/__init__.py",
+    "easyicu.research_agent.planning.family_spec.continuous_survival_template": "planning/family_spec/continuous_survival_template.py",
     "easyicu.research_agent.planning.family_spec.contract": "planning/family_spec/contract.py",
     "easyicu.research_agent.planning.family_spec.descriptive_template": "planning/family_spec/descriptive_template.py",
     "easyicu.research_agent.planning.family_spec.feasibility_template": "planning/family_spec/feasibility_template.py",

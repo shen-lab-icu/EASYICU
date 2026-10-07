@@ -62,6 +62,7 @@ from .contract import (
     DESCRIPTIVE_FAMILY_ID,
     FIXED_WINDOW_TRAJECTORY_FAMILY_ID,
     LANDMARK_CATEGORICAL_FAMILY_ID,
+    LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID,
     LANDMARK_SPLINE_FAMILY_ID,
     LANDMARK_SURVIVAL_FAMILY_ID,
     PHENOTYPING_FAMILY_ID,
@@ -77,6 +78,7 @@ from .contract import (
     ExposureKind,
     FamilySpecError,
     FamilySpecRequest,
+    SealedContinuousSuiteCoordinates,
     SealedFeasibilityCoordinates,
     SealedSuiteCoordinates,
     SealedTrajectoryCoordinates,
@@ -87,9 +89,13 @@ from .contract import (
 )
 
 #: Marker lines the sealed authorities print before their JSON coordinates
-#: (``LandmarkSurvivalRuntimeAuthority.planning_contract_context`` and
+#: (``LandmarkSurvivalRuntimeAuthority.planning_contract_context``,
+#: ``LandmarkContinuousSurvivalRuntimeAuthority.planning_contract_context`` and
 #: ``TrajectoryScientificRuntimeAuthority.planning_contract_context``).
 SEALED_SURVIVAL_SUITE_MARKER = "CALLER-BOUND LANDMARK SURVIVAL SUITE:"
+SEALED_CONTINUOUS_SURVIVAL_SUITE_MARKER = (
+    "CALLER-BOUND LANDMARK CONTINUOUS-EXPOSURE SURVIVAL SUITE:"
+)
 SEALED_TRAJECTORY_SUITE_MARKER = "CALLER-BOUND FIXED-WINDOW TRAJECTORY SUITE:"
 SEALED_FEASIBILITY_MARKER = "CALLER-BOUND SOURCE FEASIBILITY DECISION:"
 
@@ -226,6 +232,51 @@ def sealed_survival_suite_coordinates(
     except (TypeError, ValueError):
         return None
 
+
+def sealed_continuous_survival_suite_coordinates(
+    planning_contract_context: str,
+) -> SealedContinuousSuiteCoordinates | None:
+    """Parse the sealed continuous-exposure survival disclosure, or ``None``.
+
+    The suite's exposure is a summary of the window from ICU admission to its
+    landmark; a disclosure stating any other window is not this suite's.
+    """
+
+    payload = _sealed_disclosure_payload(
+        planning_contract_context, SEALED_CONTINUOUS_SURVIVAL_SUITE_MARKER
+    )
+    if payload is None or "sealed_primary_owner" not in payload:
+        return None
+    try:
+        landmark = float(payload.get("landmark_hours") or 0.0)
+        window = [float(value) for value in payload.get("exposure_window_hours") or []]
+        if window != [0.0, landmark] or float(payload.get("exposure_increment") or 0.0) != 1.0:
+            return None
+        unit = payload.get("exposure_unit")
+        return SealedContinuousSuiteCoordinates(
+            primary_owner=str(payload.get("sealed_primary_owner") or ""),
+            exposure_column=str(payload.get("exposure_column") or ""),
+            exposure_window_summary=str(payload.get("exposure_window_summary") or ""),
+            exposure_unit=str(unit) if unit is not None else None,
+            event_column=str(payload.get("event_column") or ""),
+            followup_time_column=str(payload.get("followup_time_column") or ""),
+            landmark_hours=landmark,
+            endpoint_horizon_days=float(payload.get("endpoint_horizon_days") or 0.0),
+            adjustment_columns=[str(value) for value in payload.get("adjustment_columns") or []],
+            plan_outputs=[str(value) for value in payload.get("plan_outputs") or []],
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def landmark_survival_suite_sealed(planning_contract_context: str) -> bool:
+    """Whether the host has sealed a landmark survival suite of either exposure kind."""
+
+    return (
+        sealed_survival_suite_coordinates(planning_contract_context) is not None
+        or sealed_continuous_survival_suite_coordinates(planning_contract_context) is not None
+    )
+
 #: The one owner a proposed survival design names; the host seals it only after
 #: the reviewed design is compiled into the study configuration.
 _PROPOSED_SURVIVAL_OWNER = "signed_landmark_survival_suite"
@@ -265,7 +316,7 @@ def proposed_survival_suite_coordinates(
     The roster is left empty for the Planner.  Nothing here is sealed.
     """
 
-    if sealed_survival_suite_coordinates(planning_contract_context) is not None:
+    if landmark_survival_suite_sealed(planning_contract_context):
         return None
     if len(context.cohort.id_columns) != 1:
         return None
@@ -306,6 +357,87 @@ def proposed_survival_suite_coordinates(
             endpoint_horizon_days=float(endpoint.horizon_days),
             adjustment_columns=[],
             plan_outputs=outputs,
+        )
+    except ValueError:
+        return None
+
+
+#: The one owner a proposed continuous-exposure survival design names.
+_PROPOSED_CONTINUOUS_SURVIVAL_OWNER = "signed_landmark_continuous_survival_suite"
+#: The window summaries the continuous suite models, as the materializer names
+#: them (``<source>_<summary>``).
+_CONTINUOUS_SURVIVAL_SUMMARIES = ("max", "min", "mean", "first")
+#: Products every signed continuous suite declares except its composite figure.
+_PROPOSED_CONTINUOUS_SURVIVAL_OUTPUTS = (
+    "table:landmark_continuous_table_one",
+    "table:landmark_continuous_risk_set_flow",
+    "table:landmark_continuous_km_curve",
+    "table:landmark_continuous_cox_summary",
+    "table:landmark_continuous_ph_diagnostics",
+    "table:landmark_continuous_time_varying_cox_summary",
+    "table:landmark_continuous_spline_curve",
+    "table:landmark_continuous_measurement_audit",
+    "log:landmark_continuous_survival_receipt",
+)
+
+
+def proposed_continuous_survival_suite_coordinates(
+    context: ResearchContext,
+    *,
+    planning_contract_context: str = "",
+) -> SealedContinuousSuiteCoordinates | None:
+    """The continuous-exposure survival suite the host could seal, else ``None``.
+
+    For a study with no sealed suite yet.  Every coordinate comes from a host
+    vocabulary: a numeric, non-ordinal exposure that is the materializer's
+    ``<source>_<summary>`` of a concept recorded over time (a value recorded
+    once per stay has no window to summarise); one fixed-horizon mortality
+    endpoint whose paired follow-up concept is in the context; and the
+    landmark at the end of the host-bound ICU-admission feature window, which
+    is the window the summary covers.  The suite's prespecified interval model
+    needs one of the endpoint's interval cutpoints inside the follow-up after
+    the landmark.  The roster is left empty for the Planner.
+    """
+
+    if landmark_survival_suite_sealed(planning_contract_context):
+        return None
+    if len(context.cohort.id_columns) != 1:
+        return None
+    exposure = str(context.primary_exposure or "").strip()
+    outcome = str(context.target_outcome or "").strip()
+    variable = context.variable(exposure) if exposure else None
+    if variable is None or not outcome or context.variable(outcome) is None:
+        return None
+    if _exposure_kind(context, exposure) != "continuous":
+        return None
+    if _binary_outcome_levels(context, outcome) is None:
+        return None
+    source = str(getattr(variable, "source_concept", "") or "").strip()
+    summary = exposure[len(source) + 1:] if source and exposure.startswith(f"{source}_") else ""
+    if summary not in _CONTINUOUS_SURVIVAL_SUMMARIES or concept_records_one_value_per_stay(source):
+        return None
+    endpoint = fixed_horizon_mortality_endpoint(outcome)
+    if endpoint is None or context.variable(endpoint.followup_concept) is None:
+        return None
+    landmark = host_outer_feature_window_end_hours(context)
+    if landmark is None or landmark <= 0 or landmark / 24.0 >= endpoint.horizon_days:
+        return None
+    followup_days = endpoint.horizon_days - landmark / 24.0
+    if not any(0 < value < followup_days for value in endpoint.time_varying_cutpoints_days):
+        return None
+    unit = str(variable.unit or "").strip() or None
+    try:
+        return SealedContinuousSuiteCoordinates(
+            primary_owner=_PROPOSED_CONTINUOUS_SURVIVAL_OWNER,
+            exposure_column=exposure,
+            exposure_window_summary=summary,
+            exposure_unit=unit,
+            event_column=endpoint.event_concept,
+            followup_time_column=endpoint.followup_concept,
+            landmark_hours=float(landmark),
+            endpoint_horizon_days=float(endpoint.horizon_days),
+            adjustment_columns=[],
+            plan_outputs=list(_PROPOSED_CONTINUOUS_SURVIVAL_OUTPUTS),
         )
     except ValueError:
         return None
@@ -566,16 +698,34 @@ def family_template_id_for_context(
     if len(context.cohort.id_columns) != 1:
         return None
     if headline == "survival":
-        # Survival is templated on the landmark survival suite: the sealed
+        # Survival is templated on a landmark survival suite: the sealed
         # suite when the host has sealed it for this run, otherwise the suite
         # the host could seal, as a proposal whose roster the Planner selects.
-        # The Planner never composes a Cox contract itself.
+        # A binary exposure's suite contrasts its two statuses; a continuous
+        # exposure's models it per unit.  The Planner never composes a Cox
+        # contract itself.
         sealed = sealed_survival_suite_coordinates(planning_contract_context)
+        continuous = sealed_continuous_survival_suite_coordinates(planning_contract_context)
+        if sealed is not None and continuous is not None:
+            return None
+        if continuous is not None:
+            if (
+                continuous.exposure_column != exposure
+                or continuous.event_column != outcome
+                or any(context.variable(name) is None for name in continuous.source_columns)
+            ):
+                return None
+            return LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID
         if sealed is None:
-            proposed = proposed_survival_suite_coordinates(
+            if proposed_survival_suite_coordinates(
                 context, planning_contract_context=planning_contract_context
-            )
-            return LANDMARK_SURVIVAL_FAMILY_ID if proposed is not None else None
+            ) is not None:
+                return LANDMARK_SURVIVAL_FAMILY_ID
+            if proposed_continuous_survival_suite_coordinates(
+                context, planning_contract_context=planning_contract_context
+            ) is not None:
+                return LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID
+            return None
         if (
             sealed.exposure_status_column != exposure
             or sealed.event_column != outcome
@@ -876,7 +1026,7 @@ def _bind_population_authority(
         not concepts
         or required_primary_cohort_selection_mode == "all_input_rows"
         or request.family_id not in POPULATION_FAMILY_IDS
-        or request.sealed_suite is not None
+        or request.sealed_survival_suite is not None
         or request.cohort_time_zero_hours is None
     ):
         return request
@@ -1073,8 +1223,8 @@ def _require_sealed_table_one(request: FamilySpecRequest, projection: Mapping[st
     at all; both are refused before any Provider call.
     """
 
-    sealed = request.sealed_suite
-    if request.family_id != LANDMARK_SURVIVAL_FAMILY_ID or sealed is None:
+    sealed = request.sealed_survival_suite
+    if sealed is None:
         raise FamilySpecError(
             "family_spec_accepted_baseline_unsatisfiable",
             "the accepted baseline roster cannot be kept: this family's sealed "
@@ -1082,15 +1232,21 @@ def _require_sealed_table_one(request: FamilySpecRequest, projection: Mapping[st
             "Table 1",
             path="accepted_baseline_rows",
         )
+    # A continuous exposure's suite groups its Table 1 by exposure tertile,
+    # which no prepared column holds.
+    group_column = getattr(sealed, "exposure_status_column", None)
     described = set(sealed.adjustment_columns)
     lost: list[str] = []
     for table in projection["tables"]:
         group = table["group_by"]
-        if group["required"] is not None and sealed.exposure_status_column not in group["available_columns"]:
+        if group["required"] is not None and (
+            group_column is None or group_column not in group["available_columns"]
+        ):
             raise FamilySpecError(
                 "family_spec_accepted_baseline_grouping_unsupported",
                 f"the accepted baseline roster is grouped by {group['required']!r}; "
-                f"the sealed suite's Table 1 is grouped by {sealed.exposure_status_column!r}",
+                "the sealed suite's Table 1 is grouped by "
+                + (repr(group_column) if group_column is not None else "exposure tertile"),
                 path="accepted_baseline_rows",
             )
         lost.extend(
@@ -1127,7 +1283,7 @@ def _refuse_unfilterable_cohort(request: FamilySpecRequest) -> None:
 
     if (
         request.family_id in _BOUND_OR_STATED_FAMILY_IDS
-        and request.sealed_suite is None
+        and request.sealed_survival_suite is None
         and request.cohort_selection_mode == "predicate_filtered"
         and all(
             value is None
@@ -1239,6 +1395,25 @@ def _family_spec_request(
         return _build_survival_request(
             context,
             sealed=sealed,
+            variable_roster=variable_roster,
+            allowed_literature_citation_keys=allowed_literature_citation_keys,
+            direct_comparator_literature_keys=direct_comparator_literature_keys,
+            comparison_literature_keys=comparison_literature_keys,
+            comparator_titles=comparator_titles,
+            required_primary_cohort_selection_mode=required_primary_cohort_selection_mode,
+        )
+    if family_id == LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID:
+        suite = sealed_continuous_survival_suite_coordinates(planning_contract_context)
+        proposed = suite is None
+        if proposed:
+            suite = proposed_continuous_survival_suite_coordinates(
+                context, planning_contract_context=planning_contract_context
+            )
+        assert suite is not None
+        return _build_continuous_survival_request(
+            context,
+            suite=suite,
+            proposed=proposed,
             variable_roster=variable_roster,
             allowed_literature_citation_keys=allowed_literature_citation_keys,
             direct_comparator_literature_keys=direct_comparator_literature_keys,
@@ -1798,27 +1973,7 @@ def _build_survival_request(
         )
         for name in sealed.adjustment_columns
     }
-    def _sealed_coding(name: str) -> list[str]:
-        level_count = len(_levels(context, name))
-        if level_count == 2:
-            return ["binary"]
-        if level_count > 2:
-            return ["categorical"]
-        return ["continuous"]
-
-    candidates = [
-        AdjustmentCandidate(
-            name=name,
-            semantic_role=str(getattr(variables[name].role, "value", variables[name].role)),
-            host_temporal_role=None,
-            allowed_codings=_sealed_coding(name),
-            closed_domain_size=len(_levels(context, name)) or None,
-            selectable=False,
-            boundary="sealed by the landmark survival suite; not Planner-selectable",
-        )
-        for name in sealed.adjustment_columns
-        if name in variables
-    ]
+    candidates = _sealed_adjustment_candidates(context, sealed.adjustment_columns)
     # Every sealed source column enters the reviewed design, so each needs a
     # reader label (the compiler refuses an unlabeled required variable).
     required_label_keys = [
@@ -1862,6 +2017,36 @@ def _build_survival_request(
         },
         variable_roster=roster,
     )
+
+
+def _sealed_adjustment_candidates(
+    context: ResearchContext, columns: Sequence[str]
+) -> list[AdjustmentCandidate]:
+    """A sealed suite's adjustment columns, shown to the Planner as not selectable."""
+
+    variables = {item.name: item for item in context.variables}
+
+    def coding(name: str) -> list[str]:
+        level_count = len(_levels(context, name))
+        if level_count == 2:
+            return ["binary"]
+        if level_count > 2:
+            return ["categorical"]
+        return ["continuous"]
+
+    return [
+        AdjustmentCandidate(
+            name=name,
+            semantic_role=str(getattr(variables[name].role, "value", variables[name].role)),
+            host_temporal_role=None,
+            allowed_codings=coding(name),
+            closed_domain_size=len(_levels(context, name)) or None,
+            selectable=False,
+            boundary="sealed by the landmark survival suite; not Planner-selectable",
+        )
+        for name in columns
+        if name in variables
+    ]
 
 
 def _build_survival_proposal_request(
@@ -1947,6 +2132,129 @@ def _build_survival_proposal_request(
         exact_roster=list(adjustment.operational_covariates) if exact else [],
         exact_rationales=dict(adjustment.operational_rationales) if exact else {},
         exact_temporal_roles=dict(adjustment.operational_temporal_roles) if exact else {},
+        adjustment_candidates=candidates,
+        required_reader_label_keys=required_label_keys,
+        allowed_literature_citation_keys=list(dict.fromkeys(allowed_literature_citation_keys)),
+        direct_comparator_literature_keys=list(dict.fromkeys(direct_comparator_literature_keys)),
+        comparison_literature_keys=list(dict.fromkeys(comparison_literature_keys)),
+        comparator_titles={
+            str(key): " ".join(str(value or "").split())
+            for key, value in (comparator_titles or {}).items()
+            if str(value or "").strip()
+        },
+        variable_roster=roster,
+    )
+
+
+def _build_continuous_survival_request(
+    context: ResearchContext,
+    *,
+    suite: SealedContinuousSuiteCoordinates,
+    proposed: bool,
+    variable_roster: Sequence[str],
+    allowed_literature_citation_keys: Sequence[str],
+    direct_comparator_literature_keys: Sequence[str],
+    comparison_literature_keys: Sequence[str],
+    comparator_titles: Mapping[str, str] | None,
+    required_primary_cohort_selection_mode: str | None,
+) -> FamilySpecRequest:
+    """Seal the request for the continuous-exposure landmark survival suite.
+
+    A sealed suite fixes every coordinate, its roster included, and the
+    Planner labels the columns.  A proposed suite fixes the same coordinates
+    except the roster, which the Planner selects from the candidates the
+    host times to the suite's landmark (or keeps as the user's exact roster);
+    review compiles the design and the host seals it before anything runs.
+    """
+
+    roster = list(dict.fromkeys(str(value).strip() for value in variable_roster if str(value).strip()))
+    variables = {item.name: item for item in context.variables}
+    exposure = suite.exposure_column
+    outcome = suite.event_column
+    outcome_levels = _levels(context, outcome)
+    if len(outcome_levels) != 2:
+        raise FamilySpecError(
+            "family_spec_survival_levels_unavailable",
+            "the continuous survival suite needs a 0/1 event column",
+            path="outcome",
+        )
+    selection: dict[str, Any]
+    if proposed:
+        adjustment = AdjustmentSetAuthority.from_context(context)
+        optional_roster = set(_structurally_available_roster(context, roster))
+        # The exposure's companions (its other window summaries, counts and
+        # observation times) describe the same measurement, not a confounder.
+        design_columns = {
+            exposure,
+            outcome,
+            suite.followup_time_column,
+            *context.cohort.outcome_columns,
+            *exposure_companion_columns(context, exposure),
+        }
+        candidates = _candidates(
+            context,
+            variable_roster=[name for name in roster if name in optional_roster],
+            adjustment=adjustment,
+            design_columns=frozenset(design_columns) - set(adjustment.operational_covariates),
+            reference_hours=float(suite.landmark_hours),
+        )
+        exact = adjustment.selection == "exact"
+        label_columns = [
+            exposure,
+            outcome,
+            suite.followup_time_column,
+            *(adjustment.operational_covariates if exact else ()),
+        ]
+        selection = {
+            "proposed_continuous_suite": suite,
+            "adjustment_selection": adjustment.selection,
+            "exact_roster": list(adjustment.operational_covariates) if exact else [],
+            "exact_rationales": dict(adjustment.operational_rationales) if exact else {},
+            "exact_temporal_roles": dict(adjustment.operational_temporal_roles) if exact else {},
+        }
+    else:
+        candidates = _sealed_adjustment_candidates(context, suite.adjustment_columns)
+        label_columns = [exposure, outcome, *suite.source_columns]
+        selection = {
+            "sealed_continuous_suite": suite,
+            "adjustment_selection": "exact",
+            "exact_roster": list(suite.adjustment_columns),
+            "exact_rationales": {
+                name: (
+                    "Sealed by the reviewed landmark survival suite as a prespecified "
+                    "baseline adjustment column."
+                )
+                for name in suite.adjustment_columns
+            },
+        }
+    # Every column the design names needs a reader label (the compiler
+    # refuses an unlabeled required variable).
+    required_label_keys = [
+        name
+        for name in dict.fromkeys(label_columns)
+        if name in variables and name != context.cohort.id_columns[0]
+    ]
+    dependence = context_dependence_authority(context)
+    cohort_fields = _typed_cohort_fields(context, required_primary_cohort_selection_mode)
+    return FamilySpecRequest(
+        family_id=LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID,
+        analysis_type="survival",
+        research_question=str(context.research_question or "").strip() or "(no question text)",
+        cohort_name=str(context.cohort.cohort_name),
+        **cohort_fields,
+        identity_column=context.cohort.id_columns[0],
+        cluster_unit="patient" if dependence is not None else None,
+        primary_exposure=exposure,
+        exposure_kind="continuous",
+        exposure_levels=[],
+        reference_level_index=0,
+        primary_contrast_level_index=0,
+        exposure_is_ordered=False,
+        exposure_companion_columns=[],
+        outcome=outcome,
+        outcome_levels=outcome_levels,
+        event_level_index=1,
+        **selection,
         adjustment_candidates=candidates,
         required_reader_label_keys=required_label_keys,
         allowed_literature_citation_keys=list(dict.fromkeys(allowed_literature_citation_keys)),
@@ -2223,6 +2531,9 @@ __all__ = [
     "build_family_spec_request",
     "exposure_companion_columns",
     "family_template_id_for_context",
+    "landmark_survival_suite_sealed",
+    "proposed_continuous_survival_suite_coordinates",
+    "sealed_continuous_survival_suite_coordinates",
     "sealed_feasibility_coordinates",
     "sealed_survival_suite_coordinates",
     "sealed_trajectory_suite_coordinates",

@@ -16,6 +16,12 @@ from ..contracts.survival import SURVIVAL_PH_DIAGNOSTIC_PRODUCT
 #: Plan method of the host-sealed fixed-landmark survival suite
 #: (``authority/current_case_scientific_runtime.LandmarkSurvivalRuntimeAuthority``).
 SEALED_LANDMARK_SURVIVAL_SUITE_METHOD = "signed_landmark_survival_suite"
+#: The host-sealed landmark survival suites: a binary exposure's and a
+#: continuous exposure's
+#: (``authority/landmark_continuous_survival_runtime``).
+SEALED_LANDMARK_SURVIVAL_SUITE_METHODS = frozenset(
+    {SEALED_LANDMARK_SURVIVAL_SUITE_METHOD, "signed_landmark_continuous_survival_suite"}
+)
 from ..contracts.survival_execution import survival_execution_verdict
 from ..contracts.capability_ids import LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID
 from ..contracts.source_feasibility_validation import (
@@ -222,9 +228,9 @@ def validate_required_primary_result(
     primary = primary_steps[0]
     if (
         declared_family == "survival"
-        and str(primary.method or "").strip() == SEALED_LANDMARK_SURVIVAL_SUITE_METHOD
+        and str(primary.method or "").strip() in SEALED_LANDMARK_SURVIVAL_SUITE_METHODS
     ):
-        # The sealed landmark survival suite is a host owner whose exposure,
+        # A sealed landmark survival suite is a host owner whose exposure,
         # endpoint, horizon, adjustment set and PH policy are signed in the
         # runtime authority, not written by the Planner. Its step can only
         # execute under that authority (executor ownership and the effect
