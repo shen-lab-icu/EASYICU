@@ -5508,7 +5508,9 @@ def make_research_pipeline_run_runner(
                             for spec in sensitivity_specs
                             for variable in spec.source_materialization_variables
                         ),
-                        *primary_cohort.cohort_required_concepts(study.get("cohort")),
+                        *primary_cohort.cohort_required_concepts(
+                            study.get("cohort"), study.get("analysis_design")
+                        ),
                         # A declared trajectory design is admitted on the
                         # catalog's columns, so its concepts, and those its
                         # population reads, must be on it.

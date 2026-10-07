@@ -368,6 +368,8 @@ def _population_authority(request: FamilySpecRequest) -> dict[str, Any]:
             ("age_min", request.age_min if typed else None),
             ("age_max", request.age_max if typed else None),
             ("minimum_icu_hours", request.minimum_icu_hours if typed else None),
+            # A prediction model's stays: still in the ICU after it predicts.
+            ("still_in_icu_after_prediction_time_hours", request.prediction_time_hours if typed else None),
             ("source_concept_population", request.concept_cohort_definition),
             ("source_concept_population_window_end_hours", request.concept_cohort_window_end_hours),
             ("source_inclusion_contracts", list(request.source_applied_inclusion) or None),

@@ -547,10 +547,10 @@ def test_a_proposed_survival_suite_applies_the_stated_population() -> None:
 
 # A reviewed candidate whose stated population filtered its cohort binds the
 # next pass to a predicate-filtered cohort; these contexts have no typed bound.
+# A prediction cohort always has one, its prediction time.
 _UNBOUNDED = [
     pytest.param(lambda: _with_cohort(_context(), age_min=None), id="landmark"),
     pytest.param(_descriptive_context, id="descriptive"),
-    pytest.param(_prediction_context, id="prediction"),
 ]
 
 

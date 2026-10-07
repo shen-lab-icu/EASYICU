@@ -635,30 +635,44 @@ def _predicate(concept_id: str, op: str, value: float, *, end_hours: float) -> P
 def typed_bound_predicates(
     request: FamilySpecRequest, *, end_hours: float
 ) -> list[ProgressiveCohortPredicate]:
-    """The request's typed age bounds and minimum ICU stay as cohort predicates."""
+    """The request's typed age bounds, minimum ICU stay and prediction time as cohort predicates."""
 
     predicates: list[ProgressiveCohortPredicate] = []
     if request.age_min is not None:
         predicates.append(_predicate("age", ">=", request.age_min, end_hours=end_hours))
     if request.age_max is not None:
         predicates.append(_predicate("age", "<=", request.age_max, end_hours=end_hours))
-    if request.minimum_icu_hours is not None:
-        # ``los_icu`` is the stay's ICU length of stay in days.  A stay reaches
-        # the typed duration exactly when it is still in the ICU at that hour;
-        # the request builder refuses a duration beyond time zero, so no later
-        # information decides eligibility.
+    risk_set = request.prediction_time_hours
+    # ``los_icu`` is the stay's ICU length of stay, in the unit the roster
+    # records it in: days, the dictionary's unit, or hours.
+    hours_per_unit = 1.0 if request.icu_stay_unit == "hours" else 24.0
+    if request.minimum_icu_hours is not None and (
+        risk_set is None or request.minimum_icu_hours > risk_set
+    ):
+        # A stay reaches the typed duration exactly when it is still in the
+        # ICU at that hour; the request builder refuses a duration beyond time
+        # zero, so no later information decides eligibility.
         predicates.append(
-            _predicate("los_icu", ">=", request.minimum_icu_hours / 24.0, end_hours=end_hours)
+            _predicate(
+                "los_icu", ">=", request.minimum_icu_hours / hours_per_unit, end_hours=end_hours
+            )
+        )
+    if risk_set is not None:
+        # A static prediction model's stays are those still in the ICU after
+        # its prediction time, which is its time zero: alive at it, and with
+        # no outcome that ended the stay before the prediction.  A minimum
+        # stay up to that time is implied and adds no predicate of its own.
+        predicates.append(
+            _predicate("los_icu", ">", risk_set / hours_per_unit, end_hours=end_hours)
         )
     return predicates
 
 
 def typed_bound_applies(request: FamilySpecRequest) -> bool:
-    """Whether the plan's cohort applies the request's typed age or stay bounds."""
+    """Whether the plan's cohort applies the request's typed age, stay or prediction-time bounds."""
 
     return request.cohort_selection_mode == "predicate_filtered" and any(
-        value is not None
-        for value in (request.age_min, request.age_max, request.minimum_icu_hours)
+        value is not None for value in request.typed_cohort_bounds
     )
 
 

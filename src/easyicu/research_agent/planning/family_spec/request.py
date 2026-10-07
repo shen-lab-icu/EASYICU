@@ -39,7 +39,7 @@ from ..analysis_types import (
     requested_exposure_occurrence_cues,
 )
 from ..baseline_requirements import baseline_requirement_projection
-from ..cohort_eligibility import eligibility_after_time_zero
+from ..cohort_eligibility import ICU_LENGTH_OF_STAY_CONCEPT, eligibility_after_time_zero
 from ..adjustment_authority import (
     AdjustmentSetAuthority,
     adjusted_model_term_planning_authority,
@@ -504,10 +504,11 @@ def _typed_cohort_fields(
 ) -> dict[str, Any]:
     """The primary cohort's typed row bounds and the selection mode they imply.
 
-    Age bounds and a minimum ICU stay are the only typed predicates a family
+    Age bounds and a minimum ICU stay are the typed predicates every family
     template applies itself; prose criteria are not authority.  A minimum stay
     is checked against ``los_icu``, the stay-level duration the predicate
-    reads, so a roster without it fails here instead of losing the criterion.
+    reads, so a roster without it, or with it in a unit the bound cannot be
+    written in, fails here instead of losing the criterion.
     Whether a caller-bound filtered cohort has anything to filter it by is
     decided once its population authority is bound.
     """
@@ -521,21 +522,105 @@ def _typed_cohort_fields(
         selection_mode = required_primary_cohort_selection_mode
     else:
         selection_mode = "predicate_filtered" if typed else "all_input_rows"
-    if minimum_icu_hours is not None and not any(
-        variable.name == "los_icu" for variable in context.variables
-    ):
-        raise FamilySpecError(
-            "family_spec_cohort_predicate_unavailable",
-            "a minimum ICU stay needs the stay's ICU length of stay (los_icu) in the "
-            "sealed roster",
-            path="cohort",
+    unit = (
+        _icu_stay_unit(
+            context,
+            code="family_spec_cohort_predicate_unavailable",
+            needed_for="a minimum ICU stay",
         )
+        if minimum_icu_hours is not None
+        else "days"
+    )
     return {
         "cohort_selection_mode": selection_mode,
         "age_min": age_min,
         "age_max": age_max,
         "minimum_icu_hours": minimum_icu_hours,
+        "icu_stay_unit": unit,
         **_concept_cohort_window(context),
+    }
+
+
+#: The units ``los_icu`` is read in.  A missing unit is the concept
+#: dictionary's, days, as the time-zero rule reads it too.
+_ICU_STAY_DAY_UNITS = frozenset({"", "d", "day", "days"})
+_ICU_STAY_HOUR_UNITS = frozenset({"h", "hr", "hrs", "hour", "hours"})
+
+
+def _icu_stay_unit(context: ResearchContext, *, code: str, needed_for: str) -> str:
+    """The unit of the roster's ``los_icu``, which an ICU-stay bound is written in.
+
+    The column is the stay-level ``los_icu`` itself, the first one the host
+    filters and the time-zero rule judges; a window summary or a companion
+    (its observation time or count) is no ICU length of stay.  The host
+    filters the column's own values, so a bound written in days over a stay
+    recorded in hours would keep stays 24 times too short.  Days and hours
+    are read as the time-zero rule reads them; another unit fails here.
+    """
+
+    variable = next(
+        (item for item in context.variables if item.name == ICU_LENGTH_OF_STAY_CONCEPT), None
+    )
+    if variable is None:
+        raise FamilySpecError(
+            code,
+            f"{needed_for} needs the stay's ICU length of stay (los_icu) in the sealed roster",
+            path="cohort",
+        )
+    unit = str(getattr(variable, "unit", None) or "").strip().casefold()
+    if unit in _ICU_STAY_DAY_UNITS:
+        return "days"
+    if unit in _ICU_STAY_HOUR_UNITS:
+        return "hours"
+    raise FamilySpecError(
+        "family_spec_icu_stay_unit_unread",
+        f"{needed_for} bounds the ICU length of stay (los_icu), whose unit "
+        f"{variable.unit!r} is read as neither days nor hours",
+        path="cohort",
+    )
+
+
+def _prediction_risk_set(
+    context: ResearchContext,
+    cohort_fields: dict[str, Any],
+    *,
+    prediction_time_hours: Optional[float],
+    required_primary_cohort_selection_mode: str | None,
+) -> dict[str, Any]:
+    """The stays a static prediction model analyzes: those still in the ICU after it predicts.
+
+    The model predicts at the end of its observation window from what was
+    measured in it.  A stay that died or left the ICU by then is not one the
+    model predicts for, and its outcome may come before the prediction.  The
+    template keeps the stays whose ICU length of stay exceeds the prediction
+    time: still in the ICU after it, hence alive at it, on every source and
+    without a death time.  Without a typed window there is no prediction time
+    and nothing is added.  A caller that binds every input row leaves no
+    cohort to filter, so the request is refused before any Provider call.
+    """
+
+    if prediction_time_hours is None:
+        return cohort_fields
+    needed_for = (
+        f"a prediction at {prediction_time_hours:g} h after ICU admission, which analyzes "
+        "the stays still in the ICU after it,"
+    )
+    if required_primary_cohort_selection_mode == "all_input_rows":
+        raise FamilySpecError(
+            "family_spec_prediction_risk_set_conflicts_with_population",
+            f"{needed_for} cannot keep every input row, which the caller binds; a study "
+            f"population with a minimum ICU stay of {prediction_time_hours:g} h is one the "
+            "model can predict for",
+            path="cohort",
+        )
+    unit = _icu_stay_unit(
+        context, code="family_spec_prediction_risk_set_unavailable", needed_for=needed_for
+    )
+    return {
+        **cohort_fields,
+        "cohort_selection_mode": "predicate_filtered",
+        "prediction_time_hours": prediction_time_hours,
+        "icu_stay_unit": unit,
     }
 
 
@@ -1285,10 +1370,7 @@ def _refuse_unfilterable_cohort(request: FamilySpecRequest) -> None:
         request.family_id in _BOUND_OR_STATED_FAMILY_IDS
         and request.sealed_survival_suite is None
         and request.cohort_selection_mode == "predicate_filtered"
-        and all(
-            value is None
-            for value in (request.age_min, request.age_max, request.minimum_icu_hours)
-        )
+        and all(value is None for value in request.typed_cohort_bounds)
         and not request.population_concepts
     ):
         raise FamilySpecError(
@@ -2374,7 +2456,13 @@ def _build_prediction_request(
         and name not in feature_names
         and str(getattr(variables[name].role, "value", variables[name].role)) == "other"
     ]
-    cohort_fields = _typed_cohort_fields(context, required_primary_cohort_selection_mode)
+    prediction_time_hours = host_outer_feature_window_end_hours(context)
+    cohort_fields = _prediction_risk_set(
+        context,
+        _typed_cohort_fields(context, required_primary_cohort_selection_mode),
+        prediction_time_hours=prediction_time_hours,
+        required_primary_cohort_selection_mode=required_primary_cohort_selection_mode,
+    )
     return FamilySpecRequest(
         family_id=PREDICTION_FAMILY_ID,
         analysis_type="prediction_model",
@@ -2392,7 +2480,7 @@ def _build_prediction_request(
         outcome=outcome,
         outcome_levels=outcome_levels,
         event_level_index=len(outcome_levels) - 1,
-        observation_window_hours=host_outer_feature_window_end_hours(context),
+        observation_window_hours=prediction_time_hours,
         level_label_keys=[],
         counts_only=False,
         feature_candidates=feature_candidates,
