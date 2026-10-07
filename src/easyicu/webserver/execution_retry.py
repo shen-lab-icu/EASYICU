@@ -45,10 +45,11 @@ def preserves_approved_execution_checkpoint(gate_reason: Any) -> bool:
 class ExecutionRetryAssessment:
     """Whether a retry of the failed step could change its outcome.
 
-    ``futile`` is claimed only when the failed step's repair budget is spent
-    after a code failure and nothing the step runs on changed since then;
-    every doubt (no record, no capsule, a timeout, an infrastructure failure)
-    leaves the retry ``available`` or ``unknown``.  ``fresh_repair_budget``
+    ``futile`` is claimed only when nothing the failed step runs on changed
+    since it failed, and either its repair budget is spent after a code
+    failure or its executor named a registered stop that a retry on the same
+    plan and data repeats; every doubt (no record, no capsule, a timeout, an
+    infrastructure failure) leaves the retry ``available`` or ``unknown``.  ``fresh_repair_budget``
     says whether the retry would also earn a fresh budget epoch: only when
     its identity differs from every identity the step was granted or ran on.
     """
@@ -100,14 +101,21 @@ def assess_failed_step(
         "repair_attempts": basis.repair_attempts,
         "repair_limit": basis.repair_limit,
     }
-    if basis.failure_class != "code":
+    if basis.failure_class == "typed_stop" and basis.stop_repeats_on_unchanged_retry:
+        # The executor's own stop follows from the approved plan and the bound
+        # data; like a spent repair budget, only a change in what the step
+        # runs on can change it.
+        repeated = "execution_retry_repeats_typed_stop"
+    elif basis.failure_class != "code":
         return ExecutionRetryAssessment(
             "available", f"execution_retry_failure_{basis.failure_class}", **common
         )
-    if not basis.repair_budget_exhausted:
+    elif not basis.repair_budget_exhausted:
         return ExecutionRetryAssessment(
             "available", "execution_retry_repair_budget_remaining", **common
         )
+    else:
+        repeated = "execution_retry_repeats_failure"
     if basis.identity is None:
         return ExecutionRetryAssessment(
             "unknown", "execution_retry_failed_identity_unknown", **common
@@ -139,8 +147,7 @@ def assess_failed_step(
                 **common,
             )
     return ExecutionRetryAssessment(
-        "futile", "execution_retry_repeats_failure",
-        image_checked=bool(basis.identity.image_id), **common,
+        "futile", repeated, image_checked=bool(basis.identity.image_id), **common
     )
 
 

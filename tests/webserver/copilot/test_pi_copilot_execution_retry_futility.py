@@ -184,6 +184,51 @@ def test_the_futile_card_explains_the_spent_budget_and_offers_only_a_fresh_plan(
     assert "从失败步骤重试分析" not in rendered["html"]
 
 
+def test_a_futile_retry_of_a_named_stop_says_the_stop_repeats() -> None:
+    stopped = {
+        **FUTILE,
+        "reason_code": "execution_retry_repeats_typed_stop",
+        "repair_attempts": 0,
+        "repair_limit": None,
+    }
+    script = f"""
+      global.window = {{ EU_HTML: {{ esc: value => String(value ?? '') }} }};
+      eval({_read("js/screens-guided-pi-confirmation.js")!r});
+      eval({_read("js/screens-guided-pi-error-text.js")!r});
+      const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create({{
+        tr: (en, zh) => en, esc: value => String(value), iconHtml: () => '',
+        resourceButton: () => '', sessionIsStale: () => false, busy: () => false,
+        workflow: () => ({{
+          next_action_code: 'failed_pipeline_execution_retry_futile',
+          execution_retry: {json.dumps(stopped)},
+        }}),
+        session: () => ({{ archived_child_jobs: [] }}),
+      }});
+      const errorText = window.EU_GUIDED_PI_ERROR_TEXT.create({{
+        tr: (en, zh) => en, staticPreview: () => false,
+      }}).errorText;
+      const refused = code => errorText({{
+        code: 'research_pipeline_execution_retry_futile', details: {{ reason_code: code }},
+      }});
+      process.stdout.write(JSON.stringify({{
+        spec: confirmation.workflowConfirmation(),
+        stopped: refused('execution_retry_repeats_typed_stop'),
+        repaired: refused('execution_retry_repeats_failure'),
+      }}));
+    """
+    rendered = json.loads(
+        subprocess.run([_node(), "--eval", script], check=True, capture_output=True, text=True).stdout
+    )
+
+    note = rendered["spec"]["note"]
+    assert "its data and the approved plan determine" in note
+    assert "repair budget" not in note
+    assert rendered["spec"]["approve"] == "Generate a fresh research plan"
+    assert "its data and the approved plan determine" in rendered["stopped"]
+    assert "automatic repairs" not in rendered["stopped"]
+    assert "used its automatic repairs" in rendered["repaired"]
+
+
 def test_approving_the_futile_card_starts_a_fresh_plan_bound_to_the_failed_run() -> None:
     script = f"""
       global.window = {{}};

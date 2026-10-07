@@ -109,6 +109,36 @@ def test_only_a_script_that_ran_and_failed_is_a_code_failure(
     assert basis.failure_class == expected
 
 
+def test_a_stop_its_executor_named_is_read_with_whether_it_repeats(
+    tmp_path: Path,
+) -> None:
+    stopped = _failed(
+        status="deterministic_standard_blocked",
+        runtime_repair_route="fail_closed",
+        deterministic_standard_analysis="signed_landmark_continuous_survival_suite",
+        executor_stop_reason_code="continuous_survival_interval_result_not_estimable",
+        executor_stop_cause_code="interval_without_event",
+    )
+
+    basis = load_failed_step_retry_basis(_run(tmp_path, [stopped]), "figure")
+
+    assert basis is not None
+    assert basis.failure_class == "typed_stop"
+    assert basis.stop_reason_code == "continuous_survival_interval_result_not_estimable"
+    assert basis.stop_repeats_on_unchanged_retry is True
+    # Codes on the record of another executor's step name no stop.
+    other = load_failed_step_retry_basis(
+        _run(
+            tmp_path / "other",
+            [{**stopped, "deterministic_standard_analysis": "grouped_table_one"}],
+        ),
+        "figure",
+    )
+    assert other is not None
+    assert (other.failure_class, other.stop_reason_code) == ("fail_closed", None)
+    assert other.stop_repeats_on_unchanged_retry is False
+
+
 def test_a_step_without_a_record_or_a_readable_ledger_has_no_basis(
     tmp_path: Path,
 ) -> None:

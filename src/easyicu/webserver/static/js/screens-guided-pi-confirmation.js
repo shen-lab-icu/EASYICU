@@ -162,9 +162,11 @@
         approve: tr('Retry analysis from failed step', '从失败步骤重试分析'),
       };
       if (code === 'failed_pipeline_execution_retry_futile') {
-        // The server found the failed step's repair budget spent and nothing
-        // it runs on changed, so a retry could only replay the same failure.
+        // The server found nothing the failed step runs on changed, and either
+        // its repair budget spent or a stop its executor named that repeats on
+        // the same plan and data, so a retry could only replay the failure.
         const retry = workflow.execution_retry || {};
+        const typedStop = retry.reason_code === 'execution_retry_repeats_typed_stop';
         const used = Number(retry.repair_attempts);
         const limit = Number(retry.repair_limit);
         const counted = Number.isInteger(used) && Number.isInteger(limit) && limit > 0;
@@ -175,7 +177,12 @@
             '保留失败的运行作为历史。请按当前研究配置启动一次新的 Research Agent 规划，并在分析前停下让我审核。',
           ),
           title: tr('Retrying the failed step would repeat the same failure', '从失败步骤重试只会重复同样的失败'),
-          note: counted
+          note: typedStop
+            ? tr(
+              'The analysis stopped for a reason its data and the approved plan determine, and neither EasyICU nor the runner image has changed since, so a retry would stop the same way. Generate a fresh plan with the change the stop names, or update EasyICU and return to retry.',
+              '分析因数据和已批准计划本身决定的原因停止，且此后 EasyICU 与运行镜像都没有变化，重试只会以同样的方式停止。请按停止原因所指的修改重新生成计划，或更新 EasyICU 后再回来重试。',
+            )
+            : counted
             ? tr(
               `The failed step's automatic repair budget is spent (${used} of ${limit} code repairs), and neither EasyICU nor the runner image has changed since. Generate a fresh plan, or update EasyICU and return to retry.`,
               `失败步骤的自动修复预算已用尽（代码修复 ${used}/${limit} 次），且此后 EasyICU 与运行镜像都没有变化。请重新生成计划，或更新 EasyICU 后再回来重试。`,
