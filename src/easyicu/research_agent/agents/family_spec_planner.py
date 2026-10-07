@@ -362,12 +362,14 @@ def _population_authority(request: FamilySpecRequest) -> dict[str, Any]:
     """
 
     typed = request.cohort_selection_mode == "predicate_filtered"
+    # Under a caller-bound population only the risk set is applied.
+    bounds = typed and not request.caller_binds_all_input_rows
     applied = {
         key: value
         for key, value in (
-            ("age_min", request.age_min if typed else None),
-            ("age_max", request.age_max if typed else None),
-            ("minimum_icu_hours", request.minimum_icu_hours if typed else None),
+            ("age_min", request.age_min if bounds else None),
+            ("age_max", request.age_max if bounds else None),
+            ("minimum_icu_hours", request.minimum_icu_hours if bounds else None),
             # A prediction model's stays: still in the ICU after it predicts.
             ("still_in_icu_after_prediction_time_hours", request.prediction_time_hours if typed else None),
             ("source_concept_population", request.concept_cohort_definition),

@@ -400,26 +400,33 @@ def _require_variables(
     return cleaned
 
 
+def compile_cohort_predicate(item: Any) -> ConceptPredicate:
+    """One progressive cohort predicate as the plan's cohort states it."""
+
+    return ConceptPredicate(
+        concept_id=item.concept_id,
+        time_window=TimeWindow(
+            anchor=item.anchor,
+            start_offset_hours=item.start_offset_hours,
+            end_offset_hours=item.end_offset_hours,
+        ),
+        aggregation=item.aggregation,
+        op=item.op,
+        value=item.value.materialize(),
+    )
+
+
 def _compile_cohort_intent(
     cohort_intent: ProgressiveCohortIntent,
 ) -> CohortDefinition:
-    def predicate(item: Any) -> ConceptPredicate:
-        return ConceptPredicate(
-            concept_id=item.concept_id,
-            time_window=TimeWindow(
-                anchor=item.anchor,
-                start_offset_hours=item.start_offset_hours,
-                end_offset_hours=item.end_offset_hours,
-            ),
-            aggregation=item.aggregation,
-            op=item.op,
-            value=item.value.materialize(),
-        )
-
     return CohortDefinition(
         name=cohort_intent.name,
-        inclusion=tuple(predicate(item) for item in cohort_intent.inclusion),
-        exclusion=tuple(predicate(item) for item in cohort_intent.exclusion),
+        inclusion=tuple(
+            compile_cohort_predicate(item) for item in cohort_intent.inclusion
+        ),
+        exclusion=tuple(
+            compile_cohort_predicate(item) for item in cohort_intent.exclusion
+        ),
         selection_mode=cohort_intent.selection_mode,
         # A criterion with concepts is applied by one of the predicates
         # (``_require_stated_population_applied``); one without is not.
@@ -3106,6 +3113,7 @@ __all__ = [
     "assert_immutable_prefix",
     "compile_progressive_plan",
     "cohort_identity_columns",
+    "compile_cohort_predicate",
     "progressive_cohort_concept_ids",
     "progressive_population_concept_ids",
     "required_binary_display_label_scopes",

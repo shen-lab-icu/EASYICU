@@ -9173,6 +9173,10 @@
     ],
     [
       "easyicu.research_agent.pipeline",
+      "easyicu.research_agent.planning.family_spec"
+    ],
+    [
+      "easyicu.research_agent.pipeline",
       "easyicu.research_agent.planning.figure_plan_shaping"
     ],
     [
@@ -13644,7 +13648,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3403,
+    "edge_count": 3404,
     "largest_scc_size": 0,
     "module_count": 783,
     "package_count": 36,

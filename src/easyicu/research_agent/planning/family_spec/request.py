@@ -56,7 +56,7 @@ from ..literature_design_authority import (
     LiteratureDesignEvidenceCard,
 )
 from ..ordinal_multi_outcome import resolve_ordinal_multi_outcome_contract
-from ..progressive_compiler import cohort_identity_columns
+from ..progressive_compiler import cohort_identity_columns, compile_cohort_predicate
 from ..scientific_review import post_baseline_exposure
 from .contract import (
     DESCRIPTIVE_FAMILY_ID,
@@ -84,6 +84,7 @@ from .contract import (
     SealedTrajectoryCoordinates,
     SensitivityAxisBinding,
     StudyPopulationOccurrence,
+    prediction_risk_set_predicates,
     sealed_cohort_predicate,
     table_one_group_column,
 )
@@ -595,8 +596,9 @@ def _prediction_risk_set(
     template keeps the stays whose ICU length of stay exceeds the prediction
     time: still in the ICU after it, hence alive at it, on every source and
     without a death time.  Without a typed window there is no prediction time
-    and nothing is added.  A caller that binds every input row leaves no
-    cohort to filter, so the request is refused before any Provider call.
+    and nothing is added.  When the caller binds every input row, that is the
+    population, and the risk set is the only filter the template adds to it
+    (``caller_binds_all_input_rows``).
     """
 
     if prediction_time_hours is None:
@@ -605,14 +607,6 @@ def _prediction_risk_set(
         f"a prediction at {prediction_time_hours:g} h after ICU admission, which analyzes "
         "the stays still in the ICU after it,"
     )
-    if required_primary_cohort_selection_mode == "all_input_rows":
-        raise FamilySpecError(
-            "family_spec_prediction_risk_set_conflicts_with_population",
-            f"{needed_for} cannot keep every input row, which the caller binds; a study "
-            f"population with a minimum ICU stay of {prediction_time_hours:g} h is one the "
-            "model can predict for",
-            path="cohort",
-        )
     unit = _icu_stay_unit(
         context, code="family_spec_prediction_risk_set_unavailable", needed_for=needed_for
     )
@@ -621,7 +615,57 @@ def _prediction_risk_set(
         "cohort_selection_mode": "predicate_filtered",
         "prediction_time_hours": prediction_time_hours,
         "icu_stay_unit": unit,
+        "caller_binds_all_input_rows": required_primary_cohort_selection_mode
+        == "all_input_rows",
     }
+
+
+def caller_bound_population_conflict(
+    plan: Any, *, context: ResearchContext, required_selection_mode: str
+) -> Optional[str]:
+    """Why a plan's cohort does not keep the population its caller binds, or None.
+
+    It keeps it when its selection mode is the caller's.  A caller that binds
+    every input row also admits a static prediction's cohort that adds only
+    its risk set, the stays still in the ICU after the prediction time
+    (``prediction_risk_set_predicates``): compared as typed predicates, with
+    the threshold in the unit the roster records ``los_icu`` in.  Any other
+    predicate, threshold, unit or window is not that population.
+    """
+
+    cohort = getattr(plan, "cohort", None)
+    observed = str(getattr(cohort, "selection_mode", "") or "")
+    if observed == required_selection_mode:
+        return None
+    conflict = (
+        "Planner primary cohort selection mode does not match the caller-bound "
+        f"contract: expected {required_selection_mode!r}, observed {observed!r}"
+    )
+    prediction_time_hours = host_outer_feature_window_end_hours(context)
+    if (
+        cohort is None
+        or required_selection_mode != "all_input_rows"
+        or observed != "predicate_filtered"
+        or getattr(plan, "analysis_type", None) != "prediction_model"
+        or cohort.exclusion
+        or prediction_time_hours is None
+    ):
+        return conflict
+    try:
+        unit = _icu_stay_unit(
+            context,
+            code="family_spec_prediction_risk_set_unavailable",
+            needed_for="a prediction's risk set",
+        )
+    except FamilySpecError:
+        return conflict
+    risk_set = tuple(
+        compile_cohort_predicate(item)
+        for item in prediction_risk_set_predicates(
+            prediction_time_hours=prediction_time_hours, icu_stay_unit=unit
+        )
+    )
+    return None if tuple(cohort.inclusion) == risk_set else conflict
 
 
 def _optional_number(value: Any) -> Optional[float]:
@@ -2617,6 +2661,7 @@ def _build_phenotyping_request(
 
 __all__ = [
     "build_family_spec_request",
+    "caller_bound_population_conflict",
     "exposure_companion_columns",
     "family_template_id_for_context",
     "landmark_survival_suite_sealed",

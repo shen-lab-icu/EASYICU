@@ -266,13 +266,6 @@ def test_a_caller_bound_filter_is_bounded_by_the_prediction_time() -> None:
     assert (bare.population_concepts, bare.prediction_time_hours) == ([], 24.0)
 
 
-def test_a_caller_binding_every_input_row_is_refused_not_unfiltered() -> None:
-    assert (
-        _refusal(_prediction_context(), "all_input_rows")
-        == "family_spec_prediction_risk_set_conflicts_with_population"
-    )
-
-
 @pytest.mark.parametrize(
     ("unit", "stored", "value"),
     [("days", "days", 1.0), (None, "days", 1.0), ("d", "days", 1.0), ("hours", "hours", 24.0), ("h", "hours", 24.0)],
