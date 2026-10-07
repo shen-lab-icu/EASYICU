@@ -384,11 +384,35 @@ def compile_landmark_survival_runtime_projection(
         primary_exposure=primary_exposure,
         primary_exposure_source=primary_exposure_source,
     )
+    analysis_unit_label = (
+        _FIRST_STAY_UNIT_LABEL
+        if primary_cohort.first_icu_stay_only(study.get("cohort"))
+        else _ANALYSIS_UNIT_LABELS[_SUPPORTED_ANALYSIS_UNIT]
+    )
+    if exposure_kind == VariableKind.CONTINUOUS:
+        # A continuous exposure is modelled per unit by its own sealed suite,
+        # on the coordinates validated above.
+        from .landmark_continuous_survival_runtime_projection import (
+            compile_landmark_continuous_survival_runtime_projection,
+        )
+
+        return compile_landmark_continuous_survival_runtime_projection(
+            study=study,
+            endpoint=endpoint,
+            landmark_hours=landmark_hours,
+            analysis_unit_label=analysis_unit_label,
+            primary_exposure=str(primary_exposure),
+            primary_exposure_source=str(primary_exposure_source),
+            declared_covariates=declared_covariates,
+            covariate_operationalizations=covariate_operationalizations,
+            universe_path=universe_path,
+            scientific_configuration_sha256=scientific_configuration_sha256,
+        )
     if exposure_kind != VariableKind.BINARY:
         raise WebScientificRuntimeProjectionError(
             "web_landmark_survival_exposure_incompatible",
-            "The sealed survival suite contrasts one binary incident exposure "
-            "against its comparator.",
+            "The sealed survival suites contrast one binary incident exposure "
+            "against its comparator or model one continuous exposure per unit.",
             details={
                 "primary_exposure": primary_exposure,
                 "exposure_kind": exposure_kind.value,
@@ -499,11 +523,7 @@ def compile_landmark_survival_runtime_projection(
         "comparator_group_label": (
             f"No incident {exposure_name} by {landmark_token} h"
         ),
-        "analysis_unit_label": (
-            _FIRST_STAY_UNIT_LABEL
-            if primary_cohort.first_icu_stay_only(study.get("cohort"))
-            else _ANALYSIS_UNIT_LABELS[_SUPPORTED_ANALYSIS_UNIT]
-        ),
+        "analysis_unit_label": analysis_unit_label,
         "derived_exposure_column": (
             f"incident_{primary_exposure_source}_by_{landmark_token}h"
         ),
