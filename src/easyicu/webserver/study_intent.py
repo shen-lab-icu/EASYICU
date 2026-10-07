@@ -118,6 +118,13 @@ _FIXED_HORIZON_MORTALITY = "fixed_horizon_mortality"
 # reading aid, not an allowlist of what a study may be about: an unmatched
 # phrase yields an unread slot, never a default.
 _PHRASE_TO_CONCEPT: Tuple[Tuple[str, str], ...] = (
+    # A spelled-out catalog name is read by its own name ("lactate
+    # dehydrogenase" is ldh, not lactate): see ``_resolved_reading``.  These are
+    # the abbreviations and name variants the catalog does not spell.
+    (r"\bldh\b", "ldh"),
+    (r"\bhba1c\b|\ba1c\b|glyc(?:ated|osylated)\s+h(?:ae|e)moglobin", "hba1c"),
+    (r"\bplr\b", "plr"),
+    (r"\bnlr\b", "nlr"),
     (r"lactate|乳酸", "lact"),
     (r"\bsofa-?2\b|sofa2", "sofa2"),
     (r"\bsofa\b", "sofa"),
@@ -371,16 +378,106 @@ def _entry_readings(pattern: str, concept: str, text: str) -> Iterator[Tuple[str
         yield concept, match.start(), match.end()
 
 
+@lru_cache(maxsize=1)
+def _catalog_name_patterns() -> Tuple[Tuple[str, "re.Pattern[str]"], ...]:
+    """Every catalog concept's own names, compiled once."""
+
+    try:
+        from easyicu.concept.catalog import CONCEPT_DICTIONARY
+    except Exception:  # pragma: no cover - catalog is optional at import time
+        return ()
+    compiled = []
+    for concept_id in CONCEPT_DICTIONARY:
+        pattern = _concept_name_pattern(concept_id)
+        if pattern is not None:
+            compiled.append((concept_id, re.compile(pattern, re.IGNORECASE)))
+    return tuple(compiled)
+
+
+@lru_cache(maxsize=64)
+def _catalog_name_readings(text: str) -> Tuple[Tuple[str, int, int], ...]:
+    """Each catalog concept ``text`` names by its own name: concept, start, end."""
+
+    return tuple(
+        (concept_id, match.start(), match.end())
+        for concept_id, pattern in _catalog_name_patterns()
+        for match in pattern.finditer(text)
+    )
+
+
+#: A reading joined to another analyte in a ratio ("lactate/pyruvate ratio",
+#: "ratio of BUN to creatinine", "乳酸与丙酮酸比值"), or followed by a clearance,
+#: names that derived measure, not the analyte.
+_RATIO_WORD = r"(?:ratio\b|比值|比率|之比)"
+_RATIO_JOIN = r"(?:[\s\-‐–]+to[\s\-‐–]+|\s*[/／:]\s*|与|和)"
+_RATIO_TERM = r"[^\s,.;:，。；：、]{1,24}"
+_DERIVED_AFTER = re.compile(
+    rf"(?:[\s\-‐–]*(?:clearance\b|清除率)"
+    rf"|{_RATIO_JOIN}{_RATIO_TERM}(?:[\s\-‐–]+{_RATIO_TERM}){{0,2}}?[\s\-‐–]*的?{_RATIO_WORD})",
+    re.IGNORECASE,
+)
+_RATIO_PARTNER_BEFORE = re.compile(rf"{_RATIO_TERM}{_RATIO_JOIN}$", re.IGNORECASE)
+_RATIO_AFTER = re.compile(rf"[\s\-‐–]*的?{_RATIO_WORD}", re.IGNORECASE)
+_RATIO_OF_BEFORE = re.compile(
+    r"\bratio\s+of\s+(?:(?:[^\s,.;:]+\s+){0,3}?|.{1,40}?\bto\s+)$", re.IGNORECASE
+)
+
+
+def _derived_measure_component(text: str, start: int, end: int) -> bool:
+    """Whether the reading at ``start:end`` is one term of a ratio or a clearance."""
+
+    before, after = text[:start], text[end:]
+    return bool(
+        _DERIVED_AFTER.match(after)
+        or (_RATIO_PARTNER_BEFORE.search(before) and _RATIO_AFTER.match(after))
+        or _RATIO_OF_BEFORE.search(before)
+    )
+
+
+def _resolved_reading(
+    text: str, concept: str, start: int, end: int
+) -> Optional[Tuple[str, int, int]]:
+    """What one phrase-table reading names, or ``None`` when it names nothing read here.
+
+    A reading inside another concept's longer catalog name is that concept:
+    "lactate dehydrogenase" is ldh, "直接胆红素" is direct bilirubin, "hospital
+    length of stay" is the hospital stay; the longest such name wins.  A term
+    of a ratio or a clearance the catalog does not name is not read at all, so
+    the slot stays unread rather than naming the analyte it is computed from.
+    """
+
+    longest: Optional[Tuple[str, int, int]] = None
+    for other, begin, finish in _catalog_name_readings(text):
+        if (
+            other != concept
+            and begin <= start
+            and end <= finish
+            and finish - begin > end - start
+            and (longest is None or finish - begin > longest[2] - longest[1])
+        ):
+            longest = (other, begin, finish)
+    if longest is not None:
+        return longest
+    if _derived_measure_component(text, start, end):
+        return None
+    return concept, start, end
+
+
 def _match_concept(text: str) -> List[Tuple[str, str]]:
     """Return concept/phrase pairs in dictionary-specificity order.
 
     A phrase the sentence explicitly negates is not a reading — it is skipped,
-    which leaves the slot unread rather than wrong.
+    which leaves the slot unread rather than wrong.  A phrase inside another
+    concept's longer name is that concept (``_resolved_reading``).
     """
     found: List[Tuple[str, str]] = []
     seen = set()
     for pattern, entry in _PHRASE_TO_CONCEPT:
-        for concept, start, end in _entry_readings(pattern, entry, text):
+        for reading in _entry_readings(pattern, entry, text):
+            resolved = _resolved_reading(text, *reading)
+            if resolved is None:
+                continue
+            concept, start, end = resolved
             if (
                 concept in seen
                 or _negated(text, start)
@@ -409,7 +506,11 @@ def explicit_outcome_concepts(question: str) -> tuple[str, ...]:
     for pattern, entry in _PHRASE_TO_CONCEPT:
         if entry not in _OUTCOME_CONCEPTS_PRIMARY and entry != _FIXED_HORIZON_MORTALITY:
             continue
-        for concept, start, end in _entry_readings(pattern, entry, text):
+        for reading in _entry_readings(pattern, entry, text):
+            resolved = _resolved_reading(text, *reading)
+            if resolved is None or resolved[0] not in _OUTCOME_CONCEPTS_PRIMARY:
+                continue
+            concept, start, end = resolved
             if (
                 _negated(text, start)
                 or _follow_up_handling(text, start, end)
@@ -537,7 +638,38 @@ def explicit_landmark_hours(question: str) -> Optional[float]:
     return next(iter(stated)) if len(stated) == 1 else None
 
 
-@lru_cache(maxsize=256)
+#: How a catalog name's words may be joined in a question: "platelet-to-
+#: lymphocyte ratio", "platelet to lymphocyte ratio", "platelet/lymphocyte
+#: ratio"; "血小板/淋巴细胞比值", "血小板与淋巴细胞比值".
+_NAME_WORD_SPLIT = re.compile(r"[\s\-‐–/／]+")
+_NAME_SEPARATOR = r"[\s\-‐–/／]+"
+_NAME_TO_JOIN = r"(?:[\s\-‐–]+to[\s\-‐–]+|\s*[/／:]\s*)"
+_NAME_CJK_SEPARATOR = r"(?:[\s\-‐–/／]+|与|和)?"
+_CJK = re.compile(r"[\u3400-\u9fff]")
+
+
+def _catalog_name_regex(name: str) -> str:
+    """One catalog name as a phrase: its words in order, however they are joined."""
+
+    words = [word for word in _NAME_WORD_SPLIT.split(name.strip()) if word]
+    pattern = ""
+    index = 0
+    while index < len(words):
+        word = words[index]
+        if not pattern:
+            pattern = re.escape(word)
+        elif word.lower() == "to" and index + 1 < len(words):
+            index += 1
+            pattern += _NAME_TO_JOIN + re.escape(words[index])
+        elif _CJK.search(words[index - 1][-1:]) or _CJK.search(word[:1]):
+            pattern += _NAME_CJK_SEPARATOR + re.escape(word)
+        else:
+            pattern += _NAME_SEPARATOR + re.escape(word)
+        index += 1
+    return pattern
+
+
+@lru_cache(maxsize=1024)
 def _concept_name_pattern(concept_id: str) -> Optional[str]:
     """The concept's own catalog names, read as whole concept phrases.
 
@@ -558,7 +690,7 @@ def _concept_name_pattern(concept_id: str) -> Optional[str]:
     if not names:
         return None
     return "|".join(
-        rf"(?<![a-z0-9]){re.escape(name)}(?![a-z0-9])" for name in names
+        rf"(?<![a-z0-9]){_catalog_name_regex(name)}(?![a-z0-9])" for name in names
     )
 
 
@@ -595,6 +727,7 @@ def explicit_exposure_aggregation(
         if not any(
             other != span and other[0] <= span[0] and span[1] <= other[1] for other in spans
         )
+        and _resolved_reading(text, concept_id, *span) == (concept_id, *span)
     }
     for begin, finish in sorted(spans):
         for operation, expression in _MEASUREMENT_OPERATIONS:
