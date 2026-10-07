@@ -1698,6 +1698,78 @@ _EFFECT_SCALE_PHRASE_PATTERNS = {
 _CI_MARKER = r"(?:95\s*%\s*(?:CI|confidence\s+interval)|confidence\s+interval)"
 _PLAIN_PROSE_NUMBER = r"[-+]?(?:\d[\d,]*(?:\.\d+)?|\.\d+)%?"
 
+# A ratio label governs the ratio's own numbers: its estimate and interval.
+# The numbers below report something else, so the label must not narrow them
+# to ratio claims; narrowed, a step, coordinate or count stays untraced and the
+# strict binder blocks its sentence.
+#: A p-value, standard error or count named just before the number.
+_STATISTIC_BEFORE_RE = re.compile(
+    r"\b(?:(?:p|SE|standard\s+error)\s*[<=>:]?|n\s*[=:])\s*$", re.I
+)
+#: A count noun just after the number: "1,234 patients", "312 events".
+_COUNT_AFTER_RE = re.compile(
+    r"\s*(?:(?:icu|hospital)\s+)?"
+    r"(?:patients?|stays?|admissions?|observations?|rows?|groups?"
+    r"|events?|deaths?|cases?|participants?|subjects?|individuals?"
+    r"|encounters?|episodes?)\b",
+    re.I,
+)
+_RANGE_WORD = r"(?:–|—|-|to\b|and\b|through\b|versus\b|vs\b\.?)"
+_TIME_WORD = r"(?:day|hour|week|month|year)s?"
+#: A unit's first token; a slash unit ("mmol/L", "mL/kg/h") starts with one. No
+#: letter, digit or hyphen may follow, so "U-shaped" names no unit.
+_UNIT_OF_MEASURE = (
+    r"(?:%|(?:percent|per\s?cent|percentage\s+points?"
+    r"|mm\s?Hg|cm\s?H2O|kPa|[mµμunp]?mol|[mµμunpk]?g|mcg|[mµμd]?L|ml|[mµμ]?IU|[mk]?U"
+    r"|m?Eq|cm|mm|°[CF]|bpm|cells|copies|beats|breaths"
+    r"|SDs?|standard\s+deviations?|units?|points?"
+    r"|seconds?|minutes?|min|hours?|hrs?|h|days?|d|weeks?|wks?|months?|mos?"
+    r"|years?|yrs?|y)(?![\w-]))"
+)
+#: A step ("per 500 U/L") or a time coordinate ("day 120", "days 14 to 120").
+#: A time word that is itself the unit of a number ("at 90 days") is not one.
+_STEP_OR_TIME_BEFORE_RE = re.compile(
+    r"(?:\bper[\s-]*"
+    r"|(?:^|[^\d\s-])\s*\b" + _TIME_WORD + r"\s+"
+    r"|\b" + _TIME_WORD + r"\s+" + _PLAIN_PROSE_NUMBER + r"\s*" + _RANGE_WORD + r"\s*"
+    r")$",
+    re.I,
+)
+#: A unit of measure after the number, or after the other end of its range or
+#: contrast: "139 mmol/L", "180-day", "23.4%", "133.4 versus 139 mmol/L".
+_UNIT_AFTER_RE = re.compile(
+    r"\s*(?:" + _RANGE_WORD + r"\s*" + _PLAIN_PROSE_NUMBER + r"\s*)?-?\s*"
+    + _UNIT_OF_MEASURE
+)
+
+
+def _is_step_or_time_coordinate(text: str, *, start: int) -> bool:
+    """Whether the words just before a number make it a step or time coordinate.
+
+    Neither is a ratio, an estimate or an interval endpoint, even after an
+    interval. Like the unit pattern, this one is anchored at the number and
+    reads past the sentence splitter, which takes the "." of "vs." for a full
+    stop.
+    """
+
+    return bool(_STEP_OR_TIME_BEFORE_RE.search(text[max(0, start - 40) : start]))
+
+
+def _reports_no_ratio(
+    text: str, *, start: int, end: int, sentence_start: int, sentence_end: int
+) -> bool:
+    """Whether the prose marks this number as something other than a ratio."""
+
+    if text[start:end].endswith("%"):
+        return True
+    if _STATISTIC_BEFORE_RE.search(
+        text[max(sentence_start, start - 24) : start]
+    ) or _COUNT_AFTER_RE.match(text[end : min(sentence_end, end + 32)]):
+        return True
+    return _is_step_or_time_coordinate(text, start=start) or bool(
+        _UNIT_AFTER_RE.match(text[end : end + 40])
+    )
+
 
 def _prose_effect_scale(
     text: str, *, start: int, end: int
@@ -1707,7 +1779,9 @@ def _prose_effect_scale(
     Scale is mention-local rather than sentence-global: a results sentence may
     legitimately report OR, HR, and RR together. A following label is used only
     when it is directly postfix to the number; otherwise the latest preceding
-    label governs the point estimate and any CI endpoints that follow it.
+    label governs the point estimate and any CI endpoints that follow it. A
+    number the prose marks as a statistic, count, percentage, step, coordinate
+    or other quantity has no ratio scale.
     """
 
     abbreviation_scales = {
@@ -1721,17 +1795,12 @@ def _prose_effect_scale(
     next_boundary = _NUMERIC_SENTENCE_BOUNDARY_RE.search(text, end)
     context_end = next_boundary.start() if next_boundary is not None else len(text)
     context = text[context_start:context_end]
-    local_prefix = text[max(context_start, start - 24) : start]
-    local_suffix = text[end : min(context_end, end + 32)]
-    if re.search(
-        r"\b(?:p|SE|standard\s+error)\s*[<=>:]?\s*$",
-        local_prefix,
-        re.I,
-    ) or re.match(
-        r"\s*(?:(?:icu|hospital)\s+)?"
-        r"(?:patients?|stays?|admissions?|observations?|rows?|groups?)\b",
-        local_suffix,
-        re.I,
+    if _reports_no_ratio(
+        text,
+        start=start,
+        end=end,
+        sentence_start=context_start,
+        sentence_end=context_end,
     ):
         return None
     mentions: list[tuple[int, int, NumericEffectScale]] = []
@@ -1772,6 +1841,8 @@ def _prose_numeric_estimand(
 ) -> Optional[NumericEstimand]:
     """Classify an explicitly labelled point estimate or ordered CI endpoint."""
 
+    if _is_step_or_time_coordinate(text, start=start):
+        return None
     prefix = text[max(0, start - 180) : start]
     suffix = text[end : min(len(text), end + 100)]
     separator = r"(?:-|–|—|\bto\b)"
