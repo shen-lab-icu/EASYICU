@@ -6,9 +6,9 @@ This package owns the ``family_spec_v1`` planner strategy for method families
 that have a host template (today: the fixed-landmark categorical and
 continuous/spline association families, the descriptive exposure–outcome
 family, the cross-sectional phenotyping family, the static binary
-prediction family, the sealed fixed-landmark survival suite, the sealed
-fixed-window trajectory suite, and the sealed fail-closed source-feasibility
-decision).  The Planner's only output is a
+prediction family, the sealed fixed-landmark survival suites of a binary and
+of a continuous exposure, the sealed fixed-window trajectory suite, and the
+sealed fail-closed source-feasibility decision).  The Planner's only output is a
 :class:`~.contract.FamilyPlanSpec` — the scientific decisions a statistician
 makes for the family (adjustment set with rationales, reader labels, how each
 screened comparator is applied).  Every executable coordinate (steps, products,
@@ -36,6 +36,7 @@ from .contract import (
     FAMILY_SPEC_SCHEMA_VERSION,
     FIXED_WINDOW_TRAJECTORY_FAMILY_ID,
     LANDMARK_CATEGORICAL_FAMILY_ID,
+    LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID,
     LANDMARK_SPLINE_FAMILY_ID,
     LANDMARK_SURVIVAL_FAMILY_ID,
     PHENOTYPING_FAMILY_ID,
@@ -46,6 +47,7 @@ from .contract import (
     FamilyPlanSpec,
     FamilySpecError,
     FamilySpecRequest,
+    SealedContinuousSuiteCoordinates,
     SealedFeasibilityCoordinates,
     SealedSuiteCoordinates,
     SealedTrajectoryCoordinates,
@@ -56,6 +58,8 @@ from .request import (
     build_family_spec_request,
     exposure_companion_columns,
     family_template_id_for_context,
+    landmark_survival_suite_sealed,
+    sealed_continuous_survival_suite_coordinates,
     sealed_feasibility_coordinates,
     sealed_survival_suite_coordinates,
     sealed_trajectory_suite_coordinates,
@@ -66,6 +70,7 @@ from .landmark_categorical_template import (
     build_landmark_categorical_skeleton,
     keeps_unmeasured_covariate_rows,
 )
+from .continuous_survival_template import build_landmark_continuous_survival_skeleton
 from .descriptive_template import build_descriptive_skeleton
 from .feasibility_template import build_source_feasibility_skeleton
 from .phenotyping_template import build_phenotyping_skeleton
@@ -78,6 +83,7 @@ __all__ = [
     "FAMILY_SPEC_SCHEMA_VERSION",
     "FIXED_WINDOW_TRAJECTORY_FAMILY_ID",
     "LANDMARK_CATEGORICAL_FAMILY_ID",
+    "LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID",
     "LANDMARK_SPLINE_FAMILY_ID",
     "LANDMARK_SURVIVAL_FAMILY_ID",
     "PHENOTYPING_FAMILY_ID",
@@ -89,6 +95,7 @@ __all__ = [
     "FamilySkeletonDraft",
     "FamilySpecError",
     "FamilySpecRequest",
+    "SealedContinuousSuiteCoordinates",
     "SealedFeasibilityCoordinates",
     "SealedSuiteCoordinates",
     "SealedTrajectoryCoordinates",
@@ -98,6 +105,7 @@ __all__ = [
     "build_family_spec_request",
     "build_landmark_association_skeleton",
     "build_landmark_categorical_skeleton",
+    "build_landmark_continuous_survival_skeleton",
     "build_landmark_survival_skeleton",
     "build_phenotyping_skeleton",
     "build_prediction_skeleton",
@@ -105,6 +113,8 @@ __all__ = [
     "exposure_companion_columns",
     "family_template_id_for_context",
     "keeps_unmeasured_covariate_rows",
+    "landmark_survival_suite_sealed",
+    "sealed_continuous_survival_suite_coordinates",
     "sealed_feasibility_coordinates",
     "sealed_survival_suite_coordinates",
     "sealed_trajectory_suite_coordinates",

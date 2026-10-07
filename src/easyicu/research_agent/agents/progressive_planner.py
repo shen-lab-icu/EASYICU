@@ -77,7 +77,7 @@ from ..planning.progressive_compiler import (
     required_reader_display_label_keys,
     validate_progressive_foundation,
 )
-from ..planning.family_spec import family_template_id_for_context, sealed_survival_suite_coordinates
+from ..planning.family_spec import family_template_id_for_context, landmark_survival_suite_sealed
 from ..planning.dependence_authority import (
     context_counts_only_authority,
     descriptive_counts_only_required,
@@ -4437,9 +4437,7 @@ class ProgressivePlannerAgent:
         # The Progressive v2 compiler never writes a family result contract, so
         # a final plan whose every candidate family needs one cannot pass
         # acceptance: stop before any Provider call instead of spending.
-        sealed_survival_suite = (
-            sealed_survival_suite_coordinates(planning_contract_context) is not None
-        )
+        sealed_survival_suite = landmark_survival_suite_sealed(planning_contract_context)
         v2_compiles_final_plan = resume_checkpoint is None and not stop_after_outline and (
             planner_strategy != FAMILY_SPEC_STRATEGY or family_spec_fallback_reason is not None
         )

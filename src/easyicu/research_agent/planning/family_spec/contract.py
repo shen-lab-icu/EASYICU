@@ -43,13 +43,14 @@ DESCRIPTIVE_FAMILY_ID = "descriptive_exposure_outcome"
 PHENOTYPING_FAMILY_ID = "cross_sectional_phenotyping"
 PREDICTION_FAMILY_ID = "static_prediction_model"
 LANDMARK_SURVIVAL_FAMILY_ID = "landmark_survival_suite"
+LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID = "landmark_continuous_survival_suite"
 FIXED_WINDOW_TRAJECTORY_FAMILY_ID = "fixed_window_trajectory_suite"
 SOURCE_FEASIBILITY_FAMILY_ID = "source_feasibility_fail_closed"
 LANDMARK_FAMILY_IDS = frozenset({LANDMARK_CATEGORICAL_FAMILY_ID, LANDMARK_SPLINE_FAMILY_ID})
 #: Families whose template applies the plan's own cohort, so a population the
-#: study states can be applied there; the survival family only for a proposed
-#: suite.  A sealed suite's cohort is its study design's, and the feasibility
-#: family decides nothing by a time zero.
+#: study states can be applied there; the survival families only for a
+#: proposed suite.  A sealed suite's cohort is its study design's, and the
+#: feasibility family decides nothing by a time zero.
 POPULATION_FAMILY_IDS = frozenset(
     {
         *LANDMARK_FAMILY_IDS,
@@ -57,6 +58,7 @@ POPULATION_FAMILY_IDS = frozenset(
         PHENOTYPING_FAMILY_ID,
         PREDICTION_FAMILY_ID,
         LANDMARK_SURVIVAL_FAMILY_ID,
+        LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID,
     }
 )
 #: The anchor a population predicate counts from: the family's time zero is
@@ -67,6 +69,7 @@ POPULATION_ANCHOR = "icu_admission"
 SEALED_SUITE_FAMILY_IDS = frozenset(
     {
         LANDMARK_SURVIVAL_FAMILY_ID,
+        LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID,
         FIXED_WINDOW_TRAJECTORY_FAMILY_ID,
         SOURCE_FEASIBILITY_FAMILY_ID,
     }
@@ -78,6 +81,7 @@ FamilyId = Literal[
     "cross_sectional_phenotyping",
     "static_prediction_model",
     "landmark_survival_suite",
+    "landmark_continuous_survival_suite",
     "fixed_window_trajectory_suite",
     "source_feasibility_fail_closed",
 ]
@@ -211,6 +215,67 @@ class SealedSuiteCoordinates(BaseModel):
                 (
                     self.exposure_status_column,
                     self.exposure_onset_column,
+                    self.event_column,
+                    self.followup_time_column,
+                    *self.adjustment_columns,
+                )
+            )
+        )
+
+    @property
+    def analysis_outputs(self) -> tuple[str, ...]:
+        """Every owned product except the composite figure the host renders."""
+
+        return tuple(
+            value for value in self.plan_outputs if not value.startswith("figure:")
+        )
+
+
+class SealedContinuousSuiteCoordinates(BaseModel):
+    """The continuous-exposure landmark survival suite's coordinates, named, not chosen.
+
+    The signing runtime authority models one window summary of a continuous
+    exposure, recorded from ICU admission to the landmark, per unit of its
+    source's scale.  Like :class:`SealedSuiteCoordinates`, the template copies
+    these verbatim into the single primary step and ``bind_plan`` replaces it
+    with the signed owner and its figure.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    primary_owner: Literal["signed_landmark_continuous_survival_suite"]
+    exposure_column: str = Field(min_length=1, max_length=128)
+    #: How the materializer summarised the exposure over hours 0 to the landmark.
+    exposure_window_summary: Literal["max", "min", "mean", "first"]
+    #: The unit of the exposure source's recorded scale, when the context states it.
+    exposure_unit: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    event_column: str = Field(min_length=1, max_length=128)
+    followup_time_column: str = Field(min_length=1, max_length=128)
+    landmark_hours: float = Field(gt=0.0)
+    endpoint_horizon_days: float = Field(gt=0.0)
+    adjustment_columns: list[str] = Field(default_factory=list)
+    plan_outputs: list[str] = Field(min_length=1)
+
+    @field_validator("adjustment_columns", "plan_outputs")
+    @classmethod
+    def _unique_nonblank(cls, values: list[str]) -> list[str]:
+        cleaned = [str(value or "").strip() for value in values]
+        if any(not value for value in cleaned) or len(cleaned) != len(set(cleaned)):
+            raise ValueError("sealed suite rosters must contain unique non-empty values")
+        return cleaned
+
+    @model_validator(mode="after")
+    def _landmark_precedes_the_horizon(self) -> "SealedContinuousSuiteCoordinates":
+        if self.landmark_hours / 24.0 >= self.endpoint_horizon_days:
+            raise ValueError("the suite's landmark must precede its endpoint horizon")
+        return self
+
+    @property
+    def source_columns(self) -> tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                (
+                    self.exposure_column,
                     self.event_column,
                     self.followup_time_column,
                     *self.adjustment_columns,
@@ -464,6 +529,15 @@ class FamilySpecRequest(BaseModel):
     proposed_suite: Optional[SealedSuiteCoordinates] = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    #: The continuous-exposure survival suite, sealed or proposed like the
+    #: binary suite above.  Omitted from the digest when absent, so every
+    #: other request keeps its identity.
+    sealed_continuous_suite: Optional[SealedContinuousSuiteCoordinates] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    proposed_continuous_suite: Optional[SealedContinuousSuiteCoordinates] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     sealed_trajectory: Optional[SealedTrajectoryCoordinates] = None
     sealed_feasibility: Optional[SealedFeasibilityCoordinates] = None
     adjustment_selection: Literal["planner_selectable", "exact"]
@@ -557,12 +631,41 @@ class FamilySpecRequest(BaseModel):
         landmark-or-window value it had before the suite was read here.
         """
 
-        suite = self.sealed_suite or self.proposed_suite
+        suite = self.survival_suite
         return (
             self.landmark_hours
             or (suite.landmark_hours if suite is not None else None)
             or self.observation_window_hours
         )
+
+    @property
+    def survival_suite(
+        self,
+    ) -> SealedSuiteCoordinates | SealedContinuousSuiteCoordinates | None:
+        """The request's survival suite, sealed or proposed, of either exposure kind."""
+
+        return (
+            self.sealed_suite
+            or self.proposed_suite
+            or self.sealed_continuous_suite
+            or self.proposed_continuous_suite
+        )
+
+    @property
+    def suite_proposal(
+        self,
+    ) -> SealedSuiteCoordinates | SealedContinuousSuiteCoordinates | None:
+        """The survival suite the host proposes, whose roster the Planner selects."""
+
+        return self.proposed_suite or self.proposed_continuous_suite
+
+    @property
+    def sealed_survival_suite(
+        self,
+    ) -> SealedSuiteCoordinates | SealedContinuousSuiteCoordinates | None:
+        """The survival suite the host has sealed, of either exposure kind."""
+
+        return self.sealed_suite or self.sealed_continuous_suite
 
     @model_validator(mode="after")
     def _exposure_shape(self) -> "FamilySpecRequest":
@@ -636,6 +739,37 @@ class FamilySpecRequest(BaseModel):
                 raise ValueError("the survival adjustment set is sealed, not selectable")
             if self.proposed_suite is not None and self.proposed_suite.adjustment_columns:
                 raise ValueError("a proposed survival suite seals no adjustment roster")
+        elif self.family_id == LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID:
+            if self.analysis_type != "survival":
+                raise ValueError("the landmark survival family plans a survival study")
+            suite = self.sealed_continuous_suite or self.proposed_continuous_suite
+            if suite is None:
+                raise ValueError(
+                    "the continuous survival family needs its sealed suite coordinates"
+                )
+            if (
+                self.sealed_continuous_suite is not None
+                and self.proposed_continuous_suite is not None
+            ):
+                raise ValueError("a landmark survival request is either sealed or proposed, not both")
+            if any(value is not None for value in landmark_fields):
+                raise ValueError("the sealed survival suite owns its landmark coordinates")
+            if self.exposure_kind != "continuous":
+                raise ValueError("the continuous survival suite models one continuous exposure")
+            if self.primary_exposure != suite.exposure_column:
+                raise ValueError("the survival exposure must be the suite's exposure column")
+            if self.outcome != suite.event_column:
+                raise ValueError("the survival outcome must be the sealed event column")
+            if self.sealed_continuous_suite is not None and (
+                self.adjustment_selection != "exact"
+                or self.exact_roster != self.sealed_continuous_suite.adjustment_columns
+            ):
+                raise ValueError("the survival adjustment set is sealed, not selectable")
+            if (
+                self.proposed_continuous_suite is not None
+                and self.proposed_continuous_suite.adjustment_columns
+            ):
+                raise ValueError("a proposed survival suite seals no adjustment roster")
         elif self.family_id == FIXED_WINDOW_TRAJECTORY_FAMILY_ID:
             if self.analysis_type != "trajectory_clustering":
                 raise ValueError("the trajectory suite family plans a clustering study")
@@ -669,6 +803,12 @@ class FamilySpecRequest(BaseModel):
                 raise ValueError("the prediction family fits no adjusted model")
         if self.proposed_suite is not None and self.family_id != LANDMARK_SURVIVAL_FAMILY_ID:
             raise ValueError("proposed suite coordinates belong to the landmark survival family")
+        if (
+            self.sealed_continuous_suite is not None or self.proposed_continuous_suite is not None
+        ) and self.family_id != LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID:
+            raise ValueError(
+                "continuous suite coordinates belong to the continuous survival family"
+            )
         if self.sealed_trajectory is not None and self.family_id != FIXED_WINDOW_TRAJECTORY_FAMILY_ID:
             raise ValueError("sealed trajectory coordinates belong to the trajectory suite family")
         if self.sealed_feasibility is not None and self.family_id != SOURCE_FEASIBILITY_FAMILY_ID:
@@ -711,15 +851,21 @@ class FamilySpecRequest(BaseModel):
             if self.exposure_companion_columns:
                 raise ValueError("companion columns are a continuous-exposure coordinate")
         elif self.exposure_kind == "continuous":
-            if self.family_id != LANDMARK_SPLINE_FAMILY_ID:
-                raise ValueError("a continuous exposure belongs to the spline family")
+            if self.family_id not in {
+                LANDMARK_SPLINE_FAMILY_ID,
+                LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID,
+            }:
+                raise ValueError(
+                    "a continuous exposure belongs to the spline family or the "
+                    "continuous survival suite"
+                )
             if self.exposure_levels or self.exposure_is_ordered:
                 raise ValueError("a continuous exposure carries no closed level set")
             if self.reference_level_index or self.primary_contrast_level_index:
                 raise ValueError("a continuous exposure has no level indices")
             if self.alternate_exposures:
                 raise ValueError(
-                    "alternate exposure definitions are not projected for the spline family"
+                    "alternate exposure definitions are not projected for a continuous exposure"
                 )
         occurrence = self.study_population_occurrence
         if occurrence is not None:
@@ -842,7 +988,7 @@ def planner_selects_adjustment(request: "FamilySpecRequest") -> bool:
     """
 
     return request.adjustment_selection == "planner_selectable" and (
-        request.family_id in LANDMARK_FAMILY_IDS or request.proposed_suite is not None
+        request.family_id in LANDMARK_FAMILY_IDS or request.suite_proposal is not None
     )
 
 
@@ -1007,7 +1153,7 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
             "belongs to the descriptive and phenotyping families",
             path="baseline_variables",
         )
-    if request.family_id in SEALED_SUITE_FAMILY_IDS and request.proposed_suite is None:
+    if request.family_id in SEALED_SUITE_FAMILY_IDS and request.suite_proposal is None:
         if spec.adjustment_set:
             raise FamilySpecError(
                 "family_spec_adjustment_not_applicable",
@@ -1185,7 +1331,8 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
             "its clinical_rationale; an empty adjustment set is not an adjusted estimate",
             path="adjustment_set",
         )
-    if request.proposed_suite is not None:
+    proposal = request.suite_proposal
+    if proposal is not None:
         if spec.baseline_variables:
             raise FamilySpecError(
                 "family_spec_baseline_variables_not_applicable",
@@ -1193,12 +1340,12 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
                 path="baseline_variables",
             )
         design_limit = design_field_max_length("required_variables")
-        roster = [request.identity_column, *request.proposed_suite.source_columns, *names]
+        roster = [request.identity_column, *proposal.source_columns, *names]
         if len(roster) > design_limit:
             raise FamilySpecError(
                 "family_spec_roster_exceeds_design",
                 f"the design names at most {design_limit} variables including the row identity, "
-                f"exposure status and onset, endpoint and follow-up columns; this roster needs "
+                f"exposure, endpoint and follow-up columns; this roster needs "
                 f"{len(roster)}: keep the adjustment covariates that matter most",
                 path="adjustment_set",
             )
@@ -1222,7 +1369,7 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
         *(spec.feature_variables if request.family_id in {PHENOTYPING_FAMILY_ID, PREDICTION_FAMILY_ID} else []),
         *(spec.baseline_variables if request.family_id == PHENOTYPING_FAMILY_ID else []),
         # A proposed survival suite's roster is the Planner's selection.
-        *(names if request.proposed_suite is not None else []),
+        *(names if request.suite_proposal is not None else []),
         # The study-population distribution names each exposure level.
         *(request.level_label_keys if request.study_population_occurrence is not None else []),
     ]
@@ -1450,6 +1597,7 @@ __all__ = [
     "FAMILY_SPEC_SCHEMA_VERSION",
     "DESCRIPTIVE_FAMILY_ID",
     "LANDMARK_CATEGORICAL_FAMILY_ID",
+    "LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID",
     "LANDMARK_FAMILY_IDS",
     "LANDMARK_SPLINE_FAMILY_ID",
     "PHENOTYPING_FAMILY_ID",
@@ -1463,6 +1611,7 @@ __all__ = [
     "FamilyPlanSpec",
     "FamilySpecError",
     "FamilySpecRequest",
+    "SealedContinuousSuiteCoordinates",
     "SealedFeasibilityCoordinates",
     "SensitivityAxisBinding",
     "SpecComparatorApplication",
