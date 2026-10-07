@@ -1653,24 +1653,33 @@ _ADULT_STUDY_PRESETS = frozenset({"adult_all", "adult_first"})
 #: "非成人") or a "non-adult" group is not one.
 _ADULT_GROUP_ZH = re.compile(r"(?<![未非])成(?:人|年)")
 _ADULT_GROUP_EN = re.compile(r"(?<!non )\badults?\b")
-#: An adult age floor: 18 or older, never "under 18" or "18 or younger".
+#: An adult age floor: 18 or older, never "under 18", "18 or younger", "no
+#: older than 18" or "未年满18周岁" (not yet 18).
 _ADULT_AGE_FLOOR = re.compile(
-    r"(?:≥|⩾|>=)\s*18(?![0-9])|18\s*周?岁(?:及|或)?以上|年满\s*18\s*周?岁"
+    r"(?:≥|⩾|>=)\s*18(?![0-9])|18\s*周?岁(?:及|或)?以上|(?<![未不])年满\s*18\s*周?岁"
 )
 _ADULT_AGE_FLOOR_EN = re.compile(
     r"\b18\s+(?:years?\s+)?(?:or|and)\s+(?:older|over|above)\b"
-    r"|\b(?:at\s+least|(?<!not )older\s+than|over|above)\s+18\b"
+    r"|(?<!not )(?<!no )\b(?:at\s+least|older\s+than|over|above)\s+18\b"
 )
 #: A paediatric group a statement includes; an excluded one ("excluding
-#: children", "儿童被排除") leaves an adult statement adult.
+#: children", "but not children", "儿童被排除", "不纳入儿童") leaves an adult
+#: statement adult.  A "minor" is a group as a noun or before a word for
+#: people ("minor patients"), not as the severity of a condition ("minor
+#: head injury", "minor surgery").
 _PEDIATRIC_GROUP = re.compile(
     r"\b(?:child(?:ren)?|childhood|pa?ediatrics?|adolescents?|teen(?:ager)?s?|infants?|"
-    r"neonat(?:es?|al)|newborns?|minors?)\b|儿童|儿科|小儿|青少年|婴儿|婴幼儿|新生儿|未成年",
+    r"neonat(?:es?|al)|newborns?|minors|minor(?:(?=[\s-]+(?:patients?|subjects?|individuals?|"
+    r"persons?|people|participants?|cases?)\b)|(?![\s-]*[a-z])))\b"
+    r"|儿童|儿科|小儿|青少年|婴儿|婴幼儿|新生儿|未成年",
     re.IGNORECASE,
 )
 _GROUP_EXCLUDED_BEFORE = re.compile(
-    r"(?:\b(?:excluding|excluded|exclude|except|without|other\s+than)\b|排除|不包括|不含|除外)"
-    r"[^,.;:，。；：]{0,20}$",
+    r"(?:\b(?:excluding|excluded|exclude|except|without|other\s+than)\b"
+    r"|排除|不包括|不含|不包含|除外|不纳入|未纳入)[^,.;:，。；：]{0,20}$"
+    # "but not children", "and no infants", "not including children": a
+    # negation right before the group.
+    r"|\b(?:not|no)\s+(?:includ(?:e|es|ing)\s+)?$",
     re.IGNORECASE,
 )
 _GROUP_EXCLUDED_AFTER = re.compile(
