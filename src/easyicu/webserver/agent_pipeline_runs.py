@@ -5254,9 +5254,18 @@ def make_research_pipeline_run_runner(
         if retry.state == "futile":
             raise ResearchPipelineRunError(
                 "research_pipeline_execution_retry_futile",
-                "The failed step has used its automatic repairs and nothing it "
-                "runs on changed since; a retry would repeat the failure. "
-                "Generate a fresh plan, or update EasyICU before retrying.",
+                (
+                    "The failed step stopped for a reason its data and approved "
+                    "plan determine, and nothing it runs on changed since; a "
+                    "retry would stop the same way. Generate a fresh plan, or "
+                    "update EasyICU before retrying."
+                )
+                if retry.reason_code == "execution_retry_repeats_typed_stop"
+                else (
+                    "The failed step has used its automatic repairs and nothing it "
+                    "runs on changed since; a retry would repeat the failure. "
+                    "Generate a fresh plan, or update EasyICU before retrying."
+                ),
                 details=retry.public(),
             )
 

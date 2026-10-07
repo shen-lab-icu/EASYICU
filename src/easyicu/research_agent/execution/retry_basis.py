@@ -7,8 +7,11 @@ can change the outcome only if something the step runs on changed since the
 failure: the research-agent code, the prompt pack, the execution kernel, or
 the runner image.  A retry under an identity that no earlier grant or attempt
 used also opens a fresh budget epoch (:mod:`.budget_epoch`), so the budget
-read here is the latest epoch's.  This module reads the failed step's basis
-without writing anything; the Web retry policy decides what to offer.
+read here is the latest epoch's.  A step whose standard executor named a
+registered stop (``contracts.executor_stop``) did not fail in its code: the
+stop's owner declares whether a retry on the same plan, data and execution
+identity repeats it.  This module reads the failed step's basis without
+writing anything; the Web retry policy decides what to offer.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from ..authority.runtime_artifacts import (
     current_step_records,
     load_run_artifact_authority,
 )
+from ..contracts.executor_stop import EXECUTOR_STOP_REASONS, recorded_executor_stop
 from .budget_epoch import (
     AttemptIdentity,
     checkpoint_capsule_identity,
@@ -32,6 +36,7 @@ from .provider_budget_runtime import monotonic_step_llm_repair_history
 
 FailureClass = Literal[
     "code",
+    "typed_stop",
     "timeout",
     "infrastructure",
     "fail_closed",
@@ -64,6 +69,11 @@ class FailedStepRetryBasis:
     used_identities: tuple[AttemptIdentity, ...] = ()
     #: The budget epoch the counters above describe.
     budget_epoch: int = 0
+    #: The registered stop the step's executor named, and whether its owner
+    #: declares that a retry on the same plan, data and execution identity
+    #: repeats it.
+    stop_reason_code: Optional[str] = None
+    stop_repeats_on_unchanged_retry: bool = False
 
 
 def _int(value: Any) -> Optional[int]:
@@ -78,6 +88,8 @@ def _failure_class(record: Mapping[str, Any]) -> FailureClass:
         "provider_call_budget_receipt_invalid"
     ):
         return "ledger_invalid"
+    if recorded_executor_stop(record) is not None:
+        return "typed_stop"
     failure = str(record.get("runtime_failure_class") or "")
     if record.get("timed_out") is True or failure == "execution_timeout":
         return "timeout"
@@ -171,6 +183,7 @@ def load_failed_step_retry_basis(
     repairs, provider_calls, provider_limit, exhausted = _repair_budget(
         epoch.records, epoch_latest, limit=limit, counter_field=epoch.counter_field
     )
+    stop = recorded_executor_stop(latest)
     return FailedStepRetryBasis(
         step_id=step_id,
         status=str(latest.get("status") or ""),
@@ -185,6 +198,10 @@ def load_failed_step_retry_basis(
         identity=checkpoint_capsule_identity(root, step_id),
         used_identities=epoch.used_identities,
         budget_epoch=epoch.epoch,
+        stop_reason_code=stop[0] if stop else None,
+        stop_repeats_on_unchanged_retry=bool(
+            stop and EXECUTOR_STOP_REASONS[stop[0]].repeats_on_unchanged_retry
+        ),
     )
 
 

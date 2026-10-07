@@ -50,6 +50,27 @@ def _unasked() -> Optional[str]:
     pytest.fail("the runner image must not be inspected")
 
 
+_STOP = "continuous_survival_interval_result_not_estimable"
+
+
+def _stopped(
+    identity: Optional[AttemptIdentity] = None, **fields: Any
+) -> FailedStepRetryBasis:
+    """A deterministic executor's named stop: no repair budget was involved."""
+
+    values: dict[str, Any] = {
+        "status": "deterministic_standard_blocked",
+        "failure_class": "typed_stop",
+        "repair_attempts": 0,
+        "repair_limit": None,
+        "repair_budget_exhausted": False,
+        "stop_reason_code": _STOP,
+        "stop_repeats_on_unchanged_retry": True,
+    }
+    values.update(fields)
+    return _basis(identity, **values)
+
+
 def test_spent_repairs_on_unchanged_code_and_image_are_futile() -> None:
     assessment = assess_failed_step(
         _basis(current_attempt_identity(image_id=IMAGE)), read_image_id=lambda: IMAGE
@@ -108,6 +129,58 @@ def test_a_rebuilt_runner_image_offers_the_retry() -> None:
 
     assert (assessment.state, assessment.changed_components) == ("available", ("image_id",))
     assert assessment.reason_code == "execution_retry_runner_image_changed"
+
+
+def test_a_stop_that_repeats_on_unchanged_code_and_image_is_futile() -> None:
+    assessment = assess_failed_step(
+        _stopped(current_attempt_identity(image_id=IMAGE)), read_image_id=lambda: IMAGE
+    )
+
+    assert (assessment.state, assessment.reason_code) == (
+        "futile",
+        "execution_retry_repeats_typed_stop",
+    )
+    assert assessment.image_checked is True
+
+
+def test_a_stop_under_changed_code_or_image_keeps_the_retry() -> None:
+    current = current_attempt_identity(image_id=IMAGE)
+    changed_code = assess_failed_step(
+        _stopped(replace(current, execution_kernel_identity_sha256="0" * 64)),
+        read_image_id=_unasked,
+    )
+    rebuilt = assess_failed_step(
+        _stopped(current), read_image_id=lambda: "sha256:" + "2" * 64
+    )
+
+    assert (changed_code.state, changed_code.reason_code) == (
+        "available",
+        "execution_retry_code_changed",
+    )
+    assert (rebuilt.state, rebuilt.reason_code) == (
+        "available",
+        "execution_retry_runner_image_changed",
+    )
+
+
+def test_a_stop_that_may_change_or_an_unknown_identity_is_not_futile() -> None:
+    may_change = assess_failed_step(
+        _stopped(
+            current_attempt_identity(image_id=IMAGE),
+            stop_repeats_on_unchanged_retry=False,
+        ),
+        read_image_id=_unasked,
+    )
+    unknown = assess_failed_step(_stopped(None), read_image_id=_unasked)
+
+    assert (may_change.state, may_change.reason_code) == (
+        "available",
+        "execution_retry_failure_typed_stop",
+    )
+    assert (unknown.state, unknown.reason_code) == (
+        "unknown",
+        "execution_retry_failed_identity_unknown",
+    )
 
 
 def test_an_unreadable_runner_image_is_doubt_not_futility() -> None:
@@ -245,7 +318,11 @@ def test_projection_polls_reuse_one_reading_and_the_launch_rereads(
     )
 
 
-def _factory(monkeypatch: pytest.MonkeyPatch, state: str) -> list[dict[str, Any]]:
+def _factory(
+    monkeypatch: pytest.MonkeyPatch,
+    state: str,
+    reason: str = "execution_retry_repeats_failure",
+) -> list[dict[str, Any]]:
     asked: list[dict[str, Any]] = []
     prepared = SimpleNamespace(
         scientific=SimpleNamespace(study={"id": "study-1"}),
@@ -263,8 +340,7 @@ def _factory(monkeypatch: pytest.MonkeyPatch, state: str) -> list[dict[str, Any]
     def assessment(**kwargs: Any) -> ExecutionRetryAssessment:
         asked.append(kwargs)
         return ExecutionRetryAssessment(
-            state, "execution_retry_repeats_failure", failed_step_id="figure",
-            repair_attempts=2, repair_limit=2,
+            state, reason, failed_step_id="figure", repair_attempts=2, repair_limit=2
         )
 
     monkeypatch.setattr(agent_pipeline_runs, "execution_retry_assessment", assessment)
@@ -301,6 +377,20 @@ def test_a_futile_retry_is_refused_before_any_job_exists(
             "max_age_seconds": 0.0,
         }
     ]
+
+
+def test_a_refused_retry_of_a_named_stop_says_the_stop_repeats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _factory(monkeypatch, "futile", "execution_retry_repeats_typed_stop")
+
+    with pytest.raises(ResearchPipelineRunError) as raised:
+        _launch()
+
+    assert raised.value.code == "research_pipeline_execution_retry_futile"
+    assert raised.value.details["reason_code"] == "execution_retry_repeats_typed_stop"
+    assert "its data and approved plan determine" in str(raised.value)
+    assert "automatic repairs" not in str(raised.value)
 
 
 def test_a_retry_that_could_change_the_outcome_is_accepted(
