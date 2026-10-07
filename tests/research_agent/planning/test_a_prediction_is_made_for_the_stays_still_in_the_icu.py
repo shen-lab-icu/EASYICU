@@ -95,7 +95,11 @@ def _with_minimum_stay(context: ResearchContext, hours: float) -> ResearchContex
 
 
 def _with_window(context: ResearchContext, hours: float) -> ResearchContext:
-    """The context materialized over the first ``hours`` after ICU admission."""
+    """The context materialized over the first ``hours`` after ICU admission.
+
+    The host's record and the window it declares carry the same hours, as a
+    Web launch writes them.
+    """
 
     window = f"icu_admission[0,{hours:g}]h"
     variables = [
@@ -104,6 +108,10 @@ def _with_window(context: ResearchContext, hours: float) -> ResearchContext:
         else item
         for item in context.variables
     ]
+    constraints = json.loads(context.user_preferences.data_constraints or "{}")
+    constraints["materialization_window"] = {
+        **constraints.get("materialization_window", {}), "hours": hours,
+    }
     return context.model_copy(
         update={
             "variables": variables,
@@ -113,6 +121,9 @@ def _with_window(context: ResearchContext, hours: float) -> ResearchContext:
                     end_hours=hours, rationale="Outer feature-materialization window bound by the host.",
                 )
             ],
+            "user_preferences": context.user_preferences.model_copy(
+                update={"data_constraints": json.dumps(constraints)}
+            ),
         }
     )
 
