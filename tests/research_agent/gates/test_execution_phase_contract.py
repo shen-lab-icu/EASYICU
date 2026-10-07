@@ -1873,6 +1873,7 @@ def test_primary_cohort_coder_receives_verified_physical_predicate_receipt(
         "event_time_column": None,
         "event_time_start_hours": None,
         "event_time_end_hours": None,
+        "event_time_reading": None,
     }
 
 

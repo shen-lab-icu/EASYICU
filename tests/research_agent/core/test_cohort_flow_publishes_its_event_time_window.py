@@ -113,6 +113,7 @@ def test_the_ledger_names_the_window_and_the_column_it_consulted():
     assert exclusion["event_time_column"] == "death_time"
     assert exclusion["event_time_start_hours"] == 0.0
     assert exclusion["event_time_end_hours"] == 24.0
+    assert exclusion["event_time_reading"] == "occurrence"
 
 
 def _replay_ledger(universe: pd.DataFrame, flow: list) -> None:
@@ -145,10 +146,15 @@ def _replay_ledger(universe: pd.DataFrame, flow: list) -> None:
         event_time_column = row["event_time_column"]
         if event_time_column is not None:
             event_time = universe[event_time_column]
-            matches = matches & (
+            in_window = (
                 (event_time >= row["event_time_start_hours"])
                 & (event_time <= row["event_time_end_hours"])
             ).fillna(False)
+            if row["event_time_reading"] == "occurrence":
+                matches = matches & in_window
+            else:
+                event = universe[row["resolved_column"]] == 1
+                matches = matches | (event & ~in_window)
         before = int(kept.sum())
         kept = kept & (matches if row["predicate_kind"] == "inclusion" else ~matches)
         assert before == row["n_before"]
@@ -210,6 +216,18 @@ _LEDGER_SHAPES = {
         (_predicate("age", "first", ">=", 18, 1.0),),
         (_predicate("death", "any", "==", 1, 24.0),),
     ),
+    "windowed absence inclusion (survived the window)": (
+        (_predicate("death", "any", "==", 0, 24.0),),
+        (),
+    ),
+    "absence written as a not-equal": (
+        (_predicate("death", "any", "!=", 1, 24.0),),
+        (),
+    ),
+    "occurrence written as a not-equal": (
+        (),
+        (_predicate("death", "any", "!=", 0, 24.0),),
+    ),
 }
 
 
@@ -251,6 +269,7 @@ def test_an_unwindowed_predicate_says_so_instead_of_omitting_the_fields():
         assert row["event_time_column"] is None
         assert row["event_time_start_hours"] is None
         assert row["event_time_end_hours"] is None
+        assert row["event_time_reading"] is None
 
 
 def test_a_magnitude_filter_is_not_windowed_even_when_it_could_be():
@@ -391,6 +410,7 @@ def test_the_refinement_record_is_immutable():
         event_time_column="death_time",
         start_offset_hours=0.0,
         end_offset_hours=24.0,
+        reading="occurrence",
     )
     with pytest.raises(Exception):
         window.end_offset_hours = 48.0  # type: ignore[misc]
