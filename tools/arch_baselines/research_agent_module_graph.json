@@ -2996,6 +2996,10 @@
       "easyicu.research_agent.methods.time_varying_cox"
     ],
     [
+      "easyicu.research_agent.contracts.executor_stop",
+      "easyicu.research_agent.methods.time_varying_cox"
+    ],
+    [
       "easyicu.research_agent.contracts.exposure_outcome_distribution",
       "easyicu.research_agent.contracts.closed_levels"
     ],
@@ -3777,6 +3781,10 @@
     ],
     [
       "easyicu.research_agent.execution.candidate_loop",
+      "easyicu.research_agent.execution.executor_stop_record"
+    ],
+    [
+      "easyicu.research_agent.execution.candidate_loop",
       "easyicu.research_agent.execution.failure_classification"
     ],
     [
@@ -4064,6 +4072,10 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.execution.executor_stop_record",
+      "easyicu.research_agent.contracts.executor_stop"
+    ],
+    [
       "easyicu.research_agent.execution.failure_classification",
       "easyicu.research_agent.contracts.execution_result"
     ],
@@ -4198,6 +4210,10 @@
     [
       "easyicu.research_agent.execution.native_method_runtime",
       "easyicu.research_agent.execution.docker_locality"
+    ],
+    [
+      "easyicu.research_agent.execution.output_files",
+      "easyicu.research_agent.contracts.executor_stop"
     ],
     [
       "easyicu.research_agent.execution.owner_declaration",
@@ -5869,6 +5885,10 @@
     ],
     [
       "easyicu.research_agent.execution.runners.landmark_continuous_survival_executor",
+      "easyicu.research_agent.contracts.executor_stop"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_executor",
       "easyicu.research_agent.contracts.host_scaffold"
     ],
     [
@@ -6958,6 +6978,10 @@
     [
       "easyicu.research_agent.execution.runners.typed_input_binding",
       "easyicu.research_agent.contracts.declared_product"
+    ],
+    [
+      "easyicu.research_agent.execution.standard_executor_diagnostics",
+      "easyicu.research_agent.contracts.executor_stop"
     ],
     [
       "easyicu.research_agent.execution.standard_executor_diagnostics",
@@ -11677,6 +11701,10 @@
     ],
     [
       "easyicu.research_agent.reporting.completion",
+      "easyicu.research_agent.contracts.executor_stop"
+    ],
+    [
+      "easyicu.research_agent.reporting.completion",
       "easyicu.research_agent.planning.figure_step_contract"
     ],
     [
@@ -13660,9 +13688,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3407,
+    "edge_count": 3414,
     "largest_scc_size": 0,
-    "module_count": 783,
+    "module_count": 785,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -13830,6 +13858,7 @@
     "easyicu.research_agent.contracts.endpoint": "contracts/endpoint.py",
     "easyicu.research_agent.contracts.executed_method_design": "contracts/executed_method_design.py",
     "easyicu.research_agent.contracts.execution_result": "contracts/execution_result.py",
+    "easyicu.research_agent.contracts.executor_stop": "contracts/executor_stop.py",
     "easyicu.research_agent.contracts.exposure_outcome_distribution": "contracts/exposure_outcome_distribution.py",
     "easyicu.research_agent.contracts.family_primary": "contracts/family_primary.py",
     "easyicu.research_agent.contracts.figure_plan": "contracts/figure_plan.py",
@@ -13932,6 +13961,7 @@
     "easyicu.research_agent.execution.development_sample": "execution/development_sample.py",
     "easyicu.research_agent.execution.docker_locality": "execution/docker_locality.py",
     "easyicu.research_agent.execution.envelope_sealing": "execution/envelope_sealing.py",
+    "easyicu.research_agent.execution.executor_stop_record": "execution/executor_stop_record.py",
     "easyicu.research_agent.execution.failure_classification": "execution/failure_classification.py",
     "easyicu.research_agent.execution.figure_plan_binding": "execution/figure_plan_binding.py",
     "easyicu.research_agent.execution.figure_preparation": "execution/figure_preparation.py",

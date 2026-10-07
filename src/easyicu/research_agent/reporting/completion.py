@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from ..contracts.executor_stop import executor_stop_codes
 from ..planning.figure_step_contract import _output_declares_figure
 
 
@@ -74,12 +75,22 @@ def step_completion_projection(
     status_by_step: Mapping[str, str],
     step_ok: Callable[[str], bool],
 ) -> dict[str, object]:
-    """Project outer execution and closed scientific terminal states."""
+    """Project outer execution and closed scientific terminal states.
 
+    A failed step carries the stop its executor named, as codes
+    (``contracts.executor_stop``); one without a stop keeps its two keys.
+    """
+
+    failed: list[dict[str, Any]] = []
     incomplete: list[dict[str, str]] = []
     states: list[dict[str, Any]] = []
     for step_id in required_step_ids:
         record = record_by_step.get(step_id, {})
+        if step_id in status_by_step and not step_ok(step_id):
+            failed.append(
+                {"step_id": step_id, "status": status_by_step.get(step_id)}
+                | executor_stop_codes(record)
+            )
         summary = record.get("step_summary")
         summary_status = (
             str(summary.get("status") or "").strip().lower()
@@ -102,6 +113,7 @@ def step_completion_projection(
             }
         )
     return {
+        "failed_steps": failed,
         "scientific_incomplete_steps": incomplete,
         "step_completion_states": states,
     }

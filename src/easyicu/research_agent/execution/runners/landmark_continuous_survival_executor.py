@@ -11,7 +11,9 @@ identifier and no model-editable code.  The composite figure is rendered by
 
 Exposure tertiles the risk set cannot form, and a secondary model the data
 leave without an estimate, are reported with the reason; the suite fails only
-when its result, the estimate the PH decision authorizes, has none.
+when its result, the estimate the PH decision authorizes, has none.  It then
+stops with ``ExecutorStop`` and leaves the stop's record, codes only, for the
+host (``contracts.executor_stop``).
 """
 
 from __future__ import annotations
@@ -47,6 +49,7 @@ from ...contracts.executed_method_design import (
     LandmarkContinuousSurvivalDesign,
     executed_method_design_payload,
 )
+from ...contracts.executor_stop import ExecutorStop, write_executor_stop_record
 from ...contracts.host_scaffold import HostScaffoldedScript
 from ...contracts.manuscript_result_structure import PRIMARY_RESULT_HEADINGS_BY_FAMILY
 from ...contracts.manuscript_tables import (
@@ -979,11 +982,18 @@ def run_landmark_continuous_survival_suite(
         if error.reason not in TIME_VARYING_NOT_ESTIMABLE_REASONS:
             raise
         if ph_violation:
-            raise ValueError(
-                "continuous_survival_interval_result_not_estimable: the PH test rejected "
-                "the constant hazard ratio, and the interval model that replaces it is "
-                f"not estimable ({error.reason})"
-            ) from error
+            # A stop the host reads as codes; the message keeps its prefix.
+            stop = ExecutorStop(
+                "continuous_survival_interval_result_not_estimable",
+                cause_code=error.reason,
+                detail=(
+                    "the PH test rejected the constant hazard ratio, and the "
+                    "interval model that replaces it is not estimable "
+                    f"({error.reason})"
+                ),
+            )
+            write_executor_stop_record(out_dir, stop)
+            raise stop from error
         interval_reason = error.reason
         exposure_intervals = pd.DataFrame()
         time_varying_table = pd.DataFrame(

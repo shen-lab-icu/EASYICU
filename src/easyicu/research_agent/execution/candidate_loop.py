@@ -97,6 +97,7 @@ from ..authority.step_runtime import (
 )
 from ..authority.step_attempt import StepAttemptState
 from .step_execution import LockedStepExecutionRequest, StepExecutor
+from .executor_stop_record import read_executor_stop_record
 from ..repairs.summary import salvage_step_summary
 
 _FIGURE_CONTRACT_SOURCE_DATA_SCHEMA_REPAIR_ID = "figure_contract_source_data_schema_v1"
@@ -2300,14 +2301,36 @@ def _candidate_failure_transition(
         # Fixed native code must fail at its owner boundary. Letting Coder
         # replace an imported helper would still label the repaired script as
         # deterministic_standard and grant it the original trust path.
+        #
+        # An executor that stopped for a reason it can name left a record of
+        # it (``contracts.executor_stop``).  The record is the process's own
+        # claim: only the step's executor may name a stop, only from its
+        # registered vocabulary, and a timed-out attempt's record may be
+        # partial, so it is not read.
+        stop = rejection = None
+        if not state.run_result.timed_out:
+            stop, rejection = read_executor_stop_record(
+                state.run_result.out_dir,
+                expected_owner=str(
+                    attempt.step_record.get("deterministic_standard_analysis") or ""
+                ),
+            )
         # A timeout can interrupt a standard executor between its
-        # private streaming write and atomic rename.  That file is an
-        # implementation detail, not a diagnostic product, and must
-        # be gone before the generic output-directory scan below can
-        # register it as evidence.
+        # private streaming write and atomic rename.  That file, like the
+        # stop record, is an implementation detail, not a diagnostic
+        # product, and must be gone before the generic output-directory
+        # scan below can register it as evidence.
         host._remove_standard_executor_pending_artifacts(state.run_result.out_dir)
         state.standard_executor_terminal_block = True
-        state.standard_executor_terminal_reason = "executor_runtime_failure"
+        state.standard_executor_terminal_reason = (
+            "executor_typed_stop" if stop is not None else "executor_runtime_failure"
+        )
+        if stop is not None:
+            attempt.step_record["executor_stop_reason_code"] = stop.reason_code
+            if stop.cause_code is not None:
+                attempt.step_record["executor_stop_cause_code"] = stop.cause_code
+        elif rejection is not None:
+            attempt.step_record["executor_stop_record_rejected"] = rejection
         # Distinguish wall-clock termination from an implementation failure
         # while retaining the same terminal decision for fixed executors.
         #

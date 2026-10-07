@@ -339,6 +339,8 @@ from .host_services import ExecutePhaseHost
 from .output_files import (
     _clear_output_dir,
     _has_figure_exports,
+    _is_standard_executor_internal_artifact,
+    _remove_standard_executor_pending_artifacts,
     bind_primary_output,
     normalize_typed_statistic_sidecars,
 )
@@ -580,7 +582,6 @@ from .phase_support import (  # noqa: F401 — owner module
     _RICH_EXPOSURE_AUDIT_OUTPUT_TOKENS,
     _ROBUSTNESS_SENSITIVITY_METHODS,
     _SEALED_AUTHORITY_SUMMARY_MARKERS,
-    _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS,
     _assert_execution_plan_locks,
     _absolute_risk_context_runner_owns_step,
     _actionable_validator_messages,
@@ -597,7 +598,6 @@ from .phase_support import (  # noqa: F401 — owner module
     _failed_contract_code_can_be_reused_before_coder,
     _fresh_plausibility_receipt_findings,
     _is_cohort_definition_sensitivity_step,
-    _is_standard_executor_internal_artifact,
     _is_terminal_publication_figure_repair_step,
     _load_step_summary_from_outputs,
     _locked_measurement_data_quality_issues,
@@ -614,7 +614,6 @@ from .phase_support import (  # noqa: F401 — owner module
     _publication_bundle_has_primary_result_roles,
     _python_repair_is_materially_changed,
     _python_semantic_sha256,
-    _remove_standard_executor_pending_artifacts,
     _repair_prompt_binding_sha256,
     _robustness_sensitivity_runner_owns_step,
     _simple_missingness_audit_runner_owns_step,
