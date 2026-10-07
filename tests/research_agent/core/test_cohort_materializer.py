@@ -79,7 +79,9 @@ def test_legacy_concept_bounds_exclude_before_stay_aggregation(
         _database,
         _patient_ids,
         _unavailable,
+        event_time_column=None,
     ):
+        assert event_time_column is None
         return source[concept].copy()
 
     monkeypatch.setattr(M, "_load_concept", fake_load)
