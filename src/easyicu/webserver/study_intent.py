@@ -526,14 +526,34 @@ def explicit_outcome_concepts(question: str) -> tuple[str, ...]:
     return tuple(values)
 
 
+#: Conditions a question studies, or studies a population with.  One that
+#: frames where the question is asked ("mortality in sepsis", "among AKI",
+#: "sepsis mortality", "脓毒症28天死亡") is the setting, not the exposure, so
+#: an exposure the reader cannot name stays unread instead of becoming the
+#: setting's condition.
+_CONDITION_CONCEPTS = frozenset().union(
+    *(family for _pattern, _label, family in _POPULATION_PATTERNS)
+) | frozenset({"sep3_sofa2", "circ_failure"})
+_SETTING_BEFORE = re.compile(r"\b(?:in|among|amongst)\s+$", re.IGNORECASE)
+_SETTING_AFTER = re.compile(
+    r"\s*(?:-?related\s+|的\s*)?"
+    r"(?:(?:\d{1,3}|[一二三四五六七八九十百]+)\s*(?:-?days?\s+|天|日)\s*)?"
+    r"(?:in-?hospital\s+|hospital\s+|icu\s+|院内|住院)?"
+    r"(?:mortality|death|survival|死亡|病死|生存|存活)",
+    re.IGNORECASE,
+)
+
+
 def _exposure_candidates_in_text_order(
     text: str, candidates: List[Tuple[str, str]]
 ) -> List[Tuple[str, str]]:
     """Read the studied marker before later definitions or method acronyms.
 
     Dictionary order ranks synonyms, not scientific roles. Explicit population
-    phrases are not exposure assignments. Ties retain dictionary specificity
-    (for example, SOFA-2 before the overlapping original SOFA token).
+    phrases are not exposure assignments, nor is a condition that frames the
+    question's setting (``_SETTING_BEFORE``, ``_SETTING_AFTER``). Ties retain
+    dictionary specificity (for example, SOFA-2 before the overlapping
+    original SOFA token).
     """
 
     positioned = []
@@ -546,6 +566,10 @@ def _exposure_candidates_in_text_order(
             if re.match(r"\s*(?:patients?\b|cohort\b|患者|人群|病人)", after, re.IGNORECASE):
                 continue
             if re.search(r"\bpatients?\s+with\s*$", before, re.IGNORECASE):
+                continue
+            if concept in _CONDITION_CONCEPTS and (
+                _SETTING_BEFORE.search(text[:match.start()]) or _SETTING_AFTER.match(after)
+            ):
                 continue
             positioned.append((match.start(), rank, concept, phrase))
             break
