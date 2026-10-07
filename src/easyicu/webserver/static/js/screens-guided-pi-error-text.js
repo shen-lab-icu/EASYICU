@@ -141,12 +141,38 @@
        code. The code stays the contract; the researcher sees what stopped the
        run and what to change next, never the bare identifier. Returns RAW
        copy: callers esc() it before insertion (D-P2-2). */
-    /* ``detail`` is the gate's lower-layer cause as codes: ``{code, missing}``
-       from the run row's ``gate_detail_code`` / ``gate_missing_concepts``.
-       It turns "data preparation did not pass" into which variable the data
-       lacks, without the projection carrying free text. */
+    /* ``detail`` is the gate's lower-layer cause as codes: ``{code, missing,
+       cause}`` from the run row's ``gate_detail_code`` /
+       ``gate_missing_concepts`` / ``gate_detail_cause_code``. It turns "data
+       preparation did not pass" into which variable the data lacks, and "the
+       run did not pass a check" into which check and why, without the
+       projection carrying free text. */
+    /* A stop the continuous-exposure survival suite named: the interval model
+       its rejected proportional-hazards check made primary could not be
+       estimated. The remedy follows the cause. */
+    function intervalResultNotEstimableText(cause) {
+      const why = {
+        interval_without_event: tr('an interval had no events', '有一个区间没有事件'),
+        follow_up_ends_by_final_cutpoint: tr('follow-up ended by the last cut point', '随访在最后一个切点之前就结束了'),
+        did_not_converge: tr('the interval model did not converge', '区间模型没有收敛'),
+        invalid_contrast_variance: tr('an interval estimate had no valid variance', '有一个区间估计的方差无效'),
+        non_finite_estimate: tr('an interval estimate was not finite', '有一个区间估计不是有限值'),
+      }[cause];
+      const cutPoints = cause === 'interval_without_event' || cause === 'follow_up_ends_by_final_cutpoint';
+      const remedy = !why
+        ? tr('Change the plan\'s follow-up intervals or its adjustment, then generate the plan again.', '请调整计划的随访区间或调整变量，再生成计划。')
+        : cutPoints
+          ? tr('Choose interval cut points with events in every interval and follow-up past the last cut point, then generate the plan again.', '请选择每个区间都有事件、且随访超过最后一个切点的区间切点，再生成计划。')
+          : tr('Adjust for fewer variables or merge sparse categories, then generate the plan again.', '请减少调整变量或合并稀疏的类别，再生成计划。');
+      return tr(
+        `The proportional-hazards check rejected one hazard ratio for the whole follow-up, so the planned hazard ratios by follow-up interval are the primary result, and they could not be estimated${why ? `: ${why}` : ''}. The run has no primary result. ${remedy}`,
+        `比例风险检验否定了整个随访期使用同一个风险比，因此预先设定的分区间风险比是主结果，但无法估计${why ? `：${why}` : ''}。这次运行没有主结果。${remedy}`,
+      );
+    }
+
     function runFailureDetailText(detail) {
       const code = String(detail && detail.code || '').trim();
+      const cause = String(detail && detail.cause || '').trim();
       const missing = Array.isArray(detail && detail.missing) ? detail.missing.map(String).filter(Boolean) : [];
       const list = missing.length ? missing.join(', ') : '';
       const detailCopy = {
@@ -162,6 +188,11 @@
         progressive_family_result_contract_unwritable: tr('No executable EasyICU method can yet produce the primary result this causal or survival question needs, so planning stopped before its analysis steps were drafted. Ask an association question, or choose a design EasyICU can execute.', 'EasyICU 目前没有能给出这个因果或生存问题所需主结果的可执行方法，规划在起草分析步骤之前停止。可以改为关联性问题，或选用 EasyICU 能执行的设计。'),
         progressive_family_spec_cohort_eligibility_after_time_zero: tr('This study decides who is in its cohort after the analysis time zero (its concept window or minimum ICU stay ends later), so planning stopped before the model was called and no analysis was run. End the concept window or minimum ICU stay by time zero, or move time zero later; then prepare the export again and generate a fresh plan.', '这项研究在分析时间零点之后才确定谁入组（概念人群的窗口或最短 ICU 住院时长晚于时间零点），规划在调用模型之前停止，没有运行分析。请让概念窗口或最短住院时长在时间零点前结束，或把时间零点后移；然后重新准备导出，再生成计划。'),
         progressive_family_spec_prediction_risk_set_unavailable: tr('A prediction model is made for the stays still in the ICU when it predicts, which needs each stay\'s ICU length of stay; EasyICU prepares it for a study declared as a prediction model. Planning stopped before the model was called and no analysis was run. Declare the study\'s analysis as a prediction model, then generate the plan again.', '预测模型只针对预测时点仍在 ICU 的入住，需要每次入住的 ICU 住院时长；研究声明为预测模型时，EasyICU 才会准备这一列。规划在调用模型之前停止，没有运行分析。请把研究的分析类型声明为预测模型，再生成计划。'),
+        execution_complete_not_satisfied: tr('An analysis step did not finish, so the run produced no result it can report.', '有分析步骤没有完成，这次运行没有可以报告的结果。'),
+        analysis_validated_not_satisfied: tr('The analysis ran, but its automated validation did not pass, so its results cannot be reported.', '分析已运行，但没有通过自动校验，结果不能报告。'),
+        evidence_complete_not_satisfied: tr('The analysis ran, but some results lack the evidence they rest on, so they cannot be reported.', '分析已运行，但有些结果缺少所依据的证据，不能报告。'),
+        numeric_verified_not_satisfied: tr('The analysis ran, but some reported numbers could not be checked against the results they come from, so they cannot be reported.', '分析已运行，但有些报告的数字无法与其来源结果核对，不能报告。'),
+        continuous_survival_interval_result_not_estimable: intervalResultNotEstimableText(cause),
         progressive_family_spec_icu_stay_unit_unread: tr('The prepared data records the ICU length of stay in a unit EasyICU reads as neither days nor hours, so planning stopped before the model was called and no analysis was run. Prepare the export again with the unit recorded.', '准备好的数据里，ICU 住院时长的单位既不是天也不是小时，EasyICU 无法读取；规划在调用模型之前停止，没有运行分析。请重新准备导出，并记录单位。'),
       };
       if (detailCopy[code]) return detailCopy[code];
@@ -179,6 +210,11 @@
       if (!value) return '';
       const suffix = runFailureDetailText(detail);
       const withDetail = text => (suffix ? `${text} ${suffix}` : text);
+      // A failed-closed run did not pass a check after it started. Its detail
+      // says which check and why; the fallback holds for every check.
+      if (value === 'research_agent_pipeline_failed_closed') {
+        return suffix || tr('The run did not pass EasyICU\'s checks, so its results cannot be reported.', '这次运行没有通过 EasyICU 的检查，结果不能报告。');
+      }
       const known = {
         research_pipeline_planning_identity_unavailable: tr(
           'The selected database has no ICU-stay identity definition for planning. Choose a supported database family and generate the plan again.',

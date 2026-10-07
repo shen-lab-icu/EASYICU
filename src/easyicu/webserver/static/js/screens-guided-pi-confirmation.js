@@ -87,12 +87,12 @@
       // code, which names the generic cause of a typed stop.
       const failedRun = (Array.isArray(workflow.runs) ? workflow.runs : []).find(run => (
         run && run.authoritative && ['failed', 'blocked'].includes(String(run.run_status || ''))
-        && /^research_pipeline_|^data_foundation_blocked$/.test(String(run.gate_reason_code || ''))
+        && /^research_pipeline_|^data_foundation_blocked$|^research_agent_pipeline_failed_closed$/.test(String(run.gate_reason_code || ''))
       ));
       const failureReason = planContractExhausted || typeof host.runFailureText !== 'function'
         ? ''
         : failedRun
-          ? String(host.runFailureText(failedRun.gate_reason_code, { code: failedRun.gate_detail_code, missing: failedRun.gate_missing_concepts }) || '')
+          ? String(host.runFailureText(failedRun.gate_reason_code, { code: failedRun.gate_detail_code, missing: failedRun.gate_missing_concepts, cause: failedRun.gate_detail_cause_code }) || '')
           : latestFailedAgentJob ? String(host.runFailureText(latestFailedAgentJob.error_code) || '') : '';
       if (code === 'extraction_ready') return {
         code, grants: ['extract'],

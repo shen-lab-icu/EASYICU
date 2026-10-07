@@ -154,9 +154,9 @@
       const blocked = row && ['failed', 'blocked'].includes(String(row.run_status || row.status || row.gate_status || ''));
       const gateReason = String(row && (row.gate_reason_code || row.gate_reason) || '');
       // A blocked gate that is merely waiting for review is not a failure.
-      const failureGate = blocked && /^research_pipeline_|^data_foundation_blocked$/.test(gateReason) ? gateReason : '';
+      const failureGate = blocked && /^research_pipeline_|^data_foundation_blocked$|^research_agent_pipeline_failed_closed$/.test(gateReason) ? gateReason : '';
       const failureCode = String(row && (row.error_code || failureGate) || '');
-      const detail = row ? { code: row.gate_detail_code, missing: row.gate_missing_concepts } : null;
+      const detail = row ? { code: row.gate_detail_code, missing: row.gate_missing_concepts, cause: row.gate_detail_cause_code } : null;
       const failure = failureCode
         ? String(typeof host.runFailureText === 'function' ? host.runFailureText(failureCode, detail) || failureCode : failureCode)
         : '';
@@ -192,7 +192,7 @@
       const rows = runs.map(run => {
         const status = runStatus(run);
         const cause = ['failed', 'blocked'].includes(status.key) && run.gate_reason_code && typeof host.runFailureText === 'function'
-          ? String(host.runFailureText(run.gate_reason_code, { code: run.gate_detail_code, missing: run.gate_missing_concepts }) || '') : '';
+          ? String(host.runFailureText(run.gate_reason_code, { code: run.gate_detail_code, missing: run.gate_missing_concepts, cause: run.gate_detail_cause_code }) || '') : '';
         const count = Number(run.artifact_count || 0);
         return `<li class="gpi-run-row is-${status.key}${run.authoritative ? ' is-current' : ''}"><span class="gpi-run-mark" aria-hidden="true"></span><div class="gpi-run-copy"><strong>${esc(kind(run))} · ${esc(status.label)}${run.authoritative ? `<span class="gpi-run-current">${tr('current', '当前')}</span>` : ''}</strong><small>${esc(when(run.updated_at))}${count ? ` · ${count} ${tr('files', '个文件')}` : ''}</small>${cause ? `<small class="gpi-run-cause">${esc(cause)}</small>` : ''}<code>${esc(run.run_id)}</code></div></li>`;
       }).join('');
