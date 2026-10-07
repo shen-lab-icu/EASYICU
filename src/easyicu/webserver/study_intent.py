@@ -35,6 +35,7 @@ from typing import Any, Callable, Dict, Iterator, List, Literal, Mapping, Option
 from easyicu.ai_optin import AIOptInError
 from easyicu.outcome_availability import (
     fixed_horizon_mortality_endpoint_stated_by,
+    mortality_horizon_spans,
     stated_mortality_horizon_mentions,
 )
 from easyicu.webserver import provider_adapter
@@ -681,12 +682,22 @@ def deterministic_intent(question: str) -> Dict[str, Any]:
             slots["population"] = _slot(label, "user_text", match.group(0))
             break
 
-    window = re.search(r"(?:first\s*)?(\d{1,3})\s*(?:h\b|hr|hour|小时)", lowered)
+    # The hours of "48-hour mortality" or "excluding deaths within 24 hours"
+    # time an endpoint or an exclusion, not the window.
+    horizons = mortality_horizon_spans(lowered)
+    window = next(
+        (
+            match
+            for match in re.finditer(r"(?:first\s*)?(\d{1,3})\s*(?:h\b|hr|hour|小时)", lowered)
+            if not any(start <= match.start(1) < end for start, end in horizons)
+        ),
+        None,
+    )
     if window:
         slots["time_window_hours"] = _slot(
             int(window.group(1)), "user_text", window.group(0)
         )
-    elif re.search(r"\b24\s*h|首日|第一天|first day", lowered):
+    elif re.search(r"首日|第一天|first day", lowered):
         slots["time_window_hours"] = _slot(24, "user_text", "first day")
 
     for pattern, family in _FAMILY_PATTERNS:

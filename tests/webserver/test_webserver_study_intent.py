@@ -125,6 +125,21 @@ def test_length_of_stay_is_an_outcome_not_a_population():
 
 
 # --------------------------------------------------- never fill a default ---
+@pytest.mark.parametrize(
+    ("question", "window"),
+    [
+        ("Is lactate associated with 48-hour mortality in adult ICU stays?", None),
+        ("Is lactate associated with 24 h mortality?", None),
+        ("乳酸与 48 小时内死亡是否相关？", None),
+        ("Can the first-6h heart rate discriminate 48-hour mortality?", 6),
+        ("Excluding deaths within 24 hours, is the first-6h lactate associated with in-hospital mortality?", 6),
+    ],
+)
+def test_the_hours_of_a_mortality_horizon_are_not_the_window(question, window):
+    # "48-hour mortality" times the endpoint and an exclusion's hours the cohort.
+    assert _values(study_intent.deterministic_intent(question)).get("time_window_hours") == window
+
+
 def test_unreadable_slots_stay_unread_and_are_named():
     result = study_intent.deterministic_intent("数据质量怎么样")
     values = _values(result)
