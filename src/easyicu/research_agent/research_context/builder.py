@@ -1177,6 +1177,41 @@ _NAMED_HORIZON_OUTCOMES = {
 }
 
 
+_ICU_MORTALITY_TERMS = ("icu mortality", "icu死亡", "icu 死亡", "重症监护病房死亡")
+_HOSPITAL_MORTALITY_TERMS = ("in-hospital mortality", "hospital mortality", "院内死亡", "住院死亡")
+
+
+def _stated_horizon_request(
+    horizons: Sequence[StatedHorizon],
+    outcome_name: Optional[str],
+    setting: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Mortality at a stated horizon, in the setting the question names if any.
+
+    "48-hour in-hospital mortality" is neither whole-stay in-hospital
+    mortality nor all-cause mortality at 48 hours, so a request naming a
+    setting carries no horizon an all-cause endpoint could agree with.
+    """
+
+    noun = f"{setting} mortality" if setting else "mortality"
+    label = " or ".join(f"{horizon.adjective} {noun}" for horizon in horizons)
+    request: Dict[str, Any] = {
+        "label": label,
+        "description": f"Binary outcome flag operationalizing {label} for this analysis.",
+        "source_concept": horizons[0].semantic_key,
+        "horizons": tuple(horizons),
+        "substitution_note": (
+            "Do not silently substitute ICU, hospital, 28-day, or 30-day mortality "
+            f"for one another when using '{outcome_name}'."
+        ),
+    }
+    if setting:
+        key = "icu" if setting == "ICU" else "hospital"
+        request["source_concept"] = f"{key}_{horizons[0].semantic_key}"
+        del request["horizons"]
+    return request
+
+
 def _infer_outcome_semantics(
     *,
     research_question: str,
@@ -1218,10 +1253,18 @@ def _infer_outcome_semantics(
                 "or unrelated follow-up horizon for this time-to-event endpoint."
             ),
         }
-    if any(
-        term in question
-        for term in ("icu mortality", "icu死亡", "icu 死亡", "重症监护病房死亡")
-    ) or outcome in {
+    if stated:
+        # A stated horizon is part of the request ("48-hour in-hospital
+        # mortality", "in-hospital mortality within 48 hours"): whole-stay ICU
+        # or hospital mortality is another endpoint, whichever setting the
+        # question or the outcome column names.
+        setting = (
+            "ICU" if any(term in question for term in _ICU_MORTALITY_TERMS)
+            else "in-hospital" if any(term in question for term in _HOSPITAL_MORTALITY_TERMS)
+            else None
+        )
+        return _stated_horizon_request(stated, outcome_name, setting)
+    if any(term in question for term in _ICU_MORTALITY_TERMS) or outcome in {
         "death_icu",
         "icu_death",
         "icu_mortality",
@@ -1235,13 +1278,11 @@ def _infer_outcome_semantics(
                 f"for one another when using '{outcome_name}'."
             ),
         }
-    if (
-        "in-hospital mortality" in question
-        or "hospital mortality" in question
-        or "院内死亡" in question
-        or "住院死亡" in question
-        or outcome in {"death_hosp", "hospital_death", "hospital_mortality"}
-    ):
+    if any(term in question for term in _HOSPITAL_MORTALITY_TERMS) or outcome in {
+        "death_hosp",
+        "hospital_death",
+        "hospital_mortality",
+    }:
         return {
             "label": "hospital mortality",
             "description": "Binary outcome flag operationalizing hospital mortality for this analysis.",
@@ -1252,19 +1293,8 @@ def _infer_outcome_semantics(
             ),
         }
     named = _NAMED_HORIZON_OUTCOMES.get(outcome)
-    if stated or named is not None:
-        horizons = stated or (named,)
-        label = " or ".join(f"{horizon.adjective} mortality" for horizon in horizons)
-        return {
-            "label": label,
-            "description": f"Binary outcome flag operationalizing {label} for this analysis.",
-            "source_concept": horizons[0].semantic_key,
-            "horizons": horizons,
-            "substitution_note": (
-                "Do not silently substitute ICU, hospital, 28-day, or 30-day mortality "
-                f"for one another when using '{outcome_name}'."
-            ),
-        }
+    if named is not None:
+        return _stated_horizon_request((named,), outcome_name)
     if outcome in {"death", "mortality"}:
         return {
             "label": "mortality without a specified setting or horizon",
