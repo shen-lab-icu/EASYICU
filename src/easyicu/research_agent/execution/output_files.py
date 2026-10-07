@@ -12,6 +12,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
+from ..contracts.executor_stop import EXECUTOR_STOP_RECORD_NAME
+
 
 def _has_figure_exports(out_dir: Path) -> bool:
     figure_suffixes = {".png", ".svg", ".pdf", ".tiff", ".tif", ".pptx"}
@@ -36,6 +38,28 @@ def _clear_output_dir(out_dir: Path) -> None:
             child.unlink(missing_ok=True)
         else:
             shutil.rmtree(child)
+
+
+#: A standard executor's private work products in its output directory: the
+#: trajectory-stability executor's streaming write before its atomic rename,
+#: and the record of a stop an executor named (``contracts.executor_stop``).
+#: They never become evidence.
+_STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS = frozenset(
+    {".cluster_stability_assignments.pending.csv", EXECUTOR_STOP_RECORD_NAME}
+)
+
+
+def _remove_standard_executor_pending_artifacts(out_dir: Path) -> None:
+    """Remove private partial files before failed-run evidence discovery."""
+
+    for name in _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS:
+        (out_dir / name).unlink(missing_ok=True)
+
+
+def _is_standard_executor_internal_artifact(path: Path) -> bool:
+    """Return whether *path* is a private, never-evidence work product."""
+
+    return path.name in _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS
 
 
 def _finite_number(value: Any) -> float | None:
@@ -278,8 +302,11 @@ def bind_primary_output(step_summary: Any, out_dir: Path) -> Dict[str, Any]:
 
 
 __all__ = [
+    "_STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS",
     "_clear_output_dir",
     "_has_figure_exports",
+    "_is_standard_executor_internal_artifact",
+    "_remove_standard_executor_pending_artifacts",
     "bind_primary_output",
     "normalize_typed_statistic_sidecars",
 ]

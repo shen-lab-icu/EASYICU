@@ -491,17 +491,13 @@ def execution_gate_status(
     def _step_ok(step_id: str) -> bool:
         return status_by_step.get(step_id) == "ok" or (step_id in repaired_figures)
 
-    failed_steps = [
-        {"step_id": step_id, "status": status_by_step.get(step_id)}
-        for step_id in required_step_ids
-        if step_id in status_by_step and not _step_ok(step_id)
-    ]
     completion = step_completion_projection(
         required_step_ids=required_step_ids,
         record_by_step=record_by_step,
         status_by_step=status_by_step,
         step_ok=_step_ok,
     )
+    failed_steps = completion["failed_steps"]
     scientific_incomplete_steps = completion["scientific_incomplete_steps"]
     execution_complete = not missing_steps and not failed_steps
     return {

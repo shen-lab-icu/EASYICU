@@ -72,6 +72,7 @@ from .figure_preparation import (
     _step_has_figure_only_output_contract,
 )
 from .output_files import (
+    _is_standard_executor_internal_artifact,
     bind_primary_output,
 )
 from ..gates.semantics import (
@@ -311,9 +312,6 @@ def _untrusted_runtime_repair_allowed(*, repair_id: str, source: str) -> bool:
         }
         or metadata.repair_class is RepairClass.SYNTACTIC
     )
-_STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS = frozenset(
-    {".cluster_stability_assignments.pending.csv"}
-)
 _FIGURE_CONTRACT_SOURCE_DATA_SCHEMA_REPAIR_ID = "figure_contract_source_data_schema_v1"
 _COHORT_TRANSLATION_PROVIDER_CATEGORY = "cohort_definition_translation"
 _HOST_COHORT_TRANSLATION_BUDGET_STEP_ID = "host_cohort_definition_translation"
@@ -2628,15 +2626,6 @@ def _step_apply_authority_resume(
     return coder_context, None
 
 
-def _remove_standard_executor_pending_artifacts(out_dir: Path) -> None:
-    """Remove private partial files before failed-run evidence discovery."""
-
-    for name in _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS:
-        (out_dir / name).unlink(missing_ok=True)
-def _is_standard_executor_internal_artifact(path: Path) -> bool:
-    """Return whether *path* is a private, never-evidence work product."""
-
-    return path.name in _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS
 def _planner_locked_cohort_prompt_payload(plan: AnalysisPlan) -> str:
     """Return only the exact Planner-owned cohort definition for Coder scope."""
 
