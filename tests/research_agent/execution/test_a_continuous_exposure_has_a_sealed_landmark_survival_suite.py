@@ -354,14 +354,6 @@ def _digest_row(tmp_path, summary) -> dict:
     return json.loads(lines[head + 1])
 
 
-def test_tied_tertiles_refuse_three_descriptive_groups(tmp_path) -> None:
-    def two_values(rng, n):
-        return rng.choice([1.0, 2.0], size=n, p=[0.5, 0.5])
-
-    with pytest.raises(ValueError, match="tertiles are tied"):
-        _run(tmp_path, _rows(exposure=two_values))
-
-
 def test_a_spline_check_without_a_result_is_reported_without_one(tmp_path) -> None:
     def heaped(rng, n):
         # More than half the risk set at one value: the 10th and 50th

@@ -417,30 +417,37 @@ def _level_text(plan: AnalysisPlan, name: str, level: str) -> str:
 
 def _grouped_summary(plan: AnalysisPlan, body: GroupedSummaryLayout, rows, printed: _PrintedCounts):
     groups = body.groups
-    columns = ("Characteristic", *(f"{group.label} (n = {group.n})" for group in groups), "SMD")
+    # One group describes a whole population: there is no difference to show.
+    compared = len(groups) > 1
+    blank = ("",) if compared else ()
+    columns = (
+        "Characteristic",
+        *(f"{group.label} (n = {group.n})" for group in groups),
+        *(("SMD",) if compared else ()),
+    )
     printed.extend(("n", group.label, str(group.n)) for group in groups)
     projected: list[tuple[str, ...]] = []
     opened: set[str] = set()
     for row in rows:
         name = row["variable"]
         label = plan.display_labels.get(name) or name.replace("_", " ")
-        smd = _number(row["standardized_mean_difference"], 3)
+        smd = (_number(row["standardized_mean_difference"], 3),) if compared else ()
         if row["summary_type"] == "categorical_n_percent":
             if name not in opened:
-                projected.append((f"{label}, n (%)", *("" for _ in groups), ""))
+                projected.append((f"{label}, n (%)", *("" for _ in groups), *blank))
                 opened.add(name)
             level = _level_text(plan, name, row["level"])
             projected.append((
                 "  " + level,
                 *(_count_percent(row[f"{g.prefix}_n"], row[f"{g.prefix}_percent"]) for g in groups),
-                smd,
+                *smd,
             ))
             printed.extend((f"{label}: {level}", g.label, row[f"{g.prefix}_n"]) for g in groups)
         elif row["summary_type"] == "continuous_mean_sd":
             projected.append((
                 f"{label}, mean (SD)",
                 *(f"{_number(row[f'{g.prefix}_mean'])} ({_number(row[f'{g.prefix}_sd'])})" for g in groups),
-                smd,
+                *smd,
             ))
             projected.append((
                 "  Median [Q1, Q3]",
@@ -449,7 +456,7 @@ def _grouped_summary(plan: AnalysisPlan, body: GroupedSummaryLayout, rows, print
                     f"[{_number(row[f'{g.prefix}_q1'])}, {_number(row[f'{g.prefix}_q3'])}]"
                     for g in groups
                 ),
-                "",
+                *blank,
             ))
         else:
             raise ManuscriptTableProjectionError("A declared summary row has an unknown summary type")
@@ -457,7 +464,7 @@ def _grouped_summary(plan: AnalysisPlan, body: GroupedSummaryLayout, rows, print
         projected.append((
             body.events_label,
             *(_count_percent(str(group.events), repr(group.events_percent)) for group in groups),
-            "",
+            *blank,
         ))
         printed.extend((body.events_label, group.label, str(group.events)) for group in groups)
     return columns, projected
