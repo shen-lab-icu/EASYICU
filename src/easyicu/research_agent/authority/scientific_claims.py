@@ -17,6 +17,9 @@ import re
 from typing import Literal, Mapping, Sequence
 
 from .claim_coordinates import contrast_exposure_coordinate
+from .continuous_survival_scientific_claims import (
+    continuous_survival_reporting_requests_claims,
+)
 from .survival_scientific_claims import survival_reporting_requests_claims
 from .prespecified_rule_outcomes import (
     RULE_OUTCOME_CLAIM_SCHEMA_VERSION,
@@ -572,6 +575,8 @@ def scientific_claim_compilation_requested(summary: object) -> bool:
         # The signed survival suite opts in with its versioned envelope; an
         # older envelope stays readable and claims nothing.
         return True
+    if continuous_survival_reporting_requests_claims(summary):
+        return True
     interpretation_class = str(summary.get("interpretation_class") or "").strip()
     if interpretation_class == "adjusted_association":
         return True
@@ -633,6 +638,14 @@ def derive_scientific_claim_drafts(
 
         return [ScientificClaimDraft.model_validate(payload)
                 for payload in derive_survival_claim_payloads(summary)]
+
+    if continuous_survival_reporting_requests_claims(summary):
+        from .continuous_survival_scientific_claims import (
+            derive_continuous_survival_claim_payloads,
+        )
+
+        return [ScientificClaimDraft.model_validate(payload)
+                for payload in derive_continuous_survival_claim_payloads(summary)]
 
     if summary.get("interpretation_class") == "prespecified_sensitivity":
         from .sensitivity_scientific_claims import derive_sensitivity_claim_payloads

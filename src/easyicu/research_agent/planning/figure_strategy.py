@@ -314,6 +314,7 @@ _FAMILY_STRATEGIES: Dict[StudyDesignFamily, Dict[str, Any]] = {
                 "Adjusted hazard or risk contrasts quantify the primary survival estimand.",
                 (
                     "hazard_ratio_forest",
+                    "hazard_ratio_curve",
                     "risk_difference_panel",
                     "survival_contrast_table",
                 ),

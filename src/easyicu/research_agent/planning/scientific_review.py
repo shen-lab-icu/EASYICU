@@ -486,15 +486,21 @@ def patient_identity_available(context: ResearchContext) -> bool:
     return context_patient_group_authority(context) is not None
 
 
-#: The host's landmark survival suite.  It closes a temporal design only once
-#: its signed runtime authority binds the step; a draft that names it is a
-#: proposal the host has not sealed.
-_LANDMARK_SURVIVAL_SUITE_METHOD = "signed_landmark_survival_suite"
+#: The host's landmark survival suites: a binary exposure's contrast and a
+#: continuous exposure's per-unit model.  Each closes a temporal design only
+#: once its signed runtime authority binds the step; a draft that names one is
+#: a proposal the host has not sealed.
+_LANDMARK_SURVIVAL_SUITE_METHODS = frozenset(
+    {
+        "signed_landmark_survival_suite",
+        "signed_landmark_continuous_survival_suite",
+    }
+)
 _EXECUTABLE_TEMPORAL_METHODS = frozenset(
     {
         "signed_landmark_restricted_cubic_spline",
         "signed_landmark_categorical_association",
-        "signed_landmark_survival_suite",
+        *_LANDMARK_SURVIVAL_SUITE_METHODS,
         "time_varying_exposure_model",
         "landmark_analysis",
     }
@@ -688,7 +694,10 @@ def timing_design_closed(plan: Optional[AnalysisPlan]) -> bool:
             step.scientific_capability == "association_time_varying_exposure_v1"
             and _bound_to_runtime_contract(step)
         ))
-        and (_method_head(step) != _LANDMARK_SURVIVAL_SUITE_METHOD or _bound_to_runtime_contract(step))
+        and (
+            _method_head(step) not in _LANDMARK_SURVIVAL_SUITE_METHODS
+            or _bound_to_runtime_contract(step)
+        )
         for step in applicable
     )
 
@@ -699,11 +708,12 @@ def _signed_survival_suite_step(
 ) -> Optional[AnalysisStep]:
     """The one plan step the given signed landmark survival suite binds, if any."""
 
-    if getattr(runtime_authority, "plan_method", None) != _LANDMARK_SURVIVAL_SUITE_METHOD:
+    method = getattr(runtime_authority, "plan_method", None)
+    if method not in _LANDMARK_SURVIVAL_SUITE_METHODS:
         return None
     steps = [
         step for step in plan.steps
-        if _method_head(step) == _LANDMARK_SURVIVAL_SUITE_METHOD
+        if _method_head(step) == method
         and runtime_authority.plan_rule_ref in step.icu_rule_refs
         and runtime_authority.table_one_product in step.expected_outputs
     ]
@@ -2332,7 +2342,7 @@ def landmark_survival_suite_facts(
     primaries = [
         step for step in plan.steps
         if step.planned_analysis_role == "primary"
-        and _method_head(step) == _LANDMARK_SURVIVAL_SUITE_METHOD
+        and _method_head(step) in _LANDMARK_SURVIVAL_SUITE_METHODS
     ]
     if len(primaries) != 1:
         return None
@@ -3067,14 +3077,18 @@ def build_plan_scientific_review(
                 remediation_route="study_authority_change" if declared else "agent_plan_revision",
                 requires_user_authorization=declared,
             ))
-    # The signed survival suite describes its own Table 1 roster by exposure.
+    # The signed survival suite describes its own Table 1 roster by exposure:
+    # a binary suite by its status, a continuous one by tertiles of its value.
     survival_suite = _signed_survival_suite_step(plan, runtime_authority)
     baseline_coverage = baseline_requirement_coverage(
         context, plan,
         signed_rosters=(
             [(
                 survival_suite.step_id,
-                {runtime_authority.exposure_status_column},
+                {
+                    getattr(runtime_authority, "exposure_status_column", None)
+                    or runtime_authority.exposure_column
+                },
                 set(runtime_authority.table_one_columns),
             )]
             if survival_suite is not None

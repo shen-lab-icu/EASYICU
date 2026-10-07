@@ -273,6 +273,10 @@ def _compile_survival_cohort_report_facts(projected, evidence):
     """
 
     from .writer_evidence import _verified_evidence_json
+    from ..authority.continuous_survival_scientific_claims import (
+        ContinuousSurvivalReporting,
+        continuous_survival_reporting_requests_claims,
+    )
     from ..authority.survival_scientific_claims import (
         SURVIVAL_REPORTING_KEY,
         SurvivalReporting,
@@ -295,9 +299,16 @@ def _compile_survival_cohort_report_facts(projected, evidence):
         source = _verified_evidence_json(
             evidence, source_id, exact_evidence_id=True, expected_kind="statistic",
         )
-        if not survival_reporting_requests_claims(source):
-            continue  # A /1 envelope has no typed reporting coordinates.
-        reporting = SurvivalReporting.model_validate(source[SURVIVAL_REPORTING_KEY])
+        # A binary suite's /2 envelope or a continuous suite's /1 states the
+        # analysis unit; a binary /1 envelope has no typed coordinates.
+        if survival_reporting_requests_claims(source):
+            reporting = SurvivalReporting.model_validate(source[SURVIVAL_REPORTING_KEY])
+        elif continuous_survival_reporting_requests_claims(source):
+            reporting = ContinuousSurvivalReporting.model_validate(
+                source[SURVIVAL_REPORTING_KEY]
+            )
+        else:
+            continue
         population = _count(source.get("n_landmark_population"), positive=True)
         if "n_source" in source and _count(source["n_source"], positive=True) < population:
             raise ValueError("Survival landmark population exceeds its source cohort")

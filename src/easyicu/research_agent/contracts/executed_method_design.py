@@ -171,8 +171,60 @@ class LandmarkSurvivalDesign(_ExecutedDesign):
         return self
 
 
+class LandmarkContinuousSurvivalDesign(_ExecutedDesign):
+    """The landmark risk set of a continuous exposure, its model and its checks.
+
+    The exposure is one window summary recorded by the landmark, modelled per
+    ``exposure_increment`` units of the source's scale.  Times are hours or
+    days from the time origin; the cutpoints are days after the landmark.
+    """
+
+    design_kind: Literal["landmark_continuous_survival"]
+    time_origin: str = Field(min_length=1, max_length=80)
+    landmark_hours: float = Field(gt=0)
+    endpoint_horizon_days: float = Field(gt=0)
+    exposure_window_start_hours: float = Field(ge=0)
+    exposure_window_end_hours: float = Field(gt=0)
+    exposure_window_summary: Literal["max", "min", "mean", "first"]
+    exposure_increment: float = Field(gt=0)
+    exposure_unit: str | None = Field(min_length=1, max_length=40)
+    n_adjustment_covariates: int = Field(ge=0)
+    effect_model: Literal["cox_proportional_hazards_efron_ties"]
+    interval_method: Literal["wald_95_ci"]
+    proportional_hazards_test: Literal["schoenfeld_residuals"]
+    proportional_hazards_alpha: float = Field(gt=0.0, lt=1.0)
+    time_varying_cutpoints_days: list[float] = Field(min_length=1)
+    spline_knot_percentiles: list[float]
+    descriptive_grouping: Literal["value_tertiles"]
+
+    @model_validator(mode="after")
+    def _times_are_ordered(self) -> "LandmarkContinuousSurvivalDesign":
+        followup_days = self.endpoint_horizon_days - self.landmark_hours / 24.0
+        cutpoints = self.time_varying_cutpoints_days
+        if followup_days <= 0:
+            raise ValueError("the landmark is not before the endpoint horizon")
+        if not (
+            self.exposure_window_start_hours
+            < self.exposure_window_end_hours
+            <= self.landmark_hours
+        ):
+            raise ValueError("the exposure window does not close by the landmark")
+        if any(
+            later <= earlier for earlier, later in zip(cutpoints, cutpoints[1:])
+        ) or any(not 0 < cut < followup_days for cut in cutpoints):
+            raise ValueError("time-varying cutpoints must increase within follow-up")
+        if self.spline_knot_percentiles != [10.0, 50.0, 90.0]:
+            raise ValueError("the spline knots are the 10th, 50th and 90th percentiles")
+        return self
+
+
 ExecutedMethodDesign = Annotated[
-    Union[FixedWindowRepresentationDesign, LatentClassModelDesign, LandmarkSurvivalDesign],
+    Union[
+        FixedWindowRepresentationDesign,
+        LatentClassModelDesign,
+        LandmarkSurvivalDesign,
+        LandmarkContinuousSurvivalDesign,
+    ],
     Field(discriminator="design_kind"),
 ]
 _DESIGN_ADAPTER: TypeAdapter[Any] = TypeAdapter(ExecutedMethodDesign)
@@ -193,6 +245,7 @@ __all__ = [
     "EXECUTED_METHOD_DESIGN_SCHEMA_VERSION",
     "ExecutedMethodDesign",
     "FixedWindowRepresentationDesign",
+    "LandmarkContinuousSurvivalDesign",
     "LandmarkSurvivalDesign",
     "LatentClassModelDesign",
     "executed_method_design_payload",

@@ -19,6 +19,9 @@ from typing import Annotated, Any, Dict, Literal, Mapping, Tuple, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
+from .landmark_continuous_survival_runtime import (
+    LandmarkContinuousSurvivalRuntimeAuthority,
+)
 from .rmst_runtime import RmstRuntimeAuthority
 from .time_varying_runtime import TimeVaryingRuntimeAuthority
 
@@ -2991,6 +2994,7 @@ CurrentCaseScientificRuntimeAuthority = Annotated[
         LandmarkCategoricalAssociationRuntimeAuthority,
         LandmarkSplineRuntimeAuthority,
         LandmarkSurvivalRuntimeAuthority,
+        LandmarkContinuousSurvivalRuntimeAuthority,
         SourceFeasibilityRuntimeAuthority,
         TimeVaryingRuntimeAuthority,
         RmstRuntimeAuthority,
@@ -3010,6 +3014,7 @@ def load_current_case_scientific_runtime_authority(
             LandmarkCategoricalAssociationRuntimeAuthority,
             LandmarkSplineRuntimeAuthority,
             LandmarkSurvivalRuntimeAuthority,
+            LandmarkContinuousSurvivalRuntimeAuthority,
             SourceFeasibilityRuntimeAuthority,
             TimeVaryingRuntimeAuthority,
             RmstRuntimeAuthority,

@@ -1,7 +1,8 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/planning/cohort_contract.py"
+      "src/easyicu/research_agent/planning/figure_strategy.py",
+      "src/easyicu/research_agent/reporting/article_contract.py"
     ],
     "summary_changes": {}
   },
@@ -665,9 +666,17 @@
         "src/easyicu/research_agent/planning/cohort_contract.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "planning/figure_strategy.py: a survival effect may be drawn as a hazard-ratio curve, the per-unit panel of the continuous-exposure landmark survival suite (CS), so H1's planning contract lists that chart type (+20 bytes); reporting/article_contract.py: the continuous suite owns its reader roles and its measurement audit. No resource selection changes.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/planning/figure_strategy.py",
+        "src/easyicu/research_agent/reporting/article_contract.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "planning/cohort_contract.py: CohortDefinition carries the population criteria a plan states and no predicate applies (UP); they stay out of the cohort's record and digest and out of the Planner's transport schema. Only that file's source digest moves; every fixed task's planning contract, Planner prompt, resource selection and coder context are unchanged; provider-free and patient-data-free.",
+  "baseline_reason": "planning/figure_strategy.py: a survival effect may be drawn as a hazard-ratio curve, the per-unit panel of the continuous-exposure landmark survival suite (CS), so H1's planning contract lists that chart type (+20 bytes); reporting/article_contract.py: the continuous suite owns its reader roles and its measurement audit. No resource selection changes.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -688,11 +697,11 @@
     "src/easyicu/research_agent/planning/analysis_blueprint.py": "5330a604f9894c879ba400bee3b3ac1b617de1ce24425506139a5a29bb4020b2",
     "src/easyicu/research_agent/planning/analysis_types.py": "936b11fe41791a06369a20d930e6e1b3ec29a16c3bd71197f916e8fb9948bc4b",
     "src/easyicu/research_agent/planning/cohort_contract.py": "559d20fb3b2f434764843c3557c4e62047cb479ef514418636a4e9f751aabdc1",
-    "src/easyicu/research_agent/planning/figure_strategy.py": "f6c2cb10e1af641787fb7de1da29cfee99d869f56a3116ec3c1b2881fd3b93bf",
+    "src/easyicu/research_agent/planning/figure_strategy.py": "42b617ad40d993c585df27598613731ceedc2e4645f197a2cb96c54645f7cec2",
     "src/easyicu/research_agent/planning/study_design.py": "84e7d9c0974ca3d1f9deadcc22de065586a9be20fcdf66f101f931469b64cad0",
     "src/easyicu/research_agent/planning/study_design_playbook.py": "fa07ee36a06d560ca9266999516bf1f394c4ac522d5b1436bf689d274b07888d",
     "src/easyicu/research_agent/providers/prompts/v1/system.txt": "cf9212ac318beac1b2690738506b0b9d658bc28db4b98a521022d57a317eb692",
-    "src/easyicu/research_agent/reporting/article_contract.py": "e905dbc389d449630c87aba037adcc54cea5df3658cbd1504516e89d9453eec2",
+    "src/easyicu/research_agent/reporting/article_contract.py": "a4220196c9aa8761be2f255ebce754c82f0ac73b4c02f9046a5f82a984bef2e8",
     "src/easyicu/research_agent/research_context/outbound.py": "1019a35f2bf4ed055c4c274fbe29bf8b6cffcbe601fe3c0fa2096c54bb68efd6",
     "src/easyicu/research_agent/resources/capability.py": "3fc6dea8ffde23a358dfccd02b5f31620069fcccba8012807057a9913c70ca84",
     "src/easyicu/research_agent/resources/capability_runtime.py": "5e707e8a4b3a5f375ae579951b07c3e1f07d635b8db093109c613936c8b3bc71",
@@ -1413,15 +1422,15 @@
       "know_how_prompt_bytes": 4015,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 14826,
+        "approx_input_tokens": 14831,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 46216,
+            "bytes": 46236,
             "included": true,
             "required": true,
-            "sha256": "f35f8ee6a752258006550af6ea814d08a6365f910c8918d5ec6ce72d08091978"
+            "sha256": "49567c25cbac8a23578e662f26853a108487d777e6aad288c22facfb089fecb6"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -1432,30 +1441,30 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 59303,
+        "total_bytes": 59323,
         "truncated_strings": false,
-        "user_bytes": 50859
+        "user_bytes": 50879
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 13665,
+        "approx_input_tokens": 13670,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 46216,
+            "bytes": 46236,
             "included": true,
             "required": true,
-            "sha256": "f35f8ee6a752258006550af6ea814d08a6365f910c8918d5ec6ce72d08091978"
+            "sha256": "49567c25cbac8a23578e662f26853a108487d777e6aad288c22facfb089fecb6"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 54660,
+        "total_bytes": 54680,
         "truncated_strings": false,
-        "user_bytes": 46216
+        "user_bytes": 46236
       },
-      "planning_contract_bytes": 6757,
-      "planning_contract_sha256": "e227ee73ac9220ebc9cb705c73311d1533abeb13362f661160a2f6a24f4f1fc2",
+      "planning_contract_bytes": 6777,
+      "planning_contract_sha256": "7426aa9258538c2435537b62ad55d33c38c7c0acffa9624978eddce8b2f6dd06",
       "question": "Estimate mechanical ventilation survival and 28-day mortality.",
       "resource_added_bytes": 4643,
       "resource_allowlist_sha256": "9fdb53508a14f7aeee8455163b7c328ee6430d83fb990fee9173a5719d84d7aa",

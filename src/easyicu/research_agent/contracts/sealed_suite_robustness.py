@@ -58,6 +58,10 @@ SEALED_SUITE_ROBUSTNESS_AXES = MappingProxyType(
         # Cox fitted beside the constant-hazard model is an alternative hazard
         # specification of the same estimand.
         "signed_landmark_survival_suite": ("timing", "model_specification"),
+        # The continuous-exposure suite applies the same landmark design; its
+        # interval model and the spline check of its linear term are
+        # alternative specifications of the same per-unit estimand.
+        "signed_landmark_continuous_survival_suite": ("timing", "model_specification"),
         # The sealed candidate grid fits every admissible cluster count and
         # fails closed when the BIC optimum sits at the upper boundary, which
         # is the "alternative cluster number" the phenotyping playbook asks for.

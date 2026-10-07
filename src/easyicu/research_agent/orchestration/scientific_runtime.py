@@ -83,6 +83,15 @@ _CURRENT_CASE_PLAN_COMPILERS: Mapping[str, _RuntimePlanCompilerSpec] = {
         governed_steps=(("step_id", "governed_step"),),
         sequence_details=(("output_products", "plan_outputs"),),
     ),
+    "landmark_continuous_survival_suite": _RuntimePlanCompilerSpec(
+        message=(
+            "Compiled the signed continuous-exposure landmark survival suite "
+            "into one deterministic host-tool route."
+        ),
+        reason_code="landmark_continuous_survival_suite_host_compiled",
+        governed_steps=(("step_id", "governed_step"),),
+        sequence_details=(("output_products", "plan_outputs"),),
+    ),
     "landmark_categorical_association": _RuntimePlanCompilerSpec(
         message=(
             "Compiled the categorical landmark cohort and primary association "
@@ -140,6 +149,14 @@ _CURRENT_CASE_DEVELOPMENT_PLAN_COMPILERS: Mapping[
         analysis_only=True,
     ),
     "landmark_survival_suite": _RuntimePlanCompilerSpec(
+        message=_DEVELOPMENT_MESSAGE,
+        reason_code="development_execution_only_authority_compiled",
+        project_research_question=True,
+        enabled_flag="development_execution_only_allowed",
+        governed_steps=(("step_id", "governed_step"),),
+        analysis_only=True,
+    ),
+    "landmark_continuous_survival_suite": _RuntimePlanCompilerSpec(
         message=_DEVELOPMENT_MESSAGE,
         reason_code="development_execution_only_authority_compiled",
         project_research_question=True,
@@ -436,7 +453,13 @@ class ScientificRuntimeAuthorities:
         if authority is None or not callable(projector):
             return endpoint, primary_exposure, preferences
         sealed_endpoint = projector()
-        sealed_exposure = str(getattr(authority, "exposure_status_column", "") or "")
+        # A binary suite names its exposure status; a continuous one, the
+        # window summary it models.
+        sealed_exposure = str(
+            getattr(authority, "exposure_status_column", "")
+            or getattr(authority, "exposure_column", "")
+            or ""
+        )
         if endpoint is not None and endpoint != sealed_endpoint:
             same_event_without_time_axis = (
                 endpoint.kind == "binary"

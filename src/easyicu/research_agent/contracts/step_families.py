@@ -596,18 +596,31 @@ def _signed_standard_effect_output_authorized(
     )
 
 
+#: The digest-bound survival suites, each with the selector reason that
+#: records the host ran it: the binary exposure contrast and the continuous
+#: exposure per unit.
+_SIGNED_SURVIVAL_SUITE_SELECTION_REASONS: Mapping[str, str] = {
+    "signed_landmark_survival_suite": "signed_landmark_survival_suite_contract_preflight",
+    "signed_landmark_continuous_survival_suite": (
+        "signed_landmark_continuous_survival_suite_contract_preflight"
+    ),
+}
+
+
 def _signed_landmark_survival_effect_output_authorized(
     step: AnalysisStep,
     step_record: Optional[Mapping[str, Any]],
 ) -> bool:
-    """Recognize the digest-bound deterministic survival suite as effect owner."""
+    """Recognize a digest-bound deterministic survival suite as effect owner."""
 
     if not isinstance(step_record, Mapping):
         return False
+    method = str(step.method or "")
+    reason = _SIGNED_SURVIVAL_SUITE_SELECTION_REASONS.get(method)
     candidates = step_record.get("standard_executor_candidates")
     typed_outputs = [typed_product(value) for value in step.expected_outputs or ()]
     return bool(
-        step.method == "signed_landmark_survival_suite"
+        reason is not None
         and step.planned_analysis_role == "primary"
         and any(
             product is not None and product[0] == "table" for product in typed_outputs
@@ -616,12 +629,10 @@ def _signed_landmark_survival_effect_output_authorized(
             re.fullmatch(r"scientific_runtime_contract:[0-9a-f]{64}", str(ref))
             for ref in (step.icu_rule_refs or [])
         )
-        and step_record.get("deterministic_standard_analysis")
-        == "signed_landmark_survival_suite"
-        and step_record.get("deterministic_standard_selection_reason")
-        == "signed_landmark_survival_suite_contract_preflight"
+        and step_record.get("deterministic_standard_analysis") == method
+        and step_record.get("deterministic_standard_selection_reason") == reason
         and isinstance(candidates, Mapping)
-        and candidates.get("claimed_by") == "signed_landmark_survival_suite"
+        and candidates.get("claimed_by") == method
     )
 
 
