@@ -8,7 +8,9 @@ its error left the planner untyped, so the Web run recorded
 ``research_pipeline_execution_failed`` with no cause, and the conversation read
 it as an analysis step that failed while running.  The refusal now stops
 planning with the request's reason code, and states that the Planner made no
-Provider call, so the host can say what stopped and what to change.
+Provider call, so the host can say what stopped and what to change.  A
+prediction refused for its risk set (no ICU length of stay, every input row
+bound, an unread unit) names the study change that lifts it.
 
 Synthetic contexts only.
 """
@@ -25,11 +27,16 @@ from easyicu.research_agent.planning.baseline_requirements import bind_baseline_
 from easyicu.research_agent.planning.family_spec import FamilySpecError
 from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
-from easyicu.research_agent.schema import ResearchContext
+from easyicu.research_agent.schema import ConceptDescriptor, ResearchContext, VariableRole
 from easyicu.webserver import agent_pipeline_runs
 from easyicu.webserver.pi_copilot.workflow import gate_detail_projection
 
-from .family_spec_fixtures import ALLOWED_CITATIONS, DIRECT_COMPARATORS, _context
+from .family_spec_fixtures import (
+    ALLOWED_CITATIONS,
+    DIRECT_COMPARATORS,
+    _context,
+    _prediction_context,
+)
 
 LATE_COHORT = "family_spec_cohort_eligibility_after_time_zero"
 UNGROUPABLE = "family_spec_accepted_baseline_grouping_unsupported"
@@ -72,7 +79,9 @@ def _ungroupable() -> ResearchContext:
 REFUSALS = {LATE_COHORT: _late_cohort, UNGROUPABLE: _ungroupable}
 
 
-def _planning_stop(context: ResearchContext) -> ProgressivePlanCompileError:
+def _planning_stop(
+    context: ResearchContext, mode: str | None = "predicate_filtered"
+) -> ProgressivePlanCompileError:
     llm = ScriptedMockLLMClient([])
     with pytest.raises(ProgressivePlanCompileError) as stopped:
         ProgressivePlannerAgent(llm).run_attempt(
@@ -84,7 +93,7 @@ def _planning_stop(context: ResearchContext) -> ProgressivePlanCompileError:
             enforce_article_contract=True,
             article_contract_context=context,
             planning_contract_context="",
-            required_primary_cohort_selection_mode="predicate_filtered",
+            required_primary_cohort_selection_mode=mode,
         )
     assert llm.calls == []
     return stopped.value
@@ -157,3 +166,52 @@ def test_the_host_says_what_stopped_planning_and_what_to_change() -> None:
     assert "replay artifact was preserved" in (
         agent_pipeline_runs._progressive_compile_failure_message(projected)
     )
+
+
+def _with_icu_stay(context: ResearchContext, unit: str | None) -> ResearchContext:
+    """The context with its stay-level ICU length of stay in ``unit``, or without it."""
+
+    variables = [item for item in context.variables if item.name != "los_icu"]
+    if unit is not None:
+        variables.append(
+            ConceptDescriptor(
+                name="los_icu", description="ICU length of stay", role=VariableRole.OUTCOME,
+                dtype="float64", unit=unit, source_concept="los_icu",
+            )
+        )
+    return context.model_copy(update={"variables": variables})
+
+
+PREDICTION_STOPS = [
+    pytest.param(
+        lambda: _with_icu_stay(_prediction_context(), None), None,
+        "family_spec_prediction_risk_set_unavailable",
+        "Declare the study's analysis as a prediction model",
+        id="no_icu_stay",
+    ),
+    pytest.param(
+        _prediction_context, "all_input_rows",
+        "family_spec_prediction_risk_set_conflicts_with_population",
+        "a population that filters",
+        id="every_input_row",
+    ),
+    pytest.param(
+        lambda: _with_icu_stay(_prediction_context(), "weeks"), None,
+        "family_spec_icu_stay_unit_unread",
+        "Prepare the export again with the unit recorded",
+        id="unread_unit",
+    ),
+]
+
+
+@pytest.mark.parametrize(("build", "mode", "code", "remedy"), PREDICTION_STOPS)
+def test_a_prediction_stop_names_the_study_change_that_lifts_it(
+    build, mode: str | None, code: str, remedy: str
+) -> None:
+    stop = _planning_stop(build(), mode)
+
+    assert stop.reason_code == f"progressive_{code}"
+    assert stop.easyicu_safe_diagnostic["metrics"] == {"planner_provider_calls": 0}
+    message = agent_pipeline_runs._progressive_compile_failure_message(stop)
+    assert remedy in message
+    assert "before the Planner was called" in message

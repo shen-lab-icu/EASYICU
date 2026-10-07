@@ -491,26 +491,54 @@ def _pipeline_failure_code(
     return "research_pipeline_execution_failed"
 
 
+#: What stopped planning, and what the researcher changes, for a typed stop
+#: whose remedy is the researcher's.  Any other stop is described by what is
+#: true of it.
+_PLANNING_STOP_SENTENCES = {
+    "progressive_family_result_contract_unwritable": (
+        "No executable EasyICU method can yet produce the primary result this "
+        "causal or survival question needs, so planning stopped before its "
+        "analysis steps were drafted. No analysis was run."
+    ),
+    "progressive_family_spec_cohort_eligibility_after_time_zero": (
+        "This study decides who is in its cohort after the analysis time zero: "
+        "its concept window or minimum ICU stay ends later. Planning stopped "
+        "before the Planner was called, and no analysis was run. Change the "
+        "study so its cohort is decided by time zero (end the concept window or "
+        "minimum ICU stay there), or move time zero later; then prepare the "
+        "export again and generate a fresh plan."
+    ),
+    "progressive_family_spec_prediction_risk_set_unavailable": (
+        "A prediction model is made for the stays still in the ICU when it "
+        "predicts, which needs each stay's ICU length of stay, and EasyICU "
+        "prepares it for a study declared as a prediction model. Planning "
+        "stopped before the Planner was called, and no analysis was run. "
+        "Declare the study's analysis as a prediction model, then generate a "
+        "fresh plan."
+    ),
+    "progressive_family_spec_prediction_risk_set_conflicts_with_population": (
+        "This study keeps every input row, but a prediction model is made only "
+        "for the stays still in the ICU when it predicts. Planning stopped "
+        "before the Planner was called, and no analysis was run. Give the study "
+        "a population that filters, such as a minimum ICU stay up to the "
+        "prediction time or an adult preset, then generate a fresh plan."
+    ),
+    "progressive_family_spec_icu_stay_unit_unread": (
+        "The prepared data records the ICU length of stay in a unit EasyICU "
+        "reads as neither days nor hours. Planning stopped before the Planner "
+        "was called, and no analysis was run. Prepare the export again with the "
+        "unit recorded."
+    ),
+}
+
+
 def _progressive_compile_failure_message(exc: BaseException) -> str:
     """Say what stopped planning; the typed reason decides which sentence is true."""
 
     typed = _safe_pipeline_typed_failure(exc)
-    reason_code = typed.get("reason_code")
-    if reason_code == "progressive_family_result_contract_unwritable":
-        return (
-            "No executable EasyICU method can yet produce the primary result this "
-            "causal or survival question needs, so planning stopped before its "
-            "analysis steps were drafted. No analysis was run."
-        )
-    if reason_code == "progressive_family_spec_cohort_eligibility_after_time_zero":
-        return (
-            "This study decides who is in its cohort after the analysis time zero: "
-            "its concept window or minimum ICU stay ends later. Planning stopped "
-            "before the Planner was called, and no analysis was run. Change the "
-            "study so its cohort is decided by time zero (end the concept window or "
-            "minimum ICU stay there), or move time zero later; then prepare the "
-            "export again and generate a fresh plan."
-        )
+    sentence = _PLANNING_STOP_SENTENCES.get(str(typed.get("reason_code") or ""))
+    if sentence:
+        return sentence
     if (typed.get("metrics") or {}).get("planner_provider_calls") == 0:
         return (
             "The host refused this study's planning request before the Planner was "
