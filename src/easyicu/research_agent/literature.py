@@ -1637,6 +1637,57 @@ def _stated_study_cohort(context: ResearchContext) -> dict[str, Any]:
 #: Extraction applies the adult age floor with them whether or not an age
 #: bound is set (the host's ``primary_cohort.ADULT_COHORT_PRESETS``).
 _ADULT_STUDY_PRESETS = frozenset({"adult_all", "adult_first"})
+#: An adult group named in the study's own words; a minor ("未成年",
+#: "非成人") or a "non-adult" group is not one.
+_ADULT_GROUP_ZH = re.compile(r"(?<![未非])成(?:人|年)")
+_ADULT_GROUP_EN = re.compile(r"(?<!non )\badults?\b")
+#: An adult age floor: 18 or older, never "under 18" or "18 or younger".
+_ADULT_AGE_FLOOR = re.compile(
+    r"(?:≥|⩾|>=)\s*18(?![0-9])|18\s*周?岁(?:及|或)?以上|年满\s*18\s*周?岁"
+)
+_ADULT_AGE_FLOOR_EN = re.compile(
+    r"\b18\s+(?:years?\s+)?(?:or|and)\s+(?:older|over|above)\b"
+    r"|\b(?:at\s+least|(?<!not )older\s+than|over|above)\s+18\b"
+)
+#: A paediatric group a statement includes; an excluded one ("excluding
+#: children", "儿童被排除") leaves an adult statement adult.
+_PEDIATRIC_GROUP = re.compile(
+    r"\b(?:child(?:ren)?|childhood|pa?ediatrics?|adolescents?|teen(?:ager)?s?|infants?|"
+    r"neonat(?:es?|al)|newborns?|minors?)\b|儿童|儿科|小儿|青少年|婴儿|婴幼儿|新生儿|未成年",
+    re.IGNORECASE,
+)
+_GROUP_EXCLUDED_BEFORE = re.compile(
+    r"(?:\b(?:excluding|excluded|exclude|except|without|other\s+than)\b|排除|不包括|不含|除外)"
+    r"[^,.;:，。；：]{0,20}$",
+    re.IGNORECASE,
+)
+_GROUP_EXCLUDED_AFTER = re.compile(
+    r"^[^,.;:，。；：]{0,16}?(?:\b(?:were|was|are|is|being)\s+excluded\b|被?排除|除外)",
+    re.IGNORECASE,
+)
+
+
+def _includes_a_pediatric_group(statement: str) -> bool:
+    for found in _PEDIATRIC_GROUP.finditer(statement):
+        if _GROUP_EXCLUDED_BEFORE.search(statement[: found.start()]) or _GROUP_EXCLUDED_AFTER.match(
+            statement[found.end():]
+        ):
+            continue
+        return True
+    return False
+
+
+def _states_adult_scope(statement: str) -> bool:
+    """One statement names adults (or an adult age floor) and includes no child."""
+
+    normalized = _normalise_clinical_text(statement)
+    adult = bool(
+        _ADULT_GROUP_ZH.search(statement)
+        or _ADULT_GROUP_EN.search(normalized)
+        or _ADULT_AGE_FLOOR.search(statement)
+        or _ADULT_AGE_FLOOR_EN.search(normalized)
+    )
+    return adult and not _includes_a_pediatric_group(statement)
 
 
 def _adult_population_required(context: ResearchContext) -> bool:
@@ -1648,6 +1699,9 @@ def _adult_population_required(context: ResearchContext) -> bool:
     has no rows, so a scope stated only in the question or the wording would
     otherwise leave a pediatric study eligible as a design analogue for an
     adult one.
+    Each statement is read on its own: a minor, a "non-adult" group, an age
+    bound below 18, or a statement that also includes a paediatric group
+    ("adult and paediatric patients") declares no adult-only scope.
     Observed ages constrain comparison to this bound cohort, not eligibility
     for a future cohort. A sample, empty catalog, partial age coverage, or the
     dictionary's physiological range cannot establish that population.
@@ -1668,17 +1722,10 @@ def _adult_population_required(context: ResearchContext) -> bool:
         *[str(value) for value in list(provenance.get("inclusion_criteria") or [])],
         *[str(stated[key]) for key in ("label", "review") if isinstance(stated.get(key), str)],
     ]
-    raw_text = " ".join(values)
-    text = _normalise_clinical_text(raw_text)
-    if any(marker in raw_text for marker in ("成人", "成年")) or any(
-        marker in f" {text} "
-        for marker in (
-            " adult ",
-            " adults ",
-            " age 18 ",
-            " age 18 years ",
-            " age 18 or older ",
-        )
+    if any(
+        _states_adult_scope(statement)
+        for value in values
+        for statement in re.split(r"[.;!?。；！？\n]+", str(value or ""))
     ):
         return True
     for variable in context.variables:
