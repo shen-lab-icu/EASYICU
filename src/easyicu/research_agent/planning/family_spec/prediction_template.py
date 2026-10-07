@@ -2,7 +2,9 @@
 
 A prognostic model question over predictors measured inside the sealed
 observation window and a 0/1 outcome (for example: in-hospital death from
-first-24-hour vitals and labs). The Planner decides the predictor roster,
+first-24-hour vitals and labs). The model predicts at the window's end, its
+prediction time, for the stays still in the ICU after it; the request types
+that time and the template applies it as a cohort bound. The Planner decides the predictor roster,
 reader labels, and comparator applications; the host projects the
 discrimination/calibration primary, the calibration, internal validation, and
 decision-curve secondaries, the composite figure, and the report, and the
@@ -145,6 +147,39 @@ def _estimand(head: str, labels: list[str], tail: str) -> str:
     return f"{head} ({roster}){tail}" if roster else f"{head}, named in the plan{tail}"
 
 
+def _population_item(request: FamilySpecRequest, spec: FamilyPlanSpec, language: str) -> str:
+    """The rows the plan analyzes, naming each typed bound the cohort applies."""
+
+    risk_set = request.prediction_time_hours
+    other_bounds = request.cohort_selection_mode == "predicate_filtered" and any(
+        value is not None for value in (request.age_min, request.age_max, request.minimum_icu_hours)
+    )
+    restricted = typed_bound_applies(request) or population_restricts(spec.population)
+    if language == "zh":
+        qualifiers = [
+            *(["满足类型化纳入界限"] if other_bounds else []),
+            *([f"在预测时点（ICU 入院后 {risk_set:g} h）之后仍在 ICU 内"] if risk_set is not None else []),
+        ]
+        return (
+            "研究队列中" + ("、".join(qualifiers) + "的" if qualifiers else "") + "分析行"
+            if restricted
+            else "研究队列的全部输入行"
+        )
+    qualifiers = [
+        *(["meet the typed eligibility bound"] if other_bounds else []),
+        *(
+            [f"are still in the ICU after the prediction time ({risk_set:g} h after ICU admission)"]
+            if risk_set is not None
+            else []
+        ),
+    ]
+    return (
+        "Analysis rows of the study cohort" + (" that " + " and ".join(qualifiers) if qualifiers else "")
+        if restricted
+        else "All input rows of the study cohort"
+    )
+
+
 def _design_selection(
     request: FamilySpecRequest,
     spec: FamilyPlanSpec,
@@ -154,6 +189,7 @@ def _design_selection(
     method_keys: list[str],
 ) -> ResearchDesignSelection:
     outcome = _label(spec, request.outcome)
+    risk_set = request.prediction_time_hours
     hours = (
         f"0–{request.observation_window_hours:g} h after ICU admission"
         if request.observation_window_hours is not None
@@ -190,10 +226,18 @@ def _design_selection(
             ", evaluated by discrimination, calibration, internal validation, and decision-curve "
             "utility.",
         ),
-        time_zero=f"ICU admission; predictors use only information available in {hours}.",
+        time_zero=(
+            f"The prediction time, {risk_set:g} h after ICU admission: predictors use only "
+            f"information available in {hours}, and the stays still in the ICU after it are "
+            "analyzed."
+            if risk_set is not None
+            else f"ICU admission; predictors use only information available in {hours}."
+        ),
         observation_window=(
-            f"Predictors measured in {hours}; {outcome} taken from the hospital outcome record "
-            "after the window."
+            f"Predictors measured in {hours}; {outcome} from the outcome record of the stays "
+            f"still in the ICU after {risk_set:g} h."
+            if risk_set is not None
+            else f"Predictors measured in {hours}; {outcome} from the outcome record."
         ),
         primary_method=(
             "Prespecified static prediction model with host-owned preprocessing, a patient-grouped "
@@ -204,6 +248,15 @@ def _design_selection(
         assumptions=[
             "Predictor timestamps separate the observation window from information after the outcome.",
             f"{unit_text[0].upper()}{unit_text[1:]}.",
+            *(
+                [
+                    "A stay leaves the analysis only by leaving the ICU, alive or dead, by the "
+                    "prediction time; an outcome event that does not end the ICU stay before it "
+                    "is not excluded."
+                ]
+                if risk_set is not None
+                else []
+            ),
         ],
         literature_citation_keys=[*method_keys, *comparator_keys][:8],
         literature_design_decisions=list(spec.literature_design_decisions),
@@ -225,34 +278,32 @@ def _design_selection(
         ),
         reviewable_plan=(
             [
-                (
-                    "研究队列中"
-                    + ("满足类型化纳入界限的" if typed_bound_applies(request) else "")
-                    + "分析行"
-                    if typed_bound_applies(request) or population_restricts(spec.population)
-                    else "研究队列的全部输入行"
-                )
+                _population_item(request, spec, language)
                 + f"；{unit_text_zh}。"
                 + stated_population_sentence(spec.population, language),
                 f"预测变量为 {listing([_label(spec, name) for name in predictors], language)}，"
                 f"每项均在 {hours_zh} 内测量，并按行汇总。",
-                f"{outcome}，取自观察窗口之后。",
+                (
+                    f"{outcome}，取自这些入住的结局记录；在预测时点之前离开 ICU（存活或死亡）的入住不纳入分析。"
+                    if risk_set is not None
+                    else f"{outcome}，取自结局记录。"
+                ),
                 "预先设定的静态模型，由宿主负责的预处理只在训练集上拟合；在留出行上评估区分度与校准。",
                 "审计预测变量的可得性与缺失情况；插补只在训练集上拟合并报告。",
                 "预先设定乐观校正的内部验证、校准指标和决策曲线；拟合前检查信息泄漏、重复入住结构和结局编码。",
             ]
             if language == "zh"
             else [
-                (
-                    "Analysis rows of the study cohort"
-                    + (" that meet the typed eligibility bound" if typed_bound_applies(request) else "")
-                    if typed_bound_applies(request) or population_restricts(spec.population)
-                    else "All input rows of the study cohort"
-                )
+                _population_item(request, spec, language)
                 + f"; {unit_text}."
                 + stated_population_sentence(spec.population, language),
                 f"Predictors {predictor_text}, each measured inside {hours} and aggregated per row.",
-                sentence(f"{outcome}, taken after the observation window."),
+                sentence(
+                    f"{outcome}, from the outcome record of these stays; a stay that left the ICU, "
+                    "alive or dead, by the prediction time is not analyzed."
+                    if risk_set is not None
+                    else f"{outcome}, from the outcome record."
+                ),
                 "Prespecified static model with host-owned preprocessing fitted on the training split "
                 "only; discrimination and calibration on held-out rows.",
                 "Predictor availability and missingness are audited; imputation is fitted on the "

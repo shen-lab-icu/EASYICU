@@ -1123,7 +1123,10 @@ def _data_foundation_profile(
             static_concepts.append("icu_readmission")
         else:
             required_feature_concepts.append("icu_readmission")
-    for concept_id in primary_cohort.cohort_required_concepts(study.get("cohort")):
+    stay_bound_concepts = primary_cohort.cohort_required_concepts(study.get("cohort"))
+    for concept_id in primary_cohort.cohort_required_concepts(
+        study.get("cohort"), study.get("analysis_design")
+    ):
         cohort_meta = by_id.get(concept_id)
         if cohort_meta is None or Path(cohort_meta.file_name).stem.lower() not in {
             "demographics",
@@ -1132,7 +1135,15 @@ def _data_foundation_profile(
             raise ResearchPipelineRunError(
                 "research_pipeline_cohort_concept_unavailable",
                 "The typed cohort reads a stay-level concept the selected modules do not provide.",
-                details={"field": "cohort.min_icu_los_hours", "concept_id": concept_id},
+                details={
+                    # A declared prediction study's population reads it too.
+                    "field": (
+                        "cohort.min_icu_los_hours"
+                        if concept_id in stay_bound_concepts
+                        else "analysis_design.analysis_family"
+                    ),
+                    "concept_id": concept_id,
+                },
             )
         if concept_id not in static_concepts:
             static_concepts.append(concept_id)

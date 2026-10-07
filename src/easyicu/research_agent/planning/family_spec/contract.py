@@ -484,6 +484,19 @@ class FamilySpecRequest(BaseModel):
     minimum_icu_hours: Optional[float] = Field(
         default=None, gt=0.0, exclude_if=lambda value: value is None
     )
+    #: The prediction time of a static prediction model, in hours after ICU
+    #: admission: the end of its observation window.  The model's rows are
+    #: the stays still in the ICU after it.  Omitted from the digest when
+    #: absent, like the minimum stay.
+    prediction_time_hours: Optional[float] = Field(
+        default=None, gt=0.0, exclude_if=lambda value: value is None
+    )
+    #: The unit the sealed roster records ``los_icu`` in, which the ICU-stay
+    #: bounds above are written in.  Omitted from the digest in days, the
+    #: concept dictionary's unit.
+    icu_stay_unit: Literal["days", "hours"] = Field(
+        default="days", exclude_if=lambda value: value == "days"
+    )
     #: A concept-derived population (``sepsis3`` ...) and the hour after ICU
     #: admission by which a positive concept row admits a stay.  Omitted from
     #: the digest when absent, like the minimum stay.
@@ -620,6 +633,12 @@ class FamilySpecRequest(BaseModel):
         if any(not value for value in cleaned) or len(cleaned) != len(set(cleaned)):
             raise ValueError("request rosters must contain unique non-empty values")
         return cleaned
+
+    @property
+    def typed_cohort_bounds(self) -> tuple[Optional[float], ...]:
+        """The typed bounds a predicate-filtered cohort applies: ages, stay, prediction time."""
+
+        return (self.age_min, self.age_max, self.minimum_icu_hours, self.prediction_time_hours)
 
     @property
     def cohort_time_zero_hours(self) -> Optional[float]:
@@ -801,8 +820,24 @@ class FamilySpecRequest(BaseModel):
                 raise ValueError("the prediction family needs selectable predictor candidates")
             if self.adjustment_selection == "exact" and self.exact_roster:
                 raise ValueError("the prediction family fits no adjusted model")
+            if self.prediction_time_hours is not None and (
+                self.prediction_time_hours != self.observation_window_hours
+                or self.cohort_selection_mode != "predicate_filtered"
+            ):
+                raise ValueError(
+                    "a prediction time is the end of the observation window, and the stays "
+                    "still in the ICU after it filter the cohort"
+                )
         if self.proposed_suite is not None and self.family_id != LANDMARK_SURVIVAL_FAMILY_ID:
             raise ValueError("proposed suite coordinates belong to the landmark survival family")
+        if self.prediction_time_hours is not None and self.family_id != PREDICTION_FAMILY_ID:
+            raise ValueError("a prediction time belongs to the prediction family")
+        if (
+            self.icu_stay_unit != "days"
+            and self.minimum_icu_hours is None
+            and self.prediction_time_hours is None
+        ):
+            raise ValueError("an ICU-stay unit belongs to a typed ICU-stay bound")
         if (
             self.sealed_continuous_suite is not None or self.proposed_continuous_suite is not None
         ) and self.family_id != LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID:
@@ -1425,17 +1460,14 @@ def population_required(request: FamilySpecRequest) -> bool:
     """Whether only a population the Planner states can filter this cohort.
 
     The caller binds a predicate-filtered cohort (a reviewed candidate chose
-    one), no typed age or stay bound applies, and population concepts are
-    offered.  A phenotyping plan may filter by its membership flag instead.
+    one), no typed bound applies, and population concepts are offered.  A
+    phenotyping plan may filter by its membership flag instead.
     """
 
     return (
         bool(request.population_concepts)
         and request.cohort_selection_mode == "predicate_filtered"
-        and all(
-            value is None
-            for value in (request.age_min, request.age_max, request.minimum_icu_hours)
-        )
+        and all(value is None for value in request.typed_cohort_bounds)
     )
 
 

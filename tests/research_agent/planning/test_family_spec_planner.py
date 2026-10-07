@@ -1596,7 +1596,7 @@ def _with_minimum_icu_stay(
 
     constraints = json.loads(context.user_preferences.data_constraints or "{}")
     constraints["cohort"] = {**constraints.get("cohort", {}), "min_icu_los_hours": hours}
-    variables = list(context.variables)
+    variables = [item for item in context.variables if item.name != "los_icu"]
     if duration_column:
         variables.append(
             ConceptDescriptor(
@@ -1618,7 +1618,9 @@ def test_a_typed_minimum_icu_stay_is_the_prediction_cohort_predicate() -> None:
     """A first-day prediction typed as "ICU stay of at least 24 h" plans that cohort.
 
     The family template could express only typed age bounds, so such a cohort
-    was refused after the Planner had been paid for its spec.
+    was refused after the Planner had been paid for its spec.  The model's
+    own stays, those still in the ICU after its 24-hour prediction time,
+    already meet that stay, so the one predicate is the prediction time's.
     """
 
     context = _with_minimum_icu_stay(_prediction_context())
@@ -1635,7 +1637,7 @@ def test_a_typed_minimum_icu_stay_is_the_prediction_cohort_predicate() -> None:
     cohort = result.output.cohort
     assert cohort is not None and cohort.selection_mode == "predicate_filtered"
     assert [(item.concept_id, item.op, item.value) for item in cohort.inclusion] == [
-        ("los_icu", ">=", 1.0)
+        ("los_icu", ">", 1.0)
     ]
     # The outcome-role duration only gates the cohort; it never becomes a predictor.
     assert "los_icu" not in {item.name for item in request.feature_candidates}

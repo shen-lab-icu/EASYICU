@@ -188,6 +188,12 @@ def _phenotyping_payload(request, *, features, baseline, membership):
 
 def _prediction_context() -> ResearchContext:
     base = _phenotyping_context()
+    # The host supplies the ICU length of stay to a declared prediction study:
+    # the model's stays are those still in the ICU after its prediction time.
+    los_icu = ConceptDescriptor(
+        name="los_icu", description="ICU length of stay", role=VariableRole.OUTCOME,
+        dtype="float64", unit="days", source_concept="los_icu",
+    )
     return base.model_copy(
         update={
             "research_question": (
@@ -195,6 +201,7 @@ def _prediction_context() -> ResearchContext:
                 "predict in-hospital mortality?"
             ),
             "primary_exposure": None,
+            "variables": [*base.variables, los_icu],
             "user_preferences": base.user_preferences.model_copy(
                 update={"inferred_analysis_family": "prediction_model"}
             ),

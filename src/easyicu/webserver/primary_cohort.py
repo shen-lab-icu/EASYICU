@@ -416,16 +416,26 @@ def planner_selectable_cohort(cohort: Any) -> Dict[str, Any]:
     return raw
 
 
-def cohort_required_concepts(cohort: Any) -> Tuple[str, ...]:
+#: The declared analysis family whose population the ICU length of stay
+#: decides: a static prediction model predicts at the end of its feature
+#: window for the stays still in the ICU after it.
+_PREDICTION_ANALYSIS_FAMILY = "prediction_model"
+
+
+def cohort_required_concepts(cohort: Any, analysis_design: Any = None) -> Tuple[str, ...]:
     """Stay-level concepts the typed cohort's own predicates read.
 
-    A minimum ICU stay is evaluated from ``los_icu`` (days), so a study that
-    types one needs that concept in the planning catalog and in the
-    materialized universe alike.
+    A minimum ICU stay is evaluated from ``los_icu`` (days), and so is the
+    population of a study declared a prediction study, whose model analyzes
+    the stays still in the ICU after its prediction time.  A study that types
+    either needs that concept in the planning catalog and in the materialized
+    universe alike.
     """
 
     execution = normalize_execution_cohort(cohort if isinstance(cohort, Mapping) else {})
-    return ("los_icu",) if int(execution["min_icu_los_hours"]) > 0 else ()
+    design = analysis_design if isinstance(analysis_design, Mapping) else {}
+    prediction = str(design.get("analysis_family") or "").strip() == _PREDICTION_ANALYSIS_FAMILY
+    return ("los_icu",) if int(execution["min_icu_los_hours"]) > 0 or prediction else ()
 
 
 def planning_selection_mode(cohort: Any) -> Optional[str]:
