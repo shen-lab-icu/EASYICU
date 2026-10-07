@@ -71,22 +71,27 @@ _AMBIGUOUS_ARTIFACT_ROLE_TERMS: Dict[str, Set[str]] = {
 #: only the digest-bound runtime authority can execute them, and their
 #: registered products are case-specific (``table:h1_landmark_km_curve``) so
 #: the name matcher below cannot see the roles by itself.
+_LANDMARK_SURVIVAL_SUITE_ROLES = frozenset(
+    {
+        "baseline_context",
+        "cohort_accounting",
+        "temporal_absolute_risk",
+        "survival_effect",
+        "diagnostics",
+    }
+)
 _SEALED_HOST_SUITE_ROLES: Dict[str, frozenset] = {
-    "signed_landmark_survival_suite": frozenset(
-        {
-            "baseline_context",
-            "cohort_accounting",
-            "temporal_absolute_risk",
-            "survival_effect",
-            "diagnostics",
-        }
-    ),
+    "signed_landmark_survival_suite": _LANDMARK_SURVIVAL_SUITE_ROLES,
+    "signed_landmark_continuous_survival_suite": _LANDMARK_SURVIVAL_SUITE_ROLES,
     "signed_source_feasibility_fail_closed": frozenset({"feasibility_decision"}),
 }
 #: A sealed host suite that publishes its own measurement audit owns the
 #: data-quality role through that product; a suite signed without it does not.
 _SEALED_HOST_SUITE_AUDIT_PRODUCTS: Dict[str, str] = {
     "signed_landmark_survival_suite": "table:landmark_measurement_audit",
+    "signed_landmark_continuous_survival_suite": (
+        "table:landmark_continuous_measurement_audit"
+    ),
 }
 
 _ROLE_ALIASES: Dict[str, Sequence[str]] = {

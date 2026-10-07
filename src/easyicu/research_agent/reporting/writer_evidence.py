@@ -536,10 +536,32 @@ def _survival_reporting_is_authorized(
     payload: Any,
     evidence: EvidenceStore | None,
 ) -> bool:
-    """Authorize the deterministic non-PH survival projection for Writer."""
+    """Authorize the deterministic non-PH survival projection for Writer.
+
+    A continuous-exposure suite reports no top-level estimate, so its whole
+    envelope is the result whatever the PH decision: the per-unit hazard
+    ratio when it is authorized, and the interval estimates in every case.
+    """
 
     if not isinstance(payload, Mapping):
         return False
+    if payload.get("schema_version") == "easyicu.continuous_survival_reporting/1":
+        time_varying = payload.get("time_varying_adjusted_association")
+        intervals = (
+            time_varying.get("intervals") if isinstance(time_varying, Mapping) else None
+        )
+        if not isinstance(intervals, list) or not intervals:
+            return False
+        return bool(
+            payload.get("execution_owner") == "landmark_continuous_survival_executor_v1"
+            or (
+                _has_envelope_writer_authority(record, evidence=evidence)
+                and record.get("deterministic_standard_analysis")
+                == "signed_landmark_continuous_survival_suite"
+                and summary.get("analysis_family") == "survival"
+                and summary.get("analysis_role") == "primary"
+            )
+        )
     rmst = payload.get("rmst")
     time_varying = payload.get("time_varying_adjusted_association")
     if not isinstance(rmst, Mapping) or not isinstance(time_varying, Mapping):

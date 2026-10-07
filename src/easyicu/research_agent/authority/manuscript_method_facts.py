@@ -22,6 +22,7 @@ from typing import Sequence
 from ..contracts.executed_method_design import (
     EXECUTED_METHOD_DESIGN_KEY,
     FixedWindowRepresentationDesign,
+    LandmarkContinuousSurvivalDesign,
     LandmarkSurvivalDesign,
     LatentClassModelDesign,
     validate_executed_method_design,
@@ -128,6 +129,14 @@ def _executed_hour_spans(design: object) -> tuple[tuple[float, float], ...]:
                 for span in ((0.0, float(hour)), (float(hour), window_end))
             ),
         )))
+    if isinstance(design, LandmarkContinuousSurvivalDesign):
+        return tuple(dict.fromkeys((
+            (0.0, float(design.landmark_hours)),
+            (
+                float(design.exposure_window_start_hours),
+                float(design.exposure_window_end_hours),
+            ),
+        )))
     return ()
 
 
@@ -154,6 +163,8 @@ def _design_text(design: object) -> str:
         )
     if isinstance(design, LandmarkSurvivalDesign):
         return _survival_design_text(design)
+    if isinstance(design, LandmarkContinuousSurvivalDesign):
+        return _continuous_survival_design_text(design)
     assert isinstance(design, LatentClassModelDesign)
     counts = design.candidate_class_counts
     if counts == list(range(counts[0], counts[-1] + 1)):
@@ -257,6 +268,67 @@ def _survival_design_text(design: LandmarkSurvivalDesign) -> str:
         text += (
             f"; the {models} used the records with complete covariate data, and "
             f"{whole} used the whole risk set"
+        )
+    return text
+
+
+_WINDOW_SUMMARY_WORDS = {
+    "max": "highest",
+    "min": "lowest",
+    "mean": "mean",
+    "first": "first",
+}
+
+
+def _continuous_survival_design_text(design: LandmarkContinuousSurvivalDesign) -> str:
+    """The landmark risk set of a continuous exposure, its model and its checks."""
+
+    start = design.exposure_window_start_hours
+    window = (
+        f"in the first {design.exposure_window_end_hours:g} hours"
+        if start == 0
+        else f"from hour {start:g} to hour {design.exposure_window_end_hours:g}"
+    )
+    unit = (
+        f" ({_quoted_source(design.exposure_unit)})"
+        if design.exposure_unit is not None
+        else ""
+    )
+    adjustment = (
+        f", adjusted for {design.n_adjustment_covariates} prespecified covariates,"
+        if design.n_adjustment_covariates
+        else ""
+    )
+    # No result vocabulary ("hazard ratio", "confidence interval"): the numeric
+    # binder would then accept only result fields for this sentence's numbers.
+    text = (
+        "Executed survival design: the risk set comprised records alive and "
+        f"observed at a landmark {design.landmark_hours:g} hours after "
+        f"{_quoted_source(design.time_origin)}, with follow-up ending at day "
+        f"{design.endpoint_horizon_days:g}, and a recorded exposure value: the "
+        f"{_WINDOW_SUMMARY_WORDS[design.exposure_window_summary]} value of the "
+        f"exposure source {window} after that origin; a Cox proportional hazards "
+        f"model with Efron ties{adjustment} estimated the association per "
+        f"{design.exposure_increment:g} unit of the exposure's recorded "
+        f"scale{unit} with Wald intervals, and proportional hazards were tested "
+        "with Schoenfeld residuals, judged violated when the test of the exposure "
+        "term or a Bonferroni-adjusted global test over all model terms rejected "
+        f"at a prespecified alpha of {design.proportional_hazards_alpha:g}; "
+        "interval-specific associations came from a piecewise Cox model split at "
+        f"days {_days(design.time_varying_cutpoints_days)} after the landmark; "
+        "the linear exposure term was compared with a restricted cubic spline "
+        "with knots at the "
+        + ", ".join(f"{value:g}th" for value in design.spline_knot_percentiles[:-1])
+        + f" and {design.spline_knot_percentiles[-1]:g}th percentiles of the "
+        "exposure by a likelihood-ratio test; the descriptive tables and the "
+        "Kaplan-Meier curves grouped the risk set by exposure tertile"
+    )
+    if design.n_adjustment_covariates:
+        # The adjusted models drop records with a missing covariate; the
+        # Kaplan-Meier curves keep them.  Name both sets, without counts.
+        text += (
+            "; the Cox models used the records with complete covariate data, "
+            "and the Kaplan-Meier curves used the whole risk set"
         )
     return text
 

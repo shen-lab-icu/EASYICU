@@ -1736,6 +1736,14 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.authority.continuous_survival_scientific_claims",
+      "easyicu.research_agent.authority.prespecified_rule_outcomes"
+    ],
+    [
+      "easyicu.research_agent.authority.current_case_scientific_runtime",
+      "easyicu.research_agent.authority.landmark_continuous_survival_runtime"
+    ],
+    [
       "easyicu.research_agent.authority.current_case_scientific_runtime",
       "easyicu.research_agent.authority.rmst_runtime"
     ],
@@ -1929,6 +1937,26 @@
     ],
     [
       "easyicu.research_agent.authority.figure_renderer",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.authority.landmark_continuous_survival_runtime",
+      "easyicu.research_agent.canonical_json"
+    ],
+    [
+      "easyicu.research_agent.authority.landmark_continuous_survival_runtime",
+      "easyicu.research_agent.contracts.cohort_product_keys"
+    ],
+    [
+      "easyicu.research_agent.authority.landmark_continuous_survival_runtime",
+      "easyicu.research_agent.contracts.figure_plan"
+    ],
+    [
+      "easyicu.research_agent.authority.landmark_continuous_survival_runtime",
+      "easyicu.research_agent.contracts.runtime_outcomes"
+    ],
+    [
+      "easyicu.research_agent.authority.landmark_continuous_survival_runtime",
       "easyicu.research_agent.schema"
     ],
     [
@@ -2446,6 +2474,10 @@
     [
       "easyicu.research_agent.authority.scientific_claims",
       "easyicu.research_agent.authority.claim_coordinates"
+    ],
+    [
+      "easyicu.research_agent.authority.scientific_claims",
+      "easyicu.research_agent.authority.continuous_survival_scientific_claims"
     ],
     [
       "easyicu.research_agent.authority.scientific_claims",
@@ -5804,6 +5836,94 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_executor",
+      "easyicu.research_agent.authority.continuous_survival_scientific_claims"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_executor",
+      "easyicu.research_agent.authority.current_case_scientific_runtime"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_executor",
+      "easyicu.research_agent.authority.landmark_continuous_survival_runtime"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_executor",
+      "easyicu.research_agent.authority.plausibility"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_executor",
+      "easyicu.research_agent.authority.prespecified_rule_outcomes"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_executor",
+      "easyicu.research_agent.contracts.executed_method_design"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_executor",
+      "easyicu.research_agent.contracts.host_scaffold"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_executor",
+      "easyicu.research_agent.contracts.manuscript_result_structure"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_executor",
+      "easyicu.research_agent.contracts.manuscript_tables"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_executor",
+      "easyicu.research_agent.execution.runners.plausibility_receipt"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_executor",
+      "easyicu.research_agent.execution.runners.typed_input_binding"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_executor",
+      "easyicu.research_agent.figures.base"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_executor",
+      "easyicu.research_agent.methods.ph_schoenfeld"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_executor",
+      "easyicu.research_agent.methods.rcs_dose_response"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_executor",
+      "easyicu.research_agent.methods.time_varying_cox"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_executor",
+      "easyicu.research_agent.numeric_scalars"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_executor",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_figure",
+      "easyicu.research_agent.authority.current_case_scientific_runtime"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_figure",
+      "easyicu.research_agent.authority.landmark_continuous_survival_runtime"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_figure",
+      "easyicu.research_agent.figures.display_labels"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_figure",
+      "easyicu.research_agent.figures.publication"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_figure",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.execution.runners.landmark_spline_executor",
       "easyicu.research_agent.authority.current_case_scientific_runtime"
     ],
@@ -6381,6 +6501,10 @@
     ],
     [
       "easyicu.research_agent.execution.runners.selection",
+      "easyicu.research_agent.authority.landmark_continuous_survival_runtime"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.selection",
       "easyicu.research_agent.authority.plausibility"
     ],
     [
@@ -6478,6 +6602,14 @@
     [
       "easyicu.research_agent.execution.runners.selection",
       "easyicu.research_agent.execution.runners.landmark_categorical_association_executor"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.selection",
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_executor"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.selection",
+      "easyicu.research_agent.execution.runners.landmark_continuous_survival_figure"
     ],
     [
       "easyicu.research_agent.execution.runners.selection",
@@ -11501,6 +11633,10 @@
     ],
     [
       "easyicu.research_agent.reporting.descriptive_report_facts",
+      "easyicu.research_agent.authority.continuous_survival_scientific_claims"
+    ],
+    [
+      "easyicu.research_agent.reporting.descriptive_report_facts",
       "easyicu.research_agent.authority.scientific_claim_registry"
     ],
     [
@@ -13468,9 +13604,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3359,
+    "edge_count": 3393,
     "largest_scc_size": 0,
-    "module_count": 778,
+    "module_count": 782,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -13535,6 +13671,7 @@
     "easyicu.research_agent.authority.claim_coordinates": "authority/claim_coordinates.py",
     "easyicu.research_agent.authority.coder_authority": "authority/coder_authority.py",
     "easyicu.research_agent.authority.context_numeric_claims": "authority/context_numeric_claims.py",
+    "easyicu.research_agent.authority.continuous_survival_scientific_claims": "authority/continuous_survival_scientific_claims.py",
     "easyicu.research_agent.authority.current_case_scientific_runtime": "authority/current_case_scientific_runtime.py",
     "easyicu.research_agent.authority.declared_levels": "authority/declared_levels.py",
     "easyicu.research_agent.authority.descriptive_scientific_claims": "authority/descriptive_scientific_claims.py",
@@ -13547,6 +13684,7 @@
     "easyicu.research_agent.authority.execution_input": "authority/execution_input.py",
     "easyicu.research_agent.authority.figure_renderer": "authority/figure_renderer.py",
     "easyicu.research_agent.authority.filesystem": "authority/filesystem.py",
+    "easyicu.research_agent.authority.landmark_continuous_survival_runtime": "authority/landmark_continuous_survival_runtime.py",
     "easyicu.research_agent.authority.lock_contract": "authority/lock_contract.py",
     "easyicu.research_agent.authority.manuscript_claim_policy": "authority/manuscript_claim_policy.py",
     "easyicu.research_agent.authority.manuscript_method_facts": "authority/manuscript_method_facts.py",
@@ -13789,6 +13927,8 @@
     "easyicu.research_agent.execution.runners.host_bound_cohort_executor": "execution/runners/host_bound_cohort_executor.py",
     "easyicu.research_agent.execution.runners.landmark_association_figure_executor": "execution/runners/landmark_association_figure_executor.py",
     "easyicu.research_agent.execution.runners.landmark_categorical_association_executor": "execution/runners/landmark_categorical_association_executor.py",
+    "easyicu.research_agent.execution.runners.landmark_continuous_survival_executor": "execution/runners/landmark_continuous_survival_executor.py",
+    "easyicu.research_agent.execution.runners.landmark_continuous_survival_figure": "execution/runners/landmark_continuous_survival_figure.py",
     "easyicu.research_agent.execution.runners.landmark_spline_effects": "execution/runners/landmark_spline_effects.py",
     "easyicu.research_agent.execution.runners.landmark_spline_executor": "execution/runners/landmark_spline_executor.py",
     "easyicu.research_agent.execution.runners.landmark_spline_fit": "execution/runners/landmark_spline_fit.py",
