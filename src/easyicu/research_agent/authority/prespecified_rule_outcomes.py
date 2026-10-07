@@ -3,7 +3,8 @@
 A deterministic owner applies rules fixed before execution: a class-count
 criterion over a candidate grid, a minimum of observed windows, the resampling
 stability of a selected class solution, a class description that needs a
-frozen solution, a planned analysis the inputs cannot support.  The rule's outcome is a study result even when the rule selects
+frozen solution, a planned analysis the inputs cannot support, a
+proportional-hazards test, the spline check of a linear exposure term.  The rule's outcome is a study result even when the rule selects
 nothing.  Without a host claim the strict Results grammar can state none of
 it, so a run whose owners all succeed can leave its required Results empty,
 and an unqualified count such as the criterion's minimum reads as a solution.
@@ -324,18 +325,21 @@ class ProportionalHazardsTestOutcome(_RuleOutcome):
         # reader display the numeric binder can trace ("p < 0.001" cites a
         # threshold, not a registered value).  The owner's PH diagnostics keep
         # the exact p values.
+        # Whether the model was adjusted is the association claims' to say;
+        # this rule decides only between hazard ratios constant over
+        # follow-up and interval-specific ones.
         alpha = _reader_proportion(self.alpha)
         if self.disposition == "assumption_rejected":
             return (
                 "The Schoenfeld residual test rejected the proportional-hazards "
                 f"assumption at the prespecified alpha of {alpha}, so interval-specific "
-                "adjusted hazard ratios are the primary estimates instead of one "
-                "constant hazard ratio."
+                "hazard ratios are the primary estimates instead of hazard ratios "
+                "constant over follow-up."
             )
         return (
             "The Schoenfeld residual test did not reject the proportional-hazards "
-            f"assumption at the prespecified alpha of {alpha}, so one constant "
-            "adjusted hazard ratio is the primary estimate."
+            f"assumption at the prespecified alpha of {alpha}, so the primary "
+            "estimates are hazard ratios constant over follow-up."
         )
 
     def conclusion_sentence(self) -> str:
@@ -343,11 +347,138 @@ class ProportionalHazardsTestOutcome(_RuleOutcome):
             return (
                 "Because the proportional-hazards assumption was rejected, the "
                 "association is described by interval-specific hazard ratios rather "
-                "than one constant hazard ratio."
+                "than hazard ratios constant over follow-up."
             )
         return (
             "The proportional-hazards assumption was not rejected, so the "
-            "association is summarized by one constant adjusted hazard ratio."
+            "association is summarized by hazard ratios constant over follow-up."
+        )
+
+
+#: Why the spline check of a linear exposure term had no result.
+FunctionalFormNotAssessableReason = Literal["tied_knots", "spline_model_not_estimable"]
+_NOT_ASSESSABLE_WORDS = {
+    "tied_knots": "the exposure had too few distinct values for its three spline knots",
+    "spline_model_not_estimable": "the spline model had no estimate",
+}
+
+
+class FunctionalFormTestOutcome(_RuleOutcome):
+    """The prespecified spline check of a linear exposure term, and the estimate it left.
+
+    A likelihood-ratio test of a restricted cubic spline against the linear
+    term judges linearity at a prespecified alpha.  When it rejects and the
+    proportional-hazards test does not, the spline's hazard ratios at two
+    percentiles of the exposure relative to its median replace the per-step
+    estimate; when the PH test rejected, the interval-specific per-step
+    estimates remain the result and describe an average log-linear trend.  A
+    check without a result changes nothing and says why.  The sentence names
+    no shape: the rule decides linearity, not a form.
+    """
+
+    rule: Literal["functional_form_test"]
+    diagnostic: Literal["restricted_cubic_spline_likelihood_ratio_test"]
+    alpha: float = Field(gt=0.0, lt=1.0)
+    #: Absent exactly when the check had no result.
+    nonlinearity_p_value: float | None = Field(default=None, ge=0.0, le=1.0)
+    disposition: Literal[
+        "linearity_rejected", "linearity_not_rejected", "not_assessable"
+    ]
+    not_assessable_reason: FunctionalFormNotAssessableReason | None = None
+    #: The estimate the suite's rules left as its result.
+    primary_estimate: Literal[
+        "per_step_hazard_ratio",
+        "spline_percentile_contrasts",
+        "interval_per_step_hazard_ratios",
+    ]
+
+    @model_serializer(mode="wrap")
+    def _omit_unstated_fields(self, handler):
+        payload = handler(self)
+        for name in ("nonlinearity_p_value", "not_assessable_reason"):
+            if getattr(self, name) is None:
+                payload.pop(name, None)
+        return payload
+
+    @model_validator(mode="after")
+    def _disposition_follows_from_the_test(self) -> "FunctionalFormTestOutcome":
+        assessed = self.disposition != "not_assessable"
+        if assessed != (self.nonlinearity_p_value is not None) or assessed == (
+            self.not_assessable_reason is not None
+        ):
+            raise ValueError(
+                "a functional-form test states its p value, or why it had none"
+            )
+        if assessed:
+            rejected = self.nonlinearity_p_value < self.alpha
+            expected = "linearity_rejected" if rejected else "linearity_not_rejected"
+            if self.disposition != expected:
+                raise ValueError(
+                    "functional-form disposition contradicts its own p value"
+                )
+        rejected = self.disposition == "linearity_rejected"
+        if (self.primary_estimate == "spline_percentile_contrasts") != (
+            rejected and self.primary_estimate != "interval_per_step_hazard_ratios"
+        ):
+            raise ValueError(
+                "the spline contrasts are the result exactly when linearity is rejected "
+                "and the per-step estimate is constant over follow-up"
+            )
+        return self
+
+    @property
+    def report_section(self) -> ReportSection:
+        return "primary"
+
+    def result_sentence(self) -> str:
+        if self.not_assessable_reason is not None:
+            return (
+                "The restricted cubic spline check of the linear exposure term had no "
+                f"result, because {_NOT_ASSESSABLE_WORDS[self.not_assessable_reason]}, "
+                "so the per-step estimates stand unchecked."
+            )
+        alpha = _reader_proportion(self.alpha)
+        if self.disposition == "linearity_not_rejected":
+            return (
+                "The restricted cubic spline check did not reject a linear association "
+                f"with the log hazard at the prespecified alpha of {alpha}, so the "
+                "per-step estimates stand."
+            )
+        if self.primary_estimate == "spline_percentile_contrasts":
+            return (
+                "The restricted cubic spline check rejected a linear association with "
+                f"the log hazard at the prespecified alpha of {alpha}, so the spline's "
+                "hazard ratios at two prespecified percentiles of the exposure relative "
+                "to its median are the primary estimates instead of one per-step "
+                "hazard ratio."
+            )
+        return (
+            "The restricted cubic spline check rejected a linear association with the "
+            f"log hazard at the prespecified alpha of {alpha}; the interval-specific "
+            "per-step hazard ratios remain the primary estimates and describe an "
+            "average log-linear trend within each interval."
+        )
+
+    def conclusion_sentence(self) -> str:
+        if self.not_assessable_reason is not None:
+            return (
+                "The linearity of the association was not checked, because "
+                f"{_NOT_ASSESSABLE_WORDS[self.not_assessable_reason]}."
+            )
+        if self.disposition == "linearity_not_rejected":
+            return (
+                "A linear association with the log hazard was not rejected, so the "
+                "association is summarized per step of the exposure."
+            )
+        if self.primary_estimate == "spline_percentile_contrasts":
+            return (
+                "Because a linear association was rejected, the association is "
+                "described at two percentiles of the exposure relative to its median "
+                "rather than per step."
+            )
+        return (
+            "A linear association was rejected, so each interval-specific per-step "
+            "hazard ratio describes only an average log-linear trend."
         )
 
 
@@ -473,6 +604,7 @@ PrespecifiedRuleOutcome = Annotated[
         PlannedAnalysisFeasibilityOutcome,
         ProportionalHazardsTestOutcome,
         ClassSolutionStabilityOutcome,
+        FunctionalFormTestOutcome,
     ],
     Field(discriminator="rule"),
 ]
@@ -486,6 +618,7 @@ _CLAIM_IDS = {
     "planned_analysis_feasibility": "feasibility_rule",
     "proportional_hazards_test": "proportional_hazards_rule",
     "class_solution_stability": "class_stability_rule",
+    "functional_form_test": "functional_form_rule",
 }
 #: The claim's subject and measure, as the machine claim names them.
 _CLAIM_TERMS = {
@@ -497,6 +630,10 @@ _CLAIM_TERMS = {
     "planned_analysis_feasibility": ("planned analysis", "executability"),
     "proportional_hazards_test": ("proportional hazards", "Schoenfeld residual test"),
     "class_solution_stability": ("selected class solution", "resampling stability"),
+    "functional_form_test": (
+        "linear exposure term",
+        "restricted cubic spline likelihood-ratio test",
+    ),
 }
 _CLAIM_POPULATIONS = {
     "information_criterion_class_count": "the class-model records",
@@ -505,6 +642,7 @@ _CLAIM_POPULATIONS = {
     "planned_analysis_feasibility": "the study inputs",
     "proportional_hazards_test": "the survival model records",
     "class_solution_stability": "the class-model records",
+    "functional_form_test": "the survival model records",
 }
 _CLAIM_ROLES = {
     "information_criterion_class_count": "primary",
@@ -512,6 +650,7 @@ _CLAIM_ROLES = {
     "frozen_class_description": "auxiliary",
     "proportional_hazards_test": "primary",
     "class_solution_stability": "primary",
+    "functional_form_test": "primary",
 }
 
 
@@ -572,6 +711,8 @@ __all__ = [
     "ClassCountSelectionOutcome",
     "ClassSolutionStabilityOutcome",
     "FrozenClassDescriptionOutcome",
+    "FunctionalFormNotAssessableReason",
+    "FunctionalFormTestOutcome",
     "ObservedWindowEligibilityOutcome",
     "PlannedAnalysisFeasibilityOutcome",
     "PrespecifiedRuleOutcome",

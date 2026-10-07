@@ -251,7 +251,9 @@ def sealed_continuous_survival_suite_coordinates(
     try:
         landmark = float(payload.get("landmark_hours") or 0.0)
         window = [float(value) for value in payload.get("exposure_window_hours") or []]
-        if window != [0.0, landmark] or float(payload.get("exposure_increment") or 0.0) != 1.0:
+        if window != [0.0, landmark] or payload.get("exposure_increment_rule") != (
+            "largest_round_step_within_interquartile_range"
+        ):
             return None
         unit = payload.get("exposure_unit")
         return SealedContinuousSuiteCoordinates(

@@ -1741,6 +1741,10 @@
     ],
     [
       "easyicu.research_agent.authority.continuous_survival_scientific_claims",
+      "easyicu.research_agent.contracts.executed_method_design"
+    ],
+    [
+      "easyicu.research_agent.authority.continuous_survival_scientific_claims",
       "easyicu.research_agent.methods.time_varying_cox"
     ],
     [
@@ -13692,7 +13696,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3415,
+    "edge_count": 3416,
     "largest_scc_size": 0,
     "module_count": 785,
     "package_count": 36,

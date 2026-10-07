@@ -11,6 +11,8 @@ in its step summary); the reporting owner renders it and never infers it.
 
 from __future__ import annotations
 
+import math
+from decimal import Decimal
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import (
@@ -49,6 +51,38 @@ WHOLE_RISK_SET_REASON_WORDS: dict[str, str] = {
         "so no record lay above it"
     ),
 }
+
+#: The spread of the modelled exposure a continuous suite read its reporting
+#: step from: the interquartile range, or, for a heaped exposure whose
+#: narrower spreads are zero, the range between its tenth and ninetieth
+#: percentiles, then its range.
+ExposureIncrementSpread = Literal[
+    "interquartile_range", "central_eighty_percent_range", "range"
+]
+#: Reader words for each spread, without digits: the Methods bind every
+#: number they state.
+EXPOSURE_INCREMENT_SPREAD_WORDS: dict[str, str] = {
+    "interquartile_range": "interquartile range",
+    "central_eighty_percent_range": (
+        "range between its tenth and ninetieth percentiles"
+    ),
+    "range": "range",
+}
+
+
+def is_round_exposure_step(value: Any) -> bool:
+    """Whether ``value`` is one, two or five times a power of ten."""
+
+    if not isinstance(value, float) or not math.isfinite(value) or value <= 0:
+        return False
+    digits = Decimal(repr(value)).normalize().as_tuple().digits
+    return len(digits) == 1 and digits[0] in (1, 2, 5)
+
+
+def exposure_step_text(value: float) -> str:
+    """The step as readers see it: its decimal digits, never an exponent."""
+
+    return format(Decimal(repr(float(value))).normalize(), "f")
 
 
 class _ExecutedDesign(BaseModel):
@@ -200,8 +234,10 @@ class LandmarkContinuousSurvivalDesign(_ExecutedDesign):
     """The landmark risk set of a continuous exposure, its model and its checks.
 
     The exposure is one window summary recorded by the landmark, modelled per
-    ``exposure_increment`` units of the source's scale.  Times are hours or
-    days from the time origin; the cutpoints are days after the landmark.
+    ``exposure_increment`` units of the source's scale: one, two or five
+    times a power of ten, read from the spread ``exposure_increment_spread``
+    names.  Times are hours or days from the time origin; the cutpoints are
+    days after the landmark.
     """
 
     design_kind: Literal["landmark_continuous_survival"]
@@ -212,6 +248,7 @@ class LandmarkContinuousSurvivalDesign(_ExecutedDesign):
     exposure_window_end_hours: float = Field(gt=0)
     exposure_window_summary: Literal["max", "min", "mean", "first"]
     exposure_increment: float = Field(gt=0)
+    exposure_increment_spread: ExposureIncrementSpread
     exposure_unit: str | None = Field(min_length=1, max_length=40)
     n_adjustment_covariates: int = Field(ge=0)
     effect_model: Literal["cox_proportional_hazards_efron_ties"]
@@ -220,6 +257,8 @@ class LandmarkContinuousSurvivalDesign(_ExecutedDesign):
     proportional_hazards_alpha: float = Field(gt=0.0, lt=1.0)
     time_varying_cutpoints_days: list[float] = Field(min_length=1)
     spline_knot_percentiles: list[float]
+    #: The prespecified alpha of the spline check of the linear term.
+    functional_form_alpha: float = Field(gt=0.0, lt=1.0)
     #: The groups Table 1 and the Kaplan-Meier curves described: the sealed
     #: value tertiles, or the whole risk set when a tertile would be empty.
     descriptive_grouping: Literal["value_tertiles", "whole_risk_set"]
@@ -257,6 +296,10 @@ class LandmarkContinuousSurvivalDesign(_ExecutedDesign):
             raise ValueError("time-varying cutpoints must increase within follow-up")
         if self.spline_knot_percentiles != [10.0, 50.0, 90.0]:
             raise ValueError("the spline knots are the 10th, 50th and 90th percentiles")
+        if not is_round_exposure_step(self.exposure_increment):
+            raise ValueError(
+                "the exposure step is one, two or five times a power of ten"
+            )
         if (self.descriptive_grouping == "whole_risk_set") != (
             self.descriptive_grouping_reason is not None
         ):
@@ -291,13 +334,17 @@ def executed_method_design_payload(design: Any) -> dict[str, Any]:
 __all__ = [
     "EXECUTED_METHOD_DESIGN_KEY",
     "EXECUTED_METHOD_DESIGN_SCHEMA_VERSION",
+    "EXPOSURE_INCREMENT_SPREAD_WORDS",
     "WHOLE_RISK_SET_REASON_WORDS",
     "ExecutedMethodDesign",
+    "ExposureIncrementSpread",
     "FixedWindowRepresentationDesign",
     "LandmarkContinuousSurvivalDesign",
     "LandmarkSurvivalDesign",
     "LatentClassModelDesign",
     "WholeRiskSetReason",
     "executed_method_design_payload",
+    "exposure_step_text",
+    "is_round_exposure_step",
     "validate_executed_method_design",
 ]

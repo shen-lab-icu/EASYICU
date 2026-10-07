@@ -3,12 +3,13 @@
 The binary suite (``LandmarkSurvivalRuntimeAuthority``) contrasts an incident
 exposure group with its comparator.  A continuous exposure has no groups to
 contrast: this suite models the value one window summary recorded by the
-landmark, per one unit of the source's own scale.  A caller-reviewed protocol
+landmark, per one readable step of the source's own scale.  A caller-reviewed protocol
 supplies the window, its summary, the endpoint and the adjustment set; the
 host then runs one deterministic risk-set build, a descriptive Table 1 and
-Kaplan-Meier curves by exposure tertile, the adjusted Cox fit per unit, a
-restricted cubic spline check of that linear term, the proportional-hazards
-audit with its interval model, and the composite figure.  None of those
+Kaplan-Meier curves by exposure tertile, the Cox fit per exposure step, a
+restricted cubic spline check of that linear term whose rejection makes the
+spline's percentile contrasts the result, the proportional-hazards audit
+with its interval model, and the composite figure.  None of those
 mechanical operations goes through a Coder.
 
 The authority chooses no case science and imports no other authority: the
@@ -59,7 +60,7 @@ class LandmarkContinuousSurvivalRuntimeAuthority(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    schema_version: Literal["easyicu.landmark_continuous_survival_runtime_authority/1"]
+    schema_version: Literal["easyicu.landmark_continuous_survival_runtime_authority/2"]
     authority_kind: Literal["landmark_continuous_survival_suite"]
     protocol_content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     execution_contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -68,14 +69,18 @@ class LandmarkContinuousSurvivalRuntimeAuthority(BaseModel):
     plan_outputs: tuple[str, ...]
     development_execution_only_allowed: bool
     exposure_column: str = Field(min_length=1)
-    #: Reader words for the exposure and the unit one step of its scale is.
+    #: Reader words for the exposure and the unit of its scale.
     exposure_label: str = Field(min_length=1, max_length=120)
     exposure_unit: str | None = Field(min_length=1, max_length=40)
     exposure_window_summary: Literal["max", "min", "mean", "first"]
     #: Hours from the time origin the summary read, ending by the landmark.
     exposure_window_hours: tuple[float, float]
-    #: The hazard ratio is reported per this many units of the source scale.
-    exposure_increment: Literal[1.0]
+    #: The hazard ratio is reported per one step of the source scale, read
+    #: from the modelled exposure alone before any model is fitted: the
+    #: largest one, two or five times a power of ten within its
+    #: interquartile range, or, for a heaped exposure whose interquartile
+    #: range is zero, within its 10th-90th percentile range, then its range.
+    exposure_increment_rule: Literal["largest_round_step_within_interquartile_range"]
     event_column: str = Field(min_length=1)
     followup_time_column: str = Field(min_length=1)
     endpoint_time_origin: str = Field(min_length=1)
@@ -89,7 +94,7 @@ class LandmarkContinuousSurvivalRuntimeAuthority(BaseModel):
     categorical_adjustment_columns: tuple[str, ...]
     table_one_columns: tuple[str, ...]
     estimator: Literal["cox_ph_lifelines_efron"]
-    effect_measure: Literal["hazard_ratio_per_unit"]
+    effect_measure: Literal["hazard_ratio_per_exposure_step"]
     uncertainty_method: Literal["wald_95_ci"]
     proportional_hazards_diagnostic: Literal["schoenfeld_residual_test"]
     proportional_hazards_alpha: float = Field(gt=0, lt=1)
@@ -99,11 +104,17 @@ class LandmarkContinuousSurvivalRuntimeAuthority(BaseModel):
     time_varying_effect_method: Literal["piecewise_time_varying_cox"]
     time_varying_interval_cutpoints_days: tuple[float, ...]
     #: The functional-form check of the linear term: Harrell's three knots at
-    #: fixed percentiles of the analysed exposure, reported, never selected.
+    #: fixed percentiles of the analysed exposure and a likelihood-ratio test
+    #: judged at ``functional_form_alpha``.  When it rejects linearity and the
+    #: PH test does not reject, the spline's hazard ratios at the two ends of
+    #: ``curve_quantile_range`` relative to the median replace the per-step
+    #: estimate as the result.
     spline_knot_quantiles: tuple[float, float, float]
     spline_reference: Literal["median_in_model_population"]
     curve_quantile_range: tuple[float, float]
     curve_points: int = Field(ge=5, le=201)
+    functional_form_alpha: float = Field(gt=0, lt=1)
+    functional_form_policy: Literal["spline_contrasts_replace_linear_estimate"]
     #: Table 1 and the Kaplan-Meier curves describe value tertiles of the risk
     #: set; no estimate is computed between them.
     descriptive_grouping: Literal["value_tertiles"]
@@ -307,7 +318,7 @@ class LandmarkContinuousSurvivalRuntimeAuthority(BaseModel):
         """Exact panels of the signed composite figure, by article role.
 
         Panel b's grammar follows the sealed PH policy at execution: the
-        adjusted hazard-ratio curve of a model with a constant effect is
+        hazard-ratio curve of a model with a constant effect is
         withheld when the assumption is rejected, and the per-unit hazard
         ratios of the prespecified interval model replace it.
         """
@@ -352,7 +363,7 @@ class LandmarkContinuousSurvivalRuntimeAuthority(BaseModel):
             "exposure_column": self.exposure_column,
             "exposure_window_summary": self.exposure_window_summary,
             "exposure_window_hours": list(self.exposure_window_hours),
-            "exposure_increment": self.exposure_increment,
+            "exposure_increment_rule": self.exposure_increment_rule,
             "exposure_unit": self.exposure_unit,
             "event_column": self.event_column,
             "followup_time_column": self.followup_time_column,
@@ -367,9 +378,8 @@ class LandmarkContinuousSurvivalRuntimeAuthority(BaseModel):
             "must declare exactly the listed source columns and outputs and "
             "carry no model requirement of its own. The host compiles risk-set "
             "accounting, Table 1 and Kaplan-Meier curves by exposure tertile, "
-            "the adjusted Cox model per exposure unit, its spline check, the PH "
-            "audit with its interval model and the composite figure from this "
-            "contract.\n"
+            "the Cox model per exposure step, its spline check, the PH audit with "
+            "its interval model and the composite figure from this contract.\n"
             + json.dumps(coordinates, ensure_ascii=False, sort_keys=True)
         )
 

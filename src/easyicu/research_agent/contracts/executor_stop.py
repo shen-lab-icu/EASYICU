@@ -78,6 +78,14 @@ EXECUTOR_STOP_REASONS: Mapping[str, ExecutorStopReason] = MappingProxyType(
             cause_codes=frozenset(TIME_VARYING_NOT_ESTIMABLE_REASONS),
             repeats_on_unchanged_retry=True,
         ),
+        # Every modelled record has the same exposure value, so the suite
+        # has no step to report its hazard ratios per and no association to
+        # estimate.
+        "continuous_survival_exposure_has_one_value": ExecutorStopReason(
+            owner="signed_landmark_continuous_survival_suite",
+            cause_codes=frozenset(),
+            repeats_on_unchanged_retry=True,
+        ),
     }
 )
 #: Why a record was not accepted.  A rejected record names no stop.
