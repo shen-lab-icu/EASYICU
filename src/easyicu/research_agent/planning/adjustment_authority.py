@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Optional, Sequence
 
 from ..authority.declared_levels import observed_levels_for
+from ..research_context.materialization_window import bound_feature_window_end_hours
 from ..research_context.typed import declared_domain_for_variable
 
 
@@ -81,21 +82,16 @@ def primary_landmark_hours(context: Any) -> Optional[float]:
 
 
 def host_outer_feature_window_end_hours(context: Any) -> Optional[float]:
-    """Return the end (hours after ICU admission) of the host-bound feature window.
+    """Return the end (hours after ICU admission) of the feature window that binds the run.
 
-    ``ResearchContext.time_windows`` are the windows the host materialized; the
-    cohort carries no measurement outside the widest of them.  Windows with a
-    different anchor cannot be compared with an ICU-admission landmark and are
-    ignored.
+    The cohort carries no measurement outside it.  The materialization owner
+    answers: the host's materialization record, else the windows the run's
+    caller declared.  A window the context builder synthesized -- its default
+    roster, or one inferred from the question's wording -- binds nothing, so
+    the answer is then ``None``.
     """
 
-    ends = [
-        float(window.end_hours)
-        for window in (getattr(context, "time_windows", ()) or ())
-        if str(getattr(window, "anchor", "") or "") == "icu_admission"
-        and getattr(window, "end_hours", None) is not None
-    ]
-    return max(ends) if ends else None
+    return bound_feature_window_end_hours(context)
 
 
 def _analysis_window_end_hours(label: Any) -> Optional[float]:
