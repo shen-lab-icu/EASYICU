@@ -258,6 +258,12 @@ _ZH_EVENT_TIME_ZERO_PATTERNS = (
         rf"(?:(?:首|前|最初|头)\s*个?\s*)?{_ZH_DURATION}",
         re.I,
     ),
+    # "插管后第一天", "脓毒症发生后首日": the first day counted from the event.
+    re.compile(
+        rf"(?:{_ZH_EVENTS}){_ZH_ONSET_WORDS}?{_ZH_AFTER}\s*的?\s*"
+        rf"(?P<day>第\s*(?:一|1)\s*[天日]|首\s*日|头\s*一?\s*天)",
+        re.I,
+    ),
     # "脓毒症发生后", "机械通气开始时", "自插管起".
     re.compile(rf"(?:{_ZH_EVENTS}){_ZH_ONSET_WORDS}(?:{_ZH_AFTER}|起|时)", re.I),
     re.compile(rf"自\s*(?:{_ZH_EVENTS}){_ZH_ONSET_WORDS}?(?:起|开始)", re.I),
@@ -288,18 +294,12 @@ def _matched_event(match: re.Match[str]) -> str:
     raise ValueError("an event time-zero pattern matched no event")  # pragma: no cover
 
 
-def stated_event_time_zeros(text: str) -> tuple[EventTimeZeroStatement, ...]:
-    """The clinical events a question counts time from, in question order.
+def _event_readings(text: str) -> tuple[EventTimeZeroStatement, ...]:
+    """Every phrase that counts time from a clinical event, in question order.
 
-    Only the closed event vocabulary is read, and a condition or therapy only
-    with an onset word or a duration, so a population ("patients with septic
-    shock") or a status ("mortality at discharge") states no time zero.  The
-    admissions are not read here: ``relative_to_anchor`` owns them, and every
-    materialized window already counts from one.  Overlapping readings keep
-    the earliest, longest one.
+    Overlapping readings keep the earliest, longest one.
     """
 
-    text = str(text or "")
     found: list[EventTimeZeroStatement] = []
     for pattern in (*_EN_EVENT_TIME_ZERO_PATTERNS, *_ZH_EVENT_TIME_ZERO_PATTERNS):
         for match in pattern.finditer(text):
@@ -330,6 +330,140 @@ def stated_event_time_zeros(text: str) -> tuple[EventTimeZeroStatement, ...]:
             continue
         statements.append(statement)
     return tuple(statements)
+
+
+_CLAUSE_STOP = re.compile(r"[.;:,!?()\[\]（）。；：，！？、\n]")
+_EN_POPULATION_NOUNS = (
+    r"(?:patients?|subjects?|adults?|children|survivors?|cases?|individuals?|"
+    r"people|persons?|stays?|those|populations?|cohorts?)"
+)
+#: The event qualifies who is studied: "patients admitted to the ICU after
+#: cardiac arrest", "in patients after ROSC", "post-cardiac arrest patients".
+#: An admission word reaches the event across a short place ("to the ICU")
+#: only.  A relative clause about the patients qualifies nothing by itself:
+#: "patients who received steroids after septic shock onset" may state the
+#: exposure.
+_EN_ADMITTED_BEFORE = re.compile(
+    r"\b(?:admitted|admissions|transferred|presenting|presented|"
+    r"hospitali[sz]ed|resuscitated)"
+    r"(?:\s+(?:to|into|in|at)\s+(?:(?:the|an?)\s+)?(?:[\w-]+\s+){0,2}[\w-]+)?\s*$",
+    re.I,
+)
+_EN_POPULATION_ADJACENT_BEFORE = re.compile(rf"\b{_EN_POPULATION_NOUNS}\s*$", re.I)
+_EN_POPULATION_AFTER = re.compile(rf"^\s*{_EN_POPULATION_NOUNS}\b", re.I)
+#: The time elapsed since the event is a variable, not a window: "adjusting
+#: for hours since sepsis onset", "the time from intubation to extubation".
+#: "The first hours since sepsis onset" is a window.
+_EN_ELAPSED_TIME_BEFORE = re.compile(
+    r"(?<!first )(?<!initial )(?<!early )"
+    r"\b(?:time|hours?|days?|minutes?|duration|interval|delay)\s*$",
+    re.I,
+)
+_EN_ELAPSED_RELATION = re.compile(r"^(?:since|from)\b", re.I)
+#: The event is negated or excluded: "not after intubation", "excluding values
+#: measured after intubation".
+_EN_NEGATION = re.compile(
+    r"\b(?:not|never|without|excluding|exclude[sd]?|exclusion|except|"
+    r"other\s+than|rather\s+than|instead\s+of)\b",
+    re.I,
+)
+_ZH_POPULATION_AFTER = re.compile(
+    r"^\s*的?\s*(?:入住|入\s*(?:ICU|重症|监护|科)|入组|入院|转入|收入|收治|"
+    r"患者|病人|者|人群|病例)",
+    re.I,
+)
+#: "自疑似感染起的时间": the time elapsed since the event; "插管后的时间窗"
+#: is a window.
+_ZH_ELAPSED_SINCE = re.compile(r"(?:起|开始)$")
+_ZH_ELAPSED_AFTER = re.compile(r"^\s*的?\s*(?:时间|时长|间隔)(?!窗|段)")
+#: "不同" (different), "不论"/"不管"/"无论" (regardless) and "无关"
+#: (unrelated) negate nothing.
+_ZH_NEGATION_BEFORE = re.compile(
+    r"(?:排除|除外|不包括|不含|不(?![同论管])|未|非|无(?![论关]))\s*\S{0,2}$"
+)
+_ZH_TEXT = re.compile(r"[\u4e00-\u9fff]")
+
+
+def _clause_around(text: str, start: int, end: int) -> tuple[str, str]:
+    """The text of the reading's clause before and after it."""
+
+    stops_before = [match.end() for match in _CLAUSE_STOP.finditer(text, 0, start)]
+    left = text[stops_before[-1] if stops_before else 0 : start]
+    stop_after = _CLAUSE_STOP.search(text, end)
+    right = text[end : stop_after.start() if stop_after else len(text)]
+    return left, right
+
+
+def _governs_time_zero(text: str, reading: EventTimeZeroStatement) -> bool:
+    """Whether a reading states when the study's time counts from.
+
+    A duration counted from the event ("within 6 hours of intubation") is a
+    window wherever it stands.  A bare mention of the event counts nothing
+    from it when it qualifies the population, names the time elapsed since
+    the event, or is negated or excluded.
+    """
+
+    if reading.hours is not None:
+        return True
+    left, right = _clause_around(text, reading.start, reading.end)
+    phrase = reading.text
+    if _ZH_TEXT.search(phrase):
+        return not (
+            _ZH_POPULATION_AFTER.search(right)
+            or (_ZH_ELAPSED_SINCE.search(phrase) and _ZH_ELAPSED_AFTER.search(right))
+            or _ZH_NEGATION_BEFORE.search(left[-6:])
+        )
+    return not (
+        _EN_ADMITTED_BEFORE.search(left)
+        or _EN_POPULATION_ADJACENT_BEFORE.search(left)
+        or _EN_POPULATION_AFTER.search(right)
+        or (
+            _EN_ELAPSED_TIME_BEFORE.search(left) and _EN_ELAPSED_RELATION.search(phrase)
+        )
+        or _EN_NEGATION.search(" ".join(left.split()[-3:]))
+    )
+
+
+def event_anchored_spans(text: str) -> tuple[tuple[int, int], ...]:
+    """Where a question counts time from a clinical event, time zero or not.
+
+    Every reading of :func:`stated_event_time_zeros`'s vocabulary is included,
+    also a phrase that states no time zero (a population, the time elapsed
+    since the event, a negation): an hour count inside one is never a window
+    from ICU admission.  Spans are ``[start, end)``, sorted and merged.
+    """
+
+    spans: list[tuple[int, int]] = []
+    for reading in _event_readings(str(text or "")):
+        if spans and reading.start <= spans[-1][1]:
+            spans[-1] = (spans[-1][0], max(spans[-1][1], reading.end))
+        else:
+            spans.append((reading.start, reading.end))
+    return tuple(spans)
+
+
+def stated_event_time_zeros(text: str) -> tuple[EventTimeZeroStatement, ...]:
+    """The clinical events a question counts time from, in question order.
+
+    Only the closed event vocabulary is read, and a condition or therapy only
+    with an onset word or a duration, so a population ("patients with septic
+    shock") or a status ("mortality at discharge") states no time zero.  A
+    bare mention of an event in that vocabulary counts nothing from it either
+    when it qualifies the population ("patients admitted after cardiac
+    arrest"), names the time elapsed since the event ("adjusting for hours
+    since sepsis onset", "the time from intubation to extubation"), or is
+    negated or excluded ("excluding values measured after intubation").  A
+    duration counted from an event is always read.  The admissions are not
+    read here: ``relative_to_anchor`` owns them, and every materialized window
+    already counts from one.
+    """
+
+    text = str(text or "")
+    return tuple(
+        reading
+        for reading in _event_readings(text)
+        if _governs_time_zero(text, reading)
+    )
 
 
 @dataclass(frozen=True)
@@ -797,13 +931,22 @@ class TimeWindowSemanticParser:
         if not text:
             return out
         events = stated_event_time_zeros(text)
+        anchored = event_anchored_spans(text)
+        no_time_zero = [item for item in _event_readings(text) if item not in events]
         for relation, pattern in _PATTERNS:
             for match in pattern.finditer(text):
                 if relation == "first_window" and any(
-                    event.start <= match.start() < event.end for event in events
+                    start <= match.start() < end for start, end in anchored
                 ):
                     # "the first 24 h after sepsis onset" counts from that
-                    # event; ICU admission is not its default here.
+                    # event, whether or not it is the study's time zero; ICU
+                    # admission is not its default here.
+                    continue
+                if relation == "relative_to_anchor" and any(
+                    item.start <= match.start() < item.end for item in no_time_zero
+                ):
+                    # "the time from suspected infection onset" names the time
+                    # elapsed since the event, not the study's time zero.
                     continue
                 groups = match.groupdict()
                 anchor = _normalise_anchor(groups.get("anchor") or "icu_admission")
