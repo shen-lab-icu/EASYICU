@@ -420,8 +420,8 @@ def _manuscript_tables(
             "notes": [
                 "The last stage excludes exposed records whose exposure was first recorded "
                 + ("as present " if present_onset else "")
-                + f"at or before hour {sealed.prevalent_exposure_cutoff_hours:g} or after hour "
-                f"{sealed.exposure_window_hours[1]:g}.",
+                + f"at or before hour {sealed.prevalent_exposure_cutoff_hours:g} or at or after "
+                f"hour {sealed.exposure_window_hours[1]:g}.",
                 "Excluded counts are the records removed since the stage before.",
             ],
         },
@@ -1391,10 +1391,13 @@ def run_landmark_survival_suite(
     prevalent = exposure_status.eq(1) & exposure_onset.le(
         float(sealed.prevalent_exposure_cutoff_hours)
     )
+    # The exposure window closes before its end, as every landmark window does:
+    # a first record at the window's end, the landmark at the latest, is not
+    # an exposure by then.
     incident = (
         exposure_status.eq(1)
         & exposure_onset.gt(float(sealed.prevalent_exposure_cutoff_hours))
-        & exposure_onset.le(float(sealed.exposure_window_hours[1]))
+        & exposure_onset.lt(float(sealed.exposure_window_hours[1]))
     )
     exposure_supported = exposure_status.eq(0) | incident
     eligible_mask = (

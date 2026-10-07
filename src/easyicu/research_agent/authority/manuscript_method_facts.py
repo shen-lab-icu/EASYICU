@@ -223,7 +223,7 @@ def _survival_design_text(design: LandmarkSurvivalDesign) -> str:
         "does not observe exposure begun before that record: exposed records "
         f"{recorded} at or before hour "
         f"{design.prevalent_exposure_cutoff_hours:g} were excluded, and those "
-        f"{recorded} by hour {design.exposure_window_end_hours:g} formed the exposed group; "
+        f"{recorded} before hour {design.exposure_window_end_hours:g} formed the exposed group; "
         "a Cox proportional hazards model with Efron ties, adjusted for "
         f"{design.n_adjustment_covariates} prespecified covariates, estimated the "
         "exposure contrast with Wald intervals, and proportional hazards were "
