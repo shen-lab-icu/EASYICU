@@ -878,7 +878,7 @@ def _cohort_execution_readme_lines(record: Any) -> List[str]:
         lines.insert(
             0,
             f"- Cohort rule: a stay enters on a positive `{window.get('definition', '')}` row "
-            f"at or before hour `{window.get('window_end_hours', '')}` after ICU admission",
+            f"charted before hour `{window.get('window_end_hours', '')}` after ICU admission",
         )
     return lines
 
@@ -1691,9 +1691,10 @@ def _positive_ids_from_concept_payload(
                     mask = mask | ((numeric > 0) & (numeric <= threshold))
                 elif op == "ge":
                     mask = mask | (numeric >= threshold)
-        # ``primary_cohort.CONCEPT_POSITIVE_ROWS``: only a positive row timed at
-        # or before the window's end admits a stay.
-        mask = mask & hours.le(window_end_hours)
+        # ``primary_cohort.CONCEPT_POSITIVE_ROWS``: only a positive row charted
+        # before the window's end admits a stay.  Row times are floored to the
+        # hourly grid, so the row at the end hour was charted after it.
+        mask = mask & hours.lt(window_end_hours)
         matched.update(frame.loc[mask, frame_id].dropna().tolist())
     return matched
 
@@ -1972,13 +1973,15 @@ def normalize_export_cohort_contract(
     return _normalize_export_cohort(dict(cohort) if isinstance(cohort, Mapping) else None)
 
 
-#: What an export's cohort and scores mean, recorded in its manifest.  Version 2
-#: admits a concept-derived cohort only on a positive row timed at or before the
-#: end of its window (``primary_cohort.CONCEPT_POSITIVE_ROWS``), and never uses
-#: that window as a scoring window.  Version 1 exports carry no record: they
-#: admitted a stay on a positive row at any time, and scored SOFA and SOFA-2
-#: over the observation window instead of their own.
-EXPORT_COHORT_EXECUTION_SCHEMA = "easyicu.export-cohort-execution/2"
+#: What an export's cohort and scores mean, recorded in its manifest.  Version 3
+#: admits a concept-derived cohort only on a positive row charted before the end
+#: of its window (``primary_cohort.CONCEPT_POSITIVE_ROWS``), and never uses that
+#: window as a scoring window.  Version 2 also admitted a stay on a row at the
+#: window's end hour, which was charted in the hour after the window.  Version 1
+#: exports carry no record: they admitted a stay on a positive row at any time,
+#: and scored SOFA and SOFA-2 over the observation window instead of their own.
+EXPORT_COHORT_EXECUTION_SCHEMA = "easyicu.export-cohort-execution/3"
+_EXPORT_COHORT_EXECUTION_V2 = "easyicu.export-cohort-execution/2"
 #: The SOFA and SOFA-2 callbacks' own worst-value window.
 _SCORE_WINDOW_HOURS = 24
 
@@ -2021,7 +2024,9 @@ def export_cohort_execution_current(manifest: Mapping[str, Any]) -> bool:
 
     A manifest without a record predates version 2.  Its rows still agree when
     neither change could have reached them: no concept-derived cohort, and an
-    observation window equal to the scores' own window.
+    observation window equal to the scores' own window.  A version 2 record
+    differs only in which concept rows admitted a stay, so its rows agree when
+    it records no concept-derived cohort.
 
     The manifest records the contract as it executed.  An adult preset
     recorded with a minimum age below the adult floor was extracted before
@@ -2032,7 +2037,10 @@ def export_cohort_execution_current(manifest: Mapping[str, Any]) -> bool:
         return False
     record = manifest.get("cohort_execution")
     if isinstance(record, Mapping):
-        return record.get("schema_version") == EXPORT_COHORT_EXECUTION_SCHEMA
+        version = record.get("schema_version")
+        if version == _EXPORT_COHORT_EXECUTION_V2:
+            return record.get("concept_cohort_window") is None
+        return version == EXPORT_COHORT_EXECUTION_SCHEMA
     contract = manifest.get("cohort_contract")
     normalized = normalize_export_cohort_contract(
         contract if isinstance(contract, Mapping) else None

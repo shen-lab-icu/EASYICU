@@ -691,7 +691,7 @@ def bind_primary_cohort_role(
             "windowed event predicate, read as its `event_time_reading`. For "
             "`occurrence` the host required BOTH the stated op/value on "
             "`resolved_column` AND `event_time_start_hours <= "
-            "<event_time_column> <= event_time_end_hours`; for `absence` it "
+            "<event_time_column> < event_time_end_hours`; for `absence` it "
             "kept a row satisfying the op/value OR whose event "
             "(`resolved_column == 1`) lies outside that window. It treats a "
             "missing event time as outside the window. Reproducing such a row "

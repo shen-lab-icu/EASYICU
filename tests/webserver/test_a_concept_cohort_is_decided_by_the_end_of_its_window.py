@@ -1,12 +1,13 @@
 """A concept-derived cohort is decided by the end of the window it states.
 
 Data Extraction admits a stay to a concept-derived population (Sepsis-3, AKI,
-ventilation, vasopressor, respiratory support) on a positive concept row timed
-at or before the end of the cohort's observation window, in hours after ICU
-admission.  The window decides who enters and is never a scoring window: SOFA
-and SOFA-2 keep their own.  The export manifest records the rule, and a
-registered export made under the earlier rule is reused only where its rows
-cannot differ.
+ventilation, vasopressor, respiratory support) on a positive concept row
+charted before the end of the cohort's observation window, in hours after ICU
+admission.  Row times are floored to the hourly grid, so the row at the end
+hour was charted in the hour after the window.  The window decides who enters
+and is never a scoring window: SOFA and SOFA-2 keep their own.  The export
+manifest records the rule, and a registered export made under an earlier rule
+is reused only where its rows cannot differ.
 """
 
 from __future__ import annotations
@@ -72,10 +73,26 @@ def test_a_stay_enters_only_on_a_positive_row_by_the_end_of_its_window(preset: s
 
     ids, api = _match(rows, preset)
 
-    # 1 turns positive only after hour 24; 2 at hour 24 itself; 3 before
-    # admission, as far as the loader reads; 4 never; 5 within and after.
-    assert ids == {2, 3, 5}
+    # 1 turns positive only after hour 24; 2 at hour 24, charted in the hour
+    # after the window; 3 before admission, as far as the loader reads; 4
+    # never; 5 within and after.
+    assert ids == {3, 5}
     assert api.calls[0]["concepts"] == concepts
+
+
+@pytest.mark.parametrize("window_hours", [24, 72])
+def test_the_last_hour_inside_the_window_admits_a_stay_and_the_end_hour_does_not(
+    window_hours: int,
+) -> None:
+    rows = pd.DataFrame(
+        {
+            "stay_id": [1, 2],
+            "charttime": [float(window_hours - 1), float(window_hours)],
+            "sep3_sofa2": [True, True],
+        }
+    )
+
+    assert _match(rows, "sepsis3", window_hours)[0] == {1}
 
 
 def test_threshold_and_rate_signals_count_only_within_the_window() -> None:
@@ -183,7 +200,7 @@ def test_an_export_records_its_cohort_rule_and_keeps_the_scores_own_window(
 ) -> None:
     loaded: list[dict[str, Any]] = []
     matcher = pd.DataFrame(
-        {"stay_id": [1, 2, 3], "charttime": [80.0, 72.0, 5.0], "sep3_sofa2": [True, True, False]}
+        {"stay_id": [1, 2, 3], "charttime": [80.0, 71.0, 5.0], "sep3_sofa2": [True, True, False]}
     )
     _patch_extraction(monkeypatch, loaded, matcher)
     runner = dataio.make_export_runner(
@@ -210,7 +227,7 @@ def test_an_export_records_its_cohort_rule_and_keeps_the_scores_own_window(
         },
         "score_window_hours": 24,
     }
-    assert "a stay enters on a positive `sepsis3` row at or before hour `72`" in readme
+    assert "a stay enters on a positive `sepsis3` row charted before hour `72`" in readme
     assert "SOFA and SOFA-2 keep their own `24 h` worst-value window" in readme
     assert dataio.export_cohort_execution_current(manifest)
 
@@ -297,3 +314,40 @@ def test_an_export_that_records_the_current_rule_is_reused(tmp_path: Path) -> No
 
     assert handoff.reusable is True
     assert handoff.mismatch_codes == ()
+
+
+def _version_2_record(cohort: dict[str, Any]) -> dict[str, Any]:
+    record = dataio.export_cohort_execution(cohort)
+    return {**record, "schema_version": "easyicu.export-cohort-execution/2"}
+
+
+@pytest.mark.parametrize(
+    ("cohort", "reusable"),
+    [
+        # Admitted on positive rows through the window's end hour.
+        ({"preset": "sepsis3", "observation_window_hours": 24}, False),
+        ({"preset": "ventilation", "observation_window_hours": 72}, False),
+        # No concept population: version 3 changed nothing in these rows.
+        ({"preset": "adult_first", "observation_window_hours": 24}, True),
+        ({"preset": "all_icu", "observation_window_hours": 168}, True),
+    ],
+)
+def test_an_export_recorded_under_version_2_is_reused_only_without_a_concept_population(
+    tmp_path: Path, cohort: dict[str, Any], reusable: bool
+) -> None:
+    handoff = _registered_handoff(tmp_path, cohort, _version_2_record(cohort))
+
+    assert handoff.reusable is reusable
+    outdated = "registered_export_cohort_execution_outdated" in handoff.mismatch_codes
+    assert outdated is not reusable
+
+
+def test_a_record_of_another_version_is_not_current() -> None:
+    record = {
+        **dataio.export_cohort_execution(
+            {"preset": "adult_first", "observation_window_hours": 24}
+        ),
+        "schema_version": "easyicu.export-cohort-execution/9",
+    }
+
+    assert dataio.export_cohort_execution_current({"cohort_execution": record}) is False

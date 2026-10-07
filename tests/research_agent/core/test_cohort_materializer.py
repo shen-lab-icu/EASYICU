@@ -442,7 +442,7 @@ def test_trajectory_excludes_owner_unavailable_zero_and_preserves_locf_receipt(
     long_df, provenance = M.build_trajectory_long(
         data_path=tmp_path,
         concepts=["sofa2_resp"],
-        window=(0.0, 24.0),
+        window=(0.0, 48.0),
     )
 
     assert long_df["charttime"].tolist() == [12.0, 24.0]
@@ -484,7 +484,7 @@ def test_trajectory_excludes_owner_observed_but_unscoreable_measurement(
     long_df, provenance = M.build_trajectory_long(
         data_path=tmp_path,
         concepts=["sofa2_resp"],
-        window=(0.0, 12.0),
+        window=(0.0, 24.0),
     )
 
     assert long_df["charttime"].tolist() == [12.0]
@@ -515,7 +515,7 @@ def test_trajectory_ignores_wide_module_row_without_owner_claim(
     long_df, _ = M.build_trajectory_long(
         data_path=tmp_path,
         concepts=["sofa2_resp"],
-        window=(0.0, 12.0),
+        window=(0.0, 24.0),
     )
 
     assert long_df["charttime"].tolist() == [12.0]
@@ -602,7 +602,7 @@ def test_native_export_trajectory_preserves_owner_receipts(tmp_path):
         data_path=root,
         database="miiv",
         concepts=["sofa2_resp"],
-        window=(0.0, 24.0),
+        window=(0.0, 48.0),
     )
 
     assert long_df["charttime"].tolist() == [12.0, 24.0]

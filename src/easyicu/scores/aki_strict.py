@@ -193,6 +193,10 @@ def summarize_strict_kdigo_window(
     contains no positive reading is not a ruled-out stay.  The summary reports
     the same ascertainment vocabulary as the row-level reading, so "partly
     assessed, never positive" stays distinguishable from "never assessed".
+
+    The window holds the rows charted in ``[window_start_hours,
+    window_end_hours)``.  Chart times are floored to the hourly grid, so the
+    row at ``window_end_hours`` was charted after the window ends.
     """
 
     if id_column not in frame.columns or time_column not in frame.columns:
@@ -209,7 +213,7 @@ def summarize_strict_kdigo_window(
     if bool(lost.any()):
         raise StrictKdigoError(f"{time_column} contains non-numeric values")
     window = strict.loc[
-        times.between(window_start_hours, window_end_hours, inclusive="both")
+        times.between(window_start_hours, window_end_hours, inclusive="left")
     ]
     if window[id_column].isna().any():
         raise StrictKdigoError(f"{id_column} contains missing identities")

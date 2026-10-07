@@ -46,10 +46,15 @@ CONCEPT_DERIVED_PRESETS = frozenset(
 #: admit children under a label that says adults.
 ADULT_COHORT_PRESETS = frozenset({"adult_all", "adult_first"})
 ADULT_AGE_FLOOR_YEARS = 18
-#: A concept-derived population admits a stay on a positive concept row timed
-#: at or before the end of its window, in hours after ICU admission.  Rows the
-#: loader reads before admission count; rows after the window do not, so who
-#: enters never depends on what happens after the window the study states.
+#: A concept-derived population admits a stay on a positive concept row charted
+#: before the end of its window, in hours after ICU admission.  Rows the loader
+#: reads before admission count; rows after the window do not, so who enters
+#: never depends on what happens after the window the study states.  Row times
+#: are floored to the hourly grid, where a row at hour ``h`` was charted in
+#: ``[h, h + 1)``, so the last row inside a window ending at hour ``W`` is at
+#: hour ``W - 1``.  The value's wording predates that reading.  It stays: the
+#: cohort scope digest an eligibility confirmation names includes it, and the
+#: population confirmed, positive within the window, is the same.
 CONCEPT_POSITIVE_ROWS = "at_or_before_window_end_after_icu_admission"
 ADMISSION_ELIGIBILITY_FIELDS: Tuple[str, ...] = (
     "age_min",

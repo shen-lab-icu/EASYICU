@@ -99,7 +99,7 @@ def test_the_windowed_exclusion_really_does_drop_fewer_rows_than_its_op_says():
 
     exclusion = flow[-1]
     assert exclusion["predicate_kind"] == "exclusion"
-    # Only stay 1 dies inside [0h, 24h]. Reading `death == 1` without the
+    # Only stay 1 dies inside [0h, 24h). Reading `death == 1` without the
     # window would drop three, and a window that admitted the negative event
     # time would drop two -- both of those are the failure this test guards.
     assert exclusion["n_excluded"] == 1
@@ -148,7 +148,7 @@ def _replay_ledger(universe: pd.DataFrame, flow: list) -> None:
             event_time = universe[event_time_column]
             in_window = (
                 (event_time >= row["event_time_start_hours"])
-                & (event_time <= row["event_time_end_hours"])
+                & (event_time < row["event_time_end_hours"])
             ).fillna(False)
             if row["event_time_reading"] == "occurrence":
                 matches = matches & in_window
@@ -505,7 +505,8 @@ def test_the_coder_is_told_how_to_read_a_windowed_row():
 
     assert "`event_time_column` is not null" in guidance
     assert "event_time_start_hours <= " in guidance
-    assert "event_time_end_hours" in guidance
+    # The end hour is outside the window, as the host reads it.
+    assert "<event_time_column> < event_time_end_hours" in guidance
     # The rule that is not in any row: what a missing event time means.
     assert "missing event time as outside" in guidance
     # And why it matters, so the instruction is not read as optional colour.
