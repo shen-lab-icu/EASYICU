@@ -90,6 +90,47 @@ def test_no_adult_scope_is_read_where_none_is_stated(stated: dict) -> None:
     assert not _adult_population_required(_context(stated=stated))
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Among adult ICU patients, excluding children, is condition-x associated with hospital mortality?",
+        "在成人 ICU 患者中（排除儿童），condition-x 与住院死亡有何关联？",
+        "Among ICU patients aged 18 years or older, is condition-x associated with hospital mortality?",
+        "在年满18岁的 ICU 患者中，condition-x 与住院死亡有何关联？",
+    ],
+)
+def test_an_adult_floor_or_an_excluded_child_still_declares_the_scope(question: str) -> None:
+    assert _adult_population_required(_context(question))
+
+
+def test_a_background_sentence_about_children_leaves_the_adult_scope() -> None:
+    # Each statement is read on its own: children named in another sentence
+    # are not a group this study includes.
+    assert _adult_population_required(_context(
+        "Among adult ICU patients, is condition-x associated with hospital mortality? "
+        "Condition-x is also common in children."
+    ))
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # A minor or a non-adult group is not an adult one.
+        "在未成年 ICU 患者中，condition-x 与住院死亡有何关联？",
+        "在非成人 ICU 患者中，condition-x 与住院死亡有何关联？",
+        "Among non-adult ICU patients, is condition-x associated with hospital mortality?",
+        # An age bound below 18 names children.
+        "Among ICU patients under age 18, is condition-x associated with hospital mortality?",
+        "Among ICU patients aged 18 or younger, is condition-x associated with hospital mortality?",
+        # A study that includes children is not adult-only.
+        "Among adult and pediatric ICU patients, is condition-x associated with hospital mortality?",
+        "比较成人和儿童 ICU 患者中 condition-x 与住院死亡的关联。",
+    ],
+)
+def test_a_minor_or_a_mixed_population_declares_no_adult_only_scope(question: str) -> None:
+    assert not _adult_population_required(_context(question))
+
+
 @pytest.mark.parametrize("raw", ["", "   ", "not json", "[]", json.dumps({"cohort": "adults"})])
 def test_unreadable_constraints_declare_nothing(raw: str) -> None:
     assert not _adult_population_required(_context(raw=raw))
