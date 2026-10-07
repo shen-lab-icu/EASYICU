@@ -56,6 +56,7 @@ from .contract import (
 )
 from .request import (
     build_family_spec_request,
+    caller_bound_population_conflict,
     exposure_companion_columns,
     family_template_id_for_context,
     landmark_survival_suite_sealed,
@@ -103,6 +104,7 @@ __all__ = [
     "build_descriptive_skeleton",
     "build_fixed_window_trajectory_skeleton",
     "build_family_spec_request",
+    "caller_bound_population_conflict",
     "build_landmark_association_skeleton",
     "build_landmark_categorical_skeleton",
     "build_landmark_continuous_survival_skeleton",

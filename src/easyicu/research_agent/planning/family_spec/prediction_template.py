@@ -147,34 +147,53 @@ def _estimand(head: str, labels: list[str], tail: str) -> str:
     return f"{head} ({roster}){tail}" if roster else f"{head}, named in the plan{tail}"
 
 
-def _population_item(request: FamilySpecRequest, spec: FamilyPlanSpec, language: str) -> str:
+def _population_item(
+    request: FamilySpecRequest, spec: FamilyPlanSpec, language: str
+) -> str:
     """The rows the plan analyzes, naming each typed bound the cohort applies."""
 
     risk_set = request.prediction_time_hours
-    other_bounds = request.cohort_selection_mode == "predicate_filtered" and any(
-        value is not None for value in (request.age_min, request.age_max, request.minimum_icu_hours)
+    other_bounds = (
+        request.cohort_selection_mode == "predicate_filtered"
+        and not request.caller_binds_all_input_rows
+        and any(
+            value is not None
+            for value in (request.age_min, request.age_max, request.minimum_icu_hours)
+        )
     )
     restricted = typed_bound_applies(request) or population_restricts(spec.population)
+    # Every input row is the population the caller binds; the risk set filters it.
+    every_row = request.caller_binds_all_input_rows
     if language == "zh":
         qualifiers = [
             *(["满足类型化纳入界限"] if other_bounds else []),
-            *([f"在预测时点（ICU 入院后 {risk_set:g} h）之后仍在 ICU 内"] if risk_set is not None else []),
+            *(
+                [f"在预测时点（ICU 入院后 {risk_set:g} h）之后仍在 ICU 内"]
+                if risk_set is not None
+                else []
+            ),
         ]
         return (
-            "研究队列中" + ("、".join(qualifiers) + "的" if qualifiers else "") + "分析行"
+            ("研究队列全部输入行中" if every_row else "研究队列中")
+            + ("、".join(qualifiers) + "的" if qualifiers else "")
+            + "分析行"
             if restricted
             else "研究队列的全部输入行"
         )
     qualifiers = [
         *(["meet the typed eligibility bound"] if other_bounds else []),
         *(
-            [f"are still in the ICU after the prediction time ({risk_set:g} h after ICU admission)"]
+            [
+                f"are still in the ICU after the prediction time ({risk_set:g} h after ICU admission)"
+            ]
             if risk_set is not None
             else []
         ),
     ]
     return (
-        "Analysis rows of the study cohort" + (" that " + " and ".join(qualifiers) if qualifiers else "")
+        ("All input rows" if every_row else "Analysis rows")
+        + " of the study cohort"
+        + (" that " + " and ".join(qualifiers) if qualifiers else "")
         if restricted
         else "All input rows of the study cohort"
     )

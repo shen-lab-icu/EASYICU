@@ -190,12 +190,6 @@ PREDICTION_STOPS = [
         id="no_icu_stay",
     ),
     pytest.param(
-        _prediction_context, "all_input_rows",
-        "family_spec_prediction_risk_set_conflicts_with_population",
-        "a population that filters",
-        id="every_input_row",
-    ),
-    pytest.param(
         lambda: _with_icu_stay(_prediction_context(), "weeks"), None,
         "family_spec_icu_stay_unit_unread",
         "Prepare the export again with the unit recorded",

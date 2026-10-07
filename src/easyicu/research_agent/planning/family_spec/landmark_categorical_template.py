@@ -74,6 +74,7 @@ from .contract import (
     accepted_baseline_additions,
     design_field_max_length,
     landmark_design_roster,
+    prediction_risk_set_predicates,
     table_one_group_column,
 )
 from .plan_language import bounded_roster, listing, plan_language, sentence
@@ -637,12 +638,18 @@ def typed_bound_predicates(
 ) -> list[ProgressiveCohortPredicate]:
     """The request's typed age bounds, minimum ICU stay and prediction time as cohort predicates."""
 
+    risk_set = request.prediction_time_hours
+    if request.caller_binds_all_input_rows and risk_set is not None:
+        # The caller bound every input row: the age and stay bounds describe
+        # that population, and only the prediction's risk set filters it.
+        return prediction_risk_set_predicates(
+            prediction_time_hours=risk_set, icu_stay_unit=request.icu_stay_unit
+        )
     predicates: list[ProgressiveCohortPredicate] = []
     if request.age_min is not None:
         predicates.append(_predicate("age", ">=", request.age_min, end_hours=end_hours))
     if request.age_max is not None:
         predicates.append(_predicate("age", "<=", request.age_max, end_hours=end_hours))
-    risk_set = request.prediction_time_hours
     # ``los_icu`` is the stay's ICU length of stay, in the unit the roster
     # records it in: days, the dictionary's unit, or hours.
     hours_per_unit = 1.0 if request.icu_stay_unit == "hours" else 24.0
@@ -662,8 +669,10 @@ def typed_bound_predicates(
         # its prediction time, which is its time zero: alive at it, and with
         # no outcome that ended the stay before the prediction.  A minimum
         # stay up to that time is implied and adds no predicate of its own.
-        predicates.append(
-            _predicate("los_icu", ">", risk_set / hours_per_unit, end_hours=end_hours)
+        predicates.extend(
+            prediction_risk_set_predicates(
+                prediction_time_hours=risk_set, icu_stay_unit=request.icu_stay_unit
+            )
         )
     return predicates
 
@@ -747,14 +756,13 @@ def _cohort_intent(
             "a predicate-filtered cohort needs a typed landmark or observation window",
             path="cohort",
         )
-    inclusion = [
-        *(
-            typed_bound_predicates(request, end_hours=end_hours)
-            if request.cohort_selection_mode == "predicate_filtered"
-            else []
-        ),
-        *stated_inclusion,
-    ]
+    typed = (
+        typed_bound_predicates(request, end_hours=end_hours)
+        if request.cohort_selection_mode == "predicate_filtered"
+        else []
+    )
+    # A stated predicate the typed bounds already apply is not applied twice.
+    inclusion = [*typed, *(item for item in stated_inclusion if item not in typed)]
     if not (inclusion or stated_exclusion):
         raise FamilySpecError(
             "family_spec_cohort_predicate_unavailable",

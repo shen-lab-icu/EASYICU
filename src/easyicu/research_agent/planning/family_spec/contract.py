@@ -360,6 +360,36 @@ def sealed_cohort_predicate(item: Any) -> ProgressiveCohortPredicate:
     )
 
 
+def prediction_risk_set_predicates(
+    *, prediction_time_hours: float, icu_stay_unit: str
+) -> list[ProgressiveCohortPredicate]:
+    """The cohort predicates of a static prediction's risk set.
+
+    A static prediction model predicts at the end of its observation window,
+    its time zero, for the stays still in the ICU after it: ``los_icu`` above
+    the prediction time, written in the unit the roster records ``los_icu`` in
+    (days, the dictionary's unit, or hours) and decided at that time.  The
+    family template and the check of a caller-bound population both read the
+    risk set from here.
+    """
+
+    hours_per_unit = 1.0 if icu_stay_unit == "hours" else 24.0
+    return [
+        ProgressiveCohortPredicate(
+            concept_id="los_icu",
+            anchor="icu_admission",
+            start_offset_hours=0.0,
+            end_offset_hours=float(prediction_time_hours),
+            aggregation="first",
+            op=">",
+            value=ProgressivePredicateValue(
+                mode="number",
+                number_value=float(prediction_time_hours) / hours_per_unit,
+            ),
+        )
+    ]
+
+
 def _closed_predicate_value(value: Any) -> ProgressivePredicateValue:
     if value is None:
         return ProgressivePredicateValue(mode="none")
@@ -496,6 +526,13 @@ class FamilySpecRequest(BaseModel):
     #: concept dictionary's unit.
     icu_stay_unit: Literal["days", "hours"] = Field(
         default="days", exclude_if=lambda value: value == "days"
+    )
+    #: The caller bound every input row as the population, and the prediction
+    #: family filters it only to its risk set: the age and stay bounds then
+    #: describe that population and add no predicate.  Omitted from the
+    #: digest when false, like the minimum stay.
+    caller_binds_all_input_rows: bool = Field(
+        default=False, exclude_if=lambda value: not value
     )
     #: A concept-derived population (``sepsis3`` ...) and the hour after ICU
     #: admission by which a positive concept row admits a stay.  Omitted from
@@ -832,6 +869,13 @@ class FamilySpecRequest(BaseModel):
             raise ValueError("proposed suite coordinates belong to the landmark survival family")
         if self.prediction_time_hours is not None and self.family_id != PREDICTION_FAMILY_ID:
             raise ValueError("a prediction time belongs to the prediction family")
+        if self.caller_binds_all_input_rows and (
+            self.prediction_time_hours is None or self.population_concepts
+        ):
+            raise ValueError(
+                "a population the caller binds to every input row is filtered only "
+                "by a prediction's risk set, and offers no population to state"
+            )
         if (
             self.icu_stay_unit != "days"
             and self.minimum_icu_hours is None
@@ -1654,6 +1698,7 @@ __all__ = [
     "accepted_baseline_additions",
     "literature_design_card_keys_by_dimension",
     "population_required",
+    "prediction_risk_set_predicates",
     "sealed_cohort_predicate",
     "spec_from_mapping",
     "table_one_group_column",

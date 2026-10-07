@@ -193,6 +193,7 @@ from .planning.dependence_authority import (
     DependenceAuthorityError,
     bind_context_dependence_authority,
 )
+from .planning.family_spec import caller_bound_population_conflict
 from .reporting.article_contract import (
     build_article_analysis_contract,
     validate_plan_against_article_contract,
@@ -2896,14 +2897,13 @@ class ResearchAgentPipeline:
                 )
             )
         if self._required_primary_cohort_selection_mode is not None:
-            observed_mode = str(getattr(plan.cohort, "selection_mode", "") or "")
-            if observed_mode != self._required_primary_cohort_selection_mode:
-                raise CohortAuthorityError(
-                    "Planner primary cohort selection mode does not match the "
-                    "caller-bound contract: expected "
-                    f"{self._required_primary_cohort_selection_mode!r}, observed "
-                    f"{observed_mode!r}"
-                )
+            conflict = caller_bound_population_conflict(
+                plan,
+                context=agent_context,
+                required_selection_mode=self._required_primary_cohort_selection_mode,
+            )
+            if conflict is not None:
+                raise CohortAuthorityError(conflict)
             if not cohort_definition_has_explicit_selection(plan.cohort):
                 raise CohortAuthorityError(
                     "Planner primary cohort selection is not explicit"
