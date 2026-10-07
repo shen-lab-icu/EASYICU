@@ -91,6 +91,21 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   assert.doesNotMatch(familyStop, /variable level or model term/);
   assert.match(runFailure('research_pipeline_progressive_compile_failed', { code: 'progressive_step_invalid' }), /variable level or model term/);
 
+  // A prediction stop names the study change that lifts it, not the generic
+  // family-template sentence.
+  const predictionStops = {
+    progressive_family_spec_prediction_risk_set_unavailable: /Declare the study's analysis as a prediction model/,
+    progressive_family_spec_prediction_risk_set_conflicts_with_population: /a population that filters/,
+    progressive_family_spec_icu_stay_unit_unread: /Prepare the export again with the unit recorded/,
+  };
+  Object.entries(predictionStops).forEach(([code, remedy]) => {
+    const text = runFailure('research_pipeline_progressive_compile_failed', { code });
+    assert.match(text, remedy);
+    assert.match(text, /before the model was called/);
+    assert.doesNotMatch(text, /EasyICU check of the study's template plan/);
+  });
+  assert.match(runFailureZh('research_pipeline_progressive_compile_failed', { code: 'progressive_family_spec_prediction_risk_set_unavailable' }), /声明为预测模型/);
+
   // A runner image built from other EasyICU source needs a rebuild; telling the
   // researcher to start Docker would send them to a runtime that is already up.
   const stale = live({ code: 'research_pipeline_runner_image_mismatch' });
