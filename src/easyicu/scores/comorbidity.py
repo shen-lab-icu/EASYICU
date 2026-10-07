@@ -1190,8 +1190,8 @@ def flag_comorbidities(
 # EasyICU loader — wires flag_comorbidities to each database's diagnosis
 # table and the ICU stay-id schema. Per-database because the id structure
 # and diagnosis storage differ (MIMIC: hadm_id ICD table -> map to stay_id;
-# eICU: per-stay comma-joined ICD-9/10 string; SICdb: single ICD10Main).
-# HiRID/AmsterdamUMCdb ship no ICD diagnoses -> documented N/A.
+# eICU: per-stay comma-joined ICD-9/10 string). HiRID/AmsterdamUMCdb ship no
+# ICD diagnoses and SICdb one principal diagnosis per case -> documented N/A.
 # --------------------------------------------------------------------------
 # ICU stay-id column produced per database (matches the concept layer).
 _STAY_ID_COL = {
@@ -1201,8 +1201,6 @@ _STAY_ID_COL = {
     "mimic_demo": "icustay_id",
     "eicu": "patientunitstayid",
     "eicu_demo": "patientunitstayid",
-    "sic": "CaseID",
-    "sic_demo": "CaseID",
 }
 
 
@@ -1294,15 +1292,19 @@ def load_comorbidity(
     Returns a DataFrame keyed by the database's ICU stay id with one
     boolean column per condition plus the weighted index
     (``charlson_index`` or ``elixhauser_vw``/``elixhauser_count``).
-    Databases without ICD diagnoses (HiRID, AmsterdamUMCdb) return an
-    empty frame — comorbidity is genuinely unavailable there.
+    Databases the loader's declaration names return an empty frame: HiRID
+    and AmsterdamUMCdb record no ICD diagnoses, and SICdb records one
+    principal diagnosis per case, which scores the reason for admission
+    rather than the comorbidity burden.
     """
     db = database.lower()
-    # Databases with no usable ICD diagnosis source, declared once for this
-    # loader and for the cross-database availability owner.
-    if db in COMPOSITE_LOADER_SUPPORT["comorbidity_loader"].no_source_databases:
+    # Databases with no source that can carry an index, declared once for
+    # this loader and for the cross-database availability owner.
+    support = COMPOSITE_LOADER_SUPPORT["comorbidity_loader"]
+    if db.removesuffix("_demo") in support.no_source_databases:
         if verbose:
-            print(f"[comorbidity] {database} ships no ICD diagnoses — N/A")
+            reason = support.reason_unavailable(db.removesuffix("_demo"))
+            print(f"[comorbidity] {database}: {reason} — N/A")
         return pd.DataFrame()
 
     ds = _build_datasource(database, data_path)
@@ -1341,22 +1343,6 @@ def load_comorbidity(
             long[["patientunitstayid", "code", "version"]],
             system=system,
             id_col="patientunitstayid",
-            code_col="code",
-            version_col="version",
-        )
-        out = flags
-
-    elif db in ("sic", "sic_demo"):
-        cases = _table_df(ds, "cases")
-        # CamelCase columns in SICdb cases
-        colmap = {c.lower(): c for c in cases.columns}
-        cid, icd = colmap.get("caseid"), colmap.get("icd10main")
-        dx = cases[[cid, icd]].rename(columns={cid: "CaseID", icd: "code"})
-        dx["version"] = 10
-        flags = flag_comorbidities(
-            dx[["CaseID", "code", "version"]],
-            system=system,
-            id_col="CaseID",
             code_col="code",
             version_col="version",
         )

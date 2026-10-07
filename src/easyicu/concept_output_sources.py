@@ -90,25 +90,46 @@ class CompositeLoaderSupport:
     """What one provenance pseudo-loader needs before it can emit its outputs.
 
     The loader reads these values, and so does the cross-database availability
-    owner, so the two cannot disagree.  ``no_source_databases`` lack the table
-    the loader reads; there its outputs are structurally unavailable.
-    ``required_concepts`` must be derivable for the loader to run at all;
-    ``optional_concepts`` refine its definition, and a missing one degrades it.
+    owner, so the two cannot disagree.  ``no_source_databases`` lack a source
+    that can carry the loader's outputs; there its outputs are structurally
+    unavailable, for ``no_source_reason`` unless ``no_source_reasons`` gives
+    the database its own.  ``required_concepts`` must be derivable for the
+    loader to run at all; ``optional_concepts`` refine its definition, and a
+    missing one degrades it.
     """
 
     no_source_databases: frozenset[str] = frozenset()
     no_source_reason: str = ""
     required_concepts: tuple[str, ...] = ()
     optional_concepts: tuple[str, ...] = ()
+    no_source_reasons: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self) -> None:
+        stray = sorted(
+            {database for database, _reason in self.no_source_reasons}
+            - self.no_source_databases
+        )
+        if stray:
+            raise ValueError(
+                f"a no-source reason names a database with a source: {stray!r}"
+            )
+
+    def reason_unavailable(self, database: str) -> str:
+        """Why ``database`` cannot carry this loader's outputs."""
+
+        return dict(self.no_source_reasons).get(database, self.no_source_reason)
 
 
 # ``outcomes_loader`` support is owned by ``easyicu.outcome_availability``.
 COMPOSITE_LOADER_SUPPORT: Mapping[str, CompositeLoaderSupport] = MappingProxyType(
     {
-        # ICD code sets matched over the diagnosis table.
+        # ICD code sets matched over an admission's diagnoses.  SICdb records
+        # one principal diagnosis per case: an index over it would score the
+        # reason for admission, not the comorbidity burden.
         "comorbidity_loader": CompositeLoaderSupport(
-            no_source_databases=frozenset({"hirid", "aumc"}),
+            no_source_databases=frozenset({"hirid", "aumc", "sic"}),
             no_source_reason="no_icd_diagnosis_source",
+            no_source_reasons=(("sic", "single_principal_diagnosis_only"),),
         ),
         # Structured culture results.
         "microbiology_loader": CompositeLoaderSupport(

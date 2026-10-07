@@ -717,7 +717,7 @@ def _composite_output_availability(
             database=database,
             status="blocked",
             available=False,
-            reason=support.no_source_reason,
+            reason=support.reason_unavailable(database.removesuffix("_demo")),
             structural_unavailable=True,
         )
     required = [_explain_dependency(dep, database) for dep in support.required_concepts]

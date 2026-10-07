@@ -103,7 +103,7 @@ def test_a_database_without_the_loaders_source_blocks_its_outputs() -> None:
                     assert (cell.status, cell.structural_unavailable, cell.reason) == (
                         "blocked",
                         True,
-                        support.no_source_reason,
+                        support.reason_unavailable(database),
                     ), (output, database)
                 else:
                     assert (cell.status, cell.available, cell.reason) == (
