@@ -806,7 +806,7 @@ class ICUDataSource:
             if filters:
                 for spec in filters:
                     # 🔧 FIX: MIMIC-III 使用 icustay_id
-                    id_col_to_check = 'icustay_id' if self.config.name == 'mimic' else 'stay_id'
+                    id_col_to_check = 'icustay_id' if self.config.name in ('mimic', 'mimic_demo') else 'stay_id'
                     if spec.column == id_col_to_check and spec.op == FilterOp.IN:
                         original_stay_ids = set(spec.value)  # 保存原始目标 stay_ids
                         print(f"💾 [{table_name}] 保存原始 {id_col_to_check} 过滤器: {len(original_stay_ids)} 个患者")
@@ -901,7 +901,7 @@ class ICUDataSource:
                 # 🔧 FIX 2026-01-26: MIMIC-III 使用 icustay_id 而非 stay_id
                 # 将 stay_id 替换为 icustay_id（对于 MIMIC-III）
                 db_name = self.config.name if hasattr(self, 'config') and hasattr(self.config, 'name') else ''
-                if db_name == 'mimic' and 'stay_id' in base_columns:
+                if db_name in ('mimic', 'mimic_demo') and 'stay_id' in base_columns:
                     base_columns = [c if c != 'stay_id' else 'icustay_id' for c in base_columns]
                     if DEBUG_MODE:
                         logger.debug("🔄 MIMIC-III 列映射: stay_id -> icustay_id")
@@ -1003,7 +1003,7 @@ class ICUDataSource:
                                 
                                 # 加载 icustays 获取映射
                                 # MIMIC-III 使用 icustay_id，MIMIC-IV 使用 stay_id
-                                id_col = 'icustay_id' if self.config.name == 'mimic' else 'stay_id'
+                                id_col = 'icustay_id' if self.config.name in ('mimic', 'mimic_demo') else 'stay_id'
                                 icustays_map = self.load_table(
                                     'icustays', 
                                     columns=[id_col, 'hadm_id'], 
@@ -1124,7 +1124,7 @@ class ICUDataSource:
 
         # 🔧 FIX 2026-01-26: 支持 MIMIC-III 的 icustay_id
         # MIMIC-III 的 id 列是 icustay_id，需要补全
-        target_id_col = 'icustay_id' if self.config.name == 'mimic' else 'stay_id'
+        target_id_col = 'icustay_id' if self.config.name in ('mimic', 'mimic_demo') else 'stay_id'
         has_target_id = target_id_col in frame.columns and not frame[target_id_col].isna().all()
         
         if not has_target_id and 'hadm_id' in frame.columns:

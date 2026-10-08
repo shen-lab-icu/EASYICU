@@ -1,0 +1,121 @@
+{
+  "task": "respiratory_source_channel_repair",
+  "date": "2026-10-08",
+  "starting_head": "06cd55d4dde46d842d608ab336b907a34d84d84d",
+  "clinical_event_rows_read": null,
+  "exports": 0,
+  "model_fits": 0,
+  "sealed_current_changed": false,
+  "source_sha256": {
+    "src/easyicu/data/concept-dict.json": "3c0ebd9b5fe92223a3b674ab0f68a03c4c50e52f1043784b1c7223d1a159dcaf",
+    "src/easyicu/concept/catalog.py": "d7a66c20b7b9f368398c58d4706f27cc684520849284e7d4739d8d4994df2b15",
+    "src/easyicu/concept/__init__.py": "6f1f01c16f475d689044f886a7873ba1a41575d5ec70f5de727747f3986f6513",
+    "src/easyicu/datasource.py": "8fb8250a08fec755cf4861275db50cd7b4bb7ed843ab4b4a419f2d37ef36a7dc",
+    "src/easyicu/webserver/static/js/data-catalog.js": "dce16ebfba2b32edbe1c8ea97501b5bb1eec9f9e72df534233f3117a9c7365ae",
+    "tests/core/test_respiratory_source_channels.py": "bb617760be42493d2b367e7dc3ddf1a2e855665925185651642742a56a3ef22c",
+    "tests/core/test_concept_catalog_consistency.py": "a85fc72d4065c7a1a3a595656e34bfba7f3f7c7110577881e76e3e885e0a080b",
+    "docs/catalog_summary.md": "42f59fbf441ed7390f0e5e41cd6f4cf9211db1d591e73093288c1fd2e29df68d",
+    "tests/core/test_community_databases.py": "2f159d1b2d0e20a2e39ef762c31b56c60a8b602bf7a6b8d4b6131e7a3eecbe78",
+    "src/easyicu/data/community-concept-coverage.json": "9ccc27a809dcbe42379af1960fe670cd7538b02a70c6b405a97e24ccc46f4207",
+    "docs/community_concept_coverage.md": "ed2067a38e3d6e67650fa2f3cc2827fcc55f0644991f9950544645d01784721c"
+  },
+  "nonpatient_dictionaries": {
+    "mimiciv/d_items.parquet": "48f79107d9ccd2070911b1654b45901d574d60f7a9e00dce6a6f2a0c1a5f9bef",
+    "mimiciii/1.4/d_items.parquet": "4eab8ac440b97c9f936c71eeffc697fcee7cb7f93e51721d00279aa13d725f4d"
+  },
+  "official_implementation": {
+    "repository": "MIT-LCP/mimic-code",
+    "commit": "303d26c623dcc9c49cc0f204468d4acc2f063797",
+    "files": [
+      {
+        "url": "https://raw.githubusercontent.com/MIT-LCP/mimic-code/303d26c623dcc9c49cc0f204468d4acc2f063797/mimic-iv/concepts/measurement/vitalsign.sql",
+        "sha256": "9a618fb7f6bf74ed1571e08088b09d1f27a8ccf8b1054082a94270cde456ab0d",
+        "name": "vitalsign.sql"
+      },
+      {
+        "url": "https://raw.githubusercontent.com/MIT-LCP/mimic-code/303d26c623dcc9c49cc0f204468d4acc2f063797/mimic-iv/concepts/measurement/ventilator_setting.sql",
+        "sha256": "80ac2b4bde1d4e8324f1818bd36c453fe0b70b2e90e228762ecfe65fcc757708",
+        "name": "ventilator_setting.sql"
+      }
+    ]
+  },
+  "verification": {
+    "focused": {
+      "passed": 20,
+      "command": "OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 python -m pytest -q tests/core/test_respiratory_source_channels.py"
+    },
+    "nonclinical_fast_suite": {
+      "status": "interrupted_for_unverified_data_access_scope",
+      "pid": 4130283,
+      "session": 38172,
+      "exit_code": 143,
+      "last_progress_percent": 26,
+      "failures_seen": true,
+      "full_failure_summary_available": false,
+      "log_sha256": "cb4a7f4c21e0b121fd2e377f585004a205a5c942ed5b43f2b3478364b185c2b9",
+      "log_not_published": "unaudited full logs not committed",
+      "final_verification_replacement": "four individually reviewed complete synthetic/metadata test files"
+    },
+    "ruff": {
+      "errors": 16,
+      "identical_to_pre_task_baseline": true,
+      "changed_python_files": "PASS"
+    },
+    "independent_review": {
+      "agent": "/root/m2_independent_review",
+      "scope": "synthetic database implementation review; not human clinical validation",
+      "status": "PASS",
+      "loading_tests": 26,
+      "catalog_contract_tests": 37,
+      "review_receipt_sha256": "8f6cd7ded68167d064530a33d0a147394b1219a0698c7cfcdd6e609da14c6920"
+    },
+    "complete_related_suite": {
+      "passed": 73,
+      "warnings": 591,
+      "seconds": 4.58,
+      "files": [
+        "tests/core/test_respiratory_source_channels.py",
+        "tests/core/test_community_databases.py",
+        "tests/core/test_concept_catalog_consistency.py",
+        "tests/governance/test_catalog_manifest.py"
+      ],
+      "marker_expression": "",
+      "data_inputs": "packaged metadata and temporary synthetic event fixtures",
+      "thread_libraries": {
+        "OMP_NUM_THREADS": 1,
+        "OPENBLAS_NUM_THREADS": 1,
+        "MKL_NUM_THREADS": 1,
+        "NUMEXPR_NUM_THREADS": 1
+      },
+      "log_sha256": "5caf814c43c1ab8dd54158abd3fd69d8c6cc153914303ddb254890e45e12f3e6"
+    },
+    "development_failures": [
+      "Initial focused loader: 3 failed / 5 passed; MIIV lab wrapper and demo identity.",
+      "Independent distinct-ID check: 1 failed / 5 passed; demo Python selection leak.",
+      "Observer iterations: 3 failed each; missed multi-concept path then counted failed fallback attempts.",
+      "Community registry: 2 failed / 20 passed; regenerated coverage and synchronized concept count."
+    ],
+    "dictionary_diff_contract": {
+      "old_concepts_changed": [
+        "spo2",
+        "o2sat"
+      ],
+      "new_concepts": [
+        "peep_set",
+        "peep_total",
+        "fio2_chart",
+        "fio2_lab"
+      ],
+      "legacy_peep_fio2_objects_unchanged": true
+    }
+  },
+  "limitations": [
+    "Existing sealed exports are unchanged; actual alarm-record contribution remains unknown.",
+    "Source channels are not certified synchronous bedside settings.",
+    "No clinical raw-event schema or candidate export is validated by these synthetic tests."
+  ],
+  "data_access_scope": {
+    "source_review_and_audited_related_tests": "nonpatient dictionaries and synthetic events only",
+    "interrupted_broad_suite": "not certified at syscall level; no established real-event read; marker/environment exclusions insufficient to prove zero reads"
+  }
+}

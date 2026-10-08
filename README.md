@@ -20,6 +20,8 @@ EasyICU is a Python toolkit for intensive care unit (ICU) data analysis. It prov
 > CMAISE Jinhua ICU, and the Zigong infection cohort currently expose an
 > audited core-concept subset only; SOFA/SOFA-2 conformance is `not_assessed`.
 
+> **Respiratory source correction (2026-10-08):** MIMIC-IV and MIMIC-III `spo2`/`o2sat` no longer map the SpO2 alarm-limit item. New `peep_set`, `peep_total`, `fio2_chart`, and `fio2_lab` channels separate source definitions; legacy `peep`/`fio2` retain their mixed-source definitions. Existing exports are not rewritten. See the [source and synthetic-validation receipt](docs/validation/respiratory_source_channel_repair.md).
+
 ## Why EasyICU
 
 EasyICU has two layers that answer the two halves of one question — *how trustworthy is a reported ICU result?* The **concept layer** governs the clinical definition that produces a number; the **evidence-bound agent layer** governs the trail that records it.

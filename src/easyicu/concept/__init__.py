@@ -1106,7 +1106,7 @@ class ConceptResolver:
                 # HiRID使用patientid
                 patient_ids = {'patientid': list(patient_ids)}
                 _debug(f'  转换为: {patient_ids}')
-            elif db_name in ['mimic']:
+            elif db_name in ['mimic', 'mimic_demo']:
                 # 🔧 FIX 2026-02-08: MIMIC-III 使用 icustay_id（不是 stay_id）
                 patient_ids = {'icustay_id': list(patient_ids)}
                 _debug(f'  转换为: {patient_ids}')
@@ -1126,7 +1126,7 @@ class ConceptResolver:
         db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
         
         # 🔧 FIX 2026-02-08: MIMIC-III 使用 icustay_id
-        stay_id_col = 'icustay_id' if db_name == 'mimic' else 'stay_id'
+        stay_id_col = 'icustay_id' if db_name in ('mimic', 'mimic_demo') else 'stay_id'
         
         if target_id_var == 'subject_id' and stay_id_col in patient_ids:
             # 需要从 stay_id/icustay_id 获取 subject_id
@@ -1174,7 +1174,7 @@ class ConceptResolver:
                 
                 from ..datasource import FilterSpec, FilterOp
                 # 🔧 FIX 2026-02-08: MIMIC-III 使用 icustay_id
-                stay_id_col = 'icustay_id' if db_name == 'mimic' else 'stay_id'
+                stay_id_col = 'icustay_id' if db_name in ('mimic', 'mimic_demo') else 'stay_id'
                 
                 # 加载 icustays 表（只需要 stay_id/icustay_id 和 subject_id）
                 filters = [
@@ -2404,7 +2404,7 @@ class ConceptResolver:
                     effective_id_var = 'subject_id'
                 elif source.table == 'services' and db_name in ['mimic', 'miiv', 'mimic_demo']:
                     # services 表使用 stay_id/icustay_id，datasource 会自动转换为 hadm_id
-                    effective_id_var = 'icustay_id' if db_name == 'mimic' else 'stay_id'
+                    effective_id_var = 'icustay_id' if db_name in ('mimic', 'mimic_demo') else 'stay_id'
                 elif source.table in ['microbiologyevents', 'd_labitems', 'prescriptions'] and db_name in ['mimic', 'miiv', 'mimic_demo']:
                     # 其他 hosp 表使用 subject_id
                     effective_id_var = 'subject_id'
@@ -2423,8 +2423,12 @@ class ConceptResolver:
                         # MIMIC-IV patients/admissions 表使用 subject_id
                         effective_id_var = 'subject_id'
                     elif source.table in ['inputevents', 'chartevents', 'outputevents', 'procedureevents']:
-                        # MIMIC-IV icu表使用stay_id
-                        effective_id_var = 'stay_id'
+                        # Demo ICU tables have no defaults.id_var; retain the
+                        # MIMIC-III stay key instead of losing the ID predicate.
+                        effective_id_var = (
+                            'icustay_id' if db_name in ('mimic', 'mimic_demo')
+                            else 'stay_id'
+                        )
                 
                 if effective_id_var:
                     # 🔗 自动扩展 patient_ids：如果用户只提供了 stay_id 但表需要 subject_id（或反之），
@@ -2456,7 +2460,7 @@ class ConceptResolver:
                                 source.table in hospital_tables and 
                                 effective_id_var == 'subject_id'):
                                 # 确定目标 ID 列名
-                                target_id_col = 'icustay_id' if db_name == 'mimic' else 'stay_id'
+                                target_id_col = 'icustay_id' if db_name in ('mimic', 'mimic_demo') else 'stay_id'
                                 if target_id_col in expanded_patient_ids:
                                     original_stay_ids = expanded_patient_ids.get(target_id_col)
                                     if original_stay_ids:
@@ -3106,7 +3110,11 @@ class ConceptResolver:
                         elif db_name in ('eicu', 'eicu_demo'):
                             _duckdb_id_col = 'patientunitstayid'
                             _duckdb_time_col = 'charttime'
-                        elif db_name == 'nwicu':
+                        elif db_name in ('miiv', 'nwicu'):
+                            # The DuckDB loader already maps MIIV laboratory
+                            # subject/hospital IDs onto ICU stays. Wrapping its
+                            # output with the raw table's subject_id loses that
+                            # identity for a standalone laboratory concept.
                             _duckdb_id_col = 'stay_id'
                             _duckdb_time_col = 'charttime'
                         else:
@@ -3728,7 +3736,7 @@ class ConceptResolver:
                         if stay_ids:
                             # 确定正确的 ID 列名（支持 MIMIC-III icustay_id 和 MIMIC-IV stay_id）
                             db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
-                            id_col = 'icustay_id' if db_name == 'mimic' else 'stay_id'
+                            id_col = 'icustay_id' if db_name in ('mimic', 'mimic_demo') else 'stay_id'
                             icustay_filters.append(
                                 FilterSpec(column=id_col, op=FilterOp.IN, value=stay_ids)
                             )
@@ -3736,7 +3744,7 @@ class ConceptResolver:
                     icustays = data_source.load_table('icustays', filters=icustay_filters if icustay_filters else None, verbose=False)
                     # 🔧 FIX 2026-01-26: 支持 MIMIC-III icustay_id 列名
                     db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
-                    stay_col = 'icustay_id' if db_name == 'mimic' else 'stay_id'
+                    stay_col = 'icustay_id' if db_name in ('mimic', 'mimic_demo') else 'stay_id'
                     if hasattr(icustays, 'data'):
                         icu_df = icustays.data[['subject_id', stay_col]].drop_duplicates()
                     else:
@@ -3783,7 +3791,7 @@ class ConceptResolver:
             if source.table in ['labevents', 'microbiologyevents', 'inputevents'] and 'subject_id' in frame.columns and not has_stay_id:
                 # 确定目标 ID 列名
                 db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
-                target_id_col = 'icustay_id' if db_name == 'mimic' else 'stay_id'
+                target_id_col = 'icustay_id' if db_name in ('mimic', 'mimic_demo') else 'stay_id'
                 if DEBUG_MODE: print(f"   ➡️  进入 MIMIC 特殊处理: {source.table} (db={db_name}, target_id={target_id_col})")
                 try:
                     # 仅加载相关stay的icustays，并携带intime/outtime用于窗口过滤
@@ -4091,7 +4099,7 @@ class ConceptResolver:
                     
                     # 🔧 FIX 2026-02: 支持 MIMIC-III (icustay_id) 和 MIMIC-IV (stay_id)
                     db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
-                    target_id_col = 'icustay_id' if db_name == 'mimic' else 'stay_id'
+                    target_id_col = 'icustay_id' if db_name in ('mimic', 'mimic_demo') else 'stay_id'
                     icu_cols = ['subject_id', 'hadm_id', target_id_col, 'intime']
                     icu_cols = [c for c in icu_cols if c in (icustays.data.columns if hasattr(icustays, 'data') else icustays.columns)]
                     
@@ -4238,7 +4246,7 @@ class ConceptResolver:
             should_detect_id = not table.id_columns
             
             # 🔧 MIMIC-III 特殊处理：labevents 配置了 hadm_id，但实际需要用 icustay_id
-            if db_name == 'mimic' and 'icustay_id' in frame.columns:
+            if db_name in ('mimic', 'mimic_demo') and 'icustay_id' in frame.columns:
                 # 如果数据中有 icustay_id，强制使用它
                 should_detect_id = True
             
@@ -4254,7 +4262,7 @@ class ConceptResolver:
                     common_id_cols = ['patientunitstayid', 'patientid']
                 elif db_name in ['hirid']:
                     common_id_cols = ['patientid']
-                elif db_name == 'mimic':
+                elif db_name in ('mimic', 'mimic_demo'):
                     # 🔧 FIX 2026-02-05: MIMIC-III 使用 icustay_id（不是 stay_id）
                     common_id_cols = ['icustay_id', 'hadm_id', 'subject_id']
                 else:
@@ -6659,7 +6667,7 @@ class ConceptResolver:
         db_stay_id_col = (
             icustay_cfg.id
             if icustay_cfg is not None and icustay_cfg.id
-            else ('icustay_id' if db_name == 'mimic' else 'stay_id')
+            else ('icustay_id' if db_name in ('mimic', 'mimic_demo') else 'stay_id')
         )
         stay_origin_table = (
             icustay_cfg.table

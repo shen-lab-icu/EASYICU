@@ -1,5 +1,5 @@
 {
-  "concept_count": 274,
+  "concept_count": 278,
   "concepts": {
     "abx": {
       "category": "medications",
@@ -2490,6 +2490,50 @@
         }
       },
       "description": "fraction of inspired oxygen"
+    },
+    "fio2_chart": {
+      "category": "respiratory",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Inspired oxygen fraction from bedside chart records; may include set and analyzed chart channels"
+    },
+    "fio2_lab": {
+      "category": "respiratory",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Inspired oxygen fraction documented with blood gas laboratory records"
     },
     "fluid_balance": {
       "category": "output",
@@ -5158,6 +5202,50 @@
         }
       },
       "description": "Positive End Expiratory Pressure"
+    },
+    "peep_set": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Set positive end-expiratory pressure; excludes total PEEP"
+    },
+    "peep_total": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Total positive end-expiratory pressure; separate from ventilator setting"
     },
     "persistent_critical_illness": {
       "category": "outcome",
@@ -8697,25 +8785,25 @@
       "derived": 19,
       "direct": 135,
       "partial": 24,
-      "unavailable": 96
+      "unavailable": 100
     },
     "nwicu": {
       "derived": 20,
       "direct": 137,
       "partial": 25,
-      "unavailable": 92
+      "unavailable": 96
     },
     "zhejiang_eicu": {
       "derived": 25,
       "direct": 128,
       "partial": 22,
-      "unavailable": 99
+      "unavailable": 103
     },
     "zigong": {
       "derived": 19,
       "direct": 125,
       "partial": 33,
-      "unavailable": 97
+      "unavailable": 101
     }
   },
   "databases": [

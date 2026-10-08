@@ -35,6 +35,8 @@ CONCEPT_DICTIONARY = {
     'driving_pres_controlled': ('Driving Pressure (controlled vent)', '驱动压(控制通气)', 'cmH2O'),
     'ett_gcs': ('Intubation/Tracheostomy Status', '气管插管/切开状态', 'boolean'),
     'fio2': ('Fraction of Inspired Oxygen', '吸入氧浓度', '%'),
+    'fio2_chart': ('Charted Inspired Oxygen Fraction', '床旁记录吸入氧浓度', '%'),
+    'fio2_lab': ('Blood-Gas Recorded Inspired Oxygen Fraction', '血气记录吸入氧浓度', '%'),
 
     # 血气分析
     'be': ('Base Excess', '碱剩余', 'mEq/L'),
@@ -214,6 +216,8 @@ CONCEPT_DICTIONARY = {
 
     # 呼吸机参数 (Ventilator Parameters)
     'peep': ('Positive End-Expiratory Pressure', '呼气末正压', 'cmH2O'),
+    'peep_set': ('Set PEEP', '设置呼气末正压', 'cmH2O'),
+    'peep_total': ('Total PEEP', '总呼气末正压', 'cmH2O'),
     'tidal_vol': ('Tidal Volume (Observed)', '潮气量（实测）', 'mL'),
     'tidal_vol_set': ('Tidal Volume (Set)', '潮气量（设定）', 'mL'),
     'pip': ('Peak Inspiratory Pressure', '吸气峰压', 'cmH2O'),
@@ -429,6 +433,10 @@ CONCEPT_DESCRIPTIONS = {
     'pafi': ('PaO2/FiO2 ratio - key oxygenation index for ARDS/SOFA scoring', '氧合指数 - ARDS/SOFA评分的关键指标'),
     'safi': ('SpO2/FiO2 ratio - non-invasive alternative to PaFi (used when SpO2<98%)', '脉氧/吸氧比 - PaFi的非侵入性替代（当SpO2<98%时使用）'),
     'fio2': ('Fraction of inspired oxygen (21-100%)', '吸入氧浓度（21-100%）'),
+    'fio2_chart': ('FiO2 from chart records; includes set or analyzed channels, excludes laboratory records', '床旁FiO2记录，包含设置或分析通道，不混入血气记录'),
+    'fio2_lab': ('FiO2 documented with blood gas laboratory records; not a bedside setting timestamp', '血气记录FiO2，不等同床旁设置时刻'),
+    'peep_set': ('Explicit PEEP setting channel; excludes total PEEP', '明确设置PEEP通道，不含总PEEP'),
+    'peep_total': ('Explicit total PEEP channel; kept separate from set PEEP', '总PEEP通道，与设置PEEP分开'),
     'vent_ind': ('Mechanical ventilation indicator (boolean)', '机械通气指示（布尔值）'),
     'ecmo_indication': ("ECMO indication type: 'respiratory' (lung failure) or 'cardiovascular' (heart failure). Any ECMO auto-scores 4 in SOFA-2 resp; cardiovascular indication also scores in SOFA-2 cardio as mech_circ_support", "ECMO适应症类型：'respiratory'（肺衰竭）或'cardiovascular'（心衰）。任何ECMO均使SOFA-2呼吸评分为4分；心血管适应症还计入SOFA-2心血管的机械循环支持"),
     'adv_resp': ('Advanced respiratory support indicator: IMV (invasive mechanical ventilation), NIV (non-invasive ventilation), HFNC (high-flow nasal cannula), CPAP, or BiPAP - required for SOFA-2 respiratory scores 3-4', '高级呼吸支持指示：IMV（有创机械通气）、NIV（无创通气）、HFNC（经鼻高流量）、CPAP或BiPAP - SOFA-2呼吸评分3-4分的必要条件'),
@@ -536,8 +544,8 @@ CONCEPT_GROUPS_INTERNAL = {
     'sepsis3_sofa1': ['sep3_sofa1'],  # 🔧 共享概念移到单独的 sepsis_shared 模块
     'sepsis_shared': ['susp_inf', 'infection_icd', 'samp', 'culture_positive', 'bld_culture_positive'],  # Sepsis共享概念（已移除sep3）
     'vitals': ['hr', 'map', 'sbp', 'dbp', 'pulse_pressure', 'cvp', 'temp', 'spo2', 'resp', 'shock_index', 'modified_shock_index', 'diastolic_shock_index'],  # 🔧 etco2 移到 ventilator；cvp(中心静脉压,measured 血流动力学 vital,dict category=vitals)接入 vitals 模块,不再走单独 cvp_extraction
-    'respiratory': ['pafi', 'safi', 'fio2', 'supp_o2', 'vent_ind', 'vent_start', 'vent_end', 'o2sat', 'sao2', 'mech_vent', 'ett_gcs', 'ecmo', 'ecmo_indication', 'adv_resp', 'oxygenation_index'],
-    'ventilator': ['peep', 'tidal_vol', 'tidal_vol_set', 'pip', 'plateau_pres', 'mean_airway_pres', 'minute_vol', 'vent_rate', 'etco2', 'compliance', 'driving_pres', 'ps', 'vent_mode', 'vent_breath_seq', 'driving_pres_controlled'],
+    'respiratory': ['pafi', 'safi', 'fio2', 'fio2_chart', 'fio2_lab', 'supp_o2', 'vent_ind', 'vent_start', 'vent_end', 'o2sat', 'sao2', 'mech_vent', 'ett_gcs', 'ecmo', 'ecmo_indication', 'adv_resp', 'oxygenation_index'],
+    'ventilator': ['peep', 'peep_set', 'peep_total', 'tidal_vol', 'tidal_vol_set', 'pip', 'plateau_pres', 'mean_airway_pres', 'minute_vol', 'vent_rate', 'etco2', 'compliance', 'driving_pres', 'ps', 'vent_mode', 'vent_breath_seq', 'driving_pres_controlled'],
     'blood_gas': ['be', 'cai', 'hbco', 'lact', 'methb', 'pco2', 'ph', 'po2', 'tco2'],
     'chemistry': ['alb', 'alp', 'alt', 'ast', 'anion_gap', 'bicar', 'bili', 'bili_dir', 'bun', 'ca', 'ck', 'ckmb', 'cl', 'crea', 'crp', 'glu', 'k', 'mg', 'na', 'phos', 'tnt', 'tri', 'ammonia', 'amylase', 'd_dimer', 'ferritin', 'ldh', 'lipase', 'osmolality', 'corrected_calcium', 'ggt', 'trig', 'tsh', 'total_protein', 'ntprobnp', 'cortisol', 'pct', 'bnp', 'uric_acid', 'cholesterol', 'hdl', 'ldl', 'iron', 'tibc', 'transferrin', 'ft4', 'prealbumin', 'myoglobin', 't4'],
     'hematology': ['bnd', 'basos', 'eos', 'esr', 'fgn', 'hba1c', 'hct', 'hgb', 'inr_pt', 'lymph', 'mch', 'mchc', 'mcv', 'neut', 'plt', 'pt', 'ptt', 'rbc', 'rdw', 'wbc', 'nlr', 'plr', 'monos', 'mpv', 'retic'],
@@ -737,6 +745,7 @@ CONCEPT_DB_COVERAGE = {
     'lact': 5, 'alb': 5, 'crp': 5, 'fio2': 5, 'po2': 5, 'pco2': 5, 'ph': 5,
     'pafi': 5, 'safi': 5, 'urine': 5,
     'peep': 4, 'tidal_vol': 4, 'ins': 4,
+    'peep_set': 2, 'peep_total': 2, 'fio2_chart': 2, 'fio2_lab': 2,
     'mech_vent': 3, 'vent_ind': 3, 'ecmo': 2, 'rrt': 4,
     'vent_mode': 4, 'vent_breath_seq': 4,  # miiv/mimic/aumc/hirid (eICU 332 stays, SIC none)
     'driving_pres_controlled': 4,  # plateau+mode overlap: miiv/mimic/aumc/hirid
