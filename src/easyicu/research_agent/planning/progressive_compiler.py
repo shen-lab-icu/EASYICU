@@ -79,6 +79,7 @@ from .cohort_contract import (
     sealed_cohort_concept_ids,
     validate_cohort_definition,
 )
+from .cohort_identity import cohort_identity_columns
 from .dependence_authority import descriptive_counts_only_required
 from .distribution_authority import distribution_policy_issues
 from .literature_contract import LiteratureDesignBinding
@@ -334,26 +335,6 @@ def progressive_cohort_concept_ids(
     """
 
     return sealed_cohort_concept_ids(context, variable_names)
-
-
-def cohort_identity_columns(context: ResearchContext) -> frozenset[str]:
-    """The columns that identify the analysis input's rows.
-
-    Every row has its identifier, so a predicate over one keeps every row (a
-    value that is not missing, a count of at least one) or an arbitrary
-    subset of them: it states no population.
-    """
-
-    return frozenset(
-        {
-            *(str(name) for name in context.cohort.id_columns),
-            *(
-                variable.name
-                for variable in context.variables
-                if variable.role.value == "id"
-            ),
-        }
-    )
 
 
 def progressive_population_concept_ids(
