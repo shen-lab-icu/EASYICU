@@ -128,7 +128,7 @@ def test_all_channels_and_native_chart_boundary(tmp_path):
 
 @pytest.mark.parametrize("clocks,reason", [
     ([(101, 501, 10, 0, 30), (101, 501, 20, 20, 30)], "ambiguous_outtime"),
-    ([(101, 501, 10, 0, None), (101, 501, 20, 20, 30)], "invalid_identity_or_clock"),
+    ([(101, 501, 10, None, 10), (101, 501, 20, 20, 30)], "invalid_identity_or_clock"),
     ([(999, 501, 10, 0, 10), (101, 501, 20, 20, 30)], "hospital_subject_conflict"),
     ([(101, 501, 20, 20, 30), (101, 501, 20, 20, 30)], "duplicate_stay_id"),
     ([(101, 501, 10, 0, 10)], "missing_requested_stay"),
@@ -234,7 +234,10 @@ def test_every_clinical_fetch_has_sql_scope_predicate(tmp_path, monkeypatch):
 
         def fetchdf(self):
             fetches.append(self.sql)
-            assert "WHERE identity_status='identity_allowed'" in self.sql
+            if "FROM clocks WHERE stay_id IN (SELECT stay_id FROM requested)" in self.sql:
+                assert "raw_value" not in self.sql
+            else:
+                assert "WHERE identity_status='identity_allowed'" in self.sql
             frame = self.connection.fetchdf()
             assert set(frame.stay_id) <= {20}
             return frame
@@ -244,7 +247,7 @@ def test_every_clinical_fetch_has_sql_scope_predicate(tmp_path, monkeypatch):
 
     monkeypatch.setattr(module.duckdb, "connect", Connection)
     extract_miiv_respiratory_events(source, allowed_stay_ids=[20])
-    assert len(fetches) == 2
+    assert len(fetches) == 3  # One exact-allowed metadata ledger plus two clinical fetches.
     domains = [s for s in statements if "CREATE OR REPLACE VIEW source_domain" in s]
     assert len(domains) == 2
     assert any("o.stay_id IN (SELECT stay_id FROM requested)" in s for s in domains)
@@ -268,3 +271,79 @@ def test_source_change_during_extraction_is_detected(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "_read_scoped_events", mutate)
     with pytest.raises(SourceEventContractError, match="source_changed_during_extraction"):
         extract_miiv_respiratory_events(source, allowed_stay_ids=[20])
+
+
+def test_single_missing_outtime_is_identified_without_imputation(tmp_path):
+    lab = [(101, 501, t, 50816, .5, ".5", "%", i, i) for i, t in enumerate([15, 20, 100])]
+    source = write_source(tmp_path, clocks=[(101, 501, 20, 20, None)], lab=lab)
+    result = extract_miiv_respiratory_events(source, allowed_stay_ids=[20])
+    rows = result.trace.loc[result.trace.source_table.eq("labevents")]
+    assert rows.labevent_id.tolist() == [0, 1, 2]
+    assert rows.outtime.isna().all()
+    assert rows.temporal_position.tolist() == ["before_intime", "outtime_unknown", "outtime_unknown"]
+    assert rows.lab_assignment_status.eq("identified_under_unknown_outtime").all()
+    assert result.trace.loc[result.trace.source_table.eq("chartevents"), "temporal_position"].eq("outtime_unknown").all()
+    assert result.clock_context.outtime.isna().all()
+    assert result.clock_context.outtime_status.tolist() == ["unknown"]
+    assert result.receipt["schema"] == "miiv_scoped_source_events_v2"
+
+
+@pytest.mark.parametrize("clocks,allowed,expected", [
+    ([(101, 501, 10, 0, 10), (101, 501, 20, 20, None)], [20], {2:20, 3:20, 4:20, 5:20}),
+    ([(101, 501, 10, 0, 10), (101, 501, 20, 20, None)], [10,20], {0:10, 1:10, 2:20, 3:20, 4:20, 5:20}),
+    ([(101, 501, 10, 0, None), (101, 501, 20, 20, 30)], [20], {}),
+    ([(101, 501, 10, 0, 10), (101, 501, 20, 10, None)], [10,20], {}),
+    ([(101, 501, 10, 0, 10), (101, 501, 20, 20, None), (101, 501, 30, 30, None)], [10,20], {0:10, 1:10}),
+    ([(101, 501, 10, 0, 10), (101, 501, 20, 20, None), (101, 501, 30, 30, 40)], [10,20,30], {0:10, 1:10}),
+    ([(101, 501, 10, 0, None), (101, 501, 20, 20, None)], [20], {}),
+])
+def test_partial_clocks_keep_only_uniquely_identified_lab(tmp_path, clocks, allowed, expected):
+    lab = [(101, 501, t, 50816, .5, ".5", "%", i, i)
+           for i, t in enumerate([-1, 10, 15, 20, 30, 100])]
+    source = write_source(tmp_path, clocks=clocks, lab=lab)
+    result = extract_miiv_respiratory_events(source, allowed_stay_ids=allowed, concepts=["fio2_lab"])
+    assert result.trace.set_index("labevent_id").stay_id.to_dict() == expected
+    assert set(result.clock_context.stay_id) == set(allowed)  # Retain zero-event stays.
+    assert result.clock_context.context_stay_count.eq(len(clocks)).all()
+    assert result.clock_context.context_unknown_outtime_count.eq(sum(row[-1] is None for row in clocks)).all()
+    returned = sum(r["count"] for r in result.receipt["source_filter_counts"] if r["reason"] == "identity_allowed")
+    assert returned == len(expected)
+
+
+def test_missing_outtime_does_not_relax_malformed_nonnull_clock(tmp_path):
+    source = write_source(tmp_path, clocks=[(101, 501, 20, 20, None)])
+    path = tmp_path / "icustays.parquet"
+    clocks = pd.read_parquet(path)
+    clocks["outtime"] = "not a timestamp"
+    clocks.to_parquet(path, index=False)
+    with pytest.raises(SourceEventContractError, match="invalid_complete_hospital_clock_context"):
+        extract_miiv_respiratory_events(source, allowed_stay_ids=[20])
+
+
+def test_all_known_values_match_frozen_v1_git_object(tmp_path):
+    """Historical compatibility uses a committed implementation, not a copied oracle."""
+    import subprocess
+    import sys
+    import types
+
+    historical = subprocess.run(
+        ["git", "show", "4edfb6695ba848206c76dbc34bcb1877b351031e:src/easyicu/io/source_events.py"],
+        cwd=Path(__file__).resolve().parents[2], text=True, capture_output=True, check=False,
+    )
+    if historical.returncode:
+        pytest.skip("Frozen v1 Git object unavailable in this checkout; other synthetic contracts still run")
+    text = historical.stdout
+    module = types.ModuleType("easyicu.io._frozen_source_events_v1")
+    module.__package__ = "easyicu.io"
+    sys.modules[module.__name__] = module
+    try:
+        exec(compile(text, "<frozen-source-events-v1>", "exec"), module.__dict__)
+        source = write_source(tmp_path, lab=[(101, 501, t, 50816, .5, ".5", "%", i, i)
+                                             for i, t in enumerate([-1, 10, 15, 20, 30, 100])])
+        old = module.extract_miiv_respiratory_events(source, allowed_stay_ids=[10,20])
+        new = extract_miiv_respiratory_events(source, allowed_stay_ids=[10,20])
+        pd.testing.assert_frame_equal(old.hourly, new.hourly)
+        pd.testing.assert_frame_equal(old.trace, new.trace[old.trace.columns])
+        assert old.receipt["source_filter_counts"] == new.receipt["source_filter_counts"]
+    finally:
+        sys.modules.pop(module.__name__, None)

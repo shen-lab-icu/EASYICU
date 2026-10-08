@@ -30,7 +30,7 @@ TRACE_COLUMNS = [
     "source_file", "source_file_sha256", "source_row_number", "event_key",
     "labevent_id", "specimen_id", "raw_charttime", "raw_storetime", "raw_value",
     "raw_valuenum", "raw_valueuom", "intime", "outtime", "assignment_rule",
-    "temporal_position", "callback", "numeric_source", "callback_input",
+    "temporal_position", "lab_assignment_status", "callback", "numeric_source", "callback_input",
     "numeric_value", "converted_value", "conversion_status", "bounds_status",
     "icu_relative_time", "hour_bucket", "selected_by_identity",
     "retained_for_aggregation", "exclusion_reason", "aggregate_value", "aggregate_n",
@@ -42,6 +42,7 @@ class SourceEventResult:
     hourly: pd.DataFrame
     trace: pd.DataFrame
     receipt: dict
+    clock_context: pd.DataFrame
 
 
 class SourceEventContractError(ValueError):
@@ -124,7 +125,8 @@ def _prepare_clocks(conn, paths: list[Path], allowed: list[int]) -> None:
     relation = _relation(paths)
     conn.execute(f"""CREATE VIEW clocks_raw AS
         SELECT subject_id, hadm_id, stay_id,
-               {_clock_sql('intime')} AS intime, {_clock_sql('outtime')} AS outtime
+               {_clock_sql('intime')} AS intime, {_clock_sql('outtime')} AS outtime,
+               outtime IS NULL AS outtime_missing
         FROM {relation}
         WHERE hadm_id IN (SELECT hadm_id FROM {relation}
                          WHERE stay_id IN (SELECT stay_id FROM requested))
@@ -132,15 +134,20 @@ def _prepare_clocks(conn, paths: list[Path], allowed: list[int]) -> None:
     checks = {
         "missing_requested_stay": "SELECT count(*) FROM requested WHERE stay_id NOT IN (SELECT stay_id FROM clocks_raw WHERE stay_id IS NOT NULL)",
         "duplicate_stay_id": "SELECT count(*) FROM (SELECT stay_id FROM clocks_raw GROUP BY stay_id HAVING count(*) != 1)",
-        "invalid_identity_or_clock": "SELECT count(*) FROM clocks_raw WHERE subject_id IS NULL OR hadm_id IS NULL OR stay_id IS NULL OR intime IS NULL OR outtime IS NULL OR intime > outtime",
+        "invalid_identity_or_clock": "SELECT count(*) FROM clocks_raw WHERE subject_id IS NULL OR hadm_id IS NULL OR stay_id IS NULL OR intime IS NULL OR (outtime IS NULL AND NOT outtime_missing) OR intime > outtime",
         "hospital_subject_conflict": "SELECT count(*) FROM (SELECT hadm_id FROM clocks_raw GROUP BY hadm_id HAVING count(DISTINCT subject_id) != 1)",
-        "ambiguous_outtime": "SELECT count(*) FROM (SELECT subject_id, hadm_id, outtime FROM clocks_raw GROUP BY ALL HAVING count(*) > 1)",
+        "ambiguous_outtime": "SELECT count(*) FROM (SELECT subject_id, hadm_id, outtime FROM clocks_raw WHERE outtime IS NOT NULL GROUP BY ALL HAVING count(*) > 1)",
     }
     counts = {key: int(conn.execute(sql).fetchone()[0]) for key, sql in checks.items()}
     if any(counts.values()):
         raise SourceEventContractError("invalid_complete_hospital_clock_context", counts=counts)
     # Only identity/time columns in engine memory; never fetch nonallowed IDs.
-    conn.execute("CREATE TEMP TABLE clocks AS SELECT * FROM clocks_raw")
+    conn.execute("""CREATE TEMP TABLE clocks AS SELECT *,
+        CASE WHEN outtime_missing THEN 'unknown' ELSE 'known' END AS outtime_status,
+        count(*) OVER (PARTITION BY subject_id, hadm_id) AS context_stay_count,
+        count(*) FILTER (WHERE outtime_missing) OVER (PARTITION BY subject_id, hadm_id)
+            AS context_unknown_outtime_count
+        FROM clocks_raw""")
     conn.execute("CREATE VIEW targets AS SELECT * FROM clocks WHERE stay_id IN (SELECT stay_id FROM requested)")
 
 
@@ -157,15 +164,34 @@ def _read_scoped_events(conn, paths: list[Path], table: str, itemids: list[int])
     if table == "chartevents":
         predicate = "o.stay_id IN (SELECT stay_id FROM requested)"
         assignment = "LEFT JOIN targets a ON o.stay_id = a.stay_id"
+        identity_failure = "o.subject_id IS DISTINCT FROM a.subject_id OR o.hadm_id IS DISTINCT FROM a.hadm_id"
+        uncertainty_case = ""
+        assignment_status = "'native_stay_id'"
     else:
         predicate = "o.hadm_id IN (SELECT hadm_id FROM targets)"
         assignment = """LEFT JOIN LATERAL (
+            SELECT min(outtime) FILTER (WHERE outtime >= o.event_time) AS known_future,
+                   max(outtime) AS known_max,
+                   count(*) FILTER (WHERE outtime_missing) AS unknown_n,
+                   min(intime) FILTER (WHERE outtime_missing) AS unknown_lower,
+                   count(*) AS context_n
+            FROM clocks c WHERE c.subject_id = o.subject_id AND c.hadm_id = o.hadm_id
+        ) s ON true
+        LEFT JOIN LATERAL (
             SELECT * FROM clocks c
             WHERE c.subject_id = o.subject_id AND c.hadm_id = o.hadm_id
+              AND (s.unknown_n = 0
+                   OR (s.known_future IS NOT NULL AND c.outtime = s.known_future
+                       AND s.unknown_lower > s.known_future)
+                   OR (s.known_future IS NULL AND s.unknown_n = 1 AND c.outtime_missing
+                       AND (s.known_max IS NULL OR s.unknown_lower > s.known_max)))
             ORDER BY CASE WHEN c.outtime >= o.event_time THEN c.outtime END ASC NULLS LAST,
                      c.outtime DESC
             LIMIT 1
         ) a ON true"""
+        identity_failure = "s.context_n = 0"
+        uncertainty_case = "WHEN a.stay_id IS NULL THEN 'unknown_outtime_assignment'"
+        assignment_status = "CASE WHEN s.unknown_n > 0 THEN 'identified_under_unknown_outtime' ELSE 'complete_clocks' END"
     conn.execute(f"""CREATE OR REPLACE VIEW source_domain AS
         SELECT o.subject_id, o.hadm_id, {('o.stay_id,' if table == 'chartevents' else '')}
                o.itemid, o.filename AS source_file, o.file_row_number AS source_row_number,
@@ -177,9 +203,11 @@ def _read_scoped_events(conn, paths: list[Path], table: str, itemids: list[int])
     conn.execute(f"""CREATE OR REPLACE VIEW assigned AS
         SELECT o.* EXCLUDE ({('stay_id,' if table == 'chartevents' else '')} event_time),
                o.event_time, a.stay_id, a.intime, a.outtime,
-               CASE WHEN o.subject_id IS DISTINCT FROM a.subject_id OR o.hadm_id IS DISTINCT FROM a.hadm_id
+               {assignment_status} AS lab_assignment_status,
+               CASE WHEN {identity_failure}
                          THEN 'identity_mismatch'
                     WHEN o.event_time IS NULL THEN 'missing_or_invalid_event_time'
+                    {uncertainty_case}
                     WHEN a.stay_id NOT IN (SELECT stay_id FROM requested) THEN 'assigned_stay_not_allowed'
                     ELSE 'identity_allowed' END AS identity_status
         FROM source_domain o {assignment}""")
@@ -206,8 +234,8 @@ def _transform(events: pd.DataFrame, specs: list[dict], hashes: dict, interval: 
         part["event_key"] = (part.source_table + "|" + part.source_file + "|" + part.source_row_number.astype(str))
         part["assignment_rule"] = LAB_ASSIGNMENT if spec["table"] == "labevents" else "native_stay_id"
         part["temporal_position"] = np.select(
-            [part.event_time < part.intime, part.event_time == part.outtime, part.event_time > part.outtime],
-            ["before_intime", "at_outtime", "after_outtime"], default="within_icu",
+            [part.event_time < part.intime, part.outtime.isna(), part.event_time == part.outtime, part.event_time > part.outtime],
+            ["before_intime", "outtime_unknown", "at_outtime", "after_outtime"], default="within_icu",
         )
         part["callback"] = spec["callback"] or "identity_numeric"
         use_numeric = part.raw_valuenum.notna()
@@ -292,6 +320,9 @@ def extract_miiv_respiratory_events(
     conn = duckdb.connect(":memory:", config={"threads": 1, "temp_directory": ""})
     try:
         _prepare_clocks(conn, clock_paths, allowed)
+        clock_context = conn.execute("""SELECT subject_id, hadm_id, stay_id, intime, outtime,
+            outtime_status, context_stay_count, context_unknown_outtime_count
+            FROM clocks WHERE stay_id IN (SELECT stay_id FROM requested) ORDER BY stay_id""").fetchdf()
         frames, counts = [], []
         for table, paths in sources.items():
             items = sorted({i for s in specs if s["table"] == table for i in s["ids"]})
@@ -327,7 +358,9 @@ def extract_miiv_respiratory_events(
         if dictionary_sha != _sha(dictionary_path):
             raise SourceEventContractError("dictionary_changed_during_extraction")
     receipt = dict(
-        schema="miiv_scoped_source_events_v1", lab_assignment_rule=LAB_ASSIGNMENT,
+        schema="miiv_scoped_source_events_v2", lab_assignment_rule=LAB_ASSIGNMENT,
+        unknown_outtime_rule="identify only if the same unique winner exists for every E>=intime completion; possible tied winner is ambiguous; no imputation or cross-stay non-overlap assumption",
+        clock_context_rows=len(clock_context),
         source_filter_applied_before_python=True,
         time_coordinate={"origin": "icu_intime", "unit": "h", "column": "charttime", "timezone": "source_naive_deidentified_local_not_UTC"},
         callback_input_contract="non-null valuenum else value; object-string Series; no fallback from nonfinite valuenum",
@@ -339,7 +372,7 @@ def extract_miiv_respiratory_events(
         source_files=[dict(table=table, path=str(path), sha256=hashes[str(path)]) for table, path in files],
         source_filter_counts=counts, concept_counts=concept_counts, concept_sources=specs,
         dictionary_sha256=dictionary_sha, event_identity="source table + absolute source file + zero-based Parquet row; native IDs retained; no event deduplication",
-        differences_from_legacy=["no collapse of distinct physical duplicate events", "explicit event-first conversion/bounds/aggregation order", "ambiguous/missing identity clocks fail closed", "observed all-null/out-of-range event hours retain keys; legacy prefilters may drop keys; extra missing hours are not new measurements or improved coverage"],
+        differences_from_legacy=["no collapse of distinct physical duplicate events", "explicit event-first conversion/bounds/aggregation order", "invalid identity/intime, malformed non-null outtime and duplicate known exits fail closed; native missing outtime uses all-completions unique assignment and an explicit clock ledger", "observed all-null/out-of-range event hours retain keys; legacy prefilters may drop keys; extra missing hours are not new measurements or improved coverage"],
         privacy="private patient trace/counts; publication needs separate disclosure review",
     )
-    return SourceEventResult(hourly=hourly, trace=trace, receipt=receipt)
+    return SourceEventResult(hourly=hourly, trace=trace, receipt=receipt, clock_context=clock_context)
