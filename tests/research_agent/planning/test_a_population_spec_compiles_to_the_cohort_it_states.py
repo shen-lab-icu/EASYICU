@@ -464,6 +464,29 @@ def test_a_criterion_is_not_applied_for_its_reason(
     assert item.detail
 
 
+@pytest.mark.parametrize(
+    "criterion",
+    [
+        _condition("circ_failure"),
+        _condition("sep3_sofa1"),
+        {"kind": "event_absent", "concept": "mort_28d", "window": None},
+    ],
+    ids=["loader_output", "loader_alias", "derived_outcome"],
+)
+def test_a_concept_an_extraction_defines_outside_the_dictionary_needs_extraction(
+    criterion,
+) -> None:
+    # The dictionary has none of these: code loaders emit circ_failure and
+    # sep3_sofa1, and mort_28d is a derived outcome.  An input without one
+    # lacks a concept an extraction holds, not an unknown name.
+    item = _one(criterion)
+
+    assert (item.disposition, item.reason) == (
+        "requires_extraction",
+        "population_concept_not_in_export",
+    )
+
+
 # Applied by the plan's predicates --------------------------------------------
 
 
