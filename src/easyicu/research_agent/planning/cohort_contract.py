@@ -363,6 +363,44 @@ def ensure_cohort_definition(plan: Any) -> Any:
     return plan.model_copy(update={"cohort": definition})
 
 
+def _event_level(value: Any) -> Optional[int]:
+    """The event-status level (0 or 1) a predicate value names, if any."""
+
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return int(value)
+    return None
+
+
+def event_status_reading(
+    op: str, value: Any
+) -> Optional[Literal["occurrence", "absence"]]:
+    """Whether a predicate on an event status asks that the event happened, or that it did not.
+
+    An event status takes the levels 0 and 1. An equality predicate naming one
+    level reads the event's occurrence (``== 1``, ``!= 0``, ``in [1]``) or its
+    absence (``== 0``, ``!= 1``, ``not_in [1]``). Any other predicate -- a
+    magnitude filter, a missingness check, a value naming no level or both --
+    reads no occurrence, and no event window applies to it.  The cohort
+    builder reads a windowed event predicate by this rule, and the time-zero
+    rule judges one by it.
+    """
+
+    if op in {"==", "!="}:
+        values = [value]
+    elif op in {"in", "not_in"}:
+        values = value if isinstance(value, list) else [value]
+    else:
+        return None
+    levels = {_event_level(item) for item in values}
+    if len(levels) != 1 or None in levels:
+        return None
+    (level,) = levels
+    occurs = (level == 1) == (op in {"==", "in"})
+    return "occurrence" if occurs else "absence"
+
+
 def validate_concept_predicate(predicate: ConceptPredicate) -> None:
     if not predicate.concept_id:
         raise CohortSchemaError("concept_id is required")
@@ -730,6 +768,7 @@ __all__ = [
     "concept_id_exists",
     "default_pattern_registry",
     "ensure_cohort_definition",
+    "event_status_reading",
     "expand_named_cohort",
     "known_concept_ids",
     "plan_expects_analysis_cohort",

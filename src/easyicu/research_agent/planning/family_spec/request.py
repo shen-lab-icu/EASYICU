@@ -13,6 +13,11 @@ import json
 from typing import Any, Mapping, Optional, Sequence
 
 from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
+from easyicu.utils.death_time_semantics import (
+    DEATH_STATUS,
+    DEATH_TIME_COMPANION,
+    death_time_read_to_the_hour,
+)
 
 from ...authority.declared_levels import closed_planning_levels_for
 from ...concept_availability import concept_records_one_value_per_stay, variable_source_unavailability
@@ -29,6 +34,7 @@ from ...research_context.concept_population import (
     concept_cohort_window,
     context_data_constraints,
 )
+from ...research_context.event_time_semantics import recorded_event_time_semantics
 from ...research_context.export_selection import export_applied_selection
 from ...research_context.minimum_stay import minimum_icu_stay_hours
 from ...schema import ResearchContext
@@ -39,7 +45,12 @@ from ..analysis_types import (
     requested_exposure_occurrence_cues,
 )
 from ..baseline_requirements import baseline_requirement_projection
-from ..cohort_eligibility import ICU_LENGTH_OF_STAY_CONCEPT, eligibility_after_time_zero
+from ..cohort_contract import event_status_reading
+from ..cohort_eligibility import (
+    ICU_LENGTH_OF_STAY_CONCEPT,
+    eligibility_after_time_zero,
+    event_status_read_by_its_time,
+)
 from ..adjustment_authority import (
     AdjustmentSetAuthority,
     adjusted_model_term_planning_authority,
@@ -78,6 +89,7 @@ from .contract import (
     ExposureKind,
     FamilySpecError,
     FamilySpecRequest,
+    PredictionDeathTime,
     SealedContinuousSuiteCoordinates,
     SealedFeasibilityCoordinates,
     SealedSuiteCoordinates,
@@ -583,6 +595,58 @@ def _icu_stay_unit(context: ResearchContext, *, code: str, needed_for: str) -> s
     )
 
 
+def _prediction_death_time(context: ResearchContext) -> Optional[PredictionDeathTime]:
+    """How the risk set reads deaths before the prediction time, or ``None`` without the record.
+
+    A stay can stay in the ICU after its recorded death, so ``los_icu`` alone
+    can keep a stay that died before the prediction.  The risk set also keeps
+    only the stays without a death recorded before it, read by the death's
+    time, when the launch recorded that the export's death time is recorded to
+    the hour (``data_constraints.event_time_semantics``, labelled by the
+    producer) and the roster carries the death status, with its two closed
+    levels, and the death time typed as that status's time after ICU admission
+    (``event_status_read_by_its_time``, the rule the time-zero check applies).
+    Otherwise it says why not.  A context without the record predates it:
+    there is no reading, and the risk set and its words stay as they were.
+    """
+
+    semantics = recorded_event_time_semantics(context)
+    if semantics is None:
+        return None
+    label = semantics.get(DEATH_TIME_COMPANION)
+    read_to_the_hour = death_time_read_to_the_hour(label) if label else None
+    if read_to_the_hour is None:
+        return PredictionDeathTime(
+            applied=False, semantics=label, reason="death_time_semantics_unrecorded"
+        )
+    if not read_to_the_hour:
+        return PredictionDeathTime(
+            applied=False, semantics=label, reason="death_time_resolution"
+        )
+    variables = {item.name: item for item in context.variables}
+    levels = closed_planning_levels_for(name=DEATH_STATUS, variables=variables)
+    absent = [
+        level for level in levels if event_status_reading("==", level) == "absence"
+    ]
+    occurs = [
+        level for level in levels if event_status_reading("==", level) == "occurrence"
+    ]
+    if len(levels) != 2 or len(absent) != 1 or len(occurs) != 1:
+        return PredictionDeathTime(
+            applied=False, semantics=label, reason="death_status_absent"
+        )
+    if not event_status_read_by_its_time(variables, DEATH_STATUS):
+        return PredictionDeathTime(
+            applied=False, semantics=label, reason="death_time_companion_absent"
+        )
+    (level,) = absent
+    return PredictionDeathTime(
+        applied=True,
+        semantics=label,
+        absent_level=level if isinstance(level, bool) else float(level),
+    )
+
+
 def _prediction_risk_set(
     context: ResearchContext,
     cohort_fields: dict[str, Any],
@@ -596,11 +660,14 @@ def _prediction_risk_set(
     measured in it.  A stay that died or left the ICU by then is not one the
     model predicts for, and its outcome may come before the prediction.  The
     template keeps the stays whose ICU length of stay exceeds the prediction
-    time: still in the ICU after it, hence alive at it, on every source and
-    without a death time.  Without a typed window there is no prediction time
-    and nothing is added.  When the caller binds every input row, that is the
-    population, and the risk set is the only filter the template adds to it
-    (``caller_binds_all_input_rows``).
+    time, still in the ICU after it, on every source and without a death time.
+    A stay can stay in the ICU after its recorded death, so where the source
+    records the death's time to the hour the risk set also keeps only the
+    stays without a death recorded before the prediction
+    (``_prediction_death_time``).  Without a typed window there is no
+    prediction time and nothing is added.  When the caller binds every input
+    row, that is the population, and the risk set is the only filter the
+    template adds to it (``caller_binds_all_input_rows``).
     """
 
     if prediction_time_hours is None:
@@ -612,6 +679,7 @@ def _prediction_risk_set(
     unit = _icu_stay_unit(
         context, code="family_spec_prediction_risk_set_unavailable", needed_for=needed_for
     )
+    death_time = _prediction_death_time(context)
     return {
         **cohort_fields,
         "cohort_selection_mode": "predicate_filtered",
@@ -619,6 +687,7 @@ def _prediction_risk_set(
         "icu_stay_unit": unit,
         "caller_binds_all_input_rows": required_primary_cohort_selection_mode
         == "all_input_rows",
+        **({"prediction_death_time": death_time} if death_time is not None else {}),
     }
 
 
@@ -664,7 +733,9 @@ def caller_bound_population_conflict(
     risk_set = tuple(
         compile_cohort_predicate(item)
         for item in prediction_risk_set_predicates(
-            prediction_time_hours=prediction_time_hours, icu_stay_unit=unit
+            prediction_time_hours=prediction_time_hours,
+            icu_stay_unit=unit,
+            death_time=_prediction_death_time(context),
         )
     )
     return None if tuple(cohort.inclusion) == risk_set else conflict

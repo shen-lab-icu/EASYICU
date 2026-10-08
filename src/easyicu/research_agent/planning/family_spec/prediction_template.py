@@ -147,6 +147,46 @@ def _estimand(head: str, labels: list[str], tail: str) -> str:
     return f"{head} ({roster}){tail}" if roster else f"{head}, named in the plan{tail}"
 
 
+#: Why a risk set does not read deaths before the prediction time, in each language.
+_DEATH_TIME_REASONS = {
+    "death_time_resolution": (
+        "the source's death time is not recorded to the hour ({semantics})",
+        "来源的死亡时间未记录到小时（{semantics}）",
+    ),
+    "death_time_semantics_unrecorded": (
+        "the export does not label what its death time is",
+        "导出未标明其死亡时间是什么",
+    ),
+    "death_status_absent": (
+        "the study's data carry no death status",
+        "研究数据中没有死亡状态",
+    ),
+    "death_time_companion_absent": (
+        "the study's data carry no death time after ICU admission",
+        "研究数据中没有 ICU 入院后的死亡时间",
+    ),
+}
+
+
+def _deaths_read_by_time(request: FamilySpecRequest) -> bool:
+    """Whether the risk set keeps only the stays without a death recorded before it."""
+
+    reading = request.prediction_death_time
+    return reading is not None and reading.applied
+
+
+def _death_time_not_read(request: FamilySpecRequest, language: str) -> str:
+    """Why the risk set reads no death by its time, or "" when it does or has no record."""
+
+    reading = request.prediction_death_time
+    if reading is None or reading.applied or reading.reason is None:
+        return ""
+    english, chinese = _DEATH_TIME_REASONS[reading.reason]
+    return (chinese if language == "zh" else english).format(
+        semantics=reading.semantics or ""
+    )
+
+
 def _population_item(
     request: FamilySpecRequest, spec: FamilyPlanSpec, language: str
 ) -> str:
@@ -168,7 +208,10 @@ def _population_item(
         qualifiers = [
             *(["满足类型化纳入界限"] if other_bounds else []),
             *(
-                [f"在预测时点（ICU 入院后 {risk_set:g} h）之后仍在 ICU 内"]
+                [
+                    f"在预测时点（ICU 入院后 {risk_set:g} h）之后仍在 ICU 内"
+                    + ("且此前无记录死亡" if _deaths_read_by_time(request) else "")
+                ]
                 if risk_set is not None
                 else []
             ),
@@ -185,6 +228,11 @@ def _population_item(
         *(
             [
                 f"are still in the ICU after the prediction time ({risk_set:g} h after ICU admission)"
+                + (
+                    " with no death recorded before it"
+                    if _deaths_read_by_time(request)
+                    else ""
+                )
             ]
             if risk_set is not None
             else []
@@ -196,6 +244,29 @@ def _population_item(
         + (" that " + " and ".join(qualifiers) if qualifiers else "")
         if restricted
         else "All input rows of the study cohort"
+    )
+
+
+def _risk_set_assumption(request: FamilySpecRequest) -> str:
+    """What the risk set leaves unchecked, and why a death before it may stay."""
+
+    if _deaths_read_by_time(request):
+        return (
+            "A stay leaves the analysis by leaving the ICU by the prediction time, or by a "
+            "death recorded before it; a death without a recorded time, and an outcome event "
+            "other than death that does not end the ICU stay before it, are not excluded."
+        )
+    unchecked = (
+        "A stay leaves the analysis only by leaving the ICU, alive or dead, by the "
+        "prediction time; an outcome event that does not end the ICU stay before it "
+        "is not excluded."
+    )
+    why = _death_time_not_read(request, "en")
+    if not why:
+        return unchecked
+    return (
+        f"{unchecked} Nor is a death recorded before the prediction time while the stay "
+        f"remains in the ICU: {why}."
     )
 
 
@@ -267,15 +338,7 @@ def _design_selection(
         assumptions=[
             "Predictor timestamps separate the observation window from information after the outcome.",
             f"{unit_text[0].upper()}{unit_text[1:]}.",
-            *(
-                [
-                    "A stay leaves the analysis only by leaving the ICU, alive or dead, by the "
-                    "prediction time; an outcome event that does not end the ICU stay before it "
-                    "is not excluded."
-                ]
-                if risk_set is not None
-                else []
-            ),
+            *([_risk_set_assumption(request)] if risk_set is not None else []),
         ],
         literature_citation_keys=[*method_keys, *comparator_keys][:8],
         literature_design_decisions=list(spec.literature_design_decisions),
@@ -303,7 +366,16 @@ def _design_selection(
                 f"预测变量为 {listing([_label(spec, name) for name in predictors], language)}，"
                 f"每项均在 {hours_zh} 内测量，并按行汇总。",
                 (
-                    f"{outcome}，取自这些入住的结局记录；在预测时点之前离开 ICU（存活或死亡）的入住不纳入分析。"
+                    f"{outcome}，取自这些入住的结局记录；在预测时点之前离开 ICU（存活或死亡）"
+                    + ("或在此之前有记录死亡" if _deaths_read_by_time(request) else "")
+                    + "的入住不纳入分析。"
+                    + (
+                        "仍在 ICU 内、但在预测时点之前已有记录死亡的入住未被排除，因为"
+                        + _death_time_not_read(request, language)
+                        + "。"
+                        if _death_time_not_read(request, language)
+                        else ""
+                    )
                     if risk_set is not None
                     else f"{outcome}，取自结局记录。"
                 ),
@@ -319,7 +391,21 @@ def _design_selection(
                 f"Predictors {predictor_text}, each measured inside {hours} and aggregated per row.",
                 sentence(
                     f"{outcome}, from the outcome record of these stays; a stay that left the ICU, "
-                    "alive or dead, by the prediction time is not analyzed."
+                    "alive or dead, by the prediction time"
+                    + (
+                        ", or with a death recorded before it,"
+                        if _deaths_read_by_time(request)
+                        else ""
+                    )
+                    + " is not analyzed."
+                    + (
+                        " A stay still in the ICU with a death recorded before the prediction "
+                        "time is not excluded, as "
+                        + _death_time_not_read(request, language)
+                        + "."
+                        if _death_time_not_read(request, language)
+                        else ""
+                    )
                     if risk_set is not None
                     else f"{outcome}, from the outcome record."
                 ),

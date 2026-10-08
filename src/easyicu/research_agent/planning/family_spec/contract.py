@@ -12,10 +12,12 @@ from them and cites only a card that states that dimension.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Mapping, Optional, Sequence
+from typing import Any, Literal, Mapping, Optional, Sequence, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ....utils.death_time_semantics import DEATH_STATUS, death_time_read_to_the_hour
+from ....utils.time_units import ICU_TIME_PRE_ADMISSION_HOURS
 from ...canonical_json import canonical_sha256
 from ...contracts.primary_cohort import (
     STUDY_POPULATION_PRODUCTS,
@@ -360,8 +362,69 @@ def sealed_cohort_predicate(item: Any) -> ProgressiveCohortPredicate:
     )
 
 
+#: Why a prediction's risk set does not read deaths before its prediction time.
+PredictionDeathTimeReason = Literal[
+    "death_time_resolution",
+    "death_time_semantics_unrecorded",
+    "death_status_absent",
+    "death_time_companion_absent",
+]
+
+
+class PredictionDeathTime(BaseModel):
+    """How a static prediction's risk set reads deaths before its prediction time.
+
+    ``los_icu`` keeps the stays still in the ICU after the prediction time,
+    but a stay can stay in the ICU after its recorded death (an ICU discharge
+    recorded after the death), so a stay that died before the prediction can
+    remain.  Where the source records the death's time to the hour, the risk
+    set also keeps only the stays without a death recorded before it, read by
+    that time (``applied``).  Otherwise ``reason`` says why it does not:
+
+    * ``death_time_resolution``: the export's death time is a date, a proxy
+      or none (``semantics`` is its producer's label);
+    * ``death_time_semantics_unrecorded``: the export labels no death time
+      that the producer's vocabulary classifies;
+    * ``death_status_absent``: the roster has no death status with two
+      closed levels;
+    * ``death_time_companion_absent``: the roster types no death time as the
+      death's time after ICU admission.
+
+    ``absent_level`` is the death status's level for no death, which the
+    risk set's predicate compares with.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    applied: bool
+    semantics: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    reason: Optional[PredictionDeathTimeReason] = None
+    absent_level: Optional[Union[bool, float]] = None
+
+    @model_validator(mode="after")
+    def _applied_or_why_not(self) -> "PredictionDeathTime":
+        if self.applied:
+            if (
+                self.reason is not None
+                or self.absent_level is None
+                or death_time_read_to_the_hour(self.semantics or "") is not True
+            ):
+                raise ValueError(
+                    "a risk set reads deaths by a death time recorded to the hour, "
+                    "compares the level for no death, and states no reason"
+                )
+        elif self.reason is None or self.absent_level is not None:
+            raise ValueError(
+                "a risk set that does not read deaths by their time states why"
+            )
+        return self
+
+
 def prediction_risk_set_predicates(
-    *, prediction_time_hours: float, icu_stay_unit: str
+    *,
+    prediction_time_hours: float,
+    icu_stay_unit: str,
+    death_time: Optional[PredictionDeathTime] = None,
 ) -> list[ProgressiveCohortPredicate]:
     """The cohort predicates of a static prediction's risk set.
 
@@ -371,10 +434,18 @@ def prediction_risk_set_predicates(
     (days, the dictionary's unit, or hours) and decided at that time.  The
     family template and the check of a caller-bound population both read the
     risk set from here.
+
+    Where the risk set reads deaths by their time (``death_time.applied``), a
+    second predicate keeps the stays without a death recorded before the
+    prediction time: the death status equals its level for no death over the
+    export's pre-admission context up to the prediction time, a window the
+    cohort builder reads by the death's recorded time.  A death at the
+    prediction time or later, or one without a recorded time, stays.  It is a
+    row of its own in the cohort's ledger.
     """
 
     hours_per_unit = 1.0 if icu_stay_unit == "hours" else 24.0
-    return [
+    predicates = [
         ProgressiveCohortPredicate(
             concept_id="los_icu",
             anchor="icu_admission",
@@ -388,6 +459,19 @@ def prediction_risk_set_predicates(
             ),
         )
     ]
+    if death_time is not None and death_time.applied:
+        predicates.append(
+            ProgressiveCohortPredicate(
+                concept_id=DEATH_STATUS,
+                anchor="icu_admission",
+                start_offset_hours=-float(ICU_TIME_PRE_ADMISSION_HOURS),
+                end_offset_hours=float(prediction_time_hours),
+                aggregation="any",
+                op="==",
+                value=_closed_predicate_value(death_time.absent_level),
+            )
+        )
+    return predicates
 
 
 def _closed_predicate_value(value: Any) -> ProgressivePredicateValue:
@@ -533,6 +617,13 @@ class FamilySpecRequest(BaseModel):
     #: digest when false, like the minimum stay.
     caller_binds_all_input_rows: bool = Field(
         default=False, exclude_if=lambda value: not value
+    )
+    #: How the prediction's risk set reads deaths before its prediction time,
+    #: set only when the context records what the export's death time is.
+    #: Omitted from the digest when absent, like the minimum stay, so a
+    #: request built before the record keeps its identity.
+    prediction_death_time: Optional[PredictionDeathTime] = Field(
+        default=None, exclude_if=lambda value: value is None
     )
     #: A concept-derived population (``sepsis3`` ...) and the hour after ICU
     #: admission by which a positive concept row admits a stay.  Omitted from
@@ -865,10 +956,23 @@ class FamilySpecRequest(BaseModel):
                     "a prediction time is the end of the observation window, and the stays "
                     "still in the ICU after it filter the cohort"
                 )
-        if self.proposed_suite is not None and self.family_id != LANDMARK_SURVIVAL_FAMILY_ID:
-            raise ValueError("proposed suite coordinates belong to the landmark survival family")
-        if self.prediction_time_hours is not None and self.family_id != PREDICTION_FAMILY_ID:
+        if (
+            self.proposed_suite is not None
+            and self.family_id != LANDMARK_SURVIVAL_FAMILY_ID
+        ):
+            raise ValueError(
+                "proposed suite coordinates belong to the landmark survival family"
+            )
+        if (
+            self.prediction_time_hours is not None
+            and self.family_id != PREDICTION_FAMILY_ID
+        ):
             raise ValueError("a prediction time belongs to the prediction family")
+        if (
+            self.prediction_death_time is not None
+            and self.prediction_time_hours is None
+        ):
+            raise ValueError("a death reading belongs to a prediction's risk set")
         if self.caller_binds_all_input_rows and (
             self.prediction_time_hours is None or self.population_concepts
         ):
@@ -1698,6 +1802,8 @@ __all__ = [
     "accepted_baseline_additions",
     "literature_design_card_keys_by_dimension",
     "population_required",
+    "PredictionDeathTime",
+    "PredictionDeathTimeReason",
     "prediction_risk_set_predicates",
     "sealed_cohort_predicate",
     "spec_from_mapping",

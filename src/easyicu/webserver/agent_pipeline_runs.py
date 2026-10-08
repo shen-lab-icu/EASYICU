@@ -128,6 +128,7 @@ from easyicu.webserver.research_launch_scientific import (
     _runtime_projection_sensitivity_specs,
     _target_outcome,
     _validate_trajectory_design,
+    bound_export_event_time_semantics,
     bound_export_selection_basis,
     resolve_study_analysis_design,
     validate_analysis_design_for_execution,
@@ -2073,6 +2074,7 @@ def _research_user_preferences(
     patient_grouping: Optional[PatientGroupingBinding] = None,
     cohort_study: Optional[Mapping[str, Any]] = None,
     source_selection_basis: Optional[SelectionBasis] = None,
+    event_time_semantics: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
     """Compile StudyContext into the existing strict preference contract.
 
@@ -2084,6 +2086,10 @@ def _research_user_preferences(
     selection that produced the bound export's rows
     (``bound_export_selection_basis``); ``data_constraints.source_selection``
     carries it, with the declared criteria the host applies itself.
+    ``event_time_semantics`` is what each event time the bound export issues
+    is, as its producer labels it (``bound_export_event_time_semantics``);
+    ``data_constraints.event_time_semantics`` carries it, empty when the
+    export labels none.
     """
 
     preferences: Dict[str, Any] = {}
@@ -2193,6 +2199,11 @@ def _research_user_preferences(
                 cohort_study if cohort_study is not None else study
             ),
         }
+    if event_time_semantics is not None:
+        # What the bound export's death time is (a recorded time, a date, a
+        # proxy or none): a prediction's risk set reads deaths before its
+        # prediction time only by a time recorded to the hour.
+        constraints["event_time_semantics"] = dict(event_time_semantics)
     if isinstance(confirmations, Mapping) and confirmations:
         constraints["confirmations"] = dict(confirmations)
     if analysis_design:
@@ -6212,6 +6223,7 @@ def make_research_pipeline_run_runner(
                 patient_grouping=patient_grouping,
                 cohort_study=study,
                 source_selection_basis=source_selection_basis,
+                event_time_semantics=bound_export_event_time_semantics(export_path),
             )
             _progress(
                 job,

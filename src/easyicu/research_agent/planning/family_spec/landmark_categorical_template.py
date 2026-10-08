@@ -643,7 +643,9 @@ def typed_bound_predicates(
         # The caller bound every input row: the age and stay bounds describe
         # that population, and only the prediction's risk set filters it.
         return prediction_risk_set_predicates(
-            prediction_time_hours=risk_set, icu_stay_unit=request.icu_stay_unit
+            prediction_time_hours=risk_set,
+            icu_stay_unit=request.icu_stay_unit,
+            death_time=request.prediction_death_time,
         )
     predicates: list[ProgressiveCohortPredicate] = []
     if request.age_min is not None:
@@ -666,12 +668,15 @@ def typed_bound_predicates(
         )
     if risk_set is not None:
         # A static prediction model's stays are those still in the ICU after
-        # its prediction time, which is its time zero: alive at it, and with
-        # no outcome that ended the stay before the prediction.  A minimum
-        # stay up to that time is implied and adds no predicate of its own.
+        # its prediction time, which is its time zero, and, where the source
+        # records the death's time to the hour, without a death recorded
+        # before it.  A minimum stay up to that time is implied and adds no
+        # predicate of its own.
         predicates.extend(
             prediction_risk_set_predicates(
-                prediction_time_hours=risk_set, icu_stay_unit=request.icu_stay_unit
+                prediction_time_hours=risk_set,
+                icu_stay_unit=request.icu_stay_unit,
+                death_time=request.prediction_death_time,
             )
         )
     return predicates

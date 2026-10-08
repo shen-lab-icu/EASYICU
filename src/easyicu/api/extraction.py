@@ -21,6 +21,12 @@ from ..base import BaseICULoader, detect_database_type, get_default_data_path
 from ..concept.catalog import CONCEPT_GROUPS_INTERNAL
 from ..config import DATABASE_ID_CONFIG
 from ..resources import load_dictionary
+from ..utils.death_time_semantics import (
+    DEATH_STATUS,
+    DEATH_TIME_COMPANION,
+    NATIVE_EXPORT_DEATH_TIME_SEMANTICS as _NATIVE_EXPORT_DEATH_TIME_SEMANTICS,
+    native_export_death_time_semantics,
+)
 from ..scores.sofa2_aggregate import (
     SOFA2_COMPONENT_NAMES,
     sofa2_total_structurally_supported,
@@ -4182,23 +4188,11 @@ _SOFA1_COMPONENT_NAMES = (
 # but selected event concepts still carry an owner-authorized event timestamp
 # before that normalization.  Preserve that timestamp as a typed companion
 # rather than overloading the module-wide charttime column.
-_NATIVE_EXPORT_EVENT_TIME_COMPANIONS = {"death": "death_time"}
+_NATIVE_EXPORT_EVENT_TIME_COMPANIONS = {DEATH_STATUS: DEATH_TIME_COMPANION}
 
-# eICU's death concept is indexed by ICU discharge offset while its status is
-# hospital-discharge mortality.  That coordinate is not time of death and must
-# therefore remain unavailable.  HiRID is intentionally retained but labelled
-# as a proxy: its ricu-compatible death callback places a recorded death at the
-# last observation of variables 110/200.
-_NATIVE_EXPORT_DEATH_TIME_SEMANTICS = {
-    "miiv": "recorded_deathtime",
-    "miiv_demo": "recorded_deathtime",
-    "mimic": "recorded_deathtime",
-    "mimic_demo": "recorded_deathtime",
-    "aumc": "recorded_dateofdeath_for_72h_post_icu_discharge_death_proxy",
-    "hirid": "last_recorded_observation_proxy_for_dead_discharge",
-    "sic": "recorded_offset_of_death_for_hospital_discharge_death",
-    "sic_demo": "recorded_offset_of_death_for_hospital_discharge_death",
-}
+# Each source's death time is labelled by ``utils.death_time_semantics``, which
+# owns the labels and whether an hour can be read from each.  eICU's is
+# structurally unavailable: its death row sits at the ICU discharge offset.
 
 
 def _native_export_physical_value_columns(
@@ -6006,13 +6000,8 @@ def _enforce_native_export_time_axis(
             audit.update(
                 {
                     "event_time_companion": "death_time",
-                    "event_time_semantics": _NATIVE_EXPORT_DEATH_TIME_SEMANTICS.get(
-                        normalized_database,
-                        (
-                            "source_event_time"
-                            if not normalized_database
-                            else "structurally_unavailable"
-                        ),
+                    "event_time_semantics": native_export_death_time_semantics(
+                        normalized_database
                     ),
                     "event_rows": int(death_event.sum()),
                     "timed_event_rows": int((death_event & timed).sum()),

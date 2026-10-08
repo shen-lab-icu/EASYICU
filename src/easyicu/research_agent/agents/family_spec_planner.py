@@ -370,8 +370,17 @@ def _population_authority(request: FamilySpecRequest) -> dict[str, Any]:
             ("age_min", request.age_min if bounds else None),
             ("age_max", request.age_max if bounds else None),
             ("minimum_icu_hours", request.minimum_icu_hours if bounds else None),
-            # A prediction model's stays: still in the ICU after it predicts.
+            # A prediction model's stays: still in the ICU after it predicts,
+            # and, where deaths are read by their time, none recorded before it.
             ("still_in_icu_after_prediction_time_hours", request.prediction_time_hours if typed else None),
+            (
+                "no_death_recorded_before_prediction_time_hours",
+                request.prediction_time_hours
+                if typed
+                and request.prediction_death_time is not None
+                and request.prediction_death_time.applied
+                else None,
+            ),
             ("source_concept_population", request.concept_cohort_definition),
             ("source_concept_population_window_end_hours", request.concept_cohort_window_end_hours),
             ("source_inclusion_contracts", list(request.source_applied_inclusion) or None),
