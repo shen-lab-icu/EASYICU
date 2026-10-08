@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Union, Any
+from typing import Dict, List, Optional, Tuple, Union, Any
 from dataclasses import dataclass
 
 import pandas as pd
@@ -47,6 +47,42 @@ class PatientFilterCriterionError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.criterion = criterion
+
+
+def _kept(mask: pd.Series) -> pd.Series:
+    """A selection mask as plain booleans; a missing verdict keeps no row."""
+
+    return mask.astype("boolean").fillna(False).astype(bool)
+
+
+def _selection_step(
+    criterion: str,
+    before: pd.Series,
+    after: pd.Series,
+    missing: pd.Series,
+    **parameters: Any,
+) -> Dict[str, Any]:
+    """One criterion's count of the stays it excluded, as a flow diagram states it.
+
+    ``before`` and ``after`` are the selection masks around the criterion, so a
+    stay another criterion already excluded is not counted again.
+    ``n_excluded_missing`` counts the excluded stays with no value for the
+    criterion, which it excluded for want of one.
+    """
+
+    kept_before = _kept(before)
+    kept_after = _kept(after)
+    excluded = kept_before & ~kept_after
+    return {
+        "criterion": criterion,
+        "parameters": {
+            name: value for name, value in parameters.items() if value is not None
+        },
+        "n_before": int(kept_before.sum()),
+        "n_excluded": int(excluded.sum()),
+        "n_remaining": int(kept_after.sum()),
+        "n_excluded_missing": int((excluded & missing.astype(bool)).sum()),
+    }
 
 
 def _hospital_survival_from_expire_flag(values: pd.Series) -> pd.Series:
@@ -193,6 +229,8 @@ class PatientFilter:
         self._icustays: Optional[pd.DataFrame] = None
         self._last_criteria: Optional[FilterCriteria] = None
         self._last_result: Optional[pd.DataFrame] = None
+        self._last_original_count: Optional[int] = None
+        self._last_selection_steps: Tuple[Dict[str, Any], ...] = ()
         
     def _load_demographics(self) -> pd.DataFrame:
         """加载人口统计学数据"""
@@ -712,6 +750,8 @@ class PatientFilter:
         df = self._load_demographics()
         original_count = len(df)
         self._last_original_count = original_count
+        self._last_selection_steps = ()
+        steps: List[Dict[str, Any]] = []
         
         if self.verbose:
             logger.info(f"开始筛选: 原始患者数 {original_count}")
@@ -735,12 +775,17 @@ class PatientFilter:
                 )
         
         # 年龄筛选
+        before = mask.copy()
+        age_missing = pd.Series(False, index=df.index)
         if (
             (age_min is not None or age_max is not None)
             and {'age_lower', 'age_upper'}.issubset(df.columns)
         ):
             lower = pd.to_numeric(df['age_lower'], errors='coerce')
             upper = pd.to_numeric(df['age_upper'], errors='coerce')
+            # An interval without either bound is an age the source lacks; an
+            # open interval (90 and over) is an age it states.
+            age_missing = lower.isna() & upper.isna()
             if age_min is not None:
                 split = lower.lt(age_min) & (upper.isna() | upper.ge(age_min))
                 if split.any():
@@ -762,33 +807,86 @@ class PatientFilter:
                     )
                 mask &= upper.le(age_max).fillna(False)
         else:
+            if age_min is not None or age_max is not None:
+                age_missing = df['age'].isna()
             if age_min is not None:
                 mask &= df['age'] >= age_min
             if age_max is not None:
                 mask &= df['age'] <= age_max
+        if age_min is not None or age_max is not None:
+            steps.append(
+                _selection_step(
+                    'age', before, mask, age_missing, age_min=age_min, age_max=age_max
+                )
+            )
         
         # 首次入ICU
         if first_icu_stay is not None:
+            before = mask.copy()
             mask &= df['first_icu_stay'] == first_icu_stay
+            steps.append(
+                _selection_step(
+                    'first_icu_stay',
+                    before,
+                    mask,
+                    df['first_icu_stay'].isna(),
+                    first_icu_stay=first_icu_stay,
+                )
+            )
         
         # 住院时长
-        if los_min is not None:
-            mask &= df['los_hours'] >= los_min
-        if los_max is not None:
-            mask &= df['los_hours'] <= los_max
+        if los_min is not None or los_max is not None:
+            before = mask.copy()
+            if los_min is not None:
+                mask &= df['los_hours'] >= los_min
+            if los_max is not None:
+                mask &= df['los_hours'] <= los_max
+            steps.append(
+                _selection_step(
+                    'los',
+                    before,
+                    mask,
+                    df['los_hours'].isna(),
+                    los_min=los_min,
+                    los_max=los_max,
+                )
+            )
         
         # 性别
         if gender is not None:
+            before = mask.copy()
             mask &= df['gender'].str.upper() == gender.upper()
+            steps.append(
+                _selection_step(
+                    'gender', before, mask, df['gender'].isna(), gender=gender
+                )
+            )
         
         # 存活状态
         if survived is not None:
+            before = mask.copy()
             mask &= df['survived'] == survived
+            steps.append(
+                _selection_step(
+                    'survived', before, mask, df['survived'].isna(), survived=survived
+                )
+            )
         
         # Sepsis筛选（需要额外处理）
         if has_sepsis is not None:
+            before = mask.copy()
             positive_ids, negative_ids = self._get_sepsis_status_ids()
             mask &= df['patient_id'].isin(positive_ids if has_sepsis else negative_ids)
+            # A stay neither set holds has no Sepsis-3 status.
+            steps.append(
+                _selection_step(
+                    'has_sepsis',
+                    before,
+                    mask,
+                    ~df['patient_id'].isin(positive_ids | negative_ids),
+                    has_sepsis=has_sepsis,
+                )
+            )
         
         # 应用筛选
         result = df[mask].copy()
@@ -796,6 +894,7 @@ class PatientFilter:
         # 保存结果
         self._last_criteria = criteria
         self._last_result = result
+        self._last_selection_steps = tuple(steps)
         
         if self.verbose:
             logger.info(f"筛选完成: {len(result)}/{original_count} ({len(result)/original_count*100:.1f}%)")
@@ -805,6 +904,22 @@ class PatientFilter:
         else:
             return result['patient_id'].tolist()
     
+    def last_selection_steps(self) -> Tuple[Dict[str, Any], ...]:
+        """The last filter's criteria in the order it applied them, with their counts.
+
+        One entry per requested criterion (``age``, ``first_icu_stay``,
+        ``los``, ``gender``, ``survived``, ``has_sepsis``): the stays before
+        it, the stays it excluded (``n_excluded_missing`` of them for want of
+        a value) and the stays left.  A stay is counted under the first
+        criterion that excludes it, so the steps add up to the stays the
+        filter dropped.  Empty before a filter has run.
+        """
+
+        return tuple(
+            {**step, "parameters": dict(step["parameters"])}
+            for step in self._last_selection_steps
+        )
+
     def _get_sepsis_patients(self) -> set:
         """Compatibility projection: observed Sepsis-3 positives only."""
         return self._get_sepsis_status_ids()[0]

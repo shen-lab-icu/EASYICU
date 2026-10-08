@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Dict, List, Mapping, Optional, Union
+from typing import Callable, Dict, List, Mapping, MutableMapping, Optional, Union
 
 import pandas as pd
 
@@ -41,6 +41,13 @@ def get_patient_table_for_database(
         ) from exc
 
 
+#: The loader's sample for a source without a stay table, passed explicitly so
+#: that the order the discovery records is the order it took.
+_LOADER_SAMPLE_STRATEGY = "sorted"
+#: The order each sample strategy returns IDs in.
+_SAMPLE_ORDER = {"sorted": "identifier_order", "random": "seeded_random_sample"}
+
+
 def get_all_patient_ids_impl(
     data_path: Union[str, Path],
     *,
@@ -50,8 +57,17 @@ def get_all_patient_ids_impl(
     sample_patient_ids_fn: Callable[..., Optional[List]],
     database: Optional[str] = None,
     max_patients: Optional[int] = None,
+    listing: Optional[MutableMapping[str, str]] = None,
 ) -> tuple[List, str]:
-    """Discover the stay universe without turning read failures into emptiness."""
+    """Discover the stay universe without turning read failures into emptiness.
+
+    ``listing`` is an output parameter.  When given, the discovery writes the
+    order its IDs come in under ``order``: ``source_file_order`` as the
+    source's stay table lists them (shards in file-name order), or the order
+    of the loader's sample for a source without such a table
+    (``identifier_order`` for the sorted sample it takes).  It writes nothing
+    when no ID could be sampled.  A cap keeps the first IDs in that order.
+    """
     resolved_database = database or detect_database_type_fn(data_path)
     id_col = get_id_col_for_database(
         resolved_database,
@@ -115,8 +131,14 @@ def get_all_patient_ids_impl(
                     loader,
                     max_patients or 999_999_999,
                     verbose=False,
+                    sample_strategy=_LOADER_SAMPLE_STRATEGY,
                 )
+                if listing is not None and sampled is not None:
+                    listing["order"] = _SAMPLE_ORDER[_LOADER_SAMPLE_STRATEGY]
                 return list(sampled or []), id_col
+
+        if listing is not None:
+            listing["order"] = "source_file_order"
 
         if max_patients and len(all_ids) > max_patients:
             all_ids = all_ids[:max_patients]

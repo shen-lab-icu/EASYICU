@@ -1774,10 +1774,12 @@ def _resolve_export_cohort(
 
     if not filters_active:
         emit("all_icu_ids", preset=normalized["preset"])
+        listing: Dict[str, str] = {}
         ids_list, id_col = api.get_all_patient_ids(
             str(data_path),
             database=_database_for_patient_filter(database),
             max_patients=max_n or None,
+            listing=listing,
         )
         emit(
             "all_icu_selected", selected=len(ids_list), max_patients_applied=bool(max_n)
@@ -1789,9 +1791,35 @@ def _resolve_export_cohort(
             "cohort_contract": normalized,
             "cohort_report": {
                 "mode": "all_icu",
+                "count_unit": "icu_stay",
                 "selected": len(ids_list),
                 "max_patients_applied": bool(max_n),
                 "applied_filters": [],
+                # Below its cap (or without one) the export holds every ICU
+                # stay of the source; a full cap leaves the source's count
+                # unknown, and may have cut stays.
+                **(
+                    {
+                        "source_total": len(ids_list),
+                        "selected_before_cap": len(ids_list),
+                    }
+                    if not max_n or len(ids_list) < max_n
+                    else {}
+                ),
+                **(
+                    {
+                        # The first stays in the order the discovery read
+                        # them: the stay table's file order, or the loader's
+                        # ID order when the source has no such table.
+                        "cap": {
+                            "max_patients": max_n,
+                            "rule": listing.get("order") or "unrecorded",
+                            "cut": None if len(ids_list) >= max_n else False,
+                        }
+                    }
+                    if max_n
+                    else {}
+                ),
             },
             "sepsis_load_kwargs": sepsis_load_kwargs,
         }
@@ -1826,6 +1854,13 @@ def _resolve_export_cohort(
         return_dataframe=True,
     )
     source_total = _positive_int(getattr(pf, "_last_original_count", None))
+    # Each demographic criterion with the stays it excluded.  A filter that
+    # does not count them leaves the report as before: its criteria then stand
+    # as one step.
+    counted_steps = getattr(pf, "last_selection_steps", None)
+    demographic_steps = (
+        [dict(step) for step in counted_steps()] if callable(counted_steps) else None
+    )
     if "patient_id" not in filtered.columns:
         raise ExportCohortError(
             "cohort_filter_missing_patient_id", {"database": database}
@@ -1910,13 +1945,30 @@ def _resolve_export_cohort(
         "cohort_contract": normalized,
         "cohort_report": {
             "mode": normalized["preset"],
+            "count_unit": "icu_stay",
             "source_total": source_total,
             "selected": len(ids),
             "selected_before_cap": uncapped,
             "selected_before_concept_prefilter": before_concept,
+            **(
+                {"demographic_steps": demographic_steps}
+                if demographic_steps is not None
+                else {}
+            ),
             "concept_matches": concept_matches,
             "selected_before_icd": before_icd,
             "max_patients_applied": bool(max_n and uncapped > max_n),
+            **(
+                {
+                    "cap": {
+                        "max_patients": max_n,
+                        "rule": "identifier_text_order",
+                        "cut": uncapped > max_n,
+                    }
+                }
+                if max_n
+                else {}
+            ),
             "applied_filters": applied,
             "icd": {
                 "enabled": normalized["icd_enabled"],
