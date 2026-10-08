@@ -77,5 +77,23 @@
     "No independent clinical event-key completeness certification from trace self-consistency alone.",
     "No scientific cohort eligibility, reward or endpoint recomputation.",
     "No raw clinical extraction or scientific release in this round."
-  ]
+  ],
+  "review_reference_addendum": {
+    "date": "2026-10-09",
+    "source_implementation_commit_unchanged": "4edfb6695ba848206c76dbc34bcb1877b351031e",
+    "earlier_reference_status": "The 26-check message and 9e4d970e0014b312886ff163af52190e67f90a20be63ffee0de0637dd29584d1 captured an intermediate working-tree test. That test snapshot was not persisted as a Git version and must not be advertised as independently retrievable/replayable. Earlier fields are retained as historical evidence.",
+    "final_review_repository": "02-study2-trajactory-clustering",
+    "final_review_commit": "6554b44384c598a4f5ce4ee6e770ce6b1083ee1a",
+    "test_path": "code/tests/test_m2_measurement_source_review.py",
+    "test_sha256": "850015144e5b608821bd25905de3d8bc7c6fe635e6efc7fbdae53386a2a26203",
+    "report_path": "results/evidence/16_第二代亚型计划/M2-A143_AHRF核心轨迹多库运输/MIIV_SCOPED_SOURCE_REVIEW.md",
+    "receipt_path": "results/evidence/16_第二代亚型计划/M2-A143_AHRF核心轨迹多库运输/respiratory_channel_lineage/m2-a143-respiratory-channel-lineage-v6-20261008a/scoped_source_independent_review.json",
+    "final_passed": 39,
+    "seconds": 6.32,
+    "additional_owner_archive_end_to_end_independently_run_passed": 1,
+    "claim_ceiling": "finite synthetic API and producer review; checks are not disjoint from owner 101; dependent producer/verifier bytes are separately SHA-bound in the M2 receipt; no real patient certification",
+    "producer_timezone_followup": "resolved in final review; the previous intermediate pending note is retained as chronology",
+    "original_source_sha256_scope": "Original source_sha256 records the source/test/document snapshot at implementation commit 4edfb669; the implementation and test bytes are unchanged, only this addendum changes the document.",
+    "updated_document_sha256": "f2d1efe3c8d423f866a9c41b3586b404a024ffd3020e0ff7d843f3cbfb6b9b9a"
+  }
 }
