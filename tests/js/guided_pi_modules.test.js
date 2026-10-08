@@ -89,7 +89,24 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   assert.match(familyStop, /progressive_family_spec_accepted_baseline_grouping_unsupported/);
   assert.match(familyStop, /no analysis was run/);
   assert.doesNotMatch(familyStop, /variable level or model term/);
-  assert.match(runFailure('research_pipeline_progressive_compile_failed', { code: 'progressive_step_invalid' }), /variable level or model term/);
+  // Any other candidate-plan stop says only what is true of every such stop,
+  // with its code; the compile sentence is true only of a variable or level
+  // the data cannot resolve.
+  const planStop = runFailure('research_pipeline_progressive_compile_failed', { code: 'progressive_step_invalid' });
+  assert.match(planStop, /EasyICU check of the candidate plan \(code: progressive_step_invalid\)/);
+  assert.match(planStop, /no analysis was run/);
+  assert.doesNotMatch(planStop, /variable level or model term/);
+  assert.match(runFailureZh('research_pipeline_progressive_compile_failed', { code: 'progressive_step_invalid' }), /候选计划没有通过 EasyICU 的检查/);
+  ['progressive_unknown_variable', 'progressive_model_levels_unavailable'].forEach(code => {
+    assert.match(runFailure('research_pipeline_progressive_compile_failed', { code }), /variable level or model term/);
+  });
+  // Two owners of one result, and a reused result no earlier step produces,
+  // name their own cause.
+  const owners = runFailure('research_pipeline_progressive_compile_failed', { code: 'progressive_product_has_multiple_owners' });
+  assert.match(owners, /Two steps of the candidate plan produce the same result/);
+  assert.doesNotMatch(owners, /variable level or model term/);
+  assert.match(runFailure('research_pipeline_progressive_compile_failed', { code: 'progressive_outline_replay_producer_absent' }), /no earlier step runs/);
+  assert.match(runFailure('research_pipeline_progressive_compile_failed', { code: 'progressive_outline_trajectory_comparison_unowned' }), /trajectory groups/);
 
   // A prediction stop names the study change that lifts it, not the generic
   // family-template sentence.
