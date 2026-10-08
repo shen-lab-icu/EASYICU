@@ -1,7 +1,7 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/resources/coder.py"
+      "src/easyicu/research_agent/planning/cohort_contract.py"
     ],
     "summary_changes": {}
   },
@@ -694,9 +694,16 @@
         "src/easyicu/research_agent/resources/coder.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "planning/cohort_contract.py: the planning contract owns the event-status reading rule (event_status_reading) that the cohort builder and the time-zero rule share; source digest only, no measured context size changes.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/planning/cohort_contract.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "resources/coder.py: the Coder is told a cohort-flow row's n_excluded_missing describes its exclusion and selects no rows; source digest only, no measured context size changes.",
+  "baseline_reason": "planning/cohort_contract.py: the planning contract owns the event-status reading rule (event_status_reading) that the cohort builder and the time-zero rule share; source digest only, no measured context size changes.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -716,7 +723,7 @@
     "src/easyicu/research_agent/learning/store.py": "2a951e221b413c6e0c251382224acd3bba7bde8e23cca25812def65df0ef26d0",
     "src/easyicu/research_agent/planning/analysis_blueprint.py": "5330a604f9894c879ba400bee3b3ac1b617de1ce24425506139a5a29bb4020b2",
     "src/easyicu/research_agent/planning/analysis_types.py": "936b11fe41791a06369a20d930e6e1b3ec29a16c3bd71197f916e8fb9948bc4b",
-    "src/easyicu/research_agent/planning/cohort_contract.py": "559d20fb3b2f434764843c3557c4e62047cb479ef514418636a4e9f751aabdc1",
+    "src/easyicu/research_agent/planning/cohort_contract.py": "c0ae5113ce3dd9ab4461865e2b7586f62f81b52310ba43e1e26617e19dab0d9d",
     "src/easyicu/research_agent/planning/figure_strategy.py": "42b617ad40d993c585df27598613731ceedc2e4645f197a2cb96c54645f7cec2",
     "src/easyicu/research_agent/planning/study_design.py": "84e7d9c0974ca3d1f9deadcc22de065586a9be20fcdf66f101f931469b64cad0",
     "src/easyicu/research_agent/planning/study_design_playbook.py": "fa07ee36a06d560ca9266999516bf1f394c4ac522d5b1436bf689d274b07888d",

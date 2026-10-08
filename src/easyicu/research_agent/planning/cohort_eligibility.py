@@ -19,9 +19,11 @@ then.  A context's analysis ``time_windows`` are not a materialization
 record, so a column with neither record is refused as unrecorded.  A value
 fixed at admission passes: a demographic or identifier variable, or a
 stay-level concept the dictionary files under demographics.  An outcome the
-stay records at its end does not, an ICU length of stay of ``x`` is known at
-``x``, and any other stay-level value (a first-day severity score) carries no
-time the host can compare.  A column that holds an event's time after ICU
+stay records at its end does not, with one exception: an event status the
+cohort builder reads by the event's own recorded time, keeping the stays whose
+event is not in a window that ends by time zero (``_event_absence_decided``).
+An ICU length of stay of ``x`` is known at ``x``, and any other stay-level
+value (a first-day severity score) carries no time the host can compare.  A column that holds an event's time after ICU
 admission is not summarized over a window: ``< x`` and ``<= x`` are known at
 ``x``, and any other test only once the event happens.  A last observation
 time is a window summary like any other, since a later observation moves it.
@@ -41,6 +43,7 @@ from ..research_context.materialization_window import host_materialization_windo
 from ..research_context.temporal_semantics import normalise_time_anchor
 from ..schema import ResearchContext
 from .adjustment_authority import host_window_bound_roles
+from .cohort_contract import event_status_reading
 
 
 @dataclass(frozen=True)
@@ -286,7 +289,10 @@ def cohort_predicates_after_time_zero(
                 or {concept, column} & outcomes
                 or category == _STAY_END_CATEGORY
             ):
-                found.append(_with(item, reason="stay_outcome"))
+                if not _event_absence_decided(
+                    kind, predicate, concept, variables, time_zero_hours
+                ):
+                    found.append(_with(item, reason="stay_outcome"))
                 continue
             if role in _ADMISSION_ROLES or category == _ADMISSION_CATEGORY:
                 # Fixed at admission, whatever window the predicate names.
@@ -400,6 +406,62 @@ def _event_time(variable: Any) -> tuple[bool, float | None]:
     return True, _TIME_UNIT_HOURS.get(str(unit or "").strip())
 
 
+def event_status_read_by_its_time(variables: Mapping[str, Any], concept: str) -> bool:
+    """Whether the context types ``<concept>_time`` as the time of ``concept``'s event.
+
+    The cohort builder reads a windowed predicate on an event status by the
+    ``<concept>_time`` column beside it, as hours after ICU admission like the
+    window itself.  The context types that column as the event's time when its
+    observation semantics name ``concept`` as their event status and it counts
+    from ICU admission in hours (``_event_time``): a time in days or minutes
+    would be compared with the window as if it were hours.  The family-spec
+    risk set asks the same question before it writes such a predicate.
+    """
+
+    companion = variables.get(f"{concept}_time")
+    semantics = getattr(companion, "observation_semantics", None)
+    if companion is None or getattr(semantics, "event_status_column", None) != concept:
+        return False
+    event_time, hours_per_unit = _event_time(companion)
+    return event_time and hours_per_unit == 1.0
+
+
+def _event_absence_decided(
+    kind: str,
+    predicate: Mapping[str, Any],
+    concept: str,
+    variables: Mapping[str, Any],
+    time_zero_hours: float,
+) -> bool:
+    """Whether a test of an event status keeps the stays without the event by time zero.
+
+    An outcome's status is recorded at the stay's end.  The cohort builder
+    reads an equality on an event status over a finite window by the event's
+    own time instead (``<concept>_time``), and the stays it then keeps are
+    those whose event is not in the window: an inclusion of the event's
+    absence, or an exclusion of its occurrence (``event_status_reading``).
+    That is known when the window ends.  It holds only when the context types
+    that time: a ``<concept>_time`` column whose event status is the concept,
+    counted from ICU admission in hours.  Without one the builder
+    reads the status over the whole stay.  The window is anchored at ICU
+    admission, both its ends are finite and in order, and it ends by time zero.
+    """
+
+    reading = event_status_reading(
+        str(predicate.get("op") or ""), predicate.get("value")
+    )
+    if (kind, reading) not in {("inclusion", "absence"), ("exclusion", "occurrence")}:
+        return False
+    if not event_status_read_by_its_time(variables, concept):
+        return False
+    window = predicate.get("time_window") or {}
+    if str(window.get("anchor") or "").casefold() not in POPULATION_TIME_ZERO_ANCHORS:
+        return False
+    start = _number(window.get("start_offset_hours"))
+    end = _number(window.get("end_offset_hours"))
+    return start is not None and end is not None and start < end <= time_zero_hours
+
+
 def _event_time_decided_hours(
     predicate: Mapping[str, Any], hours_per_unit: float
 ) -> float | None:
@@ -469,5 +531,6 @@ __all__ = [
     "PredicateAfterTimeZero",
     "cohort_predicates_after_time_zero",
     "eligibility_after_time_zero",
+    "event_status_read_by_its_time",
     "predicate_context_column",
 ]

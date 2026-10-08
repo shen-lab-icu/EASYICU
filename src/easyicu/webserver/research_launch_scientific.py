@@ -760,6 +760,46 @@ def bound_export_selection_basis(
     return "unrecorded"
 
 
+def bound_export_event_time_semantics(export_path: Optional[str]) -> Dict[str, str]:
+    """What each event time the bound export issues is, as its producer labels it.
+
+    The native export labels every event-time companion it issues in the
+    outcome file's time-axis audit, ``death_time`` by the death time its source
+    records (``easyicu.utils.death_time_semantics``).  The launch reads the
+    label from the same manifest ``bound_export_selection_basis`` reads, once,
+    and planning reads it from ``data_constraints.event_time_semantics``; no
+    later stage opens the export again.  An export that labels none (written
+    before the label, a folder without a manifest, a prepared package) gives
+    an empty mapping, and so do two files that label one companion
+    differently: the launch still records it, so that planning can tell a
+    source whose death time nobody labelled from a context older than the
+    record.
+    """
+
+    if not export_path:
+        return {}
+    manifest = dataio.read_prepared_export_manifest(str(export_path))
+    if manifest is None:
+        return {}
+    labelled: Dict[str, str] = {}
+    for record in manifest.get("files") or []:
+        audit = record.get("time_axis_audit") if isinstance(record, Mapping) else None
+        if not isinstance(audit, Mapping):
+            continue
+        companion = audit.get("event_time_companion")
+        semantics = audit.get("event_time_semantics")
+        if not (isinstance(companion, str) and companion.strip()):
+            continue
+        if not (isinstance(semantics, str) and semantics.strip()):
+            continue
+        if (
+            labelled.setdefault(companion.strip(), semantics.strip())
+            != semantics.strip()
+        ):
+            return {}
+    return labelled
+
+
 def _neutral_materialization_scope(
     study: Mapping[str, Any], *, export_path: str
 ) -> Dict[str, Any]:

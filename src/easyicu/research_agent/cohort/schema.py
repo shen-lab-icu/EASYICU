@@ -53,6 +53,7 @@ from ..planning.cohort_contract import (
     concept_id_exists,
     default_pattern_registry,
     ensure_cohort_definition,
+    event_status_reading,
     expand_named_cohort,
     known_concept_ids,
     register_cohort_concept_ids,
@@ -1710,38 +1711,14 @@ def _event_time_flow_fields(
 _EVENT_TIME_ANCHORS = frozenset({"icu_admit", "icu_admission"})
 
 
-def _event_level(value: Any) -> Optional[int]:
-    """The event-status level (0 or 1) a predicate value names, if any."""
-
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, (int, float)) and value in (0, 1):
-        return int(value)
-    return None
-
-
 def _event_time_reading(pred: ConceptPredicate) -> Optional[str]:
     """Whether a predicate asks that an event happened, or that it did not.
 
-    An event status takes the levels 0 and 1. An equality predicate naming one
-    level reads the event's occurrence (``== 1``, ``!= 0``, ``in [1]``) or its
-    absence (``== 0``, ``!= 1``, ``not_in [1]``). Any other predicate -- a
-    magnitude filter, a missingness check, a value naming no level or both --
-    reads no occurrence, and no event window applies to it.
+    The planning contract owns the rule (``event_status_reading``); the
+    time-zero rule judges a windowed event predicate by the same one.
     """
 
-    if pred.op in {"==", "!="}:
-        values = [pred.value]
-    elif pred.op in {"in", "not_in"}:
-        values = pred.value if isinstance(pred.value, list) else [pred.value]
-    else:
-        return None
-    levels = {_event_level(value) for value in values}
-    if len(levels) != 1 or None in levels:
-        return None
-    (level,) = levels
-    occurs = (level == 1) == (pred.op in {"==", "in"})
-    return "occurrence" if occurs else "absence"
+    return event_status_reading(pred.op, pred.value)
 
 
 def _refine_occurrence_mask_by_event_time(
