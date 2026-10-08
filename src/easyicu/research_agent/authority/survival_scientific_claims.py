@@ -2,9 +2,12 @@
 
 The suite reports one constant adjusted hazard ratio when its prespecified
 proportional-hazards test does not reject the assumption, and adjusted
-interval-specific hazard ratios from its prespecified extended Cox model in
-every case.  Without host claims the strict Results grammar admits none of
-them, and a survival manuscript's Conclusion has no claim to read.
+interval-specific hazard ratios from its prespecified extended Cox model
+when the data allow them.  An interval model the data left without an
+estimate is reported with its reason; beside a rejected test, where the
+interval estimates are the result, it is refused.  Without host claims the
+strict Results grammar admits none of these estimates, and a survival
+manuscript's Conclusion has no claim to read.
 
 The suite opts in with a versioned ``easyicu.survival_reporting/2`` envelope.
 Its coordinates are typed here, the reported estimate follows from the
@@ -20,10 +23,11 @@ answer.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Mapping
+from typing import Any, Literal, Mapping, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..methods.time_varying_cox import TimeVaryingNotEstimableReason
 from .prespecified_rule_outcomes import (
     RULE_OUTCOMES_KEY,
     ProportionalHazardsTestOutcome,
@@ -105,6 +109,27 @@ class _TimeVaryingAssociation(BaseModel):
         return self
 
 
+class _TimeVaryingNotEstimable(BaseModel):
+    """A prespecified interval model the data left without an estimate, and why."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    status: Literal["not_estimable"]
+    reason: TimeVaryingNotEstimableReason
+    method: Literal["piecewise_time_varying_cox"]
+    adjustment_columns: list[str]
+
+
+def _interval_estimates(
+    association: "_TimeVaryingAssociation | _TimeVaryingNotEstimable",
+) -> list[_IntervalHazardRatio]:
+    """The interval estimates; none when the model was not estimable."""
+
+    if isinstance(association, _TimeVaryingAssociation):
+        return list(association.intervals)
+    return []
+
+
 class _PrevalenceSensitivityFit(BaseModel):
     """One re-fit that also excluded exposed records first recorded by ``hours``.
 
@@ -158,7 +183,9 @@ class SurvivalReporting(BaseModel):
     proportional_hazards_status: str = Field(min_length=1)
     proportional_hazards_test: ProportionalHazardsTestOutcome
     rmst: dict[str, Any]
-    time_varying_adjusted_association: _TimeVaryingAssociation
+    time_varying_adjusted_association: Union[
+        _TimeVaryingAssociation, _TimeVaryingNotEstimable
+    ]
     manuscript_projection: dict[str, Any]
     prevalence_definition_sensitivity: _PrevalenceSensitivity | None = None
 
@@ -175,11 +202,17 @@ class SurvivalReporting(BaseModel):
             raise ValueError("the PH status contradicts the PH test outcome")
         if self.time_varying_adjusted_association.adjustment_columns != self.adjustment_columns:
             raise ValueError("the interval model must adjust for the sealed covariates")
+        if rejected and not isinstance(
+            self.time_varying_adjusted_association, _TimeVaryingAssociation
+        ):
+            raise ValueError(
+                "a rejected PH test makes the interval estimates the result"
+            )
         if len(set(self.adjustment_columns)) != len(self.adjustment_columns) or any(
             not column.strip() for column in self.adjustment_columns
         ):
             raise ValueError("survival adjustment columns must be unique and non-empty")
-        intervals = len(self.time_varying_adjusted_association.intervals)
+        intervals = len(_interval_estimates(self.time_varying_adjusted_association))
         for fit in (
             self.prevalence_definition_sensitivity.fits
             if self.prevalence_definition_sensitivity is not None
@@ -215,11 +248,10 @@ def survival_claim_ids(reporting: SurvivalReporting) -> tuple[str, ...]:
         if reporting.constant_hazard_ratio_authorized
         else ()
     )
+    intervals = _interval_estimates(reporting.time_varying_adjusted_association)
     return constant + tuple(
         interval_hazard_ratio_claim_id(position)
-        for position in range(
-            1, len(reporting.time_varying_adjusted_association.intervals) + 1
-        )
+        for position in range(1, len(intervals) + 1)
     ) + tuple(claim_id for claim_id, _estimate, _hours, _estimand in _sensitivity_estimates(reporting))
 
 
@@ -227,7 +259,7 @@ def _sensitivity_estimates(reporting: SurvivalReporting):
     """Each estimable re-fit's estimates: claim id, estimate, hours and estimand."""
 
     sensitivity = reporting.prevalence_definition_sensitivity
-    primary_intervals = reporting.time_varying_adjusted_association.intervals
+    primary_intervals = _interval_estimates(reporting.time_varying_adjusted_association)
     for fit in sensitivity.fits if sensitivity is not None else ():
         hours = fit.prevalent_exposure_cutoff_hours
         if fit.adjusted_hazard_ratio is not None:
@@ -295,7 +327,7 @@ def derive_survival_claim_payloads(summary: Mapping[str, Any]) -> list[dict[str,
     # constant one; otherwise they are the prespecified secondary model.
     interval_role = "secondary" if reporting.constant_hazard_ratio_authorized else "primary"
     for position, interval in enumerate(
-        reporting.time_varying_adjusted_association.intervals, start=1
+        _interval_estimates(reporting.time_varying_adjusted_association), start=1
     ):
         payloads.append(association(
             interval_hazard_ratio_claim_id(position), interval,

@@ -36,6 +36,7 @@ from ...contracts.executed_method_design import (
     LandmarkSurvivalDesign,
     executed_method_design_payload,
 )
+from ...contracts.executor_stop import ExecutorStop, write_executor_stop_record
 from ...contracts.host_scaffold import HostScaffoldedScript
 from ...contracts.manuscript_tables import (
     MANUSCRIPT_TABLE_SCHEMA_VERSION,
@@ -485,7 +486,11 @@ def _prevalence_sensitivity_fit(
 
     import numpy as np
 
-    from ...methods.time_varying_cox import fit_piecewise_time_varying_cox
+    from ...methods.time_varying_cox import (
+        TIME_VARYING_NOT_ESTIMABLE_REASONS,
+        TimeVaryingCoxError,
+        fit_piecewise_time_varying_cox,
+    )
 
     exposure = sealed.derived_exposure_column
     fit: dict[str, Any] = {
@@ -533,6 +538,13 @@ def _prevalence_sensitivity_fit(
                 for row in rows.itertuples(index=False)
             ]
     except (ValueError, ArithmeticError, np.linalg.LinAlgError) as error:
+        if (
+            isinstance(error, TimeVaryingCoxError)
+            and error.reason in TIME_VARYING_NOT_ESTIMABLE_REASONS
+        ):
+            # The primary's words for the same data condition.
+            not_reported = f"the interval model is not estimable: {error.reason}"
+            return {**fit, "not_reported": not_reported}
         return {**fit, "not_reported": f"the model could not be fitted: {str(error)[:120]}"}
     checked = []
     for start, end, ratio, low, high in estimates:
@@ -1238,7 +1250,10 @@ def build_survival_manuscript_projection(
     below 0.001 has no display the numeric binder can trace.
     """
 
-    if interval_count <= 0:
+    # The interval estimates are claimed as the result only under a rejected
+    # PH test; an interval model the data left without an estimate claims
+    # nothing beside the constant one.
+    if interval_count < 0 or (proportional_hazards_rejected and interval_count == 0):
         raise ValueError("survival manuscript projection requires intervals")
     abstract = {"kind": "abstract_label", "label": "Results"}
     survival = {
@@ -1297,7 +1312,11 @@ def build_survival_manuscript_projection(
     }
 
 
-def _executed_survival_design(sealed: LandmarkSurvivalRuntimeAuthority) -> dict[str, Any]:
+def _executed_survival_design(
+    sealed: LandmarkSurvivalRuntimeAuthority,
+    *,
+    interval_model_not_estimable_reason: Optional[str] = None,
+) -> dict[str, Any]:
     """The design this run applied, read from the sealed contract it executed."""
 
     followup_days = float(sealed.endpoint_horizon_days) - float(sealed.landmark_hours) / 24.0
@@ -1325,6 +1344,7 @@ def _executed_survival_design(sealed: LandmarkSurvivalRuntimeAuthority) -> dict[
                 if sealed.prevalence_sensitivity_cutoffs_hours is None
                 else [float(hour) for hour in sealed.prevalence_sensitivity_cutoffs_hours]
             ),
+            interval_model_not_estimable_reason=interval_model_not_estimable_reason,
         )
     )
 
@@ -1346,7 +1366,11 @@ def run_landmark_survival_suite(
 
     from ...figures.base import km_estimate
     from ...methods.rmst import rmst, rmst_difference
-    from ...methods.time_varying_cox import fit_piecewise_time_varying_cox
+    from ...methods.time_varying_cox import (
+        TIME_VARYING_NOT_ESTIMABLE_REASONS,
+        TimeVaryingCoxError,
+        fit_piecewise_time_varying_cox,
+    )
 
     sealed = load_current_case_scientific_runtime_authority(authority)
     if not isinstance(sealed, LandmarkSurvivalRuntimeAuthority):
@@ -1632,23 +1656,63 @@ def run_landmark_survival_suite(
             ]
         )
 
+    # The interval estimates are the result when the PH test rejects the
+    # constant one.  Otherwise they are a prespecified secondary model, which
+    # data may leave without an estimate: it is then reported as such.
     time_varying_table = None
     exposure_intervals = None
+    interval_reason: Optional[str] = None
     if sealed.time_varying_effect_method is not None:
-        time_varying_table = fit_piecewise_time_varying_cox(
-            model_frame,
-            duration_col=sealed.derived_time_column,
-            event_col=sealed.derived_event_column,
-            covariates=covariates,
-            interval_cutpoints=sealed.time_varying_interval_cutpoints_days,
-            exposure_col=sealed.derived_exposure_column,
-        )
-        exposure_intervals = time_varying_table.loc[time_varying_table["is_exposure"]]
-        if len(exposure_intervals) != (
-            len(sealed.time_varying_interval_cutpoints_days) + 1
-        ):
-            raise ValueError(
-                "landmark survival time-varying result lacks every exposure interval"
+        try:
+            time_varying_table = fit_piecewise_time_varying_cox(
+                model_frame,
+                duration_col=sealed.derived_time_column,
+                event_col=sealed.derived_event_column,
+                covariates=covariates,
+                interval_cutpoints=sealed.time_varying_interval_cutpoints_days,
+                exposure_col=sealed.derived_exposure_column,
+            )
+        except TimeVaryingCoxError as error:
+            if error.reason not in TIME_VARYING_NOT_ESTIMABLE_REASONS:
+                raise
+            if ph_violation:
+                # A stop the host reads as codes; the message keeps its prefix.
+                stop = ExecutorStop(
+                    "landmark_survival_interval_result_not_estimable",
+                    cause_code=error.reason,
+                    detail=(
+                        "the PH test rejected the constant hazard ratio, and the "
+                        "interval model that replaces it is not estimable "
+                        f"({error.reason})"
+                    ),
+                )
+                write_executor_stop_record(out_dir, stop)
+                raise stop from error
+            interval_reason = error.reason
+            exposure_intervals = pd.DataFrame()
+            time_varying_table = pd.DataFrame(
+                [
+                    {
+                        "term": sealed.derived_exposure_column,
+                        "is_exposure": True,
+                        "method": sealed.time_varying_effect_method,
+                        "model_status": "not_estimable",
+                        "not_estimable_reason": interval_reason,
+                    }
+                ]
+            )
+        else:
+            exposure_intervals = time_varying_table.loc[
+                time_varying_table["is_exposure"]
+            ]
+            if len(exposure_intervals) != (
+                len(sealed.time_varying_interval_cutpoints_days) + 1
+            ):
+                raise ValueError(
+                    "landmark survival time-varying result lacks every exposure interval"
+                )
+            time_varying_table = time_varying_table.assign(
+                model_status="estimated", not_estimable_reason=None
             )
 
     # The prevalence-definition sensitivity analysis: every hour of the sealed
@@ -1735,21 +1799,32 @@ def run_landmark_survival_suite(
                 "ci_high": float(rmst_row["ci_high"]),
                 "p_value": float(rmst_row["p_value"]),
             },
-            "time_varying_adjusted_association": {
-                "method": str(sealed.time_varying_effect_method),
-                "adjustment_columns": list(sealed.adjustment_columns),
-                "intervals": [
-                    {
-                        "start_days": float(row.interval_start_days),
-                        "end_days": float(row.interval_end_days),
-                        "hazard_ratio": float(row.hazard_ratio),
-                        "ci_low": float(row.ci_low),
-                        "ci_high": float(row.ci_high),
-                        "p_value": float(row.p_value),
-                    }
-                    for row in exposure_intervals.itertuples(index=False)
-                ],
-            },
+            # An estimated interval model keeps the shape this envelope has
+            # always had; one the data left without an estimate says why.
+            "time_varying_adjusted_association": (
+                {
+                    "method": str(sealed.time_varying_effect_method),
+                    "adjustment_columns": list(sealed.adjustment_columns),
+                    "intervals": [
+                        {
+                            "start_days": float(row.interval_start_days),
+                            "end_days": float(row.interval_end_days),
+                            "hazard_ratio": float(row.hazard_ratio),
+                            "ci_low": float(row.ci_low),
+                            "ci_high": float(row.ci_high),
+                            "p_value": float(row.p_value),
+                        }
+                        for row in exposure_intervals.itertuples(index=False)
+                    ],
+                }
+                if interval_reason is None
+                else {
+                    "status": "not_estimable",
+                    "reason": interval_reason,
+                    "method": str(sealed.time_varying_effect_method),
+                    "adjustment_columns": list(sealed.adjustment_columns),
+                }
+            ),
             "manuscript_projection": build_survival_manuscript_projection(
                 interval_count=len(exposure_intervals),
                 proportional_hazards_rejected=ph_violation,
@@ -1876,6 +1951,12 @@ def run_landmark_survival_suite(
             if rmst_table is None
             else float(rmst_table.loc[0, "rmst_difference_days"])
         ),
+        # The continuous suite's key: the reason, or "estimated".
+        **(
+            {"time_varying_status": interval_reason or "estimated"}
+            if sealed.time_varying_effect_method is not None
+            else {}
+        ),
         "paper_authorization_allowed": not ph_violation,
         "interpretation": sealed.interpretation,
         "analysis_only": True,
@@ -1915,7 +1996,9 @@ def run_landmark_survival_suite(
         # The first numeric block. The per-step numeric cap keeps headline
         # roots first and then this order, so the design's few numbers bind
         # as one exact Methods fact whatever the size of the rest.
-        EXECUTED_METHOD_DESIGN_KEY: _executed_survival_design(sealed),
+        EXECUTED_METHOD_DESIGN_KEY: _executed_survival_design(
+            sealed, interval_model_not_estimable_reason=interval_reason
+        ),
         "typed_cohort_input": input_product,
         "input_evidence_id": input_evidence_id,
         "input_sha256": input_sha256,

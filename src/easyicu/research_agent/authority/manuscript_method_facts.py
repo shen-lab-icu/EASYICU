@@ -236,9 +236,16 @@ def _survival_design_text(design: LandmarkSurvivalDesign) -> str:
     # No result vocabulary ("hazard ratio", "confidence interval"): the numeric
     # binder would then accept only result fields for this sentence's numbers.
     if design.time_varying_cutpoints_days:
+        split = f"split at days {_days(design.time_varying_cutpoints_days)} after the landmark"
+        reason = design.interval_model_not_estimable_reason
         text += (
-            "; interval-specific contrasts came from a piecewise Cox model split "
-            f"at days {_days(design.time_varying_cutpoints_days)} after the landmark"
+            f"; interval-specific contrasts came from a piecewise Cox model {split}"
+            if reason is None
+            else (
+                f"; a piecewise Cox model {split} was prespecified for "
+                "interval-specific contrasts and was not estimable, because "
+                f"{_INTERVAL_NOT_ESTIMABLE_WORDS[reason]}"
+            )
         )
     if design.rmst_horizon_days is not None:
         text += (

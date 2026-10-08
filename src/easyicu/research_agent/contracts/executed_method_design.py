@@ -188,11 +188,19 @@ class LandmarkSurvivalDesign(_ExecutedDesign):
     #: exposed records first recorded by one of these hours.  A design without
     #: that analysis omits the field.
     prevalence_sensitivity_cutoffs_hours: list[float] | None = None
+    #: Why the prespecified interval model had no estimate; a design whose
+    #: interval model was estimated, or that has none, omits it, as one
+    #: written before it does.
+    interval_model_not_estimable_reason: TimeVaryingNotEstimableReason | None = None
 
     @model_serializer(mode="wrap")
     def _preserve_unstated_fields(self, handler):
         payload = handler(self)
-        for name in ("exposure_onset_representation", "prevalence_sensitivity_cutoffs_hours"):
+        for name in (
+            "exposure_onset_representation",
+            "prevalence_sensitivity_cutoffs_hours",
+            "interval_model_not_estimable_reason",
+        ):
             if getattr(self, name) is None:
                 payload.pop(name, None)
         return payload
@@ -217,6 +225,8 @@ class LandmarkSurvivalDesign(_ExecutedDesign):
             self.rmst_horizon_days - followup_days
         ) > 1e-9:
             raise ValueError("the restricted-mean horizon is not the follow-up end")
+        if self.interval_model_not_estimable_reason is not None and not cutpoints:
+            raise ValueError("only a prespecified interval model can be not estimable")
         hours = self.prevalence_sensitivity_cutoffs_hours
         if hours is not None and (
             not hours

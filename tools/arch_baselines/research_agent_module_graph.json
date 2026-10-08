@@ -2612,6 +2612,10 @@
       "easyicu.research_agent.authority.prespecified_rule_outcomes"
     ],
     [
+      "easyicu.research_agent.authority.survival_scientific_claims",
+      "easyicu.research_agent.methods.time_varying_cox"
+    ],
+    [
       "easyicu.research_agent.authority.table_one_binding",
       "easyicu.research_agent.authority.declared_levels"
     ],
@@ -6106,6 +6110,10 @@
     [
       "easyicu.research_agent.execution.runners.landmark_survival_executor",
       "easyicu.research_agent.contracts.executed_method_design"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.landmark_survival_executor",
+      "easyicu.research_agent.contracts.executor_stop"
     ],
     [
       "easyicu.research_agent.execution.runners.landmark_survival_executor",
@@ -13696,7 +13704,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3416,
+    "edge_count": 3418,
     "largest_scc_size": 0,
     "module_count": 785,
     "package_count": 36,

@@ -126,6 +126,13 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   assert.match(oneValue, /Choose an exposure, summary or window whose values differ between stays/);
   assert.doesNotMatch(oneValue, /did not pass EasyICU's checks/);
   assert.match(runFailureZh(failedClosed, { code: 'continuous_survival_exposure_has_one_value' }), /取值都相同/);
+  // The binary landmark suite stops under the same rule, with the same remedy.
+  const binaryStop = 'landmark_survival_interval_result_not_estimable';
+  const binaryNoEvents = runFailure(failedClosed, { code: binaryStop, cause: 'interval_without_event' });
+  assert.match(binaryNoEvents, /could not be estimated: an interval had no events/);
+  assert.match(binaryNoEvents, /Choose interval cut points with events in every interval/);
+  assert.doesNotMatch(binaryNoEvents, /did not pass EasyICU's checks/);
+  assert.match(runFailureZh(failedClosed, { code: binaryStop, cause: 'did_not_converge' }), /区间模型没有收敛/);
   const axisSentences = {
     execution_complete_not_satisfied: /An analysis step did not finish/,
     analysis_validated_not_satisfied: /automated validation did not pass/,
