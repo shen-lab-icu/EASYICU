@@ -129,7 +129,7 @@ from ..planning.progressive_resume import (
 from ..planning.robustness_contract import validate_planner_robustness_specs
 from ..planning.scientific_action_catalog import scientific_actions_for_analysis_type
 from ..planning.scientific_review import required_method_layers_for_context, requested_outcomes
-from ..planning.phenotype_outline_rules import validate_outline_phenotype_comparison
+from ..planning.outline_action_rules import validate_outline_action_rules
 from ..providers.capabilities import llm_supports_strict_json_schema
 from ..providers.llm import llm_is_mockish
 from ..planning.prompt_projection import (
@@ -2110,7 +2110,7 @@ class ProgressivePlannerAgent:
                     "change the variance ceiling or the scientific question.",
                     path="analysis_type",
                 )
-        validate_outline_phenotype_comparison(
+        validate_outline_action_rules(
             outline,
             requested_outcomes=(
                 requested_outcomes(article_context) if article_context is not None
