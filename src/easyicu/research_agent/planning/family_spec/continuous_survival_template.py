@@ -51,6 +51,7 @@ from .contract import (
     FamilySpecError,
     FamilySpecRequest,
     SealedContinuousSuiteCoordinates,
+    design_field_max_length,
 )
 from .landmark_categorical_template import (
     FamilySkeletonDraft,
@@ -59,7 +60,7 @@ from .landmark_categorical_template import (
     _method_card_elements,
     stated_population_sentence,
 )
-from .plan_language import listing, plan_language, sentence
+from .plan_language import adjusted_roster_sentence, listing, plan_language, sentence
 from .survival_template import (
     _AUDIT_OUTPUTS,
     _PRIMARY_DESIGN_ELEMENTS,
@@ -125,7 +126,8 @@ def _design_selection(
         f"{suite.exposure_unit or '个单位'}）"
     )
     adjusted = bool(roster)
-    adjustment_text = ", ".join(_label(spec, name) for name in roster) or "no covariates"
+    labels = [_label(spec, name) for name in roster]
+    adjustment_text = ", ".join(labels) or "no covariates"
     landmark = f"{suite.landmark_hours:g} h after ICU admission"
     window_end = f"the {suite.landmark_hours:g} h landmark"
     horizon = f"{suite.endpoint_horizon_days:g} days"
@@ -142,7 +144,7 @@ def _design_selection(
     )
     landmark_zh = f"ICU 入院后 {suite.landmark_hours:g} h"
     horizon_zh = f"{suite.endpoint_horizon_days:g} 天"
-    adjustment_zh = listing([_label(spec, name) for name in roster], language) or "无协变量"
+    adjustment_zh = listing(labels, language) or "无协变量"
     columns = _bound_columns(request, roster)
     comparator_keys = [
         key for key in request.comparison_literature_keys if key in request.allowed_literature_citation_keys
@@ -150,17 +152,17 @@ def _design_selection(
     selected = ResearchDesignCandidate(
         design_id="fixed_landmark_continuous_survival_suite",
         analysis_type="survival",
-        estimand=(
+        # The design bounds its estimand: the roster is named there while it
+        # fits, and the reviewable plan below names it in full.
+        estimand=adjusted_roster_sentence(
             f"The {'adjusted ' if adjusted else ''}hazard ratio for {outcome} through "
             f"{horizon} {increment} (its {summary_en} from ICU admission to "
-            f"{window_end}), among stays alive and event-free at the landmark, "
-            + (
-                f"adjusted for {adjustment_text}"
-                if adjusted
-                else "without covariate adjustment"
-            )
-            + "; the spline's 10th- and 90th-percentile contrasts replace it if linearity "
-            "is rejected; a descriptive prognostic association, not a causal effect."
+            f"{window_end}), among stays alive and event-free at the landmark, ",
+            labels,
+            "; the spline's 10th- and 90th-percentile contrasts replace it if linearity "
+            "is rejected; a descriptive prognostic association, not a causal effect.",
+            bound=design_field_max_length("estimand"),
+            unadjusted="without covariate adjustment",
         ),
         time_zero=f"ICU admission; follow-up starts at the {landmark} landmark.",
         observation_window=(

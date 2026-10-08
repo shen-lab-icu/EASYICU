@@ -57,6 +57,7 @@ from .contract import (
     FamilySpecError,
     FamilySpecRequest,
     SealedSuiteCoordinates,
+    design_field_max_length,
 )
 from .landmark_categorical_template import (
     FamilySkeletonDraft,
@@ -66,7 +67,7 @@ from .landmark_categorical_template import (
     _method_card_ids,
     stated_population_sentence,
 )
-from .plan_language import listing, plan_language, sentence
+from .plan_language import adjusted_roster_sentence, listing, plan_language, sentence
 
 #: The suite's own data-quality product.  A suite that publishes it audits
 #: its source columns itself, so the outline names a measurement audit that
@@ -229,7 +230,8 @@ def _design_selection(
     )
     exposure = _label(spec, request.primary_exposure)
     outcome = _label(spec, request.outcome)
-    adjustment_text = ", ".join(_label(spec, name) for name in roster) or "no covariates"
+    labels = [_label(spec, name) for name in roster]
+    adjustment_text = ", ".join(labels) or "no covariates"
     landmark = f"{sealed.landmark_hours:g} h after ICU admission"
     horizon = f"{sealed.endpoint_horizon_days:g} days"
     unit_text = (
@@ -245,7 +247,7 @@ def _design_selection(
     )
     landmark_zh = f"ICU 入院后 {sealed.landmark_hours:g} h"
     horizon_zh = f"{sealed.endpoint_horizon_days:g} 天"
-    adjustment_zh = listing([_label(spec, name) for name in roster], language) or "无协变量"
+    adjustment_zh = listing(labels, language) or "无协变量"
     columns = _bound_columns(request, roster)
     comparator_keys = [
         key for key in request.comparison_literature_keys if key in request.allowed_literature_citation_keys
@@ -253,11 +255,16 @@ def _design_selection(
     selected = ResearchDesignCandidate(
         design_id="fixed_landmark_survival_suite",
         analysis_type="survival",
-        estimand=(
+        # The design bounds its estimand: the roster is named there while it
+        # fits, and the reviewable plan below names it in full.
+        estimand=adjusted_roster_sentence(
             f"The adjusted hazard ratio for {outcome} through {horizon} comparing stays with "
             f"incident {exposure} by {landmark} against stays without it, among stays alive and "
-            f"event-free at the landmark, adjusted for {adjustment_text}; reported as a descriptive "
-            "prognostic association, not a causal effect."
+            "event-free at the landmark, ",
+            labels,
+            "; reported as a descriptive prognostic association, not a causal effect.",
+            bound=design_field_max_length("estimand"),
+            unadjusted="adjusted for no covariates",
         ),
         time_zero=f"ICU admission; follow-up starts at the {landmark} landmark.",
         observation_window=(

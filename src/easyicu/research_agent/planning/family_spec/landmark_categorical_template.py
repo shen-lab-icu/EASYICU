@@ -77,7 +77,7 @@ from .contract import (
     prediction_risk_set_predicates,
     table_one_group_column,
 )
-from .plan_language import bounded_roster, listing, plan_language, sentence
+from .plan_language import adjusted_roster_sentence, listing, plan_language, sentence
 
 FUNCTIONAL_FORM_METHOD = "restricted_cubic_spline_sensitivity"
 FUNCTIONAL_FORM_KNOT_QUANTILES = (0.1, 0.5, 0.9)
@@ -305,15 +305,13 @@ def _table_one_summary(coding: str) -> str:
 def _estimand(head: str, labels: list[str], tail: str) -> str:
     """Name the adjustment roster while the estimand holds it; the plan lists it in full."""
 
-    if not labels:
-        return f"{head}unadjusted (no covariate was authorized){tail}"
-    prefix = "adjusted for "
-    roster = bounded_roster(
-        labels, budget=design_field_max_length("estimand") - len(head) - len(prefix) - len(tail)
+    return adjusted_roster_sentence(
+        head,
+        labels,
+        tail,
+        bound=design_field_max_length("estimand"),
+        unadjusted="unadjusted (no covariate was authorized)",
     )
-    if roster:
-        return f"{head}{prefix}{roster}{tail}"
-    return f"{head}{prefix}{len(labels)} prespecified covariates named in the plan{tail}"
 
 
 def _design_selection(
