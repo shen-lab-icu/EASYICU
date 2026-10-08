@@ -10,15 +10,17 @@ criterion gets exactly one disposition:
   executed, or the host's first-stay receipt);
 * ``applied_by_plan``: predicates over the input's columns apply it;
 * ``requires_extraction``: the input does not hold what applies it, and an
-  extraction could (a dictionary concept, diagnosis codes, the first stay);
+  extraction could (a concept Data Extraction defines, diagnosis codes, the
+  first stay);
 * ``not_applied``: nothing can apply it as stated, with a reason code.
 
 The judgements are the owners', not this module's: which column a predicate
 filters (``cohort_eligibility.predicate_context_column``), whether its window
 and its event time can be read (``cohort.schema``), whether its threshold
 separates rows (``cohort_predicate_domain``), whether it is decided by time
-zero (``cohort_eligibility``), and which values a column takes
-(``authority.declared_levels``).  This module maps their findings to reason
+zero (``cohort_eligibility``), which values a column takes
+(``authority.declared_levels``), and which concepts an extraction defines
+(``concept_availability``).  This module maps their findings to reason
 codes.  A source proof is a typed record whose parameters imply the
 criterion; the verbatim contract strings are never parsed.  A criterion the
 source applied is not judged against time zero here: that check stays with
@@ -64,7 +66,7 @@ from ..research_context.stay_events import (
     stay_outcome_columns,
     whole_stay_event_columns,
 )
-from ..concept_availability import normalize_concept_name
+from ..concept_availability import explain_concept_availability
 from ..schema import ResearchContext
 from .cohort_contract import (
     CohortDefinition,
@@ -526,7 +528,7 @@ def _resolve(reading: _Input, concept: str, aggregation: str) -> str:
     """The column the cohort builder would filter for ``concept``."""
 
     if concept not in reading.roster:
-        if _dictionary_defines(concept):
+        if _extraction_defines(concept, reading.context.cohort.database):
             raise _NotApplied(
                 "population_concept_not_in_export",
                 f"This input does not hold {concept!r}; an extraction that holds it "
@@ -534,8 +536,8 @@ def _resolve(reading: _Input, concept: str, aggregation: str) -> str:
             )
         raise _NotApplied(
             "population_concept_unavailable",
-            f"{concept!r} is neither a column of this input nor a concept the "
-            "dictionary defines.",
+            f"{concept!r} is neither a column of this input nor a concept Data "
+            "Extraction defines.",
         )
     column = predicate_context_column(reading.variables, concept, aggregation)
     if column not in reading.variables:
@@ -969,14 +971,18 @@ def _proof_text(proof: SourceProof) -> str:
 
 
 @lru_cache(maxsize=1024)
-def _dictionary_defines(concept: str) -> bool:
-    """Whether the concept dictionary Data Extraction reads defines ``concept``."""
+def _extraction_defines(concept: str, database: str) -> bool:
+    """Whether Data Extraction defines ``concept``, as its availability owner says.
 
-    from ...resources import load_dictionary
+    A dictionary concept, a derived outcome and an output a declared loader
+    emits (``circ_failure``, ``sep3_sofa1``; the dictionary lacks these) are
+    defined; any other name the owner does not find.  Whether ``database`` can
+    derive a defined concept is the extraction's own check.
+    """
 
     return (
-        load_dictionary(include_sofa2=True).get(normalize_concept_name(concept))
-        is not None
+        explain_concept_availability(concept=concept, database=database).reason
+        != "concept_not_found"
     )
 
 
