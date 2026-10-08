@@ -1,0 +1,81 @@
+{
+  "schema": "miiv_scoped_source_events_implementation_receipt_v1",
+  "date": "2026-10-09",
+  "base_head": "712531aa8fae8d994a7028978974d91bc452a4e2",
+  "scope": "code and temporary synthetic fixtures only; no actual routing file or clinical source event read in this implementation round",
+  "clinical_event_reads": 0,
+  "real_identity_roster_reads": 0,
+  "model_fits": 0,
+  "exports": 0,
+  "sealed_current_changes": false,
+  "api": "easyicu.io.source_events.extract_miiv_respiratory_events",
+  "lab_rule": "legacy_outtime_forward_rollends",
+  "default_load_concepts_changed": false,
+  "source_sha256": {
+    "src/easyicu/io/source_events.py": "83e841db15c35fe034f60a667aecc3f38521e709f0b3ddd82d0a625bf0e5ea63",
+    "tests/core/test_scoped_source_events.py": "b0f92ad4a303fd2e0c527dcb679e7f92086eab7de1a481a219bb49de5f676e98",
+    "docs/validation/miiv_scoped_source_events.md": "2c42d200519d2b169cf3e6c5d3e34bab65fb532ba01494284f08c2706d7fbac5"
+  },
+  "dictionary_sha256": "3c0ebd9b5fe92223a3b674ab0f68a03c4c50e52f1043784b1c7223d1a159dcaf",
+  "official_sources": [
+    {
+      "url": "https://mimic.mit.edu/docs/iv/modules/hosp/labevents.html",
+      "read": "table schema, event/specimen/identity semantics, charttime vs storetime, missing hospital links"
+    },
+    {
+      "url": "https://mimic.mit.edu/docs/iv/modules/icu/chartevents.html",
+      "read": "native ICU identifier and chart/store clocks"
+    },
+    {
+      "url": "https://mimic.mit.edu/docs/iv/modules/icu/icustays.html",
+      "read": "ICU stay identity and entry/exit clocks"
+    }
+  ],
+  "verification": {
+    "focused": {
+      "passed": 28,
+      "warnings": 547,
+      "seconds": 2.62
+    },
+    "complete_related": {
+      "passed": 101,
+      "warnings": 1112,
+      "seconds": 6.84,
+      "command": "OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 python -m pytest -q -m '' tests/core/test_scoped_source_events.py tests/core/test_respiratory_source_channels.py tests/core/test_community_databases.py tests/core/test_concept_catalog_consistency.py tests/governance/test_catalog_manifest.py",
+      "files_individually_reviewed_for_synthetic_or_packaged_metadata_inputs": true,
+      "broad_suite_run": false,
+      "log_sha256": "114d54cbea45ac403d6953108bbef91828fe2de30617ec96cc4f61a1f936ee6f"
+    },
+    "ruff_changed_files": "PASS",
+    "ruff_all": {
+      "errors": 16,
+      "same_as_base_baseline": true
+    },
+    "independent_review": {
+      "agent": "/root/m2_independent_review",
+      "status": "PASS for scoped extraction API",
+      "claim_ceiling": "synthetic implementation review, not human clinical certification",
+      "frozen_byte_rerun_passed": 26,
+      "rerun_scope": "independent API and producer adversarial fixtures; includes a producer raw-key omission counterexample, not 26 additional disjoint API-only tests",
+      "producer_followup": "separate producer verifier UTC handling remains owned by preprocessing; no API blocking finding",
+      "test_source_path": "02-study2-trajactory-clustering/code/tests/test_m2_measurement_source_review.py",
+      "test_source_sha256": "9e4d970e0014b312886ff163af52190e67f90a20be63ffee0de0637dd29584d1"
+    },
+    "development_failures": [
+      {
+        "run": "r1",
+        "failed": 2,
+        "passed": 19,
+        "reason": "fixture None coerced to NaN before timedelta construction; fixture corrected, real null input preserved"
+      }
+    ]
+  },
+  "deliberately_excluded": [
+    "No strict ICU-interval assignment branch; legacy outtime mapping remains explicit.",
+    "No PO2 specimen or arterial inference.",
+    "No physical Parquet page isolation claim.",
+    "No independent clinical event-key completeness certification from trace self-consistency alone.",
+    "No scientific cohort eligibility, reward or endpoint recomputation.",
+    "No raw clinical extraction or scientific release in this round."
+  ]
+}
