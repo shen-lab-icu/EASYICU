@@ -1105,7 +1105,7 @@
     ],
     [
       "easyicu.research_agent.agents.progressive_planner",
-      "easyicu.research_agent.planning.phenotype_outline_rules"
+      "easyicu.research_agent.planning.outline_action_rules"
     ],
     [
       "easyicu.research_agent.agents.progressive_planner",
@@ -1202,6 +1202,10 @@
     [
       "easyicu.research_agent.agents.progressive_prompt_contracts",
       "easyicu.research_agent.planning.literature_design_authority"
+    ],
+    [
+      "easyicu.research_agent.agents.progressive_prompt_contracts",
+      "easyicu.research_agent.planning.outline_action_rules"
     ],
     [
       "easyicu.research_agent.agents.progressive_prompt_contracts",
@@ -10276,6 +10280,18 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.planning.outline_action_rules",
+      "easyicu.research_agent.planning.phenotype_outline_rules"
+    ],
+    [
+      "easyicu.research_agent.planning.outline_action_rules",
+      "easyicu.research_agent.planning.progressive_contract"
+    ],
+    [
+      "easyicu.research_agent.planning.outline_action_rules",
+      "easyicu.research_agent.planning.scientific_action_catalog"
+    ],
+    [
       "easyicu.research_agent.planning.phenotype_outline_rules",
       "easyicu.research_agent.contracts.phenotype_comparison"
     ],
@@ -13844,9 +13860,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3453,
+    "edge_count": 3457,
     "largest_scc_size": 0,
-    "module_count": 790,
+    "module_count": 791,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -14404,6 +14420,7 @@
     "easyicu.research_agent.planning.method_vocabulary": "planning/method_vocabulary.py",
     "easyicu.research_agent.planning.novelty_contract": "planning/novelty_contract.py",
     "easyicu.research_agent.planning.ordinal_multi_outcome": "planning/ordinal_multi_outcome.py",
+    "easyicu.research_agent.planning.outline_action_rules": "planning/outline_action_rules.py",
     "easyicu.research_agent.planning.phenotype_outline_rules": "planning/phenotype_outline_rules.py",
     "easyicu.research_agent.planning.plan_graph": "planning/plan_graph.py",
     "easyicu.research_agent.planning.planner_output_contract": "planning/planner_output_contract.py",
