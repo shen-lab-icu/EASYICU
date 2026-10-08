@@ -6969,6 +6969,10 @@
     ],
     [
       "easyicu.research_agent.execution.runners.trajectory_stability_executor",
+      "easyicu.research_agent.contracts.executor_stop"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.trajectory_stability_executor",
       "easyicu.research_agent.execution.runners._shared"
     ],
     [
@@ -13704,7 +13708,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3418,
+    "edge_count": 3419,
     "largest_scc_size": 0,
     "module_count": 785,
     "package_count": 36,

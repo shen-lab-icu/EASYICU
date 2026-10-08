@@ -94,6 +94,17 @@ EXECUTOR_STOP_REASONS: Mapping[str, ExecutorStopReason] = MappingProxyType(
             cause_codes=frozenset(),
             repeats_on_unchanged_retry=True,
         ),
+        # A planned stability refit failed on a condition of its subsample or
+        # of its arithmetic, not as the class model's own result there, and
+        # the stability rule needs every planned refit, so it has no result.
+        # The plan's design and seeds fix every refit's subsample.  The refits'
+        # errors are free text in the step's refit failure table, so the stop
+        # names no cause.
+        "trajectory_stability_refit_failed": ExecutorStopReason(
+            owner="trajectory_cluster_stability",
+            cause_codes=frozenset(),
+            repeats_on_unchanged_retry=True,
+        ),
     }
 )
 #: Why a record was not accepted.  A rejected record names no stop.

@@ -126,6 +126,11 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   assert.match(oneValue, /Choose an exposure, summary or window whose values differ between stays/);
   assert.doesNotMatch(oneValue, /did not pass EasyICU's checks/);
   assert.match(runFailureZh(failedClosed, { code: 'continuous_survival_exposure_has_one_value' }), /取值都相同/);
+  const refitFailed = runFailure(failedClosed, { code: 'trajectory_stability_refit_failed' });
+  assert.match(refitFailed, /needs every planned refit to succeed, and a refit could not be completed/);
+  assert.match(refitFailed, /Revise the plan, for example to consider fewer classes/);
+  assert.doesNotMatch(refitFailed, /did not pass EasyICU's checks/);
+  assert.match(runFailureZh(failedClosed, { code: 'trajectory_stability_refit_failed' }), /每次计划的重拟合都成功/);
   // The binary landmark suite stops under the same rule, with the same remedy.
   const binaryStop = 'landmark_survival_interval_result_not_estimable';
   const binaryNoEvents = runFailure(failedClosed, { code: binaryStop, cause: 'interval_without_event' });
