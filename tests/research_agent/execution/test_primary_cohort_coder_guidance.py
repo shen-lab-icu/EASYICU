@@ -139,6 +139,9 @@ def test_primary_cohort_role_binds_resolved_predicate_receipt() -> None:
     assert "A threshold check alone is not a domain check" in text
     assert "not permission to select rows by position" in text
     assert "`resolved_column` entries are the only raw predicate coordinates" in text
+    assert (
+        "`n_excluded_missing` describes a row's exclusion and selects no rows" in text
+    )
     assert "`manifest['raw_input_contracts']['contracts']`" in text
     assert "not ordinary Planner step inputs" in text
     assert "`contracts.get(resolved_column)`" in text

@@ -804,3 +804,237 @@ def test_each_exclusion_gets_a_side_box_and_the_final_stage_stands_out(
     svg = (out_dir / "cohort_accounting.svg").read_text(encoding="utf-8")
     assert "Cohort accounting" not in svg and "Final" not in svg
     assert "Stay of 24 hours" in svg and "n = 3,900" in svg
+
+
+def _flow_with_unrecorded() -> pd.DataFrame:
+    """A ledger counting, per exclusion, the records read without a value."""
+
+    return pd.DataFrame(
+        [
+            [0, "universe", 5_000, 0, 5_000, 0, None],
+            [1, "adult", 5_000, 200, 4_800, 15, None],
+            [2, "first_icu_stay", 4_800, 700, 4_100, 0, None],
+            [3, "death", 4_100, 200, 3_900, 40, "death_time"],
+        ],
+        columns=[
+            "step_order",
+            "predicate_kind",
+            "n_before",
+            "n_excluded",
+            "n_remaining",
+            "n_excluded_missing",
+            "event_time_column",
+        ],
+    )
+
+
+def _side_boxes(ax):
+    from matplotlib.patches import FancyBboxPatch
+
+    return [
+        patch
+        for patch in ax.patches
+        if isinstance(patch, FancyBboxPatch)
+        and patch.get_facecolor()[:3] == (1.0, 1.0, 1.0)
+    ]
+
+
+def test_an_exclusion_counts_the_records_it_read_without_a_value() -> None:
+    """The line sits in the side box, under its exclusion, above the shares."""
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from easyicu.research_agent.execution.runners.cohort_flow_figure_executor import (
+        render_cohort_flow_axis,
+    )
+
+    fig, ax = plt.subplots(figsize=(7.2, 4.8))
+    render_cohort_flow_axis(
+        ax, _flow_with_unrecorded(), ["Source", "Adult", "First stay", "Alive"]
+    )
+    rows = _drawn_text_rows(fig, ax)
+
+    # One short line, for a missing value and a missing event time alike;
+    # the caption says what it covers.
+    assert [row[4] for row in rows if row[4].startswith("of which")] == [
+        "of which 15 missing",
+        "of which 40 missing",
+    ]
+    # Each side box reads top to bottom: the exclusion, the records it read
+    # without a value (when there are any), then the retained shares.
+    stacks = []
+    for box in _side_boxes(ax):
+        bottom, top = box.get_y() - 0.004, box.get_y() + box.get_height() + 0.004
+        inside = [
+            row
+            for row in rows
+            if row[0] >= box.get_x() and bottom <= row[1] and row[3] <= top
+        ]
+        stacks.append(
+            [row[4].split()[0] for row in sorted(inside, key=lambda r: -r[3])]
+        )
+    assert stacks == [
+        ["Excluded", "of", "retained"],
+        ["Excluded", "retained"],
+        ["Excluded", "of", "retained"],
+    ]
+    _assert_no_text_overlap(rows)
+    for x0, _y0, x1, _y1, _text in rows:
+        assert x0 >= -0.01 and x1 <= 1.01, "text escaped the axes"
+    plt.close(fig)
+
+
+def test_a_ledger_without_the_count_or_with_none_draws_no_line(
+    tmp_path: Path,
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from easyicu.research_agent.execution.runners.cohort_flow_figure_executor import (
+        render_cohort_flow_axis,
+    )
+
+    none_counted = _flow_with_unrecorded().assign(n_excluded_missing=0)
+    for frame in (_frame(), none_counted):
+        fig, ax = plt.subplots(figsize=(7.2, 4.8))
+        render_cohort_flow_axis(ax, frame, [f"Stage {i}" for i in range(len(frame))])
+        assert not any(text.get_text().startswith("of which") for text in ax.texts)
+        plt.close(fig)
+
+    step = _step()
+    captions = {}
+    for name, frame in (("none", none_counted), ("some", _flow_with_unrecorded())):
+        run_dir, manifest, _binding_row = _binding(tmp_path / name, frame=frame)
+        out_dir = run_dir / "steps" / step.step_id / "outputs"
+        run_cohort_flow_figure(
+            out_dir=out_dir,
+            run_dir=run_dir,
+            resolved_inputs=manifest,
+            step_id=step.step_id,
+            figure_product="cohort_accounting",
+        )
+        contract = json.loads(
+            (out_dir / "cohort_accounting.figure_contract.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        captions[name] = contract["reader_caption"]
+        source = pd.read_csv(out_dir / "cohort_accounting_source_data.csv")
+        assert (
+            source["n_excluded_missing"].tolist()
+            == frame["n_excluded_missing"].tolist()
+        )
+    # The caption explains the line only on a figure that draws it.
+    assert "of which" not in captions["none"]
+    assert captions["some"] == (
+        captions["none"]
+        + ' Under an exclusion, "of which N missing" counts the excluded records '
+        "whose criterion had no recorded value, or no recorded event time for an "
+        "event read within a time window."
+    )
+
+
+@pytest.mark.parametrize(
+    ("stage_count", "each_excluded"),
+    # Counts in the millions wrap the line onto a second side-column line.
+    [(6, None), (48, None), (6, 1_234_567)],
+)
+def test_every_stage_keeps_its_line_legible(
+    stage_count: int, each_excluded: int | None
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from easyicu.research_agent.execution.runners.cohort_flow_figure_executor import (
+        render_cohort_flow_axis,
+    )
+
+    frame = _staged_frame(stage_count)
+    if each_excluded is not None:
+        universe = each_excluded * stage_count
+        frame = frame.assign(
+            n_before=[universe]
+            + [universe - each_excluded * i for i in range(stage_count - 1)],
+            n_excluded=[0] + [each_excluded] * (stage_count - 1),
+            n_remaining=[universe - each_excluded * i for i in range(stage_count)],
+        )
+    frame = frame.assign(n_excluded_missing=frame["n_excluded"])
+    fig, ax = plt.subplots(figsize=(7.2, 0.8 * stage_count + 0.8))
+    render_cohort_flow_axis(ax, frame, [f"Stage {i}" for i in range(len(frame))])
+    rows = _drawn_text_rows(fig, ax)
+
+    assert sum(row[4].startswith("of which") for row in rows) == stage_count - 1
+    _assert_no_text_overlap(rows)
+    for x0, _y0, x1, _y1, _text in rows:
+        assert x0 >= -0.01 and x1 <= 1.01, "text escaped the axes"
+    assert all(text.get_fontsize() >= 7.5 for text in ax.texts)
+    plt.close(fig)
+
+
+def test_a_composite_panel_keeps_its_summary_and_its_canvas() -> None:
+    """The small sub-panel draws what it drew before; the full figure has the line."""
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from easyicu.research_agent.execution.runners.cohort_flow_figure_executor import (
+        render_cohort_flow_axis,
+    )
+
+    drawn = []
+    for frame in (_flow_with_unrecorded(), _flow_with_unrecorded().iloc[:, :5]):
+        fig, axes = plt.subplots(2, 2, figsize=(7.2, 7.0))
+        render_cohort_flow_axis(axes[0, 0], frame, ["a", "b", "c", "d"], compact=True)
+        drawn.append(
+            (fig.get_figheight(), [text.get_text() for text in axes[0, 0].texts])
+        )
+        plt.close(fig)
+    assert drawn[0] == drawn[1]
+    assert not any(text.startswith("of which") for text in drawn[0][1])
+
+
+@pytest.mark.parametrize(
+    "counts",
+    [
+        [0, 15, 0, 201],  # more than the exclusion beside it
+        [0, -1, 0, 40],
+        [0, 1.5, 0, 40],
+        [0, None, 0, 40],
+        [3, 15, 0, 40],  # the universe excludes nobody
+    ],
+)
+def test_the_count_must_lie_within_the_exclusion_beside_it(
+    tmp_path: Path, counts: list
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from easyicu.research_agent.execution.runners.cohort_flow_figure_executor import (
+        render_cohort_flow_axis,
+    )
+
+    frame = _flow_with_unrecorded().assign(n_excluded_missing=counts)
+    step = _step()
+    run_dir, manifest, _binding_row = _binding(tmp_path, frame=frame)
+    out_dir = run_dir / "steps" / step.step_id / "outputs"
+    with pytest.raises(ValueError, match="invalid n_excluded_missing"):
+        run_cohort_flow_figure(
+            out_dir=out_dir,
+            run_dir=run_dir,
+            resolved_inputs=manifest,
+            step_id=step.step_id,
+            figure_product="cohort_accounting",
+        )
+    # Refused while the ledger is verified, before any output is written.
+    assert not list(out_dir.iterdir())
+    # The renderer checks what it is handed as well.
+    fig, ax = plt.subplots(figsize=(7.2, 4.8))
+    with pytest.raises(ValueError, match="invalid n_excluded_missing"):
+        render_cohort_flow_axis(ax, frame, ["a", "b", "c", "d"])
+    plt.close(fig)

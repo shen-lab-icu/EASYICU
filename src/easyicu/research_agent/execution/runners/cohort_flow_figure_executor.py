@@ -2,8 +2,10 @@
 
 The cohort-definition owner has already fixed every eligibility predicate and
 count.  This renderer verifies those exact bytes and draws the sequential
-flow, with a side box for every exclusion and the share its stage retained;
-it never reloads the cohort or invents another inclusion rule.
+flow, with a side box for every exclusion, the share its stage retained
+and, where the ledger counts them, the excluded records its criterion read
+without a recorded value; it never reloads the cohort or invents another
+inclusion rule.
 """
 
 from __future__ import annotations
@@ -64,6 +66,15 @@ _TRAJECTORY_FLOW_STAGES = (
     "included_in_clustering",
 )
 _TRAJECTORY_FLOW_EXCLUSION = "excluded_insufficient_windows"
+#: Of a stage's exclusions, the records its criterion read without a
+#: recorded value (``cohort/schema.py``). A ledger written before the count
+#: existed has no such column, and its stages draw no such line.
+_EXCLUDED_MISSING = "n_excluded_missing"
+_MISSING_CAPTION = (
+    ' Under an exclusion, "of which N missing" counts the excluded records '
+    "whose criterion had no recorded value, or no recorded event time for an "
+    "event read within a time window."
+)
 
 
 def _is_trajectory_flow_contract(contract: Mapping[str, Any]) -> bool:
@@ -312,6 +323,12 @@ def _verified_flow(path: Path, binding: Mapping[str, Any]) -> pd.DataFrame:
         if values.isna().any() or (values < 0).any() or not (values % 1 == 0).all():
             raise ValueError(f"cohort-flow has invalid {column} values")
         numeric[column] = values.astype("int64")
+    if _EXCLUDED_MISSING in frame:
+        numeric[_EXCLUDED_MISSING] = pd.Series(
+            _excluded_missing_counts(frame, numeric["n_excluded"].tolist()),
+            index=frame.index,
+            dtype="int64",
+        )
     if numeric["step_order"].duplicated().any():
         raise ValueError("cohort-flow step_order values are not unique")
     frame = frame.assign(**numeric).sort_values("step_order", kind="stable")
@@ -461,6 +478,40 @@ def _share_note(parts: Sequence[str], *, separator: str) -> str:
     return "retained " + separator.join(parts) if parts else ""
 
 
+def _excluded_missing_counts(frame: pd.DataFrame, excluded: Sequence[int]) -> list[int]:
+    """Each stage's excluded records read without a recorded value.
+
+    Part of the exclusion beside it, so a whole number from zero to that
+    exclusion; zeros for a ledger that does not count them.
+    """
+
+    if _EXCLUDED_MISSING not in frame:
+        return [0] * len(excluded)
+    values = pd.to_numeric(frame[_EXCLUDED_MISSING], errors="coerce")
+    if (
+        values.isna().any()
+        or (values < 0).any()
+        or not (values % 1 == 0).all()
+        or any(value > limit for value, limit in zip(values, excluded))
+    ):
+        raise ValueError(f"cohort-flow has invalid {_EXCLUDED_MISSING} values")
+    return [int(value) for value in values]
+
+
+def _missing_note(count: int, *, wrap: int) -> str:
+    """The line under an exclusion counting its records without a value.
+
+    Short enough for one side-column line at most counts: a longer line
+    wraps and grows the canvas, and the caption says what "missing"
+    covers. Empty when there are none. The fit pass measures and the draw
+    pass prints this same wrapped string.
+    """
+
+    if count <= 0:
+        return ""
+    return textwrap.fill(f"of which {count:,} missing", wrap)
+
+
 def _axes_size_pt(ax: Any) -> tuple[float, float]:
     """The axes' drawable rectangle in points, for legibility arithmetic."""
 
@@ -479,6 +530,7 @@ def _flow_type_scale(
     labels: Sequence[str],
     counts: Sequence[int],
     excluded: Sequence[int],
+    missing: Sequence[int],
     panel_width_pt: float,
     panel_height_pt: float,
     step: float,
@@ -489,7 +541,7 @@ def _flow_type_scale(
     base_count: float,
     base_note: float,
     base_wrap: int,
-) -> tuple[float, int, float, int] | None:
+) -> tuple[float, int, float, int, int] | None:
     """Largest type scale at which every stage still clears its neighbours.
 
     Each stage owns a vertical pitch band of ``step`` axes units. The node
@@ -516,6 +568,8 @@ def _flow_type_scale(
         label_line_pt = label_fs * 1.25
         count_line_pt = count_fs * 1.25
         note_line_pt = note_fs * 1.25
+        # Characters per side-column line, by the share note's width rule.
+        side_wrap = max(12, int(side_width_pt * 0.92 / (note_fs * 0.5)))
         max_node_pt = 0.0
         for label in labels:
             node_pt = (
@@ -549,6 +603,10 @@ def _flow_type_scale(
                 max_up_pt = max(
                     max_up_pt, note_line_pt if excluded[index] else 0.0
                 )
+                # Ledger arithmetic like the exclusion above it, so its
+                # lines are kept in both tiers.
+                missing_note = _missing_note(missing[index], wrap=side_wrap)
+                down_pt = note_line_pt * len(missing_note.splitlines())
                 if draw_shares and excluded[index]:
                     parts = _share_parts(
                         counts[index], counts[index - 1], counts[0]
@@ -561,12 +619,13 @@ def _flow_type_scale(
                             and len(joined) * note_fs * 0.5 > side_width_pt * 0.92
                         ):
                             shares_lines = 2
-                        max_down_pt = max(
-                            max_down_pt,
-                            note_line_pt * (shares_lines if len(parts) == 2 else 1),
+                        down_pt += note_line_pt * (
+                            shares_lines if len(parts) == 2 else 1
                         )
+                max_down_pt = max(max_down_pt, down_pt)
             if max_up_pt + max_down_pt + 2 * _NOTE_BOX_PAD_PT <= note_band_pt:
-                return scale, wrap, height, shares_lines if draw_shares else 0
+                shares = shares_lines if draw_shares else 0
+                return scale, wrap, height, shares, side_wrap
         scale -= 0.05
 
 
@@ -643,10 +702,14 @@ def _add_exclusion_box(
     side_x: float,
     note_offset: float,
     excluded: int,
+    missing_note: str,
     shares: str,
     fontsize: float,
 ) -> None:
     """A participant-flow side box: the exclusion count over the retained shares.
+
+    Between them, when the ledger counts any, the excluded records read
+    without a recorded value.
 
     A line joins it to the arrow between the two stages it separates.  The
     text keeps the coordinates the fit pass measured; the box only frames it.
@@ -657,9 +720,10 @@ def _add_exclusion_box(
     _panel_w, panel_h_pt = _axes_size_pt(ax)
     line = fontsize * 1.25 / panel_h_pt
     pad = _NOTE_BOX_PAD_PT / panel_h_pt
+    missing_lines = missing_note.count("\n") + 1 if missing_note else 0
     share_lines = shares.count("\n") + 1 if shares else 0
     top = middle + note_offset + line + pad
-    bottom = middle - note_offset - share_lines * line - pad
+    bottom = middle - note_offset - (missing_lines + share_lines) * line - pad
     left = side_x - 0.012
     ax.plot(
         [hub_x, left],
@@ -690,10 +754,21 @@ def _add_exclusion_box(
         color=PALETTE_CLINICAL["red"],
         zorder=3,
     )
-    if shares:
+    if missing_note:
         ax.text(
             side_x,
             middle - note_offset,
+            missing_note,
+            ha="left",
+            va="top",
+            fontsize=fontsize,
+            color=PALETTE_CLINICAL["red"],
+            zorder=3,
+        )
+    if shares:
+        ax.text(
+            side_x,
+            middle - note_offset - missing_lines * line,
             shares,
             ha="left",
             va="top",
@@ -739,6 +814,11 @@ def render_cohort_flow_axis(
         for previous, current in zip(counts, counts[1:]):
             drop = previous - current
             excluded.append(drop if drop > 0 else 0)
+    # A composite's small panel keeps its summary grammar and its canvas;
+    # the cohort flow figure itself carries the records read without a value.
+    missing = (
+        [0] * len(counts) if compact else _excluded_missing_counts(frame, excluded)
+    )
     body_fontsize = 6.0 if compact else 8.5
     count_fontsize = 6.4 if compact else 9.0
     note_fontsize = 5.4 if compact else 7.5
@@ -772,6 +852,7 @@ def render_cohort_flow_axis(
             labels=labels,
             counts=counts,
             excluded=excluded,
+            missing=missing,
             panel_width_pt=panel_width_pt,
             panel_height_pt=panel_height_pt,
             step=step,
@@ -793,7 +874,7 @@ def render_cohort_flow_axis(
         figure.set_size_inches(
             figure.get_figwidth(), figure.get_figheight() * 1.25, forward=False
         )
-    scale, wrap, height, shares_lines = fitted
+    scale, wrap, height, shares_lines, side_wrap = fitted
     body_fontsize *= scale
     count_fontsize *= scale
     note_fontsize *= scale
@@ -843,6 +924,7 @@ def render_cohort_flow_axis(
             side_x=side_x,
             note_offset=note_offset,
             excluded=excluded[index],
+            missing_note=_missing_note(missing[index], wrap=side_wrap),
             shares=(
                 _share_note(
                     _share_parts(count, counts[index - 1], universe),
@@ -880,6 +962,11 @@ def run_cohort_flow_figure(
     completeness = _accounting_completeness(frame)
     complete = completeness == COHORT_ACCOUNTING_COMPLETE
     unfiltered_universe = (not complete) and _unfiltered_universe(frame)
+    missing_drawn = (
+        complete
+        and _EXCLUDED_MISSING in frame
+        and bool(frame[_EXCLUDED_MISSING].iloc[1:].gt(0).any())
+    )
     display_labels = _display_labels(frame, complete=complete)
     # The normalized columns above are plotting coordinates, not new emitted
     # results. Preserve the upstream value columns exactly so every exported
@@ -976,7 +1063,7 @@ def run_cohort_flow_figure(
             "records entering, excluded from, and remaining after each recorded "
             "eligibility stage; no additional selection is applied by the figure. "
             "The ledger begins at the bound input universe, not necessarily the "
-            "entire source database."
+            "entire source database." + (_MISSING_CAPTION if missing_drawn else "")
             if complete
             else (
                 "Analysis denominator. The single bar shows all bound input "

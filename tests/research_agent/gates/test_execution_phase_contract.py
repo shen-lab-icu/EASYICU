@@ -1863,13 +1863,13 @@ def test_primary_cohort_coder_receives_verified_physical_predicate_receipt(
         "n_before": 3,
         "n_excluded": 1,
         "n_remaining": 2,
+        "n_excluded_missing": 1,  # stay 12 has no recorded age
         "op": ">=",
         "predicate_kind": "inclusion",
         "resolved_column": "age",
         "step_order": 1,
         "value": 18,
-        # A magnitude filter is never narrowed by an event time, so the ledger
-        # states that explicitly rather than omitting the fields on some rows.
+        # Never narrowed by an event time: the fields are None, not omitted.
         "event_time_column": None,
         "event_time_start_hours": None,
         "event_time_end_hours": None,

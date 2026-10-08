@@ -687,9 +687,16 @@
         "src/easyicu/research_agent/resources/coder.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "resources/coder.py: the Coder is told a cohort-flow row's n_excluded_missing describes its exclusion and selects no rows; source digest only, no measured context size changes.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/resources/coder.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "resources/coder.py: the Coder is told a windowed cohort-flow row's event time lies in [event_time_start_hours, event_time_end_hours), as the host reads it: an hourly event time at the end hour was charted after the window; source digest only, no measured context size changes.",
+  "baseline_reason": "resources/coder.py: the Coder is told a cohort-flow row's n_excluded_missing describes its exclusion and selects no rows; source digest only, no measured context size changes.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -719,7 +726,7 @@
     "src/easyicu/research_agent/resources/capability.py": "3fc6dea8ffde23a358dfccd02b5f31620069fcccba8012807057a9913c70ca84",
     "src/easyicu/research_agent/resources/capability_runtime.py": "5e707e8a4b3a5f375ae579951b07c3e1f07d635b8db093109c613936c8b3bc71",
     "src/easyicu/research_agent/resources/catalog.py": "d1df9901759c3a323ac6a9bb4998cefa7ca2deb978ddd8409851a68f2beeff2f",
-    "src/easyicu/research_agent/resources/coder.py": "fc2ad33f2c9e028c8f7fd41077b295148abfc8a4dc7b2196f04ea84cc216fee7",
+    "src/easyicu/research_agent/resources/coder.py": "9cfa95df9338ecd9d7c158fe80d492a79b83fc99417bcf78e0b45af412418095",
     "src/easyicu/research_agent/resources/context.py": "8ce42accd83398ff9972b8e50f2f64f9ac926ad610d2c386f2b763adf77af2e1",
     "src/easyicu/research_agent/resources/scheduler.py": "50d836934c0f079c35265004495a067a543ed575e2ed1757319fe619c9c7a280",
     "src/easyicu/research_agent/resources/schema.py": "456053a9d96a8ee5fe0b3e8b2cfa22187f6bb0d8cc81b43d28569ffd311fd288",
