@@ -457,8 +457,8 @@ def test_plan_predicates_over_a_declared_package_select_the_rows_they_admit() ->
 # Criteria the plan did not apply ------------------------------------------
 
 _NOT_APPLIED = (
-    "- Population criteria the plan names but did not apply (no data concept "
-    "expresses them, so they selected no one): "
+    "- Population criteria the plan names but did not apply (no predicate "
+    "applies them, so they selected no one): "
 )
 _NOT_APPLIED_RULE = (
     "- A criterion listed as not applied is not part of this study's population: "
@@ -503,6 +503,26 @@ def test_a_criterion_the_plan_did_not_apply_is_stated_as_not_applied(
     block = writer_population_block(population)
     assert _NOT_APPLIED + "; ".join(criteria) + "." in block
     assert _NOT_APPLIED_RULE in block
+
+
+def test_the_not_applied_line_names_no_cause() -> None:
+    # A criterion is left unapplied for more than one cause: no allowed
+    # concept expresses it, or the input does not record it as it is stated.
+    # The block is told neither, so its line names no cause.
+    criterion = "Lactate above 4 mmol/L within 6 h of ICU admission"
+    plan = _plan({**_SELECTED, "unapplied_population_criteria": [criterion]})
+
+    population = analyzed_population(plan=plan, context=_context())
+
+    assert population is not None
+    (line,) = [
+        line
+        for line in writer_population_block(population).splitlines()
+        if line.startswith(_NOT_APPLIED.split(" (", 1)[0])
+    ]
+    assert line == _NOT_APPLIED + criterion + "."
+    preamble = line[: -len(criterion) - 1]
+    assert not any(word in preamble for word in ("concept", "express", "window", "record"))
 
 
 def test_a_plan_applying_every_criterion_names_none_as_unapplied() -> None:
