@@ -417,7 +417,7 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "34"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "35"
 
 
 def manuscript_section_specs(analysis_plan: AnalysisPlan | None = None):

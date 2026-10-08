@@ -327,8 +327,8 @@ def writer_population_block(population: AnalyzedPopulation | None) -> str:
             )
         if population.unapplied_population_criteria:
             lines.append(
-                "- Population criteria the plan names but did not apply (no data "
-                "concept expresses them, so they selected no one): "
+                "- Population criteria the plan names but did not apply (no "
+                "predicate applies them, so they selected no one): "
                 + _listed(list(population.unapplied_population_criteria))
             )
     lines.append(_DESCRIBE_RULE)
