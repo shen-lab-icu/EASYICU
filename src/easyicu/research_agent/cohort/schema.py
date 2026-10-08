@@ -1511,6 +1511,7 @@ def _build_cohort_with_flow(
             "n_before": int(len(data)),
             "n_excluded": 0,
             "n_remaining": int(len(data)),
+            "n_excluded_missing": 0,
             **_event_time_flow_fields(None),
         }
     ]
@@ -1520,12 +1521,13 @@ def _build_cohort_with_flow(
     ]
     for order, (kind, predicate) in enumerate(ordered, start=1):
         before = int(mask.sum())
-        predicate_mask, event_time_window = _predicate_mask(
+        predicate_mask, event_time_window, unrecorded = _predicate_mask(
             data,
             predicate,
             column_bindings=column_bindings,
         )
         keep = predicate_mask if kind == "inclusion" else ~predicate_mask
+        excluded = mask & ~keep
         mask &= keep
         remaining = int(mask.sum())
         flow.append(
@@ -1545,6 +1547,11 @@ def _build_cohort_with_flow(
                 "n_before": before,
                 "n_excluded": before - remaining,
                 "n_remaining": remaining,
+                # Of those excluded, the stays the predicate read without a
+                # recorded value: a criterion that could not be read is not
+                # one that was unmet, and a reader of the ledger can tell them
+                # apart only here.
+                "n_excluded_missing": int((excluded & unrecorded).sum()),
                 # The mask above is the only authority on what this predicate
                 # did; the same call that built it reports the window it used,
                 # so the ledger cannot describe a filter that was not applied.
@@ -1616,7 +1623,12 @@ def _predicate_mask(
     pred: ConceptPredicate,
     *,
     column_bindings: Optional[Dict[str, str]] = None,
-) -> tuple[Any, Optional["AppliedEventTimeWindow"]]:
+) -> tuple[Any, Optional["AppliedEventTimeWindow"], Any]:
+    """The predicate's mask, its event-time window and its unrecorded rows.
+
+    The last is ``_unrecorded_value_mask``: the rows read without a value.
+    """
+
     if pred.aggregation not in _IMPLEMENTED_AGGREGATIONS:
         raise NotImplementedError(
             f"aggregation {pred.aggregation!r} is not implemented by the CTAS "
@@ -1636,7 +1648,10 @@ def _predicate_mask(
         )
     series = data[column]
     mask = _apply_op(series, pred.op, pred.value)
-    return _refine_occurrence_mask_by_event_time(data, pred, mask, status=series)
+    mask, window = _refine_occurrence_mask_by_event_time(
+        data, pred, mask, status=series
+    )
+    return mask, window, _unrecorded_value_mask(data, series, window)
 
 
 @dataclass(frozen=True)
@@ -1801,7 +1816,7 @@ def _refine_occurrence_mask_by_event_time(
             f"cohort predicate on {pred.concept_id!r} is anchored at "
             f"{tw.anchor!r}, but {event_time_col!r} is in hours from ICU admission"
         )
-    event = (status == 1).fillna(False).astype(bool)
+    event = _event_occurred(status)
     event_time = data[event_time_col]
     if bool(event.any()) and not bool(event_time[event].notna().any()):
         raise CohortDataError(
@@ -1819,6 +1834,36 @@ def _refine_occurrence_mask_by_event_time(
         end_offset_hours=end,
         reading=reading,
     )
+
+
+def _event_occurred(status: Any) -> Any:
+    """The stays whose event status records the event (level 1)."""
+
+    return (status == 1).fillna(False).astype(bool)
+
+
+def _unrecorded_value_mask(
+    data: Any,
+    series: Any,
+    window: Optional[AppliedEventTimeWindow],
+) -> Any:
+    """The rows a predicate read without a recorded value.
+
+    Whatever the operator, such a row was placed by the value's absence,
+    not by a value: a comparison reads a missing value as unmet (``!=`` and
+    ``not_in`` as met) and a missingness check reads nothing else. A
+    predicate read over an event-time window (``window``) also reads the
+    event's time, and an event without one lies outside every window; a
+    stay without the event needs no time. The attrition ledger counts
+    these rows among each step's exclusions.
+    """
+
+    unrecorded = series.isna()
+    if window is not None:
+        unrecorded = unrecorded | (
+            _event_occurred(series) & data[window.event_time_column].isna()
+        )
+    return unrecorded
 
 
 def _apply_op(series: Any, op: str, value: Any) -> Any:
