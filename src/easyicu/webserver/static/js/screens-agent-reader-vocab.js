@@ -77,6 +77,7 @@
     REVIEWABLE_PLAN_SPECIFICATION_MISSING: ['缺少完整的推荐设定', '所选设计没有给出完整、可审阅的推荐设定。'],
     ROBUSTNESS_AXES_TOO_NARROW: ['稳健性分析维度不足', '可执行的稳健性分析维度少于这类研究的要求。'],
     ROBUSTNESS_DIAGNOSTIC_DISPLAY_MISMATCH: ['稳健性图混入了诊断结果', '稳健性图绑定了不是效应估计的函数形式诊断。'],
+    ROBUSTNESS_OVERRIDE_EVENT_WINDOW_UNREADABLE: ['稳健性分析的事件窗口读不出', '有锁定的稳健性分析要按有限时间窗读取一个事件，但输入只记录了整段住院的状态，没有该事件的时间列；宿主不会构建这些队列，这些分析没有估计，运行会在稳健性面板处不通过。由 Agent 改写或删除这些敏感性分析，不需要你补填；主估计目标不变。'],
     ROBUSTNESS_SPECS_NOT_EXECUTABLE: ['部分稳健性分析没有执行组件', '计划声明的部分稳健性分析没有任何组件会执行。'],
     SCIENTIFIC_STEP_METHOD_SOURCE_NOT_BOUND: ['科学步骤缺少方法依据', '有科学步骤没有引用约束其方法的文献。'],
     STUDY_TIME_ZERO_MISMATCH: ['研究时间零点与观察窗起点不一致', '研究声明的时间零点不是已物化观察窗计时的起点；研究没有主暴露，无法由暴露定义承载这个时间零点。'],

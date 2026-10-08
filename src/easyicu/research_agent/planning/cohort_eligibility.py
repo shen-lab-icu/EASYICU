@@ -40,6 +40,10 @@ from typing import Any, Iterable, Literal, Mapping
 from ..concept_availability import stay_level_concept_category
 from ..research_context.concept_population import ConceptCohortWindow
 from ..research_context.materialization_window import host_materialization_window_hours
+from ..research_context.stay_events import (
+    event_time_status_column,
+    stay_outcome_columns,
+)
 from ..research_context.temporal_semantics import normalise_time_anchor
 from ..schema import ResearchContext
 from .adjustment_authority import host_window_bound_roles
@@ -244,10 +248,7 @@ def cohort_predicates_after_time_zero(
     if time_zero_hours is None:
         return ()
     variables = {str(variable.name): variable for variable in context.variables}
-    outcomes = {
-        *context.cohort.outcome_columns,
-        *([context.target_outcome] if context.target_outcome else []),
-    }
+    outcomes = stay_outcome_columns(context)
     # Only a column's own window proves it here: the analysis time windows
     # are not what the host materialized.
     proven = host_window_bound_roles(
@@ -284,11 +285,7 @@ def cohort_predicates_after_time_zero(
                     )
                 continue
             category = stay_level_concept_category(concept)
-            if (
-                role == "outcome"
-                or {concept, column} & outcomes
-                or category == _STAY_END_CATEGORY
-            ):
+            if {concept, column} & outcomes or category == _STAY_END_CATEGORY:
                 if not _event_absence_decided(
                     kind, predicate, concept, variables, time_zero_hours
                 ):
@@ -419,8 +416,7 @@ def event_status_read_by_its_time(variables: Mapping[str, Any], concept: str) ->
     """
 
     companion = variables.get(f"{concept}_time")
-    semantics = getattr(companion, "observation_semantics", None)
-    if companion is None or getattr(semantics, "event_status_column", None) != concept:
+    if companion is None or event_time_status_column(companion) != concept:
         return False
     event_time, hours_per_unit = _event_time(companion)
     return event_time and hours_per_unit == 1.0

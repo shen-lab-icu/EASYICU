@@ -21,7 +21,12 @@ import pandas as pd
 from ..schema import ResearchContext
 from ..authority.evidence_store import EvidenceStore
 from .readiness import _blocked_outcome_step_ids
-from ..robustness.panel import RobustnessPanel, load_robustness_panel
+from ..robustness.panel import (
+    RobustnessPanel,
+    load_robustness_panel,
+    row_was_estimated,
+    unexecuted_locked_spec_ids,
+)
 from ..authority.runtime_artifacts import (
     current_step_records,
     verified_run_evidence_path,
@@ -1661,12 +1666,12 @@ def _render_robustness_panel_block(
             "placeholder is not evidence that a primary model was executed "
             "or failed to converge."
         )
-    converged_variants = [
+    variant_rows = [
         row
         for row in panel.rows
-        if row.spec_id != panel.primary_spec_id and row.converged and row.independent_variant
+        if row.spec_id != panel.primary_spec_id and row.independent_variant
     ]
-    if converged_variants:
+    if any(row_was_estimated(row) for row in variant_rows):
         lines.append(
             "variants: "
             f"n_variants={panel.n_variants}, "
@@ -1677,7 +1682,7 @@ def _render_robustness_panel_block(
                 else "no common effect range is authorized; retain each result and its contrast separately"
             )
         )
-    elif panel.n_variants:
+    elif variant_rows:
         lines.append(
             "variants: "
             f"n_variants={panel.n_variants}, "
@@ -1689,6 +1694,16 @@ def _render_robustness_panel_block(
             "variants: n_variants=0, no independent sensitivity variant result rows were "
             "recorded. This is not evidence of nonconvergence; do not claim "
             "an executed robustness analysis or a robustness range."
+        )
+    unexecuted = unexecuted_locked_spec_ids(panel)
+    if unexecuted:
+        lines.append(
+            "pre-specified but not estimated: "
+            + ", ".join(unexecuted)
+            + ". Report each as a pre-specified sensitivity analysis the run did "
+            "not carry out, for the reason its row's notes record; none of them "
+            "is among the n_variants analyses or in any count of sensitivity "
+            "analyses."
         )
     for row in panel.rows:
         if row.spec_id == panel.primary_spec_id:

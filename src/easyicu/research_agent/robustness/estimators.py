@@ -13,8 +13,13 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 
-from ..cohort.schema import CohortDefinition, build_cohort
+from ..cohort.schema import (
+    CohortDefinition,
+    build_cohort,
+    require_event_windows_readable,
+)
 from ..methods.missing import apply_missing_strategy
+from ..research_context.stay_events import whole_stay_event_columns
 from .primary_effect import (
     _extract_primary_effect_payload_from_records,
     _primary_effect_payload_is_complete,
@@ -1325,11 +1330,18 @@ def _data_with_predicate_aliases(
     exposure: str,
     context: Any,
 ) -> Any:
+    """The data a cohort override is built from, its missing concepts aliased.
+
+    Every robustness path builds an override from this frame, so the refusal
+    of a window the builder would read over the whole stay is made here: a
+    concept aliased to a whole-stay column records its event over the whole
+    stay too (``require_event_windows_readable``).
+    """
+
     predicates = [*cohort_definition.inclusion, *cohort_definition.exclusion]
     missing = [pred for pred in predicates if pred.concept_id not in data.columns]
-    if not missing:
-        return data
-    out = data.copy()
+    out = data.copy() if missing else data
+    aliases: Dict[str, str] = {}
     for pred in missing:
         alias = _resolve_column_alias(
             pred.concept_id,
@@ -1339,6 +1351,15 @@ def _data_with_predicate_aliases(
         )
         if alias:
             out[pred.concept_id] = out[alias]
+            aliases[pred.concept_id] = alias
+    whole_stay = whole_stay_event_columns(context)
+    require_event_windows_readable(
+        cohort_definition,
+        columns=out.columns,
+        whole_stay_columns=whole_stay
+        | {concept for concept, alias in aliases.items() if alias in whole_stay},
+        label="cohort_override",
+    )
     return out
 
 

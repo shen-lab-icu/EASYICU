@@ -152,7 +152,15 @@ class RobustnessPanel:
             rows=row_tuple,
             range_low=min(converged_lows) if converged_lows else None,
             range_high=max(converged_highs) if converged_highs else None,
-            n_variants=sum(1 for r in row_tuple if r.spec_id != primary_spec_id and r.independent_variant),
+            # Only a variant with an estimate is a sensitivity analysis the
+            # run carried out; a blank row counts nowhere.
+            n_variants=sum(
+                1
+                for r in row_tuple
+                if r.spec_id != primary_spec_id
+                and r.independent_variant
+                and row_was_estimated(r)
+            ),
             locked_at=locked_at or datetime.now(timezone.utc).isoformat(),
         )
 
@@ -739,6 +747,21 @@ def _declared_rows_from_records(
             yield RobustnessPanelRow.from_dict(data)
 
 
+def row_was_estimated(row: RobustnessPanelRow) -> bool:
+    """Whether the row holds an estimate: a finite point estimate that converged.
+
+    A row without one is a locked specification the run did not carry out:
+    blocked, never emitted or not converged.  ``converged`` is required of
+    every result row, and a non-iterative estimate records it as well.
+    """
+
+    return bool(
+        row.converged
+        and row.point_estimate is not None
+        and math.isfinite(float(row.point_estimate))
+    )
+
+
 def _row_has_claimable_estimate(row: RobustnessPanelRow) -> bool:
     return bool(
         row.converged
@@ -908,8 +931,7 @@ def unexecuted_locked_spec_ids(panel: "RobustnessPanel") -> list[str]:
     return sorted(
         row.spec_id
         for row in panel.rows
-        if row.spec_id != panel.primary_spec_id
-        and (row.point_estimate is None or not row.converged)
+        if row.spec_id != panel.primary_spec_id and not row_was_estimated(row)
     )
 
 
@@ -928,6 +950,7 @@ __all__ = [
     "load_locked_robustness_specs",
     "load_robustness_panel",
     "numeric_digest_for_panel",
+    "row_was_estimated",
     "robustness_specs_for_execution",
     "unexecuted_locked_spec_ids",
     "validate_robustness_specs",

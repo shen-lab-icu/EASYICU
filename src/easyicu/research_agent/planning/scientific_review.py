@@ -28,6 +28,10 @@ from ..authority.current_case_scientific_runtime import (
     LandmarkCategoricalAssociationRuntimeAuthority,
     LandmarkSplineRuntimeAuthority,
 )
+from ..cohort.schema import (
+    context_materialized_columns,
+    predicates_read_over_the_whole_stay,
+)
 from ..concept_availability import normalize_database_name
 from ..gates.plan_declared_inputs import declared_raw_input_plan_findings
 from ..contracts.host_action_robustness import host_action_prespecified_axes
@@ -76,6 +80,7 @@ from ..research_context.concept_population import (
 )
 from ..research_context.materialization_window import host_materialization_window_hours
 from ..research_context.minimum_stay import minimum_icu_stay_hours
+from ..research_context.stay_events import whole_stay_event_columns
 from ..research_context.temporal_semantics import (
     primary_exposure_time_anchor_alignment,
     study_time_origin_alignment,
@@ -90,6 +95,7 @@ from ..trajectory.runtime_validation import (
     signed_trajectory_plan_claimed,
     signed_trajectory_plan_contract_errors,
 )
+from .cohort_contract import CohortDefinition
 from .cohort_eligibility import (
     PredicateAfterTimeZero,
     cohort_predicates_after_time_zero,
@@ -2995,6 +3001,66 @@ def unapplied_population_findings(plan: AnalysisPlan) -> list[PlanScientificFind
     ]
 
 
+def robustness_override_event_window_findings(
+    context: ResearchContext, plan: AnalysisPlan
+) -> list[PlanScientificFinding]:
+    """Say which locked cohort overrides read an event over a window the input cannot.
+
+    An override that reads an event over a finite window from a column that
+    records it over the whole stay, with no ``<concept>_time`` beside it, is
+    refused where every robustness path builds it
+    (``cohort.schema.require_event_windows_readable``).  Its specification
+    then has no estimate, and an unexecuted locked specification fails the
+    run closed at the robustness panel.  The primary cohort is refused at
+    planning instead.
+    """
+
+    whole_stay = whole_stay_event_columns(context)
+    if not whole_stay:
+        return []
+    columns = context_materialized_columns(context)
+    found = [
+        item
+        for spec in plan.robustness_specs
+        for override in [getattr(spec, "cohort_override", None)]
+        if isinstance(override, CohortDefinition)
+        for item in predicates_read_over_the_whole_stay(
+            override,
+            columns=columns,
+            whole_stay_columns=whole_stay,
+            label=f"robustness_specs[{spec.spec_id}].cohort_override",
+        )
+    ]
+    if not found:
+        return []
+    return [
+        PlanScientificFinding(
+            code="ROBUSTNESS_OVERRIDE_EVENT_WINDOW_UNREADABLE",
+            severity="major",
+            dimension="robustness",
+            message=(
+                "These locked cohort overrides read an event over a window the "
+                "input cannot place it in, so the host will not build them, and an "
+                "unexecuted locked specification fails the run closed at the "
+                "robustness panel: " + "; ".join(item.description() for item in found)
+            ),
+            evidence_refs=[
+                "analysis_plan.json.robustness_specs",
+                "research_context.json.variables",
+            ],
+            remediation=(
+                "Restate each such override so the input can read it, or remove the "
+                "specification. A predicate on a column that records its event over "
+                'the whole stay reads only the whole stay (end_offset_hours "inf"), '
+                "for a sensitivity analysis that means the whole stay; a reading "
+                "bounded in time needs an input that records the event's time as "
+                "<concept>_time. Do not change the headline estimand."
+            ),
+            remediation_route="agent_plan_revision",
+        )
+    ]
+
+
 def build_plan_scientific_review(
     *,
     context: ResearchContext,
@@ -3184,6 +3250,7 @@ def build_plan_scientific_review(
     )
     findings.extend(cohort_predicate_domain_findings(context, plan))
     findings.extend(unapplied_population_findings(plan))
+    findings.extend(robustness_override_event_window_findings(context, plan))
     required_source_columns = {
         context.primary_exposure, context.target_outcome,
         *context.cohort.outcome_columns,

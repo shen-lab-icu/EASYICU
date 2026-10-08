@@ -64,6 +64,7 @@ from ..planning.cohort_contract import (
     validate_cohort_definition,
     validate_concept_predicate,
 )
+from ..research_context.stay_events import whole_stay_event_columns
 from ..research_context.typed import parse_research_context_json
 
 COHORT_LOCK_FILENAME = "cohort_locked.json"
@@ -131,6 +132,34 @@ def materialized_input_column_authority(
         reserved_navigation_coordinates=tuple(
             sorted(set(sealed_columns) - set(executable_columns))
         ),
+    )
+
+
+def context_materialized_columns(context: Any) -> tuple[str, ...]:
+    """The columns the run's input carries, as the context records them.
+
+    A typed context seals its cohort columns.  A legacy one lists its
+    variables and the cohort's id, time and outcome columns.
+    """
+
+    sealed = materialized_input_column_authority(context).sealed_columns
+    if sealed:
+        return sealed
+    cohort = getattr(context, "cohort", None)
+    return tuple(
+        dict.fromkeys(
+            str(column)
+            for column in (
+                *(
+                    getattr(variable, "name", "")
+                    for variable in getattr(context, "variables", None) or ()
+                ),
+                *(getattr(cohort, "id_columns", None) or ()),
+                *(getattr(cohort, "time_columns", None) or ()),
+                *(getattr(cohort, "outcome_columns", None) or ()),
+            )
+            if str(column or "").strip()
+        )
     )
 
 
@@ -971,6 +1000,7 @@ def validate_plan_typed_bindings_against_context(
     a host-verified materialized column roster.
     """
 
+    _require_primary_event_windows_readable(plan=plan, context=context)
     column_authority = materialized_input_column_authority(context)
     columns = column_authority.sealed_columns
     if not columns:
@@ -1095,6 +1125,48 @@ def validate_plan_typed_bindings_against_context(
         f"{sorted(executable_columns)!r}; reserved navigation coordinates="
         f"{list(reserved_coordinates)!r}."
     )
+
+
+def _require_primary_event_windows_readable(*, plan: Any, context: Any) -> None:
+    """Refuse a primary cohort the builder would read over the whole stay.
+
+    Legacy contexts too: without a sealed roster, the context's own columns
+    stand in for the input's (``context_materialized_columns``).  The plan's
+    cohort is read as the plan holds it, not validated again: its concepts
+    were checked when the plan was built, in that plan's concept scope, and
+    an ``AnalysisPlan`` always holds a ``CohortDefinition``.  A cohort whose
+    columns do not bind is left to the checks that report it.
+    """
+
+    whole_stay = whole_stay_event_columns(context)
+    definition = getattr(plan, "cohort", None)
+    if not whole_stay or not isinstance(definition, CohortDefinition):
+        return
+    columns = context_materialized_columns(context)
+    try:
+        bindings = _planner_declared_context_column_bindings(
+            definition=definition,
+            plan=plan,
+            context=context,
+            columns=columns,
+        )
+    except CohortDataError:
+        return
+    found = predicates_read_over_the_whole_stay(
+        definition,
+        columns=columns,
+        whole_stay_columns=whole_stay,
+        column_bindings=bindings,
+    )
+    if found:
+        raise CohortSchemaError(
+            f"{COHORT_EVENT_WINDOW_UNREADABLE}: "
+            + "; ".join(item.description() for item in found)
+            + ". The cohort builder would read the whole stay instead. State each "
+            "such criterion in cohort.unapplied_population_criteria and remove its "
+            "predicate; a predicate on that column can read only the whole stay "
+            '(end_offset_hours "inf"), for a criterion that means the whole stay.'
+        )
 
 
 def validate_plan_cohort_predicates_against_context(
@@ -1239,6 +1311,7 @@ def materialize_locked_analysis_cohort(
             definition,
             filter_input,
             column_bindings=column_bindings,
+            whole_stay_columns=whole_stay_event_columns(context),
         )
     except Exception as exc:
         if typed_parent is not None:
@@ -1456,6 +1529,7 @@ def build_cohort(
     data: Any = None,
     *,
     column_bindings: Optional[Dict[str, str]] = None,
+    whole_stay_columns: Sequence[str] = (),
 ) -> Any:
     """Apply a CTAS definition to a stay-level dataframe.
 
@@ -1485,6 +1559,7 @@ def build_cohort(
         definition,
         data,
         column_bindings=column_bindings,
+        whole_stay_columns=whole_stay_columns,
     )
     return cohort
 
@@ -1494,11 +1569,23 @@ def _build_cohort_with_flow(
     data: Any,
     *,
     column_bindings: Optional[Dict[str, str]] = None,
+    whole_stay_columns: Sequence[str] = (),
 ) -> tuple[Any, list[Dict[str, Any]]]:
-    """Apply locked predicates once and return their exact attrition ledger."""
+    """Apply locked predicates once and return their exact attrition ledger.
+
+    ``whole_stay_columns`` are the columns of ``data`` that record an event
+    over the whole stay (``whole_stay_event_columns``); a predicate that would
+    read one over a finite window is refused before any is applied.
+    """
 
     import pandas as pd  # type: ignore
 
+    require_event_windows_readable(
+        definition,
+        columns=data.columns,
+        whole_stay_columns=whole_stay_columns,
+        column_bindings=column_bindings,
+    )
     mask = pd.Series(True, index=data.index)
     flow: list[Dict[str, Any]] = [
         {
@@ -1560,6 +1647,134 @@ def _build_cohort_with_flow(
             }
         )
     return data.loc[mask].copy(), flow
+
+
+#: Why a cohort predicate cannot be read over its window on this input.
+COHORT_EVENT_WINDOW_UNREADABLE = "cohort_event_window_unreadable"
+
+
+@dataclass(frozen=True)
+class WholeStayEventWindow:
+    """A predicate that reads an event over a finite window from a whole-stay status.
+
+    ``column`` records whether the event happened at any time in the ICU
+    stay, and the input has no ``<concept>_time`` to place it in the window.
+    """
+
+    label: str
+    concept_id: str
+    column: str
+    anchor: str
+    start_offset_hours: float
+    end_offset_hours: float
+
+    def description(self) -> str:
+        return (
+            f"{self.label} reads whether the event of {self.concept_id!r} happened "
+            f"within {self.anchor}[{self.start_offset_hours:g}, "
+            f"{self.end_offset_hours:g}) h, but this input records {self.column!r} "
+            "over the whole ICU stay and has no "
+            f"{self.concept_id + '_time'!r} to place the event in that window"
+        )
+
+
+class CohortEventWindowUnreadableError(CohortDataError):
+    """The cohort reads an event over a window its input cannot place it in."""
+
+    code = COHORT_EVENT_WINDOW_UNREADABLE
+
+    def __init__(self, windows: Sequence[WholeStayEventWindow]) -> None:
+        self.windows = tuple(windows)
+        super().__init__(
+            f"{COHORT_EVENT_WINDOW_UNREADABLE}: "
+            + "; ".join(window.description() for window in self.windows)
+        )
+
+    def __str__(self) -> str:
+        # KeyError would quote the message.
+        return str(self.args[0])
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return type(self), (self.windows,)
+
+
+def predicates_read_over_the_whole_stay(
+    definition: CohortDefinition,
+    *,
+    columns: Any,
+    whole_stay_columns: Any,
+    column_bindings: Optional[Dict[str, str]] = None,
+    label: str = "cohort",
+) -> tuple[WholeStayEventWindow, ...]:
+    """The predicates that read an event over a finite window from a whole-stay status.
+
+    The builder reads such a window by the event's own time, the
+    ``<concept>_time`` column beside the status
+    (``_refine_occurrence_mask_by_event_time``).  Without that column it reads
+    the status as it is, over the whole stay: an exclusion of the event
+    within 24 h would remove every stay with the event.  ``columns`` and
+    ``column_bindings`` are those the builder resolves a predicate with, and
+    ``whole_stay_columns`` the columns among them that record an event over
+    the whole stay (``whole_stay_event_columns``).
+    """
+
+    whole_stay = {str(column) for column in whole_stay_columns or ()}
+    if not whole_stay:
+        return ()
+    available = {str(column) for column in columns}
+    found: list[WholeStayEventWindow] = []
+    for kind, predicates in (
+        ("inclusion", definition.inclusion),
+        ("exclusion", definition.exclusion),
+    ):
+        for index, predicate in enumerate(predicates):
+            window = predicate.time_window
+            end = float(window.end_offset_hours)
+            if (
+                _event_time_reading(predicate) is None
+                or not math.isfinite(end)
+                or f"{predicate.concept_id}_time" in available
+            ):
+                continue
+            column = _resolve_predicate_column(
+                available,
+                predicate.concept_id,
+                predicate.aggregation,
+                column_bindings=column_bindings,
+            )
+            if column in whole_stay:
+                found.append(
+                    WholeStayEventWindow(
+                        label=f"{label}.{kind}[{index}]",
+                        concept_id=predicate.concept_id,
+                        column=column,
+                        anchor=str(window.anchor),
+                        start_offset_hours=float(window.start_offset_hours),
+                        end_offset_hours=end,
+                    )
+                )
+    return tuple(found)
+
+
+def require_event_windows_readable(
+    definition: CohortDefinition,
+    *,
+    columns: Any,
+    whole_stay_columns: Any,
+    column_bindings: Optional[Dict[str, str]] = None,
+    label: str = "cohort",
+) -> None:
+    """Refuse a cohort the builder would read over the whole stay."""
+
+    found = predicates_read_over_the_whole_stay(
+        definition,
+        columns=columns,
+        whole_stay_columns=whole_stay_columns,
+        column_bindings=column_bindings,
+        label=label,
+    )
+    if found:
+        raise CohortEventWindowUnreadableError(found)
 
 
 def _catalog_output_stems(concept_id: str) -> tuple[str, ...]:
@@ -1871,21 +2086,25 @@ def _apply_op(series: Any, op: str, value: Any) -> Any:
 
 __all__ = [
     "ALLOWED_CTAS_AGGREGATIONS",
+    "COHORT_EVENT_WINDOW_UNREADABLE",
     "COHORT_LOCK_FILENAME",
     "CohortAuthorityError",
     "CohortDefinition",
     "CohortDataError",
+    "CohortEventWindowUnreadableError",
     "CohortSchemaError",
     "ConceptPredicate",
     "MaterializedInputColumnAuthority",
     "PatternRegistry",
     "TimeWindow",
     "UNIVERSAL_ANCHORS",
+    "WholeStayEventWindow",
     "assert_cohort_definition_locked",
     "build_cohort",
     "coerce_cohort_definition",
     "clear_cohort_concept_ids",
     "cohort_concept_id_scope",
+    "context_materialized_columns",
     "materialized_cohort_concept_id_scope",
     "cohort_definition_sha",
     "concept_id_exists",
@@ -1895,10 +2114,12 @@ __all__ = [
     "known_concept_ids",
     "materialized_input_column_authority",
     "predicate_accepts_closed_level",
+    "predicates_read_over_the_whole_stay",
     "register_cohort_concept_ids",
     "registered_run_cohort_concept_ids",
     "register_pattern",
     "register_patterns_from_file",
+    "require_event_windows_readable",
     "reset_pattern_registry",
     "validate_cohort_definition",
     "validate_plan_cohort_predicates_against_context",
