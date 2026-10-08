@@ -409,8 +409,12 @@ def get_all_patient_ids(
     data_path: Union[str, Path],
     database: Optional[str] = None,
     max_patients: Optional[int] = None,
+    listing: Optional[Dict[str, str]] = None,
 ) -> tuple:
-    """Return patient IDs, failing closed when discovery cannot be verified."""
+    """Return patient IDs, failing closed when discovery cannot be verified.
+
+    ``listing``, when given, receives the order the IDs come in.
+    """
     return _get_all_patient_ids_impl(
         data_path,
         database_id_config=DATABASE_ID_CONFIG,
@@ -419,6 +423,7 @@ def get_all_patient_ids(
         sample_patient_ids_fn=_sample_patient_ids,
         database=database,
         max_patients=max_patients,
+        listing=listing,
     )
 
 
