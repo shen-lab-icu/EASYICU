@@ -1,0 +1,61 @@
+{
+  "schema": "miiv_scoped_source_events_v2_implementation_receipt",
+  "date": "2026-10-09",
+  "starting_head": "d434f05081db03d43adc2a9552f7337398477e59",
+  "previous_actual_source_commit": "4edfb6695ba848206c76dbc34bcb1877b351031e",
+  "trigger": "candidate a failed before respiratory event query; separate permitted identity/clock diagnosis identified native missing outtime only, in single- and multiple-stay contexts",
+  "trigger_is_post_failure_revision_not_prespecified": true,
+  "old_candidate_preserved": true,
+  "real_events_read_by_this_implementation_round": 0,
+  "real_route_reads_by_this_implementation_round": 0,
+  "model_fits": 0,
+  "candidate_b_executed_by_this_task": false,
+  "source_sha256": {
+    "src/easyicu/io/source_events.py": "eb0fdbe72021b54b8e3f8fb12038d6f5f1a219c04aa85a02ff42add72d9355ac",
+    "tests/core/test_scoped_source_events.py": "aaf0a875e13a1ca6d75a9f85919a3984ffaf2b041a559b693b72ce0e12b3f58d",
+    "docs/validation/miiv_scoped_source_events_v2.md": "35cfc16d4e3d389135c41be78acc05101e627164db2346dc10614a2a1a3b93ee"
+  },
+  "contract": {
+    "schema": "miiv_scoped_source_events_v2",
+    "lab_assignment_rule": "legacy_outtime_forward_rollends",
+    "native_null_only": true,
+    "unknown_exit_completion_domain": "finite E>=known intime L; tied winner treated as ambiguous; no non-overlap assumption",
+    "unique_known_future": "K=min known E>=t and every unknown L>K",
+    "unique_unknown_tail": "no known E>=t, exactly one unknown and L>max known E; no known E satisfies latter comparison",
+    "unidentified_lab": "private reason count only, no clinical value fetch",
+    "native_chart": "keep exact allowed identity/intime, preserve unknown outtime",
+    "clock_context": "all and only allowed stays, including zero-event stays; no endpoint imputation"
+  },
+  "verification": {
+    "complete_related": {
+      "passed": 111,
+      "warnings": 1348,
+      "seconds": 8.34,
+      "log_sha256": "6c554b5e0c5a623ee8b1110629d28f474929b7afb81735d80daba41b1c1fba88",
+      "command": "OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 python -m pytest -q -m '' tests/core/test_scoped_source_events.py tests/core/test_respiratory_source_channels.py tests/core/test_community_databases.py tests/core/test_concept_catalog_consistency.py tests/governance/test_catalog_manifest.py",
+      "broad_tests_run": false
+    },
+    "all_known_v1_git_comparison": "actual committed v1 Python module loaded; hourly, original trace columns and source reason counts exactly equal on synthetic data",
+    "ruff_changed_files": "PASS",
+    "independent_source_review": {
+      "agent": "/root/m2_independent_review",
+      "status": "no API blocking findings; approved to commit",
+      "evidence_stage": "agent message during cross-repository review; no intermediate test SHA advertised as a persisted/replayable reference",
+      "pure_completion_oracle": {
+        "scenarios": 2475,
+        "completions": 131275,
+        "mismatches": 0
+      },
+      "source_and_old_git_checks_reported_passed": 19,
+      "later_cross_repository_stage_reported_passed": 62,
+      "not_disjoint_from_owner_tests": true,
+      "final_persisted_reference": "owned by M2, to be bound after source commit and producer archive integration"
+    }
+  },
+  "limits": [
+    "No clinical impact counts or identities published.",
+    "Unknown-outtime identification is relative to the explicit completion domain, not a recovered ICU exit.",
+    "The candidate failure is retained and v2 must be separately pinned in a new producer run.",
+    "No real candidate b or source/current promotion performed here."
+  ]
+}
