@@ -57,4 +57,33 @@ def bounded_roster(labels: Sequence[str], *, budget: int) -> str | None:
     return text if len(text) <= budget else None
 
 
-__all__ = ["PlanLanguage", "bounded_roster", "listing", "plan_language", "sentence"]
+def adjusted_roster_sentence(
+    head: str, labels: Sequence[str], tail: str, *, bound: int, unadjusted: str
+) -> str:
+    """``head``, the adjustment roster and ``tail`` in at most ``bound`` characters.
+
+    The roster is named while the sentence holds it and counted otherwise; the
+    plan itself lists it in full.  ``unadjusted`` takes the roster's place when
+    there is no covariate.  ``bound`` is the design owner's limit for the field
+    (``contract.design_field_max_length``).  A roster that fits gives the same
+    sentence as joining it in place; a sentence too long even with the count is
+    left for the design contract to refuse.
+    """
+
+    if not labels:
+        return f"{head}{unadjusted}{tail}"
+    prefix = "adjusted for "
+    roster = bounded_roster(labels, budget=bound - len(head) - len(prefix) - len(tail))
+    noun = "covariate" if len(labels) == 1 else "covariates"
+    named = roster or f"{len(labels)} prespecified {noun} named in the plan"
+    return f"{head}{prefix}{named}{tail}"
+
+
+__all__ = [
+    "PlanLanguage",
+    "adjusted_roster_sentence",
+    "bounded_roster",
+    "listing",
+    "plan_language",
+    "sentence",
+]
