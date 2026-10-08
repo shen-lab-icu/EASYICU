@@ -1733,6 +1733,10 @@
     ],
     [
       "easyicu.research_agent.authority.context_numeric_claims",
+      "easyicu.research_agent.research_context.export_selection"
+    ],
+    [
+      "easyicu.research_agent.authority.context_numeric_claims",
       "easyicu.research_agent.schema"
     ],
     [
@@ -13776,7 +13780,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3436,
+    "edge_count": 3437,
     "largest_scc_size": 0,
     "module_count": 787,
     "package_count": 36,

@@ -26,6 +26,14 @@ manuscript states its population only when the plan selected its rows by
 predicate.  Otherwise the registered owners such a statement could cite
 record the export or the question, not a selection.
 
+A recorded selection also states how many ICU stays each criterion excluded,
+from the source database to the analysis input
+(``export_selection.export_selection_counts``), and how the export capped
+its stays if it did.  The block lists them so that the manuscript can report
+its selection as a flow diagram does; the host registers the counts as
+``research_context`` claims.  Without counts that chain, the block states
+none, and why is kept for audit only.
+
 The execution kernel's authority is to own the same record, with these field
 names, for the manuscript's population method fact and its claim check; this
 module then calls that builder instead of reading the owners itself.
@@ -42,7 +50,14 @@ from ..research_context.concept_population import (
     ConceptCohortWindow,
     ConceptCohortWindowError,
 )
-from ..research_context.export_selection import AppliedContracts, export_applied_selection
+from ..research_context.export_selection import (
+    AppliedContracts,
+    ExportCap,
+    SelectionCounts,
+    SelectionStep,
+    export_applied_selection,
+    export_selection_counts,
+)
 from ..schema import AnalysisPlan, ResearchContext
 
 
@@ -117,6 +132,14 @@ class AnalyzedPopulation:
     #: Population criteria the plan names that no predicate applies
     #: (``CohortDefinition.unapplied_population_criteria``); they select no row.
     unapplied_population_criteria: tuple[str, ...] = ()
+    #: The ICU stays each selection criterion excluded, from the source
+    #: database to the analysis input; ``None`` without counts that chain.
+    selection_counts: Optional[SelectionCounts] = None
+    #: How the export capped the stays that met its criteria, if it did.
+    export_cap: Optional[ExportCap] = None
+    #: Why ``selection_counts`` is ``None``: for audit, never in ``record()``
+    #: or the Writer's block.
+    selection_counts_unavailable: Optional[str] = None
 
     def record(self) -> dict[str, Any]:
         """The JSON shape both owners of this record agree on."""
@@ -140,6 +163,14 @@ class AnalyzedPopulation:
             "source_selection_recorded": self.source_selection_recorded,
             "source_selection_basis": self.source_selection_basis,
             "unapplied_population_criteria": list(self.unapplied_population_criteria),
+            "selection_counts": (
+                self.selection_counts.record()
+                if self.selection_counts is not None
+                else None
+            ),
+            "export_cap": (
+                self.export_cap.record() if self.export_cap is not None else None
+            ),
         }
 
 
@@ -181,6 +212,7 @@ def analyzed_population(
         scope = "all_input_rows_of_contracted_export"
     else:
         scope = "all_icu_stays_of_source_export"
+    counts = export_selection_counts(context)
     return AnalyzedPopulation(
         selection_mode=cohort.selection_mode,
         inclusion_predicates=inclusion,
@@ -194,6 +226,9 @@ def analyzed_population(
         unapplied_population_criteria=tuple(
             getattr(cohort, "unapplied_population_criteria", None) or ()
         ),
+        selection_counts=counts.counts,
+        export_cap=counts.cap,
+        selection_counts_unavailable=counts.unavailable,
     )
 
 
@@ -299,6 +334,13 @@ def writer_population_block(population: AnalyzedPopulation | None) -> str:
         applied = _contract_items(population.applied_contracts)
         if recorded:
             lines.append("- Criteria applied before analysis: " + _listed(applied + concept))
+            if population.selection_counts is not None:
+                lines.append(_selection_counts_line(population.selection_counts))
+            if (
+                population.export_cap is not None
+                and population.export_cap.cut is not False
+            ):
+                lines.append(_export_cap_line(population.export_cap))
         elif declared:
             if applied:
                 lines.append("- Criteria applied before analysis: " + _listed(applied))
@@ -346,6 +388,108 @@ def writer_population_block(population: AnalyzedPopulation | None) -> str:
         )
     )
     return "\n".join(lines) + "\n\n"
+
+
+#: How a cap chose the stays it kept, for the rules that keep the first ones.
+_CAP_RULE_TEXT = {
+    "identifier_text_order": "the first by identifier compared as text",
+    "identifier_order": "the first by identifier",
+    "source_file_order": "the first in the order the source's stay table lists them",
+}
+
+
+def _selection_counts_line(counts: SelectionCounts) -> str:
+    """The stays from the source database to the analysis input, step by step."""
+
+    parts = [f"the source database held {counts.source_total:,}"]
+    parts += [_step_text(step) for step in counts.steps if step.stage == "export"]
+    parts.append(f"the export held {counts.exported:,}")
+    parts += [_step_text(step) for step in counts.steps if step.stage == "host"]
+    parts.append(f"the analysis input held {counts.analysis_input:,}")
+    return (
+        "- Selection counts, in ICU stays, never patients (cite research_context): "
+        + "; ".join(parts)
+        + "."
+    )
+
+
+def _step_text(step: SelectionStep) -> str:
+    missing = (
+        f" ({step.n_excluded_missing:,} of them for want of a value)"
+        if step.n_excluded_missing
+        else ""
+    )
+    return (
+        f"{_step_label(step)}: {step.n_excluded:,} excluded{missing}, "
+        f"{step.n_remaining:,} remain"
+    )
+
+
+def _export_cap_line(cap: ExportCap) -> str:
+    kept = f"- Export cap: the export kept at most {cap.max_patients:,} stays, "
+    if cap.rule == "seeded_random_sample":
+        return kept + "a random sample with a fixed seed."
+    if cap.rule == "unrecorded":
+        # How it chose them is unknown, so whether they are random is too.
+        return kept + (
+            "chosen in an order the export did not record, so they cannot be "
+            "taken as a random sample."
+        )
+    return kept + (
+        f"{_CAP_RULE_TEXT[cap.rule]}; they are not a random sample, and the "
+        "stays kept may cluster by hospital or period."
+    )
+
+
+def _step_label(step: SelectionStep) -> str:
+    """What a selection step excluded, in the words a flow diagram uses."""
+
+    parameters = step.parameters
+    if step.criterion == "age":
+        low, high = parameters.get("age_min"), parameters.get("age_max")
+        if low is not None and high is not None:
+            return f"age outside {_offset_text(low)} to {_offset_text(high)} years"
+        if low is not None:
+            return f"age under {_offset_text(low)} years"
+        return f"age over {_offset_text(high)} years"
+    if step.criterion in {"first_icu_stay", "first_icu_stay_restriction"}:
+        label = (
+            "the patient's first ICU stay"
+            if parameters.get("first_icu_stay") is False
+            else "not the patient's first ICU stay"
+        )
+        if step.stage == "host":
+            label += " (restricted by the host)"
+        return label
+    if step.criterion == "los":
+        bounds = []
+        if parameters.get("los_min") is not None:
+            bounds.append(f"shorter than {_offset_text(parameters['los_min'])} h")
+        if parameters.get("los_max") is not None:
+            bounds.append(f"longer than {_offset_text(parameters['los_max'])} h")
+        return "ICU stay " + " or ".join(bounds)
+    if step.criterion == "gender" and parameters.get("gender") is not None:
+        return f"sex other than {parameters['gender']}"
+    if step.criterion == "survived" and parameters.get("survived") is not None:
+        return (
+            "not alive at hospital discharge"
+            if parameters["survived"]
+            else "alive at hospital discharge"
+        )
+    if step.criterion == "has_sepsis" and parameters.get("has_sepsis") is not None:
+        return "without Sepsis-3" if parameters["has_sepsis"] else "with Sepsis-3"
+    if step.criterion == "concept_population" and parameters.get("definition"):
+        return f"outside the concept-derived population {parameters['definition']}"
+    return _STEP_LABELS.get(step.criterion, step.criterion.replace("_", " "))
+
+
+#: The labels of the steps whose wording takes no parameter.
+_STEP_LABELS = {
+    "demographics": "the export's demographic criteria, together",
+    "concept_population": "outside the concept-derived population",
+    "icd": "the diagnosis-code (ICD) criteria",
+    "cap": "beyond the export's cap",
+}
 
 
 def _contracts_record(contracts: AppliedContracts) -> dict[str, list[str]]:

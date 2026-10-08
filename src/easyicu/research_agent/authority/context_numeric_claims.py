@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import math
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import Iterable, Optional
 
 from .evidence_store import EvidenceStore, NumericClaim
+from ..research_context.export_selection import export_selection_counts
 from ..schema import ConceptDescriptor, ResearchContext
 
 
@@ -66,6 +67,33 @@ def _context_missingness_claims(
     return claims
 
 
+def _selection_count_claims(context: ResearchContext) -> dict[str, float]:
+    """The selection counts a manuscript may cite, one claim per fact.
+
+    The facts are the source's stays, each step's excluded stays (and those
+    it excluded for want of a value), and the stays left after a step that
+    excluded any; a step that excluded none leaves the same stays.  A value
+    two facts share is registered for neither, since the binder would give
+    it to whichever field it ranks first.  Zero is not registered.
+    """
+
+    counts = export_selection_counts(context).counts
+    if counts is None:
+        return {}
+    facts = [("source_selection.source_total", counts.source_total)]
+    for index, step in enumerate(counts.steps, start=1):
+        field = f"source_selection.{index}_{step.criterion}"
+        facts.append((f"{field}.n_excluded", step.n_excluded))
+        if step.n_excluded_missing:
+            facts.append((f"{field}.n_excluded_missing", step.n_excluded_missing))
+        if step.n_excluded:
+            facts.append((f"{field}.n_remaining", step.n_remaining))
+    shared = Counter(value for _, value in facts)
+    return {
+        field: float(value) for field, value in facts if value and shared[value] == 1
+    }
+
+
 def register_context_numeric_claims(
     evidence: EvidenceStore,
     *,
@@ -79,7 +107,10 @@ def register_context_numeric_claims(
     limitations, such as the source export size or a variable group's baseline
     missingness. Register only that compact surface so provenance exists without
     flooding the NumericClaim registry with every observed-domain min/max and
-    repeated per-variable ``n_total`` value.
+    repeated per-variable ``n_total`` value.  The stays each selection
+    criterion excluded are registered too, except a value another context
+    claim already holds: two fields of one record with one value would leave
+    a sentence that cites it ambiguous.
     """
 
     payload: dict[str, float] = {
@@ -95,6 +126,12 @@ def register_context_numeric_claims(
         if n_patients is not None:
             payload["cohort.n_patients"] = n_patients
     payload.update(_context_missingness_claims(context.variables))
+    held = {round(value, 12) for value in payload.values()}
+    payload.update(
+        (field, value)
+        for field, value in _selection_count_claims(context).items()
+        if round(value, 12) not in held
+    )
 
     registered: list[NumericClaim] = []
     for source_field, canonical in payload.items():

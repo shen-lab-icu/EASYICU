@@ -168,6 +168,9 @@ def test_a_plan_keeping_every_row_of_an_uncontracted_export_analyzes_every_icu_s
         "source_selection_recorded": True,
         "source_selection_basis": "export_contract",
         "unapplied_population_criteria": [],
+        # The export recorded no count report.
+        "selection_counts": None,
+        "export_cap": None,
     }
 
 
