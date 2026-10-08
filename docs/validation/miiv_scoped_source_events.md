@@ -58,3 +58,12 @@ Lab 规则明确命名为 `legacy_outtime_forward_rollends`：在完整相同 su
 ## 验证
 
 定向合成覆盖部分 stay 请求、同人跨住院、多 stay 竞争、边界/间隙/出口后、缺键、坏时钟/歧义 outtime、字符串时钟/时区拒绝、源 SQL 与 Python 返回边界、物理重复事件、所有新通道、混编码/百分号/零/边界/±inf/空值、all-null 键、输入文件变动。初版 21 例中两个 fixture 将 None 转为 NaN 后构造失败，修正 fixture 后全部通过；该失败未隐去。其后补强源语义测试，最终结果与独立审查见配套 JSON。不运行未经逐文件审阅的广域测试。
+
+
+## 独立审查最终引用追加
+
+实际源码 pin 仍为 `4edfb6695ba848206c76dbc34bcb1877b351031e`，后续这次仅追加文档。初期 26 项的消息结果及临时测试 SHA `9e4d970e…` 是当时工作树捕获，未保存为独立 Git 测试版本，不能称可取回重放；原记录保留以区分过程与终态。
+
+最终持久审查位于研究仓 `02-study2-trajactory-clustering` 的 Git `6554b44384c598a4f5ce4ee6e770ce6b1083ee1a`：`code/tests/test_m2_measurement_source_review.py`，SHA `850015144e5b608821bd25905de3d8bc7c6fe635e6efc7fbdae53386a2a26203`，39 项通过；另独立运行固定 archive→API→producer→verify 的合成全链用例 1 项通过。完整报告为 `results/evidence/16_第二代亚型计划/M2-A143_AHRF核心轨迹多库运输/MIIV_SCOPED_SOURCE_REVIEW.md`，精确收据路径见配套 JSON 的 `review_reference_addendum`。重放需同时匹配收据绑定的 producer/verifier 文件；不宣称仅检出 M2 一仓即可独立重放所有跨仓测试。
+
+最终核验器已修正临时时区谓词不一致，并能拒绝 trace/hourly 同时遗漏合法事件的反例。39 项与 owner 101 项有重叠目的，不相加为独立证据数量；有限合成验证不认证真实患者数据。此次追加不修改 API、字典、默认接口或任何候选科学定义。
