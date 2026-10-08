@@ -9,7 +9,14 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.contracts.executor_stop import (
+    EXECUTOR_STOP_RECORD_NAME,
+    ExecutorStop,
+)
 from easyicu.research_agent.contracts.runtime import RunResult
+from easyicu.research_agent.execution.runners.trajectory_stability_executor import (
+    stop_on_refit_failure,
+)
 from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 from easyicu.research_agent.schema import ValidationFinding
 from easyicu.research_agent.trajectory.plan_contract import (
@@ -392,6 +399,34 @@ class _TerminalRunner:
                     self.stability_mode != "unsafe_runtime_timeout"
                 ),
             )
+        if step_id == "03_stability" and self.stability_mode == "typed_stop":
+            # The owner's runner ends the process with its stop once the
+            # summary of a failed refit is written.
+            summary = {
+                "status": "failed_closed",
+                "failure_class": "numerical_engine_failure",
+                "reason_code": "TRAJECTORY_REFIT_ENGINE_FAILURE",
+                "errors": ["synthetic refit failure"],
+            }
+            self._write_json(out_dir / "step_summary.json", summary)
+            try:
+                stop_on_refit_failure(summary, out_dir=out_dir)
+            except ExecutorStop as stop:
+                stderr = f"ExecutorStop: {stop}"
+            else:
+                raise AssertionError("a failed refit's summary did not stop the step")
+            return RunResult(
+                step_id=step_id,
+                script_path=script_path,
+                cwd=cwd,
+                out_dir=out_dir,
+                stdout="",
+                stderr=stderr,
+                returncode=1,
+                duration_seconds=0.01,
+                artefacts=sorted(path for path in out_dir.iterdir() if path.is_file()),
+                effective_isolation="synthetic_test",
+            )
         if step_id == "03_stability":
             self._write_terminal_outputs(out_dir)
         else:
@@ -570,6 +605,7 @@ def _run_terminal_case(
     ("stability_mode", "expected_reason", "expected_runner_calls"),
     [
         ("failed_closed", "executor_reported_failed_closed", 1),
+        ("typed_stop", "executor_typed_stop", 1),
         ("empty", "missing_executor_outputs", 1),
         ("ok_contract_error", "executor_output_contract_failed", 1),
         ("runtime_timeout", "executor_runtime_failure", 1),
@@ -636,6 +672,20 @@ def test_trajectory_stability_terminal_failures_never_enter_repair_or_fallback(
         assert stability_record.get("runtime_failure_class") != "execution_timeout"
     if stability_mode == "unsafe_runtime_timeout":
         assert stability_record["outputs_safe_to_collect"] is False
+    if stability_mode == "typed_stop":
+        # A failed refit arrives as the stop its runner named; the record
+        # was the attempt's private file.
+        assert (
+            stability_record["executor_stop_reason_code"]
+            == "trajectory_stability_refit_failed"
+        )
+        assert "executor_stop_cause_code" not in stability_record
+        assert not (
+            run_dir / "steps" / "03_stability" / "outputs" / EXECUTOR_STOP_RECORD_NAME
+        ).exists()
+    else:
+        # A summary the owner reported failed closed names no stop.
+        assert "executor_stop_reason_code" not in stability_record
     assert "04_characterization" not in runner.calls
 
     pending_path = (

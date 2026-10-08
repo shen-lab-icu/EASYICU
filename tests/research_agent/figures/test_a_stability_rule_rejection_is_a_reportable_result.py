@@ -8,7 +8,9 @@ and the manuscript.  Because every planned refit must succeed, one refit that
 did not converge was enough.  A rejection by the prespecified rule is the
 study's result, so the owner now completes, freezes nothing, leaves every
 class-describing table empty, and states the rule's outcome.  A refit that
-failed for any reason other than the model itself is still an engine failure.
+failed for any reason other than the model itself still fails the step: on a
+condition of its subsample as an engine failure, and on any other error as an
+internal or environment failure.
 Synthetic, opaque bundles only.
 """
 
@@ -170,15 +172,23 @@ def test_refits_that_do_not_reproduce_the_solution_leave_stability_unestablished
 
 
 @pytest.mark.parametrize(
-    "error",
+    ("error", "failure_class", "reason_code"),
     [
-        RuntimeError("engine defect"),
-        ValueError("a refit coordinate has no observed values"),
+        (
+            RuntimeError("engine defect"),
+            "internal_or_environment_failure",
+            "TRAJECTORY_REFIT_INTERNAL_FAILURE",
+        ),
+        (
+            ValueError("a refit coordinate has no observed values"),
+            "numerical_engine_failure",
+            "TRAJECTORY_REFIT_ENGINE_FAILURE",
+        ),
     ],
     ids=["runtime_error", "input_error"],
 )
-def test_a_refit_that_fails_for_another_reason_is_still_an_engine_failure(
-    tmp_path: Path, monkeypatch, error: Exception
+def test_a_refit_that_fails_for_another_reason_still_fails_the_step(
+    tmp_path: Path, monkeypatch, error: Exception, failure_class: str, reason_code: str
 ) -> None:
     resolved, _representation, _assignments = _bundle(tmp_path)
     fit = owner._fit_observed_data_diag_gmm
@@ -202,8 +212,8 @@ def test_a_refit_that_fails_for_another_reason_is_still_an_engine_failure(
     )
 
     assert summary["status"] == "failed_closed"
-    assert summary["failure_class"] == "numerical_engine_failure"
-    assert summary["reason_code"] == "TRAJECTORY_REFIT_ENGINE_FAILURE"
+    assert summary["failure_class"] == failure_class
+    assert summary["reason_code"] == reason_code
     assert "reportable_rule_outcomes" not in summary
 
 

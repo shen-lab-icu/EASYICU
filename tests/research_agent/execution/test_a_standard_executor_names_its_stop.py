@@ -578,3 +578,17 @@ def test_a_record_left_by_an_earlier_attempt_is_gone_before_the_next(
     assert seen_before_run == [False]
     assert step["standard_executor_terminal_reason"] == "executor_runtime_failure"
     assert "executor_stop_reason_code" not in step
+
+
+# ---- the user's sentence ------------------------------------------------------
+
+
+def test_every_stop_the_host_reads_has_a_sentence_for_the_user():
+    # The conversation states a failed run's stop by its reason code; a code
+    # without a sentence there falls back to the generic failed-check line.
+    copy = (
+        Path(executor_stop.__file__).resolve().parents[2]
+        / "webserver/static/js/screens-guided-pi-error-text.js"
+    ).read_text(encoding="utf-8")
+
+    assert [code for code in EXECUTOR_STOP_REASONS if f"{code}: " not in copy] == []

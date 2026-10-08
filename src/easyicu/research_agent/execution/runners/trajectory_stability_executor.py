@@ -31,6 +31,7 @@ from ...authority.prespecified_rule_outcomes import (
     rule_outcome_payload,
     validate_rule_outcome,
 )
+from ...contracts.executor_stop import ExecutorStop, write_executor_stop_record
 from ...schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -69,6 +70,7 @@ __all__ = [
     "STABILITY_EXECUTOR_INPUTS",
     "STABILITY_EXECUTOR_OUTPUTS",
     "run_trajectory_stability",
+    "stop_on_refit_failure",
     "trajectory_stability_executor_code",
     "trajectory_stability_executor_owns_step",
     "validate_trajectory_stability_schema_pair",
@@ -105,6 +107,14 @@ _NATIVE_MATH_THREAD_ENV = (
 
 class _NumericalRefitFailure(ValueError):
     pass
+
+
+class _RefitInternalFailure(Exception):
+    """A refit raised an error that no condition of its subsample raises."""
+
+
+#: The stop a refit engine failure ends the step process with.
+_REFIT_FAILED_STOP = "trajectory_stability_refit_failed"
 
 
 def _step_contract_is_closed(step: AnalysisStep) -> bool:
@@ -205,16 +215,17 @@ def trajectory_stability_executor_code(
         "os.environ['NUMEXPR_NUM_THREADS'] = '1'\n"
         "from pathlib import Path\n"
         "from easyicu.research_agent.execution.runners.trajectory_stability_executor import "
-        "run_trajectory_stability\n"
+        "run_trajectory_stability, stop_on_refit_failure\n"
         f"spec = json.loads({json.dumps(json.dumps(payload, sort_keys=True))})\n"
         f"scientific_runtime_authority = json.loads({json.dumps(json.dumps(authority_payload, sort_keys=True))})\n"
-        "run_trajectory_stability("
+        "summary = run_trajectory_stability("
         "spec=spec, out_dir=Path(os.environ['STEP_OUT_DIR']), "
         "run_dir=Path(os.environ['EASYICU_RUN_DIR']), "
         "resolved_inputs=os.environ['EASYICU_RESOLVED_INPUTS_JSON'], "
         "scientific_runtime_authority=scientific_runtime_authority, "
         f"runtime_projection_sha256={runtime_projection_sha256!r}, "
         f"include_characterization={include_characterization!r})\n"
+        "stop_on_refit_failure(summary, out_dir=Path(os.environ['STEP_OUT_DIR']))\n"
     )
 
 
@@ -1594,6 +1605,7 @@ def run_trajectory_stability(
         reference_universe = pd.unique(reference_array).tolist()
         successful_rows: list[dict[str, Any]] = []
         failure_rows: list[dict[str, Any]] = []
+        internal_failure = False
         attempt_rows: list[dict[str, Any]] = []
         inclusion_counts = np.zeros(n_rows, dtype=np.int64)
         agreement_counts = np.zeros(n_rows, dtype=np.int64)
@@ -1692,6 +1704,12 @@ def run_trajectory_stability(
                     "solution_not_realized": isinstance(exc, ClassModelFitNotRealized),
                 }
                 failure_rows.append(failure_row)
+                # A condition of the subsample or of its arithmetic raises a
+                # ValueError or an ArithmeticError; any other error is the
+                # executor's own defect or its environment's.
+                internal_failure = internal_failure or not isinstance(
+                    exc, (ValueError, ArithmeticError)
+                )
                 attempt_rows.append(
                     {
                         **failure_row,
@@ -1726,7 +1744,10 @@ def run_trajectory_stability(
                 {"failures": failure_rows},
             )
             if not all(row["solution_not_realized"] for row in failure_rows):
-                raise _NumericalRefitFailure(
+                failure = (
+                    _RefitInternalFailure if internal_failure else _NumericalRefitFailure
+                )
+                raise failure(
                     "successful stability refits are below the planner-owned minimum: "
                     f"{len(successful_rows)} < {spec.minimum_successful_resamples}"
                 )
@@ -1971,6 +1992,10 @@ def run_trajectory_stability(
         summary["failure_class"] = "numerical_engine_failure"
         summary["reason_code"] = "TRAJECTORY_REFIT_ENGINE_FAILURE"
         summary["errors"].append(f"{type(exc).__name__}: {exc}")
+    except _RefitInternalFailure as exc:
+        summary["failure_class"] = "internal_or_environment_failure"
+        summary["reason_code"] = "TRAJECTORY_REFIT_INTERNAL_FAILURE"
+        summary["errors"].append(f"{type(exc).__name__}: {exc}")
     except Exception as exc:
         if summary["failure_class"] is None:
             summary["failure_class"] = "input_or_contract_failure"
@@ -1979,3 +2004,34 @@ def run_trajectory_stability(
     pending_assignments_path.unlink(missing_ok=True)
     _write_json(out_dir / "step_summary.json", summary)
     return summary
+
+
+def stop_on_refit_failure(summary: Mapping[str, Any], *, out_dir: Path) -> None:
+    """End the step process with the owner's stop when a planned refit failed.
+
+    :func:`run_trajectory_stability` writes every outcome into its summary and
+    returns, so its step process exited 0 after any of them.  A planned refit
+    that failed on a condition of its subsample or of its arithmetic, not as
+    the class model's own result there (``TRAJECTORY_REFIT_ENGINE_FAILURE``),
+    leaves the stability rule, which needs every planned refit, without a
+    result, and the plan's design and seeds fix every refit, so a retry with
+    them unchanged repeats it.  The step's generated runner calls this after
+    the summary is written: such a summary ends the process with the
+    registered stop (``contracts.executor_stop``), which the host reads.  Any
+    other summary returns.  The rule's own rejection is a reportable result;
+    a refit's internal or environment error, which no revision of the plan
+    removes and a retry may not repeat, and an input or contract failure keep
+    the failure they had.
+    """
+
+    if (
+        summary.get("status") != "failed_closed"
+        or summary.get("reason_code") != "TRAJECTORY_REFIT_ENGINE_FAILURE"
+    ):
+        return
+    stop = ExecutorStop(
+        _REFIT_FAILED_STOP,
+        detail="; ".join(str(error) for error in summary.get("errors") or []),
+    )
+    write_executor_stop_record(out_dir, stop)
+    raise stop
