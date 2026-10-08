@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Annotated, Any, Dict, Iterator, Literal, Optional, Sequence
 
-from pydantic import Field
+from pydantic import Field, PlainSerializer
 
 # Framework-owned anchors stay deliberately small and generic. Disease- or
 # intervention-specific anchors such as "sepsis_onset" or "vent_start" are
@@ -75,6 +75,19 @@ class CohortSchemaError(ValueError):
     """Raised when a cohort definition is ambiguous or invalid."""
 
 
+def _offset_to_json(value: float) -> float | str:
+    if math.isinf(value):
+        return "inf" if value > 0 else "-inf"
+    return value
+
+
+#: Hours from a window's anchor.  JSON has no infinity: a model that
+#: serializes a window (a plan's cohort, a robustness override) writes an
+#: unbounded end, a criterion over the whole stay, as "inf", as
+#: ``TimeWindow.to_dict`` does, so the window reads back.
+OffsetHours = Annotated[float, PlainSerializer(_offset_to_json, when_used="json")]
+
+
 @dataclass(frozen=True)
 class TimeWindow:
     """Predicate-level time window for cohort inclusion/exclusion rules.
@@ -88,12 +101,19 @@ class TimeWindow:
     """
 
     anchor: TimeAnchor
-    start_offset_hours: float
-    end_offset_hours: float
+    start_offset_hours: OffsetHours
+    end_offset_hours: OffsetHours
 
     def __post_init__(self) -> None:
         if not self.anchor:
             raise CohortSchemaError("time_window.anchor is required")
+        # NaN is the one value unequal to itself; it compares false with every
+        # bound, so the check below would pass.
+        if any(
+            offset != offset
+            for offset in (self.start_offset_hours, self.end_offset_hours)
+        ):
+            raise CohortSchemaError("time_window offsets must be numbers, not NaN")
         if self.end_offset_hours <= self.start_offset_hours:
             raise CohortSchemaError("time_window.end_offset_hours must be > start")
 
@@ -737,15 +757,12 @@ def _coerce_offset(value: Any) -> float:
     if isinstance(value, str) and value.lower() in {"inf", "+inf", "infinity"}:
         return math.inf
     try:
-        return float(value)
+        offset = float(value)
     except (TypeError, ValueError) as exc:
         raise CohortSchemaError(f"invalid time offset: {value!r}") from exc
-
-
-def _offset_to_json(value: float) -> float | str:
-    if math.isinf(value):
-        return "inf" if value > 0 else "-inf"
-    return value
+    if math.isnan(offset):
+        raise CohortSchemaError(f"invalid time offset: {value!r}")
+    return offset
 
 
 __all__ = [
