@@ -130,6 +130,7 @@ from easyicu.webserver.research_launch_scientific import (
     _validate_trajectory_design,
     bound_export_event_time_semantics,
     bound_export_selection_basis,
+    bound_export_selection_report,
     resolve_study_analysis_design,
     validate_analysis_design_for_execution,
 )
@@ -2075,6 +2076,7 @@ def _research_user_preferences(
     cohort_study: Optional[Mapping[str, Any]] = None,
     source_selection_basis: Optional[SelectionBasis] = None,
     event_time_semantics: Optional[Mapping[str, str]] = None,
+    source_selection_report: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Compile StudyContext into the existing strict preference contract.
 
@@ -2086,6 +2088,10 @@ def _research_user_preferences(
     selection that produced the bound export's rows
     (``bound_export_selection_basis``); ``data_constraints.source_selection``
     carries it, with the declared criteria the host applies itself.
+    ``source_selection_report`` is the export's own count of the stays its
+    selection kept (``bound_export_selection_report``); the record carries it
+    as ``export_report`` only when the selection is recorded, since only then
+    do its counts describe this study's rows.
     ``event_time_semantics`` is what each event time the bound export issues
     is, as its producer labels it (``bound_export_event_time_semantics``);
     ``data_constraints.event_time_semantics`` carries it, empty when the
@@ -2199,6 +2205,13 @@ def _research_user_preferences(
                 cohort_study if cohort_study is not None else study
             ),
         }
+        if (
+            source_selection_basis == "export_contract"
+            and source_selection_report is not None
+        ):
+            constraints["source_selection"]["export_report"] = dict(
+                source_selection_report
+            )
     if event_time_semantics is not None:
         # What the bound export's death time is (a recorded time, a date, a
         # proxy or none): a prediction's risk set reads deaths before its
@@ -6224,6 +6237,7 @@ def make_research_pipeline_run_runner(
                 cohort_study=study,
                 source_selection_basis=source_selection_basis,
                 event_time_semantics=bound_export_event_time_semantics(export_path),
+                source_selection_report=bound_export_selection_report(export_path),
             )
             _progress(
                 job,

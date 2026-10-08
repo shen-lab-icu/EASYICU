@@ -760,6 +760,30 @@ def bound_export_selection_basis(
     return "unrecorded"
 
 
+def bound_export_selection_report(
+    export_path: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """The bound export's own count of the stays its selection kept, verbatim.
+
+    Data Extraction writes ``cohort_report`` beside the cohort contract
+    ``bound_export_selection_basis`` reads: the source's stays, each
+    criterion with the stays it excluded, and a cap with the rule that chose
+    the stays it kept.  The launch reads it from the same manifest, once, and
+    records it for a recorded selection in
+    ``data_constraints.source_selection.export_report``;
+    ``research_context.export_selection`` alone reads it.  ``None`` without a
+    manifest or a report.
+    """
+
+    if not export_path:
+        return None
+    manifest = dataio.read_prepared_export_manifest(str(export_path))
+    if manifest is None:
+        return None
+    report = manifest.get("cohort_report")
+    return dict(report) if isinstance(report, Mapping) else None
+
+
 def bound_export_event_time_semantics(export_path: Optional[str]) -> Dict[str, str]:
     """What each event time the bound export issues is, as its producer labels it.
 
