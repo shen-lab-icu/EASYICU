@@ -167,7 +167,8 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     # public-reference, source-native, and evidence-receipt fields. 307 -> 323.
     # 2026-09-04: +eICU ICU-unit type as a typed demographics coordinate.
     # 323 -> 324.
-    assert len(CONCEPT_DICTIONARY) == 324
+    # 2026-10-08: four explicit MIIV/MIMIC respiratory source channels.
+    assert len(CONCEPT_DICTIONARY) == 328
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)

@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **274 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **278 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,10 +9,10 @@ concept (base dictionary plus SOFA-2 overlay): **274 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 20 | 25 | 92 |
-| zhejiang_eicu | 128 | 25 | 22 | 99 |
-| jinhua | 135 | 19 | 24 | 96 |
-| zigong | 125 | 19 | 33 | 97 |
+| nwicu | 137 | 20 | 25 | 96 |
+| zhejiang_eicu | 128 | 25 | 22 | 103 |
+| jinhua | 135 | 19 | 24 | 100 |
+| zigong | 125 | 19 | 33 | 101 |
 
 ## Complete matrix
 
@@ -107,6 +107,8 @@ concept (base dictionary plus SOFA-2 overlay): **274 concepts × 4 databases**.
 | `ffp` | medications | unavailable | unavailable | direct | unavailable |
 | `fgn` | hematology | direct | unavailable | direct | direct |
 | `fio2` | blood gas | direct | direct | direct | unavailable |
+| `fio2_chart` | respiratory | unavailable | unavailable | unavailable | unavailable |
+| `fio2_lab` | respiratory | unavailable | unavailable | unavailable | unavailable |
 | `fluid_balance` | output | unavailable | partial | unavailable | partial |
 | `fluid_balance_cumulative` | output | unavailable | partial | unavailable | partial |
 | `ft4` | chemistry | direct | direct | direct | unavailable |
@@ -197,6 +199,8 @@ concept (base dictionary plus SOFA-2 overlay): **274 concepts × 4 databases**.
 | `pco2` | blood gas | unavailable | direct | direct | direct |
 | `pct` | chemistry | unavailable | direct | direct | unavailable |
 | `peep` | ventilator | direct | direct | unavailable | unavailable |
+| `peep_set` | ventilator | unavailable | unavailable | unavailable | unavailable |
+| `peep_total` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `persistent_critical_illness` | outcome | derived | unavailable | derived | derived |
 | `ph` | blood gas | direct | direct | direct | direct |
 | `phenytoin` | medications | direct | direct | direct | unavailable |

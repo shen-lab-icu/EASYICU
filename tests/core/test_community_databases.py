@@ -53,7 +53,8 @@ def test_community_coverage_audits_every_standard_concept() -> None:
         coverage = json.loads(path.read_text(encoding="utf-8"))
     dictionary = load_dictionary(include_sofa2=True)
 
-    assert coverage["concept_count"] == 274 == len(list(dictionary.keys()))
+    # Four source-specific respiratory concepts were added on 2026-10-08.
+    assert coverage["concept_count"] == 278 == len(list(dictionary.keys()))
     assert set(coverage["concepts"]) == set(dictionary.keys())
     assert set(coverage["databases"]) == COMMUNITY_DATABASES
     valid = {"direct", "derived", "partial", "unavailable"}
