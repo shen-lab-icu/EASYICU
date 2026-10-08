@@ -78,6 +78,14 @@ EXECUTOR_STOP_REASONS: Mapping[str, ExecutorStopReason] = MappingProxyType(
             cause_codes=frozenset(TIME_VARYING_NOT_ESTIMABLE_REASONS),
             repeats_on_unchanged_retry=True,
         ),
+        # The same rule in the binary landmark survival suite: its rejected
+        # PH test leaves the interval-specific hazard ratios as the result,
+        # and the interval model could not be estimated on these data.
+        "landmark_survival_interval_result_not_estimable": ExecutorStopReason(
+            owner="signed_landmark_survival_suite",
+            cause_codes=frozenset(TIME_VARYING_NOT_ESTIMABLE_REASONS),
+            repeats_on_unchanged_retry=True,
+        ),
         # Every modelled record has the same exposure value, so the suite
         # has no step to report its hazard ratios per and no association to
         # estimate.
