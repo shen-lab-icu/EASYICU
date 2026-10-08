@@ -1706,7 +1706,8 @@ def _validate_population(spec: FamilyPlanSpec, request: FamilySpecRequest) -> No
                 "family_spec_population_criterion_unapplied",
                 f"criterion {item.criterion!r} names {item.concept_ids!r}, but no inclusion "
                 "or exclusion predicate reads one of them; apply it, or give it no "
-                "concepts only when no offered concept expresses it",
+                "concepts only when no offered concept expresses it over the "
+                "window the criterion states",
                 path=f"population.criteria[{index}]",
             )
 

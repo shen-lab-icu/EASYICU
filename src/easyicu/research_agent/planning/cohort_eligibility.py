@@ -37,14 +37,15 @@ import math
 from dataclasses import dataclass
 from typing import Any, Iterable, Literal, Mapping
 
-from ..concept_availability import stay_level_concept_category
 from ..research_context.concept_population import ConceptCohortWindow
 from ..research_context.materialization_window import host_materialization_window_hours
 from ..research_context.stay_events import (
+    ICU_LENGTH_OF_STAY_CONCEPT,
+    column_kind,
+    event_time_hours_per_unit,
     event_time_status_column,
     stay_outcome_columns,
 )
-from ..research_context.temporal_semantics import normalise_time_anchor
 from ..schema import ResearchContext
 from .adjustment_authority import host_window_bound_roles
 from .cohort_contract import event_status_reading
@@ -116,13 +117,6 @@ def eligibility_after_time_zero(
 #: Anchors a population predicate's window counts from: ICU admission.
 POPULATION_TIME_ZERO_ANCHORS = frozenset({"icu_admission", "icu_admit"})
 
-#: The concept dictionary's ICU length of stay, in days unless its variable
-#: states hours.
-ICU_LENGTH_OF_STAY_CONCEPT = "los_icu"
-
-#: Variable roles fixed at admission: the owner-declared admission attributes
-#: (the precedent of ``owner_declared_baseline_static``) and the stay's ids.
-_ADMISSION_ROLES = frozenset({"demographic", "id"})
 #: Variable roles the host materializes over a window before planning.  A
 #: ``meta`` column counts or flags observations of a concept over its window.
 _WINDOWED_ROLES = frozenset(
@@ -138,19 +132,10 @@ _WINDOWED_ROLES = frozenset(
         "meta",
     }
 )
-#: Dictionary categories of stay-level concepts fixed at admission and known
-#: only at the stay's end.
-_ADMISSION_CATEGORY = "demographics"
-_STAY_END_CATEGORY = "outcome"
 _ANCHOR_WORDS = {"icu_admission": "ICU admission", "icu_admit": "ICU admission"}
 _HOUR_UNITS = frozenset({"h", "hr", "hrs", "hour", "hours"})
-#: Hours per unit of the export's event-time units; any other unit is unread.
-_TIME_UNIT_HOURS = {"h": 1.0, "d": 24.0, "min": 1 / 60}
 #: Tests an event time decides once the threshold hour passes.
 _BY_THRESHOLD_OPS = frozenset({"<", "<="})
-#: The representation of a window's last observation time, which a later
-#: observation moves until the window ends.
-_LAST_TIME_TRANSFORM = "window_last_time"
 
 PredicateReason = Literal[
     "anchor",
@@ -266,14 +251,16 @@ def cohort_predicates_after_time_zero(
                 variables, concept, predicate.get("aggregation")
             )
             variable = variables.get(column)
-            role = _role(variable)
+            holds = column_kind(
+                variable, column=column, concept=concept, outcomes=outcomes
+            )
             item = PredicateAfterTimeZero(
                 kind=kind,  # type: ignore[arg-type]
                 label=_predicate_label(predicate),
                 reason="window",
                 time_zero_hours=time_zero_hours,
             )
-            if concept == ICU_LENGTH_OF_STAY_CONCEPT:
+            if holds == "icu_stay_length":
                 hours = _icu_stay_threshold_hours(
                     predicate, unit=getattr(variable, "unit", None)
                 )
@@ -284,24 +271,23 @@ def cohort_predicates_after_time_zero(
                         _with(item, reason="icu_stay_length", decided_by_hours=hours)
                     )
                 continue
-            category = stay_level_concept_category(concept)
-            if {concept, column} & outcomes or category == _STAY_END_CATEGORY:
+            if holds == "stay_outcome":
                 if not _event_absence_decided(
                     kind, predicate, concept, variables, time_zero_hours
                 ):
                     found.append(_with(item, reason="stay_outcome"))
                 continue
-            if role in _ADMISSION_ROLES or category == _ADMISSION_CATEGORY:
+            if holds == "admission":
                 # Fixed at admission, whatever window the predicate names.
                 continue
-            if category is not None:
+            if holds == "stay_level":
                 # One value per stay, but not an admission attribute.
                 found.append(_with(item, reason="stay_level"))
                 continue
             # The column first: what the host filters was decided when its
             # window ended, so no window the predicate states can repair it.
             label = str(getattr(variable, "analysis_window", None) or "").strip()
-            event_time, hours_per_unit = _event_time(variable)
+            event_time, hours_per_unit = event_time_hours_per_unit(variable)
             by_threshold = False
             if event_time and hours_per_unit is not None and proven.get(column) is None:
                 # An event's time is no window summary: its test decides it.
@@ -366,43 +352,6 @@ def predicate_context_column(
     return summary if concept not in variables and summary in variables else concept
 
 
-def _event_time(variable: Any) -> tuple[bool, float | None]:
-    """Whether a column holds an event's time, and its hours per unit after ICU admission.
-
-    The research context types an event time as ``conditional_event_time``
-    observation semantics, with the export's ``relative to <origin> in
-    <unit>`` resolution read as ``observation_semantics`` reads it; a
-    ``time`` role is an event time too.  Its hours per unit are known only
-    when its origin is ICU admission and its unit one the export writes.  A
-    last observation time is no event time here: its window decides it.
-    """
-
-    if str(getattr(variable, "unit_normalization", None) or "") == _LAST_TIME_TRANSFORM:
-        return False, None
-    semantics = getattr(variable, "observation_semantics", None)
-    origin = getattr(semantics, "time_origin", None)
-    unit = getattr(semantics, "time_unit", None)
-    resolution = str(getattr(variable, "temporal_resolution", None) or "")
-    relative = (
-        resolution.removeprefix("relative to ")
-        if resolution.startswith("relative to ")
-        else ""
-    )
-    parsed_origin, separator, parsed_unit = relative.rpartition(" in ")
-    if separator:
-        origin, unit = origin or parsed_origin, unit or parsed_unit
-    event_time = (
-        getattr(semantics, "kind", None) == "conditional_event_time"
-        or bool(separator)
-        or _role(variable) == "time"
-    )
-    if not event_time or not origin:
-        return event_time, None
-    if normalise_time_anchor(str(origin)) != "icu_admission":
-        return True, None
-    return True, _TIME_UNIT_HOURS.get(str(unit or "").strip())
-
-
 def event_status_read_by_its_time(variables: Mapping[str, Any], concept: str) -> bool:
     """Whether the context types ``<concept>_time`` as the time of ``concept``'s event.
 
@@ -410,7 +359,7 @@ def event_status_read_by_its_time(variables: Mapping[str, Any], concept: str) ->
     ``<concept>_time`` column beside it, as hours after ICU admission like the
     window itself.  The context types that column as the event's time when its
     observation semantics name ``concept`` as their event status and it counts
-    from ICU admission in hours (``_event_time``): a time in days or minutes
+    from ICU admission in hours (``event_time_hours_per_unit``): a time in days or minutes
     would be compared with the window as if it were hours.  The family-spec
     risk set asks the same question before it writes such a predicate.
     """
@@ -418,7 +367,7 @@ def event_status_read_by_its_time(variables: Mapping[str, Any], concept: str) ->
     companion = variables.get(f"{concept}_time")
     if companion is None or event_time_status_column(companion) != concept:
         return False
-    event_time, hours_per_unit = _event_time(companion)
+    event_time, hours_per_unit = event_time_hours_per_unit(companion)
     return event_time and hours_per_unit == 1.0
 
 
@@ -471,11 +420,6 @@ def _event_time_decided_hours(
 
 def _with(item: PredicateAfterTimeZero, **changes: Any) -> PredicateAfterTimeZero:
     return PredicateAfterTimeZero(**{**item.__dict__, **changes})
-
-
-def _role(variable: Any) -> str:
-    role = getattr(variable, "role", None)
-    return str(getattr(role, "value", role) or "").casefold()
 
 
 def _icu_stay_threshold_hours(

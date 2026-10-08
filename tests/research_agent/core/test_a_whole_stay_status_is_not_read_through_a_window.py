@@ -386,7 +386,8 @@ def test_the_planner_is_refused_a_primary_window_the_input_cannot_read() -> None
     assert message.startswith(f"{COHORT_EVENT_WINDOW_UNREADABLE}: cohort.exclusion[0] ")
     assert "records 'outcome_flag' over the whole ICU stay" in message
     assert "cohort.unapplied_population_criteria" in message
-    assert 'end_offset_hours "inf"' in message
+    # A Planner with strict structured output cannot write an unbounded end.
+    assert 'end_offset_hours "inf"' not in message
     assert "death" not in message
     assert infer_validation_stage(caught.value) == "typed_context_binding"
 
@@ -534,7 +535,8 @@ def test_the_review_routes_an_unreadable_override_to_the_agent() -> None:
     )
     assert "adults_only" not in finding.message
     assert "fails the run closed at the robustness panel" in finding.message
-    assert 'end_offset_hours "inf"' in finding.remediation
+    assert 'end_offset_hours "inf"' not in finding.remediation
+    assert "or remove the specification" in finding.remediation
     assert "death" not in finding.message + finding.remediation
     # A context that types the event's time reads the override by it.
     timed = _planner_context()

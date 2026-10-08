@@ -64,7 +64,15 @@ from ..planning.cohort_contract import (
     validate_cohort_definition,
     validate_concept_predicate,
 )
-from ..research_context.stay_events import whole_stay_event_columns
+from ..research_context.materialization_window import (
+    ColumnWindow,
+    column_window_from_label,
+    context_column_windows,
+)
+from ..research_context.stay_events import (
+    event_times_typed_otherwise_than_hours,
+    whole_stay_event_columns,
+)
 from ..research_context.typed import parse_research_context_json
 
 COHORT_LOCK_FILENAME = "cohort_locked.json"
@@ -404,39 +412,15 @@ def _descriptor_window_matches_predicate(value: Any, window: TimeWindow) -> bool
     """Match a named descriptor window to one exact predicate window.
 
     Cross-name binding is an execution convenience, not permission to infer a
-    temporal contract.  Accept only explicit canonical names; missing or broad
-    labels such as ``entire_stay`` fail closed.
+    temporal contract.  Accept only a label that names a window
+    (``column_window_from_label``); missing or broad labels such as
+    ``entire_stay`` fail closed.
     """
 
-    raw = str(value or "").strip().casefold()
-    if not raw:
-        return False
-
-    def _number(raw: float) -> str:
-        number = float(raw)
-        return str(int(number)) if number.is_integer() else f"{number:g}"
-
-    anchor_aliases = {
-        "icu_admit": {"icu_admit", "icu_admission"},
-        "hospital_admit": {"hospital_admit", "hospital_admission"},
-        "index_time": {"index_time"},
-    }
-    anchors = anchor_aliases.get(str(window.anchor).casefold(), {str(window.anchor)})
-    start = _number(window.start_offset_hours)
-    end = _number(window.end_offset_hours)
-    accepted = {
-        candidate
-        for anchor in anchors
-        for candidate in (
-            f"{anchor}_{start}_{end}h",
-            f"{anchor}[{start},{end}]h",
-        )
-    }
-    normalized = re.sub(r"[^a-z0-9.]+", "_", raw).strip("_")
-    normalized_accepted = {
-        re.sub(r"[^a-z0-9.]+", "_", candidate).strip("_") for candidate in accepted
-    }
-    return raw in accepted or normalized in normalized_accepted
+    column_window = column_window_from_label(value)
+    return column_window is not None and column_window.is_window(
+        window.anchor, window.start_offset_hours, window.end_offset_hours
+    )
 
 
 def _descriptor_aggregation_matches_predicate(
@@ -465,6 +449,7 @@ def _planner_declared_context_column_bindings(
     plan: Any,
     context: Any,
     columns: Any,
+    label: str = "cohort",
 ) -> Dict[str, str]:
     """Bind canonical predicate concepts to explicitly planned wide columns.
 
@@ -489,10 +474,20 @@ def _planner_declared_context_column_bindings(
             descriptors_by_name.setdefault(name, []).append(descriptor)
 
     # Exact/bare column resolution controls *which* column is used, but the
-    # suffix alone cannot prove its scientific coordinate.  Validate a direct
-    # column against its sealed descriptor even when the plan has no separate
-    # cohort-materialisation step.  Cross-name bindings below remain restricted
-    # to an explicit analysis-cohort producer.
+    # suffix alone cannot prove its scientific coordinate.  A direct column is
+    # read over the window it was summarized over, its own label else the
+    # host's materialization window, whatever window the predicate states;
+    # and an event time is read in hours after ICU admission.  Validate a
+    # direct column against its sealed descriptor even when the plan has no
+    # separate cohort-materialisation step.  Cross-name bindings below remain
+    # restricted to an explicit analysis-cohort producer.
+    require_column_windows_readable(
+        definition,
+        columns=available,
+        column_windows=context_column_windows(context),
+        event_times_not_in_hours=event_times_typed_otherwise_than_hours(context),
+        label=label,
+    )
     for predicate in (*definition.inclusion, *definition.exclusion):
         direct_column = _resolve_predicate_column(
             columns,
@@ -1029,6 +1024,8 @@ def validate_plan_typed_bindings_against_context(
         reserved_coordinates=reserved_coordinates,
     )
     issues = list(raw_issues)
+    unreadable_codes: set[str] = set()
+    corrected_issues = 0
     primary_definition: Optional[CohortDefinition] = None
     primary_bindings: Dict[str, str] = {}
     for label, definition in definitions:
@@ -1038,9 +1035,14 @@ def validate_plan_typed_bindings_against_context(
                 plan=plan,
                 context=context,
                 columns=columns,
+                label=label,
             )
         except CohortDataError as exc:
-            issues.append(f"{label}: {exc}")
+            code = str(getattr(exc, "code", "") or "")
+            issues.append(str(exc) if code else f"{label}: {exc}")
+            if code in _UNREADABLE_WINDOW_CORRECTIONS:
+                unreadable_codes.add(code)
+                corrected_issues += 1
             continue
         if label == "cohort":
             primary_definition = definition
@@ -1100,6 +1102,9 @@ def validate_plan_typed_bindings_against_context(
         }
     )
     detail = "; ".join(issues[:4])
+    corrections = [
+        _UNREADABLE_WINDOW_CORRECTIONS[code] for code in sorted(unreadable_codes)
+    ]
     if raw_issues:
         correction = (
             "For raw step inputs, Table 1, model requirements, and robustness "
@@ -1110,12 +1115,16 @@ def validate_plan_typed_bindings_against_context(
             "predicates, and kind:name is only valid for an explicit upstream "
             "product."
         )
+    elif corrected_issues == len(issues):
+        # Each issue has its own correction.
+        correction = ""
     else:
         correction = (
             "Use an executable dictionary concept whose exact "
             "window/aggregation is bound by the declared analysis-cohort "
             f"columns={producer_columns!r} and source concepts={typed_sources!r}."
         )
+    correction = " ".join(text for text in (correction, *corrections) if text)
     raise CohortSchemaError(
         "typed plan references are not executable against this sealed input. "
         f"Invalid references: {detail}. {correction} Additional binding context: "
@@ -1125,6 +1134,44 @@ def validate_plan_typed_bindings_against_context(
         f"{sorted(executable_columns)!r}; reserved navigation coordinates="
         f"{list(reserved_coordinates)!r}."
     )
+
+
+#: Why a cohort predicate cannot be read over the window it states.
+COHORT_COLUMN_WINDOW_MISMATCH = "cohort_column_window_mismatch"
+#: Why a cohort predicate cannot read its event's time against its window.
+COHORT_EVENT_TIME_NOT_HOURS_FROM_ICU_ADMISSION = (
+    "cohort_event_time_not_hours_from_icu_admission"
+)
+
+
+#: How a plan states a criterion its cohort does not apply.
+_NOT_APPLIED = (
+    "List each such criterion in population_criteria with no concepts (a plan "
+    "without population_criteria lists it in "
+    "cohort.unapplied_population_criteria) and remove its predicate, so the "
+    "results report it as not applied."
+)
+#: The correction for each reason the input cannot read a predicate's window.
+_UNREADABLE_WINDOW_CORRECTIONS = {
+    COHORT_COLUMN_WINDOW_MISMATCH: (
+        f"For each {COHORT_COLUMN_WINDOW_MISMATCH}: the host filters a column as "
+        "it was summarized, so a predicate reads only that column's window (an "
+        "event read by its <concept>_time reads any window inside it).  When "
+        "the question states no window for the criterion and the plan chose "
+        "this one, restate the predicate's time_window as the column's window.  "
+        "When the question states the window, do not restate it.  "
+        + _NOT_APPLIED
+        + " A column summarized over the stated window is the user's to extract."
+    ),
+    COHORT_EVENT_TIME_NOT_HOURS_FROM_ICU_ADMISSION: (
+        f"For each {COHORT_EVENT_TIME_NOT_HOURS_FROM_ICU_ADMISSION}: the host "
+        "compares an event's time with a window in hours after ICU admission, "
+        "and this input types that time otherwise, or with only its origin or "
+        "only its unit.  "
+        + _NOT_APPLIED
+        + " An event time in hours after ICU admission is the user's to extract."
+    ),
+}
 
 
 def _require_primary_event_windows_readable(*, plan: Any, context: Any) -> None:
@@ -1162,10 +1209,10 @@ def _require_primary_event_windows_readable(*, plan: Any, context: Any) -> None:
         raise CohortSchemaError(
             f"{COHORT_EVENT_WINDOW_UNREADABLE}: "
             + "; ".join(item.description() for item in found)
-            + ". The cohort builder would read the whole stay instead. State each "
-            "such criterion in cohort.unapplied_population_criteria and remove its "
-            "predicate; a predicate on that column can read only the whole stay "
-            '(end_offset_hours "inf"), for a criterion that means the whole stay.'
+            + ". The cohort builder would read the whole stay instead. "
+            + _NOT_APPLIED
+            + " A reading bounded in time needs an input that records the "
+            "event's time as <concept>_time, which is the user's to extract."
         )
 
 
@@ -1777,6 +1824,263 @@ def require_event_windows_readable(
         raise CohortEventWindowUnreadableError(found)
 
 
+@dataclass(frozen=True)
+class ColumnWindowMismatch:
+    """A predicate stating another window than its column was summarized over.
+
+    ``by_event_time`` marks an event read by the event's own time, which
+    reads any window inside the column's; any other predicate reads exactly
+    the column's window.
+    """
+
+    label: str
+    concept_id: str
+    column: str
+    column_window: str
+    anchor: str
+    start_offset_hours: float
+    end_offset_hours: float
+    by_event_time: bool = False
+
+    def description(self) -> str:
+        stated = (
+            f"{self.anchor}[{self.start_offset_hours:g}, "
+            f"{self.end_offset_hours:g}) h"
+        )
+        if self.by_event_time:
+            return (
+                f"{self.label} reads the event of {self.concept_id!r} within "
+                f"{stated} by its time, but this input records {self.column!r} "
+                f"only over {self.column_window}"
+            )
+        return (
+            f"{self.label} reads {self.column!r} within {stated}, but this input "
+            f"summarizes {self.column!r} over {self.column_window}"
+        )
+
+
+class CohortColumnWindowMismatchError(CohortDataError):
+    """The cohort reads a column over another window than it was summarized over."""
+
+    code = COHORT_COLUMN_WINDOW_MISMATCH
+
+    def __init__(self, windows: Sequence[ColumnWindowMismatch]) -> None:
+        self.windows = tuple(windows)
+        super().__init__(
+            f"{COHORT_COLUMN_WINDOW_MISMATCH}: "
+            + "; ".join(window.description() for window in self.windows)
+        )
+
+    def __str__(self) -> str:
+        # KeyError would quote the message.
+        return str(self.args[0])
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return type(self), (self.windows,)
+
+
+@dataclass(frozen=True)
+class EventTimeNotHoursFromAdmission:
+    """A predicate that reads its event's time, which the input times otherwise.
+
+    ``origin`` and ``unit`` are those the input types for the time, ``None``
+    for one it does not state.
+    """
+
+    label: str
+    concept_id: str
+    time_column: str
+    origin: Optional[str] = None
+    unit: Optional[str] = None
+
+    def description(self) -> str:
+        if self.origin and self.unit:
+            typed = f"in {self.unit!r} from {self.origin!r}"
+        elif self.unit:
+            typed = f"in {self.unit!r} from an origin it does not state"
+        elif self.origin:
+            typed = f"from {self.origin!r} in a unit it does not state"
+        else:
+            typed = "in other than hours after ICU admission"
+        return (
+            f"{self.label} reads the event of {self.concept_id!r} within its "
+            f"window in hours after ICU admission by {self.time_column!r}, which "
+            f"this input times {typed}"
+        )
+
+
+class CohortEventTimeNotHoursError(CohortDataError):
+    """The cohort compares an event time in other units with a window in hours."""
+
+    code = COHORT_EVENT_TIME_NOT_HOURS_FROM_ICU_ADMISSION
+
+    def __init__(self, times: Sequence[EventTimeNotHoursFromAdmission]) -> None:
+        self.times = tuple(times)
+        super().__init__(
+            f"{COHORT_EVENT_TIME_NOT_HOURS_FROM_ICU_ADMISSION}: "
+            + "; ".join(item.description() for item in self.times)
+        )
+
+    def __str__(self) -> str:
+        return str(self.args[0])
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return type(self), (self.times,)
+
+
+def predicates_read_through_another_window(
+    definition: CohortDefinition,
+    *,
+    columns: Any,
+    column_windows: Mapping[str, ColumnWindow],
+    column_bindings: Optional[Dict[str, str]] = None,
+    label: str = "cohort",
+) -> tuple[ColumnWindowMismatch, ...]:
+    """The predicates that state another window than their column was summarized over.
+
+    The builder filters a column as it was summarized; a predicate's window is
+    locked for audit only.  So a predicate reads exactly its column's window,
+    whatever window it states.  An event the builder reads by its own time,
+    the ``<concept>_time`` beside its status, reads any window inside the one
+    its status and its time were recorded over.  ``column_windows`` are the
+    windows the input's columns were summarized over
+    (``context_column_windows``); a column without one is not judged here.
+    """
+
+    if not column_windows:
+        return ()
+    available = {str(column) for column in columns}
+    found: list[ColumnWindowMismatch] = []
+    for kind, predicates in (
+        ("inclusion", definition.inclusion),
+        ("exclusion", definition.exclusion),
+    ):
+        for index, predicate in enumerate(predicates):
+            column = _resolve_predicate_column(
+                available,
+                predicate.concept_id,
+                predicate.aggregation,
+                column_bindings=column_bindings,
+            )
+            window = column_windows.get(str(column)) if column is not None else None
+            if window is None:
+                continue
+            stated = predicate.time_window
+            start = float(stated.start_offset_hours)
+            end = float(stated.end_offset_hours)
+            time_column = f"{predicate.concept_id}_time"
+            by_event_time = (
+                _event_time_reading(predicate) is not None
+                and math.isfinite(end)
+                and time_column in available
+            )
+            if by_event_time:
+                time_window = column_windows.get(time_column)
+                readable = window.contains(stated.anchor, start, end) and (
+                    time_window is None
+                    or time_window.contains(stated.anchor, start, end)
+                )
+            else:
+                readable = window.is_window(stated.anchor, start, end)
+            if not readable:
+                found.append(
+                    ColumnWindowMismatch(
+                        label=f"{label}.{kind}[{index}]",
+                        concept_id=predicate.concept_id,
+                        column=str(column),
+                        column_window=window.description(),
+                        anchor=str(stated.anchor),
+                        start_offset_hours=start,
+                        end_offset_hours=end,
+                        by_event_time=by_event_time,
+                    )
+                )
+    return tuple(found)
+
+
+def predicates_read_by_an_event_time_not_in_hours(
+    definition: CohortDefinition,
+    *,
+    columns: Any,
+    event_times_not_in_hours: Any,
+    label: str = "cohort",
+) -> tuple[EventTimeNotHoursFromAdmission, ...]:
+    """The predicates the builder would read by an event time the input times otherwise.
+
+    The builder compares ``<concept>_time`` with a window in hours after ICU
+    admission (``_refine_occurrence_mask_by_event_time``).  An input that
+    types that column in days, in minutes, from another origin, or with only
+    one of the two (``event_times_typed_otherwise_than_hours``, which maps
+    each to the origin and unit typed for it) would have it read as hours
+    after ICU admission.
+    """
+
+    other = {str(column) for column in event_times_not_in_hours or ()}
+    if not other:
+        return ()
+    typed = (
+        event_times_not_in_hours
+        if isinstance(event_times_not_in_hours, Mapping)
+        else {}
+    )
+    available = {str(column) for column in columns}
+    found: list[EventTimeNotHoursFromAdmission] = []
+    for kind, predicates in (
+        ("inclusion", definition.inclusion),
+        ("exclusion", definition.exclusion),
+    ):
+        for index, predicate in enumerate(predicates):
+            time_column = f"{predicate.concept_id}_time"
+            if (
+                _event_time_reading(predicate) is None
+                or not math.isfinite(float(predicate.time_window.end_offset_hours))
+                or time_column not in available
+                or time_column not in other
+            ):
+                continue
+            origin, unit = typed.get(time_column) or (None, None)
+            found.append(
+                EventTimeNotHoursFromAdmission(
+                    label=f"{label}.{kind}[{index}]",
+                    concept_id=predicate.concept_id,
+                    time_column=time_column,
+                    origin=origin,
+                    unit=unit,
+                )
+            )
+    return tuple(found)
+
+
+def require_column_windows_readable(
+    definition: CohortDefinition,
+    *,
+    columns: Any,
+    column_windows: Mapping[str, ColumnWindow],
+    event_times_not_in_hours: Any = (),
+    column_bindings: Optional[Dict[str, str]] = None,
+    label: str = "cohort",
+) -> None:
+    """Refuse a cohort the builder would read over another window than it states."""
+
+    found = predicates_read_through_another_window(
+        definition,
+        columns=columns,
+        column_windows=column_windows,
+        column_bindings=column_bindings,
+        label=label,
+    )
+    if found:
+        raise CohortColumnWindowMismatchError(found)
+    times = predicates_read_by_an_event_time_not_in_hours(
+        definition,
+        columns=columns,
+        event_times_not_in_hours=event_times_not_in_hours,
+        label=label,
+    )
+    if times:
+        raise CohortEventTimeNotHoursError(times)
+
+
 def _catalog_output_stems(concept_id: str) -> tuple[str, ...]:
     """Return catalog-owned output stems for one extraction source.
 
@@ -2086,8 +2390,14 @@ def _apply_op(series: Any, op: str, value: Any) -> Any:
 
 __all__ = [
     "ALLOWED_CTAS_AGGREGATIONS",
+    "COHORT_COLUMN_WINDOW_MISMATCH",
+    "COHORT_EVENT_TIME_NOT_HOURS_FROM_ICU_ADMISSION",
     "COHORT_EVENT_WINDOW_UNREADABLE",
     "COHORT_LOCK_FILENAME",
+    "CohortColumnWindowMismatchError",
+    "CohortEventTimeNotHoursError",
+    "ColumnWindowMismatch",
+    "EventTimeNotHoursFromAdmission",
     "CohortAuthorityError",
     "CohortDefinition",
     "CohortDataError",
@@ -2114,11 +2424,14 @@ __all__ = [
     "known_concept_ids",
     "materialized_input_column_authority",
     "predicate_accepts_closed_level",
+    "predicates_read_by_an_event_time_not_in_hours",
     "predicates_read_over_the_whole_stay",
+    "predicates_read_through_another_window",
     "register_cohort_concept_ids",
     "registered_run_cohort_concept_ids",
     "register_pattern",
     "register_patterns_from_file",
+    "require_column_windows_readable",
     "require_event_windows_readable",
     "reset_pattern_registry",
     "validate_cohort_definition",

@@ -19,17 +19,25 @@ typed :class:`CohortDefinition` the materialiser can apply. It only
 L2-autonomy boundary intact: the framework enforces the agent's cohort, it does
 not impose one.
 
-The CTAS ``time_window`` / ``aggregation`` of each predicate are audit metadata
-only; ``build_cohort`` filters by ``concept_id``/``op``/``value`` against
-already-materialised per-stay columns. So a missing window/aggregation is
-filled with a first-24h default rather than rejected.
+A predicate's ``time_window`` states the window its criterion reads.  The
+builder filters a column as it was summarized, and reads an event over a
+finite window by the event's own time (``cohort.schema``).  So a window the
+prose states is carried, and checked against the column like any plan's.  A
+criterion the prose states without a window reads its column as the column
+was materialized: the column's own window, the whole stay for an event the
+stay records whole (an outcome such as death), and a first-24 h default only
+for a column the context records no window for (a value fixed at admission,
+which no window summarizes).  The aggregation is audit metadata: each
+predicate names its column directly.  An extractor that leaves out a window
+the prose states makes the criterion read its column's window; the prompt
+asks for the window, and nothing else can recover it.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from typing import Any, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from .schema import (
     CohortDefinition,
@@ -40,6 +48,8 @@ from .schema import (
     validate_cohort_definition,
 )
 from ..providers.protocol import LLMClient, LLMMessage
+from ..research_context.materialization_window import context_column_windows
+from ..research_context.stay_events import whole_stay_event_columns
 from ..providers.factory import authorized_complete
 
 # Operators ``build_cohort._apply_op`` actually implements.
@@ -56,9 +66,9 @@ _SUPPORTED_OPS = (
     "not_missing",
 )
 
-# Audit-only defaults for a per-stay first-24h summary column. build_cohort
-# ignores these when filtering; they exist so the predicate validates and the
-# locked definition records a window/aggregation.
+# The window of a column the context records no window for (a value fixed at
+# admission, which no window summarizes), and the audit aggregation every
+# predicate records.
 _DEFAULT_TIME_WINDOW = {
     "anchor": "icu_admit",
     "start_offset_hours": 0,
@@ -116,7 +126,11 @@ def _user_prompt(*, cohort_prose: str, universe_columns: Sequence[str]) -> str:
         "`age` column -> {concept_id: age, op: >=, value: 18}).\n"
         "- Only use concept_id values that appear verbatim in AVAILABLE "
         "COLUMNS. Drop any criterion you cannot map to a listed column.\n"
-        "- Omit time_window/aggregation; the framework fills audit defaults.\n"
+        "- When the prose states the time window a criterion reads (e.g. "
+        "'within 24 h of ICU admission'), give it as \"time_window\": "
+        '{"anchor": "icu_admission", "start_offset_hours": <hours>, '
+        '"end_offset_hours": <hours>}; otherwise omit time_window. Omit '
+        "aggregation.\n"
         '- If nothing maps, return {"inclusion": [], "exclusion": []}.'
     )
 
@@ -152,8 +166,40 @@ def _loads_json_object(text: str) -> Optional[dict]:
     return data if isinstance(data, dict) else None
 
 
+def _column_windows(context: Any, columns: set[str]) -> dict[str, dict]:
+    """The window each column is read over when the prose states none."""
+
+    if context is None:
+        return {}
+    whole_stay = whole_stay_event_columns(context)
+    windows = context_column_windows(context)
+    found: dict[str, dict] = {}
+    for column in columns:
+        window = windows.get(column)
+        if window is not None and window.anchor is not None:
+            found[column] = {
+                "anchor": window.anchor,
+                "start_offset_hours": window.start_hours,
+                "end_offset_hours": window.end_hours,
+            }
+        elif column in whole_stay:
+            found[column] = {
+                "anchor": "icu_admission",
+                "start_offset_hours": 0,
+                "end_offset_hours": "inf",
+            }
+    return found
+
+
+class _StatedWindowUnreadable(ValueError):
+    """The translator gave a criterion a time window that names no window."""
+
+
 def _predicate_from_minimal(
-    item: Any, *, columns: set[str]
+    item: Any,
+    *,
+    columns: set[str],
+    column_windows: Mapping[str, dict] | None = None,
 ) -> Optional[ConceptPredicate]:
     if not isinstance(item, dict):
         return None
@@ -161,11 +207,16 @@ def _predicate_from_minimal(
     op = str(item.get("op") or "").strip()
     if concept_id not in columns or op not in _SUPPORTED_OPS:
         return None
-    window = item.get("time_window") or _DEFAULT_TIME_WINDOW
+    stated = item.get("time_window")
+    window = stated or (column_windows or {}).get(concept_id) or _DEFAULT_TIME_WINDOW
     aggregation = str(item.get("aggregation") or _DEFAULT_AGGREGATION)
     try:
         time_window = TimeWindow.from_dict(window)
-    except CohortSchemaError:
+    except CohortSchemaError as exc:
+        if stated:
+            # Dropping the criterion would apply the others alone, a wider
+            # cohort than the prose states.
+            raise _StatedWindowUnreadable(str(exc)) from exc
         return None
     value = item.get("value", None)
     if op in {"missing", "not_missing"}:
@@ -185,12 +236,18 @@ def extract_cohort_definition_from_prose(
     universe_columns: Sequence[str],
     llm: LLMClient,
     name: str = "primary",
+    context: Any = None,
 ) -> Optional[CohortDefinition]:
     """Return a validated :class:`CohortDefinition` from the cohort step prose,
     or ``None`` when nothing column-checkable can be extracted.
 
     The result is grounded: every predicate's ``concept_id`` is one of
     ``universe_columns`` and its operator is one ``build_cohort`` implements.
+    A criterion the prose states without a window reads its column over the
+    window ``context`` records for it (``_column_windows``).  A window the
+    translator states that names no window (a bound that is no number, an end
+    not after its start, a missing anchor) fails the whole translation: the
+    other criteria alone would select a wider cohort than the prose states.
     Pre-materialised columns are visible only inside a local validation scope;
     extraction never widens the process registry.
     """
@@ -199,6 +256,7 @@ def extract_cohort_definition_from_prose(
     if _explicitly_unfiltered_cohort(cohort_prose):
         return None
     columns = {str(c) for c in universe_columns}
+    column_windows = _column_windows(context, columns)
     try:
         raw = authorized_complete(
             llm,
@@ -226,15 +284,17 @@ def extract_cohort_definition_from_prose(
     # and never process-global registrations.
     with cohort_concept_id_scope(columns):
         inclusion = []
-        for item in data.get("inclusion") or []:
-            pred = _predicate_from_minimal(item, columns=columns)
-            if pred is not None:
-                inclusion.append(pred)
         exclusion = []
-        for item in data.get("exclusion") or []:
-            pred = _predicate_from_minimal(item, columns=columns)
-            if pred is not None:
-                exclusion.append(pred)
+        try:
+            for kind, found in (("inclusion", inclusion), ("exclusion", exclusion)):
+                for item in data.get(kind) or []:
+                    pred = _predicate_from_minimal(
+                        item, columns=columns, column_windows=column_windows
+                    )
+                    if pred is not None:
+                        found.append(pred)
+        except _StatedWindowUnreadable:
+            return None
 
         if not (inclusion or exclusion):
             return None

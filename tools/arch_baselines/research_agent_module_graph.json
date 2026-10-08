@@ -2837,6 +2837,10 @@
     ],
     [
       "easyicu.research_agent.cohort.materializer",
+      "easyicu.research_agent.research_context.materialization_window"
+    ],
+    [
+      "easyicu.research_agent.cohort.materializer",
       "easyicu.research_agent.trajectory.panel"
     ],
     [
@@ -2850,6 +2854,14 @@
     [
       "easyicu.research_agent.cohort.repair",
       "easyicu.research_agent.providers.protocol"
+    ],
+    [
+      "easyicu.research_agent.cohort.repair",
+      "easyicu.research_agent.research_context.materialization_window"
+    ],
+    [
+      "easyicu.research_agent.cohort.repair",
+      "easyicu.research_agent.research_context.stay_events"
     ],
     [
       "easyicu.research_agent.cohort.schema",
@@ -2878,6 +2890,10 @@
     [
       "easyicu.research_agent.cohort.schema",
       "easyicu.research_agent.planning.cohort_contract"
+    ],
+    [
+      "easyicu.research_agent.cohort.schema",
+      "easyicu.research_agent.research_context.materialization_window"
     ],
     [
       "easyicu.research_agent.cohort.schema",
@@ -9629,10 +9645,6 @@
     ],
     [
       "easyicu.research_agent.planning.cohort_eligibility",
-      "easyicu.research_agent.concept_availability"
-    ],
-    [
-      "easyicu.research_agent.planning.cohort_eligibility",
       "easyicu.research_agent.planning.adjustment_authority"
     ],
     [
@@ -9650,10 +9662,6 @@
     [
       "easyicu.research_agent.planning.cohort_eligibility",
       "easyicu.research_agent.research_context.stay_events"
-    ],
-    [
-      "easyicu.research_agent.planning.cohort_eligibility",
-      "easyicu.research_agent.research_context.temporal_semantics"
     ],
     [
       "easyicu.research_agent.planning.cohort_eligibility",
@@ -13009,6 +13017,10 @@
     ],
     [
       "easyicu.research_agent.research_context.materialization_window",
+      "easyicu.research_agent.research_context.stay_events"
+    ],
+    [
+      "easyicu.research_agent.research_context.materialization_window",
       "easyicu.research_agent.research_context.temporal_semantics"
     ],
     [
@@ -13102,6 +13114,14 @@
     [
       "easyicu.research_agent.research_context.representation_semantics",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.research_context.stay_events",
+      "easyicu.research_agent.concept_availability"
+    ],
+    [
+      "easyicu.research_agent.research_context.stay_events",
+      "easyicu.research_agent.research_context.temporal_semantics"
     ],
     [
       "easyicu.research_agent.research_context.temporal_semantics",
@@ -13298,6 +13318,10 @@
     [
       "easyicu.research_agent.robustness.estimators",
       "easyicu.research_agent.methods.missing"
+    ],
+    [
+      "easyicu.research_agent.robustness.estimators",
+      "easyicu.research_agent.research_context.materialization_window"
     ],
     [
       "easyicu.research_agent.robustness.estimators",
@@ -13752,7 +13776,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3430,
+    "edge_count": 3436,
     "largest_scc_size": 0,
     "module_count": 787,
     "package_count": 36,

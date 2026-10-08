@@ -181,8 +181,9 @@ class FixedWindowTrajectoryDesign:
     #: host-restricted source universe.
     population_inclusion: tuple[Mapping[str, Any], ...] = ()
     population_exclusion: tuple[Mapping[str, Any], ...] = ()
-    #: Population criteria the reviewed plan states and does not apply:
-    #: no allowed cohort concept expresses them.  They select no stay; the
+    #: Population criteria the reviewed plan states and does not apply: no
+    #: allowed cohort concept expresses them, or the input does not record
+    #: them over the window they state.  They select no stay; the
     #: plan on the signed owners states them so its review reports them.
     population_unapplied_criteria: tuple[str, ...] = ()
 
@@ -939,13 +940,14 @@ def trajectory_population_design(
     classes describe, which a plan states rather than hides.
 
     ``unapplied_criteria`` names the criteria the plan states and no
-    predicate applies: no allowed cohort concept expresses them.  They
-    select no stay; the design carries them so the plan on the signed
-    owners states them too.
+    predicate applies: no allowed cohort concept expresses them, or the
+    input does not record them over the window they state.  They select no
+    stay; the design carries them so the plan on the signed owners states
+    them too.
     """
 
     selection_mode = str(_field(cohort, "selection_mode") or "predicate_filtered")
-    # A criterion no allowed concept expresses selects no stay; the design
+    # A criterion no predicate applies selects no stay; the design
     # carries it so the plan on the signed owners still states it.
     stated = (
         _field(cohort, "unapplied_population_criteria") if cohort is not None else None
