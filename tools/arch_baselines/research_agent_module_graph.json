@@ -2881,6 +2881,10 @@
     ],
     [
       "easyicu.research_agent.cohort.schema",
+      "easyicu.research_agent.research_context.stay_events"
+    ],
+    [
+      "easyicu.research_agent.cohort.schema",
       "easyicu.research_agent.research_context.typed"
     ],
     [
@@ -9645,6 +9649,10 @@
     ],
     [
       "easyicu.research_agent.planning.cohort_eligibility",
+      "easyicu.research_agent.research_context.stay_events"
+    ],
+    [
+      "easyicu.research_agent.planning.cohort_eligibility",
       "easyicu.research_agent.research_context.temporal_semantics"
     ],
     [
@@ -10741,6 +10749,10 @@
     ],
     [
       "easyicu.research_agent.planning.scientific_review",
+      "easyicu.research_agent.cohort.schema"
+    ],
+    [
+      "easyicu.research_agent.planning.scientific_review",
       "easyicu.research_agent.concept_availability"
     ],
     [
@@ -10829,6 +10841,10 @@
     ],
     [
       "easyicu.research_agent.planning.scientific_review",
+      "easyicu.research_agent.planning.cohort_contract"
+    ],
+    [
+      "easyicu.research_agent.planning.scientific_review",
       "easyicu.research_agent.planning.cohort_eligibility"
     ],
     [
@@ -10882,6 +10898,10 @@
     [
       "easyicu.research_agent.planning.scientific_review",
       "easyicu.research_agent.research_context.minimum_stay"
+    ],
+    [
+      "easyicu.research_agent.planning.scientific_review",
+      "easyicu.research_agent.research_context.stay_events"
     ],
     [
       "easyicu.research_agent.planning.scientific_review",
@@ -13281,6 +13301,10 @@
     ],
     [
       "easyicu.research_agent.robustness.estimators",
+      "easyicu.research_agent.research_context.stay_events"
+    ],
+    [
+      "easyicu.research_agent.robustness.estimators",
       "easyicu.research_agent.robustness.panel"
     ],
     [
@@ -13728,9 +13752,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3424,
+    "edge_count": 3430,
     "largest_scc_size": 0,
-    "module_count": 786,
+    "module_count": 787,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -14470,6 +14494,7 @@
     "easyicu.research_agent.research_context.prompt_variables": "research_context/prompt_variables.py",
     "easyicu.research_agent.research_context.repair_prompt": "research_context/repair_prompt.py",
     "easyicu.research_agent.research_context.representation_semantics": "research_context/representation_semantics.py",
+    "easyicu.research_agent.research_context.stay_events": "research_context/stay_events.py",
     "easyicu.research_agent.research_context.temporal_semantics": "research_context/temporal_semantics.py",
     "easyicu.research_agent.research_context.typed": "research_context/typed.py",
     "easyicu.research_agent.resources": "resources/__init__.py",

@@ -1919,7 +1919,20 @@ def _materialize_cohort_from_resolved_source(
 
     # ---- apply CTAS inclusion/exclusion (纳排), deterministic + auditable
     if cohort_definition is not None:
-        cohort = build_cohort(cohort_definition, wide)
+        # Outcomes and stay-level events record their event over the whole
+        # stay; the builder refuses a finite window on one it cannot time.
+        cohort = build_cohort(
+            cohort_definition,
+            wide,
+            whole_stay_columns=[
+                *outcome_set,
+                *(
+                    concept
+                    for concept, record in stay_level_sources.items()
+                    if record.get("source") != "stay_level_value"
+                ),
+            ],
+        )
     else:
         cohort = wide
     n_after = int(len(cohort))
