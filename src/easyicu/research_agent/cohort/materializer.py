@@ -63,7 +63,12 @@ from .primitives import (
     merge_left as _merge_left,
     window as _window,
 )
-from .schema import CohortDefinition, build_cohort
+from .schema import (
+    CohortDefinition,
+    build_cohort,
+    require_column_windows_readable,
+)
+from ..research_context.materialization_window import ColumnWindow, host_column_window
 from ..intake.export_package import (
     ExportPackageError,
     ExportPackage,
@@ -1725,6 +1730,12 @@ def _materialize_cohort_from_resolved_source(
         raise RuntimeError("Could not establish a stay-level base from static_concepts")
 
     frames: List[pd.DataFrame] = [*static_frames]
+    # The columns summarized over the cohort window, which a predicate reads
+    # only over that window.
+    window_summaries: List[str] = []
+    # The window each bare predicate column was derived over: its first
+    # predicate's.  Another predicate on that concept reads the same column.
+    predicate_windows: Dict[str, Window] = {}
 
     # ---- time-series features -> wide per-stay summaries (over cohort_window)
     for c in feature_set:
@@ -1743,6 +1754,7 @@ def _materialize_cohort_from_resolved_source(
                 source_role=source_role,
             )
             frames.append(summary)
+            window_summaries.extend(str(column) for column in summary.columns)
             metadata_collector.add_timeseries(
                 c,
                 output_columns=summary.columns,
@@ -1785,6 +1797,7 @@ def _materialize_cohort_from_resolved_source(
             window=cohort_window,
         )
         frames.append(derived_frame)
+        window_summaries.extend(str(column) for column in derived_frame.columns)
         metadata_collector.add_host_derivation(
             declared,
             output_columns=tuple(derived_frame.columns),
@@ -1857,6 +1870,8 @@ def _materialize_cohort_from_resolved_source(
             source_role=source_role,
         )
         frames.append(predicate_frame)
+        if TIME_COL in loaded.columns:
+            predicate_windows[concept] = win
         metadata_collector.add_predicate(
             concept,
             output_columns=predicate_frame.columns,
@@ -1919,6 +1934,31 @@ def _materialize_cohort_from_resolved_source(
 
     # ---- apply CTAS inclusion/exclusion (纳排), deterministic + auditable
     if cohort_definition is not None:
+        # A column summarized over a window is read only over it: a summary
+        # over the cohort window, or a bare predicate column over the window
+        # of the predicate it was derived for.  Every <concept>_time this
+        # filter reads is the materializer's own, in hours after ICU admission.
+        cohort_column_window = host_column_window(*cohort_window)
+        require_column_windows_readable(
+            cohort_definition,
+            columns=wide.columns,
+            column_windows={
+                **{
+                    column: cohort_column_window
+                    for column in window_summaries
+                    if column != ID_COL
+                },
+                **{
+                    concept: ColumnWindow(
+                        label=f"icu_admission[{start:g},{end:g}]h",
+                        anchor="icu_admission",
+                        start_hours=start,
+                        end_hours=end,
+                    )
+                    for concept, (start, end) in predicate_windows.items()
+                },
+            },
+        )
         # Outcomes and stay-level events record their event over the whole
         # stay; the builder refuses a finite window on one it cannot time.
         cohort = build_cohort(

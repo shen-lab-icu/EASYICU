@@ -296,6 +296,25 @@ def test_a_stated_population_outside_its_authority_is_refused(
     assert caught.value.path == path
 
 
+def test_a_criterion_without_its_predicate_may_lose_its_concepts_only_for_its_window() -> None:
+    # A concept that expresses a criterion over another window than the one
+    # it states cannot apply it: the criterion then names no concepts.
+    request = _offered_request(_context())
+    population = {
+        "criteria": [_OLDER, _BURDEN],
+        "inclusion": [_predicate("age", ">=", 65)],
+        "exclusion": [],
+    }
+
+    with pytest.raises(FamilySpecError) as caught:
+        validate_family_plan_spec(_spec(request, population), request)
+
+    assert (
+        "give it no concepts only when no offered concept expresses it over the "
+        "window the criterion states"
+    ) in str(caught.value)
+
+
 def test_a_population_where_none_is_offered_is_refused() -> None:
     request = _offered_request(_context(), cohort_mode="all_input_rows")
 

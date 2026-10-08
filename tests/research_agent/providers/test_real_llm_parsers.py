@@ -908,7 +908,10 @@ def test_typed_binding_gate_rejects_direct_suffix_with_wrong_window(tmp_path) ->
         ],
     )
 
-    with pytest.raises(CohortSchemaError, match="proven matching aggregation and time"):
+    with pytest.raises(
+        CohortSchemaError,
+        match=r"cohort_column_window_mismatch: .* over its own window icu_admission\[0,24\]h",
+    ):
         validate_plan_typed_bindings_against_context(plan=plan, context=context)
 
 
@@ -1103,8 +1106,8 @@ def test_planner_retries_robustness_window_absent_from_sealed_input(tmp_path) ->
     assert len(llm.calls) == 2
     assert plan.robustness_specs[0].spec_id == "complete_case"
     feedback = llm.calls[1][0][-1].content
-    assert "proven matching aggregation and time" in feedback
-    assert "icu_admission[0.0,6.0]h/max" in feedback
+    assert "cohort_column_window_mismatch" in feedback
+    assert "within icu_admission[0, 6) h" in feedback
     assert "icu_admission[0,24]h" in feedback
 
 

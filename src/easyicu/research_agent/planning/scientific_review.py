@@ -2964,11 +2964,13 @@ def unapplied_population_findings(plan: AnalysisPlan) -> list[PlanScientificFind
     """Say so for each population criterion the plan states and does not apply.
 
     The Planner states each restriction the question places on whom the
-    study includes.  One that no allowed cohort concept expresses is
-    applied by no predicate (``CohortDefinition.unapplied_population_criteria``),
-    so the analysis keeps a broader population than the one stated.  A plan
-    revision cannot apply it: a concept that expresses it, or the
-    researcher's acceptance of the broader population, comes from the study.
+    study includes.  One that no predicate can apply, because no allowed
+    cohort concept expresses it or the input does not record it over the
+    window it states, is applied by no predicate
+    (``CohortDefinition.unapplied_population_criteria``), so the analysis
+    keeps a broader population than the one stated.  A plan revision cannot
+    apply it: data that can apply it, or the researcher's acceptance of the
+    broader population, comes from the study.
     """
 
     cohort = plan.cohort
@@ -2981,19 +2983,20 @@ def unapplied_population_findings(plan: AnalysisPlan) -> list[PlanScientificFind
             dimension="icu_clinical_design",
             message=(
                 f"The plan states the population criterion {criterion!r}, but no "
-                "allowed cohort concept expresses it, so no predicate applies it: "
-                "the analysis keeps every input row that the other cohort "
-                "criteria keep, a broader population than the one stated."
+                "predicate applies it: the analysis keeps every input row that "
+                "the other cohort criteria keep, a broader population than the "
+                "one stated."
             ),
             evidence_refs=[
                 "analysis_plan.json.cohort",
                 "research_context.json.research_question",
             ],
             remediation=(
-                "Make a concept that expresses this criterion available to the "
-                "study, so that a predicate can apply it, or have the researcher "
-                "accept the broader population. The results and the manuscript "
-                "describe the population the analysis actually kept."
+                "Make data that can apply this criterion available to the study "
+                "(a concept that expresses it, recorded over the window it "
+                "states), so that a predicate can apply it, or have the "
+                "researcher accept the broader population. The results and the "
+                "manuscript describe the population the analysis actually kept."
             ),
             remediation_route="study_authority_change",
         )
@@ -3049,12 +3052,10 @@ def robustness_override_event_window_findings(
                 "research_context.json.variables",
             ],
             remediation=(
-                "Restate each such override so the input can read it, or remove the "
-                "specification. A predicate on a column that records its event over "
-                'the whole stay reads only the whole stay (end_offset_hours "inf"), '
-                "for a sensitivity analysis that means the whole stay; a reading "
-                "bounded in time needs an input that records the event's time as "
-                "<concept>_time. Do not change the headline estimand."
+                "Restate each such override without that reading, or remove the "
+                "specification: a reading bounded in time needs an input that "
+                "records the event's time as <concept>_time. Do not change the "
+                "headline estimand."
             ),
             remediation_route="agent_plan_revision",
         )

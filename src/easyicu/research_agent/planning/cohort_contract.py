@@ -201,8 +201,9 @@ class CohortDefinition:
     derived_from_named: Optional[str] = None
     locked_at: str = "not_locked"
     selection_mode: CohortSelectionMode = "predicate_filtered"
-    #: Population criteria the plan states that no predicate applies:
-    #: no allowed cohort concept expresses them.  They select no row, so
+    #: Population criteria the plan states that no predicate applies: no
+    #: allowed cohort concept expresses them, or the input does not record
+    #: them over the window they state.  They select no row, so
     #: they stay out of ``to_dict`` and the cohort's digest, and a plan
     #: serializes them only when it has one.
     unapplied_population_criteria: Annotated[

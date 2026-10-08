@@ -16,10 +16,15 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 from ..cohort.schema import (
     CohortDefinition,
     build_cohort,
+    require_column_windows_readable,
     require_event_windows_readable,
 )
 from ..methods.missing import apply_missing_strategy
-from ..research_context.stay_events import whole_stay_event_columns
+from ..research_context.materialization_window import context_column_windows
+from ..research_context.stay_events import (
+    event_times_typed_otherwise_than_hours,
+    whole_stay_event_columns,
+)
 from .primary_effect import (
     _extract_primary_effect_payload_from_records,
     _primary_effect_payload_is_complete,
@@ -1335,7 +1340,11 @@ def _data_with_predicate_aliases(
     Every robustness path builds an override from this frame, so the refusal
     of a window the builder would read over the whole stay is made here: a
     concept aliased to a whole-stay column records its event over the whole
-    stay too (``require_event_windows_readable``).
+    stay too (``require_event_windows_readable``).  So is the refusal of a
+    window other than the one a column was summarized over, a concept aliased
+    to a column taking that column's window, and of an event time the input
+    types in other than hours after ICU admission
+    (``require_column_windows_readable``).
     """
 
     predicates = [*cohort_definition.inclusion, *cohort_definition.exclusion]
@@ -1358,6 +1367,21 @@ def _data_with_predicate_aliases(
         columns=out.columns,
         whole_stay_columns=whole_stay
         | {concept for concept, alias in aliases.items() if alias in whole_stay},
+        label="cohort_override",
+    )
+    windows = context_column_windows(context)
+    require_column_windows_readable(
+        cohort_definition,
+        columns=out.columns,
+        column_windows={
+            **windows,
+            **{
+                concept: windows[alias]
+                for concept, alias in aliases.items()
+                if alias in windows
+            },
+        },
+        event_times_not_in_hours=event_times_typed_otherwise_than_hours(context),
         label="cohort_override",
     )
     return out

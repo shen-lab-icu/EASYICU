@@ -385,6 +385,7 @@ def _extract_cohort_definition_with_provider_budget(
     llm: Any,
     name: str,
     reserved_final_category: Optional[str] = None,
+    context: Any = None,
 ) -> Tuple[Optional[CohortDefinition], Dict[str, Any]]:
     """Run cohort-prose translation under a crash-safe provider receipt.
 
@@ -447,6 +448,7 @@ def _extract_cohort_definition_with_provider_budget(
             universe_columns=universe_columns,
             llm=llm,
             name=name,
+            context=context,
         ),
     )
     snapshot = budget.snapshot()
@@ -1531,6 +1533,7 @@ def _step_try_materialize_cohort_from_prose(
                 reserved_final_category=(
                     "concept_audit" if pipeline._enable_llm_concept_audit else None
                 ),
+                context=context,
             )
         )
     except ProviderCallBudgetError as exc:

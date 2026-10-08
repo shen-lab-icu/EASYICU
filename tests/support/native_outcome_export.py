@@ -119,6 +119,8 @@ def untyped_native_export(
     outcome: pd.DataFrame,
     outcome_concepts: list[str],
     unrecorded_stays: tuple[int, ...] = (),
+    longitudinal: pd.DataFrame | None = None,
+    longitudinal_concepts: list[str] | None = None,
 ) -> Path:
     """The same export as an older native export writes it: no column types.
 
@@ -132,11 +134,21 @@ def untyped_native_export(
     statics = pd.DataFrame(
         {"stay_id": stays, "age": [50 + 5 * index for index in range(len(stays))]}
     )
-    files = []
-    for relative_path, module, frame, concepts in (
+    members: list[tuple[str, str, pd.DataFrame, list[str]]] = [
         ("demographics.parquet", "demographics", statics, ["age"]),
         ("outcome.parquet", "outcome", outcome, list(outcome_concepts)),
-    ):
+    ]
+    if longitudinal is not None:
+        members.append(
+            (
+                "medications.parquet",
+                "medications",
+                longitudinal,
+                list(longitudinal_concepts or ()),
+            )
+        )
+    files = []
+    for relative_path, module, frame, concepts in members:
         frame.to_parquet(root / relative_path, index=False)
         files.append(
             {
