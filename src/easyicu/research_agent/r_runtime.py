@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from functools import lru_cache
+from pathlib import Path
 from typing import Dict, Optional, Sequence, Tuple
 
 #: R packages the lane knows about. Present ones report versions; absent
@@ -162,10 +164,13 @@ def run_rscript(
 ) -> RScriptResult:
     """Run one R script with hardened transport semantics (never raises).
 
-    No network, no shell, fixed argv shape ``[rscript, --vanilla, -e,
-    script, *args]``.  Timeouts, non-zero exits and unreadable output all
-    surface as result fields; fail-closed mapping stays with the caller so
-    each adapter keeps its own error codes.
+    No network, no shell, fixed argv shape ``[rscript, --vanilla, <script
+    file>, *args]``.  The script travels as a file in a private temporary
+    directory, not as an ``-e`` argument: Linux limits one argument to
+    128 KiB, so a longer script would fail to start in the runner image.
+    Timeouts, non-zero exits and unreadable output all surface as result
+    fields; fail-closed mapping stays with the caller so each adapter keeps
+    its own error codes.
     """
 
     if not str(rscript or "").strip():
@@ -178,28 +183,31 @@ def run_rscript(
         raise RRuntimeError(f"timeout_s must be numeric: {exc}") from exc
     if not timeout_value > 0:
         raise RRuntimeError("timeout_s must be positive")
-    argv = [str(rscript), "--vanilla", "-e", str(script)]
-    argv.extend(str(item) for item in (args or []))
-    try:
-        completed = subprocess.run(
-            argv,
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=timeout_value,
-        )
-    except subprocess.TimeoutExpired as exc:
-        partial_out = exc.stdout
-        partial_err = exc.stderr
-        return RScriptResult(
-            returncode=-1,
-            stdout=partial_out if isinstance(partial_out, str) else "",
-            stderr=partial_err if isinstance(partial_err, str) else "",
-            timed_out=True,
-        )
-    except OSError as exc:
-        raise RRuntimeError(f"Rscript execution failed to start: {exc}") from exc
+    with tempfile.TemporaryDirectory(prefix="easyicu-rscript-") as directory:
+        script_path = Path(directory) / "script.R"
+        script_path.write_text(str(script), encoding="utf-8")
+        argv = [str(rscript), "--vanilla", str(script_path)]
+        argv.extend(str(item) for item in (args or []))
+        try:
+            completed = subprocess.run(
+                argv,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout_value,
+            )
+        except subprocess.TimeoutExpired as exc:
+            partial_out = exc.stdout
+            partial_err = exc.stderr
+            return RScriptResult(
+                returncode=-1,
+                stdout=partial_out if isinstance(partial_out, str) else "",
+                stderr=partial_err if isinstance(partial_err, str) else "",
+                timed_out=True,
+            )
+        except OSError as exc:
+            raise RRuntimeError(f"Rscript execution failed to start: {exc}") from exc
     return RScriptResult(
         returncode=int(completed.returncode),
         stdout=completed.stdout or "",
