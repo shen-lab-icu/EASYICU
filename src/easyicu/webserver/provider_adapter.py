@@ -54,6 +54,14 @@ _DEFAULT_CODEX_APP_SERVER_TURN_HARD_TIMEOUT = 480.0
 _DEFAULT_CODEX_APP_SERVER_REASONING_EFFORT = "low"
 _LOOPBACK_RESEARCH_AGENT_REQUEST_TIMEOUT = 480.0
 _WEB_RESEARCH_AGENT_TRANSIENT_HTTP_STATUS_CODES = (500, 502, 503, 504)
+# A transient 5xx relayed by the local provider proxy (an outbound CONNECT
+# 503 surfaced as HTTP 500) lasts minutes: 1.9 to 3.3 on 2026-09-22, and the
+# two requests E1 sent 5 s apart on 2026-10-09 failed inside one window.  The
+# second request of the reviewed two-request bound therefore waits about
+# three minutes, inside a five-minute window.
+_WEB_RESEARCH_AGENT_RETRY_DELAYS_SECONDS = (180.0,)
+_WEB_RESEARCH_AGENT_RETRY_JITTER_FRACTION = 0.2
+_WEB_RESEARCH_AGENT_RETRY_WINDOW_SECONDS = 300.0
 _WEB_RESEARCH_AGENT_MAX_PROVIDER_ATTEMPTS = 192
 _WEB_RESEARCH_AGENT_MAX_TOTAL_TOKENS = 2_000_000
 _WEB_RESEARCH_AGENT_MAX_ESTIMATED_COST_USD = 100.0
@@ -519,6 +527,15 @@ def build_research_agent_provider_client(
             TRUST_LOOPBACK_PROXY_KEY_ENV,
             is_loopback_openai_base_url,
         )
+        from easyicu.research_agent.providers.transport_retry import (
+            TransportRetrySchedule,
+        )
+
+        retry_schedule = TransportRetrySchedule(
+            delays_seconds=_WEB_RESEARCH_AGENT_RETRY_DELAYS_SECONDS,
+            jitter_fraction=_WEB_RESEARCH_AGENT_RETRY_JITTER_FRACTION,
+            window_seconds=_WEB_RESEARCH_AGENT_RETRY_WINDOW_SECONDS,
+        )
 
         loopback = bool(
             profile.transport == OPENAI_CHAT_COMPLETIONS
@@ -550,16 +567,18 @@ def build_research_agent_provider_client(
             request_timeout=effective_timeout,
             title="EasyICU Web Research Agent",
             environment=provider_environment,
-            # One extra transport attempt, hence two total requests.  Freeze
-            # environment overrides so EASYICU_LLM_MAX_RETRIES cannot silently
-            # widen the Web job's reviewed bound.  This allowlist is the whole
-            # Web retry policy: non-HTTP failures and other status codes fail
-            # closed without a transport replay.
-            max_retries=1,
+            # One extra transport attempt, hence two total requests, after the
+            # schedule's wait.  Freeze environment overrides so
+            # EASYICU_LLM_MAX_RETRIES cannot silently widen the Web job's
+            # reviewed bound.  This allowlist is the whole Web retry policy:
+            # non-HTTP failures and other status codes fail closed without a
+            # transport replay.
+            max_retries=retry_schedule.max_retries,
             retryable_http_status_codes=(
                 _WEB_RESEARCH_AGENT_TRANSIENT_HTTP_STATUS_CODES
             ),
             allow_environment_overrides=False,
+            retry_schedule=retry_schedule,
         )
     except Exception as exc:
         raise ProviderAdapterError(
@@ -582,7 +601,8 @@ def build_research_agent_provider_client(
             "client_constructed": True,
             "provider_gate": "research_agent_provider_ready",
             "request_timeout_seconds": effective_timeout,
-            "transport_max_attempts": 2,
+            "transport_max_attempts": 1 + retry_schedule.max_retries,
+            **retry_schedule.policy_fields(),
             "strict_json_schema_enabled": bool(
                 getattr(client, "supports_strict_json_schema", False)
             ),

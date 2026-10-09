@@ -134,6 +134,7 @@ from .manuscript_method_facts import (
     project_source_method_facts,
 )
 from .writer_evidence_repair import decide_writer_evidence_repairs
+from .writer_stop import writer_failure_detail
 from ..replication.notebook import (
     NotebookStep,
     build_notebook,
@@ -1882,11 +1883,12 @@ def _draft_manuscript(
                         "WriterAgent failed before producing a manuscript scaffold: "
                         f"{writer_error_message}"
                     ),
-                    detail={
-                        "exception_type": type(exc).__name__,
-                        "writer_digest_widened": bool(pipeline._writer_digest_widened),
-                        "rejected_candidate_evidence_id": rejected_candidate,
-                    },
+                    detail=writer_failure_detail(
+                        exc,
+                        exception_type=type(exc).__name__,
+                        writer_digest_widened=bool(pipeline._writer_digest_widened),
+                        rejected_candidate_evidence_id=rejected_candidate,
+                    ),
                 )
             )
     scaffold = _repair_robustness_reader_prose(

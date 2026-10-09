@@ -147,6 +147,7 @@ from .scientific_maturity import (
     scientific_maturity_audit_from_gates,
     scientific_maturity_readiness_gates,
 )
+from .writer_stop import current_writer_stop
 from .step_summaries import (
     authoritative_step_summaries as _authoritative_step_summaries,
     step_authority_records as _step_authority_records,
@@ -2241,6 +2242,7 @@ def _compute_readiness_gates(
             for f in superseded_findings
             if f.severity == "error"
         ],
+        "writer_stop": current_writer_stop(active_findings),
         "manuscript_result_fact_carriage": manuscript_result_fact_trace(
             run_dir=run_dir,
             manuscript_text=manuscript_text,
