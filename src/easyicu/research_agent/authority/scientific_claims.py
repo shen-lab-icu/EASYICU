@@ -11,12 +11,14 @@ author the scientific sentence.
 
 from __future__ import annotations
 
+from decimal import Decimal
 import json
 import math
 import re
 from typing import Literal, Mapping, Sequence
 
 from .claim_coordinates import contrast_exposure_coordinate
+from .reported_numbers import ReportedNumber
 from .continuous_survival_scientific_claims import (
     continuous_survival_reporting_requests_claims,
 )
@@ -192,6 +194,11 @@ _COUNTS_ONLY_FREQUENCY_RE = re.compile(
     r"observed outcome frequency was (?P<percent>\d+(?:\.\d+)?)% "
     r"\((?P<events>\d+) events among (?P<n>\d+) records; counts only, "
     r"no confidence interval\)"
+)
+# The distribution adapter's counts-only form (descriptive_scientific_claims).
+_COUNTS_ONLY_ABSOLUTE_RISK_RE = re.compile(
+    r"observed absolute risk was (?P<events>\d+)/(?P<n>\d+) "
+    r"\((?P<percent>\d+(?:\.\d+)?) percent; counts only, no confidence interval\)"
 )
 
 
@@ -538,6 +545,36 @@ class ScientificClaim(ScientificClaimDraft):
             f"{model_prefix}{subject} {relation} "
             f"{_reader_coordinate(self.outcome, labels)} in "
             f"{_reader_population(self.population)}{estimate_text}."
+        )
+
+    def reported_numbers(self) -> tuple[ReportedNumber, ...] | None:
+        """The result numbers this claim states, each in its typed unit.
+
+        A counts-only absolute risk states its events and denominator as
+        counts and their recorded percent, in either estimand form its
+        adapters issue.  ``None`` means this claim's numbers are not typed
+        here, so no other sentence can be shown to state them.
+        """
+
+        if (
+            self.claim_type != "descriptive_absolute_risk"
+            or self.rule_outcome is not None
+            or self.point_estimate is not None
+        ):
+            return None
+        frequency = _COUNTS_ONLY_FREQUENCY_RE.fullmatch(self.estimand)
+        recorded = frequency or _COUNTS_ONLY_ABSOLUTE_RISK_RE.fullmatch(self.estimand)
+        if recorded is None:
+            return None
+        # Each adapter drops the trailing zeros of the percent it records, so
+        # its precision is the adapter's: six significant figures in the
+        # frequency form, six decimals in the distribution form.
+        percent = Decimal(recorded["percent"])
+        places = 5 - percent.adjusted() if frequency is not None and percent else 6
+        return (
+            ReportedNumber.displayed(recorded["events"], "count"),
+            ReportedNumber.displayed(recorded["n"], "count"),
+            ReportedNumber.recorded(recorded["percent"], "percent", places=places),
         )
 
     def _reader_interval(self) -> tuple[float, float, float, float]:

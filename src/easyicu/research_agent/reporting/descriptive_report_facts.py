@@ -14,6 +14,7 @@ from typing import Any, Mapping, Sequence
 from ..contracts.cohort_product_keys import is_closed_cohort_product_key
 from ..contracts.primary_cohort import STUDY_POPULATION_PRODUCTS
 from ..contracts.descriptive_execution import exposure_outcome_distribution_result_receipt_valid
+from ..authority.manuscript_claim_policy import fact_sentence_visible
 from ..authority.scientific_claims import ScientificClaim
 
 #: A host-issued unit a fact sentence may name after its count ("ICU stays",
@@ -539,9 +540,7 @@ def _fact_present(body: str, fact: DescriptiveReportFact) -> bool:
         rf"^[ \t]*\{{claim:{re.escape(fact.replaces_claim_ref)}\}}[.!?]?[ \t]*$", visible, re.M,
     ):
         return True
-    visible = re.sub(r"^\[\^claim_\d+\]:.*$", "", visible, flags=re.M)
-    visible = re.sub(r"\[\^claim_\d+\]|\{evidence:[^}\n]+\}|\[[^\]]+\]\(evidence/[^\n)]*\)", "", visible)
-    return " ".join(fact.text.split()) in " ".join(visible.split())
+    return fact_sentence_visible(body, fact.text)
 
 
 def missing_primary_result_facts(manuscript: str, facts: Sequence[DescriptiveReportFact]):

@@ -91,6 +91,7 @@ from .manuscript_labels import reader_claim_labels
 from .manuscript_gate_state import (
     GATE_STATE_SUPERSESSION_PATTERNS,
     current_manuscript_completion_state,
+    manuscript_result_fact_trace,
 )
 from ..authority.evidence_store import (
     EvidenceStore,
@@ -2240,6 +2241,12 @@ def _compute_readiness_gates(
             for f in superseded_findings
             if f.severity == "error"
         ],
+        "manuscript_result_fact_carriage": manuscript_result_fact_trace(
+            run_dir=run_dir,
+            manuscript_text=manuscript_text,
+            evidence=evidence,
+            per_step_records=per_step_records,
+        ),
         **publication,
         **display_suite,
         **article_contract,

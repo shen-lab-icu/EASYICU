@@ -2573,6 +2573,10 @@
     ],
     [
       "easyicu.research_agent.authority.scientific_claims",
+      "easyicu.research_agent.authority.reported_numbers"
+    ],
+    [
+      "easyicu.research_agent.authority.scientific_claims",
       "easyicu.research_agent.authority.sensitivity_scientific_claims"
     ],
     [
@@ -12061,6 +12065,10 @@
     ],
     [
       "easyicu.research_agent.reporting.descriptive_report_facts",
+      "easyicu.research_agent.authority.manuscript_claim_policy"
+    ],
+    [
+      "easyicu.research_agent.reporting.descriptive_report_facts",
       "easyicu.research_agent.authority.scientific_claim_registry"
     ],
     [
@@ -12190,6 +12198,10 @@
     [
       "easyicu.research_agent.reporting.manuscript_gate_state",
       "easyicu.research_agent.reporting.manuscript_figures"
+    ],
+    [
+      "easyicu.research_agent.reporting.manuscript_gate_state",
+      "easyicu.research_agent.reporting.manuscript_result_facts"
     ],
     [
       "easyicu.research_agent.reporting.manuscript_labels",
@@ -12350,6 +12362,22 @@
     [
       "easyicu.research_agent.reporting.manuscript_repair_pass",
       "easyicu.research_agent.reporting.writer_repair_decision"
+    ],
+    [
+      "easyicu.research_agent.reporting.manuscript_result_facts",
+      "easyicu.research_agent.authority.manuscript_claim_policy"
+    ],
+    [
+      "easyicu.research_agent.reporting.manuscript_result_facts",
+      "easyicu.research_agent.authority.reported_numbers"
+    ],
+    [
+      "easyicu.research_agent.reporting.manuscript_result_facts",
+      "easyicu.research_agent.authority.runtime_artifacts"
+    ],
+    [
+      "easyicu.research_agent.reporting.manuscript_result_facts",
+      "easyicu.research_agent.authority.scientific_claims"
     ],
     [
       "easyicu.research_agent.reporting.manuscript_result_structure",
@@ -13014,6 +13042,10 @@
     [
       "easyicu.research_agent.reporting.write_phase",
       "easyicu.research_agent.reporting.manuscript_repair_pass"
+    ],
+    [
+      "easyicu.research_agent.reporting.write_phase",
+      "easyicu.research_agent.reporting.manuscript_result_facts"
     ],
     [
       "easyicu.research_agent.reporting.write_phase",
@@ -14056,9 +14088,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3506,
+    "edge_count": 3514,
     "largest_scc_size": 0,
-    "module_count": 806,
+    "module_count": 808,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -14167,6 +14199,7 @@
     "easyicu.research_agent.authority.provider_hard_stop": "authority/provider_hard_stop.py",
     "easyicu.research_agent.authority.reader_numeric_display": "authority/reader_numeric_display.py",
     "easyicu.research_agent.authority.registration": "authority/registration.py",
+    "easyicu.research_agent.authority.reported_numbers": "authority/reported_numbers.py",
     "easyicu.research_agent.authority.result_envelope_sidecar": "authority/result_envelope_sidecar.py",
     "easyicu.research_agent.authority.resume_plan": "authority/resume_plan.py",
     "easyicu.research_agent.authority.rmst_runtime": "authority/rmst_runtime.py",
@@ -14768,6 +14801,7 @@
     "easyicu.research_agent.reporting.manuscript_quality": "reporting/manuscript_quality.py",
     "easyicu.research_agent.reporting.manuscript_reader": "reporting/manuscript_reader.py",
     "easyicu.research_agent.reporting.manuscript_repair_pass": "reporting/manuscript_repair_pass.py",
+    "easyicu.research_agent.reporting.manuscript_result_facts": "reporting/manuscript_result_facts.py",
     "easyicu.research_agent.reporting.manuscript_result_structure": "reporting/manuscript_result_structure.py",
     "easyicu.research_agent.reporting.manuscript_sections": "reporting/manuscript_sections.py",
     "easyicu.research_agent.reporting.manuscript_sentence_context": "reporting/manuscript_sentence_context.py",

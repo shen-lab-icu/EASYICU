@@ -754,6 +754,37 @@ def missing_scientific_claims_in_results(
     )
 
 
+# What binding attaches to a host sentence: provenance footnotes and evidence
+# citations, as tokens or as resolved links.
+_FACT_BINDING_MARK_RE = re.compile(
+    r"\[\^claim_\d+\]|\{evidence:[^}\n]+\}|\[[^\]]+\]\(evidence/[^\n)]*\)"
+)
+
+
+def fact_sentence_visible(body: str, sentence: str) -> bool:
+    """Whether a host fact sentence reads verbatim in ``body``.
+
+    Hidden text (HTML comments, fenced code) and footnote definitions do not
+    count.  The footnotes and evidence citations binding attaches are removed
+    first, so the sentence is read as the reader reads it; only spacing is
+    normalized.
+    """
+
+    visible = re.sub(r"<!--.*?-->|```.*?```", "", body, flags=re.S)
+    visible = re.sub(r"^\[\^claim_\d+\]:.*$", "", visible, flags=re.M)
+    visible = _FACT_BINDING_MARK_RE.sub("", visible)
+    return " ".join(sentence.split()) in " ".join(visible.split())
+
+
+def fact_sentence_in_results(manuscript: str, sentence: str) -> bool:
+    """Whether the Results section the claim check reads shows ``sentence``."""
+
+    span = _results_section_span(manuscript)
+    return span is not None and fact_sentence_visible(
+        manuscript[span[0] : span[1]], sentence
+    )
+
+
 def _heading_requires_evidence(content: str) -> bool:
     stripped = content.strip()
     if not stripped:
@@ -1102,6 +1133,8 @@ __all__ = [
     "ScientificClaimExpansion",
     "ScientificClaimPlacement",
     "expand_scientific_claim_tokens",
+    "fact_sentence_in_results",
+    "fact_sentence_visible",
     "filter_evidence_bound_scaffold",
     "malformed_authority_placeholder_sentences",
     "missing_scientific_claims_in_results",

@@ -26,7 +26,8 @@ from ..audits.manuscript_claims import audit_manuscript_numeric_claims
 from ..audits.envelope_consumers import RegisteredOutputEnvelopeConsumer
 from .bibtex import render_bibtex
 from .descriptive_report_facts import (
-    compile_primary_counts_only_report_facts, render_descriptive_report_claims, missing_primary_result_facts,
+    compile_primary_counts_only_report_facts,
+    render_descriptive_report_claims,
 )
 from ..review.causal_audit import run_causal_audit
 from ..contracts.runtime import (
@@ -87,6 +88,11 @@ from .manuscript_provenance import (
 )
 from .manuscript_reader import build_manuscript_reader
 from .manuscript_projection import project_owner_issued_manuscript_claims, with_absent_target_repairs
+from .manuscript_result_facts import (
+    record_result_facts,
+    result_fact_carriage,
+    result_fact_rows,
+)
 from .manuscript_result_structure import planned_result_roles
 from .novelty_positioning import build_unsigned_novelty_positioning_packet
 from ..literature import LiteratureAgent, LiteratureBundle, manuscript_citable_keys
@@ -2240,15 +2246,23 @@ def _result_claim_sufficiency_finding(
 ) -> ValidationFinding | None:
     """Report host claims that final filtering removed from the Results.
 
-    A claim that a verified primary result fact replaced is reported by that
-    fact instead.  The claims are read with the labels they were bound with.
+    A claim that a verified primary result fact carries is reported by that
+    fact instead, by the rule the claims gate applies to the recorded facts
+    (:func:`.manuscript_result_facts.result_fact_carriage`).  The claims are
+    read with the labels they were bound with.
     """
     authoritative_claims = evidence.authoritative_scientific_claims(per_step_records)
-    missing_facts = missing_primary_result_facts(bound, primary_result_facts).get("Results", ())
-    projected_claim_refs = {fact.replaces_claim_ref for fact in primary_result_facts if fact not in missing_facts}
+    carried = result_fact_carriage(
+        bound,
+        facts=result_fact_rows(primary_result_facts),
+        claims=authoritative_claims,
+        evidence=evidence,
+    ).carried
     missing_result_claims = missing_scientific_claims_in_results(
         bound,
-        claims=[claim for claim in authoritative_claims if claim.claim_ref not in projected_claim_refs],
+        claims=[
+            claim for claim in authoritative_claims if claim.claim_ref not in carried
+        ],
         reader_labels=claim_labels,
     )
     if not missing_result_claims:
@@ -2581,6 +2595,10 @@ def _bind_and_review_manuscript(
         on_sha_change="new_id",
     )
     bound_evidence_id = bound_record.evidence_id
+    if not writer_probe_mode:
+        record_result_facts(
+            bound, primary_result_facts, run_dir=run_dir, evidence=evidence
+        )
     if demoted_missing_ids:
         unfiltered_path = run_dir / "manuscript_scaffold_bound_unfiltered.md"
         unfiltered_path.write_text(bound_unfiltered, encoding="utf-8")
