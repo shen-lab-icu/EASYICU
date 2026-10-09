@@ -121,6 +121,27 @@ def test_optional_unsupported_column_is_not_reintroduced(source_menu, tmp_path):
     assert receipt["unavailable_model_concepts"] == ["icu_readmission"]
 
 
+def test_demo_release_plans_with_its_family_stay_identity(source_menu, tmp_path):
+    """The official demo packages must reach the Planner, not fail on identity.
+
+    ``normalize_database_name`` keeps the ``_demo`` suffix for source
+    contracts; the ICU-stay identity registry only knows the family, so the
+    planning catalog has to resolve ``eicu_demo`` to eICU's stay column.
+    """
+    import pyarrow.parquet as pq
+
+    llm = ScriptedMockLLMClient([json.dumps({
+        "selected_concepts": ["death"],
+        "rationale": "Mortality only.", "inclusion_exclusion": [],
+    })])
+    result = owner._metadata_only_planning_acquisition(
+        database="eicu_demo", export_path="/metadata", question="Describe death.",
+        llm=llm, output_dir=tmp_path / "catalog",
+    )
+    assert not result.blocked
+    assert pq.read_schema(result.universe_path).names == ["patientunitstayid", "death"]
+    assert pq.read_metadata(result.universe_path).num_rows == 0
+
 
 def test_listed_but_unresolvable_optional_pick_is_dropped_not_fatal(tmp_path, monkeypatch):
     """A registry concept the source cannot provide leaves the menu quietly.
