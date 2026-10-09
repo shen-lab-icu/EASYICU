@@ -1,12 +1,12 @@
 """Source selection and artifact reading do not manufacture research decisions."""
 import json
 import shutil
-import subprocess
 
 import pytest
 
 from easyicu.webserver.pi_copilot.projections import project_run_outcome
 
+from tests.support.node import run_node
 from tests.webserver.copilot.pi_copilot_static_fixtures import (
     _load_guided_pi_module_harness as _load_guided_pi_module_harness,
     _read,
@@ -17,7 +17,7 @@ def run_js(script):
     node = shutil.which("node")
     if not node:
         pytest.skip("Node is not installed")
-    return json.loads(subprocess.check_output([node, "--eval", script], text=True))
+    return json.loads(run_node(node, script, check=True).stdout)
 
 
 def test_source_confirmation_continues_once_but_selection_only_opens_picker():

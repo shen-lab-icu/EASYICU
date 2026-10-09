@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
+
+from tests.support.node import run_node
 
 
 STATIC = Path(__file__).parents[3] / "src" / "easyicu" / "webserver" / "static"
@@ -51,9 +52,7 @@ def test_pre_data_planner_is_presented_as_a_candidate_with_the_next_steps() -> N
         html: confirmation.workflowConfirmationHtml(),
       }}));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     rendered = json.loads(completed.stdout)
 
     assert rendered["title"] == "现在生成候选研究计划吗？"
@@ -136,9 +135,7 @@ def test_executable_plan_review_is_expanded_and_has_two_primary_choices() -> Non
       const confirmation = window.EasyICU.guidedPi.require('confirmation').create(host);
       process.stdout.write(confirmation.workflowConfirmationHtml());
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     rendered = completed.stdout
 
     assert "计划与分析前数据检查已准备好" in rendered
@@ -197,9 +194,7 @@ def test_executable_plan_review_keeps_plan_details_in_one_disclosure() -> None:
       const confirmation = window.EasyICU.guidedPi.require('confirmation').create(host);
       process.stdout.write(confirmation.workflowConfirmationHtml());
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     rendered = completed.stdout
 
     assert "我已经根据你的研究问题生成了一份候选计划" in rendered
@@ -243,9 +238,7 @@ def test_scientific_plan_review_separates_summary_from_complete_evidence() -> No
       const confirmation = window.EasyICU.guidedPi.require('confirmation').create(host);
       process.stdout.write(confirmation.workflowConfirmationHtml());
     """
-    rendered = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    ).stdout
+    rendered = run_node(node, script, check=True).stdout
 
     assert "我已经根据你的研究问题生成了一份候选计划" in rendered
     assert '<details class="gpi-plan-conversation-summary" open>' in rendered
@@ -303,11 +296,7 @@ def test_repeated_stay_runtime_gap_stays_blocked_without_a_method_question(
         html: confirmation.workflowConfirmationHtml(),
       }}));
     """
-    result = json.loads(
-        subprocess.run(
-            [node, "--eval", script], check=True, capture_output=True, text=True
-        ).stdout
-    )
+    result = json.loads(run_node(node, script, check=True).stdout)
     rendered = result["html"]
 
     assert result["spec"]["nonApprovable"] is True

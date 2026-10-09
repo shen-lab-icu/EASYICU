@@ -2,7 +2,6 @@
 
 import json
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -13,6 +12,8 @@ from easyicu.webserver.pi_copilot.contracts import (
     AuthorityBinding, PiSessionRecord, ToolExecutionContext,
 )
 
+from tests.support.node import run_node
+
 
 APP = Path(__file__).parents[3] / "src/easyicu/webserver/pi_copilot/node_app"
 
@@ -21,10 +22,7 @@ def _node(script):
     node = shutil.which("node")
     if not node or not (APP / "node_modules").is_dir():
         pytest.skip("Pinned Pi Node runtime is unavailable")
-    result = subprocess.run(
-        [node, "--input-type=module", "--eval", script],
-        cwd=APP, capture_output=True, text=True, timeout=30, check=True,
-    )
+    result = run_node(node, script, module=True, cwd=APP, timeout=30, check=True)
     return json.loads(result.stdout)
 
 

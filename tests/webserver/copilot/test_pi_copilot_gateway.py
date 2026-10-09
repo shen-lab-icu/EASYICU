@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 import threading
 import time
 from datetime import datetime, timezone
@@ -21,6 +20,8 @@ from easyicu.webserver.pi_copilot.contracts import (
 from easyicu.webserver.pi_copilot.gateway import PiGatewayClient, _PendingRequest
 from easyicu.webserver.pi_copilot.provider_config import PiProviderConfig
 from easyicu.webserver.pi_copilot.tool_catalog import TOOL_CATALOG
+
+from tests.support.node import run_node
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 APP_DIR = REPO_ROOT / "src" / "easyicu" / "webserver" / "pi_copilot" / "node_app"
@@ -249,13 +250,8 @@ await runAgentLoop(
 if (outcomes.filter((item) => item.endsWith(":ok")).length !== 1) throw new Error(JSON.stringify(outcomes));
 if (outcomes.filter((item) => item === "pi_session_authority_stale").length !== 1) throw new Error(JSON.stringify(outcomes));
 """
-    completed = subprocess.run(
-        [node, "--input-type=module", "--eval", script],
-        cwd=APP_DIR,
-        text=True,
-        capture_output=True,
-        timeout=30,
-        check=False,
+    completed = run_node(
+        node, script, module=True, cwd=APP_DIR, timeout=30, check=False
     )
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
@@ -293,13 +289,8 @@ def test_initial_question_update_uses_host_finalization_without_second_provider_
       const result = await stream.result();
       console.log(JSON.stringify({{ types: events.map(event => event.type), result }}));
     """
-    completed = subprocess.run(
-        [node, "--input-type=module", "--eval", script],
-        cwd=APP_DIR,
-        text=True,
-        capture_output=True,
-        timeout=30,
-        check=False,
+    completed = run_node(
+        node, script, module=True, cwd=APP_DIR, timeout=30, check=False
     )
     assert completed.returncode == 0, completed.stderr or completed.stdout
     payload = json.loads(completed.stdout)
@@ -333,13 +324,8 @@ def test_zero_direction_entry_uses_deterministic_host_routing_reply() -> None:
       const result = await stream.result();
       console.log(JSON.stringify({{ types: events.map(event => event.type), result }}));
     """
-    completed = subprocess.run(
-        [node, "--input-type=module", "--eval", script],
-        cwd=APP_DIR,
-        text=True,
-        capture_output=True,
-        timeout=30,
-        check=False,
+    completed = run_node(
+        node, script, module=True, cwd=APP_DIR, timeout=30, check=False
     )
     assert completed.returncode == 0, completed.stderr or completed.stdout
     payload = json.loads(completed.stdout)
@@ -386,13 +372,8 @@ def test_idea_selection_forces_exact_literature_search_after_mining() -> None:
       const result = await stream.result();
       console.log(JSON.stringify({{ types: events.map(event => event.type), result }}));
     """
-    completed = subprocess.run(
-        [node, "--input-type=module", "--eval", script],
-        cwd=APP_DIR,
-        text=True,
-        capture_output=True,
-        timeout=30,
-        check=False,
+    completed = run_node(
+        node, script, module=True, cwd=APP_DIR, timeout=30, check=False
     )
     assert completed.returncode == 0, completed.stderr or completed.stdout
     payload = json.loads(completed.stdout)
@@ -444,13 +425,8 @@ def test_failed_mining_does_not_force_literature() -> None:
         model, {{ messages: [user, assistant, toolResult] }}, 'zh',
       )));
     """
-    completed = subprocess.run(
-        [node, "--input-type=module", "--eval", script],
-        cwd=APP_DIR,
-        text=True,
-        capture_output=True,
-        timeout=30,
-        check=False,
+    completed = run_node(
+        node, script, module=True, cwd=APP_DIR, timeout=30, check=False
     )
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert completed.stdout.strip() == "null"
@@ -510,13 +486,8 @@ def test_initial_question_without_source_stops_at_database_selection() -> None:
       const result = await stream.result();
       console.log(JSON.stringify(result));
     """
-    completed = subprocess.run(
-        [node, "--input-type=module", "--eval", script],
-        cwd=APP_DIR,
-        text=True,
-        capture_output=True,
-        timeout=30,
-        check=False,
+    completed = run_node(
+        node, script, module=True, cwd=APP_DIR, timeout=30, check=False
     )
     assert completed.returncode == 0, completed.stderr or completed.stdout
     payload = json.loads(completed.stdout)
@@ -563,13 +534,8 @@ def test_host_finalization_does_not_intercept_later_scientific_updates() -> None
       }};
       console.log(String(hostPostToolFinalization(model, {{ messages: [assistant, toolResult] }}, 'zh')));
     """
-    completed = subprocess.run(
-        [node, "--input-type=module", "--eval", script],
-        cwd=APP_DIR,
-        text=True,
-        capture_output=True,
-        timeout=30,
-        check=False,
+    completed = run_node(
+        node, script, module=True, cwd=APP_DIR, timeout=30, check=False
     )
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert completed.stdout.strip() == "null"
@@ -1206,12 +1172,7 @@ def test_transcript_projection_preserves_entry_ids_after_context_restore() -> No
       const projected = pairTranscriptMessages(restored, branch);
       console.log(JSON.stringify(projected.map(row => row.entryId)));
     """
-    completed = subprocess.run(
-        [node, "--input-type=module", "--eval", script],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    completed = run_node(node, script, module=True, check=True)
 
     assert json.loads(completed.stdout) == ["7entry-user-1", "8entry-assistant-1"]
 
@@ -1334,12 +1295,7 @@ def test_shell_budget_guard_blocks_each_provider_boundary() -> None:
         }});
       }} catch (error) {{ console.log(error.code); }}
     """
-    completed = subprocess.run(
-        [node, "--input-type=module", "-e", script],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    completed = run_node(node, script, module=True, check=True)
     assert completed.stdout.splitlines() == [
         "2000000 4000000",
         "pi_shell_token_budget_exhausted",
@@ -1472,12 +1428,7 @@ def test_sidecar_projects_safe_agent_activity_and_tool_receipts() -> None:
       }});
       console.log(JSON.stringify({{ events, timing, transcript, blockedEvent, blockedTranscript, workspaceStart, workspaceEnd, unsafeWorkspace, researchArtifacts, systemValidationDocuments, dataPackageReview, submittedRun, unsafeJob, providerErrorEvent, providerErrorTranscript, shellBudgetEvent, shellBudgetTranscript }}));
     """
-    completed = subprocess.run(
-        [node, "--input-type=module", "--eval", script],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    completed = run_node(node, script, module=True, check=True)
     payload = json.loads(completed.stdout)
 
     assert [event["type"] if event else None for event in payload["events"]] == [
@@ -1576,12 +1527,7 @@ def test_sidecar_projects_only_verified_literature_click_targets() -> None:
         }} }} }});
       console.log(JSON.stringify(result));
     """
-    completed = subprocess.run(
-        [node, "--input-type=module", "--eval", script],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    completed = run_node(node, script, module=True, check=True)
     payload = json.loads(completed.stdout)
 
     assert payload["resources"] == [
@@ -1655,12 +1601,7 @@ def test_sidecar_projects_bounded_idea_mining_preview_metadata() -> None:
         }}),
       }}));
     """
-    completed = subprocess.run(
-        [node, "--input-type=module", "--eval", script],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    completed = run_node(node, script, module=True, check=True)
     payload = json.loads(completed.stdout)
 
     assert payload["live"]["idea_mining"]["idea"]["outcome"] == ""

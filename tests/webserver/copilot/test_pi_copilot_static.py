@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.support.node import run_node
 from tests.webserver.copilot.pi_copilot_static_fixtures import (
     NODE_APP as NODE_APP,
     STATIC as STATIC,
@@ -51,10 +52,11 @@ workflow = {
 const requiredDecision = owner.planChangeDraft();
 process.stdout.write(JSON.stringify({candidate, executable, requiredDecision}));
 """
-    completed = subprocess.run(
-        [node, "-e", script,
-         str(STATIC / "js" / "screens-guided-pi-confirmation.js")],
-        check=True, capture_output=True, text=True,
+    completed = run_node(
+        node,
+        script,
+        str(STATIC / "js" / "screens-guided-pi-confirmation.js"),
+        check=True,
     )
     payload = json.loads(completed.stdout)
     for key in ("candidate", "executable"):
@@ -240,7 +242,7 @@ def test_figure_gallery_exposes_digest_pinned_view_source_action() -> None:
           && html.includes('队列流程图'),
       }}));
     """
-    result = subprocess.run([node, "--eval", script], check=True, capture_output=True, text=True)
+    result = run_node(node, script, check=True)
     assert json.loads(result.stdout) == {"hasAction": True, "pinned": True, "context": True}
 
 
@@ -580,9 +582,7 @@ def test_confirmed_plan_choice_revises_in_place_without_a_fake_user_message() ->
         option_id: 'accept_proposed_adjustment',
       }}).then(() => process.stdout.write(JSON.stringify(calls)));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     calls = json.loads(completed.stdout)
     assert not any(call[0] == "message" for call in calls)
     assert ["draft", ""] in calls
@@ -673,9 +673,7 @@ def test_governed_plan_action_owner_executes_generation_review_and_retry() -> No
         process.stdout.write(JSON.stringify({{calls, authority}}));
       }})().catch(error => {{console.error(error); process.exit(1);}});
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     payload = json.loads(completed.stdout)
     assert payload["authority"] == {
         "grants": ["configure", "provider_run"],
@@ -802,9 +800,7 @@ def test_candidate_plan_upgrade_waits_for_review_then_uses_explicit_confirmation
         process.stdout.write(JSON.stringify({{first, second, directAutomatic, beforeConfirmation, calls}}));
       }})().catch(error => {{ console.error(error); process.exit(1); }});
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     payload = json.loads(completed.stdout)
     assert payload["first"] is False
     assert payload["second"] is False
@@ -872,9 +868,7 @@ def test_failed_candidate_upgrade_is_not_replayed_automatically_after_reload() -
         process.stdout.write(JSON.stringify({{automatic, calls}}));
       }})().catch(error => {{ console.error(error); process.exit(1); }});
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     payload = json.loads(completed.stdout)
     assert payload["automatic"] is False
     plan_calls = [call for call in payload["calls"] if call[0] == "plan"]
@@ -923,9 +917,7 @@ def test_stale_scientific_policy_regenerates_without_fake_user_turn() -> None:
         process.stdout.write(JSON.stringify({{first, second, calls}}));
       }})().catch(error => {{ console.error(error); process.exit(1); }});
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     payload = json.loads(completed.stdout)
     assert payload["first"] is True
     assert payload["second"] is False
@@ -982,9 +974,7 @@ def test_bare_continue_advances_system_owned_plan_revision_without_chat() -> Non
         process.stdout.write(JSON.stringify({{detailed, bare, draft, calls}}));
       }})().catch(error => {{ console.error(error); process.exit(1); }});
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     payload = json.loads(completed.stdout)
     assert payload["detailed"] is False
     assert payload["bare"] is True
@@ -1027,9 +1017,7 @@ def test_manual_scientific_plan_repair_does_not_trigger_a_duplicate_automatic_ru
         process.stdout.write(JSON.stringify(calls));
       }})().catch(error => {{ console.error(error); process.exit(1); }});
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     calls = json.loads(completed.stdout)
     assert len(calls) == 1
     assert calls[0]["planner_start_mode"] == "auto"
@@ -1063,9 +1051,7 @@ def test_scientific_review_without_planner_owned_repair_does_not_rerun() -> None
         process.stdout.write(String(await actions.continueSystemOwnedPlanProgression()));
       }})().catch(error => {{ console.error(error); process.exit(1); }});
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     assert completed.stdout == "false"
 
 
@@ -1109,9 +1095,7 @@ def test_new_research_session_starters_minimize_interaction_cost() -> None:
       const shuffled = window.EU_GUIDED_PI_STARTERS.shuffle(host, tr);
       console.log(JSON.stringify({{ html, compose, clinical, article, data, catalogHtml, shuffled, shuffledHtml: actions.innerHTML, searchValue: search.value, emptyHidden: empty.hidden }}));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     assert "开始一项 ICU 研究" in completed.stdout
     assert "描述一个科学问题" in completed.stdout
     assert "队列描述与 Table 1" in completed.stdout
@@ -1298,9 +1282,7 @@ def test_new_conversation_control_clears_the_selected_session() -> None:
         calls,
       }}));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     payload = json.loads(completed.stdout)
 
     assert payload == {
@@ -1345,9 +1327,7 @@ def test_pending_data_source_offers_explicit_binding_before_planning() -> None:
       if (!reusable.includes('MIMIC-IV v3.1')) throw new Error('bound source identity must be path free and visible');
       console.log('ok');
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     assert completed.stdout.strip() == "ok"
 
 
@@ -1382,9 +1362,7 @@ def test_confirmed_data_scope_replays_its_original_choices_on_the_source_turn() 
         history,
       }}));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     payload = json.loads(completed.stdout)
 
     assert payload["matches"] is True
@@ -1417,9 +1395,7 @@ def test_agent_default_data_scope_is_shown_as_system_policy_not_user_choice() ->
       }}, {{tr: en => en, esc: String, icon: () => ''}});
       process.stdout.write(history);
     """
-    rendered = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    ).stdout
+    rendered = run_node(node, script, check=True).stdout
 
     assert "prepare only the data required by the reviewed plan" in rendered
     assert "automatic system policy" in rendered
@@ -1473,9 +1449,7 @@ def test_initial_candidate_plan_starts_automatically_once_per_session() -> None:
         process.stdout.write(JSON.stringify({{first, duplicate, nextSession, calls}}));
       }})().catch(error => {{console.error(error); process.exit(1);}});
     """
-    payload = json.loads(subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    ).stdout)
+    payload = json.loads(run_node(node, script, check=True).stdout)
 
     assert payload["first"] is True
     assert payload["duplicate"] is False
@@ -1525,9 +1499,7 @@ def test_initial_candidate_plan_waits_for_data_source_confirmation() -> None:
       }});
     """
     payload = json.loads(
-        subprocess.run(
-            [node, "--eval", script], check=True, capture_output=True, text=True
-        ).stdout
+        run_node(node, script, check=True).stdout
     )
 
     assert payload == {"result": False, "calls": []}
@@ -1602,9 +1574,7 @@ def test_failed_initial_candidate_plan_is_not_replayed_on_project_reopen() -> No
       }})().catch(error => {{console.error(error); process.exit(1);}});
     """
     payload = json.loads(
-        subprocess.run(
-            [node, "--eval", script], check=True, capture_output=True, text=True
-        ).stdout
+        run_node(node, script, check=True).stdout
     )
 
     assert payload["automatic"] == [
@@ -1666,9 +1636,7 @@ def test_passive_session_open_never_starts_or_compiles_a_plan() -> None:
         process.stdout.write(JSON.stringify({{providerOpen, compileOpen, calls}}));
       }})();
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     assert json.loads(completed.stdout) == {
         "providerOpen": False,
         "compileOpen": False,
@@ -1760,9 +1728,7 @@ def test_data_binding_owner_executes_local_picker_and_preserves_its_host_contrac
       await binding.authorizeDataSource('begin_local_selection', {{database: 'miiv'}});
       console.log(JSON.stringify({{calls, error, receipts, status: session.data_source_authorization.status}}));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     payload = json.loads(completed.stdout)
     assert "authorize:begin_full_data_selection:miiv" in payload["calls"]
     assert "remember:session-1" in payload["calls"]
@@ -2491,10 +2457,7 @@ process.stdout.write(JSON.stringify({
   execute: html.includes('data-gpi-confirm-action'),
 }));
 """
-    result = subprocess.run(
-        [node, "-e", script, str(confirmation_owner.resolve())],
-        check=False, capture_output=True, text=True,
-    )
+    result = run_node(node, script, str(confirmation_owner.resolve()), check=False)
     assert result.returncode == 0, result.stderr or result.stdout
     assert json.loads(result.stdout) == {
         "choices": 1, "confirm": True, "edit": True, "execute": False,
@@ -2538,12 +2501,7 @@ process.stdout.write(JSON.stringify({
   noSyntheticPrompt: !html.includes('修订研究版本并重新生成研究计划'),
 }));
 """
-    result = subprocess.run(
-        [node, "-e", script, str(confirmation_owner.resolve())],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    result = run_node(node, script, str(confirmation_owner.resolve()), check=False)
     assert result.returncode == 0, result.stderr or result.stdout
     assert json.loads(result.stdout) == {
         "choiceCount": 0,
@@ -2597,12 +2555,7 @@ process.stdout.write(JSON.stringify({
   noAnswerButton: !html.includes('回答这个问题'),
 }));
 """
-    result = subprocess.run(
-        [node, "-e", script, str(confirmation_owner.resolve())],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    result = run_node(node, script, str(confirmation_owner.resolve()), check=False)
     assert result.returncode == 0, result.stderr or result.stdout
     assert json.loads(result.stdout) == {
         "choiceCount": 0,
@@ -2654,12 +2607,7 @@ process.stdout.write(JSON.stringify({
   noAnswerButton: !html.includes('回答这个问题'),
 }));
 """
-    result = subprocess.run(
-        [node, "-e", script, str(confirmation_owner.resolve())],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    result = run_node(node, script, str(confirmation_owner.resolve()), check=False)
     assert result.returncode == 0, result.stderr or result.stdout
     assert json.loads(result.stdout) == {
         "choiceCount": 0,
@@ -2690,12 +2638,7 @@ const cases = {
 };
 process.stdout.write(JSON.stringify(cases));
 """
-    result = subprocess.run(
-        [node, "-e", script, str(owner)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    result = run_node(node, script, str(owner), check=False)
 
     assert result.returncode == 0, result.stderr or result.stdout
     assert json.loads(result.stdout) == {
@@ -2750,11 +2693,8 @@ process.stdout.write(JSON.stringify({
   html: render('<img src=x onerror=alert(1)>'),
 }));
 """
-    result = subprocess.run(
-        [node, "-e", script, str(owner), "已提交。\n\n### 下一步\n- A\n- B"],
-        check=False,
-        capture_output=True,
-        text=True,
+    result = run_node(
+        node, script, str(owner), "已提交。\n\n### 下一步\n- A\n- B", check=False
     )
 
     assert result.returncode == 0, result.stderr or result.stdout
@@ -2869,12 +2809,7 @@ process.stdout.write(activity.render({
   runningTitle: '正在生成正式研究计划', steps: [],
 }));
 """
-    completed = subprocess.run(
-        [node, "--eval", script, str(activity_path)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    completed = run_node(node, script, str(activity_path), check=True)
     assert 'aria-busy="true"' in completed.stdout
     assert "正在进行" in completed.stdout
     assert "正在生成正式研究计划" in completed.stdout
@@ -2942,12 +2877,7 @@ Promise.all([
   cancelRequested: messages[0] && messages[0].cancelRequested,
 })));
 """
-    result = subprocess.run(
-        [node, "-e", script, str(owner_path)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    result = run_node(node, script, str(owner_path), check=False)
 
     assert result.returncode == 0, result.stderr or result.stdout
     payload = json.loads(result.stdout)
@@ -3022,12 +2952,7 @@ process.stdout.write(JSON.stringify({
   afterReplacement: messages.map(row => row.childJobId),
 }));
 """
-    result = subprocess.run(
-        [node, "-e", script, str(replay_owner), str(child_owner)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    result = run_node(node, script, str(replay_owner), str(child_owner), check=False)
     assert result.returncode == 0, result.stderr or result.stdout
     assert json.loads(result.stdout) == {
         "beforeReplacement": ["review-old", "failed-current"],
@@ -3075,12 +3000,7 @@ process.stdout.write(JSON.stringify({
   exposesLocalizer: typeof made.localizedAuthorizationQuestion === 'function',
 }));
 """
-    result = subprocess.run(
-        [node, "-e", script, str(owner_path)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    result = run_node(node, script, str(owner_path), check=False)
 
     assert result.returncode == 0, result.stderr or result.stdout
     assert json.loads(result.stdout) == {
@@ -3145,12 +3065,7 @@ process.stdout.write(JSON.stringify({
   artifacts: confirmation.reviewResources.map(row => row.artifact),
 }));
 """
-    result = subprocess.run(
-        [node, "-e", script, str(owner_path)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    result = run_node(node, script, str(owner_path), check=False)
     assert result.returncode == 0, result.stderr or result.stdout
     payload = json.loads(result.stdout)
     assert payload["title"] == "修订版计划未通过科学合同"
@@ -3235,12 +3150,7 @@ process.stdout.write(JSON.stringify({
   fallback: zh.pipelineEventLabel({ type: 'progress' }),
 }));
 """
-    result = subprocess.run(
-        [node, "-e", script, str(owner)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    result = run_node(node, script, str(owner), check=False)
 
     assert result.returncode == 0, result.stderr or result.stdout
     rendered = json.loads(result.stdout)
@@ -3310,12 +3220,7 @@ process.stdout.write(JSON.stringify({
   rows: (html.match(/<li class=/g) || []).length,
 }));
 """
-    result = subprocess.run(
-        [node, "-e", script, str(owner)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    result = run_node(node, script, str(owner), check=True)
     rendered = json.loads(result.stdout)
     html = rendered["html"]
     assert rendered["rows"] == 4
@@ -3375,12 +3280,7 @@ setTimeout(() => process.stdout.write(JSON.stringify({
   terminal: messages[0] && messages[0].steps.some(step => step.id === 'pipeline-terminal'),
 })), 20);
 """
-    result = subprocess.run(
-        [node, "-e", script, str(replay_path), str(owner_path)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    result = run_node(node, script, str(replay_path), str(owner_path), check=False)
 
     assert result.returncode == 0, result.stderr or result.stdout
     payload = json.loads(result.stdout)
@@ -3428,12 +3328,7 @@ window.EU_GUIDED_PI_CHILDJOB.create(host).handleChildJobEvent(
 );
 setTimeout(() => process.stdout.write(JSON.stringify(calls)), 20);
 """
-    result = subprocess.run(
-        [node, "-e", script, str(replay_path), str(owner_path)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    result = run_node(node, script, str(replay_path), str(owner_path), check=False)
     assert result.returncode == 0, result.stderr or result.stdout
     calls = json.loads(result.stdout)
     assert "archive:job-failed" in calls
@@ -3485,12 +3380,7 @@ process.stdout.write(JSON.stringify({
   terminalStatus: terminal.status,
 }));
 """
-    result = subprocess.run(
-        [node, "-e", script, str(replay_owner), str(child_owner)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    result = run_node(node, script, str(replay_owner), str(child_owner), check=False)
 
     assert result.returncode == 0, result.stderr or result.stdout
     assert json.loads(result.stdout) == {
@@ -3548,12 +3438,7 @@ process.stdout.write(JSON.stringify({
   terminalCount: terminals.length,
 }));
 """
-    result = subprocess.run(
-        [node, "-e", script, str(replay_owner), str(child_owner)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    result = run_node(node, script, str(replay_owner), str(child_owner), check=False)
 
     assert result.returncode == 0, result.stderr or result.stdout
     assert json.loads(result.stdout) == {
@@ -3581,12 +3466,7 @@ const presentation = window.EU_GUIDED_PI_REPLAY.childJobPresentation({
 }, (en, zh) => zh || en);
 process.stdout.write(JSON.stringify(presentation));
 """
-    result = subprocess.run(
-        [node, "-e", script, str(replay_owner)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    result = run_node(node, script, str(replay_owner), check=False)
 
     assert result.returncode == 0, result.stderr or result.stdout
     presentation = json.loads(result.stdout)
@@ -3625,20 +3505,13 @@ def test_next_step_card_offers_no_generic_continue_button() -> None:
         choicesStillRender: choices.indexOf('使用 ICU 死亡作为结局') >= 0,
       }}));
     """
-    completed = subprocess.run(
-        [
-            node,
-            "--eval",
-            script,
-            "EasyICU 将继续执行规划。\n**下一步：**\n继续等待计划完成。",
-            "要用哪个结局？",
-            # Deliberately not a formal-plan choice: that path belongs to
-            # the premature-plan guard, which this test is not about.
-            "好的。\n**下一步：**\n- 使用 ICU 死亡作为结局\n- 使用住院死亡",
-        ],
+    completed = run_node(
+        node,
+        script,
+        "EasyICU 将继续执行规划。\n**下一步：**\n继续等待计划完成。",
+        "要用哪个结局？",
+        "好的。\n**下一步：**\n- 使用 ICU 死亡作为结局\n- 使用住院死亡",
         check=True,
-        capture_output=True,
-        text=True,
     )
 
     assert json.loads(completed.stdout) == {
@@ -3683,17 +3556,12 @@ def test_every_assistant_turn_projects_its_next_step_block() -> None:
         narrationPast: N.renderPast(narration, 'zh'),
       }}));
     """
-    completed = subprocess.run(
-        [
-            node,
-            "--eval",
-            script,
-            "好的。\n**下一步：**\n- 使用 ICU 死亡\n- 使用住院死亡",
-            "已提交。\n**下一步：**\nEasyICU 将继续执行规划，并在审核闸门处暂停。",
-        ],
+    completed = run_node(
+        node,
+        script,
+        "好的。\n**下一步：**\n- 使用 ICU 死亡\n- 使用住院死亡",
+        "已提交。\n**下一步：**\nEasyICU 将继续执行规划，并在审核闸门处暂停。",
         check=True,
-        capture_output=True,
-        text=True,
     )
     out = json.loads(completed.stdout)
 
@@ -4132,12 +4000,7 @@ process.stdout.write(window.AGENT_RENDER.artifactStructuredView(
   {json.dumps(payload)},
 ));
 """
-    result = subprocess.run(
-        [node, "-e", script],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    result = run_node(node, script, check=True)
     html = result.stdout
 
     assert "EasyICU 需要修订这份候选计划" in html
@@ -4213,9 +4076,7 @@ global.window = {{
 eval({json.dumps(renderer)});
 process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json', {json.dumps(payload)}));
 """
-    html = subprocess.run(
-        [node, "-e", script], check=True, capture_output=True, text=True
-    ).stdout
+    html = run_node(node, script, check=True).stdout
 
     for text in (
         "候选研究计划",
@@ -4278,9 +4139,7 @@ global.window = {{
 eval({json.dumps(renderer)});
 process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json', {json.dumps(payload)}));
 """
-    html = subprocess.run(
-        [node, "-e", script], check=True, capture_output=True, text=True
-    ).stdout
+    html = run_node(node, script, check=True).stdout
 
     # no variable, outcome, score, or database from any other study appears
     for foreign in ("乳酸", "院内死亡", "lactate", "SOFA", "sepsis", "MIMIC", "eICU"):
@@ -4324,9 +4183,7 @@ global.window = {{
 eval({json.dumps(renderer)});
 process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json', {json.dumps(payload)}));
 """
-        html = subprocess.run(
-            [node, "-e", script], check=True, capture_output=True, text=True
-        ).stdout
+        html = run_node(node, script, check=True).stdout
         found: dict[str, list[str]] = {}
         for block in html.split('<li class="ag-plan-flow-stage is-')[1:]:
             found[block[: block.index('"')]] = re.findall(r"<b>(\d+)</b>", block)
@@ -4411,9 +4268,7 @@ global.window = {{
 eval({json.dumps(renderer)});
 process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json', {json.dumps(payload)}));
 """
-        html = subprocess.run(
-            [node, "-e", script], check=True, capture_output=True, text=True
-        ).stdout
+        html = run_node(node, script, check=True).stdout
         found: dict[str, list[str]] = {}
         for block in html.split('<li class="ag-plan-flow-stage is-')[1:]:
             key = block[: block.index('"')]
@@ -4484,9 +4339,7 @@ global.window = {{
 eval({json.dumps(renderer)});
 process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json', {json.dumps(payload)}));
 """
-        return subprocess.run(
-            [node, "-e", script], check=True, capture_output=True, text=True
-        ).stdout
+        return run_node(node, script, check=True).stdout
 
     survival = render([
         {"step_id": "primary_survival", "method": "cox_proportional_hazards", "expected_outputs": ["table:hazard_ratios"]},
@@ -4583,9 +4436,7 @@ global.window = {{
 eval({json.dumps(renderer)});
 process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json', {json.dumps(payload)}));
 """
-    html = subprocess.run(
-        [node, "-e", script], check=True, capture_output=True, text=True
-    ).stdout
+    html = run_node(node, script, check=True).stdout
 
     # the flow map replaces the flat list as the default reading surface
     assert '<ol class="ag-plan-flow">' in html
@@ -4663,9 +4514,7 @@ global.window = {{
 eval({json.dumps(renderer)});
 process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json', {json.dumps(payload)}));
 """
-    html = subprocess.run(
-        [node, "-e", script], check=True, capture_output=True, text=True
-    ).stdout
+    html = run_node(node, script, check=True).stdout
 
     assert '<details class="ag-plan-recommendations">' in html
     assert "Planner 推荐方案（待审阅）· 6 项具体设定" in html
@@ -4700,9 +4549,7 @@ global.window = {{
 eval({json.dumps(renderer)});
 process.stdout.write(window.AGENT_RENDER.artifactStructuredView('result_tables.json', {json.dumps(payload)}));
 """
-    html = subprocess.run(
-        [node, "-e", script], check=True, capture_output=True, text=True
-    ).stdout
+    html = run_node(node, script, check=True).stdout
 
     assert '<nav class="ag-artifact-contents"' in html
     assert "本产物共 4 个区块" in html
@@ -4788,9 +4635,7 @@ global.window = {{
 eval({json.dumps(renderer)});
 process.stdout.write(window.AGENT_RENDER.artifactStructuredView('agent_plan.json', {json.dumps(payload)}));
 """
-    html = subprocess.run(
-        [node, "-e", script], check=True, capture_output=True, text=True
-    ).stdout
+    html = run_node(node, script, check=True).stdout
 
     for text in (
         # rationale, time zero, and observation window have no derivable gloss,
@@ -4998,12 +4843,7 @@ def test_pi_activity_owner_renders_safe_expanded_lifecycle_details() -> None:
         leaked: html.includes('secret-token') || html.includes('secret-thought'),
       }}));
     """
-    result = subprocess.run(
-        [node, "-e", script],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    result = run_node(node, script, check=True)
     payload = json.loads(result.stdout)
     assert payload == {
         "traces": True,
@@ -5123,9 +4963,7 @@ def test_child_job_handoff_reply_is_not_a_second_completed_message() -> None:
         ordinaryAssistant: ordinary.filter(row => row.role === 'assistant').length,
       }}));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
 
     assert json.loads(completed.stdout) == {
         "submittedAssistant": 0,
@@ -5177,9 +5015,7 @@ def test_host_plan_action_reopens_as_system_receipt_with_bound_activity() -> Non
         artifacts: (row.resources || []).map(resource => resource.artifact),
       }}))));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     assert json.loads(completed.stdout) == [
         {"role": "activity", "text": "", "childJobId": "child-plan-1", "status": "complete", "artifacts": []},
         {
@@ -5232,9 +5068,7 @@ def test_automatic_plan_action_reopens_as_system_activity_without_fake_user_turn
         hostActionCode: row.hostActionCode || '',
       }}))));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     assert json.loads(completed.stdout) == [
         {
             "role": "activity",
@@ -5289,9 +5123,7 @@ def test_blocked_plan_job_is_not_presented_as_a_generated_plan() -> None:
         role: row.role, text: row.text || '', status: row.status || '',
       }}))));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     assert json.loads(completed.stdout) == [
         {"role": "activity", "text": "", "status": "error"},
         {
@@ -5351,9 +5183,7 @@ def test_only_latest_successful_plan_action_is_projected_as_current_conversation
         runIds: (row.resources || []).map(resource => resource.run_id),
       }}))));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     rows = json.loads(completed.stdout)
     assert [row["role"] for row in rows] == ["activity", "assistant"]
     assert rows[0]["childJobId"] == "child-new"
@@ -5400,9 +5230,7 @@ def test_only_latest_failed_plan_attempt_is_projected_before_first_success() -> 
         role: row.role, id: row.id, childJobId: row.childJobId || '',
       }}))));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     rows = json.loads(completed.stdout)
     assert [row["role"] for row in rows] == ["activity", "assistant"]
     assert rows[0]["childJobId"] == "child-current"
@@ -5463,9 +5291,7 @@ def test_repeated_workflow_attempts_are_coalesced_in_main_conversation() -> None
         ids: rows.map(row => row.id),
       }}));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     payload = json.loads(completed.stdout)
     assert payload["childJobs"] == ["prepare-child-current", "retry-child-current"]
     assert payload["users"] == []  # Host receipts do not prove authored speech.
@@ -5518,9 +5344,7 @@ def test_passive_review_receipts_do_not_generate_conversation_messages() -> None
         }})),
       }}));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     assert json.loads(completed.stdout) == {
         "users": [],
         "evidence": [],
@@ -5571,9 +5395,7 @@ def test_provider_failure_after_successful_tool_preserves_the_tool_receipt() -> 
       const assistant = projected.find(row => row.role === 'assistant');
       console.log(assistant.text);
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
 
     assert completed.stdout.strip() == "tool-completed-final-explanation-failed"
     shell = _read("js/screens-guided-pi.js")
@@ -5617,12 +5439,7 @@ def test_pi_project_restore_does_not_let_an_empty_session_hide_history() -> None
       console.log(choose(sessions, 'research-history-zh', 'research', 'en'));
       console.log(choose(sessions, '', 'research', 'zh'));
     """
-    completed = subprocess.run(
-        [node, "--eval", script],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    completed = run_node(node, script, check=True)
 
     assert completed.stdout.splitlines() == [
         "research-history",
@@ -5660,12 +5477,7 @@ def test_pi_project_and_session_are_addressable_in_the_browser_url() -> None:
       console.log(owner.requestedSessionId('project-b'));
       console.log(window.location.href);
     """
-    completed = subprocess.run(
-        [node, "--eval", script],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    completed = run_node(node, script, check=True)
 
     rows = completed.stdout.splitlines()
     assert rows[:3] == ["project-a", "session-a", ""]
@@ -5839,9 +5651,7 @@ def test_reviewer_demo_keeps_the_manuscript_open_without_upgrading_authority() -
         primary: demo.primaryDocument().artifact,
       }}));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     payload = json.loads(completed.stdout)
     assert payload == {
         "completed": 7,
@@ -5905,9 +5715,7 @@ def test_reviewer_demo_lifecycle_exposes_only_resolvable_standard_artifacts() ->
         }},
       }}));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     payload = json.loads(completed.stdout)
     # Every trace row is a named step that stays its own row; every standard
     # record is reachable from the conversation.
@@ -6022,12 +5830,7 @@ def test_reviewer_demo_reuses_the_web_renderer_and_hydrates_registered_figures()
         }}));
       }});
     """
-    completed = subprocess.run(
-        [node, "--eval", script],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    completed = run_node(node, script, check=True)
     assert json.loads(completed.stdout) == {
         "count": 3,
         "images": [
@@ -6261,12 +6064,7 @@ def test_literature_renderer_escapes_metadata_and_rejects_unsafe_links() -> None
       }});
       console.log(html);
     """
-    completed = subprocess.run(
-        [node, "--eval", script],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    completed = run_node(node, script, check=True)
     assert "<img" not in completed.stdout
     assert "<script>" not in completed.stdout
     assert 'href="javascript:' not in completed.stdout
@@ -6301,9 +6099,7 @@ def test_literature_reader_labels_old_evidence_when_plan_revision_failed() -> No
       }});
       console.log(html);
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     html = completed.stdout
     assert "上一版计划快照 · 修订版未生成成功" in html
     assert "系统尝试了 4 版草案" in html
@@ -6335,9 +6131,7 @@ def test_literature_reader_translates_plan_bindings_for_chinese_readers() -> Non
       }});
       console.log(html);
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     html = completed.stdout
     assert "检验乳酸与死亡是否为非线性关系" in html
     assert "统计方法依据" in html
@@ -6362,12 +6156,7 @@ def test_assistant_message_renderer_makes_https_citations_clickable_and_safe() -
         '[unsafe](javascript:alert(1)) **strong** *journal* <script>alert(2)</script>'
       ));
     """
-    completed = subprocess.run(
-        [node, "--eval", script],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    completed = run_node(node, script, check=True)
     assert 'href="https://pubmed.ncbi.nlm.nih.gov/26903338/"' in completed.stdout
     assert 'target="_blank"' in completed.stdout
     assert 'rel="noopener noreferrer"' in completed.stdout
@@ -6414,9 +6203,7 @@ def test_literature_preview_renders_unsearched_bundle_without_zero_result_claim(
       }});
       console.log(html);
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
 
     assert "尚未执行针对这个问题的文献检索" in completed.stdout
     assert "目前还没有文献绑定到这份计划" in completed.stdout
@@ -6543,9 +6330,7 @@ def test_result_summary_uses_primary_population_flow_not_joint_missingness() -> 
       const result = window.EU_GUIDED_PI_RESULT_SUMMARY.summarize({json.dumps(payload)});
       process.stdout.write(JSON.stringify(result.claims));
     """
-    completed = subprocess.run(
-        [node, "-e", script], capture_output=True, text=True, check=True
-    )
+    completed = run_node(node, script, check=True)
     claims = {
         row["source_field"]: row["canonical_value"]
         for row in json.loads(completed.stdout)
@@ -6592,9 +6377,7 @@ def test_result_summary_uses_cohort_ledger_when_audit_summary_has_generic_stage_
       const result = window.EU_GUIDED_PI_RESULT_SUMMARY.summarize({json.dumps(payload)});
       process.stdout.write(JSON.stringify(result.claims));
     """
-    completed = subprocess.run(
-        [node, "-e", script], capture_output=True, text=True, check=True
-    )
+    completed = run_node(node, script, check=True)
     claims = {
         row["source_field"]: row["canonical_value"]
         for row in json.loads(completed.stdout)
@@ -6630,9 +6413,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
         ]),
       }}));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
 
     assert json.loads(completed.stdout) == {
         "mined": True,
@@ -6744,12 +6525,7 @@ def test_idea_resources_separate_topic_search_from_folded_method_references() ->
       const restored = resources.fromButton({{dataset: {{gpiResourceAuthority: 'literature_method'}}}});
       console.log(JSON.stringify({{html, authorityClass: restored.authority_class}}));
     """
-    completed = subprocess.run(
-        [node, "--input-type=module", "--eval", script],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    completed = run_node(node, script, module=True, check=True)
     payload = json.loads(completed.stdout)
     html = payload["html"]
     assert payload["authorityClass"] == "literature_method"
@@ -6831,9 +6607,7 @@ def test_idea_plan_readable_preview_localizes_owner_codes_and_steps() -> None:
       );
       process.stdout.write(html);
     """
-    completed = subprocess.run(
-        [node, "-e", script], capture_output=True, text=True, check=True
-    )
+    completed = run_node(node, script, check=True)
     html = completed.stdout
     assert "草案等待研究者审阅" in html
     assert "检索完成，未保留候选文献" in html

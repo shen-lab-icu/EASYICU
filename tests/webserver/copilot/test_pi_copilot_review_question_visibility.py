@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
+
+from tests.support.node import run_node
 
 
 STATIC = Path(__file__).parents[3] / "src" / "easyicu" / "webserver" / "static"
@@ -50,9 +51,7 @@ def _card(review: dict) -> str:
       }});
       process.stdout.write(confirmation.workflowConfirmationHtml());
     """
-    return subprocess.run(
-        [_node(), "--eval", script], check=True, capture_output=True, text=True
-    ).stdout
+    return run_node(_node(), script, check=True).stdout
 
 
 def _review(questions: list[dict], **buckets: list[str]) -> dict:
@@ -137,9 +136,7 @@ def _review_view(findings: list[dict]) -> str:
         'scientific_plan_review.json', {json.dumps({"approval_allowed": False, "findings": findings})},
       ));
     """
-    return subprocess.run(
-        [_node(), "-e", script], check=True, capture_output=True, text=True
-    ).stdout
+    return run_node(_node(), script, check=True).stdout
 
 
 def test_the_review_details_ask_for_an_endpoint_routed_to_the_user():

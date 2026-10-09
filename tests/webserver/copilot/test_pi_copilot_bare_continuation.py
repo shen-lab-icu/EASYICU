@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 
 import pytest
 
+from tests.support.node import run_node
 from tests.webserver.copilot.pi_copilot_static_fixtures import (
     _load_guided_pi_module_harness as _load_guided_pi_module_harness,
     _read,
@@ -83,9 +83,7 @@ def exercise(case: str) -> dict:
         "__ACTIONS_SOURCE__", json.dumps(_read("js/screens-guided-pi-plan-actions.js"))
     )
     script = f"const CASE = {json.dumps(case)};\n" + script
-    completed = subprocess.run(
-        [node, "--eval", script], capture_output=True, text=True, check=False
-    )
+    completed = run_node(node, script, check=False)
     assert completed.returncode == 0, completed.stderr[-2000:]
     return json.loads(completed.stdout)
 

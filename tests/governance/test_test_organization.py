@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import re
+import warnings
 from pathlib import Path
 
 
@@ -252,6 +253,46 @@ def test_no_cross_test_module_imports() -> None:
     assert offenders == [], (
         "new cross-test import(s); move the shared fixture to "
         f"conftest.py/tests/support instead: {offenders}"
+    )
+
+
+def test_node_programs_are_never_passed_through_argv() -> None:
+    """A test starts a Node program with ``tests.support.node.run_node``.
+
+    Linux caps one argument string at 128 KiB (MAX_ARG_STRLEN). Harnesses
+    embed whole owner sources in their program, so ``node --eval PROGRAM``
+    passes on macOS and fails on CI with E2BIG once those sources outgrow it.
+    """
+
+    program_flags = {"--eval", "-e", "--print", "-p", "-pe"}
+    tests_root = Path(__file__).resolve().parents[1]
+    offenders: list[str] = []
+    for path in tests_root.rglob("*.py"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            except SyntaxError:
+                continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.List, ast.Tuple)) or not node.elts:
+                continue
+            if "node" not in ast.unparse(node.elts[0]).lower():
+                continue
+            if any(
+                isinstance(item, ast.Constant)
+                and isinstance(item.value, str)
+                and (
+                    item.value in program_flags
+                    or item.value.startswith(("--eval=", "--print="))
+                )
+                for item in node.elts[1:]
+            ):
+                offenders.append(
+                    f"{path.relative_to(tests_root).as_posix()}:{node.lineno}"
+                )
+    assert offenders == [], (
+        f"start Node through tests.support.node.run_node: {offenders}"
     )
 
 

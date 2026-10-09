@@ -4,7 +4,6 @@ import json
 import os
 from pathlib import Path
 import shutil
-import subprocess
 
 import pytest
 
@@ -14,6 +13,8 @@ from easyicu.webserver.pi_copilot.resource_lifecycle import (
     WebMemoryPolicy,
 )
 from easyicu.webserver.pi_copilot.session_storage import SessionStorageMaintenance
+
+from tests.support.node import run_node
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -116,12 +117,7 @@ def test_node_hot_session_lifecycle_unloads_idle_lru_and_rejects_emergency() -> 
         {{ totalMemoryBytes: 16 * 1024 * 1024 * 1024 }},
       )));
     """
-    completed = subprocess.run(
-        [node, "--input-type=module", "-e", script],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    completed = run_node(node, script, module=True, check=True)
     first, error_code, protected, capacity, config, overridden = (
         completed.stdout.splitlines()
     )

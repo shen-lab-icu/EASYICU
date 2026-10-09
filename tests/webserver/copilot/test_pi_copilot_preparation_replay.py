@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 
 import pytest
 
 from easyicu.webserver.pi_copilot.projections import project_job
+from tests.support.node import run_node
 from tests.webserver.copilot.pi_copilot_static_fixtures import (
     _load_guided_pi_module_harness as _load_guided_pi_module_harness,
     _read,
@@ -56,9 +56,7 @@ def _replay(job: dict) -> dict:
         sourceUnchanged: before === JSON.stringify(session),
       }}));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     return json.loads(completed.stdout)
 
 

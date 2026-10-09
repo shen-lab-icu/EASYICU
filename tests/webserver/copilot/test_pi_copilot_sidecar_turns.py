@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
 
 from easyicu.webserver.pi_copilot.contracts import PiCopilotError
 from easyicu.webserver.pi_copilot.gateway import PiGatewayClient
+
+from tests.support.node import run_node
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 APP_DIR = REPO_ROOT / "src" / "easyicu" / "webserver" / "pi_copilot" / "node_app"
@@ -183,12 +184,7 @@ def test_sidecar_projects_bounded_reasoning_summaries_for_the_trace() -> None:
       }});
       console.log(JSON.stringify({{ events, transcript }}));
     """
-    completed = subprocess.run(
-        [node, "--input-type=module", "-e", script],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    completed = run_node(node, script, module=True, check=True)
     payload = json.loads(completed.stdout)
     assert [event["type"] if event else None for event in payload["events"]] == [
         "thinking_start",

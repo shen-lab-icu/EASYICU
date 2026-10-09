@@ -3,7 +3,8 @@
 import json
 from pathlib import Path
 import shutil
-import subprocess
+
+from tests.support.node import run_node
 
 
 STATIC = Path("src/easyicu/webserver/static")
@@ -87,18 +88,13 @@ process.stdout.write(JSON.stringify({
   chatFallback: html.includes('data-gpi-next-choice='),
 }));
 """
-    result = subprocess.run(
-        [
-            node,
-            "-e",
-            script,
-            str(modules_owner.resolve()),
-            str(cohort_owner.resolve()),
-            str(confirmation_owner.resolve()),
-        ],
+    result = run_node(
+        node,
+        script,
+        str(modules_owner.resolve()),
+        str(cohort_owner.resolve()),
+        str(confirmation_owner.resolve()),
         check=False,
-        capture_output=True,
-        text=True,
     )
     assert result.returncode == 0, result.stderr or result.stdout
     assert json.loads(result.stdout) == {

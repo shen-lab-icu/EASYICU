@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 
 import pytest
 
+from tests.support.node import run_node
 from tests.webserver.copilot.pi_copilot_static_fixtures import (
     NODE_APP as NODE_APP,
     _ESCAPE_OWNER as _ESCAPE_OWNER,
@@ -369,7 +369,7 @@ def test_a_question_that_names_a_full_database_opens_its_source_selection() -> N
         process.stdout.write(JSON.stringify(out));
       }}, 10);
     """
-    completed = subprocess.run([node, "--eval", script], check=True, capture_output=True, text=True)
+    completed = run_node(node, script, check=True)
     assert json.loads(completed.stdout) == {
         "miiv": "miiv", "eicu": "eicu", "bareMimic": None, "demo": None,
         "card": True, "action": ["begin_local_selection", "miiv"],
@@ -460,7 +460,7 @@ def test_a_question_that_names_an_official_demo_is_offered_that_demo() -> None:
         process.stdout.write(JSON.stringify(out));
       }}, 10);
     """
-    completed = subprocess.run([node, "--eval", script], check=True, capture_output=True, text=True)
+    completed = run_node(node, script, check=True)
     assert json.loads(completed.stdout) == {
         "beforeCatalog": None,
         "matches": {
@@ -589,7 +589,7 @@ def test_workflow_to_dos_read_as_a_checklist_with_the_current_decision() -> None
         noComputePanel: !fallback.includes('data-gpi-aside-section="compute"') && !fallback.includes('gpi-run-status'),
       }}));
     """
-    completed = subprocess.run([node, "--eval", script], check=True, capture_output=True, text=True)
+    completed = run_node(node, script, check=True)
     assert json.loads(completed.stdout) == {
         "rows": 5,
         "currentRow": True,
@@ -674,7 +674,7 @@ def test_results_section_lists_the_project_run_record() -> None:
         noHistoryWithoutRuns: (() => {{ runs.length = 0; panel.syncProjectWorkflowAside(); return !body.innerHTML.includes('gpi-run-history'); }})(),
       }}));
     """
-    completed = subprocess.run([node, "--eval", script], check=True, capture_output=True, text=True)
+    completed = run_node(node, script, check=True)
     assert json.loads(completed.stdout) == {
         "openWhenEmpty": True,
         "closedWithShelf": True,
@@ -767,7 +767,7 @@ def test_project_notes_are_project_memory_in_the_project_folder() -> None:
         }}, 1000);
       }}, 20);
     """
-    completed = subprocess.run([node, "--eval", script], check=True, capture_output=True, text=True, timeout=30)
+    completed = run_node(node, script, check=True, timeout=30)
     assert json.loads(completed.stdout) == {
         "loading": True,
         "loaded": True,
@@ -968,9 +968,7 @@ def test_reply_turn_reads_as_intro_traces_with_reasoning_and_answer() -> None:
         persistedThinkingDurations: persistedActivity.steps.filter(step => step.kind === 'thinking').map(step => step.endedAt - step.startedAt),
       }}));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     payload = json.loads(completed.stdout)
     assert payload == {
         "groupedOrder": True,
@@ -1040,7 +1038,7 @@ def test_model_follow_up_questions_are_lifted_from_the_reply_and_offered_as_sugg
         empty: owner.render([], {{}}) === '',
       }}));
     """
-    completed = subprocess.run([node, "--eval", script], check=True, capture_output=True, text=True)
+    completed = run_node(node, script, check=True)
     assert json.loads(completed.stdout) == {
         "zhText": "主要分析是 logistic 回归。\n\n**下一步：**请在计划审查控件中确认。",
         "zhQuestions": ["这个计划的样本量够吗？", "乳酸缺失会怎么处理？", "能否加入 SOFA 作为协变量？"],
@@ -1139,7 +1137,7 @@ def test_effort_level_is_a_per_conversation_menu_on_the_composer() -> None:
         remembered: stored['easyicu.pi.thinkingLevel.v1'], preferred: owner.preferred(), rendered, error, menuClosed: menu.removed,
       }})), 0);
     """
-    completed = subprocess.run([node, "--eval", script], check=True, capture_output=True, text=True)
+    completed = run_node(node, script, check=True)
     assert json.loads(completed.stdout) == {
         "rows": 3,
         "noOffChoice": True,
@@ -1293,7 +1291,7 @@ def test_floating_menus_share_one_dismissal_owner() -> None:
       out.unregisteredIgnored = folder.open;
       process.stdout.write(JSON.stringify(out));
     """
-    completed = subprocess.run([node, "--eval", script], check=True, capture_output=True, text=True)
+    completed = run_node(node, script, check=True)
     assert json.loads(completed.stdout) == {
         "captured": [True, True, True],
         "keydownBubbles": True,
@@ -1382,7 +1380,7 @@ def test_reply_markdown_renders_github_tables() -> None:
       const plain = md.render('| 不是表格 |\\n普通行');
       process.stdout.write(JSON.stringify({{ html, plain }}));
     """
-    completed = subprocess.run([node, "--eval", script], check=True, capture_output=True, text=True)
+    completed = run_node(node, script, check=True)
     payload = json.loads(completed.stdout)
     assert payload["html"] == (
         '<p>有以下产物：</p><table class="gpi-md-table"><thead><tr><th>产物</th><th>用途</th></tr></thead>'
@@ -1427,9 +1425,7 @@ def test_copilot_plus_menu_keeps_article_url_entry_in_the_conversation() -> None
       }});
       console.log(JSON.stringify({{html, bare, masterOff, handled, menuRemoved: menu.removed, input}}));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     payload = json.loads(completed.stdout)
 
     assert 'aria-label="添加到问题"' in payload["html"]

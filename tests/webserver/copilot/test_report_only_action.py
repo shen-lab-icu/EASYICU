@@ -1,9 +1,9 @@
 import json
 import shutil
-import subprocess
 
 import pytest
 
+from tests.support.node import run_node
 from tests.webserver.copilot.pi_copilot_static_fixtures import (
     _load_guided_pi_module_harness as _load_guided_pi_module_harness,
     _read,
@@ -33,7 +33,7 @@ def test_explicit_click_sends_report_only_scope_without_plan_or_approval(report_
         process.stdout.write(JSON.stringify(calls));
       })().catch(error => { console.error(error); process.exit(1); });
     """.replace("REPORT_ONLY", json.dumps(report_only))
-    result = subprocess.run([node, "--eval", script], capture_output=True, text=True)
+    result = run_node(node, script)
     assert result.returncode == 0, result.stderr
     calls = json.loads(result.stdout)
     assert len(calls) == 1
@@ -76,7 +76,7 @@ def test_general_restore_has_one_governed_fallback_but_explicit_report_scope_doe
         process.stdout.write(JSON.stringify({calls,messages,errors}));
       })().catch(e => {console.error(e);process.exit(1);});
     """.replace("REASON", json.dumps(reason)).replace("ERROR_CODE", json.dumps(code))
-    result = subprocess.run([node, "--eval", script], capture_output=True, text=True, check=True)
+    result = run_node(node, script, check=True)
     output = json.loads(result.stdout)
     assert output["calls"] == expected
     assert len([m for m in output["messages"] if m["role"] == "user"]) == 1
@@ -99,7 +99,7 @@ def test_duration_rounding_carries_into_minutes():
       });
       process.stdout.write(owner.durationText(1000, 420900));
     """
-    result = subprocess.run([node, "--eval", script], capture_output=True, text=True, check=True)
+    result = run_node(node, script, check=True)
     assert "7 分" in result.stdout and "60 秒" not in result.stdout
 
 
@@ -123,5 +123,5 @@ def test_real_outcome_click_preserves_restore_vs_explicit_report_only_scope():
       }
       process.stdout.write(JSON.stringify(calls));
     """
-    result = subprocess.run([node, "--eval", script], capture_output=True, text=True, check=True)
+    result = run_node(node, script, check=True)
     assert json.loads(result.stdout) == ["restore", "report_only", "validation_repair"]

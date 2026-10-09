@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import shutil
-import subprocess
 
 import pytest
+
+from tests.support.node import run_node
 
 
 def _render(payload: dict) -> str:
@@ -26,8 +27,7 @@ def _render(payload: dict) -> str:
       api.mount(host, {json.dumps(payload)});
       console.log(host.innerHTML);
     """
-    return subprocess.run([node, "--eval", script], check=True, capture_output=True,
-                          text=True).stdout
+    return run_node(node, script, check=True).stdout
 
 
 @pytest.mark.parametrize("value", [None, "", False, []])

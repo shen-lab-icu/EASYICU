@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -14,6 +13,7 @@ from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.execution_retry import ExecutionRetryAssessment
 from easyicu.webserver.pi_copilot.workflow import build_research_workflow_snapshot
 
+from tests.support.node import run_node
 from tests.webserver.copilot.pi_copilot_static_fixtures import (
     _load_guided_pi_module_harness as _load_guided_pi_module_harness,
 )
@@ -172,7 +172,7 @@ def test_the_futile_card_explains_the_spent_budget_and_offers_only_a_fresh_plan(
       }}));
     """
     rendered = json.loads(
-        subprocess.run([_node(), "--eval", script], check=True, capture_output=True, text=True).stdout
+        run_node(_node(), script, check=True).stdout
     )
 
     spec = rendered["spec"]
@@ -217,7 +217,7 @@ def test_a_futile_retry_of_a_named_stop_says_the_stop_repeats() -> None:
       }}));
     """
     rendered = json.loads(
-        subprocess.run([_node(), "--eval", script], check=True, capture_output=True, text=True).stdout
+        run_node(_node(), script, check=True).stdout
     )
 
     note = rendered["spec"]["note"]
@@ -253,7 +253,7 @@ def test_approving_the_futile_card_starts_a_fresh_plan_bound_to_the_failed_run()
         .then(() => console.log(JSON.stringify(submitted)));
     """
     submitted = json.loads(
-        subprocess.run([_node(), "--eval", script], check=True, capture_output=True, text=True).stdout
+        run_node(_node(), script, check=True).stdout
     )
 
     assert submitted["plan_revision_source_run_id"] == "failed-approved"
@@ -269,7 +269,7 @@ def test_an_explicit_replan_request_stays_governed_in_the_futile_state() -> None
         '重新生成研究计划', 'failed_pipeline_execution_retry_futile')));
     """
     grants = json.loads(
-        subprocess.run([_node(), "--eval", script], check=True, capture_output=True, text=True).stdout
+        run_node(_node(), script, check=True).stdout
     )
 
     assert grants == ["provider_run"]
