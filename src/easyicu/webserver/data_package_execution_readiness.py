@@ -23,6 +23,7 @@ from easyicu.webserver import (
     raw_source_authority,
     source_identity_authority,
 )
+from easyicu.webserver import study_contexts as study_context_owner
 
 
 def _read_review_concept(source_path: str, concept_id: str) -> Optional[pd.DataFrame]:
@@ -445,9 +446,10 @@ def _runtime_readiness_review(
     required_findings: list[str] = []
     design = study.get("analysis_design")
     design = design if isinstance(design, Mapping) else {}
-    if design.get("variance_estimator") == "cluster_robust" and grouping.get(
-        "status"
-    ) != "ready":
+    if (
+        study_context_owner.analysis_design_reads_patient_grouping(design)
+        and grouping.get("status") != "ready"
+    ):
         required_findings.append(
             str(grouping.get("reason_code") or "patient_grouping_authority_unavailable")
         )

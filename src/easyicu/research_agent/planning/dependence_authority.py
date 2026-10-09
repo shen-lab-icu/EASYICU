@@ -16,7 +16,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from ..contracts.analysis_design import AnalysisDesignConflict, validate_analysis_family_ceiling
+from ..contracts.analysis_design import (
+    AnalysisDesignConflict,
+    BootstrapFamilyConflict,
+    validate_analysis_family_ceiling,
+)
 
 from ..contracts.descriptive_execution import (
     exposure_outcome_distribution_execution_verdict,
@@ -31,6 +35,7 @@ DEPENDENCE_DIAGNOSTIC_OWNER = "easyicu.planning.dependence_authority_v1"
 DEPENDENCE_REASON_CODES = frozenset({
     "analysis_dependence_contract_invalid", "counts_only_inference_forbidden",
     "counts_only_step_untyped", "counts_only_family_incompatible",
+    "bootstrap_family_incompatible",
 })
 
 
@@ -66,6 +71,7 @@ class _AnalysisDesign(BaseModel):
         "heteroskedasticity_robust",
         "cluster_robust",
         "none_counts_only",
+        "bootstrap",
     ]
 
     @model_validator(mode="after")
@@ -85,6 +91,12 @@ def _parse_analysis_design(design: Mapping) -> _AnalysisDesign:
             analysis_family=design.get("analysis_family"),
             variance_estimator=design.get("variance_estimator"),
         )
+    except BootstrapFamilyConflict as exc:
+        raise DependenceAuthorityError(
+            "The host analysis_design names a bootstrap outside causal "
+            "inference; a host design revision is required before planning.",
+            code="bootstrap_family_incompatible",
+        ) from exc
     except AnalysisDesignConflict as exc:
         raise DependenceAuthorityError(
             "The host analysis_design combines an inferential family with "
@@ -122,9 +134,19 @@ def _requested_cluster_design(context: ResearchContext) -> _AnalysisDesign | Non
         raise DependenceAuthorityError(
             "cluster_robust analysis_design requires cluster_unit"
         )
-    if parsed.variance_estimator != "cluster_robust" and parsed.cluster_unit is not None:
+    # A bootstrap clusters only by resampling patients, each with all their
+    # stays; the suite that computes it reads its grouping from the context.
+    patient_bootstrap = (
+        parsed.variance_estimator == "bootstrap" and parsed.cluster_unit == "patient"
+    )
+    if (
+        parsed.variance_estimator != "cluster_robust"
+        and parsed.cluster_unit is not None
+        and not patient_bootstrap
+    ):
         raise DependenceAuthorityError(
-            "cluster_unit is valid only for cluster_robust analysis_design"
+            "cluster_unit is valid only for cluster_robust analysis_design, "
+            "or patient for a bootstrap"
         )
     if (
         parsed.analysis_unit != "icu_stay"

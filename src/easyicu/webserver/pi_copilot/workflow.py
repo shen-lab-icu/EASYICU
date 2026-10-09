@@ -1213,7 +1213,7 @@ def _repeated_stays_decided(study: Mapping[str, Any]) -> bool:
     cohort = study.get("cohort")
     cohort = cohort if isinstance(cohort, Mapping) else {}
     return (
-        design.get("variance_estimator") == "cluster_robust"
+        study_context_owner.analysis_design_reads_patient_grouping(design)
         or cohort.get("exclude_readmissions") is True
     )
 

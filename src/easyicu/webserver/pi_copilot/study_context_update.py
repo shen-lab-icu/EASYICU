@@ -372,6 +372,10 @@ def _message_explicitly_selects_clustered_inference(message: str) -> bool:
             r"(?:聚类坐标|cluster.*coordinate).*?(?:患者|patient)",
             r"\bcluster(?:ed|ing)?[\s_-]+(?:robust[\s_-]+)?(?:by[\s_-]+)?patient\b",
             r"\bpatient[\s_-]+cluster(?:ed|ing|[\s_-]+robust)?\b",
+            # A bootstrap that resamples patients, each with all their stays.
+            r"(?:按|以).*?患者.*?(?:重抽样|重采样|bootstrap|自助)",
+            r"\bbootstrap(?:ped|ping)?[\s_-]+(?:resampling[\s_-]+)?(?:by[\s_-]+)?patients?\b",
+            r"\bpatient[\s_-]+(?:level[\s_-]+)?bootstrap\b",
         )
     )
 
@@ -387,6 +391,10 @@ def _message_explicitly_changes_variance_estimator(message: str) -> bool:
             r"(?:模型|model)[\s_-]*(?:标准误|based)",
             r"(?:不进行|不做|仅报告).*?(?:关联推断|统计推断|患病率)",
             r"\b(?:model[\s_-]*based|heteroskedastic[\s_-]*robust|counts[\s_-]*only)\b",
+            r"\bbootstrap\b",
+            r"自助法",
+            r"(?:重抽样|重采样).*?(?:区间|方差|标准误)",
+            r"(?:区间|方差|标准误).*?(?:重抽样|重采样)",
         )
     )
 
