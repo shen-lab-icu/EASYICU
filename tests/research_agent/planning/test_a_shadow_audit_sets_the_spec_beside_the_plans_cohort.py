@@ -218,6 +218,33 @@ def test_a_spec_its_owner_refuses_is_recorded_with_the_owners_errors(refused) ->
     assert "day one" not in json.dumps(audit["errors"])
 
 
+def test_criteria_nested_under_their_kind_are_recorded_with_the_flat_shape() -> None:
+    """A Planner without a schema once wrote each kind's fields under its name."""
+
+    common = ("id", "quote", "source", "role", "kind")
+
+    def nested(criterion: dict[str, Any]) -> dict[str, Any]:
+        fields = {key: value for key, value in criterion.items() if key not in common}
+        return {**{key: criterion[key] for key in common}, criterion["kind"]: fields}
+
+    written = {"criteria": [nested(_ADULTS), nested(_MARKED)]}
+
+    audit = _audit(written, _plan(_predicate("age", 0.0, "inf", "first", ">=", 18)))
+
+    assert audit["status"] == "spec_invalid"
+    assert [(error["loc"], error["type"]) for error in audit["errors"]] == [
+        ("criteria.0.age_years", "value_error"),
+        ("criteria.1.condition_present", "value_error"),
+    ]
+    adults, marked = (error["msg"] for error in audit["errors"])
+    adult_shape = '{"kind": "age_years", "min_years": "...", "max_years": "..."}'
+    marked_shape = (
+        '{"kind": "condition_present", "concepts_all_of": "...", "window": "..."}'
+    )
+    assert f"write {adult_shape}" in adults
+    assert f"write {marked_shape}" in marked
+
+
 def test_the_criteria_the_owner_reads_are_compiled_beside_those_it_refuses() -> None:
     written = {"criteria": [_ADULTS, {**_MARKED, "window": "day one"}]}
 

@@ -29,7 +29,7 @@ version 2's.
 from __future__ import annotations
 
 import json
-from typing import Annotated, Literal, Mapping, Optional, Union, get_args
+from typing import Annotated, Any, Literal, Mapping, Optional, Union, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -61,6 +61,10 @@ class SpecWindow(BaseModel):
         return self
 
 
+#: The fields every criterion states, whatever its kind.
+_COMMON_FIELDS = ("id", "quote", "source", "role", "kind")
+
+
 class _Criterion(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -70,6 +74,27 @@ class _Criterion(BaseModel):
     quote: str = Field(min_length=2, max_length=160)
     source: CriterionSource
     role: CriterionRole
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fields_beside_kind(cls, data: Any) -> Any:
+        # A kind's fields written under the kind's name are refused once, with
+        # the shape this kind is read in, so the writer can move them.
+        kind = data.get("kind") if isinstance(data, Mapping) else None
+        if (
+            isinstance(kind, str)
+            and kind not in cls.model_fields
+            and isinstance(data.get(kind), Mapping)
+        ):
+            fields = [name for name in cls.model_fields if name not in _COMMON_FIELDS]
+            shape = json.dumps(
+                {"kind": kind, **{name: "..." for name in fields}}, ensure_ascii=False
+            )
+            raise ValueError(
+                f"the {kind} fields go beside kind, not nested under {kind!r}: "
+                f"write {shape} next to id, quote, source and role"
+            )
+        return data
 
 
 class _Kept(_Criterion):
