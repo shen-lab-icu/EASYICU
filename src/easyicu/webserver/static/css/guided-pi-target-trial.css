@@ -1,0 +1,24 @@
+/* Owner: a causal study's target trial card
+   (js/screens-guided-pi-target-trial.js). The protocol and its lines are
+   English text from the compiled record, so long words wrap instead of
+   widening the card; the sections fold so the card stays readable. */
+.gpi-trial{margin-top:11px;display:grid;gap:8px}
+.gpi-trial-stale,.gpi-trial-approved,.gpi-trial-ceiling{margin:0;color:var(--ink-2);font-size:12.5px;line-height:1.5}
+.gpi-trial-detail{margin:0;color:var(--ink-3);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+.gpi-trial-detail code{font-size:11.5px}
+.gpi-trial-blocking{margin:0;padding:10px 12px 10px 28px;border:1px solid color-mix(in srgb,var(--warn) 30%,var(--hair-2));border-radius:10px;background:var(--paper)}
+.gpi-trial-blocking li{margin-top:5px;font-size:12.5px;line-height:1.5;overflow-wrap:anywhere}
+.gpi-trial-blocking li:first-child{margin-top:0}
+.gpi-trial-blocking strong{display:block;color:var(--ink-1);font-size:12.5px}
+.gpi-trial-blocking span{display:block;color:var(--ink-2)}
+.gpi-trial-blocking small{display:block;color:var(--ink-3);font-size:11.5px}
+.gpi-trial-section{border:1px solid var(--hair-2);border-radius:10px;background:var(--paper);padding:8px 12px}
+.gpi-trial-section>summary{cursor:pointer;color:var(--ink-1);font-size:13px;font-weight:600}
+.gpi-trial-protocol{margin:6px 0 0;display:grid;gap:6px}
+.gpi-trial-protocol dt{color:var(--ink-3);font-size:11.5px}
+.gpi-trial-protocol dd{margin:1px 0 0;color:var(--ink-2);font-size:12.5px;line-height:1.5;overflow-wrap:anywhere}
+.gpi-trial-confirmations,.gpi-trial-limitations{margin:6px 0 0;padding-left:0;list-style:none;display:grid;gap:6px}
+.gpi-trial-confirmations label{display:flex;gap:8px;align-items:flex-start;color:var(--ink-2);font-size:12.5px;line-height:1.5;overflow-wrap:anywhere;cursor:pointer}
+.gpi-trial-confirmations input{margin-top:3px;flex:0 0 auto}
+.gpi-trial-confirmations li>span,.gpi-trial-limitations span{color:var(--ink-2);font-size:12.5px;line-height:1.5;overflow-wrap:anywhere}
+.gpi-trial-limitations strong{display:block;color:var(--ink-1);font-size:12.5px}

@@ -109,10 +109,10 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
     assert "js/screens-guided-pi-source-view.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-preview.js?v=20260922-demo-rewrite1" in index
-    assert "js/screens-guided-pi-replay.js?v=20261009-host-action1" in index
+    assert "js/screens-guided-pi-replay.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-resources.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20260922-run-answer1" in index
-    assert "js/screens-guided-pi-activity.js?v=20260922-plan-steps1" in index
+    assert "js/screens-guided-pi-activity.js?v=20261009-target-trial1" in index
     assert (
         "js/screens-guided-pi-provider.js?v=20260922-demo-entry2"
         in index
@@ -127,17 +127,26 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
-    assert "js/screens-guided-pi-confirmation.js?v=20261009-question-notes1" in index
-    assert "js/screens-guided-pi-plan-actions.js?v=20261009-question-stop1" in index
-    assert "js/screens-guided-pi-childjob.js?v=20260922-plan-steps1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261009-capability-gap1" in index
-    assert "js/screens-guided-pi.js?v=20261009-language-rail1" in index
+    assert "css/guided-pi-target-trial.css?v=20261009-target-trial1" in index
+    assert "js/screens-guided-pi-target-trial-copy.js?v=20261009-target-trial1" in index
+    assert "js/screens-guided-pi-target-trial.js?v=20261009-target-trial1" in index
+    # The card owner reads its wording, and the confirmation owner the card.
+    assert (
+        index.index("js/screens-guided-pi-target-trial-copy.js")
+        < index.index("js/screens-guided-pi-target-trial.js")
+        < index.index("js/screens-guided-pi-confirmation.js")
+    )
+    assert "js/screens-guided-pi-confirmation.js?v=20261009-target-trial1" in index
+    assert "js/screens-guided-pi-plan-actions.js?v=20261009-target-trial1" in index
+    assert "js/screens-guided-pi-childjob.js?v=20261009-target-trial1" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261009-target-trial1" in index
+    assert "js/screens-guided-pi.js?v=20261009-target-trial1" in index
     assert "js/screens-guided.js?v=20260922-state-menus1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
     )
-    assert "js/api.js?v=20260922-notes1" in index
+    assert "js/api.js?v=20261009-target-trial1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"
@@ -6504,8 +6513,8 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "showProjectContinuationCards && !dataConsentRequired" in session_panel
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
-    assert "screens-guided-pi-transcript.js?v=20260922-plan-steps1" in index
-    assert "screens-guided-pi.js?v=20261009-language-rail1" in index
+    assert "screens-guided-pi-transcript.js?v=20261009-target-trial1" in index
+    assert "screens-guided-pi.js?v=20261009-target-trial1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

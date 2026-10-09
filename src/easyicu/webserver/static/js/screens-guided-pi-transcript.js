@@ -17,6 +17,7 @@
     'easyicu_full_run_submitted',
     'easyicu_report_repair_submitted',
     'easyicu_review_submitted',
+    'easyicu_target_trial_compile_submitted',
   ]);
   const IDEA_EXPLORATION_TOOLS = new Set([
     'easyicu_mine_ideas',
@@ -181,6 +182,12 @@
         && !hostActionFailed('prepare_analysis_data', job, status));
     }
 
+    // A target trial line from its copy owner (screens-guided-pi-target-trial-copy.js).
+    function trialLine(code, fallback) {
+      const copy = window.EasyICU.guidedPi.optional('targetTrialCopy');
+      return (copy && copy.line(code, tr)) || fallback;
+    }
+
     function hostActionCopy(actionCode, job, status, turn) {
       const normalizedStatus = String(status || '');
       const interrupted = normalizedStatus === 'interrupted';
@@ -254,6 +261,14 @@
           running: tr('Preparing the article preview', '正在准备文章预览'),
           done: tr('The evidence-bound article generated after this run’s tables and figures is open. Use the bound scientific review to check which statements remain analysis-only.', '在本轮结果表和图件之后重新生成的证据绑定文章已打开；请结合绑定的科学审阅核对哪些表述仍只属于分析级结论。'),
           failed: tr('The evidence-bound article could not be opened.', '证据绑定文章未能打开。'),
+        },
+        // Written by the host when the researcher approves the trial card;
+        // the click itself is the conversation's record, so no user line.
+        target_trial_approved: {
+          user: '',
+          running: '',
+          done: trialLine('target_trial_approved', tr('The target trial is approved.', '已批准目标试验。')),
+          failed: '',
         },
         review_scientific_review: {
           user: tr('View the scientific review', '查看科学审阅'),

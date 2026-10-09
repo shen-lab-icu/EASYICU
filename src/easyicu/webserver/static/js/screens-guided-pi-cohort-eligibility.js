@@ -94,14 +94,22 @@
       const visibleOptions = focused.length === 2 ? focused : options.slice(0, 3);
       const currentDigest = String(value.primary_cohort_contract_sha256 || '');
       const design = analysisDesign();
+      // Repeated stays are handled by a patient-level variance: clustered
+      // robust, or, for a causal study, a bootstrap that resamples patients.
+      const patientVariance = String(design.cluster_unit || '') === 'patient'
+        ? String(design.variance_estimator || '') : '';
       const repeatedAdmissionsRecommended = String(admission.repeated_admission_policy || '') === 'all_icu_admissions'
         && String(design.analysis_unit || '') === 'icu_stay'
-        && String(design.variance_estimator || '') === 'cluster_robust'
-        && String(design.cluster_unit || '') === 'patient';
+        && ['cluster_robust', 'bootstrap'].includes(patientVariance);
       const rationale = groupingUnavailable
         ? tr(
           'This data package does not provide patient grouping, so an analysis of every ICU stay cannot be configured. Keeping only the first ICU admission per patient is recommended; requesting a plan change is the alternative.',
           '当前数据包没有提供患者分组，无法按全部 ICU 住院配置分析。推荐仅保留每位患者的首次 ICU 入住；也可以改为提出计划修改。',
+        )
+        : repeatedAdmissionsRecommended && patientVariance === 'bootstrap'
+        ? tr(
+          'The analysis unit is an ICU stay and repeated stays are already handled with a bootstrap that resamples patients, so keeping every eligible stay is recommended.',
+          '当前以 ICU stay 为分析单位，并已设置按患者重抽样的 bootstrap，因此推荐保留全部符合条件的 ICU 入住。',
         )
         : repeatedAdmissionsRecommended
         ? tr(

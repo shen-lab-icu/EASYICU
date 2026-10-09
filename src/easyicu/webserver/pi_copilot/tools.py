@@ -32,6 +32,7 @@ from easyicu.webserver import (
     settings,
     sources,
     study_contexts,
+    target_trial_setup,
 )
 from easyicu.webserver.copilot_data_workbench import (
     CopilotDataWorkbenchError,
@@ -2668,6 +2669,39 @@ def _update_study_context(
     )
 
 
+def _state_target_trial(
+    context: ToolExecutionContext, params: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Start the compile of the target trial the conversation states.
+
+    ``target_trial_setup`` owns the statement, its refusals and the job; every
+    refusal it can make comes before the one-use Configure grant is spent.
+    """
+
+    study = _bound_context(context.session.binding)
+    if not study or not study.get("id"):
+        return _result(
+            context,
+            status="blocked",
+            code="study_context_required",
+            summary="Bind the study before stating its target trial.",
+            owner="easyicu.webserver.study_contexts",
+        )
+    try:
+        statement = target_trial_setup.check_target_trial_statement(study, params)
+    except target_trial_setup.TargetTrialSetupError as exc:
+        return _result(context, **exc.tool_result())
+    grant_block = _consume_action(context, "configure")
+    if grant_block is not None:
+        return grant_block
+    try:
+        job = target_trial_setup.submit_target_trial_compile(study, statement)
+    except target_trial_setup.TargetTrialSetupError as exc:
+        return _result(context, **exc.tool_result())
+    context.invalidate_authority(target_trial_setup.TARGET_TRIAL_COMPILE_SUBMITTED)
+    return _result(context, **target_trial_setup.submitted_tool_result(study, job))
+
+
 def _idea_projection(payload: Mapping[str, Any]) -> Dict[str, Any]:
     ideas = payload.get("idea_ledger")
     ideas = ideas if isinstance(ideas, list) else []
@@ -4802,6 +4836,7 @@ _DISPATCH = {
     "easyicu_inspect_interpretation": _inspect_interpretation,
     "easyicu_inspect_manuscript": _inspect_manuscript,
     "easyicu_update_study_context": _update_study_context,
+    "easyicu_state_target_trial": _state_target_trial,
     "easyicu_mine_ideas": _mine_ideas,
     "easyicu_search_literature": _search_literature,
     "easyicu_adjudicate_idea_literature": _adjudicate_idea_literature,

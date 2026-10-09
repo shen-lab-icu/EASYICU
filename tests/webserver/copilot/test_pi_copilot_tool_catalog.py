@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from pathlib import Path
 
 import pytest
 
+from easyicu.webserver import target_trial_setup
 from easyicu.webserver.pi_copilot import tools
 from easyicu.webserver.pi_copilot.tool_catalog import (
     ALLOWED_TOOLS,
@@ -14,8 +16,11 @@ from easyicu.webserver.pi_copilot.tool_catalog import (
     MUTATING_HOST_TOOLS,
     TOOL_ARGUMENTS,
     TOOL_CATALOG,
+    TOOL_MODEL_SCHEMAS,
     load_tool_catalog,
 )
+from tests.support.node import run_node
+from tests.support.target_trial import target_trial_population, target_trial_spec
 
 
 def test_catalog_is_the_ordered_policy_authority_for_python_dispatch() -> None:
@@ -34,8 +39,8 @@ def test_node_runtime_validates_the_current_catalog_schema_and_arguments() -> No
         Path(tools.__file__).with_name("node_app") / "src" / "main.mjs"
     ).read_text(encoding="utf-8")
 
-    assert 'payload?.schema_version !== "easyicu.pi-tool-catalog/2"' in source
-    assert '"host_mutating", "data_source_required", "arguments"' in source
+    assert 'payload?.schema_version !== "easyicu.pi-tool-catalog/3"' in source
+    assert '"host_mutating", "data_source_required", "arguments", "model_schema"' in source
     assert 'const TOOL_ARGUMENT_FIELDS = new Set(["model", "host", "required"])' in source
 
 
@@ -61,6 +66,27 @@ def test_node_runtime_validates_the_current_catalog_schema_and_arguments() -> No
         lambda payload: payload["tools"][0].update(
             arguments={"model": "a", "host": [], "required": []}
         ),
+        # A generated parameter schema offers the model exactly its arguments.
+        lambda payload: payload["tools"][0].pop("model_schema"),
+        lambda payload: payload["tools"][0].update(model_schema="a"),
+        lambda payload: payload["tools"][0].update(
+            model_schema={"type": "object", "properties": {"a": {}}}
+        ),
+        lambda payload: payload["tools"][0].update(
+            model_schema={
+                "type": "object",
+                "properties": {"a": {}, "b": {}},
+                "additionalProperties": False,
+            }
+        ),
+        lambda payload: payload["tools"][0].update(
+            model_schema={
+                "type": "object",
+                "properties": {"a": {}},
+                "required": ["b"],
+                "additionalProperties": False,
+            }
+        ),
     ],
 )
 def test_catalog_rejects_extension_duplicate_and_unknown_policy(
@@ -68,7 +94,7 @@ def test_catalog_rejects_extension_duplicate_and_unknown_policy(
     mutation,
 ) -> None:
     payload = {
-        "schema_version": "easyicu.pi-tool-catalog/2",
+        "schema_version": "easyicu.pi-tool-catalog/3",
         "_arguments": ["note for whoever edits this file"],
         "tools": [
             {
@@ -79,6 +105,7 @@ def test_catalog_rejects_extension_duplicate_and_unknown_policy(
                 "host_mutating": False,
                 "data_source_required": False,
                 "arguments": {"model": ["a"], "host": [], "required": ["a"]},
+                "model_schema": None,
             }
         ],
     }
@@ -116,6 +143,11 @@ def _typebox_properties(source: str, tool_name: str) -> list[str]:
     rest = tail[params_at:].lstrip()
     if rest.startswith("empty"):
         return []
+    if rest.startswith("catalogParameters("):
+        assert rest.startswith(f'catalogParameters("{tool_name}")'), (
+            f"{tool_name} reads another tool's catalog schema"
+        )
+        return list(TOOL_MODEL_SCHEMAS[tool_name]["properties"])
     assert rest.startswith("Type.Object("), (
         f"{tool_name} declares parameters in an unexpected shape"
     )
@@ -196,3 +228,75 @@ def test_handlers_no_longer_restate_their_own_argument_lists() -> None:
         "handler that restates `allowed=` reintroduces the drift this replaced"
     )
     assert "_require_catalog_args(tool_name, arguments)" in source
+
+
+# ---------------------------------------------------------------------------
+# A schema the host generates is the catalog's, and main.mjs reads it there
+# ---------------------------------------------------------------------------
+#
+# The target trial tool's arguments are the host's own menus (TargetTrialSpec
+# and PopulationSpec), about 15 KB of nested choices.  Restating them in
+# TypeBox would be a second copy kept aligned by hand, so the catalog row
+# carries the generated schema and main.mjs declares the tool from it.
+
+
+def test_the_target_trial_tool_offers_the_schema_the_host_generates() -> None:
+    generated = target_trial_setup.target_trial_statement_schema()
+    assert TOOL_MODEL_SCHEMAS == {target_trial_setup.TARGET_TRIAL_STATE_TOOL: generated}, (
+        "tool_catalog.json's model_schema is stale; replace it with "
+        "json.dumps(target_trial_setup.target_trial_statement_schema(), indent=2, "
+        "sort_keys=True)"
+    )
+    row = next(
+        row for row in TOOL_CATALOG if row.name == target_trial_setup.TARGET_TRIAL_STATE_TOOL
+    )
+    assert (row.policy_group, row.execution_mode) == ("control", "sequential")
+    assert (row.host_mutating, row.data_source_required) == (True, True)
+    assert set(row.arguments.required) == set(generated["required"])
+
+    encoded = json.dumps(generated)
+    # main.mjs passes the schema to Pi as it is: nothing it would need to resolve.
+    for keyword in ('"$ref"', '"$defs"', '"discriminator"'):
+        assert keyword not in encoded
+
+
+def test_main_mjs_reads_each_generated_schema_from_its_own_row() -> None:
+    source = _MAIN_MJS.read_text(encoding="utf-8")
+    readers = re.findall(
+        r'name: "(easyicu_[a-z0-9_]+)"[^\n]*?parameters: catalogParameters\("(easyicu_[a-z0-9_]+)"\)',
+        source,
+    )
+    assert readers == [(name, name) for name in TOOL_MODEL_SCHEMAS]
+    assert source.count("catalogParameters(") == len(TOOL_MODEL_SCHEMAS) + 1
+    # hostTool refuses, at session start, a row and a definition that disagree.
+    assert "pi_tool_definition_schema_source_mismatch" in source
+
+
+def test_pi_validates_a_statement_against_the_catalog_schema() -> None:
+    node = shutil.which("node")
+    app_dir = _MAIN_MJS.parents[1]
+    if not node or not (app_dir / "node_modules").is_dir():
+        pytest.skip("Pinned Pi Node runtime is unavailable")
+    statement = {
+        "spec": target_trial_spec().model_dump(mode="json"),
+        "population_spec": target_trial_population().model_dump(mode="json"),
+    }
+    schema = TOOL_MODEL_SCHEMAS[target_trial_setup.TARGET_TRIAL_STATE_TOOL]
+    script = f"""
+import {{ Type }} from "typebox";
+// The copy the agent loop validates tool calls with.
+import {{ validateToolArguments }} from "./node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/utils/validation.js";
+const tool = {{ name: "t", description: "t", parameters: Type.Unsafe({json.dumps(schema)}) }};
+const statement = {json.dumps(statement)};
+const call = (args) => ({{ type: "toolCall", id: "c", name: "t", arguments: args }});
+const outcome = (args) => {{
+  try {{ validateToolArguments(tool, call(args)); return "accepted"; }} catch {{ return "refused"; }}
+}};
+const nested = structuredClone(statement);
+nested.spec.unknown = true;
+const missing = {{ spec: statement.spec }};
+console.log(JSON.stringify([outcome(statement), outcome({{ ...statement, extra: 1 }}), outcome(nested), outcome(missing)]));
+"""
+    completed = run_node(node, script, module=True, cwd=app_dir, timeout=30, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert json.loads(completed.stdout) == ["accepted", "refused", "refused", "refused"]

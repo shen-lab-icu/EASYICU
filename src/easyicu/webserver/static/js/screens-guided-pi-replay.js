@@ -152,6 +152,41 @@
     const runnerImageMismatch = errorCode === 'research_pipeline_runner_image_mismatch';
     const created = Number(job && job.created_at_epoch);
     const finished = Number(job && job.finished_at_epoch);
+    // A target trial compile (kind target-trial-compile): its own result says
+    // what it found, and the study's trial card holds the record.
+    const trialCompile = job && job.target_trial_compile && typeof job.target_trial_compile === 'object'
+      ? job.target_trial_compile : null;
+    if (trialCompile || String(job && job.kind || '') === 'target-trial-compile') {
+      const copy = window.EasyICU.guidedPi.optional('targetTrialCopy');
+      const line = code => (copy && code && copy.line(code, translate)) || '';
+      const outcome = trialCompile || {};
+      const status = String(job.status || '');
+      const compiled = outcome.status === 'compiled';
+      const stopped = outcome.status === 'stopped';
+      const failed = !compiled && !stopped && (status === 'failed' || outcome.status === 'failed');
+      const title = status === 'running'
+        ? translate('Compiling the target trial', '正在编译目标试验')
+        : compiled ? translate('Target trial compiled', '目标试验已编成')
+        : stopped ? translate('Target trial was not compiled', '目标试验没有编成')
+        : status === 'cancelled' ? translate('Target trial compile cancelled', '目标试验编译已取消')
+        : failed ? translate('Target trial compile failed', '目标试验编译失败')
+        : translate('Target trial compile ended', '目标试验编译已结束');
+      return {
+        expanded: false,
+        durationKnown: Number.isFinite(created) && Number.isFinite(finished) && finished >= created,
+        startedAt: Number.isFinite(created) ? created * 1000 : null,
+        endedAt: Number.isFinite(finished) ? finished * 1000 : null,
+        title,
+        terminalLabel: compiled
+          ? outcome.approvable === true
+            ? translate('Check each line on the trial card, then approve it', '请在试验卡片上逐行核对后批准')
+            : translate('The trial card lists what holds its approval', '试验卡片列出了挡住批准的各项')
+          : stopped ? (line(String(outcome.reason_code || '')) || String(outcome.detail || '') || title)
+          : failed ? (line('target_trial_compile_failed') || title)
+          : title,
+        blocked: stopped || (compiled && outcome.approvable !== true),
+      };
+    }
     const reportOnly = Boolean(job && (job.report_only === true
       || rows(job.progress).some(event => event.step === 'report_repair')));
     if (reportOnly) {

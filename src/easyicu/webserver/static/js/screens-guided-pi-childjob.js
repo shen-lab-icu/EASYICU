@@ -30,7 +30,13 @@
       host.setChildJobId('');
       workflowStep = '';
     }
+    // A target trial compile, named by its tool result or by its job kind.
+    function isTrialCompile(code) {
+      const value = String(code || '');
+      return value === 'easyicu_target_trial_compile_submitted' || value === 'target-trial-compile';
+    }
     function runningJobTitle(code) {
+      if (isTrialCompile(code)) return tr('Compiling the target trial on the study’s data', '正在用研究数据编译目标试验');
       const value = String(code || '').toLowerCase();
       if (value.includes('report_repair')) return tr('Revising the report from existing analysis', '正在复用分析结果修订报告');
       if (value.includes('extraction')) return tr('Extracting and validating study data', '正在提取并验证研究数据');
@@ -49,8 +55,11 @@
         id: 'easyicu-job-' + jobId, role: 'activity', status: 'running',
         startedAt, childJobId: jobId, runningTitle: runningJobTitle(code), steps: [], expanded: true,
         reportOnly: String(code || '').includes('report_repair'),
+        trialCompile: isTrialCompile(code),
       };
-      const label = activity.reportOnly
+      const label = activity.trialCompile
+        ? tr('Target trial compile submitted', '目标试验编译已提交')
+        : activity.reportOnly
         ? tr('Report revision submitted; existing analysis reused', '报告修订已提交；复用已有分析')
         : code === 'easyicu_extraction_submitted'
         ? tr('EasyICU data extraction submitted', 'EasyICU 数据提取任务已提交')
@@ -158,6 +167,10 @@
             gate_reason_code: gate && gate.reason,
             human_review_pending: pending,
             report_only: activity.reportOnly || (event.result && event.result.report_revision && event.result.report_revision.revision_id === jobId),
+            ...(activity.trialCompile ? {
+              kind: 'target-trial-compile',
+              target_trial_compile: event.result && event.result.target_trial_compile,
+            } : {}),
           }, tr) : {};
         const failed = event.status === 'failed' || event.status === 'cancelled';
         const blocked = Boolean(presentation.blocked);

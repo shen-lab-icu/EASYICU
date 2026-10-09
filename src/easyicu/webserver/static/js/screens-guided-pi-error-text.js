@@ -91,6 +91,9 @@
       if (error.code === 'research_pipeline_export_cohort_invalid') {
         return tr('The study’s cohort or the bound data package’s recorded cohort cannot be executed as an extraction. Check the study’s cohort, or choose another data source.', '本研究的人群设置或绑定数据包记录的人群无法按提取规则执行。请检查人群设置，或改用其他数据源。');
       }
+      if (error.code === 'research_pipeline_target_trial_plans_on_data') {
+        return tr('This study’s target trial is approved, so its plan is generated on the study’s data, not as a metadata-only candidate. Generate the plan.', '这项研究的目标试验已批准，计划要按研究数据生成，不能只读元数据生成候选计划。请直接生成计划。');
+      }
       // D-P3-5: keep the URL as plain text (no <a>) — errorText() returns RAW
       // copy esc'd by callers per D-P2-2, so embedded HTML would be escaped and
       // never clickable. Copy the address into the browser manually. Terminology

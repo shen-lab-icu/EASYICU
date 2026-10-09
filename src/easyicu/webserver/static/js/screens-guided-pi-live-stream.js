@@ -7,6 +7,13 @@
 (function () {
   'use strict';
 
+  // A tool result that hands the conversation a background job: the turn's
+  // authority is spent, and the conversation follows the job.
+  const SUBMITTED_JOB_CODES = new Set([
+    'easyicu_extraction_submitted', 'easyicu_run_submitted', 'easyicu_full_run_submitted',
+    'easyicu_report_repair_submitted', 'easyicu_target_trial_compile_submitted',
+  ]);
+
   function create(host) {
     const {
       state, timeMs, ensureActivity, upsertActivityStep, finishActivity,
@@ -98,13 +105,13 @@
         if (localWorkspace && preview && preview.open) {
           preview.open(localWorkspace, projectId());
         }
-        if (event.host_rebind_after_turn === true || ['study_context_updated', 'easyicu_extraction_submitted', 'easyicu_run_submitted', 'easyicu_full_run_submitted', 'easyicu_report_repair_submitted'].includes(String(event.code || ''))) {
+        if (event.host_rebind_after_turn === true || String(event.code || '') === 'study_context_updated' || SUBMITTED_JOB_CODES.has(String(event.code || ''))) {
           state.pendingAuthorityRebind = true;
         }
-        if (/^(easyicu_(research_workflow_projected|idea_|active_export_reused|extraction_|run_|full_run_|report_repair_|result_|manuscript_))/.test(String(event.code || ''))) {
+        if (/^(easyicu_(research_workflow_projected|idea_|active_export_reused|extraction_|run_|full_run_|report_repair_|result_|manuscript_|target_trial_))/.test(String(event.code || ''))) {
           loadWorkflow().then(render).catch(() => {});
         }
-        if (event.job_id && ['easyicu_extraction_submitted', 'easyicu_run_submitted', 'easyicu_full_run_submitted', 'easyicu_report_repair_submitted'].includes(String(event.code || ''))) {
+        if (event.job_id && SUBMITTED_JOB_CODES.has(String(event.code || ''))) {
           watchChildJob(String(event.job_id), String(event.code || ''));
         }
         HOST_JOBS.noteToolResult(event);
