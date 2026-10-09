@@ -279,7 +279,8 @@ def test_a_runtime_that_dies_mid_run_is_attributable_not_anonymous() -> None:
     )
     # ...and the same code the launch preflight raises, so one cause has one name.
     assert (
-        type(error).__name__ in agent_pipeline_runs._SAFE_PIPELINE_EXCEPTION_TYPES
+        agent_pipeline_runs._recorded_exception_type(error)
+        == "ExecutionRuntimeUnavailableError"
     )
 
 
@@ -288,10 +289,10 @@ def test_the_persisted_diagnostic_records_the_type_and_not_the_socket_path(
 ) -> None:
     """Attributable, still leak-closed.
 
-    ``exception_types`` was empty because a bare ``RuntimeError`` is not on the
-    safe list -- correctly so. The repair is a typed exception, not a wider list
-    and not persisted exception text: the daemon's own wording names a host
-    path and must not survive the boundary.
+    ``exception_types`` was empty because a bare ``RuntimeError`` is not an
+    EasyICU type -- correctly so. The repair is a typed exception, not recording
+    builtin types and not persisted exception text: the daemon's own wording
+    names a host path and must not survive the boundary.
     """
 
     reason = runner_module._classify_docker_failure(_DAEMON_DOWN_STDERR, "")
