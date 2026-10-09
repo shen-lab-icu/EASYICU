@@ -161,6 +161,9 @@ _STUDY_SETUP_FIELDS = frozenset(
     }
 )
 
+#: The one design the launch gate judges at setup (see update_study_context).
+_DESIGN_PAIR = frozenset({"analysis_design", "trajectory_design"})
+
 _NESTED_STUDY_PATCH_FIELDS = frozenset(
     {
         "cohort",
@@ -1625,6 +1628,7 @@ def update_study_context(
             },
         )
 
+    unsaved_design: Optional[Dict[str, Any]] = None
     if "analysis_design" in params or "trajectory_design" in params:
         # The two halves are one design: changing either can make the pair
         # unexecutable, and the launch gate owns that judgement.
@@ -1632,14 +1636,52 @@ def update_study_context(
         try:
             agent_pipeline_runs.validate_analysis_design_for_execution(proposed)
         except agent_pipeline_runs.ResearchPipelineRunError as exc:
-            return _result(
-                context,
-                status="blocked",
-                code=exc.code,
-                summary=str(exc),
-                owner="easyicu.webserver.agent_pipeline_runs.analysis_design",
-                details=exc.details,
-            )
+            # The gate judges the design pair alone; the rest of the setup
+            # passed its own owner above. Withhold the pair and save the
+            # rest: a trajectory family arrives before its design, which the
+            # plan decision declares from the reviewed plan, and must not
+            # cost the population the researcher stated.
+            rest = {key: value for key, value in patch.items() if key not in _DESIGN_PAIR}
+            # Only a change besides the design is saved. A confirmation may
+            # confirm the withheld design, and a slot that already holds the
+            # proposed value (the study id among them) changes nothing; such a
+            # save would spend the turn's one-use configure grant, which a
+            # corrected design still needs.
+            unchanged = {"confirmations"} | {
+                key for key, value in rest.items() if (current or {}).get(key) == value
+            }
+            if not set(rest) - unchanged:
+                return _result(
+                    context,
+                    status="blocked",
+                    code=exc.code,
+                    summary=str(exc),
+                    owner="easyicu.webserver.agent_pipeline_runs.analysis_design",
+                    details=exc.details,
+                )
+            try:
+                patch = study_contexts.validate_context_update(
+                    rest,
+                    current_context=current,
+                    lifecycle_write=False,
+                    _server_concept_selection_authority_write=True,
+                )
+            except study_contexts.StudyContextError as rest_exc:
+                return _result(
+                    context,
+                    status="blocked",
+                    code=str(rest_exc.detail.get("error") or "study_context_update_blocked"),
+                    summary="The typed StudyContext owner rejected the setup without its design.",
+                    owner="easyicu.webserver.study_contexts",
+                    details={"withheld_design_code": exc.code},
+                )
+            unsaved_design = {
+                "fields": sorted(_DESIGN_PAIR.intersection(params)),
+                "code": exc.code,
+                "summary": str(exc),
+                "details": dict(exc.details or {}),
+            }
+            analysis_design_recovery = None
 
     grant_block = _consume_action(context, "configure")
     if grant_block is not None:
@@ -1689,6 +1731,13 @@ def update_study_context(
             "and review the complete revised plan before analysis; no old plan "
             "approval or execution authority transfers to this configuration."
         )
+    if unsaved_design is not None:
+        summary += (
+            f" NOT saved this turn: {', '.join(unsaved_design['fields'])} "
+            f"({unsaved_design['code']}): {unsaved_design['summary']} The rest of "
+            "the setup is saved. Tell the researcher which design was not saved "
+            "and why; the candidate plan proposes it for their review."
+        )
     if omitted_unconfirmed_fields:
         # Preserve the omission and reason, but let the workflow decide when
         # a choice is needed. Execution requirements must not become an
@@ -1716,6 +1765,7 @@ def update_study_context(
             "unconfirmed_omissions": unconfirmed_omissions,
             **({"analysis_design_recovery": analysis_design_recovery}
                if analysis_design_recovery is not None else {}),
+            **({"unsaved_design": unsaved_design} if unsaved_design is not None else {}),
         },
     )
     context.invalidate_authority("study_context_updated")
