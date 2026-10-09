@@ -1,0 +1,81 @@
+{
+  "schema_version": "easyicu.treatment_capture_registry/1",
+  "description": "What an absent record of a treatment concept means, per database. Each entry's basis says who stated it: a development_assumption is confirmed by each study's researcher at plan approval, and only an explicit act of a data owner or user upgrades it. Which drugs a class counts is a development reading too, confirmed with the treatment.",
+  "treatment_classes": {
+    "inotrope": {
+      "agents": ["dobutamine", "milrinone"],
+      "note": "Drugs given to raise cardiac contractility rather than vascular tone."
+    },
+    "vasoactive": {
+      "agents": [
+        "angiotensin_ii",
+        "dobutamine",
+        "dopamine",
+        "epinephrine",
+        "milrinone",
+        "norepinephrine",
+        "phenylephrine",
+        "vasopressin"
+      ],
+      "note": "Any vasopressor or inotrope."
+    },
+    "vasopressor": {
+      "agents": [
+        "angiotensin_ii",
+        "dopamine",
+        "epinephrine",
+        "norepinephrine",
+        "phenylephrine",
+        "vasopressin"
+      ],
+      "note": "Drugs given to raise vascular tone; dopamine and epinephrine are also inotropic and are counted here by their usual use."
+    }
+  },
+  "entries": [
+    {
+      "database": "miiv",
+      "concept": "vaso_ind",
+      "agents": ["dobutamine", "dopamine", "epinephrine", "norepinephrine"],
+      "definition": {
+        "dictionary": "concept-dict.json",
+        "components": [
+          {"component": "dobu_dur", "agent": "dobutamine"},
+          {"component": "dopa_dur", "agent": "dopamine"},
+          {"component": "epi_dur", "agent": "epinephrine"},
+          {"component": "norepi_dur", "agent": "norepinephrine"}
+        ]
+      },
+      "capture_setting": "icu",
+      "absent_in_capture": "absent_row_is_no_event",
+      "pre_admission_visible": false,
+      "basis": "development_assumption",
+      "declared_by": "EasyICU development, causal owner design 2026-10-09 (section 10.2)",
+      "declared_at": "2026-10-09",
+      "note": "MIMIC-IV charts these continuous infusions in the ICU's input events, clipped to ICU discharge; an infusion started before ICU admission is seen only from ICU arrival."
+    },
+    {
+      "database": "miiv",
+      "concept": "other_vaso",
+      "agents": ["angiotensin_ii", "milrinone", "phenylephrine", "vasopressin"],
+      "definition": {
+        "dictionary": "sofa2-dict.json",
+        "source_items": [
+          {"item_id": 221749, "label": "Phenylephrine", "agent": "phenylephrine"},
+          {"item_id": 221986, "label": "Milrinone", "agent": "milrinone"},
+          {"item_id": 222315, "label": "Vasopressin", "agent": "vasopressin"},
+          {"item_id": 229630, "label": "Phenylephrine 50/250", "agent": "phenylephrine"},
+          {"item_id": 229632, "label": "Phenylephrine 200/250", "agent": "phenylephrine"},
+          {"item_id": 229709, "label": "Angiotensin II Giapreza mg", "agent": "angiotensin_ii"},
+          {"item_id": 229764, "label": "Angiotensin II Giapreza ng", "agent": "angiotensin_ii"}
+        ]
+      },
+      "capture_setting": "icu",
+      "absent_in_capture": "absent_row_is_no_event",
+      "pre_admission_visible": false,
+      "basis": "development_assumption",
+      "declared_by": "EasyICU development, causal owner design 2026-10-09 (section 10.2)",
+      "declared_at": "2026-10-09",
+      "note": "MIMIC-IV charts these drugs in the ICU's input events; a use before ICU admission is not recorded there. Item labels as the dictionary's source note gives them."
+    }
+  ]
+}
