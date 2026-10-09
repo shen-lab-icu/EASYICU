@@ -272,6 +272,23 @@
       };
     }
 
+    const DATABASE_NAMES = Object.freeze({
+      miiv: 'MIMIC-IV', mimic: 'MIMIC-III', eicu: 'eICU', aumc: 'AmsterdamUMCdb', hirid: 'HiRID', sic: 'SICdb',
+    });
+    /* The one full database the opening question names (not a demo), while
+       this conversation still needs a data source; otherwise null. The card
+       then opens source selection for that database instead of asking which
+       one. Naming it still binds nothing. */
+    function namedDatabase() {
+      if (!host.session() || !requiresConfirmation() || namedDemo()) return null;
+      const first = host.messages().find(row => row && row.role === 'user' && String(row.text || '').trim());
+      const text = first ? String(first.text).normalize('NFKC') : '';
+      if (!text || new RegExp(DEMO_WORD, 'i').test(text)) return null;
+      const next = window.EasyICU.guidedPi.optional('nextActions');
+      const key = next && typeof next.databaseChoiceKey === 'function' ? next.databaseChoiceKey(text) : '';
+      return key && DATABASE_NAMES[key] ? { key, label: DATABASE_NAMES[key] } : null;
+    }
+
     async function useNamedDemo(sourceId) {
       const offer = namedDemo();
       const caller = api().startOfficialDemoSourcePrepare;
@@ -331,7 +348,7 @@
       </article>`;
     }
 
-    return Object.freeze({ handleAction, namedDemo, noteToolResult, renderNotice, stopAll, sync, useNamedDemo, watchDemoSourceJob });
+    return Object.freeze({ handleAction, namedDatabase, namedDemo, noteToolResult, renderNotice, stopAll, sync, useNamedDemo, watchDemoSourceJob });
   }
 
   window.EasyICU.guidedPi.declare('hostJobs', { create });

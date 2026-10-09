@@ -247,9 +247,58 @@ function boundedLabel(value) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, 120);
 }
 
+// The one database the researcher's own words chose. The host's source
+// catalog resolved it from the same text (selected_database) and recommends
+// its most complete EasyICU export, so the reply offers that export instead
+// of asking which database to use. A bare "MIMIC" stays ambiguous.
+// Same database words as the host's source catalog (tools.py
+// _database_named_in_message): the reply credits the researcher only with a
+// database their own text names.
+const DATABASE_WORDS = [
+  ["miiv", /\bmimic[\s_-]*(?:iv|4)\b/],
+  ["mimic", /\bmimic[\s_-]*(?:iii|3)\b/],
+  ["eicu", /\beicu\b/],
+  ["aumc", /\b(?:amsterdamumcdb|aumc)\b/],
+  ["hirid", /\bhirid\b/],
+  ["sic", /\b(?:sicdb|sic)\b/],
+];
+function databaseNamedIn(text) {
+  const value = String(text || "").normalize("NFKC").toLowerCase();
+  const hit = DATABASE_WORDS.find(([, pattern]) => pattern.test(value));
+  return hit ? hit[0] : "";
+}
+
+function namedDatabaseText(language, catalog, text) {
+  const selected = catalog?.selected_database;
+  if (!selected || typeof selected !== "object" || catalog?.database_selection_deferred === true) return "";
+  if (!selected.database || databaseNamedIn(text) !== String(selected.database)) return "";
+  const label = [boundedLabel(selected.label), selected.reference_release ? `v${boundedLabel(selected.reference_release)}` : ""]
+    .filter(Boolean).join(" ");
+  if (!label) return "";
+  const zh = language === "zh";
+  const recommended = catalog?.recommended_source && typeof catalog.recommended_source === "object"
+    ? catalog.recommended_source : null;
+  if (recommended && recommended.availability === "available_in_easyicu") {
+    const stays = Number(recommended.aggregate?.stays);
+    const modules = Number(recommended.module_count);
+    const facts = [
+      Number.isFinite(stays) && stays > 0 ? (zh ? `${stays.toLocaleString("en-US")} 个 ICU 入住记录` : `${stays.toLocaleString("en-US")} ICU stays`) : "",
+      Number.isFinite(modules) && modules > 0 ? (zh ? `${modules} 个数据模块` : `${modules} data modules`) : "",
+    ].filter(Boolean).join(zh ? "，" : ", ");
+    return zh
+      ? `研究问题已保存。你的问题指定了 ${label}，EasyICU 中已有可直接使用的 ${label} 数据${facts ? `（${facts}）` : ""}。确认数据源不等于批准分析。\n\n**下一步：**\n- 使用 EasyICU 中已准备好的 ${label} 数据导出（推荐）`
+      : `The research question is saved. Your question names ${label}, and EasyICU already has ${label} data ready to use${facts ? ` (${facts})` : ""}. Confirming a source does not approve analysis.\n\n**Next step:**\n- Use the prepared ${label} EasyICU data export (recommended)`;
+  }
+  return zh
+    ? `研究问题已保存。你的问题指定了 ${label}，但 EasyICU 里还没有登记这份数据。\n\n**下一步：**在下方数据源卡片选择本机的 ${label} 数据目录；EasyICU 登记后会拟定研究计划。`
+    : `The research question is saved. Your question names ${label}, but EasyICU has no registered copy of it yet.\n\n**Next step:** Choose your local ${label} folder in the data-source card below; EasyICU registers it and then proposes the research plan.`;
+}
+
 function dataSourceSelectionText(language, catalog, text = "") {
   const demo = namedOfficialDemo(text, catalog);
   if (demo) return namedDemoText(language, demo);
+  const named = namedDatabaseText(language, catalog, text);
+  if (named) return named;
   const rows = Array.isArray(catalog?.supported_databases)
     ? catalog.supported_databases.filter((row) => row && typeof row === "object")
     : [];
@@ -258,23 +307,14 @@ function dataSourceSelectionText(language, catalog, text = "") {
     .filter(Boolean)
     .slice(0, 6)
     .map((label) => language === "zh" ? `- 使用 ${label}` : `- Use ${label}`);
-  const missingReleaseLabels = rows
-    .filter((row) => row.reference_release === null)
-    .map((row) => boundedLabel(row.display_label || row.label))
-    .filter(Boolean);
   if (!choices.length) {
     choices.push(...(language === "zh"
       ? ["- 查看并选择 EasyICU 支持的数据库", "- 选择并绑定其他本地 ICU 数据源"]
       : ["- View and choose a supported EasyICU database", "- Choose and bind another local ICU data source"]));
   }
-  const releaseNote = missingReleaseLabels.length
-    ? (language === "zh"
-      ? `目录没有为 ${missingReleaseLabels.join("、")} 声明单一参考版本，因此按规范名称显示，EasyICU 不会猜测版本。\n\n`
-      : `The catalog does not declare a single reference release for ${missingReleaseLabels.join(", ")}, so EasyICU shows the canonical name and does not invent a version.\n\n`)
-    : "";
   return language === "zh"
-    ? `研究问题已保存。当前项目尚未选择本次会话的数据源；在确认具体数据源前，EasyICU 不会继续定义研究设计或生成正式研究计划。\n\n${releaseNote}**下一步：**请先选择数据库：\n${choices.join("\n")}`
-    : `The research question is saved. This project has not selected a data source for the conversation; EasyICU will not continue defining the study design or generate the formal research plan until a specific source is confirmed.\n\n${releaseNote}**Next step:** Choose the database first:\n${choices.join("\n")}`;
+    ? `研究问题已保存。请先选择这项研究使用的数据库，EasyICU 随后拟定研究计划。\n\n**下一步：**\n${choices.join("\n")}`
+    : `The research question is saved. Choose the database for this study first; EasyICU then proposes the research plan.\n\n**Next step:**\n${choices.join("\n")}`;
 }
 
 /**

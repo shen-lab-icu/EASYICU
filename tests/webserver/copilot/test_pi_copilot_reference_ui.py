@@ -313,6 +313,69 @@ def test_demo_source_preparation_reports_back_and_offers_one_confirmation() -> N
     assert ".gpi-host-notice-actions{" in pi_css
 
 
+def test_a_question_that_names_a_full_database_opens_its_source_selection() -> None:
+    """「用 MIMIC-IV 看…」 gets a card for MIMIC-IV, not 「请选择数据源」.
+
+    The card names the database from the researcher's own first message and
+    opens source selection scoped to it; a demo mention, a bare "MIMIC", or
+    two databases keep the ordinary card. Naming it still binds nothing.
+    """
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    host_jobs = _read("js/screens-guided-pi-host-jobs.js")
+    consent = _read("js/screens-guided-pi-data-consent.js")
+    next_actions = _read("js/screens-guided-pi-next-actions.js")
+    events = _read("js/screens-guided-pi-events.js")
+    assert "DATA_CONSENT.databaseFromEvent(event)" in events
+    assert "authorizeDataSource(dataSourceAction, database ? { database } : undefined);" in events
+    script = f"""
+      global.window = global;
+      window.EU_LANG = 'zh';
+      eval({_ESCAPE_OWNER!r});
+      eval({next_actions!r});
+      eval({host_jobs!r});
+      eval({consent!r});
+      let messages = [];
+      const host = {{
+        tr: (en, zh) => zh,
+        api: () => ({{ loadOfficialDemoSources: async () => ({{ sources: [] }}) }}),
+        dataConsent: {{ requiresConfirmation: () => true }},
+        session: () => ({{ session_id: 's1' }}), messages: () => messages, render() {{}},
+        busy: () => false, workflowReceipts: () => [], setWorkflowReceipts() {{}}, setError() {{}}, errorText: e => String(e),
+      }};
+      const owner = window.EasyICU.guidedPi.require('hostJobs').create(host);
+      const consent = window.EasyICU.guidedPi.require('dataConsent');
+      const ask = text => {{ messages = [{{ role: 'user', text }}]; const named = owner.namedDatabase(); return named ? named.key : null; }};
+      ask('warm the demo catalog');
+      setTimeout(() => {{
+        const out = {{
+          miiv: ask('我想用 MIMIC-IV 看一下 Sepsis-3 脓毒症有多常见'),
+          eicu: ask('在 eICU 数据里评估乳酸'),
+          bareMimic: ask('用 MIMIC 数据看乳酸'),
+          demo: ask('在 eICU demo 数据里评估乳酸'),
+        }};
+        ask('我想用 MIMIC-IV 看一下 Sepsis-3 脓毒症有多常见');
+        const card = consent.render({{ data_source_authorization: {{ status: 'pending' }} }}, {{
+          tr: (en, zh) => zh, esc: value => String(value), icon: () => '', namedDemo: null, namedDatabase: owner.namedDatabase(),
+        }});
+        out.card = card.includes('你的问题指定了 MIMIC-IV') && card.includes('data-gpi-data-source-database="miiv"')
+          && card.includes('选择 MIMIC-IV 数据');
+        const target = {{ dataset: {{ gpiDataSourceAction: 'begin_local_selection', gpiDataSourceDatabase: 'miiv' }} }};
+        const event = {{ target: {{ closest: () => target }} }};
+        out.action = [consent.actionFromEvent(event), consent.databaseFromEvent(event)];
+        owner.stopAll();
+        process.stdout.write(JSON.stringify(out));
+      }}, 10);
+    """
+    completed = subprocess.run([node, "--eval", script], check=True, capture_output=True, text=True)
+    assert json.loads(completed.stdout) == {
+        "miiv": "miiv", "eicu": "eicu", "bareMimic": None, "demo": None,
+        "card": True, "action": ["begin_local_selection", "miiv"],
+    }
+
+
 def test_a_question_that_names_an_official_demo_is_offered_that_demo() -> None:
     """「在 eICU demo 数据里…」 should not cost four model turns of 选哪个库.
 
@@ -333,7 +396,7 @@ def test_a_question_that_names_an_official_demo_is_offered_that_demo() -> None:
     consent = _read("js/screens-guided-pi-data-consent.js")
     view = _read("js/screens-guided-pi-session-view.js")
     events = _read("js/screens-guided-pi-events.js")
-    assert "return Object.freeze({ handleAction, namedDemo, noteToolResult, renderNotice, stopAll, sync, useNamedDemo, watchDemoSourceJob });" in host_jobs
+    assert "return Object.freeze({ handleAction, namedDatabase, namedDemo, noteToolResult, renderNotice, stopAll, sync, useNamedDemo, watchDemoSourceJob });" in host_jobs
     assert "const caller = api().startOfficialDemoSourcePrepare;" in host_jobs
     assert "namedDemo: HOST_JOBS && typeof HOST_JOBS.namedDemo === 'function' ? HOST_JOBS.namedDemo() : null" in view
     assert "if (namedDemo && HOST_JOBS && typeof HOST_JOBS.useNamedDemo === 'function') { void HOST_JOBS.useNamedDemo(namedDemo.dataset.gpiNamedDemo); return; }" in events

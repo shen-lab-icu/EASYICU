@@ -398,5 +398,5 @@
     return `<section class="gpi-next-step" aria-label="${title}"><strong>${title}</strong><p>${esc(prompt)}</p>${actions}</section>`;
   }
 
-  window.EasyICU.guidedPi.declare('nextActions', { bodyText, project, render, renderPast, governedPlanGrants });
+  window.EasyICU.guidedPi.declare('nextActions', { bodyText, project, render, renderPast, governedPlanGrants, databaseChoiceKey });
 })();

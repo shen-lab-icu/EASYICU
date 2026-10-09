@@ -377,6 +377,9 @@
     setError: value => { state.error = value; },
     workflowReceipts: () => state.workflowReceipts,
     setWorkflowReceipts: value => { state.workflowReceipts = value; },
+    workflow: () => state.workflow,
+    rebind: () => rebind(),
+    researchQuestion: () => conversationResearchQuestion(),
   });
   const authorizeDataSource = DATA_BINDING.authorizeDataSource;
   const notifyExtractionHandoff = DATA_BINDING.notifyExtractionHandoff;
@@ -1494,8 +1497,19 @@
       render();
     }
   }
+  // The researcher's opening question: the first thing they wrote in this
+  // conversation, when it is a question rather than a short choice.
+  function conversationResearchQuestion() {
+    const first = state.messages.find(row => row && row.role === 'user' && String(row.text || '').trim());
+    const text = first ? String(first.text).trim() : '';
+    return text.length >= 12 ? text : '';
+  }
   async function continueAfterDataSourceConfirmation() {
     if (!state.session || state.busy || state.childJobId || sessionIsStale()) return false;
+    if (DATA_BINDING && typeof DATA_BINDING.carryQuestionIntoSetup === 'function') {
+      await DATA_BINDING.carryQuestionIntoSetup();
+      if (!state.session || state.busy || state.childJobId || sessionIsStale()) return false;
+    }
     await sendText(
       tr(
         'Continue this conversation after EasyICU confirmed the selected data source.',

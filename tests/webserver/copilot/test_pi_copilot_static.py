@@ -81,7 +81,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-modules.js?v=20260902-module-contract1" in index
     assert "js/screens-guided-pi-literature.js?v=20260828-literature-search1" in index
     assert "js/screens-guided-pi-markdown.js?v=20260921-turn-traces3" in index
-    assert "js/screens-guided-pi-next-actions.js?v=20260922-next-note1" in index
+    assert "js/screens-guided-pi-next-actions.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-message-actions.js?v=20260921-fit1" in index
     assert "js/screens-guided-pi-regeneration.js?v=20260830-plan-branch2" in index
     assert "js/screens-guided-pi-starters.js?v=20260922-demo-card1" in index
@@ -114,10 +114,10 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     )
     assert "js/screens-guided-pi-provider-control.js?v=20260830-owner-split1" in index
     assert "js/screens-guided-pi-study-workspace.js?v=20260922-popover1" in index
-    assert "js/screens-guided-pi-events.js?v=20260923-no-legacy1" in index
+    assert "js/screens-guided-pi-events.js?v=20260922-named-source1" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
-    assert "js/screens-guided-pi-data-consent.js?v=20260922-named-demo1" in index
-    assert "js/screens-guided-pi-data-binding.js?v=20260908-source-conversation1" in index
+    assert "js/screens-guided-pi-data-consent.js?v=20260922-named-source1" in index
+    assert "js/screens-guided-pi-data-binding.js?v=20260922-question-carry1" in index
     assert "js/screens-guided-pi-session-view.js?v=20260922-named-demo2" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"

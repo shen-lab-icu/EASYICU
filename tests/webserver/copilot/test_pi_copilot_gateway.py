@@ -522,7 +522,7 @@ def test_initial_question_without_source_stops_at_database_selection() -> None:
     payload = json.loads(completed.stdout)
     text = payload["content"][0]["text"]
     assert payload["usage"]["totalTokens"] == 0
-    assert "当前项目尚未选择本次会话的数据源" in text
+    assert "请先选择这项研究使用的数据库" in text
     assert "使用 MIMIC-IV v3.1" in text
     assert "使用 eICU v2.0" in text
     assert "使用 AmsterdamUMCdb" in text
@@ -530,8 +530,9 @@ def test_initial_question_without_source_stops_at_database_selection() -> None:
     assert "使用 MIMIC-III v1.4" in text
     assert "使用 SICdb v1.0.6" in text
     assert text.count("\n- 使用 ") == 6
-    assert "目录没有为 AmsterdamUMCdb 声明单一参考版本" in text
-    assert "EasyICU 不会猜测版本" in text
+    # The chips carry the catalog's exact labels; no version is invented.
+    assert "参考版本" not in text
+    assert "AmsterdamUMCdb v" not in text
     assert "主要暴露" not in text
     assert "主要结局" not in text
 
