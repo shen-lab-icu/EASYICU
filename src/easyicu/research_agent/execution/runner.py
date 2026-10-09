@@ -71,8 +71,10 @@ from ..authority.secret_redaction import (
 from ..orchestration.profiles import is_paper_facing_profile
 from .kernel_identity import (
     EXECUTION_KERNEL_IDENTITY_SCHEMA,
+    RUNNER_IMAGE_MISMATCH_REASONS,
     build_execution_kernel_identity,
     execution_kernel_relative_paths,
+    runner_image_probe_source,
 )
 from .method_capabilities import set_runtime_capability_snapshot_provider
 
@@ -2419,59 +2421,7 @@ class DockerRunner:
                 relative_paths=kernel_paths,
             )
 
-            distribution_script = (
-                "import hashlib\n"
-                "import os\n"
-                "import sys\n"
-                "from pathlib import Path\n"
-                "import easyicu\n"
-                "from importlib.metadata import distributions\n"
-                "root = Path(easyicu.__file__).resolve().parent\n"
-                f"relative_paths = {list(kernel_paths)!r}\n"
-                "digest = hashlib.sha256()\n"
-                "def refuse(code, message):\n"
-                "    sys.stderr.write(message + '\\n')\n"
-                "    sys.stderr.flush()\n"
-                "    os._exit(code)\n"
-                "for relative_text in relative_paths:\n"
-                "    path = root / relative_text\n"
-                "    if not path.is_file() or path.is_symlink():\n"
-                f"        refuse({_PROBE_KERNEL_MISMATCH_EXIT}, "
-                "f'EasyICU execution-kernel file unavailable: {relative_text}')\n"
-                "    relative = relative_text.encode('utf-8')\n"
-                "    digest.update(len(relative).to_bytes(8, 'big'))\n"
-                "    digest.update(relative)\n"
-                "    payload = path.read_bytes()\n"
-                "    digest.update(len(payload).to_bytes(8, 'big'))\n"
-                "    digest.update(payload)\n"
-                f"expected = {kernel_identity.source_sha256!r}\n"
-                "if digest.hexdigest() != expected:\n"
-                f"    refuse({_PROBE_KERNEL_MISMATCH_EXIT}, "
-                "'EasyICU execution-kernel source mismatch: ' "
-                "f'expected {expected}, observed {digest.hexdigest()}')\n"
-                "lock_path = Path('/opt/easyicu-runner/requirements.lock')\n"
-                "if not lock_path.is_file() or lock_path.is_symlink():\n"
-                f"    refuse({_PROBE_LOCK_MISMATCH_EXIT}, "
-                "'EasyICU Runner requirements.lock unavailable')\n"
-                "observed_lock = hashlib.sha256(lock_path.read_bytes()).hexdigest()\n"
-                f"expected_lock = {kernel_identity.requirements_lock_sha256!r}\n"
-                "if observed_lock != expected_lock:\n"
-                f"    refuse({_PROBE_LOCK_MISMATCH_EXIT}, "
-                "'EasyICU Runner requirements.lock mismatch: ' "
-                "f'expected {expected_lock}, observed {observed_lock}')\n"
-                "rows = {}\n"
-                "for dist in distributions():\n"
-                "    name = str(dist.metadata.get('Name') or '').strip()\n"
-                "    version = str(dist.version or '').strip()\n"
-                "    if name and version:\n"
-                "        rows[name.casefold()] = f'{name}=={version}'\n"
-                "sys.stdout.write('\\n'.join(rows[key] for key in sorted(rows)) + '\\n')\n"
-                "sys.stdout.flush()\n"
-                "# This read-only metadata probe has no cleanup contract inside the\n"
-                "# container.  Exit directly after flushing so third-party atexit\n"
-                "# handlers cannot strand an otherwise completed probe.\n"
-                "os._exit(0)\n"
-            )
+            probe_script = runner_image_probe_source(kernel_identity, kernel_paths)
             capture_proc: Optional[subprocess.CompletedProcess[str]] = None
             for attempt_index in range(self.RUNTIME_PROVENANCE_MAX_ATTEMPTS):
                 attempt_id = uuid.uuid4().hex
@@ -2497,7 +2447,7 @@ class DockerRunner:
                     image_id,
                     "python",
                     "-c",
-                    distribution_script,
+                    probe_script,
                 ]
                 ghost_monitor = self._start_ghost_container_monitor(
                     cidfile=cidfile,
@@ -2557,7 +2507,7 @@ class DockerRunner:
                     "Docker execution-runtime dependency capture produced no result"
                 )
             requirements = capture_proc.stdout.strip()
-            mismatch = _PROBE_MISMATCH_REASONS.get(capture_proc.returncode)
+            mismatch = RUNNER_IMAGE_MISMATCH_REASONS.get(capture_proc.returncode)
             if mismatch is not None:
                 # The image was built from other kernel source or another
                 # dependency lock than this host runs.  That is a named,
@@ -3311,16 +3261,6 @@ RUNNER_UNAVAILABLE_REASON_CODES = frozenset(
         "runner_image_lock_mismatch",
     }
 )
-
-#: Exit codes of the in-image dependency probe when the image does not carry
-#: this host's execution-kernel source or dependency lock.  The host maps them
-#: to reason codes and never reads the probe's text.
-_PROBE_KERNEL_MISMATCH_EXIT = 86
-_PROBE_LOCK_MISMATCH_EXIT = 87
-_PROBE_MISMATCH_REASONS = {
-    _PROBE_KERNEL_MISMATCH_EXIT: "runner_image_kernel_mismatch",
-    _PROBE_LOCK_MISMATCH_EXIT: "runner_image_lock_mismatch",
-}
 
 _RUNNER_UNAVAILABLE_REMEDIATION = {
     "docker_daemon_unreachable": (

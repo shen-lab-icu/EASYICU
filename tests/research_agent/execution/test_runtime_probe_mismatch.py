@@ -21,6 +21,9 @@ import pytest
 
 import easyicu.research_agent.execution.runner as runner_mod
 from easyicu.research_agent.execution.kernel_identity import (
+    RUNNER_IMAGE_KERNEL_MISMATCH_EXIT,
+    RUNNER_IMAGE_LOCK_MISMATCH_EXIT,
+    RUNNER_IMAGE_MISMATCH_REASONS,
     build_execution_kernel_identity,
 )
 from easyicu.webserver import agent_pipeline_runs
@@ -88,6 +91,13 @@ def test_a_mismatched_image_is_a_named_runtime_failure(
     )
 
 
+def test_every_image_mismatch_is_a_runner_reason_the_web_names() -> None:
+    reasons = frozenset(RUNNER_IMAGE_MISMATCH_REASONS.values())
+
+    assert reasons <= runner_mod.RUNNER_UNAVAILABLE_REASON_CODES
+    assert reasons == agent_pipeline_runs._RUNNER_IMAGE_MISMATCH_REASONS
+
+
 def test_resuming_an_approved_plan_names_the_image_mismatch_too() -> None:
     source = Path(agent_pipeline_runs.__file__).read_text(encoding="utf-8")
     _, _, resume = source.partition("def resume_research_pipeline(")
@@ -142,7 +152,7 @@ def test_the_probe_script_exits_with_the_code_the_host_maps(
         env=env,
         timeout=120,
     )
-    assert kernel.returncode == runner_mod._PROBE_KERNEL_MISMATCH_EXIT
+    assert kernel.returncode == RUNNER_IMAGE_KERNEL_MISMATCH_EXIT
     assert "execution-kernel source mismatch" in kernel.stderr
 
     # This host has the kernel the script expects but no in-image lock file.
@@ -153,5 +163,5 @@ def test_the_probe_script_exits_with_the_code_the_host_maps(
         env=env,
         timeout=120,
     )
-    assert lock.returncode == runner_mod._PROBE_LOCK_MISMATCH_EXIT
+    assert lock.returncode == RUNNER_IMAGE_LOCK_MISMATCH_EXIT
     assert "requirements.lock unavailable" in lock.stderr

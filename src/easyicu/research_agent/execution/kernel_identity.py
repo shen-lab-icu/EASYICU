@@ -20,7 +20,7 @@ import json
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Iterable, Iterator, Sequence
 
 
 EXECUTION_KERNEL_IDENTITY_SCHEMA = "easyicu.execution_kernel_identity/1"
@@ -31,6 +31,19 @@ _SEED_PREFIXES = (
     "research_agent/figures/",
 )
 _DYNAMIC_MODULE_RE = re.compile(r"easyicu(?:\.[A-Za-z_][A-Za-z0-9_]*)+")
+#: Where a Runner image keeps the dependency lock it was built from; the image's
+#: Dockerfile copies ``runner_image/requirements.lock`` there.
+RUNNER_IMAGE_LOCK_PATH = "/opt/easyicu-runner/requirements.lock"
+#: Exit codes of :func:`runner_image_probe_source` for an image that does not
+#: carry this host's execution-kernel source or dependency lock, and the
+#: runner-unavailable reason each one reports.  The host reads the code, never
+#: the probe's text.
+RUNNER_IMAGE_KERNEL_MISMATCH_EXIT = 86
+RUNNER_IMAGE_LOCK_MISMATCH_EXIT = 87
+RUNNER_IMAGE_MISMATCH_REASONS = {
+    RUNNER_IMAGE_KERNEL_MISMATCH_EXIT: "runner_image_kernel_mismatch",
+    RUNNER_IMAGE_LOCK_MISMATCH_EXIT: "runner_image_lock_mismatch",
+}
 
 
 class ExecutionKernelIdentityError(RuntimeError):
@@ -328,10 +341,83 @@ def build_execution_kernel_identity(
     )
 
 
+def runner_image_probe_source(
+    identity: ExecutionKernelIdentity, relative_paths: Sequence[str]
+) -> str:
+    """Python source a Runner image runs to prove it carries ``identity``.
+
+    The probe digests the image's installed kernel files the way
+    :func:`_source_digest` digests the host's (each relative path and payload
+    behind an 8-byte length), then hashes the image's dependency lock; a
+    mismatch exits with the matching ``RUNNER_IMAGE_*_MISMATCH_EXIT`` code.  An
+    image that matches prints its installed distributions as sorted
+    ``name==version`` lines.
+    """
+
+    return (
+        "import hashlib\n"
+        "import os\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "import easyicu\n"
+        "from importlib.metadata import distributions\n"
+        "root = Path(easyicu.__file__).resolve().parent\n"
+        f"relative_paths = {list(relative_paths)!r}\n"
+        "digest = hashlib.sha256()\n"
+        "def refuse(code, message):\n"
+        "    sys.stderr.write(message + '\\n')\n"
+        "    sys.stderr.flush()\n"
+        "    os._exit(code)\n"
+        "for relative_text in relative_paths:\n"
+        "    path = root / relative_text\n"
+        "    if not path.is_file() or path.is_symlink():\n"
+        f"        refuse({RUNNER_IMAGE_KERNEL_MISMATCH_EXIT}, "
+        "f'EasyICU execution-kernel file unavailable: {relative_text}')\n"
+        "    relative = relative_text.encode('utf-8')\n"
+        "    digest.update(len(relative).to_bytes(8, 'big'))\n"
+        "    digest.update(relative)\n"
+        "    payload = path.read_bytes()\n"
+        "    digest.update(len(payload).to_bytes(8, 'big'))\n"
+        "    digest.update(payload)\n"
+        f"expected = {identity.source_sha256!r}\n"
+        "if digest.hexdigest() != expected:\n"
+        f"    refuse({RUNNER_IMAGE_KERNEL_MISMATCH_EXIT}, "
+        "'EasyICU execution-kernel source mismatch: ' "
+        "f'expected {expected}, observed {digest.hexdigest()}')\n"
+        f"lock_path = Path({RUNNER_IMAGE_LOCK_PATH!r})\n"
+        "if not lock_path.is_file() or lock_path.is_symlink():\n"
+        f"    refuse({RUNNER_IMAGE_LOCK_MISMATCH_EXIT}, "
+        "'EasyICU Runner requirements.lock unavailable')\n"
+        "observed_lock = hashlib.sha256(lock_path.read_bytes()).hexdigest()\n"
+        f"expected_lock = {identity.requirements_lock_sha256!r}\n"
+        "if observed_lock != expected_lock:\n"
+        f"    refuse({RUNNER_IMAGE_LOCK_MISMATCH_EXIT}, "
+        "'EasyICU Runner requirements.lock mismatch: ' "
+        "f'expected {expected_lock}, observed {observed_lock}')\n"
+        "rows = {}\n"
+        "for dist in distributions():\n"
+        "    name = str(dist.metadata.get('Name') or '').strip()\n"
+        "    version = str(dist.version or '').strip()\n"
+        "    if name and version:\n"
+        "        rows[name.casefold()] = f'{name}=={version}'\n"
+        "sys.stdout.write('\\n'.join(rows[key] for key in sorted(rows)) + '\\n')\n"
+        "sys.stdout.flush()\n"
+        "# This read-only metadata probe has no cleanup contract inside the\n"
+        "# container.  Exit directly after flushing so third-party atexit\n"
+        "# handlers cannot strand an otherwise completed probe.\n"
+        "os._exit(0)\n"
+    )
+
+
 __all__ = [
     "EXECUTION_KERNEL_IDENTITY_SCHEMA",
+    "RUNNER_IMAGE_KERNEL_MISMATCH_EXIT",
+    "RUNNER_IMAGE_LOCK_MISMATCH_EXIT",
+    "RUNNER_IMAGE_LOCK_PATH",
+    "RUNNER_IMAGE_MISMATCH_REASONS",
     "ExecutionKernelIdentity",
     "ExecutionKernelIdentityError",
     "build_execution_kernel_identity",
     "execution_kernel_relative_paths",
+    "runner_image_probe_source",
 ]
