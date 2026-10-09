@@ -370,21 +370,32 @@ def _words(text: Any) -> str:
     return _SPACE.sub("", folded)
 
 
+def quote_written_in(quote: str, source: str, study_texts: Sequence[str]) -> bool:
+    """Whether a quote citing the study's words is written in one of ``study_texts``.
+
+    A quote from another source cites no text of the study's, so it holds.
+    Spacing, letter case and full-width forms are not words.
+    """
+
+    if source not in STUDY_WORDING_SOURCES:
+        return True
+    words = _words(quote)
+    return any(words in _words(text) for text in study_texts)
+
+
 def unquoted_criteria(
     spec: PopulationSpec, study_texts: Sequence[str]
 ) -> tuple[PopulationCriterion, ...]:
     """The criteria citing the study's words whose quote is not written in them.
 
     ``study_texts`` are the question and the study's own statements of whom it
-    includes.  Spacing, letter case and full-width forms are not words.
+    includes.
     """
 
-    texts = [_words(text) for text in study_texts]
     return tuple(
         criterion
         for criterion in spec.criteria
-        if criterion.source in STUDY_WORDING_SOURCES
-        and not any(_words(criterion.quote) in text for text in texts)
+        if not quote_written_in(criterion.quote, criterion.source, study_texts)
     )
 
 
@@ -415,6 +426,7 @@ __all__ = [
     "PopulationSpecRefused",
     "SpecWindow",
     "diagnosis_code_token",
+    "quote_written_in",
     "read_stated_population_spec",
     "unquoted_criteria",
 ]
