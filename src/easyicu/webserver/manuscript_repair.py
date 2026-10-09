@@ -146,6 +146,29 @@ def _replay_or_generate_section(replay, *, section, instruction, generate, on_co
     return generate(), False
 
 
+def revision_request_instruction(request: str) -> str:
+    """The Writer's added instruction for a researcher's revision request."""
+
+    return (
+        "The researcher asked for this report revision. Apply it to wording, "
+        "terminology and presentation only. Keep every number, estimate, "
+        "citation, claim boundary and the study scope exactly as registered; "
+        "if the request would change any of them, leave that part unchanged.\n"
+        f"Researcher's request: {request}"
+    )
+
+
+def with_revision_request(section_kwargs: dict[str, Any], request: str) -> dict[str, Any]:
+    """Writer section arguments that also carry the researcher's request."""
+
+    if not request:
+        return dict(section_kwargs)
+    return {
+        **section_kwargs,
+        "instruction": f"{section_kwargs['instruction']}\n\n{revision_request_instruction(request)}",
+    }
+
+
 def make_report_only_run_runner(
     *,
     study_context,
@@ -156,9 +179,15 @@ def make_report_only_run_runner(
     execution_resume_source_run_id,
     budget_mode,
     export_path,
+    report_revision_request: str = "",
     **other: Any,
 ):
-    """Resolve approved source before job creation; revalidate at job start."""
+    """Resolve approved source before job creation; revalidate at job start.
+
+    ``report_revision_request`` is the researcher's own wording for this
+    revision. It is added to every Writer section instruction; the sealed
+    results, number binding and gates are unchanged.
+    """
 
     if budget_mode != "full_reviewed" or any(other.values()):
         raise pipeline_owner.ResearchPipelineRunError(
@@ -197,6 +226,7 @@ def make_report_only_run_runner(
     draft_path, parent_revision = _current_revision_input(target)
     prepare_registered_report_repair(run_dir, migration_draft=draft_path)
     source_digest = _source_fingerprint(run_dir)
+    request_text = " ".join(str(report_revision_request or "").split())[:1_200]
 
     def runner(job):
         from easyicu.research_agent.agents.reporting import WriterAgent
@@ -236,6 +266,11 @@ def make_report_only_run_runner(
         pipeline_owner._write_json(
             output / "preflight.json", writer_only_preflight_payload(prepared)
         )
+        if request_text:
+            pipeline_owner._write_json(
+                output / "revision_request.json",
+                {"schema_version": "easyicu.report-revision-request/1", "request": request_text},
+            )
         ledger_path = output / "runtime" / "provider_hard_stop.json"
         ledger = ProviderHardStopLedger(
             path=ledger_path,
@@ -247,7 +282,9 @@ def make_report_only_run_runner(
         task = ledger.start_task(str(job.id))
         meter = CostMeter(runtime_dir=output / "runtime")
         public_provider = {key: provider.get(key) for key in ("provider", "model")}
-        replay = load_failed_writer_replay(target.wrapper_dir, prepared)
+        # Saved sections answer the instructions they were written for; a new
+        # revision request changes every instruction, so nothing is replayed.
+        replay = None if request_text else load_failed_writer_replay(target.wrapper_dir, prepared)
         try:
             client, _ = provider_adapter.build_research_agent_provider_client(
                 dict(provider),
@@ -273,6 +310,7 @@ def make_report_only_run_runner(
                         step="report_repair",
                         label=f"Repairing report section: {section}",
                     )
+                    kwargs = with_revision_request(kwargs, request_text)
                     instruction = kwargs["instruction"]
                     if kwargs.get("repair_feedback"):
                         instruction += "\n\n" + kwargs["repair_feedback"]
