@@ -52,6 +52,7 @@ from .contracts import (
     plan_approval_allowed,
 )
 from .plan_projection import project_plan_conversation_preview
+from .question_requirement_notes import project_question_requirement_notes
 from .projections import (
     StudySetupReceipt,
     ensure_safe_projection,
@@ -599,6 +600,12 @@ def build_research_workflow_snapshot(
             row["remediation"] = remediation[:1_600]
         return row
 
+    # What the question asks of the plan under review; only a run that wrote a
+    # record of it carries the card's view (question_requirement_notes).
+    question_notes = project_question_requirement_notes(
+        review_authority.get("question_requirements"),
+        recorded=review_authority.get("question_requirements_recorded") or (),
+    )
     plan_review_summary = (
         {
             "run_id": str(review_authority.get("run_id") or "")[:160],
@@ -643,6 +650,11 @@ def build_research_workflow_snapshot(
                 route: projected_remediation_codes(route)
                 for route in remediation_routes
             },
+            **(
+                {"question_requirements": question_notes}
+                if question_notes is not None
+                else {}
+            ),
         }
         if raw_scientific_review
         else None

@@ -462,6 +462,29 @@ def _load_question_requirements(
     }
 
 
+def _pending_question_requirements(run_dir: Path, pending: Any) -> Dict[str, Any]:
+    """The question-requirement records shown beside a paused plan's review.
+
+    Neither binds the review here.  ``question_requirements_recorded`` names the
+    record files the run wrote, so the card reports one that cannot be read
+    instead of dropping it.
+    """
+
+    return {
+        "question_requirements": _load_question_requirements(
+            run_dir, _pending_plan_authority(pending)
+        ),
+        "question_requirements_recorded": [
+            name
+            for name in (
+                QUESTION_REQUIREMENTS_FILENAME,
+                QUESTION_REQUIREMENTS_REVIEW_FILENAME,
+            )
+            if (run_dir / name).is_file()
+        ],
+    }
+
+
 def _load_pending_scientific_review(
     run_dir: Optional[Path], pending: Optional[Any]
 ) -> Dict[str, Any]:
@@ -4495,6 +4518,7 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
         and plan_recommendation_complete
         and current_review_approval_allowed,
         "scientific_plan_review": scientific_plan_review,
+        **_pending_question_requirements(run_dir, pending),
     }
 
 

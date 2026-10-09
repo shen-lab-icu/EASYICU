@@ -1,0 +1,9 @@
+/* Owner: the plan review card's question-requirement block
+   (js/screens-guided-pi-question-requirements.js). Quotes come from the
+   question, so long words wrap instead of widening the card. */
+.gpi-question-requirements{margin-top:11px;padding:10px 12px;border:1px solid var(--hair-2);border-radius:10px;background:var(--paper)}
+.gpi-question-requirements strong{display:block;font-size:13px;color:var(--ink-1)}
+.gpi-question-requirements ul{margin:6px 0 0;padding-left:18px}
+.gpi-question-requirements li{margin-top:3px;color:var(--ink-2);font-size:12.5px;line-height:1.5;overflow-wrap:anywhere}
+.gpi-question-requirements-link{margin-top:7px}
+.gpi-question-requirements-link .gpi-resource-link{display:inline-flex;align-items:center;min-height:24px}
