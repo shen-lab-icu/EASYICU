@@ -10,6 +10,8 @@ global.EU_HTML = { esc: value => String(value ?? '').replace(/&/g, '&amp;').repl
 global.EU_CATALOG = { dict: {
   age: ['Age', '年龄', 'years'], sex: ['Sex', '性别', ''], adm: ['Admission Type', '入院类型', ''],
   charlson: ['Charlson Comorbidity Index', 'Charlson 合并症指数', 'points'],
+  death: ['In-hospital Mortality', '院内死亡', 'boolean'],
+  sep3_sofa1: ['Sepsis-3 (SOFA-1 based)', 'Sepsis-3诊断 (基于传统SOFA)', 'boolean'],
 } };
 for (const file of process.argv.slice(2)) require(path.resolve(file));
 const modules = global.EasyICU.guidedPi;
@@ -100,6 +102,39 @@ const outcome = modules.require('runOutcome').create({
     return { html, followUps: outcome.followUps(run, workflow) };
   }
   const plan = payloads['agent_plan.json'];
+  // The plan registers its display labels for the English manuscript. A
+  // Chinese reader sees the governed catalog name of a column that is itself
+  // a catalog concept; an aggregated column (`_max`) and the group values
+  // keep their registered labels, so nothing is translated or guessed.
+  const englishLabels = { ...plan, display_labels: {
+    death: 'In-hospital mortality',
+    sep3_sofa1_max: 'Sepsis-3 sepsis status based on suspected infection',
+    'sep3_sofa1_max=0': 'No Sepsis-3 sepsis classification',
+    'sep3_sofa1_max=1': 'Sepsis-3 sepsis classification',
+  } };
+  const englishPlan = await reread(englishLabels);
+  assert.match(englishPlan.html, /院内死亡：「Sepsis-3 sepsis classification」组 15\.74%（4,974\/31,596），「No Sepsis-3 sepsis classification」组 10\.14%/);
+  assert.equal(englishPlan.followUps[0], '在调整年龄、性别、入院类型、Charlson 合并症指数后，Sepsis-3 sepsis status based on suspected infection与院内死亡的关联还成立吗？');
+  assert.doesNotMatch(englishPlan.html + englishPlan.followUps.join('\n'), /In-hospital mortality|Sepsis-3诊断/);
+  // An English reader keeps the registered label.
+  global.EU_LANG = 'en';
+  const englishReader = modules.require('runOutcome').create({
+    tr: en => en, esc, iconHtml: () => '', resourceButton: resources.button, api: () => api, projectId: () => 'project_e1',
+    host: () => null,
+  });
+  payloads['agent_plan.json'] = englishLabels;
+  const englishRun = { ...latest, run_id: 'run_e1_english_reader',
+    artifact_refs: latest.artifact_refs.map(row => ({ ...row, run_id: 'run_e1_english_reader' })) };
+  await englishReader.loadScientificReview(englishRun, workflow);
+  for (let turn = 0; turn < 5; turn += 1) await new Promise(resolve => setImmediate(resolve));
+  const englishCard = englishReader.render(englishRun, workflow);
+  // The fixture's plan steps are written in Chinese; only the answer's own
+  // sentences name the columns.
+  const englishAnswer = englishCard.match(/<div class="gpi-run-answer-text">([\s\S]*?)<\/div>/)[1];
+  assert.match(englishAnswer, /In-hospital mortality: 15\.74%/);
+  assert.doesNotMatch(englishAnswer, /院内死亡/);
+  payloads['agent_plan.json'] = plan;
+  global.EU_LANG = 'zh';
   // A plan with a declared first-stay sensitivity step already re-estimates
   // on first ICU stays, so it is not asked to.
   const firstStay = await reread({ ...plan, steps: plan.steps.concat([{ step_id: 'sensitivity_first_stay',
