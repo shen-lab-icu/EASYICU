@@ -33,7 +33,7 @@ from easyicu.research_agent.planning.target_trial_compile import (
     compile_target_trial,
 )
 from easyicu.research_agent.planning.target_trial_configuration import (
-    TARGET_TRIAL_DESIGN_SCHEMA_VERSION,
+    TargetTrialCompileRecord,
     target_trial_approval_event_id,
 )
 from easyicu.research_agent.planning.target_trial_spec import TargetTrialSpec
@@ -478,8 +478,21 @@ def compiled_target_trial(
     )
 
 
+def kept_target_trial_record(
+    *,
+    compiled: Optional[CompiledTargetTrial] = None,
+    population: Optional[PopulationSpec] = None,
+) -> TargetTrialCompileRecord:
+    """The record the host keeps for the card, with the population it compiled."""
+
+    population = population or target_trial_population()
+    compiled = compiled or compiled_target_trial(population=population)
+    return TargetTrialCompileRecord.of(compiled, population)
+
+
 def target_trial_design(
     *,
+    kept: Optional[TargetTrialCompileRecord] = None,
     compiled: Optional[CompiledTargetTrial] = None,
     population: Optional[PopulationSpec] = None,
     study_id: str = STUDY_ID,
@@ -488,31 +501,24 @@ def target_trial_design(
 ) -> dict[str, Any]:
     """The study's ``target_trial_design`` section, approved by default.
 
-    The approval carries the event id the host mints for the study's click.
+    It names the record ``kept`` -- by default the synthetic trial's -- by
+    its digest; the approval carries the event id the host mints for the
+    study's click.
     """
 
-    population = population or target_trial_population()
-    compiled = compiled or compiled_target_trial(population=population)
-    record = compiled.record()
-    design: dict[str, Any] = {
-        "schema_version": TARGET_TRIAL_DESIGN_SCHEMA_VERSION,
-        "spec": compiled.spec.model_dump(mode="json"),
-        "population_spec": population.model_dump(mode="json"),
-        "compile_record": record,
-        "compile_sha256": compiled.sha256(),
-        "confirmation_lines": len(compiled.confirmations),
-    }
+    kept = kept or kept_target_trial_record(compiled=compiled, population=population)
+    design = kept.design()
     if approved:
-        lines = len(compiled.confirmations)
+        lines = kept.confirmation_lines
         design["approval"] = {
             "approval_event_id": target_trial_approval_event_id(
                 study_id=study_id,
-                compile_sha256=compiled.sha256(),
+                compile_sha256=kept.compile_sha256,
                 n_lines_confirmed=lines,
                 confirmed_at=confirmed_at,
             ),
             "n_lines_confirmed": lines,
-            "confirmed_compile_sha256": compiled.sha256(),
+            "confirmed_compile_sha256": kept.compile_sha256,
             "confirmed_at": confirmed_at,
         }
     return design
@@ -527,6 +533,7 @@ __all__ = [
     "STUDY_ID",
     "TIME_ZERO",
     "compiled_target_trial",
+    "kept_target_trial_record",
     "synthetic_target_trial_cohort",
     "target_trial_authority_body",
     "target_trial_context",

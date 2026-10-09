@@ -348,6 +348,7 @@ def test_a_trial_the_input_supports_carries_every_element() -> None:
         ("map_min", "at_or_before_time_zero"),
     ]
     assert trial.blocking == () and trial.approvable
+    assert trial.record()["approval_blockers"] == []
     treatment = trial.element("treatment")
     assert treatment.parameters["onset_columns"] == [
         "vaso_ind_onset_time",
@@ -727,6 +728,13 @@ def test_each_element_stops_with_its_reason(
         compiled.detail
     )
     assert compiled in trial.blocking and not trial.approvable
+    # The card lists the element with the reason that holds approval.
+    assert {
+        "source": "element",
+        "name": element,
+        "reason": reason,
+        "detail": compiled.detail,
+    } in trial.record()["approval_blockers"]
     # Every element still gets exactly one disposition.
     assert [item.element for item in trial.elements] == [
         *STATED_ELEMENTS,
@@ -750,7 +758,14 @@ def test_an_inclusion_the_population_owner_does_not_apply_holds_approval() -> No
 
     assert trial.blocking == () and trial.confounders_waiting == ()
     assert trial.population_blocking and not trial.approvable
-    assert trial.record()["population_blocking"] is True
+    record = trial.record()
+    assert record["population_blocking"] is True
+    # The card names the criterion and the population owner's approval stop.
+    (blocker,) = record["approval_blockers"]
+    assert blocker["source"] == "population"
+    assert blocker["name"] == "an undefined state"
+    assert blocker["reason"] == "population_inclusion_not_applied"
+    assert blocker["detail"].startswith("c3: ")
 
 
 def test_a_horizon_inside_the_grace_period_is_refused(monkeypatch) -> None:
@@ -832,6 +847,19 @@ def test_each_confounder_is_carried_at_time_zero_or_listed(
     assert (confounder.disposition, confounder.reason) == (disposition, reason)
     # A confounder waiting for data holds approval; one nothing carries is listed.
     assert trial.approvable is (disposition == "not_applied")
+    blockers = trial.record()["approval_blockers"]
+    assert blockers == (
+        []
+        if disposition == "not_applied"
+        else [
+            {
+                "source": "confounder",
+                "name": name,
+                "reason": reason,
+                "detail": confounder.detail,
+            }
+        ]
+    )
     (line,) = [item for item in trial.confirmations if item.kind == "confounder_set"]
     assert line.text.startswith("Adjusted for at time zero: age.")
     listed = "Not adjusted for: " if disposition == "not_applied" else "also: "

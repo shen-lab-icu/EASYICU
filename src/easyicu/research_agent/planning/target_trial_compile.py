@@ -29,8 +29,10 @@ findings to reason codes.
 A stated or host element that is neither ``applied`` nor ``host_added``
 blocks approval, as do an eligibility the population owner does not apply, a
 confounder that waits for an extraction, and an adjustment set with no
-confounder the emulation can carry.  A confounder nothing can carry is listed
-for the researcher instead.  The record also holds what the researcher
+confounder the emulation can carry.  The record lists each of these for the
+card (``approval_blockers``), so whether the card can be approved and why not
+come from the same rule.  A confounder nothing can carry is listed for the
+researcher instead.  The record also holds what the researcher
 confirms at approval -- a capture reading or a class composition the
 development assumed, a treatment wider than its class, a coordinate the study
 did not state, a proposed adjustment set and each element the spec could not
@@ -86,7 +88,7 @@ from .dependence_authority import (
     context_patient_group_authority,
     repeat_units_possible,
 )
-from .population_compile import CompiledPopulation
+from .population_compile import POPULATION_APPROVAL_STOPS, CompiledPopulation
 from .target_trial_spec import (
     TARGET_TRIAL_SPEC_SCHEMA_VERSION,
     TargetTrialSpec,
@@ -112,6 +114,7 @@ EVIDENCE_CEILING = "analysis_only"
 
 Disposition = Literal["applied", "host_added", "requires_extraction", "not_applied"]
 ConfounderDisposition = Literal["applied", "requires_extraction", "not_applied"]
+BlockerSource = Literal["element", "confounder", "population"]
 ConfirmationKind = Literal[
     "capture_assumption",
     "treatment_class",
@@ -277,6 +280,27 @@ class CompiledConfounder:
 
 
 @dataclass(frozen=True)
+class ApprovalBlocker:
+    """One reason the approval card cannot be approved, as the card lists it."""
+
+    source: BlockerSource
+    #: The element, the confounder, or the words of the population criterion.
+    name: str
+    #: A stable code: the element's or confounder's ``tte_*`` reason, or the
+    #: population owner's approval stop for the criterion's remedy.
+    reason: str
+    detail: str
+
+    def record(self) -> dict[str, Any]:
+        return {
+            "source": self.source,
+            "name": self.name,
+            "reason": self.reason,
+            "detail": self.detail,
+        }
+
+
+@dataclass(frozen=True)
 class Confirmation:
     """A line the researcher confirms on the approval card."""
 
@@ -297,8 +321,8 @@ class CompiledTargetTrial:
     elements: tuple[CompiledElement, ...]
     confounders: tuple[CompiledConfounder, ...]
     population_sha256: str
-    #: Whether the population owner holds approval for an inclusion it does not apply.
-    population_blocking: bool
+    #: The inclusions the population owner does not apply, which hold approval.
+    population_blockers: tuple[ApprovalBlocker, ...]
     capture_registry_sha256: str
     capture_entries: tuple[CaptureEntry, ...]
     protocol: tuple[tuple[str, str], ...]
@@ -323,10 +347,30 @@ class CompiledTargetTrial:
         )
 
     @property
-    def approvable(self) -> bool:
-        return not (
-            self.blocking or self.population_blocking or self.confounders_waiting
+    def population_blocking(self) -> bool:
+        """Whether the population owner holds approval for an inclusion it does not apply."""
+
+        return bool(self.population_blockers)
+
+    @property
+    def approval_blockers(self) -> tuple[ApprovalBlocker, ...]:
+        """Why the card cannot be approved: elements, population, then confounders."""
+
+        return (
+            *(
+                ApprovalBlocker("element", item.element, str(item.reason), item.detail)
+                for item in self.blocking
+            ),
+            *self.population_blockers,
+            *(
+                ApprovalBlocker("confounder", item.name, str(item.reason), item.detail)
+                for item in self.confounders_waiting
+            ),
         )
+
+    @property
+    def approvable(self) -> bool:
+        return not self.approval_blockers
 
     def element(self, name: str) -> CompiledElement:
         for item in self.elements:
@@ -374,6 +418,7 @@ class CompiledTargetTrial:
             ],
             "evidence_ceiling": EVIDENCE_CEILING,
             "approvable": self.approvable,
+            "approval_blockers": [item.record() for item in self.approval_blockers],
         }
 
     def sha256(self) -> str:
@@ -437,7 +482,15 @@ def compile_target_trial(
         elements=elements,
         confounders=confounders,
         population_sha256=population.sha256(),
-        population_blocking=bool(population.blocking),
+        population_blockers=tuple(
+            ApprovalBlocker(
+                "population",
+                " ".join(item.criterion.quote.split()),
+                POPULATION_APPROVAL_STOPS[item.disposition],
+                f"{item.criterion.id}: {item.detail}",
+            )
+            for item in population.blocking
+        ),
         capture_registry_sha256=loaded.sha256,
         capture_entries=tuple(entry for entry in entries.values() if entry is not None),
         protocol=_protocol(reading),
@@ -1408,6 +1461,7 @@ __all__ = [
     "STATED_ELEMENTS",
     "TARGET_TRIAL_COMPILE_SCHEMA_VERSION",
     "TIME_ZERO_MENU_HOURS",
+    "ApprovalBlocker",
     "CompiledConfounder",
     "CompiledElement",
     "CompiledTargetTrial",

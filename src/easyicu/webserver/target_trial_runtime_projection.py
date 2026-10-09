@@ -7,8 +7,9 @@ whose ``analysis_design.analysis_family`` is ``causal_inference`` and whose
 ``target_trial_design`` the researcher approved into the digest-bound
 ``TargetTrialRuntimeAuthority``.  The study setup states the trial, the host
 compiled it for the approval card and the researcher's click approved that
-record (``research_agent.planning.target_trial_configuration``).  This adapter
-reads the approved record, never a description of it:
+record (``research_agent.planning.target_trial_configuration``); the host
+keeps the record under the digest the study names (``target_trial_records``).
+This adapter reads the approved record, never a description of it:
 
 * the times, the strategies' labels, the onset columns and the endpoint come
   from the stated trial;
@@ -30,7 +31,7 @@ causal plan stops before the Planner is called (``tte_trial_not_confirmed``).
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
@@ -51,10 +52,14 @@ from easyicu.research_agent.intake.materialized_metadata import (
 )
 from easyicu.research_agent.planning.analysis_types import canonical_analysis_family
 from easyicu.research_agent.planning.target_trial_configuration import (
+    ConfirmedTargetTrial,
+    TargetTrialApproval,
+    TargetTrialCompileRecord,
     TargetTrialDesign,
     TargetTrialDesignError,
     load_target_trial_design,
 )
+from easyicu.research_agent.planning.target_trial_spec import TargetTrialSpec
 from easyicu.research_agent.research_context.stay_events import (
     ICU_LENGTH_OF_STAY_CONCEPT,
 )
@@ -69,6 +74,7 @@ from .scientific_runtime_projection import (
     exposure_kind_for_dtype,
     signed_projection,
 )
+from .target_trial_records import TargetTrialRecordError, load_target_trial_record
 
 _FAMILY = "causal_inference"
 _ONSET_SUFFIX = "_onset_time"
@@ -124,6 +130,61 @@ def target_trial_family_declared(study: Mapping[str, Any]) -> bool:
     return canonical_analysis_family(design.get("analysis_family")) == _FAMILY
 
 
+@dataclass(frozen=True)
+class _ApprovedTrial:
+    """The study's approved section with the record the host keeps for it."""
+
+    section: TargetTrialDesign
+    kept: TargetTrialCompileRecord
+
+    @property
+    def spec(self) -> TargetTrialSpec:
+        return self.kept.spec
+
+    @property
+    def compile_record(self) -> Mapping[str, Any]:
+        return self.kept.record
+
+    @property
+    def compile_sha256(self) -> str:
+        return self.section.compile_sha256
+
+    @property
+    def confirmation_lines(self) -> int:
+        return self.section.confirmation_lines
+
+    @property
+    def approval(self) -> Optional[TargetTrialApproval]:
+        return self.section.approval
+
+    def confirmed(self) -> Optional[ConfirmedTargetTrial]:
+        return self.section.confirmed(self.kept)
+
+
+def _kept(study_id: str, section: TargetTrialDesign) -> _ApprovedTrial:
+    """The record the approval names, as the host keeps it under that digest."""
+
+    try:
+        kept = load_target_trial_record(study_id, section.compile_sha256)
+        section.check_record(kept)
+    except TargetTrialRecordError as exc:
+        raise WebScientificRuntimeProjectionError(
+            "target_trial_configuration_invalid",
+            "The host does not keep the record the study's approval names.",
+            details={
+                "field": "target_trial_design.compile_sha256",
+                "reason_code": exc.code,
+            },
+        ) from exc
+    except TargetTrialDesignError as exc:
+        raise WebScientificRuntimeProjectionError(
+            "target_trial_configuration_invalid",
+            "The record kept is not the one the study's approval names.",
+            details={"field": exc.field, "reason_code": exc.code},
+        ) from exc
+    return _ApprovedTrial(section=section, kept=kept)
+
+
 def _design(study: Mapping[str, Any]) -> Optional[TargetTrialDesign]:
     raw = study.get("target_trial_design")
     if raw is None or (isinstance(raw, Mapping) and not raw):
@@ -149,7 +210,7 @@ def _design(study: Mapping[str, Any]) -> Optional[TargetTrialDesign]:
     return design
 
 
-def _mismatch(design: TargetTrialDesign, message: str, **details: Any) -> None:
+def _mismatch(design: _ApprovedTrial, message: str, **details: Any) -> None:
     """The extraction does not hold what the trial reads: name what it needs."""
 
     materialization = design.compile_record.get("materialization") or {}
@@ -178,7 +239,7 @@ def _schema_types(universe_path: Path) -> dict[str, Any]:
     return {field.name: field.type for field in schema}
 
 
-def _verified(universe_path: Path, design: TargetTrialDesign) -> Any:
+def _verified(universe_path: Path, design: _ApprovedTrial) -> Any:
     try:
         verified = load_verified_materialized_cohort_authority(Path(universe_path))
     except MaterializedMetadataError as exc:
@@ -207,7 +268,7 @@ def _bindings(verified: Any) -> dict[str, Any]:
 
 
 def _onset_window(
-    design: TargetTrialDesign, bindings: Mapping[str, Any], onsets: Sequence[str]
+    design: _ApprovedTrial, bindings: Mapping[str, Any], onsets: Sequence[str]
 ) -> list[float]:
     """The one window the onset columns were read over, through the grace period."""
 
@@ -352,7 +413,7 @@ def _resampling(dependence: Any) -> dict[str, Any]:
 def _authority_body(
     *,
     study: Mapping[str, Any],
-    design: TargetTrialDesign,
+    design: _ApprovedTrial,
     columns: Mapping[str, Any],
     bindings: Mapping[str, Any],
     unit_id_column: str,
@@ -461,8 +522,8 @@ def compile_target_trial_runtime_projection(
     exposure and adjustment roster, which the trial does not read.
     """
 
-    design = _design(study)
-    if design is None:
+    section = _design(study)
+    if section is None:
         return None
     if not target_trial_family_declared(study):
         raise WebScientificRuntimeProjectionError(
@@ -473,8 +534,12 @@ def compile_target_trial_runtime_projection(
                 "required_family": _FAMILY,
             },
         )
+    if section.approval is None:
+        return None
+    # ``_design`` refuses an approval without the study it was minted for.
+    design = _kept(str(study.get("id")), section)
     confirmed = design.confirmed()
-    if confirmed is None:
+    if confirmed is None:  # pragma: no cover - the approval was checked above
         return None
     verified = _verified(Path(universe_path), design)
     bindings = _bindings(verified)
