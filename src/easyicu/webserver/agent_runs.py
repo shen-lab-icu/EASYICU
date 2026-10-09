@@ -1573,6 +1573,11 @@ def _public_review_payloads(
         public["literature_evidence.json"] = payloads["literature_evidence.json"]
     if "scientific_plan_review.json" in payloads:
         public["scientific_plan_review.json"] = payloads["scientific_plan_review.json"]
+    # What the question asks of its plan, as planned and as judged on the plan
+    # offered for review: host records naming no path and no patient row.
+    for name in ("question_requirements.json", "question_requirements_review.json"):
+        if name in payloads:
+            public[name] = payloads[name]
     if "scientific_readiness.json" in payloads:
         public["scientific_readiness.json"] = payloads["scientific_readiness.json"]
     if "manuscript_draft.json" in payloads:
@@ -1605,6 +1610,8 @@ def _public_review_payloads(
         "system_validation_report.json",
         "system_validation_report_receipt.json",
         "source_run_manifest.json",
+        # File names and digests of the rendered draft documents.
+        "manuscript_pdf_receipt.json",
     ):
         if name in payloads:
             public[name] = payloads[name]

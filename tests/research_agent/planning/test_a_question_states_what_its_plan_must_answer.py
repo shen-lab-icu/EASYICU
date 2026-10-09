@@ -381,7 +381,11 @@ def test_a_benchmark_the_family_template_cannot_compare_refuses_approval(
     }
     assert (row["gap_verification"], row["verified_by_host"]) == ("verified", True)
     assert "prediction.delong_ci" in row["gap_fact"]
-    assert _COMPARISON in stop.message
+    # The stop names the requirement; the gap's own sentence ends the line.
+    assert row["gap"]["detail"].endswith(".")
+    assert stop.message.endswith(
+        f"r1 {_COMPARISON!r} (benchmark): {row['gap']['detail']}"
+    )
     record = json.loads((tmp_path / "question_requirements.json").read_text("utf-8"))
     assert record["route"] == "family_template"
     assert record["compiled_plan_sha256"] == analysis_plan_sha256(result.output)
@@ -469,7 +473,11 @@ def test_a_gap_the_host_cannot_check_stops_the_plan_as_unverified(
         "unverifiable",
         False,
     )
-    assert _UNCHECKABLE["gap"]["detail"] in stop.message
+    # Each requirement's line ends with one full stop, its gap's own.
+    assert stop.message.endswith(
+        f"r2 {_UNCHECKABLE['quote']!r} (estimand): {_UNCHECKABLE['gap']['detail']}"
+    )
+    assert ".. r2" not in stop.message
 
 
 @pytest.mark.parametrize(
