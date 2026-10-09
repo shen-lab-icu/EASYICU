@@ -34,8 +34,16 @@
       if (resource.kind === 'demo_artifact' && demo && typeof demo.artifactLabel === 'function') {
         return demo.artifactLabel(resource.artifact || resource.label || '');
       }
-      if (resource.kind === 'research_artifact' && window.AGENT_RENDER && typeof window.AGENT_RENDER.artifactTitle === 'function') {
+      const titled = window.AGENT_RENDER && typeof window.AGENT_RENDER.artifactTitle === 'function';
+      if (resource.kind === 'research_artifact' && titled) {
         return window.AGENT_RENDER.artifactTitle(resource.artifact || resource.label || '');
+      }
+      // Research documents arrive with the host's English label; a Chinese
+      // reader gets the reader title when one exists for that file.
+      if (titled && window.EU_LANG === 'zh' && resource.artifact
+        && ['research_document', 'system_validation_document'].includes(resource.kind)) {
+        const title = String(window.AGENT_RENDER.artifactTitle(resource.artifact) || '');
+        if (/[㐀-鿿]/.test(title)) return title;
       }
       return name(resource);
     }
@@ -82,14 +90,19 @@
       ]);
       return supported.has(resource && resource.kind) ? resource.kind : 'file';
     }
-    function button(resource, overrideLabel) {
+    /* ``options.contentHtml`` replaces the text with caller-built markup the
+       caller has already escaped (a figure thumbnail); ``options.className``
+       replaces the link style. The label still names the button. */
+    function button(resource, overrideLabel, options) {
       if (!resource) return '';
+      const opts = options && typeof options === 'object' ? options : {};
+      const className = /^[a-z][a-z0-9 -]{0,80}$/i.test(String(opts.className || '')) ? opts.className : 'gpi-resource-link';
       const evidenceId = String(resource.evidence_id || '').trim();
       const evidenceSha = String(resource.evidence_sha256 || resource.evidence_digest || '').trim().toLowerCase();
       const evidenceAttrs = /^[A-Za-z0-9_.-]{1,160}$/.test(evidenceId) && /^[a-f0-9]{64}$/.test(evidenceSha)
         ? ` data-gpi-evidence-open data-evidence-id="${esc(evidenceId)}" data-evidence-sha256="${esc(evidenceSha)}" data-evidence-kind="${esc(resource.evidence_kind || 'artifact')}" data-evidence-label="${esc(resource.evidence_label || overrideLabel || label(resource))}" data-evidence-pointer="${esc(resource.evidence_pointer || '')}"`
         : '';
-      return `<button class="gpi-resource-link" type="button"
+      return `<button class="${esc(className)}" type="button"${opts.contentHtml ? ` aria-label="${esc(overrideLabel || label(resource))}"` : ''}
         data-gpi-resource-kind="${esc(kind(resource))}"
         data-gpi-resource-file="${esc(resource.file || '')}"
         data-gpi-resource-run="${esc(resource.run_id || '')}"
@@ -115,7 +128,7 @@
         data-gpi-resource-entry-mode="${esc(resource.entry_mode || '')}"
         data-gpi-resource-view="${esc(resource.view || '')}"
         data-gpi-resource-authority="${esc(resource.authority_class || '')}"
-        data-gpi-resource-digest="${esc(resource.snapshot_sha256 || resource.review_sha256 || resource.checked_sha256 || resource.sha256 || '')}"${evidenceAttrs}>${esc(overrideLabel || label(resource))}</button>`;
+        data-gpi-resource-digest="${esc(resource.snapshot_sha256 || resource.review_sha256 || resource.checked_sha256 || resource.sha256 || '')}"${evidenceAttrs}>${opts.contentHtml ? String(opts.contentHtml) : esc(overrideLabel || label(resource))}</button>`;
     }
 
     function renderForMessage(row, limit) {

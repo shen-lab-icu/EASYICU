@@ -150,6 +150,8 @@
     }[operation.kind] || tr('Execution step', '执行步骤');
     const outputs = operation.resources.length
       ? `<div class="gpi-operation-results">${operation.resources.map((resource, index) => `<button type="button" data-gpi-operation-resource="${index}">${icon(resource.kind === 'figure' ? 'viz' : 'file', 14)}<span>${esc(resource.title || resource.label || resource.filename || resource.artifact || tr('Result', '结果'))}</span>${icon('arrow', 12)}</button>`).join('')}</div>`
+      // A step that says what it did needs no generic "recorded" placeholder.
+      : operation.detail ? ''
       : `<div class="gpi-operation-empty">${icon(['error', 'failed', 'cancelled'].includes(operation.status) ? 'alert' : 'check', 17)}<div><strong>${esc(tr('Step recorded', '步骤已记录'))}</strong><span>${esc(tr('This step updated the run record without creating a separate file.', '这一步更新了运行记录，没有生成独立文件。'))}</span></div></div>`;
     return `<div class="gpi-source-document gpi-operation-document">
       <header class="gpi-source-title gpi-operation-title"><span class="gpi-operation-title-icon" aria-hidden="true">${icon(operation.icon, 18)}</span><div><h2>${esc(operation.title)}</h2><p><span>${esc(category)}</span><b class="status-${esc(operation.status)}">${esc(status)}</b>${operation.duration ? `<span>${icon('clock', 12)}${esc(operation.duration)}</span>` : ''}</p></div></header>

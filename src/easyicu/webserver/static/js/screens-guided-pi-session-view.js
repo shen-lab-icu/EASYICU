@@ -18,7 +18,15 @@
       if (row.childJobHandoff) return '';
       if (row.role === 'activity') return ACTIVITY.render(row, options && options.trace) + RUN_FILES.render(row);
       if (row.role === 'host_notice') return HOST_JOBS && typeof HOST_JOBS.renderNotice === 'function' ? HOST_JOBS.renderNotice(row) : '';
-      if (row.role === 'saved_run') return `<article class="gpi-message assistant gpi-saved-run"><div class="gpi-message-body"><p>${tr('Saved run synchronized from this research project.', '已从本研究同步保存的运行记录。')}</p>${RUN_FILES.render(row)}</div></article>`;
+      if (row.role === 'saved_run') {
+        // A saved run with no message of its own says what became of it.
+        const runs = Array.isArray(row.savedRuns) ? row.savedRuns : [];
+        const failed = runs.length && runs.every(run => String(run && run.run_status || '').toLowerCase() === 'failed');
+        const note = failed
+          ? tr('This run did not complete. Its files are kept below as history; the run list on the right shows why it stopped.', '这次运行没有完成，文件作为历史保留在下方；右侧运行记录写明了停止原因。')
+          : tr('Saved run synchronized from this research project.', '已从本研究同步保存的运行记录。');
+        return `<article class="gpi-message assistant gpi-saved-run"><div class="gpi-message-body"><p>${note}</p>${RUN_FILES.render(row)}</div></article>`;
+      }
       if (row.role === 'workflow_receipt') {
         const rows = row.total_rows == null ? Number.NaN : Number(row.total_rows);
         const files = Number(row.data_file_count);

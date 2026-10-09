@@ -304,7 +304,7 @@
   });
   const { timeMs } = ACTIVITY;
   const TRANSCRIPT = MODULES.require('transcript').create({
-    tr, activity: ACTIVITY, upsertActivityStep, timeMs, resourceKey, modelErrorText,
+    tr, activity: ACTIVITY, upsertActivityStep, timeMs, resourceKey, modelErrorText, runFailureText,
     activityHasCompletedAction,
     workflowActionCode: () => String((state.workflow && state.workflow.next_action_code) || ''),
   });
@@ -341,6 +341,7 @@
     latestRun: () => state.latestRun,
     workflowError: () => state.workflowError,
     resultsHtml: (query, options) => RUN_OUTCOME.renderShelf(state.latestRun, state.workflow, query, options),
+    resourceButton,
     reviewActionHtml: () => RUN_OUTCOME.renderReviewAction(state.latestRun, state.workflow),
     hasPendingReview: () => Boolean(state.host && state.host.querySelector('.gpi-confirmation')),
     // The to-do list names the decision the conversation is waiting for in

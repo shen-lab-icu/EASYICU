@@ -284,7 +284,10 @@
           '这份计划只使用了能力目录，并不代表数据包已经准备好。EasyICU 将先按计划准备所需数据，此时不会开始分析。',
         ),
         approve: tr('Confirm plan and prepare data', '确认方案并准备数据'),
-        reviewMaterialsTitle: tr('Preview-only plan kept as history', '仅预览计划保留为历史'),
+        // The researcher confirms this plan, so its core settings are shown
+        // with the card instead of behind a preview link.
+        showPlanPreview: true,
+        reviewMaterialsTitle: tr('The complete plan and its literature', '完整计划与文献依据'),
         reviewResources: [
           { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'agent_plan.json', label: tr('Preview the current plan', '预览当前计划'), media_type: 'application/json' },
           { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'literature_evidence.json', label: tr('View its literature evidence', '查看当前文献依据'), media_type: 'application/json' },

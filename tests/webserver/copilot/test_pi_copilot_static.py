@@ -102,11 +102,11 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     )
     assert "js/screens-guided-pi-analysis-report.js?v=20260922-estimates1" in index
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
-    assert "js/screens-guided-pi-source-view.js?v=20260921-reader-tab1" in index
+    assert "js/screens-guided-pi-source-view.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-preview.js?v=20260921-reader-tab1" in index
     assert "js/screens-guided-pi-replay.js?v=20260919-task-index1" in index
-    assert "js/screens-guided-pi-resources.js?v=20260921-evidence1" in index
-    assert "js/screens-guided-pi-run-outcome.js?v=20260921-fit2" in index
+    assert "js/screens-guided-pi-resources.js?v=20260922-run-answer1" in index
+    assert "js/screens-guided-pi-run-outcome.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-activity.js?v=20260922-plan-steps1" in index
     assert (
         "js/screens-guided-pi-provider.js?v=20260922-demo-entry2"
@@ -122,10 +122,10 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
-    assert "js/screens-guided-pi-confirmation.js?v=20260921-run-failure1" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20260930-bare-continue1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260922-plan-steps1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20260923-gate-detail1" in index
+    assert "js/screens-guided-pi-error-text.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi.js?v=20260923-no-legacy1" in index
     assert "js/screens-guided.js?v=20260922-state-menus1" in index
     assert (
@@ -6433,7 +6433,10 @@ def test_guided_analysis_outcome_stays_visible_after_refresh() -> None:
     assert "RUN_OUTCOME.render(state.latestRun, state.workflow)" in guided
     assert "analysis_results_available" in replay
     assert "分析已完成；完整质量审阅尚未通过" in replay
-    assert "分析已完成，可以审阅结果" in owner
+    # The card leads with the run's answer; its status says what review remains.
+    assert "tr('Analysis complete', '分析已完成')" in owner
+    assert "仅供分析审阅 · 投稿审阅未完成" in owner
+    assert "ANSWER.render(latestRun)" in owner
     assert "result_tables.json" in owner
     assert "figure_gallery.json" in owner
     assert "latestRun.figure_count === 0" in owner

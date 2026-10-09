@@ -76,6 +76,15 @@ CONTRACTS: dict[str, list[str]] = {
         "screens-guided-pi-aside.js",
         "screens-guided-pi-header.js",
     ],
+    "guided_pi_run_answer.test.js": [
+        "screens-guided-pi-modules.js",
+        "screens-guided-pi-resources.js",
+        "screens-guided-pi-result-summary.js",
+        "screens-guided-pi-run-answer.js",
+        "screens-guided-pi-run-outcome.js",
+        "screens-guided-pi-activity.js",
+        "screens-guided-pi-transcript.js",
+    ],
     # Loads the module registry and plan-confirmation owner itself; takes no arguments.
     "guided_plan_resource_authority.test.js": [],
     "guided_pi_modules.test.js": ["screens-guided-pi-modules.js"],
