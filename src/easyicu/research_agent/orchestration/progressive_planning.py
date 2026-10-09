@@ -25,8 +25,19 @@ from ..planning.progressive_contract import (
     ProgressivePlanOutline,
     ProgressivePlannerCheckpoint,
 )
-from ..planning.population_shadow import write_population_shadow_audit
+from ..planning.population_compile import (
+    POPULATION_APPROVAL_STOPS,
+    CompiledCriterion,
+    CompiledPopulation,
+)
+from ..planning.population_shadow import (
+    population_cohort_audit,
+    superseded_predicates_finding,
+    write_population_audit,
+)
+from ..planning.population_spec import STUDY_WORDING_SOURCES
 from ..planning.preplan_know_how import PlannerKnowHowBinding
+from ..planning.progressive_compiler import stated_population
 from ..planning import literature_design_authority as _literature_design
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 from .workflow import PlannerDesignCanaryComplete
@@ -181,6 +192,114 @@ def _resume_finding(
     )
 
 
+_POPULATION_STOP_CAUSES = {
+    "requires_extraction": (
+        "that the data bound to the study cannot apply; an extraction of the "
+        "study's own population can"
+    ),
+    "not_applied": "that cannot be applied as stated",
+}
+
+
+def _criterion_row(item: CompiledCriterion) -> dict[str, Any]:
+    criterion = item.criterion
+    return {
+        "id": criterion.id,
+        "kind": criterion.kind,
+        "role": criterion.role,
+        "source": criterion.source,
+        "stated_by_study": criterion.source in STUDY_WORDING_SOURCES,
+        "quote": criterion.quote,
+        "disposition": item.disposition,
+        "reason": item.reason,
+    }
+
+
+def population_approval_findings(
+    population: CompiledPopulation,
+) -> list[ValidationFinding]:
+    """Why the plan cannot be approved: the inclusions its cohort does not apply.
+
+    They do not stop planning (population spec design 3.3 and 3.5).  The plan
+    lists them as unapplied and the researcher reviews it with these typed
+    reasons, but approving it would analyse a broader population than the
+    study states, so each stop refuses approval (``approval_allowed``), one
+    finding per remedy (``POPULATION_APPROVAL_STOPS``).
+    """
+
+    findings: list[ValidationFinding] = []
+    for disposition, reason in POPULATION_APPROVAL_STOPS.items():
+        blocking = [
+            item for item in population.blocking if item.disposition == disposition
+        ]
+        if not blocking:
+            continue
+        findings.append(
+            ValidationFinding(
+                validator="population_compile",
+                severity="error",
+                message=(
+                    "This plan cannot be approved: the study includes only the "
+                    "stays that meet "
+                    + ("a criterion " if len(blocking) == 1 else "criteria ")
+                    + f"{_POPULATION_STOP_CAUSES[disposition]}, so the plan would "
+                    "analyse a broader population than the study states. "
+                    + " ".join(
+                        f"{item.criterion.id} {item.criterion.quote!r}: {item.detail}"
+                        for item in blocking
+                    )
+                ),
+                evidence_ids=["analysis_plan"],
+                detail={
+                    "reason": reason,
+                    "human_review_required": True,
+                    "approval_allowed": False,
+                    "criteria": [_criterion_row(item) for item in blocking],
+                    "time_zero_hours": population.time_zero_hours,
+                    "population_compile_sha256": population.sha256(),
+                },
+            )
+        )
+    return findings
+
+
+def population_proposals_finding(
+    population: CompiledPopulation,
+) -> ValidationFinding | None:
+    """The criteria the study did not state, which the plan proposes.
+
+    A criterion whose source is the Planner's outline or a preset cites no
+    words of the researcher's.  It is compiled like the study's own, so this
+    record keeps it apart from what the researcher asked for.
+    """
+
+    proposed = [
+        item
+        for item in population.criteria
+        if item.criterion.source not in STUDY_WORDING_SOURCES
+    ]
+    if not proposed:
+        return None
+    return ValidationFinding(
+        validator="population_compile",
+        severity="warning",
+        message=(
+            "The plan proposes population criteria the study does not state: "
+            + "; ".join(
+                f"{item.criterion.id} {item.criterion.quote!r} "
+                f"(from the {item.criterion.source}, {item.disposition})"
+                for item in proposed
+            )
+            + "."
+        ),
+        evidence_ids=["analysis_plan"],
+        detail={
+            "reason_code": "population_criteria_proposed_by_system",
+            "criteria": [_criterion_row(item) for item in proposed],
+        },
+    )
+
+
 def run_progressive_planner(
     *,
     planner: ProgressivePlannerAgent,
@@ -308,10 +427,27 @@ def run_progressive_planner(
         prompt_metrics=prompt_metrics,
         prompt_pack_version=prompt_pack_version,
     )
-    # Step 2a's shadow: the spec beside the cohort the plan applies; never raises.
-    write_population_shadow_audit(
-        run_dir, context=context, plan=generated, cohort=facts.skeleton.cohort
+    # The population audit never raises.  A spec decided the plan's cohort
+    # (step 2b); predicates the Planner wrote beside it that differ are a
+    # typed finding, never a silent choice between the two.
+    audit = population_cohort_audit(
+        context=context, plan=generated, cohort=facts.skeleton.cohort
     )
+    write_population_audit(run_dir, audit)
+    superseded = superseded_predicates_finding(audit)
+    if superseded is not None:
+        finding_sink(superseded)
+    # The population that decided the cohort, compiled as it was: an
+    # inclusion the cohort does not apply refuses approval, never planning.
+    population = stated_population(
+        facts.skeleton.cohort, context=context, plan=generated
+    )
+    if population is not None:
+        for finding in population_approval_findings(population):
+            finding_sink(finding)
+        proposals = population_proposals_finding(population)
+        if proposals is not None:
+            finding_sink(proposals)
     return ProgressivePlannerRunResult(
         plan=generated,
         generation_mode=(
@@ -357,6 +493,8 @@ __all__ = [
     "ProgressiveDesignCanaryDraft",
     "ProgressivePlannerRunResult",
     "persist_progressive_planner_output",
+    "population_approval_findings",
+    "population_proposals_finding",
     "run_progressive_planner",
     "run_pipeline_progressive_planner",
 ]

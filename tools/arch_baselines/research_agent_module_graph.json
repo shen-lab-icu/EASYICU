@@ -9025,7 +9025,15 @@
     ],
     [
       "easyicu.research_agent.orchestration.progressive_planning",
+      "easyicu.research_agent.planning.population_compile"
+    ],
+    [
+      "easyicu.research_agent.orchestration.progressive_planning",
       "easyicu.research_agent.planning.population_shadow"
+    ],
+    [
+      "easyicu.research_agent.orchestration.progressive_planning",
+      "easyicu.research_agent.planning.population_spec"
     ],
     [
       "easyicu.research_agent.orchestration.progressive_planning",
@@ -9034,6 +9042,10 @@
     [
       "easyicu.research_agent.orchestration.progressive_planning",
       "easyicu.research_agent.planning.progressive_artifacts"
+    ],
+    [
+      "easyicu.research_agent.orchestration.progressive_planning",
+      "easyicu.research_agent.planning.progressive_compiler"
     ],
     [
       "easyicu.research_agent.orchestration.progressive_planning",
@@ -10781,6 +10793,10 @@
     ],
     [
       "easyicu.research_agent.planning.population_shadow",
+      "easyicu.research_agent.planning.progressive_compiler"
+    ],
+    [
+      "easyicu.research_agent.planning.population_shadow",
       "easyicu.research_agent.planning.scientific_review"
     ],
     [
@@ -10953,7 +10969,15 @@
     ],
     [
       "easyicu.research_agent.planning.progressive_compiler",
+      "easyicu.research_agent.planning.population_compile"
+    ],
+    [
+      "easyicu.research_agent.planning.progressive_compiler",
       "easyicu.research_agent.planning.population_requirements"
+    ],
+    [
+      "easyicu.research_agent.planning.progressive_compiler",
+      "easyicu.research_agent.planning.population_spec"
     ],
     [
       "easyicu.research_agent.planning.progressive_compiler",
@@ -14360,7 +14384,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3582,
+    "edge_count": 3588,
     "largest_scc_size": 0,
     "module_count": 823,
     "package_count": 36,

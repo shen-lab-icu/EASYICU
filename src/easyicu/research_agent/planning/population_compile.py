@@ -36,6 +36,7 @@ import json
 import math
 from dataclasses import dataclass
 from functools import lru_cache
+from types import MappingProxyType
 from typing import Any, Literal, Mapping, Optional, Sequence
 
 from ..authority.declared_levels import closed_planning_levels_for
@@ -130,6 +131,16 @@ REQUIRES_EXTRACTION_REASONS = (
     "population_concept_not_in_export",
     "population_diagnosis_codes_need_extraction",
     "population_first_icu_stay_not_restricted",
+)
+#: Why a plan cannot be approved while an inclusion is ``blocking``, one code
+#: per remedy (population spec design 3.3 and 3.5): an extraction of the
+#: study's own population, or a decision the study itself must make.
+#: Stable: a published code never changes.
+POPULATION_APPROVAL_STOPS: Mapping[str, str] = MappingProxyType(
+    {
+        "requires_extraction": "population_inclusion_requires_extraction",
+        "not_applied": "population_inclusion_not_applied",
+    }
 )
 
 #: Where every population predicate counts from.
@@ -1004,6 +1015,7 @@ def _unit_key(unit: Any) -> str:
 
 __all__ = [
     "NOT_APPLIED_REASONS",
+    "POPULATION_APPROVAL_STOPS",
     "POPULATION_COMPILE_SCHEMA_VERSION",
     "REQUIRES_EXTRACTION_REASONS",
     "CompiledCriterion",

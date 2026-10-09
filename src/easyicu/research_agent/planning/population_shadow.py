@@ -1,16 +1,19 @@
-"""The population a Planner's spec compiles to, set beside the plan's cohort.
+"""The population a Planner's spec compiles to, set beside the Planner's own cohort.
 
 Owner
 -----
-This module owns the shadow audit of step 2a of the population spec design:
-the Planner states the population as a typed spec beside the cohort it
-already writes, the host compiles the spec
+This module owns the population audit of the population spec design.  The
+Planner states the population as a typed spec beside the cohort predicates
+it writes; the host compiles the spec
 (:func:`.population_compile.compile_population`) and compares the compiled
-cohort with the plan's own, predicate by predicate.  The plan's cohort is
-still the one the run applies; the audit changes nothing and decides
-nothing.  It is written as ``population_shadow_audit.json`` so each
-difference can be explained before the plan's cohort is ever compiled from
-the spec.
+cohort with the Planner's own, predicate by predicate.  Since step 2b the
+spec decides the plan's cohort (``progressive_compiler``): the audit records
+that (``cohort_source``), whether the plan applies the compiled cohort, and
+each predicate of the Planner's own that differs and so was not applied,
+which planning also reports as a typed finding
+(:func:`superseded_predicates_finding`).  Without a spec, the plan's cohort
+is the Planner's own and the audit compares as the step 2a shadow did.  The
+audit decides nothing; it is written as ``population_shadow_audit.json``.
 
 Two predicates that differ only where the difference cannot change a row are
 reported as equivalent, not as a difference:
@@ -25,8 +28,8 @@ A criterion over a concept of the study's design (its exposure or its
 outcome) is listed apart: a restriction the exposure itself defines belongs
 to the design, not to the population.  ``would_block`` marks a spec with an
 inclusion the host could not apply: once the plan's cohort is compiled from
-the spec (step 2b), such a plan stops before approval, so it is a difference
-to explain even when the two cohorts select the same rows.
+the spec (step 2b), such a plan cannot be approved, so it is a difference to
+explain even when the two cohorts select the same rows.
 
 The spec is read here, not by the plan: the cohort intent keeps it as the
 Planner wrote it.  When the owner refuses the spec as a whole, each criterion
@@ -49,7 +52,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 from pydantic import TypeAdapter, ValidationError
 
-from ..schema import AnalysisPlan, ResearchContext
+from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 from .cohort_contract import (
     CohortDefinition,
     ConceptPredicate,
@@ -58,7 +61,13 @@ from .cohort_contract import (
 )
 from .cohort_eligibility import POPULATION_TIME_ZERO_ANCHORS, predicate_context_column
 from .population_compile import compile_population
-from .population_spec import PopulationCriterion, PopulationSpec
+from .population_spec import (
+    PopulationCriterion,
+    PopulationSpec,
+    PopulationSpecRefused,
+    read_stated_population_spec,
+)
+from .progressive_compiler import planner_cohort_definition
 from .scientific_review import plan_time_zero_hours, trajectory_representation_facts
 from ..research_context.materialization_window import context_column_windows
 
@@ -66,7 +75,10 @@ __all__ = [
     "POPULATION_SHADOW_AUDIT_FILENAME",
     "POPULATION_SHADOW_AUDIT_SCHEMA_VERSION",
     "criterion_concepts",
+    "population_cohort_audit",
     "population_shadow_audit",
+    "superseded_predicates_finding",
+    "write_population_audit",
     "write_population_shadow_audit",
 ]
 
@@ -135,6 +147,7 @@ def population_shadow_audit(
         "spec": spec.model_dump(mode="json") if not errors else raw,
         **({"errors": errors} if errors else {}),
         "compiled_sha256": compiled.sha256(),
+        "compiled_cohort": compiled.cohort_definition().plan_dict(),
         "criteria": [_criterion_row(item, design) for item in compiled.criteria],
         "blocking": blocking,
         "would_block": bool(blocking),
@@ -148,25 +161,43 @@ def population_shadow_audit(
     }
 
 
-def write_population_shadow_audit(
-    run_dir: Path, *, context: ResearchContext, plan: AnalysisPlan, cohort: Any
-) -> Optional[Path]:
-    """Write the audit of ``plan`` beside it; never raise.
+def population_cohort_audit(
+    *, context: ResearchContext, plan: AnalysisPlan, cohort: Any
+) -> dict[str, Any]:
+    """The audit of the cohort ``plan`` applies, beside the Planner's own; never raises.
 
     ``cohort`` is the cohort intent the plan was compiled from; its
-    ``population_spec`` is the spec audited.  The plan's cohort is the one
-    the run applies, so an audit that fails is recorded as ``audit_failed``,
-    an audit that cannot be written is skipped (``None``), and planning goes
-    on either way.
+    ``population_spec`` is the spec audited.  A spec its owner reads decided
+    the plan's cohort, so the compiled cohort is compared with the
+    predicates the Planner wrote beside it; without one, with the plan's
+    cohort.  An audit that fails is recorded as ``audit_failed``: it must not
+    stop planning.
     """
 
-    path = Path(run_dir) / POPULATION_SHADOW_AUDIT_FILENAME
     try:
-        audit = population_shadow_audit(
-            spec=getattr(cohort, "population_spec", None),
-            context=context,
+        spec = getattr(cohort, "population_spec", None)
+        try:
+            stated = read_stated_population_spec(spec) is not None
+        except PopulationSpecRefused:
+            stated = False
+        unreadable: Optional[str] = None
+        compared: Optional[dict[str, Any]] = None
+        if stated:
+            try:
+                with cohort_concept_id_scope(sealed_cohort_concept_ids(context)):
+                    compared = planner_cohort_definition(cohort).plan_dict()
+                    CohortDefinition.from_dict(compared)
+            except ValueError as exc:
+                # No longer checked, so possibly unreadable; still recorded.
+                unreadable = type(exc).__name__
+                compared = None
+        elif plan.cohort is not None:
             # plan_dict keeps the criteria the plan states but does not apply.
-            plan_cohort=plan.cohort.plan_dict() if plan.cohort is not None else None,
+            compared = plan.cohort.plan_dict()
+        audit = population_shadow_audit(
+            spec=spec,
+            context=context,
+            plan_cohort=compared,
             time_zero_hours=plan_time_zero_hours(
                 context, trajectory_representation_facts(context, plan), None
             ),
@@ -175,13 +206,80 @@ def write_population_shadow_audit(
                 context.target_outcome or "",
             ),
         )
-    except Exception as exc:  # noqa: BLE001 - the shadow audit never stops planning
-        audit = {
+        audit["cohort_source"] = "population_spec" if stated else "planner_predicates"
+        if unreadable is not None:
+            audit["planner_cohort_unreadable"] = unreadable
+        if stated and "compiled_cohort" in audit:
+            audit["plan_applies_compiled"] = plan.cohort is not None and _same_rows(
+                plan.cohort.plan_dict(), audit["compiled_cohort"]
+            )
+        return audit
+    except Exception as exc:  # noqa: BLE001 - the audit never stops planning
+        return {
             "schema_version": POPULATION_SHADOW_AUDIT_SCHEMA_VERSION,
             "status": "audit_failed",
             "error_type": type(exc).__name__,
             "error": str(exc)[:500],
         }
+
+
+def superseded_predicates_finding(
+    audit: Mapping[str, Any],
+) -> Optional[ValidationFinding]:
+    """The typed record that predicates the Planner wrote were not applied.
+
+    ``None`` unless the spec decided the plan's cohort and the Planner's own
+    predicates differ from it.  The plan applies the spec's cohort either
+    way; the finding keeps the difference visible instead of resolving it
+    silently.
+    """
+
+    if audit.get("cohort_source") != "population_spec" or not audit.get("differs"):
+        return None
+    comparison = audit.get("comparison") or {}
+    return ValidationFinding(
+        validator="population_compile",
+        severity="warning",
+        message=(
+            "The plan applies the cohort compiled from its population spec. The "
+            "cohort predicates the Planner wrote beside the spec differ from it "
+            "and were not applied."
+        ),
+        detail={
+            "reason_code": "population_planner_predicates_superseded",
+            "compiled_sha256": audit.get("compiled_sha256"),
+            "time_zero_hours": audit.get("time_zero_hours"),
+            "selection_mode": comparison.get("selection_mode"),
+            **{
+                side: {
+                    key: list((comparison.get(side) or {}).get(key) or [])
+                    for key in ("compiled_only", "plan_only")
+                }
+                for side in _SIDES
+            },
+            **(
+                {"planner_cohort_unreadable": audit["planner_cohort_unreadable"]}
+                if audit.get("planner_cohort_unreadable")
+                else {}
+            ),
+        },
+    )
+
+
+def write_population_shadow_audit(
+    run_dir: Path, *, context: ResearchContext, plan: AnalysisPlan, cohort: Any
+) -> Optional[Path]:
+    """Audit ``plan`` (:func:`population_cohort_audit`) and write it; never raise."""
+
+    return write_population_audit(
+        run_dir, population_cohort_audit(context=context, plan=plan, cohort=cohort)
+    )
+
+
+def write_population_audit(run_dir: Path, audit: Mapping[str, Any]) -> Optional[Path]:
+    """Write ``audit`` beside the plan; skip it (``None``) when it cannot be written."""
+
+    path = Path(run_dir) / POPULATION_SHADOW_AUDIT_FILENAME
     temporary = None
     try:
         raw = json.dumps(
@@ -357,6 +455,22 @@ def _same_row_selection(
         == predicate_context_column(variables, other.concept_id, other.aggregation)
         and column in variables
         and column not in windows
+    )
+
+
+def _same_rows(one: Mapping[str, Any], other: Mapping[str, Any]) -> bool:
+    """Whether two plan cohorts state the same selection, whatever their names."""
+
+    fields = (
+        "selection_mode",
+        "inclusion",
+        "exclusion",
+        "unapplied_population_criteria",
+    )
+    return all(
+        json.dumps(one.get(field), sort_keys=True, default=str)
+        == json.dumps(other.get(field), sort_keys=True, default=str)
+        for field in fields
     )
 
 
