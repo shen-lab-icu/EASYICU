@@ -435,7 +435,6 @@ from ..authority.provider_budget import (
     load_provider_call_budget_state,
     provider_call_budget_receipt_path,
 )
-from .budget_epoch import runtime_attempt_identity
 from .provider_budget_runtime import (
     monotonic_step_llm_repair_history as _monotonic_step_llm_repair_history,
     step_snapshot_requires_provider_receipt as _step_snapshot_requires_provider_receipt,
@@ -443,6 +442,7 @@ from .provider_budget_runtime import (
 from .repair_reservation import StepRepairReservation
 from .step_attempt_bootstrap import (
     RAW_UNIVERSE_EXECUTION_ROLE,
+    explicit_rerun_terms,
     prepare_step_attempt_bootstrap,
 )
 from .step_authority_resume import (
@@ -3869,11 +3869,7 @@ def _execute_step(
     usage_auditor: Any,
 ) -> Tuple[Any, Dict[str, Any]]:
     attempt_bootstrap = prepare_step_attempt_bootstrap(
-        resume_state=(
-            plan_result.resume_state
-            if isinstance(plan_result.resume_state, Mapping)
-            else None
-        ),
+        resume_state=plan_result.resume_state,
         per_step_records=per_step_records,
         shared_lock=shared_lock,
         step=step,
@@ -3889,14 +3885,9 @@ def _execute_step(
         max_provider_calls=pipeline._max_step_provider_calls,
         max_llm_repairs=pipeline._max_step_llm_repair_attempts,
         reserve_concept_audit=pipeline._enable_llm_concept_audit,
-        allow_terminal_initial_generation_restart=(
-            resume_controller.explicitly_reruns_step(step.step_id)
-        ),
-        explicit_rerun=resume_controller.explicitly_reruns_step(step.step_id),
-        current_identity=(
-            runtime_attempt_identity(getattr(pipeline, "_validated_runtime_bundle", None))
-            if resume_controller.explicitly_reruns_step(step.step_id)
-            else None
+        **explicit_rerun_terms(
+            resume_controller.explicitly_reruns_step(step.step_id),
+            getattr(pipeline, "_validated_runtime_bundle", None),
         ),
     )
     prior_attempt_records = attempt_bootstrap.prior_attempt_records

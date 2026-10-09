@@ -17,14 +17,28 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, MutableSequence, Optional, Sequence
+from typing import (
+    Any,
+    Dict,
+    List,
+    Mapping,
+    MutableSequence,
+    Optional,
+    Sequence,
+    TypedDict,
+)
 
 from ..authority.evidence_store import sha256_of_file
 from ..authority.runtime_artifacts import current_step_records
 from ..contracts.primary_cohort import primary_analysis_cohort_producer_uses_universe
 from ..repairs.semantic_boundary import SemanticRepairRecorder
 from ..schema import AnalysisPlan, AnalysisStep, ValidationFinding
-from .budget_epoch import EPOCH_REPAIRS_FIELD, AttemptIdentity, select_budget_epoch
+from .budget_epoch import (
+    EPOCH_REPAIRS_FIELD,
+    AttemptIdentity,
+    runtime_attempt_identity,
+    select_budget_epoch,
+)
 from .cohort_routing import step_execution_cohort_path
 from .development_sample import DEVELOPMENT_PRIMARY_COHORT_CONFIRMATION_ROLE
 from .provider_budget_runtime import (
@@ -48,6 +62,34 @@ class StepAttemptBootstrap:
     step_record: Dict[str, Any]
     execution_cohort_path: Path
     budget_runtime: StepProviderBudgetRuntime
+
+
+class ExplicitRerunTerms(TypedDict):
+    """The arguments of :func:`prepare_step_attempt_bootstrap` a resume window sets."""
+
+    allow_terminal_initial_generation_restart: bool
+    explicit_rerun: bool
+    current_identity: Optional[AttemptIdentity]
+
+
+def explicit_rerun_terms(
+    explicit_rerun: bool, runtime_bundle: Any
+) -> ExplicitRerunTerms:
+    """How the user's resume window binds one step attempt.
+
+    Only a step the window explicitly reruns may restart a terminal initial
+    generation, and only there is the run's runtime identity read: a retry
+    under changed code or a rebuilt image earns one fresh budget epoch (see
+    :mod:`.budget_epoch`), an implicit resume never does.
+    """
+
+    return ExplicitRerunTerms(
+        allow_terminal_initial_generation_restart=explicit_rerun,
+        explicit_rerun=explicit_rerun,
+        current_identity=(
+            runtime_attempt_identity(runtime_bundle) if explicit_rerun else None
+        ),
+    )
 
 
 def prepare_step_attempt_bootstrap(
