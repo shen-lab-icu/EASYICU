@@ -435,6 +435,35 @@ def _enforce_context_budget(value: Any) -> None:
         )
 
 
+#: What a stored row past the context budget would be refused as.
+_ROW_BUDGET_ERRORS = {
+    "study_context_too_large": "study_context_row_too_large",
+    "study_context_too_complex": "study_context_row_too_complex",
+}
+
+
+def _enforce_stored_row_budget(context: Dict[str, Any]) -> None:
+    """Refuse a write whose merged row the store could not read back.
+
+    Every read holds each stored row to the context budget, so one row past
+    it would leave the whole store unreadable.  A patch within the budget
+    can still merge into a row past it: the write is refused instead, and
+    the store keeps the rows it had.
+    """
+
+    try:
+        _enforce_context_budget(context)
+    except StudyContextError as exc:
+        code = str(exc.detail.get("error") or "")
+        raise StudyContextError(
+            {
+                **exc.detail,
+                "error": _ROW_BUDGET_ERRORS.get(code, code),
+                "study_context_id": context.get("id"),
+            }
+        ) from exc
+
+
 def _text(value: Any, *, field: str, max_length: int) -> str:
     if value is None:
         return ""
@@ -2097,6 +2126,7 @@ def upsert_context(
                 _validate_materialization_window_contract(context)
             context["revision"] = current_revision + 1
             context["updated_at"] = timestamp
+        _enforce_stored_row_budget(context)
         contexts = [row for row in contexts if row.get("id") != context_id]
         contexts.insert(0, context)
         active_id = context_id if active else raw.get("active_id")
@@ -2144,6 +2174,39 @@ def bind_literature_authority(
     )
 
 
+def _check_kept_target_trial_record(study_id: str, design: Mapping[str, Any]) -> None:
+    """Require the host to keep the record ``design`` names, as the section names it.
+
+    The section keeps the record's digest, not the record
+    (``target_trial_records``): a section naming a record the host does not
+    keep, or another one, is refused before it is written.
+    """
+
+    from easyicu.research_agent.planning.target_trial_configuration import (
+        TargetTrialDesignError,
+        load_target_trial_design,
+    )
+    from easyicu.webserver.target_trial_records import (
+        TargetTrialRecordError,
+        load_target_trial_record,
+    )
+
+    try:
+        loaded = load_target_trial_design(design, study_id=study_id)
+        if loaded is not None:
+            loaded.check_record(
+                load_target_trial_record(study_id, loaded.compile_sha256)
+            )
+    except TargetTrialRecordError as exc:
+        raise StudyContextError(
+            {"error": exc.code, "field": "target_trial_design.compile_sha256"}
+        ) from exc
+    except TargetTrialDesignError as exc:
+        raise StudyContextError(
+            {"error": exc.code, "field": exc.field, "detail": str(exc)}
+        ) from exc
+
+
 def bind_target_trial_design(
     context_id: str,
     design: Mapping[str, Any],
@@ -2152,10 +2215,11 @@ def bind_target_trial_design(
 ) -> Dict[str, Any]:
     """Commit the trial the host compiled for the study's card, or clear it.
 
-    ``design`` carries the stated trial and its population, the compile record
-    and its digest, without an approval: the approval is the researcher's own
-    click (:func:`record_target_trial_approval`), and no other write carries
-    one.  ``{}`` clears the section.
+    ``design`` names the record the host keeps for the study by its digest,
+    with the lines the record lists, without an approval: the approval is the
+    researcher's own click (:func:`record_target_trial_approval`), and no
+    other write carries one.  ``{}`` clears the section.  The host compiles in
+    the background, so the write leaves the active study as it is.
     """
 
     if isinstance(design, Mapping) and design.get("approval") is not None:
@@ -2165,12 +2229,15 @@ def bind_target_trial_design(
                 "field": "target_trial_design.approval",
             }
         )
+    clean_id = _identifier(context_id, field="id")
+    if get_context(clean_id) is None:
+        raise StudyContextError(
+            {"error": "study_context_not_found", "study_context_id": clean_id}
+        )
+    _check_kept_target_trial_record(clean_id, design)
     return upsert_context(
-        {
-            "id": _identifier(context_id, field="id"),
-            "target_trial_design": dict(design),
-        },
-        active=True,
+        {"id": clean_id, "target_trial_design": dict(design)},
+        active=False,
         expected_revision=expected_revision,
         require_revision=True,
         lifecycle_write=False,
@@ -2189,7 +2256,8 @@ def record_target_trial_approval(
 
     The host mints the event id from the study, the record's digest, the
     lines confirmed and the time of the click.  The click must be on the
-    record the study keeps, and confirm every line it lists.
+    record the study names, which the host keeps and can approve, and
+    confirm every line it lists.
     """
 
     from easyicu.research_agent.planning.target_trial_configuration import (
@@ -2223,6 +2291,7 @@ def record_target_trial_approval(
         "confirmed_compile_sha256": confirmed_compile_sha256,
         "confirmed_at": confirmed_at,
     }
+    _check_kept_target_trial_record(clean_id, design)
     return upsert_context(
         {"id": clean_id, "target_trial_design": design},
         active=True,

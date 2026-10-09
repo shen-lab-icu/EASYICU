@@ -1,12 +1,14 @@
 """A study carries the target trial its researcher approved, and a run binds it.
 
 The study setup states the trial and its population; the host compiles them
-and keeps the record, its digest and the lines its card lists.  The click on
-the card adds the approval, whose event id the host mints for that study.
-Each count and digest comes from its own owner and must agree: the section
-refuses a record that is not the one its digest names, an approval of another
-record or of another number of lines, an approval of a record the host cannot
-approve, and an approval minted for another study.
+and keeps the record with the population by the record's digest.  The study's
+section keeps that digest and the lines the card lists -- a few nodes, not the
+record.  The click on the card adds the approval, whose event id the host
+mints for that study.  Each count and digest comes from its own owner and
+must agree: a kept record that is not the one its digest names is refused, as
+is a section naming another record or another number of lines, an approval
+of another record or of another number of lines, an approval of a record the
+host cannot approve, and an approval minted for another study.
 
 A run binds the approved trial before planning: it compiles the trial on the
 context the run built and requires the approved record.  A changed onset
@@ -31,6 +33,7 @@ from easyicu.research_agent.planning.target_trial_configuration import (
     TargetTrialConfirmationError,
     TargetTrialDesignError,
     bind_confirmed_target_trial,
+    load_target_trial_compile_record,
     load_target_trial_design,
     normalize_target_trial_design,
     target_trial_approval_event_id,
@@ -40,6 +43,7 @@ from tests.support.target_trial import (
     CONFIRMED_AT,
     STUDY_ID,
     compiled_target_trial,
+    kept_target_trial_record,
     target_trial_context,
     target_trial_design,
     target_trial_population,
@@ -48,8 +52,9 @@ from tests.support.target_trial import (
 
 
 def _confirmed(**changes) -> dict:
-    design = load_target_trial_design(target_trial_design(), study_id=STUDY_ID)
-    confirmed = design.confirmed().model_dump(mode="json")
+    kept = kept_target_trial_record()
+    design = load_target_trial_design(target_trial_design(kept=kept), study_id=STUDY_ID)
+    confirmed = design.confirmed(kept).model_dump(mode="json")
     confirmed.update(changes)
     return confirmed
 
@@ -60,6 +65,14 @@ def _refused(
     with pytest.raises(TargetTrialDesignError) as caught:
         load_target_trial_design(design, study_id=study_id)
     return caught.value
+
+
+def _nodes(value) -> int:
+    if isinstance(value, dict):
+        return 1 + sum(_nodes(child) for child in value.values())
+    if isinstance(value, list):
+        return 1 + sum(_nodes(child) for child in value)
+    return 1
 
 
 # -- the section ----------------------------------------------------------------
@@ -77,28 +90,69 @@ def test_the_section_is_kept_as_the_host_compiled_it() -> None:
     without_version = {k: v for k, v in design.items() if k != "schema_version"}
     assert _refused(without_version).code == "target_trial_design_invalid"
     assert _refused(["not", "an", "object"]).field == "target_trial_design"
+    # The section names the record by its digest and holds none of it: a
+    # study's configuration is small metadata.
+    assert set(design) == {
+        "schema_version",
+        "compile_sha256",
+        "confirmation_lines",
+        "approval",
+    }
+    assert _nodes(design) < 16
+    kept = kept_target_trial_record()
+    assert _refused({**design, "compile_record": kept.record}).code == (
+        "target_trial_design_invalid"
+    )
+
+
+def _record_refused(value) -> TargetTrialDesignError:
+    with pytest.raises(TargetTrialDesignError) as caught:
+        load_target_trial_compile_record(value)
+    return caught.value
 
 
 def test_the_record_kept_is_the_one_its_digest_names() -> None:
-    design = target_trial_design(approved=False)
-    record = design["compile_record"]
+    kept = kept_target_trial_record()
+    entry = kept.model_dump(mode="json")
+    record = entry["record"]
 
+    assert load_target_trial_compile_record(entry) == kept
     edited = {**record, "protocol": [*record["protocol"][:-1]]}
-    assert _refused({**design, "compile_record": edited}).code == (
-        "target_trial_design_invalid"
+    assert _record_refused({**entry, "record": edited}).code == (
+        "target_trial_record_invalid"
     )
     # A spec the record was not compiled from.
     other_spec = target_trial_spec(
         strategies={"initiate_label": "Prompt start"}
     ).model_dump(mode="json")
-    assert (
-        _refused({**design, "spec": other_spec}).code == "target_trial_design_invalid"
+    assert _record_refused({**entry, "spec": other_spec}).code == (
+        "target_trial_record_invalid"
     )
+    assert _record_refused(["not", "a", "record"]).field == "target_trial_record"
+
+
+def test_the_section_names_the_record_kept_and_the_lines_it_lists() -> None:
+    kept = kept_target_trial_record()
+    design = load_target_trial_design(target_trial_design(kept=kept), study_id=STUDY_ID)
+
+    design.check_record(kept)
+    # Another record than the one the section names.
+    other = kept_target_trial_record(
+        compiled=compiled_target_trial(
+            spec=target_trial_spec(strategies={"initiate_label": "Prompt start"})
+        )
+    )
+    with pytest.raises(TargetTrialDesignError) as caught:
+        design.check_record(other)
+    assert caught.value.field == "target_trial_design.compile_sha256"
     # The lines the card lists are the record's, not a number of their own.
-    lines = design["confirmation_lines"]
-    assert _refused({**design, "confirmation_lines": lines + 1}).code == (
-        "target_trial_design_invalid"
+    unapproved = target_trial_design(kept=kept, approved=False)
+    more_lines = load_target_trial_design(
+        {**unapproved, "confirmation_lines": unapproved["confirmation_lines"] + 1}
     )
+    with pytest.raises(TargetTrialDesignError) as caught:
+        more_lines.check_record(kept)
+    assert caught.value.field == "target_trial_design.confirmation_lines"
 
 
 def test_an_approval_is_of_the_record_kept_and_every_line_it_lists() -> None:
@@ -119,11 +173,21 @@ def test_a_record_the_host_cannot_approve_carries_no_approval() -> None:
         target_trial_context(onset_window="icu_admission[2,12]h")
     )
     assert not waiting.approvable
+    kept = kept_target_trial_record(compiled=waiting)
 
-    unapproved = target_trial_design(compiled=waiting, approved=False)
-    assert load_target_trial_design(unapproved, study_id=STUDY_ID).approval is None
-    error = _refused(target_trial_design(compiled=waiting))
-    assert error.code == "target_trial_design_invalid"
+    unapproved = load_target_trial_design(
+        target_trial_design(kept=kept, approved=False), study_id=STUDY_ID
+    )
+    assert unapproved.approval is None
+    unapproved.check_record(kept)
+    approved = load_target_trial_design(
+        target_trial_design(kept=kept), study_id=STUDY_ID
+    )
+    for check in (approved.check_record, approved.confirmed):
+        with pytest.raises(TargetTrialDesignError) as caught:
+            check(kept)
+        assert caught.value.code == "target_trial_design_invalid"
+        assert caught.value.field == "target_trial_design.approval"
 
 
 def test_an_approval_carries_the_event_id_minted_for_its_study() -> None:
@@ -169,11 +233,12 @@ def test_an_approval_carries_the_event_id_minted_for_its_study() -> None:
 
 
 def test_a_trial_without_an_approval_binds_nothing() -> None:
+    kept = kept_target_trial_record()
     design = load_target_trial_design(
-        target_trial_design(approved=False), study_id=STUDY_ID
+        target_trial_design(kept=kept, approved=False), study_id=STUDY_ID
     )
 
-    assert design.confirmed() is None
+    assert design.confirmed(kept) is None
     with pytest.raises(ValidationError):
         ConfirmedTargetTrial.model_validate({**_confirmed(), "approval": None})
 

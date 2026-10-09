@@ -6,12 +6,16 @@ This module owns the ``target_trial_design`` section of a study's
 configuration and its binding to a run.  The study setup states the trial
 (:mod:`.target_trial_spec`) and the population it is eligible from
 (:mod:`.population_spec`); the host compiles both
-(:mod:`.target_trial_compile`) and keeps the record it compiled, the record's
-digest and how many confirmation lines the record lists.  The researcher's
-click on the approval card adds the approval: an event id the host mints from
-the study, the record's digest, the lines confirmed and the time of the click.
-Only that click writes an approval; a revision the system generates writes
-none, so it cannot stand in for one.
+(:mod:`.target_trial_compile`) and keeps the record it compiled with the
+population spec (:class:`TargetTrialCompileRecord`) in its own store, by the
+record's digest.  The section keeps that digest and how many confirmation
+lines the record lists: a study's configuration is small metadata, which a
+record does not fit beside, and the digest binds the record to the study's
+scientific configuration all the same.  The researcher's click on the
+approval card adds the approval: an event id the host mints from the study,
+the record's digest, the lines confirmed and the time of the click.  Only
+that click writes an approval; a revision the system generates writes none,
+so it cannot stand in for one.
 
 A run binds the approved trial onto its research context before planning
 (:func:`bind_confirmed_target_trial`): the host compiles the stated trial on
@@ -33,10 +37,15 @@ from ..canonical_json import canonical_sha256
 from ..schema import ResearchContext
 from .population_compile import compile_population
 from .population_spec import PopulationSpec
-from .target_trial_compile import compile_record_sha256, compile_target_trial
+from .target_trial_compile import (
+    CompiledTargetTrial,
+    compile_record_sha256,
+    compile_target_trial,
+)
 from .target_trial_spec import TargetTrialSpec
 
-TARGET_TRIAL_DESIGN_SCHEMA_VERSION = "easyicu.target_trial_design/1"
+TARGET_TRIAL_DESIGN_SCHEMA_VERSION = "easyicu.target_trial_design/2"
+TARGET_TRIAL_COMPILE_RECORD_SCHEMA_VERSION = "easyicu.target_trial_compile_record/1"
 CONFIRMED_TARGET_TRIAL_SCHEMA_VERSION = "easyicu.confirmed_target_trial/1"
 APPROVAL_EVENT_PREFIX = "approval:target-trial:"
 #: The owner a run's typed stop names when the approved trial does not bind.
@@ -105,74 +114,127 @@ def target_trial_approval_event_id(
     return f"{APPROVAL_EVENT_PREFIX}{digest[:16]}"
 
 
-def _same_record(
-    *,
-    record: Mapping[str, Any],
-    compile_sha256: str,
-    confirmation_lines: int,
-    approval: Optional[TargetTrialApproval],
-) -> None:
-    """The counts and digests one record and its approval must agree on.
+class TargetTrialCompileRecord(_Closed):
+    """A compile record as the host keeps it, with the population it compiled.
 
-    The record's own count of confirmation lines and the approval's count of
-    lines confirmed come from different owners -- the compile and the click
-    -- and must agree, not be copied from one another.
+    ``record`` is :meth:`CompiledTargetTrial.record` as the host compiled it
+    for the card; ``compile_sha256`` is its digest, which names it.
     """
 
-    if approval is None:
-        return
-    if record.get("approvable") is not True:
-        raise ValueError("an approval needs a record the host can approve")
-    if approval.confirmed_compile_sha256 != compile_sha256:
-        raise ValueError("the approval is for another compile record")
-    if approval.n_lines_confirmed != confirmation_lines:
-        raise ValueError(
-            "the approval confirms another number of lines than the record lists"
+    schema_version: Literal["easyicu.target_trial_compile_record/1"]
+    spec: TargetTrialSpec
+    #: The population the trial is eligible from, compiled at its time zero.
+    population_spec: PopulationSpec
+    record: dict[str, Any]
+    compile_sha256: str = Field(pattern=_SHA256)
+
+    @model_validator(mode="after")
+    def _one_record(self) -> "TargetTrialCompileRecord":
+        record = self.record
+        if compile_record_sha256(record) != self.compile_sha256:
+            raise ValueError("the compile record does not have the digest kept with it")
+        if record.get("spec") != self.spec.model_dump(mode="json"):
+            raise ValueError("the compile record is of another spec")
+        if not isinstance(record.get("confirmations"), list) or not isinstance(
+            record.get("approvable"), bool
+        ):
+            raise ValueError("the compile record lists no confirmation lines")
+        return self
+
+    @classmethod
+    def of(
+        cls, compiled: CompiledTargetTrial, population_spec: PopulationSpec
+    ) -> "TargetTrialCompileRecord":
+        return cls(
+            schema_version=TARGET_TRIAL_COMPILE_RECORD_SCHEMA_VERSION,
+            spec=compiled.spec,
+            population_spec=population_spec,
+            record=compiled.record(),
+            compile_sha256=compiled.sha256(),
         )
+
+    @property
+    def confirmation_lines(self) -> int:
+        """The lines the card lists for the researcher to confirm."""
+
+        return len(self.record["confirmations"])
+
+    @property
+    def approvable(self) -> bool:
+        return self.record["approvable"] is True
+
+    def design(self) -> dict[str, Any]:
+        """The section that names this record, before any approval."""
+
+        return {
+            "schema_version": TARGET_TRIAL_DESIGN_SCHEMA_VERSION,
+            "compile_sha256": self.compile_sha256,
+            "confirmation_lines": self.confirmation_lines,
+        }
 
 
 class TargetTrialDesign(_Closed):
     """The ``target_trial_design`` section of a study's configuration."""
 
-    schema_version: Literal["easyicu.target_trial_design/1"]
-    spec: TargetTrialSpec
-    #: The population the trial is eligible from, compiled at its time zero.
-    population_spec: PopulationSpec
-    #: ``CompiledTargetTrial.record()`` as the host compiled it for the card.
-    compile_record: dict[str, Any]
+    schema_version: Literal["easyicu.target_trial_design/2"]
+    #: The digest of the record the host compiled for the card and keeps.
     compile_sha256: str = Field(pattern=_SHA256)
-    #: ``len(CompiledTargetTrial.confirmations)``: the lines the card lists.
+    #: The lines that record lists for the researcher to confirm.
     confirmation_lines: int = Field(ge=1)
     approval: Optional[TargetTrialApproval] = None
 
     @model_validator(mode="after")
-    def _one_record(self) -> "TargetTrialDesign":
-        record = self.compile_record
-        if compile_record_sha256(record) != self.compile_sha256:
-            raise ValueError("the compile record does not have the digest kept with it")
-        if record.get("spec") != self.spec.model_dump(mode="json"):
-            raise ValueError("the compile record is of another spec")
-        if len(record.get("confirmations") or ()) != self.confirmation_lines:
+    def _approved_record(self) -> "TargetTrialDesign":
+        approval = self.approval
+        if approval is None:
+            return self
+        if approval.confirmed_compile_sha256 != self.compile_sha256:
+            raise ValueError("the approval is for another compile record")
+        if approval.n_lines_confirmed != self.confirmation_lines:
             raise ValueError(
-                "the confirmation lines kept differ from the lines the record lists"
+                "the approval confirms another number of lines than the record lists"
             )
-        _same_record(
-            record=record,
-            compile_sha256=self.compile_sha256,
-            confirmation_lines=self.confirmation_lines,
-            approval=self.approval,
-        )
         return self
 
-    def confirmed(self) -> Optional["ConfirmedTargetTrial"]:
-        """What a run binds, once the researcher approved the record."""
+    def check_record(self, kept: TargetTrialCompileRecord) -> None:
+        """Require ``kept`` to be the record this section names and approves.
 
+        The record's own count of confirmation lines and the approval's count
+        of lines confirmed come from different owners -- the compile and the
+        click -- and must agree, not be copied from one another.
+        """
+
+        if kept.compile_sha256 != self.compile_sha256:
+            raise TargetTrialDesignError(
+                "target_trial_design_invalid",
+                "the record kept is not the one the section names",
+                field="target_trial_design.compile_sha256",
+            )
+        if kept.confirmation_lines != self.confirmation_lines:
+            raise TargetTrialDesignError(
+                "target_trial_design_invalid",
+                "the confirmation lines kept differ from the lines the record lists",
+                field="target_trial_design.confirmation_lines",
+            )
+        if self.approval is not None and not kept.approvable:
+            raise TargetTrialDesignError(
+                "target_trial_design_invalid",
+                "an approval needs a record the host can approve",
+                field="target_trial_design.approval",
+            )
+
+    def confirmed(
+        self, kept: TargetTrialCompileRecord
+    ) -> Optional["ConfirmedTargetTrial"]:
+        """What a run binds, once the researcher approved the record ``kept``."""
+
+        self.check_record(kept)
         if self.approval is None:
             return None
         return ConfirmedTargetTrial(
             schema_version=CONFIRMED_TARGET_TRIAL_SCHEMA_VERSION,
-            spec=self.spec,
-            population_spec=self.population_spec,
+            spec=kept.spec,
+            population_spec=kept.population_spec,
             compile_sha256=self.compile_sha256,
             confirmation_lines=self.confirmation_lines,
             approval=self.approval,
@@ -200,12 +262,31 @@ class ConfirmedTargetTrial(_Closed):
         return self
 
 
-def _first_error_field(exc: ValidationError) -> str:
+def _first_error_field(exc: ValidationError, *, root: str = "target_trial_design") -> str:
     for error in exc.errors(include_url=False, include_input=False):
         location = [str(part) for part in error.get("loc") or () if part != "__root__"]
         if location:
-            return ".".join(["target_trial_design", *location[:3]])
-    return "target_trial_design"
+            return ".".join([root, *location[:3]])
+    return root
+
+
+def load_target_trial_compile_record(value: Any) -> TargetTrialCompileRecord:
+    """A kept compile record, read back; the record names itself by its digest."""
+
+    if not isinstance(value, Mapping):
+        raise TargetTrialDesignError(
+            "target_trial_record_invalid",
+            "the kept compile record is not an object",
+            field="target_trial_record",
+        )
+    try:
+        return TargetTrialCompileRecord.model_validate(dict(value))
+    except ValidationError as exc:
+        raise TargetTrialDesignError(
+            "target_trial_record_invalid",
+            f"the kept compile record breaks its contract: {exc.error_count()} error(s)",
+            field=_first_error_field(exc, root="target_trial_record"),
+        ) from exc
 
 
 def load_target_trial_design(
@@ -305,15 +386,18 @@ __all__ = [
     "APPROVAL_EVENT_PREFIX",
     "CONFIRMED_TARGET_TRIAL_SCHEMA_VERSION",
     "TARGET_TRIAL_COMPILE_DRIFTED",
+    "TARGET_TRIAL_COMPILE_RECORD_SCHEMA_VERSION",
     "TARGET_TRIAL_CONFIRMATION_OWNER",
     "TARGET_TRIAL_CONFIRMATION_REASON_CODES",
     "TARGET_TRIAL_DESIGN_SCHEMA_VERSION",
     "ConfirmedTargetTrial",
     "TargetTrialApproval",
+    "TargetTrialCompileRecord",
     "TargetTrialConfirmationError",
     "TargetTrialDesign",
     "TargetTrialDesignError",
     "bind_confirmed_target_trial",
+    "load_target_trial_compile_record",
     "load_target_trial_design",
     "normalize_target_trial_design",
     "target_trial_approval_event_id",

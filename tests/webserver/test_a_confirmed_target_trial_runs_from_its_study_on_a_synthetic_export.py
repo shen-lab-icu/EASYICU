@@ -2,8 +2,9 @@
 
 One synthetic export goes the whole way a causal study goes once its trial is
 confirmed.  Data Extraction acquires it with the trial's windows; the host
-compiles the stated trial on the context it builds and keeps the record for
-the card; the researcher's click approves it; at run start the projection
+compiles the stated trial on the context it builds, keeps the record for the
+card by its digest and states the trial in the study; the researcher's click
+approves it; at run start the projection
 signs the suite from the approved record and the universe's metadata; the run
 compiles the trial again on its own context and finds the approved record;
 the signed suite owns the plan; the plan's cohort is the trial's population
@@ -35,6 +36,7 @@ from easyicu.research_agent.planning.cohort_contract import (
 )
 from easyicu.research_agent.planning.population_compile import compile_population
 from easyicu.research_agent.planning.target_trial_configuration import (
+    TargetTrialCompileRecord,
     TargetTrialConfirmationError,
     bind_confirmed_target_trial,
 )
@@ -43,6 +45,7 @@ from easyicu.research_agent.reporting.writer_evidence import (
 )
 from easyicu.research_agent.schema import AnalysisPlan
 from easyicu.webserver import study_contexts as context_store
+from easyicu.webserver import target_trial_records
 from easyicu.webserver.scientific_runtime_projection import (
     compile_web_scientific_runtime_projection,
 )
@@ -71,6 +74,9 @@ def _isolated_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         context_store, "_CONFIG_PATH", tmp_path / "cfg" / "study-contexts.json"
     )
+    monkeypatch.setattr(
+        target_trial_records, "records_root", lambda: tmp_path / "records"
+    )
 
 
 def _approved_study(universe: Path) -> dict:
@@ -81,14 +87,9 @@ def _approved_study(universe: Path) -> dict:
         export_context(universe), spec=export_trial_spec(), population=population
     )
     assert compiled.approvable
-    design = {
-        "schema_version": "easyicu.target_trial_design/1",
-        "spec": compiled.spec.model_dump(mode="json"),
-        "population_spec": population.model_dump(mode="json"),
-        "compile_record": compiled.record(),
-        "compile_sha256": compiled.sha256(),
-        "confirmation_lines": len(compiled.confirmations),
-    }
+    kept = TargetTrialCompileRecord.of(compiled, population)
+    target_trial_records.keep_target_trial_record(STUDY_ID, kept)
+    design = kept.design()
     created = context_store.upsert_context(
         {
             "id": STUDY_ID,

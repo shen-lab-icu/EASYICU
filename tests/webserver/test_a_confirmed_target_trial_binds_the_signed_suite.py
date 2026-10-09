@@ -3,9 +3,12 @@
 The ``target_trial_design`` section is the host's: a browser or model write
 cannot carry it, the host's design write carries no approval, and only the
 approval write -- the researcher's click -- adds one, minted for that study
-and that record.  A study that states no trial keeps every digest it had; a
-stated or approved trial moves the scientific digest; a turn restored from
-an earlier snapshot clears the trial, which is set up and approved again.
+and that record.  The section names a record the host keeps by its digest:
+naming one it does not keep, or approving one it cannot approve, is refused.
+The host's write leaves the active study as it is and never creates a study.
+A study that states no trial keeps every digest it had; a stated or approved
+trial moves the scientific digest; a turn restored from an earlier snapshot
+clears the trial, which is set up and approved again.
 
 At run start the trial projection reads the approved record and the
 universe's schema and column metadata, and signs the suite: times, labels,
@@ -15,7 +18,8 @@ measurement keeping its unmeasured state; stays resampled, or patients when
 the run binds their grouping.  A trial not yet approved routes nothing; a
 study of another family, an extraction without the trial's windows or
 columns, a label the suite cannot print, an approval minted for another
-study, and a second sealed design are each refused with their own code.  The
+study, a record the host no longer keeps, and a second sealed design are
+each refused with their own code.  The
 run's own stop when the approved trial no longer compiles on its data names
 its reason in the failure record.  Synthetic export rows only.
 """
@@ -40,6 +44,7 @@ from easyicu.research_agent.planning.target_trial_configuration import (
 )
 from easyicu.webserver import agent_pipeline_runs
 from easyicu.webserver import study_contexts as context_store
+from easyicu.webserver import target_trial_records
 from easyicu.webserver.pi_copilot.workflow import gate_detail_projection
 from easyicu.webserver.scientific_runtime_projection import (
     WebScientificRuntimeProjectionError,
@@ -49,6 +54,8 @@ from easyicu.webserver.scientific_runtime_projection import (
 from tests.support.target_trial import (
     STUDY_ID,
     compiled_target_trial,
+    kept_target_trial_record,
+    target_trial_context,
     target_trial_design,
 )
 from tests.support.target_trial_export import (
@@ -68,6 +75,17 @@ def _isolated_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         context_store, "_CONFIG_PATH", tmp_path / "cfg" / "study-contexts.json"
     )
+    monkeypatch.setattr(
+        target_trial_records, "records_root", lambda: tmp_path / "records"
+    )
+
+
+def _kept_design(*, kept=None, study_id: str = STUDY_ID, **kwargs) -> dict:
+    """A section naming a record the host keeps for the study."""
+
+    kept = kept or kept_target_trial_record()
+    target_trial_records.keep_target_trial_record(study_id, kept)
+    return target_trial_design(kept=kept, study_id=study_id, **kwargs)
 
 
 @pytest.fixture(scope="module")
@@ -94,7 +112,10 @@ def _design(universe: Path, **kwargs) -> dict:
         population=population,
     )
     assert compiled.approvable
-    return target_trial_design(compiled=compiled, population=population, **kwargs)
+    return _kept_design(
+        kept=kept_target_trial_record(compiled=compiled, population=population),
+        **kwargs,
+    )
 
 
 def _study(design: dict, *, family: str = "causal_inference", study_id: str = STUDY_ID):
@@ -137,7 +158,7 @@ def _refused(
 
 def test_the_section_is_written_only_by_the_host() -> None:
     created = context_store.upsert_context({"id": STUDY_ID, "question": "q"})
-    design = target_trial_design(approved=False)
+    design = _kept_design(approved=False)
 
     for write in (
         lambda: context_store.upsert_context(
@@ -153,7 +174,7 @@ def test_the_section_is_written_only_by_the_host() -> None:
 
     with pytest.raises(context_store.StudyContextError) as caught:
         context_store.bind_target_trial_design(
-            STUDY_ID, target_trial_design(), expected_revision=created["revision"]
+            STUDY_ID, _kept_design(), expected_revision=created["revision"]
         )
     assert caught.value.detail["error"] == "target_trial_approval_click_only"
 
@@ -203,7 +224,7 @@ def test_the_section_is_written_only_by_the_host() -> None:
 def test_the_digest_moves_only_with_a_stated_trial() -> None:
     created = context_store.upsert_context({"id": STUDY_ID, "question": "q"})
     before = context_store.scientific_configuration_sha256(created)
-    design = target_trial_design(approved=False)
+    design = _kept_design(approved=False)
 
     stated = context_store.bind_target_trial_design(
         STUDY_ID, design, expected_revision=created["revision"]
@@ -229,7 +250,7 @@ def test_the_digest_moves_only_with_a_stated_trial() -> None:
 
 def test_a_restored_turn_clears_the_trial() -> None:
     created = context_store.upsert_context({"id": STUDY_ID, "question": "q"})
-    design = target_trial_design(approved=False)
+    design = _kept_design(approved=False)
     stated = context_store.bind_target_trial_design(
         STUDY_ID, design, expected_revision=created["revision"]
     )
@@ -256,6 +277,72 @@ def test_a_restored_turn_clears_the_trial() -> None:
     )
 
     assert restored["target_trial_design"] == {}
+
+
+def test_the_section_names_a_record_the_host_keeps() -> None:
+    created = context_store.upsert_context({"id": STUDY_ID, "question": "q"})
+    design = target_trial_design(approved=False)
+
+    for _ in range(2):
+        with pytest.raises(context_store.StudyContextError) as caught:
+            context_store.bind_target_trial_design(
+                STUDY_ID, design, expected_revision=created["revision"]
+            )
+        assert caught.value.detail == {
+            "error": "target_trial_record_missing",
+            "field": "target_trial_design.compile_sha256",
+        }
+        # A record kept for another study is not kept for this one.
+        target_trial_records.keep_target_trial_record(
+            "study_other0001", kept_target_trial_record()
+        )
+    assert context_store.get_context(STUDY_ID)["target_trial_design"] == {}
+
+
+def test_a_record_the_host_cannot_approve_is_not_approved() -> None:
+    created = context_store.upsert_context({"id": STUDY_ID, "question": "q"})
+    # Onsets read from a later hour: the treatment waits for an extraction.
+    waiting = kept_target_trial_record(
+        compiled=compiled_target_trial(
+            target_trial_context(onset_window="icu_admission[2,12]h")
+        )
+    )
+    design = _kept_design(kept=waiting, approved=False)
+    stated = context_store.bind_target_trial_design(
+        STUDY_ID, design, expected_revision=created["revision"]
+    )
+
+    with pytest.raises(context_store.StudyContextError) as caught:
+        context_store.record_target_trial_approval(
+            STUDY_ID,
+            confirmed_compile_sha256=design["compile_sha256"],
+            n_lines_confirmed=design["confirmation_lines"],
+            expected_revision=stated["revision"],
+        )
+    assert caught.value.detail["error"] == "target_trial_design_invalid"
+    assert caught.value.detail["field"] == "target_trial_design.approval"
+    assert context_store.get_context(STUDY_ID)["revision"] == stated["revision"]
+
+
+def test_the_host_write_neither_switches_nor_creates_a_study() -> None:
+    created = context_store.upsert_context({"id": STUDY_ID, "question": "q"})
+    elsewhere = context_store.upsert_context({"id": "study_elsewhere01", "question": "q"})
+    design = _kept_design(approved=False)
+
+    context_store.bind_target_trial_design(
+        STUDY_ID, design, expected_revision=created["revision"]
+    )
+    assert context_store.get_active_context()["id"] == elsewhere["id"]
+
+    missing = "study_missing0001"
+    _kept_design(study_id=missing, approved=False)
+    for revision in (0, 1):
+        with pytest.raises(context_store.StudyContextError) as caught:
+            context_store.bind_target_trial_design(
+                missing, design, expected_revision=revision
+            )
+        assert caught.value.detail["error"] == "study_context_not_found"
+    assert context_store.get_context(missing) is None
 
 
 def test_a_stored_section_a_later_contract_refuses_stays_inspectable(tmp_path) -> None:
@@ -330,9 +417,12 @@ def test_an_approved_trial_binds_the_signed_suite(extraction) -> None:
             authority, scientific_configuration_sha256=_SCIENCE
         ).projection_sha256
     )
+    kept = target_trial_records.load_target_trial_record(
+        STUDY_ID, design["compile_sha256"]
+    )
     assert projection.bound_target_trial == (
         load_target_trial_design(design, study_id=STUDY_ID)
-        .confirmed()
+        .confirmed(kept)
         .model_dump(mode="json")
     )
 
@@ -409,6 +499,23 @@ def test_an_approval_minted_for_another_study_is_refused(extraction) -> None:
 
     assert error.code == "target_trial_configuration_invalid"
     assert error.details["reason_code"] == "target_trial_approval_event_mismatch"
+
+
+def test_an_approval_of_a_record_the_host_no_longer_keeps_is_refused(
+    extraction, tmp_path
+) -> None:
+    universe, _ = extraction
+    design = _design(universe)
+    for kept in (tmp_path / "records").rglob("*.json"):
+        kept.unlink()
+
+    error = _refused(_study(design), universe)
+
+    assert error.code == "target_trial_configuration_invalid"
+    assert error.details == {
+        "field": "target_trial_design.compile_sha256",
+        "reason_code": "target_trial_record_missing",
+    }
 
 
 def test_a_trial_and_another_sealed_design_are_refused_together(extraction) -> None:
