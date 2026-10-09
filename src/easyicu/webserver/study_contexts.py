@@ -205,6 +205,7 @@ _VARIANCE_ESTIMATORS = frozenset(
         "heteroskedasticity_robust",
         "cluster_robust",
         "none_counts_only",
+        "bootstrap",
     }
 )
 _CLUSTER_UNITS = frozenset({"hospital_admission", "patient", "site", "custom"})
@@ -1134,11 +1135,21 @@ def _normalize_analysis_design_shape(value: Any) -> Dict[str, str]:
                 "field": "analysis_design.cluster_unit",
             }
         )
-    if variance_estimator != "cluster_robust" and cluster_unit:
+    if variance_estimator not in {"cluster_robust", "bootstrap"} and cluster_unit:
         raise StudyContextError(
             {
                 "error": "study_cluster_unit_not_applicable",
                 "field": "analysis_design.cluster_unit",
+            }
+        )
+    # A bootstrap clusters only by resampling patients, each with all their
+    # stays.
+    if variance_estimator == "bootstrap" and cluster_unit not in {"", "patient"}:
+        raise StudyContextError(
+            {
+                "error": "study_cluster_unit_unsupported",
+                "field": "analysis_design.cluster_unit",
+                "allowed": ["patient"],
             }
         )
     return {
@@ -1746,15 +1757,32 @@ def _validate_covariate_decision_contract(context: Dict[str, Any]) -> None:
         )
 
 
+def analysis_design_reads_patient_grouping(design: Mapping[str, Any]) -> bool:
+    """Whether a design's inference reads the verified patient grouping.
+
+    Cluster-robust variance clusters by its unit, and a bootstrap with a
+    cluster unit resamples patients, each with all their stays; the launch
+    resolves the grouping for either and refuses any unit but the patient.
+    """
+
+    estimator = str(design.get("variance_estimator") or "").strip()
+    return estimator == "cluster_robust" or (
+        estimator == "bootstrap" and bool(str(design.get("cluster_unit") or "").strip())
+    )
+
+
 def analysis_dependence_finding(context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Return one owner-issued conflict between cohort and inference authority.
 
     A stay-level model may treat rows as independent only when the configured
     cohort removes repeat ICU stays. If repeat stays are explicitly retained,
     ordinary model-based and heteroskedasticity-robust variance do not close
-    within-patient dependence; the only currently expressible closure is a
-    patient-clustered estimator. This function chooses no design. It prevents
-    prose or an executor limitation from weakening a user-owned commitment.
+    within-patient dependence, nor does a bootstrap of stays; the only
+    currently expressible closure is a patient-clustered estimator --
+    cluster-robust variance, or for causal inference, whose suite computes a
+    bootstrap, one that resamples patients. This function chooses no design. It
+    prevents prose or an executor limitation from weakening a user-owned
+    commitment.
     """
 
     raw_design = context.get("analysis_design")
@@ -1769,17 +1797,18 @@ def analysis_dependence_finding(context: Dict[str, Any]) -> Optional[Dict[str, A
     ):
         return None
     if (
-        design.get("variance_estimator") == "cluster_robust"
+        design.get("variance_estimator") in {"cluster_robust", "bootstrap"}
         and design.get("cluster_unit") == "patient"
     ):
         return None
+    causal = design.get("analysis_family") == "causal_inference"
     return {
         "error": "study_repeated_stay_dependence_unaddressed",
         "field": "analysis_design",
         "analysis_unit": "icu_stay",
         "exclude_readmissions": False,
         "required_design": {
-            "variance_estimator": "cluster_robust",
+            "variance_estimator": "bootstrap" if causal else "cluster_robust",
             "cluster_unit": "patient",
         },
         "alternative": (
@@ -2795,6 +2824,7 @@ __all__ = [
     "COHORT_ELIGIBILITY_FIELDS",
     "StudyContextError",
     "analysis_dependence_finding",
+    "analysis_design_reads_patient_grouping",
     "materialization_window_finding",
     "bind_literature_authority",
     "bind_target_trial_design",

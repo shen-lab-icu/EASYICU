@@ -281,7 +281,7 @@ def _prepare_scientific_launch(
     patient_grouping = (
         _patient_grouping_for_analysis_design(study)
         if metadata_only_planning
-        or validated_analysis_design.get("variance_estimator") == "cluster_robust"
+        or validated_analysis_design.get("cluster_unit") == "patient"
         else None
     )
 

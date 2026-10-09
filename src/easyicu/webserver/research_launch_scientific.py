@@ -187,13 +187,13 @@ def _patient_grouping_for_analysis_design(
 ) -> Optional[PatientGroupingBinding]:
     raw = study.get("analysis_design")
     design = raw if isinstance(raw, Mapping) else {}
-    if _clean_text(design.get("variance_estimator"), 80) != "cluster_robust":
+    if not study_context_owner.analysis_design_reads_patient_grouping(design):
         return None
     cluster_unit = _clean_text(design.get("cluster_unit"), 80)
     if cluster_unit != "patient":
         raise ResearchPipelineRunError(
             "research_pipeline_cluster_unit_unsupported",
-            "The current Web runner supports cluster-robust inference only for a verified patient grouping.",
+            "The current Web runner supports clustered inference only for a verified patient grouping.",
             details={
                 "cluster_unit": cluster_unit or None,
                 "supported_cluster_units": ["patient"],
@@ -395,14 +395,14 @@ def _validate_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
                 if key != "error"
             },
         )
-    if variance_estimator == "cluster_robust":
+    if study_context_owner.analysis_design_reads_patient_grouping(raw):
         grouping = _patient_grouping_for_analysis_design(study)
         if grouping is None:
             raise ResearchPipelineRunError(
                 "research_pipeline_cluster_variance_unsupported",
                 (
                     "This source and executor do not expose a verified grouping "
-                    "coordinate for the requested cluster-robust inference."
+                    "coordinate for the requested patient-clustered inference."
                 ),
                 details={
                     "analysis_unit": analysis_unit,
@@ -430,7 +430,9 @@ def _validate_analysis_design(study: Mapping[str, Any]) -> Dict[str, str]:
             "cluster_unit": "patient",
             "grouping_coordinate": grouping.output_identity_column,
         }
-    if variance_estimator == "none_counts_only":
+    # A bootstrap of stays: the analysis design's ceiling keeps it to causal
+    # inference, whose suite computes it.
+    if variance_estimator in {"none_counts_only", "bootstrap"}:
         return {
             "analysis_unit": analysis_unit,
             "variance_estimator": variance_estimator,
@@ -1489,4 +1491,3 @@ def target_trial_launch_inputs(
         target_outcome=acquisition.target_outcome,
         foundation_profile=profile,
     )
-
