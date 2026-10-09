@@ -295,8 +295,9 @@
     try { return decodeURIComponent(match[1]); } catch (_) { return ''; }
   }
   function writeSkillHash(id) {
-    const next = `${location.pathname}${location.search}#skills${id ? `/${encodeURIComponent(id)}` : ''}`;
-    if (`${location.pathname}${location.search}${location.hash}` !== next) history.pushState(null, '', next);
+    if (typeof history === 'undefined' || !history || typeof history.pushState !== 'function') return;
+    const next = `${location.pathname || ''}${location.search || ''}#skills${id ? `/${encodeURIComponent(id)}` : ''}`;
+    if (`${location.pathname || ''}${location.search || ''}${location.hash || ''}` !== next) history.pushState(null, '', next);
   }
   function syncSelectionFromHash() {
     if (!/^#skills(\/|$)/.test(String(location.hash || ''))) return;
@@ -305,7 +306,9 @@
     if (id && id !== ui.selected && allSkills().some(item => item.id === id)) { setTimeout(() => { void openSkill(id, { fromHash: true }); }, 0); return; }
     if (!id && ui.selected) { ui.selected = ''; ui.detail = null; ui.packageDetail = null; setTimeout(rerender, 0); }
   }
-  window.addEventListener('popstate', syncSelectionFromHash);
+  // Back/forward move between a skill and the catalogue; hosts without a
+  // history API (tests, embedded previews) simply do not follow them.
+  if (typeof window.addEventListener === 'function') window.addEventListener('popstate', syncSelectionFromHash);
   async function openSkill(id, options) {
     if (!(options && options.fromHash)) writeSkillHash(id);
     ui.selected = id; ui.tab = 'overview'; ui.detail = null; ui.packageDetail = null;
