@@ -152,7 +152,64 @@ function withheldDesignText(update, language) {
     : `The analysis design was not saved: EasyICU's execution check did not accept it (code: ${code}). The candidate research plan proposes a design for your review.`;
 }
 
-// The withheld design goes before the reply's next-step list, or at its end.
+// The fields the update owner did not save this turn
+// (details.unconfirmed_omissions), one line per reason.  A reply the host
+// finalizes states them, so the researcher is told although the model never
+// reads the owner's summary.
+const OMISSION_LINES = {
+  study_cohort_population_requires_plan: [
+    "人群限定没有保存为研究设置（人群预设和为它写的名称）：按疾病或暴露限定的人群由候选研究计划提出，你在审阅中确认。",
+    "The population restriction was not saved to the study (its preset and the name written for it): a population restricted by a condition is proposed in the candidate research plan for your review.",
+  ],
+  study_cohort_all_stays_confirmation_required: [
+    "入住选择没有保存：还没有确定是纳入全部符合条件的 ICU 入住，还是每位患者只取一次入住。",
+    "The stay selection was not saved: it is not yet chosen whether every eligible ICU stay counts or one stay per patient.",
+  ],
+  study_cohort_first_stay_confirmation_required: [
+    "“只取首次 ICU 入住”没有保存：它会改变分析单位，需要你明确选择。",
+    "The first-ICU-stay restriction was not saved: it changes the analysis unit and needs your explicit choice.",
+  ],
+  study_primary_outcome_confirmation_required: [
+    "主要结局没有保存：问题里提到的结局只记作候选意向，候选研究计划会提出具体定义，供你审阅。",
+    "The primary outcome was not saved: the question names it only as candidate intent, and the candidate research plan proposes its definition for your review.",
+  ],
+  study_primary_exposure_confirmation_required: [
+    "主要暴露没有保存：问题里提到的暴露只记作候选意向，候选研究计划会提出具体定义，供你审阅。",
+    "The primary exposure was not saved: the question names it only as candidate intent, and the candidate research plan proposes its definition for your review.",
+  ],
+  study_analysis_goal_confirmation_required: [
+    "分析目标没有保存：问题里提到的目标只记作候选意向，候选研究计划会提出分析方案，供你审阅。",
+    "The analysis goal was not saved: the question names it only as candidate intent, and the candidate research plan proposes the analysis for your review.",
+  ],
+};
+
+function unsavedFieldsText(update, language) {
+  const omissions = update?.receipt?.details?.unconfirmed_omissions;
+  if (!Array.isArray(omissions) || !omissions.length) return "";
+  const zh = language === "zh";
+  const byCode = new Map();
+  for (const item of omissions) {
+    const code = String(item?.code || "");
+    if (!byCode.has(code)) byCode.set(code, []);
+    byCode.get(code).push(String(item?.field || ""));
+  }
+  const lines = [...byCode].map(([code, fields]) => {
+    const known = OMISSION_LINES[code];
+    if (!known) {
+      const named = fields.map(boundedLabel).join(zh ? "、" : ", ");
+      return zh
+        ? `- ${named} 没有保存（代码：${boundedLabel(code)}）。`
+        : `- ${named} was not saved (code: ${boundedLabel(code)}).`;
+    }
+    const modules = fields.includes("modules")
+      ? (zh ? "本轮一起提议的特征模块也没有保存。" : " The feature modules proposed with it were not saved either.")
+      : "";
+    return `- ${known[zh ? 0 : 1]}${modules}`;
+  });
+  return `${zh ? "这次没有保存的设置：" : "Not saved this time:"}\n${lines.join("\n")}`;
+}
+
+// The withheld setup goes before the reply's next-step list, or at its end.
 function withWithheldDesign(text, withheld) {
   if (!withheld) return text;
   const at = text.indexOf("\n\n**");
@@ -361,7 +418,9 @@ export function hostPostToolFinalization(model, context, language) {
     return toolCallStream(model, "easyicu_search_literature", literatureSearch);
   }
   const update = latestStudyContextUpdate(context);
-  const withheld = withheldDesignText(update, language);
+  const withheld = [withheldDesignText(update, language), unsavedFieldsText(update, language)]
+    .filter(Boolean)
+    .join("\n\n");
   if (initialQuestionSaveNeedsDataSourceSelection(update)) {
     return completedStream(finalizedMessage(
       model,

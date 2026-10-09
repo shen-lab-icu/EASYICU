@@ -139,11 +139,16 @@ def project_study_context(
     sensitivity_specs = (
         sensitivity_specs if isinstance(sensitivity_specs, list) else []
     )
+    # Every cohort field the update tool accepts is projected back, so a
+    # receipt shows what was saved of each one (study_context_update).
     safe_cohort_keys = (
         "preset",
         "label",
+        "review",
         "review_scope",
+        "comparison",
         "comparison_mode",
+        "source_type",
         "age_min",
         "age_max",
         "min_icu_los_hours",
@@ -165,6 +170,15 @@ def project_study_context(
         for key in safe_cohort_keys
         if key in cohort and not isinstance(cohort[key], (dict, list))
     }
+    for key in ("include_diagnoses", "exclude_diagnoses"):
+        if isinstance(cohort.get(key), list):
+            projected_cohort[key] = [
+                _bounded_text(item, 160) for item in cohort[key]
+            ][:64]
+    trajectory_design = context.get("trajectory_design")
+    trajectory_design = (
+        trajectory_design if isinstance(trajectory_design, Mapping) else {}
+    )
     question = _bounded_text(context.get("question"), 1200)
     if question:
         reject_sensitive_message(question)
@@ -208,6 +222,18 @@ def project_study_context(
                     context.get("covariate_operationalizations") or {}
                 ).items()
             },
+            "covariate_rationales": {
+                _bounded_text(key, 80): _bounded_text(value, 500)
+                for key, value in list(
+                    dict(context.get("covariate_rationales") or {}).items()
+                )[:64]
+            },
+            "covariate_temporal_roles": {
+                _bounded_text(key, 80): _bounded_text(value, 40)
+                for key, value in list(
+                    dict(context.get("covariate_temporal_roles") or {}).items()
+                )[:64]
+            },
             "execution_concepts": {
                 **(
                     {"outcome": _bounded_text(execution_concepts.get("outcome"), 80)}
@@ -247,6 +273,28 @@ def project_study_context(
                     "cluster_unit",
                 )
                 if analysis_design.get(key)
+            },
+            "trajectory_design": {
+                key: (
+                    [_bounded_text(item, 80) for item in trajectory_design[key]][:16]
+                    if isinstance(trajectory_design[key], list)
+                    else trajectory_design[key]
+                )
+                for key in (
+                    "coordinate_concepts",
+                    "descriptive_only_concepts",
+                    "window_start_hours",
+                    "window_end_hours",
+                    "grid_width_hours",
+                    "minimum_available_windows",
+                    "candidate_cluster_min",
+                    "candidate_cluster_max",
+                    "stability_resamples",
+                    "stability_sample_fraction",
+                    "minimum_mean_stability",
+                    "minimum_cluster_fraction",
+                )
+                if trajectory_design.get(key) is not None
             },
             "sensitivity_specs": [
                 {
