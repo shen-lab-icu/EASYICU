@@ -114,8 +114,10 @@
         span.textContent = label;
         span.title = label;
       }
-      const details = control.closest('.gpi-model-control');
-      if (details) details.open = false;
+      // A repaint during the switch keeps the menu open in new markup, so the
+      // live menu is closed as well as the one that was pressed.
+      [control.closest('.gpi-model-control'), document.querySelector('.gpi-model-control[open]')]
+        .forEach(details => { if (details) details.open = false; });
     } catch (error) {
       if (request !== state.request) return;
       state.error = /^(not found|internal server error|bad request|forbidden|unauthorized|service unavailable)$/i.test(clean(error && error.message, 200))

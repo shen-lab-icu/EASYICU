@@ -697,13 +697,18 @@
       });
     }
     state.host.hidden = false;
-    state.host.innerHTML = restoring
+    const markup = restoring
       ? restoringPanel()
       : state.shell === 'legacy'
       ? statusBanner()
       : (state.demoMode ? demoPanel() : (state.projectIssue === 'pi_project_study_context_missing'
         ? activatePanel()
         : ((state.showSetup || !connectionReady()) ? setupPanel() : (!projectId() ? projectRequiredPanel() : (state.session ? sessionPanel() : activatePanel())))));
+    // A menu the researcher has open (layout, more, composer) survives the
+    // repaint that every progress event of a running job triggers.
+    const menus = window.EU_POPOVER_MENUS;
+    if (menus && menus.keepOpen) menus.keepOpen(state.host, () => { state.host.innerHTML = markup; });
+    else state.host.innerHTML = markup;
     const preview = MODULES.optional('preview');
     if (preview && preview.setWorkflowContext) {
       preview.setWorkflowContext(previewWorkflowContext());

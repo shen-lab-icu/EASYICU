@@ -87,7 +87,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-starters.js?v=20260922-demo-card1" in index
     assert "js/screens-guided-pi-idea-source.js?v=20260922-popover1" in index
     assert "js/screens-guided-pi-header.js?v=20260922-popover1" in index
-    assert "js/screens-guided-pi-model-menu.js?v=20260921-friendly-error1" in index
+    assert "js/screens-guided-pi-model-menu.js?v=20260923-keep-open1" in index
     assert "css/workspace-canvas.css?v=20260921-fit1" in index
     assert "css/guided-pi-workspace.css?v=20260922-demo-card1" in index
     assert "css/guided-pi-empty-tasks.css?v=20260921-empty-tasks1" in index
@@ -113,7 +113,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         in index
     )
     assert "js/screens-guided-pi-provider-control.js?v=20260830-owner-split1" in index
-    assert "js/screens-guided-pi-study-workspace.js?v=20260922-popover1" in index
+    assert "js/screens-guided-pi-study-workspace.js?v=20260923-keep-open2" in index
     assert "js/screens-guided-pi-events.js?v=20260922-named-source1" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20260922-named-source1" in index
@@ -126,7 +126,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-plan-actions.js?v=20260930-bare-continue1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260922-plan-steps1" in index
     assert "js/screens-guided-pi-error-text.js?v=20260922-run-answer1" in index
-    assert "js/screens-guided-pi.js?v=20260923-no-legacy1" in index
+    assert "js/screens-guided-pi.js?v=20260923-keep-open1" in index
     assert "js/screens-guided.js?v=20260922-state-menus1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -2083,7 +2083,7 @@ def test_activation_initializes_first_use_projects_and_surfaces_failures() -> No
     render = owner.split("function render(preserveScroll)", 1)[1].split(
         "async function loadStatus()", 1
     )[0]
-    panel_selection = render.split("state.host.innerHTML", 1)[1]
+    panel_selection = render.split("const markup = restoring", 1)[1]
     assert panel_selection.index(
         "state.projectIssue === 'pi_project_study_context_missing'"
     ) < (panel_selection.index("state.showSetup || !connectionReady()"))
@@ -6629,7 +6629,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20260922-plan-steps1" in index
-    assert "screens-guided-pi.js?v=20260923-no-legacy1" in index
+    assert "screens-guided-pi.js?v=20260923-keep-open1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

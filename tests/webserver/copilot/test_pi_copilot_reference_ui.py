@@ -1199,7 +1199,7 @@ def test_floating_menus_share_one_dismissal_owner() -> None:
     floating = {
         header: ('<details class="gpi-model-control" data-popover-menu>', '<details class="gpi-layout-control" data-popover-menu>', '<details class="gpi-head-overflow" data-popover-menu>'),
         idea_source: ('<details class="gpi-idea-source-menu" data-popover-menu>',),
-        workspace: ('<details class="gpi-access-menu" data-popover-menu>', '<details class="gpi-conversation-menu" data-popover-menu>'),
+        workspace: ('<details class="gpi-access-menu" data-popover-menu>', '<details class="gpi-conversation-menu" data-popover-menu data-popover-key="${esc(row.session_id)}">'),
         effort: ('<details class="gpi-effort-menu" data-gpi-effort-menu data-popover-menu>',),
         projects: ("const pickerDismissible = !!activeId && !projectManagementActive;", "${pickerDismissible ? ' data-popover-menu' : ''}>"),
         skills: ('<details class="eusk-create-menu" data-popover-menu>', '<details class="eusk-actions-menu" data-popover-menu>'),

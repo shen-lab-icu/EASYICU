@@ -10,7 +10,9 @@
    plan sections) are not menus and never carry the attribute. Owners still
    close their own menu after an action chosen inside it. A menu whose open
    state lives in its owner rather than in a <details> registers
-   { isOpen, contains, close } and gets the same press and Escape rules. */
+   { isOpen, contains, close } and gets the same press and Escape rules. An
+   owner that rebuilds its markup wraps the rebuild in keepOpen so an open
+   menu survives the repaint. */
 (function () {
   'use strict';
 
@@ -58,6 +60,36 @@
 
   function closeAll(options) { return closeOutside(null, options); }
 
+  // An owner that rebuilds its markup (a running job repaints the conversation
+  // on every progress event) keeps the menu the researcher has open: open
+  // menus are remembered by their data-popover-key when they belong to a row
+  // that can move (a conversation's •••), otherwise by class and position
+  // among menus of that class, then reopened in the rebuilt markup, with
+  // focus back on the summary when it was inside the menu. An owner closes
+  // its menu before it rebuilds.
+  function keepOpen(root, rebuild) {
+    if (!root || typeof root.querySelectorAll !== 'function') return rebuild();
+    const key = menu => {
+      const own = typeof menu.getAttribute === 'function' ? menu.getAttribute('data-popover-key') : '';
+      if (own) return `key:${own}`;
+      const kind = String(menu.className || '');
+      return `${kind}#${Array.from(root.querySelectorAll(SELECTOR)).filter(other => String(other.className || '') === kind).indexOf(menu)}`;
+    };
+    const active = typeof document !== 'undefined' ? document.activeElement : null;
+    const open = openMenus(root).map(menu => ({ key: key(menu), focused: contains(menu, active) }));
+    const result = rebuild();
+    if (open.length) {
+      Array.from(root.querySelectorAll(SELECTOR)).forEach(menu => {
+        const kept = open.find(row => row.key === key(menu));
+        if (!kept) return;
+        menu.open = true;
+        const summary = kept.focused ? menu.querySelector(':scope > summary') : null;
+        if (summary && typeof summary.focus === 'function') summary.focus({ preventScroll: true });
+      });
+    }
+    return result;
+  }
+
   // `toggle` does not bubble, so this listens in the capture phase.
   function onToggle(event) {
     const menu = event.target;
@@ -89,6 +121,6 @@
 
   mount();
   window.EU_POPOVER_MENUS = Object.freeze({
-    ATTRIBUTE, SELECTOR, mount, register, closeAll, closeOutside, onToggle, onPointerDown, onFocusIn, onKeyDown,
+    ATTRIBUTE, SELECTOR, mount, register, closeAll, closeOutside, keepOpen, onToggle, onPointerDown, onFocusIn, onKeyDown,
   });
 })();
