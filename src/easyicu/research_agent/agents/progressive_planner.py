@@ -124,8 +124,12 @@ from ..planning.progressive_resume import (
 from ..planning.robustness_contract import validate_planner_robustness_specs
 from ..planning.scientific_action_catalog import scientific_actions_for_analysis_type
 from ..planning.scientific_review import required_method_layers_for_context, requested_outcomes
+from ..planning.outline_action_menu import outline_action_catalog as _action_catalog
 from ..planning.outline_action_rules import validate_outline_action_rules
-from ..planning.outline_design_selection import validate_outline_design_selection
+from ..planning.outline_design_selection import (
+    question_anchor_rule_text,
+    validate_outline_design_selection,
+)
 from ..providers.capabilities import llm_supports_strict_json_schema
 from ..providers.llm import llm_is_mockish
 from ..planning.prompt_projection import (
@@ -1195,54 +1199,6 @@ def select_progressive_variables(
     return ordered
 
 
-def _action_catalog(
-    analysis_types: Sequence[str],
-) -> tuple[tuple[str, ...], list[dict[str, Any]]]:
-    action_ids: list[str] = []
-    rows: list[dict[str, Any]] = []
-    for analysis_type in analysis_types:
-        catalog = scientific_actions_for_analysis_type(analysis_type)
-        for action in catalog.actions:
-            if action.execution_mode == "not_available":
-                continue
-            if action.action_id not in action_ids:
-                action_ids.append(action.action_id)
-            rows.append(
-                {
-                    "analysis_type": analysis_type,
-                    "action_id": action.action_id,
-                    "name": action.name,
-                    "purpose": action.purpose,
-                    "notes": action.notes,
-                    "execution_mode": action.execution_mode,
-                    "produces": action.produces,
-                    "required_inputs": list(action.required_inputs),
-                    "runtime_contract": (
-                        {
-                            "outputs": [
-                                {
-                                    "product_id": product_id,
-                                    "semantic_role": semantic_role,
-                                }
-                                for product_id, semantic_role in action.runtime_contract.outputs
-                            ],
-                            "required_product_inputs": list(
-                                action.runtime_contract.required_product_inputs
-                            ),
-                            "article_roles": list(
-                                action.runtime_contract.article_roles
-                            ),
-                            "standard_executor": action.runtime_contract.standard_executor,
-                            "execution_parameters": dict(action.runtime_contract.execution_parameters),
-                        }
-                        if action.runtime_contract is not None
-                        else None
-                    ),
-                }
-            )
-    return tuple(action_ids), rows
-
-
 def _primary_or_first_step_index(plan: AnalysisPlan) -> int:
     for index, step in enumerate(plan.steps):
         if step.planned_analysis_role == "primary":
@@ -1716,6 +1672,9 @@ class ProgressivePlannerAgent:
                 },
                 ensure_ascii=False,
                 separators=(",", ":"),
+            )
+            + question_anchor_rule_text(
+                (context.primary_exposure, context.target_outcome), variables
             ),
             "Adjustment-set authority (host compiled; preserve exact roster):\n"
             + json.dumps(

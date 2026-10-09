@@ -1113,6 +1113,10 @@
     ],
     [
       "easyicu.research_agent.agents.progressive_planner",
+      "easyicu.research_agent.planning.outline_action_menu"
+    ],
+    [
+      "easyicu.research_agent.agents.progressive_planner",
       "easyicu.research_agent.planning.outline_action_rules"
     ],
     [
@@ -10300,6 +10304,14 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.planning.outline_action_menu",
+      "easyicu.research_agent.planning.outline_action_rules"
+    ],
+    [
+      "easyicu.research_agent.planning.outline_action_menu",
+      "easyicu.research_agent.planning.scientific_action_catalog"
+    ],
+    [
       "easyicu.research_agent.planning.outline_action_rules",
       "easyicu.research_agent.planning.phenotype_outline_rules"
     ],
@@ -13960,9 +13972,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3482,
+    "edge_count": 3485,
     "largest_scc_size": 0,
-    "module_count": 797,
+    "module_count": 798,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -14521,6 +14533,7 @@
     "easyicu.research_agent.planning.method_vocabulary": "planning/method_vocabulary.py",
     "easyicu.research_agent.planning.novelty_contract": "planning/novelty_contract.py",
     "easyicu.research_agent.planning.ordinal_multi_outcome": "planning/ordinal_multi_outcome.py",
+    "easyicu.research_agent.planning.outline_action_menu": "planning/outline_action_menu.py",
     "easyicu.research_agent.planning.outline_action_rules": "planning/outline_action_rules.py",
     "easyicu.research_agent.planning.outline_design_selection": "planning/outline_design_selection.py",
     "easyicu.research_agent.planning.phenotype_outline_rules": "planning/phenotype_outline_rules.py",
