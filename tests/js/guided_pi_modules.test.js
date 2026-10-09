@@ -164,6 +164,14 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   Object.entries(axisSentences).forEach(([code, sentence]) => {
     assert.match(runFailure(failedClosed, { code }), sentence);
   });
+  // The Writer met an unavailable model service after every analysis step
+  // finished: whichever retry limit ended it, the results are kept.
+  for (const cause of ['transport_retry_attempts_exhausted', 'transport_retry_window_exhausted', 'transport_retry_wall_clock_exhausted']) {
+    const writerStop = runFailure(failedClosed, { code: 'writer_provider_transport_unavailable', cause });
+    assert.match(writerStop, /model service was unavailable while the manuscript was being drafted; the analysis finished/);
+    assert.doesNotMatch(writerStop, /did not pass EasyICU's checks/);
+  }
+  assert.match(runFailureZh(failedClosed, { code: 'writer_provider_transport_unavailable' }), /写稿时模型服务不可用；分析已完成，结果已保留。可以重试这次运行重新写稿/);
 
   // A runner image built from other EasyICU source needs a rebuild; telling the
   // researcher to start Docker would send them to a runtime that is already up.
