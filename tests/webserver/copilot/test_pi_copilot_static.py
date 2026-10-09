@@ -70,7 +70,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
     assert "css/guided-pi.css?v=20260923-head-fit2" in index
     assert "css/guided-pi-idea-source.css?v=20260922-connectors1" in index
-    assert "css/guided-pi-demo.css?v=20260815-reviewer-demo2" in index
+    assert "css/guided-pi-demo.css?v=20260922-demo-rewrite1" in index
     assert "css/guided-pi-preview.css?v=20260916-study-workspace3" in index
     assert "css/guided-pi-technical-report.css?v=20260830-technical-report1" in index
     assert "css/guided-pi-analysis-report.css?v=20260916-study-workspace3" in index
@@ -91,7 +91,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/workspace-canvas.css?v=20260921-fit1" in index
     assert "css/guided-pi-workspace.css?v=20260922-demo-card1" in index
     assert "css/guided-pi-empty-tasks.css?v=20260921-empty-tasks1" in index
-    assert "js/screens-guided-pi-demo.js?v=20260815-real-render2" in index
+    assert "js/screens-guided-pi-demo.js?v=20260923-demo-stage1" in index
     assert "js/screens-guided-pi-workbench-preview.js?v=20260829-data-readiness1" in index
     assert (
         "js/screens-guided-pi-evidence-preview.js?v=20260919-canvas1" in index
@@ -103,7 +103,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-analysis-report.js?v=20260922-estimates1" in index
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
     assert "js/screens-guided-pi-source-view.js?v=20260922-run-answer1" in index
-    assert "js/screens-guided-pi-preview.js?v=20260921-reader-tab1" in index
+    assert "js/screens-guided-pi-preview.js?v=20260922-demo-rewrite1" in index
     assert "js/screens-guided-pi-replay.js?v=20260919-task-index1" in index
     assert "js/screens-guided-pi-resources.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20260922-run-answer1" in index
@@ -118,7 +118,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20260922-named-source1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20260922-question-carry1" in index
-    assert "js/screens-guided-pi-session-view.js?v=20260922-named-demo2" in index
+    assert "js/screens-guided-pi-session-view.js?v=20260922-demo-rewrite1" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
@@ -5714,27 +5714,41 @@ def test_data_package_opens_in_a_route_owned_read_only_workbench() -> None:
 
 
 def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
+    """The walkthrough reads as one ordinary research conversation.
+
+    A clinical question, the plan to confirm, the answer in the registered
+    run's own numbers (rounded for display) with its figure, and the next
+    questions; the governance record is one folded block, not a defensive
+    exchange about whether the demo failed.
+    """
+
     demo = _read("js/screens-guided-pi-demo.js")
     pi_owner = _read("js/screens-guided-pi.js")
+    session_view = _read("js/screens-guided-pi-session-view.js")
     aside_owner = _read("js/screens-guided-pi-aside.js")
     resource_owner = _read("js/screens-guided-pi-resources.js")
     preview = _read("js/screens-guided-pi-preview.js")
-    assert "展示真实规划生命周期，在计划审阅处暂停" in demo
-    assert "计划草案 1/5 未满足科学合同；正在重试" in demo
-    assert "计划合同已通过；分析已暂停，等待人工审阅" in demo
-    assert "我批准这份精确审阅计划" in demo
-    assert "这是否意味着 Demo 失败" in demo
-    assert "审稿包已完整生成" in demo
-    assert "完成 6/6 · 数据质量图" in demo
-    assert "正式稿件被确定性权限闸门拒绝" in demo
-    assert "33,997 / 94,458 (35.991658%)" in demo
-    assert "4,986 / 60,461 (8.246638%)" in demo
-    assert "4,480 / 33,997 (13.177633%)" in demo
+    assert "入 ICU 后 24 小时内出现实验性 SOFA-2 脓毒症表型的比例有多高" in demo
+    assert "我拟定了一份 6 步的描述性分析计划，开始分析前请你确认" in demo
+    assert "批准这份计划，开始分析。" in demo
+    assert "33,997 个（35.99%）在入 ICU 后 24 小时内出现实验性 SOFA-2 脓毒症表型" in demo
+    assert "有表型组 13.18%（4,480/33,997），无表型组 8.25%（4,986/60,461）" in demo
+    assert "这是未调整的描述性比较，不能说明因果" in demo
+    assert "第 6/6 步：数据质量图" in demo
+    assert "在调整年龄和性别后，这个表型与院内死亡的关联还成立吗？" in demo
+    assert "没有做新颖性检索和独立科学审阅，所以没有生成临床论文" in demo
+    # Nothing in the walkthrough argues about whether the demo failed.
+    assert "这是否意味着 Demo 失败" not in demo
+    assert "临床稿件是另一项交付物" not in demo
+    # Registered values keep their provenance; the display rounds them.
+    assert "33,997 / 94,458 (35.99%)" in demo
+    assert "4,986 / 60,461 (8.25%)" in demo
+    assert "4,480 / 33,997 (13.18%)" in demo
+    assert "35.991658" not in demo
     assert "run_20260815T061842_5049c6" in demo
     assert "bounded_reviewer_projection_from_registered_run" in demo
     assert "reportable: false" in demo
     assert "publication_authorized: false" in demo
-    assert "临床稿件是另一项交付物" in demo
     assert "https://pubmed.ncbi.nlm.nih.gov/17938396/" in demo
     assert "kind: 'demo_artifact'" in demo
     assert "title: item ? item.title : name" in demo
@@ -5742,14 +5756,13 @@ def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
     assert "resource.title || label(resource)" in resource_owner
     assert "value.kind === 'demo_artifact'" in preview
     assert "Reviewer demonstration complete · Engineering evidence" in preview
-    assert "Bounded reviewer projection · Standard Web renderer" in preview
+    assert "Demo file · Read-only" in preview
     assert "safe.kind !== 'demo_artifact'" in preview
-    assert "reviewer_protocol.json" in demo
-    assert "analysis_plan.json" in demo
-    assert "descriptive_results.json" in demo
-    assert "applicability_audit.json" in demo
-    assert "execution_receipt.json" in demo
-    assert "authority_verdict.json" in demo
+    for fixture in (
+        "reviewer_protocol.json", "analysis_plan.json", "descriptive_results.json",
+        "applicability_audit.json", "execution_receipt.json", "authority_verdict.json",
+    ):
+        assert fixture in demo
     for standard_artifact in (
         "run_context.json",
         "cohort_summary.json",
@@ -5770,20 +5783,26 @@ def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
     assert demo.count("step_id: '") == 6
     assert "citation_keys:" in demo
     assert "projection_note:" in demo
+    # The walkthrough is an ordinary research workflow whose manuscript stage
+    # stays open, and it opens on the run's figures.
+    assert "kind: 'research_workflow_demo'" in demo
     assert "required_stage_count: 8" in demo
-    assert "completed_required_stages: 8" in demo
-    assert "reviewer_demo_complete" in demo
-    assert "['manuscript', 'complete', 'reviewer_dossier_complete']" in demo
-    assert "10.021% 是死亡事件比例" in demo
+    assert "completed_required_stages: 7" in demo
+    assert "['manuscript', 'blocked', 'manuscript_withheld_by_design']" in demo
+    assert "primaryDocument: () => artifactResource('figure_gallery.json'" in demo
+    assert "assets/demo/sofa2-phenotype-mortality.png" in demo
+    assert "followUps, resultHtml, shelfResources" in demo
+    assert "10.02% 是死亡事件比例" in demo
     assert "94,458 / 94,458" in demo
     assert "0 / 9,466" in demo
-    assert "primaryDocument" in demo
     assert "preview.open(primary" in pi_owner
-    assert "Reviewer workflow" in pi_owner
+    assert "demo.resultHtml({ tr, esc, button:" in session_view
+    assert "一个研究问题的完整流程" in session_view
     assert "gpi-demo-reviewer" not in pi_owner
     assert "reviewer_dossier_complete" in aside_owner
-    assert "审稿 HTML 与 PDF 报告已完整生成" in aside_owner
-    assert "Reviewer demonstration" in aside_owner
+    assert "manuscript_withheld_by_design" in aside_owner
+    assert "Workflow demo" in aside_owner
+    assert "demo.shelfResources()" in aside_owner
     assert "operator_plan_approved" in aside_owner
     assert "validated_analysis_complete" in aside_owner
     assert "validated_analysis_ready" in aside_owner
@@ -5794,7 +5813,7 @@ def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
     assert "human_review_required" in aside_owner
 
 
-def test_reviewer_demo_contract_completes_all_stages_without_upgrading_authority() -> (
+def test_reviewer_demo_keeps_the_manuscript_open_without_upgrading_authority() -> (
     None
 ):
     node = shutil.which("node")
@@ -5825,14 +5844,14 @@ def test_reviewer_demo_contract_completes_all_stages_without_upgrading_authority
     )
     payload = json.loads(completed.stdout)
     assert payload == {
-        "completed": 8,
+        "completed": 7,
         "required": 8,
-        "statuses": ["complete"] * 8,
+        "statuses": ["complete"] * 7 + ["blocked"],
         "verdict": "reviewer_demo_complete",
         "reportable": False,
         "publicationAuthorized": False,
-        "result": "4,986 / 60,461 (8.246638%)",
-        "primary": "system-validation-report.html",
+        "result": "4,986 / 60,461 (8.25%)",
+        "primary": "figure_gallery.json",
     }
 
 
@@ -5869,9 +5888,9 @@ def test_reviewer_demo_lifecycle_exposes_only_resolvable_standard_artifacts() ->
       console.log(JSON.stringify({{
         activityCount: activities.length,
         stepCount: activities.reduce((count, activity) => count + activity.steps.length, 0),
-        hasRetry: activities.some(activity => activity.steps.some(step => step.kind === 'retry')),
-        hasPause: activities.some(activity => activity.steps.some(step => step.code === 'blocked')),
-        hasStrictStop: activities.some(activity => activity.steps.some(step => step.code === 'withheld_as_designed')),
+        namedRows: activities.every(activity => activity.steps.every(step => step.kind === 'pipeline' && step.step === 'plan_step' && step.label)),
+        assistantReplies: messages.filter(message => message.role === 'assistant').length,
+        userMessages: messages.filter(message => message.role === 'user').length,
         missingStandard: standard.filter(name => !artifacts.includes(name)),
         unresolved: artifacts.filter(name => !demo.hasArtifact(name)),
         rendererShapes: {{
@@ -5890,12 +5909,14 @@ def test_reviewer_demo_lifecycle_exposes_only_resolvable_standard_artifacts() ->
         [node, "--eval", script], check=True, capture_output=True, text=True
     )
     payload = json.loads(completed.stdout)
+    # Every trace row is a named step that stays its own row; every standard
+    # record is reachable from the conversation.
     assert payload == {
-        "activityCount": 4,
-        "stepCount": 42,
-        "hasRetry": True,
-        "hasPause": True,
-        "hasStrictStop": True,
+        "activityCount": 2,
+        "stepCount": 14,
+        "namedRows": True,
+        "assistantReplies": 2,
+        "userMessages": 2,
         "missingStandard": [],
         "unresolved": [],
         "rendererShapes": {
@@ -5980,7 +6001,7 @@ def test_reviewer_demo_reuses_the_web_renderer_and_hydrates_registered_figures()
     assert "demo.renderArtifact" not in preview
     assert "renderer.artifactStructuredView(state.resource.artifact" in preview
     assert "guidedPi.require('literature')" in preview
-    assert "Bounded reviewer projection · Standard Web renderer" in preview
+    assert "Demo file · Read-only" in preview
     script = f"""
       global.window = {{ EU_LANG: 'en' }};
       global.fetch = async () => ({{

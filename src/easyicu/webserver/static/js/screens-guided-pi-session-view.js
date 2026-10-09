@@ -310,16 +310,20 @@
         return `<div class="gpi-activate"><h2>${tr('Demo unavailable', '演示暂不可用')}</h2><button class="btn" type="button" data-gpi-demo-exit>${tr('Back', '返回')}</button></div>`;
       }
       const messages = demo.messages().map(row => messageHtml(row, { interactive: false })).join('');
+      const result = typeof demo.resultHtml === 'function'
+        ? demo.resultHtml({ tr, esc, button: (resource, label) => RESOURCE_OWNER.button(resource, label) }) : '';
       const workflow = demo.workflow();
+      // A read-only walkthrough of one registered run: the header says what
+      // it is in a few words and the note says what it will not touch.
       return `<div class="gpi-panel gpi-demo-panel">
         <header class="gpi-head">
-          <div><div class="gpi-kicker">${tr('EASYICU COPILOT · REVIEWER DEMONSTRATION', 'EASYICU COPILOT · 审稿人演示')}</div><div class="gpi-title">${tr('Complete governed workflow', '完整受治理科研流程')} <span class="gpi-live">${tr('complete', '已完成')}</span></div></div>
-          <div class="gpi-head-meta"><span>${tr('Registered source run · 94,458 ICU stays', '登记 source run · 94,458 ICU stays')}</span><button class="gpi-link" type="button" data-gpi-demo-exit>${tr('Back to my project', '返回我的项目')}</button></div>
+          <div><div class="gpi-kicker">${tr('EASYICU COPILOT · DEMO', 'EASYICU COPILOT · 演示')}</div><div class="gpi-title">${tr('A research question, end to end', '一个研究问题的完整流程')}</div></div>
+          <div class="gpi-head-meta"><span>${tr('MIMIC-IV · read-only', 'MIMIC-IV · 只读')}</span><button class="gpi-link" type="button" data-gpi-demo-exit>${tr('Back to my project', '返回我的项目')}</button></div>
         </header>
         ${workflowHtml(workflow)}
-        <div class="gpi-demo-note" role="note">${iconHtml('shield', 16)}<span><strong>${tr('Read-only reviewer walkthrough.', '只读审稿人演示。')}</strong> ${tr('The transcript and dossier are a bounded projection derived from one registered source run, not live artifact transport. Aggregate results use the explicitly requested experimental first-24-hour SOFA-2 phenotype and a descriptive-only claim ceiling; they are not a clinical manuscript.', '对话与报告是从同一个登记 source run 派生的有界投影，不是 live artifact transport。聚合结果使用用户明确要求的入 ICU 后 24 小时实验性 SOFA-2 表型，结论上限为仅描述；它们不是临床论文。')}</span></div>
-        <div class="gpi-log" data-gpi-log>${messages}</div>
-        <footer class="gpi-demo-footer"><span>${tr('The reviewer dossier opens automatically. Select any underlined receipt to inspect its bounded source view.', '审稿报告会自动打开；点击任意带下划线的回执可检查其有界来源视图。')}</span><button class="btn primary" type="button" data-gpi-demo-exit>${tr('Start my own research', '开始我自己的研究')}</button></footer>
+        <div class="gpi-demo-note" role="note">${iconHtml('shield', 16)}<span>${tr('Read-only: the conversation and results come from one registered run. Nothing calls a model or changes your projects.', '只读演示：对话和结果来自一次已登记的真实运行，不会调用模型，也不会改动你的项目。')}</span></div>
+        <div class="gpi-log" data-gpi-log>${messages}${result}</div>
+        <footer class="gpi-demo-footer"><span>${tr('Open any underlined file to see its record.', '点击带下划线的文件可查看原始记录。')}</span><button class="btn primary" type="button" data-gpi-demo-exit>${tr('Start my own research', '开始我自己的研究')}</button></footer>
       </div>`;
     }
 
