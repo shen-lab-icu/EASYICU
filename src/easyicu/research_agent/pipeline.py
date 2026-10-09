@@ -187,7 +187,6 @@ from .planning.adjustment_authority import (
 from .planning.cohort_contract import (
     cohort_concept_id_scope,
     cohort_definition_has_explicit_selection,
-    sealed_cohort_concept_ids,
 )
 from .planning.dependence_authority import (
     DependenceAuthorityError,
@@ -278,6 +277,7 @@ from .intake.materialized_metadata import (
     materialized_provenance_path,
     stage_materialized_cohort_authority,
 )
+from .intake.typed_cohort_source import typed_cohort_source_database
 from .intake.materialized_trajectory import (
     MaterializedTrajectoryAuthorityRef,
     MaterializedTrajectoryError,
@@ -401,6 +401,7 @@ from .planning import figure_plan_shaping as _figure_plan
 from .planning import final_plan_shape as _final_plan
 from .orchestration.experiment_spec import ExperimentSpec, dump_experiment_spec
 from .orchestration import scientific_plan_review_gate as _scientific_plan_gate
+from .orchestration.development_locked_plan import read_development_locked_plan
 from .figures.skill import PublicationFigureSkill
 from .figures.prior_output_support import (
     figure_parent_candidate_step_dirs as _figure_parent_candidate_step_dirs,
@@ -538,21 +539,6 @@ from .orchestration.finalize import (
 _ensure_audit_panel_step_in_plan = _figure_plan.ensure_data_quality_figure_step
 
 
-def typed_cohort_source_resolution_chain(
-    database: str, class_prefixes: Sequence[str]
-) -> tuple[str, ...]:
-    """The resolution order a source class policy denotes.
-
-    Column metadata records the database followed by its class prefixes with
-    repeats removed, and a typed cohort recovers its prefixes as that chain
-    minus its head.  A source listed among its own prefixes (``eicu_demo`` ->
-    ``eicu_demo, eicu``) therefore comes back as ``eicu`` alone, so a class
-    policy is compared as the chain it denotes, not as the list that wrote it.
-    """
-
-    return tuple(dict.fromkeys((database, *class_prefixes)))
-
-
 def _one_capability_job(method: Callable[..., Any]) -> Callable[..., Any]:
     """Bind a public entry point to one runtime-capability publication scope.
 
@@ -626,18 +612,6 @@ from .orchestration.resume_plan_migration import (  # noqa: F401 — owner modul
     _restore_resume_plan_robustness_lock,
     _resume_completed_records_for_plan_migration,
 )
-
-
-def _read_locked_plan(path: Path, context: ResearchContext) -> AnalysisPlan:
-    """Parse a development locked plan with its run's sealed cohort roster.
-
-    Its cohort may filter on a column the run materialized, which validation
-    knows only with that roster.
-    """
-
-    text = path.read_text(encoding="utf-8")
-    with cohort_concept_id_scope(sealed_cohort_concept_ids(context)):
-        return AnalysisPlan.model_validate_json(text)
 
 
 def _load_resume_state(run_dir: Path) -> Optional[Dict[str, Any]]:
@@ -2353,31 +2327,11 @@ class ResearchAgentPipeline:
                 findings=findings,
             )
         elif self._config.development_locked_analysis_plan_path is not None:
-            locked_plan_path = Path(
-                self._config.development_locked_analysis_plan_path
-            ).expanduser()
-            expected_digest = str(
-                self._config.development_locked_analysis_plan_sha256 or ""
+            plan, observed_digest = read_development_locked_plan(
+                self._config.development_locked_analysis_plan_path,
+                self._config.development_locked_analysis_plan_sha256,
+                agent_context,
             )
-            if not locked_plan_path.is_file():
-                raise ValueError(
-                    "development locked analysis plan is not a regular file: "
-                    f"{locked_plan_path}"
-                )
-            observed_digest = sha256_of_file(locked_plan_path)
-            if observed_digest != expected_digest:
-                raise ValueError(
-                    "development locked analysis plan SHA-256 mismatch: "
-                    f"expected={expected_digest} observed={observed_digest}"
-                )
-            try:
-                plan = _read_locked_plan(locked_plan_path, agent_context)
-            except Exception as exc:
-                raise ValueError("development locked analysis plan is invalid") from exc
-            if plan.research_question != agent_context.research_question:
-                raise ValueError(
-                    "development locked analysis plan research question mismatch"
-                )
             primary_steps = [
                 step for step in plan.steps if step.planned_analysis_role == "primary"
             ]
@@ -3193,9 +3147,7 @@ class ResearchAgentPipeline:
         # after its last revision, so it never got to satisfy it.
         long_trajectory_bound = long_trajectory_is_bound(trajectory_binding)
         context_path = run_dir / "research_context.json"
-        from .planning.accepted_analysis_inputs import bind_analysis_inputs
-        from .planning.baseline_requirements import bind_baseline_requirements
-        from .planning.population_requirements import bind_population_requirements
+        from .orchestration.reviewed_requirements import bind_reviewed_requirements
 
         if resume_context_evidence_path is not None:
             # Resume context authority is the digest-verified evidence copy,
@@ -3207,15 +3159,7 @@ class ResearchAgentPipeline:
             context = parse_research_context_json(
                 resume_context_evidence_path.read_text(encoding="utf-8")
             )
-            bind_baseline_requirements(
-                context, self._config.bound_baseline_requirements, restoring=True,
-            )
-            bind_population_requirements(
-                context, self._config.bound_population_requirements, restoring=True,
-            )
-            bind_analysis_inputs(
-                context, self._config.bound_analysis_inputs, restoring=True,
-            )
+            bind_reviewed_requirements(context, self._config, restoring=True)
             if not context_path.is_file() or sha256_of_file(
                 context_path
             ) != sha256_of_file(resume_context_evidence_path):
@@ -3259,15 +3203,7 @@ class ResearchAgentPipeline:
             if builder is build_research_context:
                 context_kwargs["trajectory_binding"] = trajectory_binding
             context = builder(**context_kwargs)
-            context = bind_baseline_requirements(
-                context, self._config.bound_baseline_requirements,
-            )
-            context = bind_population_requirements(
-                context, self._config.bound_population_requirements,
-            )
-            context = bind_analysis_inputs(
-                context, self._config.bound_analysis_inputs,
-            )
+            context = bind_reviewed_requirements(context, self._config)
             context_path.write_text(
                 context.model_dump_json(indent=2),
                 encoding="utf-8",
@@ -4554,32 +4490,11 @@ class ResearchAgentPipeline:
                 "an untyped DataFrame or legacy parquet for the naive arm."
             )
         if verified_source_authority is not None:
-            normalized_database = normalize_database_name(database)
-            if verified_source_authority.sidecar.source_database != normalized_database:
-                raise MaterializedMetadataError(
-                    "declared database does not match typed cohort authority"
-                )
-            from easyicu.config import load_src_cfg
-
-            expected_prefixes = tuple(
-                str(value).strip().lower()
-                for value in load_src_cfg(normalized_database).class_prefix
-                if str(value).strip()
-            )
-            if typed_cohort_source_resolution_chain(
-                normalized_database,
-                verified_source_authority.sidecar.source_database_class_prefixes,
-            ) != typed_cohort_source_resolution_chain(
-                normalized_database, expected_prefixes
-            ):
-                raise MaterializedMetadataError(
-                    "typed cohort source class policy does not match host registry"
-                )
             # Typed authority owns the actual source database. Preserve the
             # public API's accepted aliases (for example ``mimiciv``) while
             # passing one canonical coordinate into scientific identity,
             # ResearchContext v2, cache, and resume authority.
-            database = normalized_database
+            database = typed_cohort_source_database(verified_source_authority, database)
         verified_source_trajectory: Optional[
             VerifiedMaterializedTrajectoryAuthority
         ] = None
