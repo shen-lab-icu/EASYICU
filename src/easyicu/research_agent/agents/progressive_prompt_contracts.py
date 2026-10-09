@@ -175,6 +175,8 @@ def outline_shape_contract(
             }
         ],
         "rationale": "<8-1200 characters>",
+        "capability_gap": None,
+        "capability_gap_concept": None,
     }
     return (
         "Exact ProgressivePlanOutline JSON shape (replace every angle-bracket "
@@ -235,6 +237,15 @@ def outline_shape_contract(
             "shown because complete dimension-specific reviewed design authority "
             "is not available."
         )
+        + "\ncapability_gap and capability_gap_concept stay null unless the "
+        "question needs a design element that no candidate family can express. "
+        "Then set capability_gap to levels_from_thresholds_unavailable, "
+        "longitudinal_representation_unavailable, multiple_sources_required, "
+        "estimand_unsupported or design_element_unsupported; set "
+        "capability_gap_concept to the sealed variable to group by thresholds "
+        "(otherwise null); say why in rationale; draft no steps; and do not "
+        "change the analysis type, population or exposure to work around it. "
+        "The host checks the claim against the study before planning stops."
     )
 
 

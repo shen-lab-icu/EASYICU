@@ -563,6 +563,13 @@ _PLANNING_STOP_SENTENCES = {
         "Declare the study's analysis as a prediction model, then generate a "
         "fresh plan."
     ),
+    # The host may have been unable to check the Planner's claim
+    # (planning.capability_gap), so the sentence says planning found it.
+    "progressive_capability_gap": (
+        "Planning found that the question needs something no executable "
+        "EasyICU method can yet provide, so it stopped before the analysis "
+        "steps were drafted. No analysis was run."
+    ),
     "progressive_family_spec_icu_stay_unit_unread": (
         "The prepared data records the ICU length of stay in a unit EasyICU "
         "reads as neither days nor hours. Planning stopped before the Planner "
@@ -752,6 +759,11 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
             path = raw.get("path")
             if isinstance(path, str) and _SAFE_COMPILER_COORDINATE_RE.fullmatch(path):
                 projected["path"] = path
+            cause_code = raw.get("cause_code")
+            if isinstance(cause_code, str) and re.fullmatch(
+                r"[a-z][a-z0-9_]{2,79}", cause_code
+            ):
+                projected["cause_code"] = cause_code
             metrics = raw.get("metrics")
             if isinstance(metrics, Mapping):
                 # The compiler's own boundary measurement. Keys are canonical
@@ -963,6 +975,12 @@ def _write_pipeline_failure_diagnostic(
     return relative
 
 
+def _failure_gate_detail(reason_code: str, cause_code: Optional[str]) -> Dict[str, Any]:
+    """A failed run's typed reason, and its cause when the owner named one."""
+
+    return {"reason_code": reason_code, **({"cause_code": cause_code} if cause_code else {})}
+
+
 def _write_pipeline_failure_projection(
     *,
     wrapper_dir: Path,
@@ -972,12 +990,14 @@ def _write_pipeline_failure_projection(
     failure_type: str,
     diagnostic: Optional[str],
     detail_reason_code: Optional[str] = None,
+    detail_cause_code: Optional[str] = None,
 ) -> bool:
     """Write a fail-closed terminal receipt that Project Monitor can index.
 
     ``detail_reason_code`` is the owner's typed reason beneath ``code``; the
-    gate carries it as its detail so the run record can name what stopped the
-    run instead of the generic wording for ``code``.
+    gate carries it, with the reason's own cause when it names one, as its
+    detail so the run record can name what stopped the run instead of the
+    generic wording for ``code``.
     """
 
     run_id = wrapper_dir.name
@@ -1005,7 +1025,11 @@ def _write_pipeline_failure_projection(
                 "reason_code": code,
             }
         ],
-        **({"detail": {"reason_code": detail_reason_code}} if detail_reason_code else {}),
+        **(
+            {"detail": _failure_gate_detail(detail_reason_code, detail_cause_code)}
+            if detail_reason_code
+            else {}
+        ),
     }
     payloads: Dict[str, Dict[str, Any]] = {
         "run_context.json": {
@@ -1092,7 +1116,9 @@ def _record_pipeline_failure(
     )
     if execution_retry_id is None:
         # The allowlisted owner projection has already validated the code.
-        reason_code = _safe_pipeline_typed_failure(exc).get("reason_code")
+        typed = _safe_pipeline_typed_failure(exc)
+        reason_code = typed.get("reason_code")
+        cause_code = typed.get("cause_code")
         _write_pipeline_failure_projection(
             wrapper_dir=wrapper_dir,
             study=study,
@@ -1101,6 +1127,7 @@ def _record_pipeline_failure(
             failure_type=_pipeline_failure_category(exc),
             diagnostic=diagnostic,
             detail_reason_code=reason_code if isinstance(reason_code, str) else None,
+            detail_cause_code=cause_code if isinstance(cause_code, str) else None,
         )
     return diagnostic
 
@@ -1156,6 +1183,7 @@ def _record_unresumable_review_failure(
     failure_type: str,
     diagnostic: Optional[str],
     detail_reason_code: Optional[str] = None,
+    detail_cause_code: Optional[str] = None,
 ) -> bool:
     """Record a paused run whose approved resume failed and cannot resume.
 
@@ -1182,7 +1210,7 @@ def _record_unresumable_review_failure(
     }
     gate.update(status="blocked", reason=code, reportable=False, draft_unlocked=False)
     if detail_reason_code:
-        gate["detail"] = {"reason_code": detail_reason_code}
+        gate["detail"] = _failure_gate_detail(detail_reason_code, detail_cause_code)
     payloads: Dict[str, Dict[str, Any]] = {
         "quality_gate.json": {**quality, "gate": gate},
         "source_run_manifest.json": {
@@ -6883,6 +6911,11 @@ def resume_research_pipeline(
                 diagnostic=diagnostic,
                 detail_reason_code=(
                     reason_code if isinstance(reason_code, str) else None
+                ),
+                detail_cause_code=(
+                    typed_failure.get("cause_code")
+                    if isinstance(typed_failure.get("cause_code"), str)
+                    else None
                 ),
             )
         next_step = "resume again" if remains_resumable else "generate a fresh plan"

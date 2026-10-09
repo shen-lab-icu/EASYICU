@@ -520,6 +520,57 @@ class ProgressiveOutlineStep(BaseModel):
         return cleaned
 
 
+#: The design element a capability gap concerns, and why no offered family can
+#: express it.  The first three requirements are checked against the study's
+#: typed context before planning stops (``planning.capability_gap``); the host
+#: has no evidence for or against the last two, so it records them unverifiable.
+CapabilityGapElement = Literal[
+    "population", "exposure", "outcome", "timing", "comparison", "analysis"
+]
+CapabilityGapRequirement = Literal[
+    "levels_from_thresholds_unavailable",
+    "longitudinal_representation_unavailable",
+    "multiple_sources_required",
+    "estimand_unsupported",
+    "design_element_unsupported",
+]
+
+
+def _names_its_concept(requirement: Optional[str], concept: Optional[str]) -> bool:
+    """A thresholds gap names the variable to group; no other gap names one."""
+
+    return (requirement == "levels_from_thresholds_unavailable") == (concept is not None)
+
+
+_CONCEPT_RULE = (
+    "a capability gap's concept names the variable to group by thresholds, "
+    "and only that requirement names one"
+)
+
+
+class ProgressiveCapabilityGap(BaseModel):
+    """Something a question needs that no offered family can express.
+
+    ``requirement`` says what is missing.  A producer that knows which part of
+    the design the gap concerns, or can say why in its own words, adds
+    ``element`` and ``detail``; an outline names only the requirement and
+    explains it in its rationale.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    requirement: CapabilityGapRequirement
+    concept: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    element: Optional[CapabilityGapElement] = None
+    detail: Optional[str] = Field(default=None, min_length=8, max_length=300)
+
+    @model_validator(mode="after")
+    def _only_thresholds_name_a_concept(self) -> "ProgressiveCapabilityGap":
+        if not _names_its_concept(self.requirement, self.concept):
+            raise ValueError(_CONCEPT_RULE)
+        return self
+
+
 class ProgressivePlanOutline(BaseModel):
     """Small retrieval-informed plan; the host materializes one step at a time."""
 
@@ -534,11 +585,40 @@ class ProgressivePlanOutline(BaseModel):
         default=None,
         exclude_if=lambda value: value is None,
     )
-    steps: list[ProgressiveOutlineStep] = Field(min_length=1, max_length=24)
+    steps: list[ProgressiveOutlineStep] = Field(max_length=24)
     rationale: str = Field(min_length=8, max_length=1200)
+    # Something the question needs that no offered family can express: planning
+    # stops there instead of drafting steps that quietly answer another question.
+    # Two flat fields keep the outline's transport small; the rationale says why.
+    capability_gap: Optional[CapabilityGapRequirement] = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    capability_gap_concept: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        exclude_if=lambda value: value is None,
+    )
+
+    def declared_capability_gap(self) -> Optional[ProgressiveCapabilityGap]:
+        """The gap this outline declares, in the form the host checks."""
+
+        if self.capability_gap is None:
+            return None
+        return ProgressiveCapabilityGap(
+            requirement=self.capability_gap, concept=self.capability_gap_concept
+        )
 
     @model_validator(mode="after")
     def _closed_dag(self) -> "ProgressivePlanOutline":
+        if (self.capability_gap is None) != bool(self.steps):
+            raise ValueError(
+                "a progressive outline drafts steps, or declares a "
+                "capability_gap and drafts none"
+            )
+        if not _names_its_concept(self.capability_gap, self.capability_gap_concept):
+            raise ValueError(_CONCEPT_RULE)
         step_ids = [step.step_id for step in self.steps]
         if len(step_ids) != len(set(step_ids)):
             raise ValueError("progressive outline step ids must be unique")
@@ -1087,6 +1167,7 @@ class ProgressivePlanCompileError(ValueError):
         path: Optional[str] = None,
         findings: Sequence[Mapping[str, Any]] = (),
         metrics: Optional[Mapping[str, Any]] = None,
+        cause_code: Optional[str] = None,
     ) -> None:
         if not re.fullmatch(r"[a-z][a-z0-9_]{2,79}", reason_code):
             raise ValueError(
@@ -1130,6 +1211,11 @@ class ProgressivePlanCompileError(ValueError):
         if safe_metrics:
             self.easyicu_safe_diagnostic["metrics"] = safe_metrics
             self.details["metrics"] = safe_metrics
+        # The stop's own typed cause beneath its reason (for example which
+        # capability a gap lacks), so a reader can say why without the message.
+        if cause_code is not None and re.fullmatch(r"[a-z][a-z0-9_]{2,79}", cause_code):
+            self.easyicu_safe_diagnostic["cause_code"] = cause_code
+            self.details["cause_code"] = cause_code
         if findings:
             self.details["findings"] = [dict(item) for item in findings]
         coordinate = f" step={step_id!r}" if step_id else ""
@@ -1314,6 +1400,7 @@ __all__ = [
     "ProgressivePlanCompileError",
     "ProgressivePlanCompileReceipt",
     "ProgressivePlanFoundation",
+    "ProgressiveCapabilityGap",
     "ProgressivePlanOutline",
     "ProgressivePlannerCheckpoint",
     "ProgressivePlanSkeleton",
