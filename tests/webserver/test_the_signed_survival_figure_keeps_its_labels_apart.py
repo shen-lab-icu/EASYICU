@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 import pytest
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 from easyicu.research_agent.figures import publication
 from easyicu.research_agent.gates.visual_qa import audit_svg_text_layout
@@ -71,7 +72,9 @@ def test_the_one_row_estimate_label_stays_beside_its_own_panel(tmp_path, monkeyp
     authority, _svg = _render(tmp_path)
 
     (fig,) = drawn
-    fig.canvas.draw()
+    # The runner closes the figure once it is saved, and matplotlib 3.11 then
+    # leaves it no drawing canvas; it is measured on a raster canvas of its own.
+    FigureCanvasAgg(fig).draw()
     by_title = {axes.get_title(loc="left"): axes for axes in fig.axes}
     km = by_title["Unadjusted landmark Kaplan-Meier survival"]
     estimate = next(
