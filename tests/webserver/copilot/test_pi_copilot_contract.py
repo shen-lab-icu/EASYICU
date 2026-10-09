@@ -4097,8 +4097,8 @@ def test_opening_question_saves_without_inventing_an_analysis_unit(
 
     assert result["code"] == "study_context_updated"
     assert writes[0]["question"].startswith("Estimate Sepsis-3 prevalence")
-    assert writes[0]["cohort"]["preset"] == "all_icu"
-    assert result["details"]["omitted_unconfirmed_fields"] == ["cohort.preset"]
+    assert writes[0]["cohort"] == {"preset": "all_icu"}  # its label is withheld with it
+    assert result["details"]["omitted_unconfirmed_fields"] == ["cohort.preset", "cohort.label"]
 
 
 @pytest.mark.parametrize("preset", ["sepsis3", "aki", "respiratory", "vasopressor", "ventilation"])
@@ -4144,9 +4144,8 @@ def test_opening_question_defers_phenotype_restrictions_to_reviewed_plan(
     assert result["code"] == "study_context_updated"
     assert writes[0]["question"] == question
     assert writes[0].get("cohort", {}) == current["cohort"]
-    assert result["details"]["unconfirmed_omissions"] == [{
-        "field": "cohort.preset", "code": "study_cohort_population_requires_plan",
-    }]
+    code = "study_cohort_population_requires_plan"  # the label is withheld with its preset
+    assert result["details"]["unconfirmed_omissions"] == [{"field": "cohort.preset", "code": code}, {"field": "cohort.label", "code": code}]
     assert "candidate plan for review" in result["summary"]
 
 

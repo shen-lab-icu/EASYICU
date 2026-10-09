@@ -596,6 +596,28 @@ _GATED_SLOT_OMISSION_CODES = {
     "primary_exposure": "study_primary_exposure_confirmation_required",
     "analysis_goal": "study_analysis_goal_confirmation_required",
 }
+#: Why a field was not saved, as the summary states it to the model.
+_OMISSION_REASONS = {
+    "study_cohort_population_requires_plan": (
+        "a population restricted by a condition is proposed in the candidate "
+        "plan, with the words written to name it"
+    ),
+    "study_cohort_all_stays_confirmation_required": (
+        "the researcher has not chosen between all eligible ICU stays and one "
+        "stay per patient"
+    ),
+    "study_cohort_first_stay_confirmation_required": (
+        "a first-ICU-stay restriction changes the analysis unit and needs the "
+        "researcher's explicit choice"
+    ),
+    "study_primary_outcome_confirmation_required": "the turn names it only as candidate intent",
+    "study_primary_exposure_confirmation_required": "the turn names it only as candidate intent",
+    "study_analysis_goal_confirmation_required": "the turn names it only as candidate intent",
+}
+#: The cohort's own words for its population, withheld with the preset they
+#: name: a saved label would otherwise name a population the preset does not
+#: select (the study card, the data package review).
+_COHORT_PRESET_WORDING = ("label", "review")
 
 
 def _unconfirmed_gated_slots(
@@ -652,13 +674,68 @@ def _has_other_confirmed_change(
     *,
     slot_machinery: Set[str],
     unconfirmed_gated: FrozenSet[str],
+    cohort_kept: bool,
 ) -> bool:
-    """Whether this call also carries a change the user actually confirmed."""
+    """Whether this call also carries a change the user actually confirmed.
 
-    return any(
+    ``cohort_kept`` says the proposed cohort changes a field saved whether or
+    not its preset is (``_cohort_kept_without_preset``).
+    """
+
+    return cohort_kept or any(
         key in params
         for key in _STUDY_SETUP_FIELDS - slot_machinery - unconfirmed_gated
     )
+
+
+def _cohort_kept_without_preset(
+    params: Mapping[str, Any], current: Mapping[str, Any]
+) -> bool:
+    """Whether the proposed cohort changes a field kept when its preset is withheld.
+
+    The preset and the words written for it (``_COHORT_PRESET_WORDING``)
+    stand or fall together.  A typed restriction such as ``age_min`` or
+    ``min_icu_los_hours`` does not depend on the preset and is saved either way.
+    """
+
+    proposed = params.get("cohort")
+    if not isinstance(proposed, Mapping):
+        return False
+    prior = current.get("cohort")
+    prior = prior if isinstance(prior, Mapping) else {}
+    return any(
+        key not in {"preset", *_COHORT_PRESET_WORDING} and value != prior.get(key)
+        for key, value in proposed.items()
+    )
+
+
+def _withhold_cohort_preset(
+    patch: Dict[str, Any], current: Mapping[str, Any], proposed: Mapping[str, Any]
+) -> list[str]:
+    """Withhold the proposed preset and the words written for it; keep the rest.
+
+    Returns the cohort fields this turn proposed and does not save.
+    """
+
+    prior = current.get("cohort")
+    prior = prior if isinstance(prior, Mapping) else {}
+    cohort = dict(patch.get("cohort") or {})
+    withheld: list[str] = []
+    for key in ("preset", *_COHORT_PRESET_WORDING):
+        if key not in proposed:
+            continue
+        proposed_value = cohort.get(key)
+        if key in prior:
+            cohort[key] = prior[key]
+        else:
+            cohort.pop(key, None)
+        if cohort.get(key) != proposed_value:
+            withheld.append(f"cohort.{key}")
+    if cohort:
+        patch["cohort"] = cohort
+    else:
+        patch.pop("cohort", None)
+    return withheld
 
 
 def _restore_unconfirmed_study_slot(
@@ -666,9 +743,15 @@ def _restore_unconfirmed_study_slot(
     current: Mapping[str, Any],
     *,
     slot: str,
-) -> None:
-    """Discard one unconfirmed proposal while retaining confirmed changes."""
+) -> list[str]:
+    """Discard one unconfirmed proposal while retaining confirmed changes.
 
+    Returns the fields besides ``slot`` that the proposal changed and this
+    discards with it: the slot's execution concept, and the feature modules
+    proposed in the same call, which go back to the saved list as a whole.
+    """
+
+    dropped: list[str] = []
     prior = current.get(slot)
     if prior:
         patch[slot] = prior
@@ -689,16 +772,34 @@ def _restore_unconfirmed_study_slot(
                 restored_execution[slot] = prior_value
             else:
                 restored_execution.pop(slot, None)
+            if restored_execution.get(slot) != proposed_execution.get(slot):
+                dropped.append(f"execution_concepts.{slot}")
             if restored_execution:
                 patch["execution_concepts"] = restored_execution
             else:
                 patch.pop("execution_concepts", None)
         if "modules" in patch:
             prior_modules = list(current.get("modules") or [])
+            if sorted(map(str, patch["modules"] or [])) != sorted(map(str, prior_modules)):
+                dropped.append("modules")
             if prior_modules:
                 patch["modules"] = prior_modules
             else:
                 patch.pop("modules", None)
+    return dropped
+
+
+def _omission_reasons_text(omissions: Sequence[Mapping[str, str]]) -> str:
+    """Each withheld field with its code and reason, grouped by reason."""
+
+    grouped: Dict[str, list[str]] = {}
+    for item in omissions:
+        grouped.setdefault(item["code"], []).append(item["field"])
+    return "; ".join(
+        f"{', '.join(fields)} ({code}: "
+        f"{_OMISSION_REASONS.get(code, 'it needs an explicit choice')})"
+        for code, fields in grouped.items()
+    )
 
 
 def update_study_context(
@@ -772,6 +873,7 @@ def update_study_context(
     unconfirmed_gated = _unconfirmed_gated_slots(
         params, current or {}, context.user_message
     )
+    cohort_kept = _cohort_kept_without_preset(params, current or {})
 
     def _record_unconfirmed_omission(
         slot: str, field: str, *, code: Optional[str] = None,
@@ -870,9 +972,10 @@ def update_study_context(
                 params,
                 slot_machinery={"cohort", "execution_concepts", "modules", "confirmations"},
                 unconfirmed_gated=unconfirmed_gated,
+                cohort_kept=cohort_kept,
             ):
-                _restore_unconfirmed_study_slot(patch, current or {}, slot="cohort")
-                _record_unconfirmed_omission("cohort", "cohort.preset", code=code)
+                for field in _withhold_cohort_preset(patch, current or {}, proposed_cohort):
+                    _record_unconfirmed_omission("cohort", field, code=code)
             else:
                 return _result(
                     context,
@@ -902,10 +1005,13 @@ def update_study_context(
                     "confirmations",
                 },
                 unconfirmed_gated=unconfirmed_gated,
+                cohort_kept=cohort_kept,
             )
             if other_confirmed_change:
-                _restore_unconfirmed_study_slot(patch, current or {}, slot="cohort")
-                _record_unconfirmed_omission("cohort", "cohort.preset")
+                for field in _withhold_cohort_preset(patch, current or {}, proposed_cohort):
+                    _record_unconfirmed_omission(
+                        "cohort", field, code="study_cohort_all_stays_confirmation_required"
+                    )
             else:
                 return _result(
                     context,
@@ -936,10 +1042,13 @@ def update_study_context(
                     "confirmations",
                 },
                 unconfirmed_gated=unconfirmed_gated,
+                cohort_kept=cohort_kept,
             )
             if other_confirmed_change:
-                _restore_unconfirmed_study_slot(patch, current or {}, slot="cohort")
-                _record_unconfirmed_omission("cohort", "cohort.preset")
+                for field in _withhold_cohort_preset(patch, current or {}, proposed_cohort):
+                    _record_unconfirmed_omission(
+                        "cohort", field, code="study_cohort_first_stay_confirmation_required"
+                    )
             else:
                 return _result(
                     context,
@@ -974,10 +1083,14 @@ def update_study_context(
                 "confirmations",
             },
             unconfirmed_gated=unconfirmed_gated,
+            cohort_kept=cohort_kept,
         )
         if other_confirmed_change:
-            _restore_unconfirmed_study_slot(patch, current or {}, slot="outcome")
-            _record_unconfirmed_omission("outcome", "outcome")
+            dropped = _restore_unconfirmed_study_slot(
+                patch, current or {}, slot="outcome"
+            )
+            for field in ("outcome", *dropped):
+                _record_unconfirmed_omission("outcome", field)
         else:
             return _result(
                 context,
@@ -1013,12 +1126,14 @@ def update_study_context(
                 "confirmations",
             },
             unconfirmed_gated=unconfirmed_gated,
+            cohort_kept=cohort_kept,
         )
         if other_confirmed_change:
-            _restore_unconfirmed_study_slot(
+            dropped = _restore_unconfirmed_study_slot(
                 patch, current or {}, slot="primary_exposure"
             )
-            _record_unconfirmed_omission("primary_exposure", "primary_exposure")
+            for field in ("primary_exposure", *dropped):
+                _record_unconfirmed_omission("primary_exposure", field)
         else:
             return _result(
                 context,
@@ -1042,12 +1157,14 @@ def update_study_context(
             params,
             slot_machinery={"analysis_goal"},
             unconfirmed_gated=unconfirmed_gated,
+            cohort_kept=cohort_kept,
         )
         if other_confirmed_change:
-            _restore_unconfirmed_study_slot(
+            dropped = _restore_unconfirmed_study_slot(
                 patch, current or {}, slot="analysis_goal"
             )
-            _record_unconfirmed_omission("analysis_goal", "analysis_goal")
+            for field in ("analysis_goal", *dropped):
+                _record_unconfirmed_omission("analysis_goal", field)
         else:
             return _result(
                 context,
@@ -1744,11 +1861,12 @@ def update_study_context(
         # opening questionnaire ahead of the candidate Planner.
         summary += (
             " NOT saved this turn: "
-            + ", ".join(omitted_unconfirmed_fields)
-            + ". Those slots stay unset because the turn only mentions them as "
-            "candidate intent, not approved design. Follow the returned "
-            "workflow next action: unresolved design belongs in the candidate "
-            "plan for review, not a pre-plan confirmation questionnaire."
+            + _omission_reasons_text(unconfirmed_omissions)
+            + ". The rest of the setup is saved. Tell the researcher, one line "
+            "each, which of these were not saved and why. Do not ask them to "
+            "choose now: follow the returned workflow next action; unresolved "
+            "design belongs in the candidate plan for review, not a pre-plan "
+            "confirmation questionnaire."
         )
     result = _result(
         context,
