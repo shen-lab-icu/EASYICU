@@ -1574,7 +1574,13 @@ def _metadata_only_planning_acquisition(
     output_dir.mkdir(parents=True, exist_ok=True)
     universe_path = output_dir / "planner_catalog.parquet"
     normalized_database = normalize_database_name(database)
-    database_id_columns = ID_COLUMNS.get(normalized_database, [])
+    # Demo releases share their family's ICU-stay identity (eicu_demo → eicu).
+    # ``normalize_database_name`` keeps the suffix so source contracts can tell
+    # them apart, but the identity registry is keyed by family only.
+    database_id_columns = (
+        ID_COLUMNS.get(normalized_database)
+        or ID_COLUMNS.get(normalized_database.removesuffix("_demo"), [])
+    )
     if not database_id_columns:
         raise ResearchPipelineRunError(
             "research_pipeline_planning_identity_unavailable",
