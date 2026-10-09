@@ -29,6 +29,7 @@ from ...authority.target_trial_runtime import (
     TargetTrialRuntimeAuthority,
 )
 from ...contracts.target_trial_design import TARGET_TRIAL_STOP_THRESHOLDS
+from ...numeric_scalars import coerce_optional_finite_float
 from ...schema import AnalysisPlan, AnalysisStep
 
 TARGET_TRIAL_FIGURE_ANALYSIS_KIND = TARGET_TRIAL_FIGURE_METHOD
@@ -81,15 +82,6 @@ def _effect_row(effects: Any, estimand: str, weighting: str) -> Mapping[str, Any
             f"target trial effect table lacks one {estimand} row with {weighting} weights"
         )
     return rows.iloc[0].to_dict()
-
-
-def _finite(value: Any) -> bool:
-    import math
-
-    try:
-        return math.isfinite(float(value))
-    except (TypeError, ValueError):
-        return False
 
 
 def _reader_legend(sealed: TargetTrialRuntimeAuthority) -> str:
@@ -266,9 +258,11 @@ def _render(
     for row, (weighting, name) in enumerate(reversed(_WEIGHTINGS)):
         values = _effect_row(effects, "risk_difference", weighting)
         point = 100.0 * float(values["estimate"])
-        if _finite(values.get("ci_low")) and _finite(values.get("ci_high")):
+        ci_low = coerce_optional_finite_float(values.get("ci_low"))
+        ci_high = coerce_optional_finite_float(values.get("ci_high"))
+        if ci_low is not None and ci_high is not None:
             ax_robust.plot(
-                [100.0 * float(values["ci_low"]), 100.0 * float(values["ci_high"])],
+                [100.0 * ci_low, 100.0 * ci_high],
                 [row, row],
                 color=palette["baseline"],
                 linewidth=1.0,
