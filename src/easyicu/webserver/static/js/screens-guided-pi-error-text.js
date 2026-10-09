@@ -197,6 +197,9 @@
         analysis_validated_not_satisfied: tr('The analysis ran, but its automated validation did not pass, so its results cannot be reported.', '分析已运行，但没有通过自动校验，结果不能报告。'),
         evidence_complete_not_satisfied: tr('The analysis ran, but some results lack the evidence they rest on, so they cannot be reported.', '分析已运行，但有些结果缺少所依据的证据，不能报告。'),
         numeric_verified_not_satisfied: tr('The analysis ran, but some reported numbers could not be checked against the results they come from, so they cannot be reported.', '分析已运行，但有些报告的数字无法与其来源结果核对，不能报告。'),
+        // Every analysis step finished; the Writer's model service then
+        // stayed unavailable through its retries.
+        writer_provider_transport_unavailable: tr('The model service was unavailable while the manuscript was being drafted; the analysis finished and its results are kept. Retry the run to draft it again; finished analysis steps are reused.', '写稿时模型服务不可用；分析已完成，结果已保留。可以重试这次运行重新写稿，已完成的分析步骤会复用。'),
         continuous_survival_interval_result_not_estimable: intervalResultNotEstimableText(cause),
         landmark_survival_interval_result_not_estimable: intervalResultNotEstimableText(cause),
         continuous_survival_exposure_has_one_value: tr('Every analysed stay had the same value of the continuous exposure, so no association with it can be estimated. The run has no primary result. Choose an exposure, summary or window whose values differ between stays, then generate the plan again.', '分析人群中每次入住的连续暴露取值都相同，无法估计与它的关联。这次运行没有主结果。请选用在不同入住之间取值不同的暴露、汇总方式或窗口，再生成计划。'),
