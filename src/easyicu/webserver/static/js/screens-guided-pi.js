@@ -56,7 +56,15 @@
         '本会话仍需确认所选数据源',
       ))
       .replace(/\bpi_[a-z0-9_]+\b/gi, tr('an EasyICU internal status', 'EasyICU 内部状态'))
-      .replace(/\beasyicu\.webserver\.pi_copilot(?:\.[a-z0-9_.]+)?\b/gi, 'EasyICU Copilot');
+      .replace(/\beasyicu\.webserver\.pi_copilot(?:\.[a-z0-9_.]+)?\b/gi, 'EasyICU Copilot')
+      // Earlier replies quoted readiness codes and file digests; the host
+      // shows files and digests beside the conversation.
+      .replace(/`?report_revision_quality_pass_analysis_only`?/gi, tr(
+        'a report revision that passed its quality checks for analysis review',
+        '已通过质量检查、仅供分析审阅的报告修订',
+      ))
+      .replace(/[，,;；]?\s*SHA-?256\s*[:：]\s*`?[a-f0-9]{64}`?/gi, '')
+      .replace(/`[a-f0-9]{64}`/gi, '');
   }
   function enhanceWithInteractiveFilePills(html) {
     if (!html) return '';

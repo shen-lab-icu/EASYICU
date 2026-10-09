@@ -99,3 +99,17 @@ def test_report_tool_does_not_admit_scientific_or_provider_parameters(setup):
     with pytest.raises(PiCopilotError, match='unknown arguments'):
         tools.execute_tool('easyicu_repair_report', {'report_only': False}, context())
     assert setup == []
+
+
+def test_report_tool_carries_the_researchers_own_words_to_the_writer(setup):
+    """The Writer gets what the researcher typed, never model-supplied text."""
+
+    ctx = ToolExecutionContext(session=PiSessionRecord(
+        session_id='pi-report', external_llm_opt_in=True,
+        binding=AuthorityBinding(study_context_id='study-report', study_revision=3),
+    ), allowed_actions=('report_revision',), user_message=(
+        '请修订当前报告：统一图表与正文的术语，修正摘要中的重复短语。\n\n'
+        '[EASYICU_INTERNAL_RESPONSE_LANGUAGE_V1]\nRespond in Simplified Chinese.'
+    ))
+    tools.execute_tool('easyicu_repair_report', {}, ctx)
+    assert setup[0].report_revision_request == '请修订当前报告：统一图表与正文的术语，修正摘要中的重复短语。'

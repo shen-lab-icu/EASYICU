@@ -3847,6 +3847,7 @@ def _run(
     run_intent: research_run_submission.RunIntent | None = None,
     plan_change_request: PlanChangeRequest | None = None,
     report_source_run_id: str = "",
+    report_revision_request: str = "",
 ) -> Dict[str, Any]:
     planner_start_mode = str(planner_start_mode or "auto").strip().lower()
     if planner_start_mode not in {"auto", "fresh", "resume_checkpoint"}:
@@ -4025,6 +4026,7 @@ def _run(
             plan_change_request=plan_change_request,
             execution_resume_source_run_id=report_source_run_id,
             report_only=bool(report_source_run_id),
+            report_revision_request=report_revision_request if report_source_run_id else "",
         )
         try:
             receipt = research_run_submission.submit_research_run(
@@ -4121,7 +4123,22 @@ def _repair_report(context: ToolExecutionContext, params: Mapping[str, Any]) -> 
     return _run(
         context, {"run_type": "full"}, run_intent="reviewed_analysis",
         report_source_run_id=source_run_id,
+        report_revision_request=_report_revision_request(context.user_message),
     )
+
+
+def _report_revision_request(message: str) -> str:
+    """The researcher's own words for a report revision, never model text.
+
+    ``context.user_message`` is the host-captured text of the current user
+    turn; host sections that follow it are not part of the request.
+    """
+
+    text = str(message or "")
+    cut = text.find("\n\n[EASYICU_")
+    if cut >= 0:
+        text = text[:cut]
+    return " ".join(text.split())[:1_200]
 
 
 def _resume(context: ToolExecutionContext, params: Mapping[str, Any]) -> Dict[str, Any]:

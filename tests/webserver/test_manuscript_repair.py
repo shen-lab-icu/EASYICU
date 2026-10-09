@@ -204,3 +204,41 @@ def test_pdf_binding_failure_preserves_previous_reader_and_historical_pdf(tmp_pa
         manuscript_repair._project_revision(SimpleNamespace(wrapper_dir=wrapper), {'id': 'study'},
             'New report', revision, {}, provenance=provenance, pdf_path=None if mismatch == 'missing' else path)
     assert {p.name: p.read_bytes() for p in wrapper.iterdir()} == before
+
+
+def test_revision_request_belongs_only_to_a_report_only_revision():
+    """The researcher's wording rides with a report rewrite, never a new plan."""
+
+    assert _request(report_revision_request="统一术语").report_revision_request == "统一术语"
+    with pytest.raises(ValidationError, match="report_revision_request_requires_report_only"):
+        ResearchRunSubmissionRequest(
+            study_context_id="study", provider="openai", credential_source="pi_verified",
+            external_llm_opt_in=True, report_revision_request="统一术语",
+        )
+    with pytest.raises(ValidationError):
+        _request(report_revision_request="x" * 1_201)
+
+
+def test_writer_receives_the_request_with_the_evidence_boundary():
+    section = {"section_name": "results", "instruction": "Write the results."}
+    assert manuscript_repair.with_revision_request(section, "") == section
+    merged = manuscript_repair.with_revision_request(section, "统一图表与正文的术语")
+    assert merged["section_name"] == "results"
+    assert merged["instruction"].startswith("Write the results.\n\n")
+    assert "Keep every number, estimate, citation, claim boundary and the study scope exactly as registered" in merged["instruction"]
+    assert merged["instruction"].endswith("Researcher's request: 统一图表与正文的术语")
+    assert section["instruction"] == "Write the results."
+
+
+def test_revision_request_is_not_a_planning_amendment(monkeypatch):
+    """The request reaches the runner factory instead of tripping its scope guard."""
+
+    approved = manuscript_repair.provider_adapter.web_research_agent_hard_stop_limits("full_reviewed")
+    impossible = replace(approved, max_total_tokens_per_run=100_000, max_total_tokens_per_batch=100_000)
+    monkeypatch.setattr(manuscript_repair.provider_adapter, "web_research_agent_hard_stop_limits", lambda _: impossible)
+    with pytest.raises(ValueError, match="cannot fund one minimum Provider"):
+        manuscript_repair.make_report_only_run_runner(
+            study_context={}, project_root=None, provider={}, provider_environment={},
+            credential_source="pi_verified", execution_resume_source_run_id="source",
+            budget_mode="full_reviewed", export_path=None, report_revision_request="统一术语",
+        )

@@ -13,7 +13,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, Literal, Mapping, Optional
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from easyicu.webserver import agent_pipeline_runs
 from easyicu.webserver import agent_runs
@@ -89,6 +89,9 @@ class ResearchRunSubmissionRequest(BaseModel):
     literature_search_authorized: bool = False
     compute_target: Literal["local"] = "local"
     plan_change_request: Optional[PlanChangeRequest] = None
+    # The researcher's own words for a report-only revision (wording and
+    # presentation); the Writer receives them, the sealed results do not change.
+    report_revision_request: str = Field(default="", max_length=1_200)
 
     @model_validator(mode="after")
     def _amendments_require_fresh_candidate(self) -> "ResearchRunSubmissionRequest":
@@ -101,6 +104,8 @@ class ResearchRunSubmissionRequest(BaseModel):
             or self.literature_search_authorized
         ):
             raise ValueError("report_only_requires_exact_completed_run")
+        if self.report_revision_request.strip() and not self.report_only:
+            raise ValueError("report_revision_request_requires_report_only")
         if self.plan_change_request is not None and (
             self.intent != "candidate_plan"
             or self.planner_start_mode != "fresh"
@@ -464,7 +469,13 @@ def submit_research_run(
             from easyicu.research_agent.reporting.writer_only_migration import WriterOnlyMigrationError
 
             try:
-                base_runner = make_report_only_run_runner(**runner_kwargs)
+                base_runner = make_report_only_run_runner(
+                    **runner_kwargs,
+                    **(
+                        {"report_revision_request": request.report_revision_request}
+                        if request.report_revision_request.strip() else {}
+                    ),
+                )
             except WriterOnlyMigrationError as exc:
                 _reject({"error": exc.code, "message": "The sealed report inputs did not pass validation; the original analysis was preserved."})
         else:
