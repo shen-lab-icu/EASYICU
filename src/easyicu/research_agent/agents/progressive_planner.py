@@ -28,10 +28,6 @@ from ..concept_availability import (
     ConceptSourceUnavailableError,
     require_supported_variable_source,
 )
-from ..planning.design_selection import (
-    ResearchDesignSelectionError,
-    validate_research_design_selection,
-)
 from ..planning.accepted_analysis_inputs import analysis_input_value_columns
 from ..planning.baseline_requirements import (
     baseline_outline_coverage,
@@ -130,6 +126,7 @@ from ..planning.robustness_contract import validate_planner_robustness_specs
 from ..planning.scientific_action_catalog import scientific_actions_for_analysis_type
 from ..planning.scientific_review import required_method_layers_for_context, requested_outcomes
 from ..planning.outline_action_rules import validate_outline_action_rules
+from ..planning.outline_design_selection import validate_outline_design_selection
 from ..providers.capabilities import llm_supports_strict_json_schema
 from ..providers.llm import llm_is_mockish
 from ..planning.prompt_projection import (
@@ -2167,22 +2164,14 @@ class ProgressivePlannerAgent:
                             path="variable_names",
                             findings=({"column": name, "source_concepts": [r.concept_id for r in exc.receipts]},),
                         ) from exc
-        try:
-            validate_research_design_selection(
-                outline.design_selection,
-                selected_analysis_type=outline.analysis_type,
-                allowed_analysis_types=analysis_types,
-                allowed_variables=variable_names,
-                allowed_literature_citation_keys=(allowed_literature_citation_keys),
-                question_anchors=(primary_exposure or "", target_outcome or ""),
-                required=require_design_selection,
-            )
-        except ResearchDesignSelectionError as exc:
-            raise ProgressivePlanCompileError(
-                f"progressive_{exc.reason_code}",
-                str(exc),
-                path=exc.path,
-            ) from exc
+        validate_outline_design_selection(
+            outline,
+            allowed_analysis_types=analysis_types,
+            allowed_variables=variable_names,
+            allowed_literature_citation_keys=allowed_literature_citation_keys,
+            question_anchors=(primary_exposure or "", target_outcome or ""),
+            required=require_design_selection,
+        )
         if article_context is not None:
             # The selected design can add an unavailable input without naming
             # it in any step. Its source check belongs to outline repair, not
