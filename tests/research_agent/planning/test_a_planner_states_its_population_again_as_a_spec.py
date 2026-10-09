@@ -124,6 +124,13 @@ def _valid(schema: dict, reply: dict) -> bool:
     return True
 
 
+def _shown_kinds(contract: str) -> list[dict[str, Any]]:
+    """The one object per kind the contract text shows, as written there."""
+
+    line = next(line for line in contract.split("\n") if line.startswith('[{"kind"'))
+    return json.loads(line)
+
+
 def test_the_strict_foundation_asks_for_the_spec_as_closed_kinds() -> None:
     schema = _request()
     definitions = schema["$defs"]
@@ -310,10 +317,7 @@ def test_a_planner_without_a_schema_reads_each_kind_and_its_fields(
     )
     template = json.loads(contract.split("\n")[1])
     shown = template["foundation"]["cohort"]["population_spec"]["criteria"][0]
-    kinds_line = next(
-        line for line in contract.split("\n") if line.startswith('{"age_years"')
-    )
-    kinds = json.loads(kinds_line)
+    kinds = {item.pop("kind"): item for item in _shown_kinds(contract)}
 
     assert set(shown) == _COMMON
     assert list(kinds) == list(CRITERION_MODELS)
@@ -330,6 +334,68 @@ def test_a_planner_without_a_schema_reads_each_kind_and_its_fields(
         cohort_concept_ids=_CONCEPTS,
     )
     assert "population_spec" not in host
+
+
+def test_a_criterion_copied_from_the_contract_is_one_its_owner_reads() -> None:
+    """A Planner without a schema writes each kind the way the text shows it."""
+
+    contract = population_spec_contract(_CONCEPTS)
+    written = []
+    for index, shown in enumerate(_shown_kinds(contract), start=1):
+        kind = shown["kind"]
+        # Every shown field keeps its place; only its placeholder is filled.
+        filled = {
+            field: value if field == "kind" else _ONE_OF_EACH[kind][field]
+            for field, value in shown.items()
+        }
+        common = {
+            field: value
+            for field, value in _criterion(index, kind).items()
+            if field in _COMMON
+        }
+        written.append(common | filled)
+
+    read = [PopulationSpec.model_validate({"criteria": [item]}) for item in written]
+
+    assert [spec.criteria[0].kind for spec in read] == list(CRITERION_MODELS)
+
+
+def test_a_status_is_shown_as_a_condition_never_against_a_number() -> None:
+    contract = population_spec_contract(_CONCEPTS)
+    head, example = contract.split(
+        "A whole criterion for a status present in a window:\n"
+    )
+    shown = json.loads(example.split("\n", 1)[0])
+    shown["concepts_all_of"] = ["marker_flag"]
+    shown["window"] = _WINDOW
+
+    spec = PopulationSpec.model_validate({"criteria": [shown]})
+
+    assert "never a measurement with a threshold such as >= 1" in head
+    assert spec.criteria[0].kind == "condition_present"
+    # With no allowed concept there is no condition to show.
+    assert "A whole criterion for a status" not in population_spec_contract(())
+
+
+@pytest.mark.parametrize("kind", list(CRITERION_MODELS))
+def test_fields_nested_under_their_kind_are_refused_with_the_flat_shape(kind) -> None:
+    """The refusal names the shape the owner reads, so a writer can correct it."""
+
+    flat = _criterion(1, kind)
+    nested = {field: flat[field] for field in _COMMON}
+    nested[kind] = {
+        field: value for field, value in flat.items() if field not in _COMMON
+    }
+
+    with pytest.raises(ValidationError) as refused:
+        PopulationSpec.model_validate({"criteria": [nested]})
+
+    (error,) = refused.value.errors(include_url=False, include_input=False)
+    assert error["loc"] == ("criteria", 0, kind)
+    assert f"not nested under {kind!r}" in error["msg"]
+    shape = json.loads(error["msg"].split(": write ", 1)[1].split(" next to ", 1)[0])
+    assert shape == {"kind": kind, **{field: "..." for field in _ONE_OF_EACH[kind]}}
+    assert PopulationSpec.model_validate({"criteria": [flat]}).criteria[0].kind == kind
 
 
 def test_the_spec_rules_name_no_case() -> None:

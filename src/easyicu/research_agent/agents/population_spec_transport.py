@@ -130,6 +130,16 @@ _KIND_FIELDS: dict[str, dict[str, Any]] = {
     "event_absent": {"concept": _CONCEPT, "window": _WINDOW},
     "not_typed": {"why": "<8-240 characters: why no kind expresses it>"},
 }
+#: A status stated as a condition, with every field a criterion holds.
+_STATUS_EXAMPLE: dict[str, Any] = {
+    "id": "c1",
+    "quote": "<the words that state it>",
+    "source": "question",
+    "role": "include",
+    "kind": "condition_present",
+    "concepts_all_of": [_CONCEPT],
+    "window": _WINDOW,
+}
 
 
 def population_spec_shape() -> dict[str, Any]:
@@ -169,9 +179,14 @@ def population_spec_contract(concept_ids: Sequence[str]) -> str:
         "stated in one sentence share it), where they come from (source: the "
         "question, study_wording for the study's own cohort wording, the "
         "outline, or a preset), and its role (include keeps the stays that "
-        "meet it, exclude removes them), and adds exactly the fields of its "
-        "kind:\n"
-        + json.dumps(kinds, ensure_ascii=False, separators=(",", ":"))
+        "meet it, exclude removes them). A criterion is one flat object: "
+        "beside kind it holds exactly the fields of its kind, never nested "
+        "under the kind's name. One object per kind:\n"
+        + json.dumps(
+            [{"kind": kind, **fields} for kind, fields in kinds.items()],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
         + "\nWindows are hours after ICU admission, [start_hours, end_hours); "
         "a condition_present or event_absent window may be null, meaning the "
         "whole stay. Age and stay-length bounds are inclusive: give at least "
@@ -181,7 +196,16 @@ def population_spec_contract(concept_ids: Sequence[str]) -> str:
         "condition_present names one concept. A condition is present or "
         "absent, never compared with a number: state it with condition_present "
         "or event_absent, and keep measurement for a value with a threshold. "
-        "State a restriction no kind expresses as not_typed with why; never "
+        + (
+            "A status, such as a flag of 0 or 1, is such a condition, never a "
+            "measurement with a threshold such as >= 1. A whole criterion for "
+            "a status present in a window:\n"
+            + json.dumps(_STATUS_EXAMPLE, ensure_ascii=False, separators=(",", ":"))
+            + "\n"
+            if "condition_present" in kinds
+            else ""
+        )
+        + "State a restriction no kind expresses as not_typed with why; never "
         "drop one. A restriction that the exposure itself defines, such as "
         "where the exposure starts relative to time zero or the exclusion of "
         "stays already exposed, belongs to the design's exposure definition, "
