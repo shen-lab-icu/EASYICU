@@ -13,7 +13,9 @@ spreads the same registry (``approval_stops.PLAN_APPROVAL_STOPS``), so these
 stops reach all of them.  The records of what the question asks, with every
 claim the host could not verify marked, are run files beside the review: the
 planning record and the judgment of the plan offered for review, which says
-whether it judged the plan under review.  Synthetic studies only.
+whether it judged the plan under review.  Each opens in the conversation with
+every field it holds, so a reader sees which requirement stopped the plan and
+why.  Synthetic studies only.
 """
 
 from __future__ import annotations
@@ -26,6 +28,9 @@ from typing import Any, Mapping
 import pytest
 
 from easyicu.research_agent.canonical_json import canonical_sha256
+from easyicu.research_agent.orchestration.progressive_planning import (
+    question_requirement_outcome,
+)
 from easyicu.research_agent.planning.approval_stops import PLAN_APPROVAL_STOPS
 from easyicu.research_agent.planning.question_requirements import (
     QUESTION_REQUIREMENT_STOP_CODES,
@@ -34,11 +39,13 @@ from easyicu.research_agent.planning.question_requirements import (
     QUESTION_REQUIREMENTS_REVIEW_SCHEMA_VERSION,
     QUESTION_REQUIREMENTS_SCHEMA_VERSION,
     analysis_plan_sha256,
+    question_requirements_on_plan_under_review,
 )
 from easyicu.research_agent.schema import AnalysisPlan
 from easyicu.webserver import agent_pipeline_runs, agent_runs, run_file_guide
 from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.pi_copilot.projections import project_run_row
+from easyicu.webserver.pi_copilot.service import PiCopilotService
 from easyicu.webserver.pi_copilot.workflow import (
     build_research_workflow_snapshot,
     host_decision_offers,
@@ -50,6 +57,7 @@ from tests.research_agent.planning.family_spec_fixtures import (
     _request,
     _run,
 )
+from tests.webserver.copilot.pi_copilot_contract_fixtures import FakeGateway
 from tests.webserver.copilot.research_workflow_fixtures import complete_study
 
 _NOT_COVERED = "question_requirement_not_covered"
@@ -318,3 +326,131 @@ def test_the_judgment_binds_the_plan_its_review_authority_binds(
         projected[QUESTION_REQUIREMENTS_REVIEW_FILENAME]["judged_on_plan_under_review"]
         is True
     )
+
+
+#: One analysis the plan answers and one estimand it declares it cannot.
+_ASKED = [
+    {
+        "id": "r1",
+        "kind": "analysis",
+        "quote": "predict in-hospital mortality",
+        "concepts": ["lactate_max"],
+        "coverage": "plan",
+        "gap": None,
+        "note": None,
+    },
+    {
+        "id": "r2",
+        "kind": "estimand",
+        "quote": "discrimination and calibration",
+        "concepts": [],
+        "coverage": "capability_gap",
+        "gap": {
+            "requirement": "estimand_unsupported",
+            "concept": None,
+            "element": "analysis",
+            "detail": "This plan cannot estimate the named measure on held-out rows.",
+        },
+        "note": None,
+    },
+]
+
+
+def _written_records(run_dir: Path) -> dict[str, dict[str, Any]]:
+    """Both records as the planning owner writes them for a synthetic study."""
+
+    base = _prediction_context()
+    constraints = json.loads(base.user_preferences.data_constraints or "{}")
+    constraints["question_named_concepts"] = [
+        {"concepts": ["lactate_max"], "evidence": "labs"}
+    ]
+    context = base.model_copy(
+        update={
+            # The question names both requirements the plan is judged on.
+            "research_question": (
+                "Among adult ICU stays, how well do first-24-hour vitals, labs, "
+                "and demographics predict in-hospital mortality, in "
+                "discrimination and calibration?"
+            ),
+            "user_preferences": base.user_preferences.model_copy(
+                update={"data_constraints": json.dumps(constraints)}
+            ),
+        }
+    )
+    request = _request(context, cohort_mode=None)
+    payload = {
+        **_prediction_payload(
+            request, features=["age", "sex", "hr_max", "lactate_max"]
+        ),
+        "question_requirements": _ASKED,
+    }
+    _llm, result = _run(
+        context, [json.dumps(payload)], required_primary_cohort_selection_mode=None
+    )
+    findings = question_requirement_outcome(
+        context=context, plan=result.output, facts=result.facts, run_dir=run_dir
+    )
+    question_requirements_on_plan_under_review(
+        findings, plan=result.output, run_dir=run_dir
+    )
+    return {
+        name: json.loads((run_dir / name).read_text(encoding="utf-8"))
+        for name in (
+            QUESTION_REQUIREMENTS_FILENAME,
+            QUESTION_REQUIREMENTS_REVIEW_FILENAME,
+        )
+    }
+
+
+@pytest.mark.parametrize(
+    "name", [QUESTION_REQUIREMENTS_FILENAME, QUESTION_REQUIREMENTS_REVIEW_FILENAME]
+)
+def test_each_record_opens_in_the_conversation_with_every_field_it_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    record = _written_records(run_dir)[name]
+    # What a reader needs to see why the plan stopped is in the record.
+    (gap,) = [row for row in record["judged"] if row["disposition"] == "capability_gap"]
+    assert (gap["quote"], gap["gap"]["detail"]) == (
+        _ASKED[1]["quote"],
+        _ASKED[1]["gap"]["detail"],
+    )
+    service = PiCopilotService(
+        store_path=tmp_path / "sessions.json", gateway=FakeGateway()
+    )
+    service.project_store.bind("project-q", "study-q")
+    monkeypatch.setattr(
+        agent_runs,
+        "list_run_history",
+        lambda *, study_id, **_kwargs: {
+            "runs": (
+                [{"run_id": _RUN, "project_dir": str(run_dir)}]
+                if study_id == "study-q"
+                else []
+            )
+        },
+    )
+    monkeypatch.setattr(
+        agent_runs,
+        "read_run_review",
+        lambda project_dir: {
+            "ok": True,
+            "gate": {"status": "blocked"},
+            "readiness": {
+                "status": "blocked",
+                "signed": False,
+                "signoff_stale": False,
+                "reportable": False,
+            },
+        },
+    )
+
+    opened = service.get_research_artifact(
+        project_id="project-q", run_id=_RUN, artifact_name=name
+    )
+
+    # The run file projection withholds no field and the browser projection
+    # drops none: the conversation shows the record as written.
+    assert opened["payload"] == record

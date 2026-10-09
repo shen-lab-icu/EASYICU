@@ -880,7 +880,8 @@ def _stated(entry: JudgedRequirement) -> str:
             )
         )
     )
-    return f"{item.id} {item.quote!r} ({item.kind}): {why}."
+    # A gap's detail is a sentence of its own: the line ends with one full stop.
+    return f"{item.id} {item.quote!r} ({item.kind}): {why.rstrip(' .。')}."
 
 
 def analysis_plan_sha256(plan: AnalysisPlan) -> str:
