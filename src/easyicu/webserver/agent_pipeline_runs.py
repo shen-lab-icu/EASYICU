@@ -100,6 +100,10 @@ from easyicu.webserver.scientific_readiness_projection import (
     build_scientific_readiness_projection,
 )
 from easyicu.webserver.figure_presentation import verified_presentation_gallery
+from easyicu.webserver.prediction_performance_projection import (
+    prediction_performance_projection,
+    prediction_result_step_ids,
+)
 from easyicu.webserver.research_evidence_preview import is_identifier_column
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
 from easyicu.webserver.research_input_progress import (
@@ -2787,10 +2791,15 @@ def _table_preview_indices(headers: List[str]) -> List[int]:
     return selected
 
 
-def _table_projection(run_dir: Path) -> Dict[str, Any]:
+def _table_projection(
+    run_dir: Path, *, plan: Optional[Mapping[str, Any]] = None
+) -> Dict[str, Any]:
     evidence = _read_json(run_dir / "evidence" / "evidence_index.json", [])
     tables: List[Dict[str, Any]] = []
     skipped_sensitive = 0
+    # In a prediction study the model's own result tables follow the
+    # population flow, so supporting audits cannot take their places.
+    prediction_steps = prediction_result_step_ids(plan or {})
 
     def review_priority(record: Mapping[str, Any]) -> tuple[int, int]:
         """Rank semantic result tables before bounded support/audit previews."""
@@ -2801,6 +2810,8 @@ def _table_projection(run_dir: Path) -> Dict[str, Any]:
         haystack = " ".join((name, description, step))
         if "population_flow" in haystack:
             rank = 0
+        elif str(record.get("produced_by_step") or "").strip() in prediction_steps:
+            rank = 1
         elif any(
             token in haystack
             for token in (
@@ -3647,7 +3658,7 @@ def _write_projection(
         }
     )
     result_tables = (
-        _table_projection(run_dir)
+        _table_projection(run_dir, plan=plan if isinstance(plan, Mapping) else {})
         if run_dir
         else {
             "schema_version": "easyicu.web-pipeline-result-tables/1",
@@ -3657,6 +3668,20 @@ def _write_projection(
             "preview_policy": "aggregate_tables_only_no_identifier_columns",
         }
     )
+    # A static prediction run's answer is its primary model's registered
+    # performance, under the authority this projection already computed.
+    prediction_performance = (
+        prediction_performance_projection(
+            run_dir,
+            plan=plan if isinstance(plan, Mapping) else {},
+            gate_status=str(gate.get("status") or ""),
+            paper_authorized=axes.get("paper_authorized") is True,
+        )
+        if run_dir
+        else None
+    )
+    if prediction_performance is not None:
+        result_tables["prediction_performance"] = prediction_performance
     evidence_index = (
         _read_json(run_dir / "evidence" / "evidence_index.json", []) if run_dir else []
     )
