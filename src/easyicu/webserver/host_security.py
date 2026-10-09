@@ -1,7 +1,8 @@
 """Host-header protection with correct bracketed IPv6 handling.
 
-This module owns the *host access policy* — which Host headers are accepted
-and whether a forwarding proxy is trusted. Both the middleware that enforces
+This module owns the *host access policy* — which Host headers are accepted,
+whether a forwarding proxy is trusted, and when a Unix-socket peer counts as
+local. Both the middleware that enforces
 it and the Settings → Privacy panel that reports it read it from here, so the
 UI cannot claim a guarantee the running server is not applying.
 """
@@ -9,7 +10,8 @@ UI cannot claim a guarantee the running server is not applying.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict
+import stat
+from typing import Any, Dict, Mapping
 from urllib.parse import urlsplit
 
 from starlette.responses import PlainTextResponse
@@ -46,6 +48,73 @@ def trusts_proxy() -> bool:
     """
 
     return _env_flag("EASYICU_WEB_TRUST_PROXY")
+
+
+#: The one Unix socket this server listens on, set by
+#: ``python -m easyicu.webserver run --uds PATH`` (or by an operator who runs
+#: ``uvicorn --uds PATH`` with the same absolute PATH).
+UNIX_SOCKET_ENV = "EASYICU_WEB_UNIX_SOCKET"
+
+
+class UnixSocketDirectoryError(RuntimeError):
+    """The socket's directory would let another account connect."""
+
+
+def configured_unix_socket() -> str | None:
+    raw = os.getenv(UNIX_SOCKET_ENV, "").strip()
+    return os.path.abspath(os.path.expanduser(raw)) if raw else None
+
+
+def unix_socket_directory_problem(socket_path: str) -> str | None:
+    """Why the socket's directory would admit another account, or None.
+
+    uvicorn makes the socket itself world-writable (0666), so its directory is
+    what keeps other accounts on a shared host out: it must be a real
+    directory (not a symbolic link) that this server's account owns, with no
+    group or other access.
+    """
+
+    directory = os.path.dirname(os.path.abspath(socket_path))
+    try:
+        info = os.lstat(directory)
+    except OSError as exc:
+        return f"its directory {directory} cannot be read ({exc.strerror or exc})"
+    if not stat.S_ISDIR(info.st_mode):
+        return f"{directory} is not a directory (a symbolic link is not accepted)"
+    if info.st_uid != os.geteuid():
+        return f"{directory} belongs to uid {info.st_uid}, not to this server's uid {os.geteuid()}"
+    mode = stat.S_IMODE(info.st_mode)
+    if mode & 0o077:
+        return f"{directory} has mode {mode:04o}, which lets group or other users in (chmod 700 it)"
+    return None
+
+
+def require_private_unix_socket_directory(socket_path: str) -> None:
+    problem = unix_socket_directory_problem(socket_path)
+    if problem:
+        raise UnixSocketDirectoryError(
+            f"EasyICU WebApp will not listen on the Unix socket {socket_path}: {problem}."
+        )
+
+
+def is_local_unix_socket_peer(scope: Mapping[str, Any]) -> bool:
+    """A connection on the private Unix socket this server was configured for.
+
+    uvicorn reports a Unix listener as ``server == (path, None)`` and gives
+    its peers no address. Both must hold, the path must be the configured
+    socket, and its directory must still be private: a directory opened up
+    after start makes every request on it fail closed.
+    """
+
+    configured = configured_unix_socket()
+    server = scope.get("server")
+    if not configured or scope.get("client") is not None:
+        return False
+    if not isinstance(server, (tuple, list)) or len(server) != 2 or server[1] is not None:
+        return False
+    if not isinstance(server[0], str) or os.path.abspath(server[0]) != configured:
+        return False
+    return unix_socket_directory_problem(configured) is None
 
 
 def resolve_allowed_hosts() -> list[str]:

@@ -75,17 +75,11 @@ def _health_check(host: str, port: int) -> bool:
         return False
 
 
-def _uvicorn_cmd(host: str, port: int) -> list[str]:
-    return [
-        sys.executable,
-        "-m",
-        "uvicorn",
-        "easyicu.webserver.app:app",
-        "--host",
-        host,
-        "--port",
-        str(port),
-    ]
+def _uvicorn_cmd(host: str, port: int, *, uds: str | None = None) -> list[str]:
+    cmd = [sys.executable, "-m", "uvicorn", "easyicu.webserver.app:app"]
+    if uds:
+        return [*cmd, "--uds", uds]
+    return [*cmd, "--host", host, "--port", str(port)]
 
 
 def _runtime_env() -> dict[str, str]:
@@ -245,23 +239,47 @@ def _find_easyicu_webserver_processes_on_port(port: int) -> list[int]:
 
 
 def run_app(
-    host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, *, background: bool = False
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    *,
+    background: bool = False,
+    uds: str | None = None,
 ) -> int:
-    if not _is_loopback_bind(host):
+    env = _runtime_env()
+    if uds:
+        # On a shared host a loopback port admits every account on it; a
+        # socket in a private directory admits only this one.
+        from easyicu.webserver.host_security import (
+            UNIX_SOCKET_ENV,
+            unix_socket_directory_problem,
+        )
+
+        socket_path = os.path.abspath(os.path.expanduser(uds))
+        problem = unix_socket_directory_problem(socket_path)
+        if problem:
+            print(
+                f"EasyICU WebApp will not listen on the Unix socket {socket_path}: {problem}.",
+                file=sys.stderr,
+            )
+            return 2
+        env[UNIX_SOCKET_ENV] = socket_path
+        cmd = _uvicorn_cmd(host, port, uds=socket_path)
+    elif not _is_loopback_bind(host):
         print(
             "EasyICU WebApp is local-only because its filesystem APIs do not have "
             "remote authentication. Bind to 127.0.0.1, localhost, or ::1.",
             file=sys.stderr,
         )
         return 2
-    cmd = _uvicorn_cmd(host, port)
+    else:
+        cmd = _uvicorn_cmd(host, port)
     if background:
         log_path = _log_file()
         pid_path = _pid_file()
         with log_path.open("a", encoding="utf-8") as log_file:
             process = subprocess.Popen(
                 cmd,
-                env=_runtime_env(),
+                env=env,
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
@@ -272,7 +290,7 @@ def run_app(
         return 0
 
     try:
-        return subprocess.run(cmd, env=_runtime_env()).returncode
+        return subprocess.run(cmd, env=env).returncode
     except KeyboardInterrupt:
         return 130
 
@@ -348,13 +366,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--background", action="store_true", help="Run in the background."
     )
+    parser.add_argument(
+        "--uds",
+        default=None,
+        help=(
+            "Listen on this Unix socket instead of a port (run only). Its "
+            "directory must be yours with mode 0700."
+        ),
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "run":
-        return run_app(args.host, args.port, background=args.background)
+        return run_app(args.host, args.port, background=args.background, uds=args.uds)
     if args.command == "stop":
         return stop_app(args.port)
     if args.command == "status":
