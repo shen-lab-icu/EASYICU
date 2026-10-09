@@ -96,7 +96,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/workspace-canvas.css?v=20260921-fit1" in index
     assert "css/guided-pi-workspace.css?v=20260922-demo-card1" in index
     assert "css/guided-pi-empty-tasks.css?v=20260921-empty-tasks1" in index
-    assert "js/screens-guided-pi-demo.js?v=20260923-demo-stage1" in index
+    assert "js/screens-guided-pi-demo.js?v=20261009-review-fix1" in index
     assert "js/screens-guided-pi-workbench-preview.js?v=20260829-data-readiness1" in index
     assert (
         "js/screens-guided-pi-evidence-preview.js?v=20260919-canvas1" in index
@@ -123,7 +123,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20260922-named-source1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20260922-question-carry1" in index
-    assert "js/screens-guided-pi-session-view.js?v=20260922-demo-rewrite1" in index
+    assert "js/screens-guided-pi-session-view.js?v=20261009-review-fix1" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
@@ -5545,7 +5545,11 @@ def test_complete_research_demo_is_natural_truthful_and_clickable() -> None:
     preview = _read("js/screens-guided-pi-preview.js")
     assert "入 ICU 后 24 小时内出现实验性 SOFA-2 脓毒症表型的比例有多高" in demo
     assert "我拟定了一份 6 步的描述性分析计划，开始分析前请你确认" in demo
-    assert "批准这份计划，开始分析。" in demo
+    # The plan is approved with the review control, never by a chat message.
+    assert "已确认方案：「确认方案并准备数据」" in demo
+    assert "在对话里打字不会批准计划" in demo
+    assert "批准这份计划，开始分析。" not in demo
+    assert "if (row.role === 'demo_action')" in session_view
     assert "33,997 个（35.99%）在入 ICU 后 24 小时内出现实验性 SOFA-2 脓毒症表型" in demo
     assert "有表型组 13.18%（4,480/33,997），无表型组 8.25%（4,986/60,461）" in demo
     assert "这是未调整的描述性比较，不能说明因果" in demo
@@ -5704,6 +5708,7 @@ def test_reviewer_demo_lifecycle_exposes_only_resolvable_standard_artifacts() ->
         namedRows: activities.every(activity => activity.steps.every(step => step.kind === 'pipeline' && step.step === 'plan_step' && step.label)),
         assistantReplies: messages.filter(message => message.role === 'assistant').length,
         userMessages: messages.filter(message => message.role === 'user').length,
+        hostControls: messages.filter(message => message.role === 'demo_action').length,
         missingStandard: standard.filter(name => !artifacts.includes(name)),
         unresolved: artifacts.filter(name => !demo.hasArtifact(name)),
         rendererShapes: {{
@@ -5727,7 +5732,8 @@ def test_reviewer_demo_lifecycle_exposes_only_resolvable_standard_artifacts() ->
         "stepCount": 14,
         "namedRows": True,
         "assistantReplies": 2,
-        "userMessages": 2,
+        "userMessages": 1,
+        "hostControls": 1,
         "missingStandard": [],
         "unresolved": [],
         "rendererShapes": {
