@@ -348,6 +348,75 @@ def _follow_up_handling(text: str, start: int, end: int) -> bool:
     return _listed_events(head, _LIST_SEPARATOR, trailing=True)
 
 
+# Whom a study includes is not what it studies.  An age or a stay length stated
+# with a bound ("年龄 ≥ 18 岁", "ICU 住院时长至少 24 小时", "length of stay > 48
+# h") restricts the population, as the population spec's age and stay-length
+# kinds do, and so does every concept named inside an inclusion or exclusion
+# clause ("纳入机械通气的成人患者", "excluding patients with AKI on
+# admission").  Such a mention is never read as the exposure or the outcome:
+# the slot is read from another mention or stays unread.  A question that
+# compares age groups ("年龄 ≥ 65 岁与 < 65 岁") therefore leaves its exposure
+# unread for the plan to propose, the safe side of the same rule.
+_BOUNDED_RESTRICTION_CONCEPTS = frozenset({"age", "los_icu", "los_hosp"})
+_NUMBER = r"\d+(?:\.\d+)?"
+_BOUND_WORD = (
+    r"(?:≥|≤|⩾|⩽|>=|<=|=>|=<|>|<|＞|＜|≧|≦"
+    r"|\bat\s+(?:least|most)\b|\b(?:no|not)\s+(?:less|more|fewer|older|younger)\s+than\b"
+    r"|\b(?:more|less|greater|fewer|longer|shorter|older|younger)\s+than\b"
+    r"|\b(?:over|under|above|below|exceeding|between)\b"
+    r"|大于或等于|大于等于|小于或等于|小于等于|大于|小于|高于|低于|多于|少于|长于|短于"
+    r"|不少于|不低于|不小于|不超过|不足|超过|至少|最少|最多|满|达到|介于)"
+)
+_BOUND_UNIT = r"(?:周岁|岁|小时|小時|天|日|周|years?(?:\s+old)?|yrs?|hours?|hrs?|h|days?|d|weeks?|wks?)"
+_BOUND_TAIL = (
+    r"(?:及以上|或以上|以上|及以下|或以下|以下|以内|之间"
+    r"|\bor\s+(?:more|older|above|greater|longer|less|younger|fewer|over|under)\b"
+    r"|\band\s+(?:over|above|older|under)\b|\+)"
+)
+# The bound follows the mention ("年龄 ≥ 18 岁", "年龄 18 岁以上", "年龄 18-80
+# 岁", "length of stay of at least 24 h") or, less often, precedes it ("至少
+# 48 小时的 ICU 住院时长").
+_BOUND_AFTER = re.compile(
+    rf"\s*(?:(?:of|is|was|were)\s+|为|在|是|[:：])?\s*[(（]?\s*"
+    rf"(?:{_BOUND_WORD}\s*{_NUMBER}"
+    rf"|{_NUMBER}\s*{_BOUND_UNIT}?\s*(?:[-–—~～至到]|\bto\b)\s*{_NUMBER}"
+    rf"|{_NUMBER}\s*{_BOUND_UNIT}?\s*{_BOUND_TAIL})",
+    re.IGNORECASE,
+)
+_BOUND_BEFORE = re.compile(
+    rf"{_BOUND_WORD}\s*{_NUMBER}\s*{_BOUND_UNIT}?\s*(?:的|\bof\b)?\s*"
+    r"(?:icu|hospital|院内|住院)?\s*$",
+    re.IGNORECASE,
+)
+# An inclusion or exclusion clause runs from its opening word to the next
+# clause break.  "包括" and a bare "include" are not openers: "结局包括死亡" and
+# "outcomes include mortality" list endpoints, not eligibility.
+_ELIGIBILITY_OPENER = re.compile(
+    r"纳入|入选|排除|剔除|仅限|限于"
+    r"|\b(?:inclusion|exclusion)\s+criteria\b|\beligib(?:le|ility)\b"
+    r"|\bexclud(?:e|es|ed|ing)\b|\b(?:restricted|limited)\s+to\b"
+    r"|\binclud(?:e|es|ed|ing)\s+(?:only\s+)?(?:all\s+)?(?:adult\s+)?(?:icu\s+)?"
+    r"(?:patients|stays|admissions|subjects|adults)\b",
+    re.IGNORECASE,
+)
+_CLAUSE_BREAK = re.compile(r"[，,。；;？?！!]")
+
+
+def _population_restriction(text: str, concept: str, start: int, end: int) -> bool:
+    """Whether the mention at ``start:end`` states whom the study includes."""
+
+    if concept in _BOUNDED_RESTRICTION_CONCEPTS and (
+        _BOUND_AFTER.match(text, end)
+        or _BOUND_BEFORE.search(text[max(0, start - 40) : start])
+    ):
+        return True
+    for opener in _ELIGIBILITY_OPENER.finditer(text, 0, start):
+        stop = _CLAUSE_BREAK.search(text, opener.end())
+        if stop is None or start < stop.start():
+            return True
+    return False
+
+
 # Concepts that name the same clinical thing at different granularity. Used to
 # stop one phrase from filling two different slots.
 _CONCEPT_FAMILIES: Tuple[frozenset, ...] = (
@@ -470,8 +539,9 @@ def _match_concept(text: str) -> List[Tuple[str, str]]:
     """Return concept/phrase pairs in dictionary-specificity order.
 
     A phrase the sentence explicitly negates is not a reading — it is skipped,
-    which leaves the slot unread rather than wrong.  A phrase inside another
-    concept's longer name is that concept (``_resolved_reading``).
+    which leaves the slot unread rather than wrong.  So is a restriction on
+    whom the study includes (``_population_restriction``).  A phrase inside
+    another concept's longer name is that concept (``_resolved_reading``).
     """
     found: List[Tuple[str, str]] = []
     seen = set()
@@ -485,6 +555,7 @@ def _match_concept(text: str) -> List[Tuple[str, str]]:
                 concept in seen
                 or _negated(text, start)
                 or _follow_up_handling(text, start, end)
+                or _population_restriction(text, concept, start, end)
             ):
                 continue
             seen.add(concept)
@@ -499,7 +570,8 @@ def explicit_outcome_concepts(question: str) -> tuple[str, ...]:
     only adds the closed, high-specificity endpoint vocabulary. A configured
     event outcome remains the caller's authority. Specific phrases reserve
     their text span: ``28-day mortality`` must not add generic ``death`` too.
-    An event a follow-up handling clause lists ends follow-up; it is not read.
+    An event a follow-up handling clause lists ends follow-up, and a stay
+    length that bounds the population restricts it; neither is read.
     This is intent, not evidence that the source can supply these endpoints.
     """
 
@@ -517,6 +589,7 @@ def explicit_outcome_concepts(question: str) -> tuple[str, ...]:
             if (
                 _negated(text, start)
                 or _follow_up_handling(text, start, end)
+                or _population_restriction(text, concept, start, end)
                 or any(start < stop and begin < end for begin, stop in covered)
             ):
                 continue
@@ -559,7 +632,9 @@ def _exposure_candidates_in_text_order(
     positioned = []
     for rank, (concept, phrase) in enumerate(candidates):
         for match in re.finditer(re.escape(phrase), text, re.IGNORECASE):
-            if _negated(text, match.start()):
+            if _negated(text, match.start()) or _population_restriction(
+                text, concept, match.start(), match.end()
+            ):
                 continue
             after = text[match.end():]
             before = text[max(0, match.start() - 35):match.start()]
@@ -818,12 +893,21 @@ def deterministic_intent(question: str) -> Dict[str, Any]:
     # tier-2 event concept that did not win the outcome slot. A concept from the
     # SAME clinical family as the outcome is not an exposure though: "my outcome
     # is AKI (KDIGO stage)" names one thing twice, not an exposure and an
-    # outcome. Leaving it unread is what makes the card ask.
+    # outcome. Leaving it unread is what makes the card ask.  Nor is any other
+    # concept the question names as an endpoint: "compare mortality, ICU length
+    # of stay and readmission across the groups" lists three outcomes, so the
+    # groups it compares are the exposure, not the second outcome.  When an
+    # endpoint is the factor studied ("is ICU length of stay associated with
+    # 1-year mortality?"), the slot stays unread for the plan to propose,
+    # rather than guessing which is which.
     outcome_family = _family_of(outcome_concept)
+    listed_outcomes = set(explicit_outcome_concepts(text))
     exposures = [
         (c, p)
         for c, p in concepts
-        if c != outcome_concept and not (outcome_family and _family_of(c) == outcome_family)
+        if c != outcome_concept
+        and c not in listed_outcomes
+        and not (outcome_family and _family_of(c) == outcome_family)
     ]
     exposures = _exposure_candidates_in_text_order(text, exposures)
     if exposures:
