@@ -1,7 +1,7 @@
 """Reader tables an owner declares for its own products.
 
 A signed owner that writes a reader-facing table (its Table 1, its risk-set
-accounting) declares it in its step summary (``manuscript_tables``): which of
+accounting, its protocol) declares it in its step summary (``manuscript_tables``): which of
 its products, which generic layout, and the reader words for the layout's
 identities.  The reporting owner formats the declared product's recorded
 cells and never recomputes one.  Table cells stay out of the bound manuscript
@@ -90,12 +90,28 @@ class StageFlowLayout(_Closed):
     ] = Field(min_length=1)
 
 
+class ProtocolRowsLayout(_Closed):
+    """A study protocol's elements, one row each, in the declared order.
+
+    The product records ``item`` and ``specification``: the owner's fixed
+    words for each element.  Every item it records needs a label, and the
+    items appear in the order their labels are declared.
+    """
+
+    layout: Literal["protocol_rows"]
+    item_labels: dict[
+        Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,80}$")],
+        Annotated[str, Field(pattern=_READER_TEXT)],
+    ] = Field(min_length=1, max_length=16)
+
+
 class ManuscriptTableDeclaration(_Closed):
     schema_version: Literal["easyicu.manuscript_table/1"]
     product: str = Field(pattern=r"^table:[a-z][a-z0-9_]{0,79}$")
     caption: str = Field(pattern=_READER_TEXT)
     body: Annotated[
-        Union[GroupedSummaryLayout, StageFlowLayout], Field(discriminator="layout")
+        Union[GroupedSummaryLayout, StageFlowLayout, ProtocolRowsLayout],
+        Field(discriminator="layout"),
     ]
     notes: list[Annotated[str, Field(pattern=_READER_TEXT)]] = Field(
         default_factory=list, max_length=8
@@ -120,6 +136,7 @@ __all__ = [
     "MANUSCRIPT_TABLES_KEY",
     "MANUSCRIPT_TABLE_SCHEMA_VERSION",
     "ManuscriptTableDeclaration",
+    "ProtocolRowsLayout",
     "StageFlowLayout",
     "TableGroup",
     "validate_manuscript_table_declarations",

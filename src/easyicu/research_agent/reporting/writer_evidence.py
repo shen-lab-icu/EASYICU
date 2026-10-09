@@ -20,6 +20,10 @@ import pandas as pd
 
 from ..schema import ResearchContext
 from ..authority.evidence_store import EvidenceStore
+from ..authority.target_trial_scientific_claims import (
+    TARGET_TRIAL_REPORTING_KEY,
+    TARGET_TRIAL_REPORTING_SCHEMA_VERSION,
+)
 from .readiness import _blocked_outcome_step_ids
 from ..robustness.panel import (
     RobustnessPanel,
@@ -380,6 +384,7 @@ _REPORTABLE_NUMERIC_PREFIXES = (
     "reportable_descriptive_results.",
     "reportable_secondary_results.",
     "reportable_survival_results.",
+    "reportable_target_trial_results.",
 )
 _REPORTABLE_NUMERIC_CAP_PER_STEP = 50
 
@@ -610,6 +615,38 @@ def _survival_reporting_is_authorized(
     return bool(raw_owner_authority or envelope_owner_authority)
 
 
+def _target_trial_reporting_is_authorized(
+    *,
+    record: Mapping[str, Any],
+    summary: Mapping[str, Any],
+    payload: Any,
+    evidence: EvidenceStore | None,
+) -> bool:
+    """Authorize the signed target trial's results for Writer.
+
+    The emulation reports no top-level estimate: its strategy risks, their
+    difference and ratio and the truncated-weight sensitivity are the result,
+    and only its executor issues them.
+    """
+
+    if not isinstance(payload, Mapping) or not isinstance(
+        payload.get("risk_difference_percentage_points"), Mapping
+    ):
+        return False
+    raw_owner_authority = (
+        payload.get("schema_version") == TARGET_TRIAL_REPORTING_SCHEMA_VERSION
+        and payload.get("execution_owner") == "target_trial_executor_v1"
+    )
+    envelope_owner_authority = (
+        _has_envelope_writer_authority(record, evidence=evidence)
+        and record.get("deterministic_standard_analysis")
+        == "signed_target_trial_suite"
+        and summary.get("analysis_family") == "causal_inference"
+        and summary.get("analysis_role") == "primary"
+    )
+    return bool(raw_owner_authority or envelope_owner_authority)
+
+
 def _executed_method_boundary_rows(
     records: Sequence[Mapping[str, Any]], *, evidence: EvidenceStore | None
 ) -> List[Dict[str, Any]]:
@@ -834,6 +871,14 @@ def _render_writer_evidence_digest(
             # interval-specific alternatives together and ahead of the
             # diagnostic-leaf cap.
             digest_row["reportable_survival_results"] = dict(reportable_survival)
+        reportable_target_trial = summary.get(TARGET_TRIAL_REPORTING_KEY)
+        if _target_trial_reporting_is_authorized(
+            record=record,
+            summary=summary,
+            payload=reportable_target_trial,
+            evidence=evidence,
+        ):
+            digest_row[TARGET_TRIAL_REPORTING_KEY] = dict(reportable_target_trial)
         artifact_bindings = record.get("writer_artifact_bindings")
         primary_candidate = summary.get("primary_association_path")
         declared_primary_candidate = bool(primary_candidate)

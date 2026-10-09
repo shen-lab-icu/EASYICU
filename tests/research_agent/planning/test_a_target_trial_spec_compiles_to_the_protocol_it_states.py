@@ -19,6 +19,10 @@ import pytest
 from pydantic import ValidationError
 
 from easyicu.outcome_availability import FixedHorizonMortalityEndpoint
+from easyicu.research_agent.authority.target_trial_claim_terms import (
+    TARGET_TRIAL_ASSUMPTIONS,
+    TargetTrialClaimTerms,
+)
 from easyicu.research_agent.planning import target_trial_compile as compile_module
 from easyicu.research_agent.planning.population_compile import compile_population
 from easyicu.research_agent.planning.population_spec import PopulationSpec
@@ -360,6 +364,7 @@ def test_a_trial_the_input_supports_carries_every_element() -> None:
         "capture_assumption",
         "treatment_class",
         "confounder_set",
+        "emulation_assumptions",
     ]
 
 
@@ -388,6 +393,11 @@ def test_the_record_is_stable_and_names_what_it_was_compiled_from() -> None:
         "causal_contrast",
         "analysis_plan",
     ]
+    # The card states what the executed protocol states: eligibility needs the
+    # vital status at the horizon, which is known only after time zero.
+    assert record["protocol"][0]["text"].endswith(
+        "and with a known vital status 28 days after ICU admission."
+    )
     assert record["materialization"]["covariate_window"] == {
         "start_hours": 0,
         "end_hours": 6,
@@ -865,6 +875,38 @@ def test_the_adjustment_set_and_its_assumption_are_confirmed_for_every_trial() -
         "confounding beyond the adjusted set.",
     )
     assert not unadjusted.approvable
+
+
+def test_the_researcher_confirms_every_assumption_the_estimates_state() -> None:
+    terms = TargetTrialClaimTerms.model_validate(
+        {
+            "schema_version": "easyicu.target_trial_claim_terms/1",
+            "measure": "risk_difference",
+            "strategy": None,
+            "weighting": "stabilized",
+            "initiate_label": "Early start",
+            "defer_label": "No early start",
+            "outcome_label": "Death",
+            "horizon_days": 28,
+            "analysis_unit_label": "ICU stays",
+            "truncation_percentiles": None,
+        }
+    )
+    stated = (
+        terms.result_sentence(point="-4.00", low="-7.50", high="-0.50", confidence="95"),
+        terms.conclusion_sentence("negative"),
+    )
+    # Every trial carries the line, whether or not it can be approved yet.
+    for trial in (_compile(), _compile(_spec(confounders=[]))):
+        (line,) = [
+            item
+            for item in trial.confirmations
+            if item.kind == "emulation_assumptions"
+        ]
+        assert line.element == "analysis"
+        for assumption in TARGET_TRIAL_ASSUMPTIONS:
+            assert assumption in line.text
+            assert all(assumption in sentence for sentence in stated)
 
 
 def test_every_reason_code_is_reachable_from_a_synthetic_study() -> None:

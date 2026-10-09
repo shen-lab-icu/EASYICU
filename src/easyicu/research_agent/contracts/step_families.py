@@ -596,27 +596,28 @@ def _signed_standard_effect_output_authorized(
     )
 
 
-#: The digest-bound survival suites, each with the selector reason that
-#: records the host ran it: the binary exposure contrast and the continuous
-#: exposure per unit.
-_SIGNED_SURVIVAL_SUITE_SELECTION_REASONS: Mapping[str, str] = {
+#: The digest-bound effect suites, each with the selector reason that records
+#: the host ran it: the survival suites' binary exposure contrast and
+#: continuous exposure per unit, and the target trial's strategy contrast.
+_SIGNED_SUITE_SELECTION_REASONS: Mapping[str, str] = {
     "signed_landmark_survival_suite": "signed_landmark_survival_suite_contract_preflight",
     "signed_landmark_continuous_survival_suite": (
         "signed_landmark_continuous_survival_suite_contract_preflight"
     ),
+    "signed_target_trial_suite": "signed_target_trial_suite_contract_preflight",
 }
 
 
-def _signed_landmark_survival_effect_output_authorized(
+def _signed_suite_effect_output_authorized(
     step: AnalysisStep,
     step_record: Optional[Mapping[str, Any]],
 ) -> bool:
-    """Recognize a digest-bound deterministic survival suite as effect owner."""
+    """Recognize a digest-bound deterministic effect suite as effect owner."""
 
     if not isinstance(step_record, Mapping):
         return False
     method = str(step.method or "")
-    reason = _SIGNED_SURVIVAL_SUITE_SELECTION_REASONS.get(method)
+    reason = _SIGNED_SUITE_SELECTION_REASONS.get(method)
     candidates = step_record.get("standard_executor_candidates")
     typed_outputs = [typed_product(value) for value in step.expected_outputs or ()]
     return bool(
@@ -686,7 +687,7 @@ def effect_output_authorized(
         or association_binary_sensitivity_contract(step) is not None
         or _signed_standard_effect_output_authorized(step, step_record)
         or _signed_landmark_spline_effect_output_authorized(step, step_record)
-        or _signed_landmark_survival_effect_output_authorized(step, step_record)
+        or _signed_suite_effect_output_authorized(step, step_record)
     )
 
 

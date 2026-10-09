@@ -23,6 +23,7 @@ from ..contracts.manuscript_tables import (
     MANUSCRIPT_TABLES_KEY,
     GroupedSummaryLayout,
     ManuscriptTableDeclaration,
+    ProtocolRowsLayout,
     StageFlowLayout,
     validate_manuscript_table_declarations,
 )
@@ -68,13 +69,17 @@ class ReaderTableCallout:
     subsection: str
 
 
-#: Both declared layouts describe the analysed cohort (how the groups compare,
-#: how the cohort was reached), so Results calls them where it describes the
-#: cohort.  A new layout names its own subsection here.
+#: Each declared layout describes the analysed cohort (how the groups compare,
+#: how the cohort was reached, the protocol that defined it), so Results calls
+#: them where it describes the cohort.  A new layout names its own subsection
+#: here.
 _RESULTS_SUBSECTION_BY_LAYOUT = {
     "grouped_summary": COHORT_RESULT_HEADING,
     "stage_flow": COHORT_RESULT_HEADING,
+    "protocol_rows": COHORT_RESULT_HEADING,
 }
+#: Characters no recorded specification may hold: Markdown or table syntax.
+_MARKUP_CHARACTERS = frozenset("{}[]<>`\\|*_#")
 
 
 def _number(value: str, places: int = 2) -> str:
@@ -490,6 +495,22 @@ def _stage_flow(body: StageFlowLayout, rows, printed: _PrintedCounts):
     return ("Stage", "Records", "Excluded"), projected
 
 
+def _protocol_rows(body: ProtocolRowsLayout, rows):
+    """The protocol's elements as recorded; it prints no count."""
+
+    if [row["item"] for row in rows] != list(body.item_labels):
+        raise ManuscriptTableProjectionError(
+            "Recorded protocol items differ from their declared labels"
+        )
+    projected = []
+    for row in rows:
+        text = " ".join(str(row["specification"]).split())
+        if not text or _MARKUP_CHARACTERS.intersection(text):
+            raise ManuscriptTableProjectionError("A recorded protocol specification is not reader text")
+        projected.append((body.item_labels[row["item"]], text))
+    return ("Protocol element", "Specification"), projected
+
+
 def _declared_table(
     plan: AnalysisPlan, declaration: ManuscriptTableDeclaration, source: EvidenceRecord, run_dir: Path,
 ) -> tuple[ManuscriptTable, _PrintedCounts]:
@@ -498,6 +519,8 @@ def _declared_table(
     try:
         if isinstance(declaration.body, GroupedSummaryLayout):
             columns, projected = _grouped_summary(plan, declaration.body, rows, printed)
+        elif isinstance(declaration.body, ProtocolRowsLayout):
+            columns, projected = _protocol_rows(declaration.body, rows)
         else:
             columns, projected = _stage_flow(declaration.body, rows, printed)
     except KeyError as exc:

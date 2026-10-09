@@ -1,8 +1,7 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/agents/core.py",
-      "src/easyicu/research_agent/agents/planner.py"
+      "src/easyicu/research_agent/reporting/article_contract.py"
     ],
     "summary_changes": {}
   },
@@ -724,9 +723,16 @@
         "src/easyicu/research_agent/agents/planner.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "2026-10-09 causal steps 2+3: reporting/article_contract.py registers the signed target trial suite's article roles; source digests only, resource selections and prompt sizes are unchanged",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/reporting/article_contract.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "2026-10-09 architecture close-out item 4: describe_article_contract_family_switch moves from agents/planner.py to agents/article_contract_switch.py, and the agents/core.py facade re-exports it from there; source digests only, resource selections and prompt sizes are unchanged",
+  "baseline_reason": "2026-10-09 causal steps 2+3: reporting/article_contract.py registers the signed target trial suite's article roles; source digests only, resource selections and prompt sizes are unchanged",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -751,7 +757,7 @@
     "src/easyicu/research_agent/planning/study_design.py": "84e7d9c0974ca3d1f9deadcc22de065586a9be20fcdf66f101f931469b64cad0",
     "src/easyicu/research_agent/planning/study_design_playbook.py": "fa07ee36a06d560ca9266999516bf1f394c4ac522d5b1436bf689d274b07888d",
     "src/easyicu/research_agent/providers/prompts/v1/system.txt": "cf9212ac318beac1b2690738506b0b9d658bc28db4b98a521022d57a317eb692",
-    "src/easyicu/research_agent/reporting/article_contract.py": "a4220196c9aa8761be2f255ebce754c82f0ac73b4c02f9046a5f82a984bef2e8",
+    "src/easyicu/research_agent/reporting/article_contract.py": "79253c08e4d959edcca599b59f758f9b650ea9829a477dd3a7c34ce4c7e57c5b",
     "src/easyicu/research_agent/research_context/outbound.py": "1019a35f2bf4ed055c4c274fbe29bf8b6cffcbe601fe3c0fa2096c54bb68efd6",
     "src/easyicu/research_agent/resources/capability.py": "3fc6dea8ffde23a358dfccd02b5f31620069fcccba8012807057a9913c70ca84",
     "src/easyicu/research_agent/resources/capability_runtime.py": "5e707e8a4b3a5f375ae579951b07c3e1f07d635b8db093109c613936c8b3bc71",

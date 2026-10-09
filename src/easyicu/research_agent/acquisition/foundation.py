@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Union
 
 from .catalog import (
     AvailableCatalog,
@@ -361,6 +361,7 @@ def acquire_universe_for_question(
     patient_grouping: Optional[PatientGroupingBinding] = None,
     host_derivations: Sequence[str] = (),
     first_icu_stay: Optional[FirstIcuStayBinding] = None,
+    event_onset_windows: Optional[Mapping[str, Tuple[float, float]]] = None,
 ) -> AcquisitionResult:
     """Agent selects concepts, we check coverage, then materialise the universe.
 
@@ -622,6 +623,9 @@ def acquire_universe_for_question(
         # not inferred: a column whose value depends on several concepts at
         # once must be requested by the design that will use it.
         host_derivations=list(dict.fromkeys(requested_derivations)),
+        # A design that times an event past the cohort window (a treatment
+        # start inside a grace period) names the window its onset is read over.
+        event_onset_windows=event_onset_windows,
         **identity_kwargs,
     )
     try:

@@ -196,6 +196,41 @@
       );
     }
 
+    /* The stops the signed target trial emulation names: each a threshold
+       its host prespecified, judged on the eligible stays. The design is a
+       researcher's confirmed choice, so the remedy revises it and confirms
+       it again. Dropping a confounder trades confounding for positivity, so
+       the positivity and weight stops name narrower eligibility, the
+       strategy's definition, or covariates that affect only the start of
+       treatment; fewer covariates remedy only a model with too few events. */
+    function targetTrialStopCopy(cause) {
+      const revise = (en, zh) => tr(
+        ` Revise the trial's design, for example with ${en}, confirm it again, then generate the plan again.`,
+        `请修订模拟试验的设计（例如${zh}），重新确认后再生成计划。`,
+      );
+      // A cause outside a table, a prototype key included, names no reason.
+      const reason = (table) => (Object.prototype.hasOwnProperty.call(table, cause) ? table[cause] : '');
+      const weightWhy = reason({
+        separation: tr('the model predicted almost perfectly when stays started the treatment or left the ICU', '模型几乎能完全预测入住何时开始治疗或离开 ICU'),
+        not_converged: tr('the model did not converge', '模型没有收敛'),
+        singular_design: tr('a covariate did not vary, a category had no stays, or covariates repeated each other\'s information, among the stays the model uses', '在模型使用的入住中，有协变量没有变化、有类别没有入住，或有协变量的信息彼此重复'),
+      });
+      const bootstrapWhy = reason({
+        resamples_failed: tr('more than the prespecified share of bootstrap resamples could not be estimated', '超过预设比例的自助法重抽样无法估计'),
+        estimate_outside_interval: tr('an estimate lay outside its own bootstrap interval, which then does not describe it', '有估计值落在它自己的自助法区间之外，这个区间不能描述它'),
+      });
+      return {
+        target_trial_sample_insufficient: tr('Fewer stays met the trial\'s eligibility at its time zero than the prespecified minimum, so the run has no primary result.', '在时间零点符合模拟试验入组条件的入住少于预设的最低数量，这次运行没有主结果。') + revise('an earlier time zero or a wider population', '更早的时间零点或更宽的人群'),
+        target_trial_events_insufficient: tr('A strategy had fewer outcome events by the horizon than the prespecified minimum, too few to estimate its risk, so the run has no primary result.', '有一个策略在随访期内的结局事件少于预设的最低数量，不足以估计它的风险，这次运行没有主结果。') + revise('a longer horizon or a wider population', '更长的随访期或更宽的人群'),
+        target_trial_strategy_unobserved: tr('Too few stays started the treatment within the grace period to model starting with the chosen covariates, or too few did not start it for the other strategy to be followed, so the run has no primary result.', '在宽限期内开始治疗的入住太少，无法用所选协变量建立开始治疗的模型；或不开始治疗的入住太少，无法跟随另一种策略，这次运行没有主结果。') + revise('a different grace period or fewer covariates', '调整宽限期或减少协变量'),
+        target_trial_positivity_violated: tr('For more than the prespecified share of eligible stays, the modelled chance of starting the treatment within the grace period was close to certain or close to none, so the two strategies cannot be compared for them and the run has no primary result.', '超过预设比例的合格入住，在宽限期内开始治疗的模型概率接近必然或接近为零，无法为它们比较两种策略，这次运行没有主结果。') + revise('eligibility that keeps only stays for whom either strategy is plausible, or without covariates that affect starting the treatment but not the outcome', '只纳入两种策略都可能的入住，或去掉只影响是否开始治疗、不影响结局的协变量'),
+        target_trial_weights_extreme: tr('A few stays carried most of a strategy\'s weight, so its estimate would rest on them and the run has no primary result.', '有一个策略的权重集中在少数入住上，它的估计将取决于这些入住，这次运行没有主结果。') + revise('narrower eligibility, a shorter grace period, or without covariates that affect starting the treatment but not the outcome', '收窄入组条件、缩短宽限期，或去掉只影响是否开始治疗、不影响结局的协变量'),
+        target_trial_icu_exit_excessive: tr('More than the prespecified share of eligible stays left the ICU within the grace period before starting the treatment, and a start after ICU exit is not recorded, so the run has no primary result.', '超过预设比例的合格入住在宽限期内、开始治疗之前离开了 ICU，而离开 ICU 后开始的治疗没有记录，这次运行没有主结果。') + revise('a shorter grace period or a later time zero', '缩短宽限期或把时间零点后移'),
+        target_trial_weight_model_not_estimable: tr(`A model of the trial's weights could not be estimated${weightWhy ? `: ${weightWhy}` : ''}, so the run has no primary result.`, `模拟试验的权重模型无法估计${weightWhy ? `：${weightWhy}` : ''}，这次运行没有主结果。`) + revise('merged sparse categories or fewer covariates', '合并稀疏的类别或减少协变量'),
+        target_trial_bootstrap_unstable: tr(`The trial's bootstrap gives no interval to report${bootstrapWhy ? `: ${bootstrapWhy}` : ''}, so the run has no primary result.`, `模拟试验的自助法没有可报告的区间${bootstrapWhy ? `：${bootstrapWhy}` : ''}，这次运行没有主结果。`) + revise('fewer covariates or a wider population', '减少协变量或扩大人群'),
+      };
+    }
+
     function runFailureDetailText(detail) {
       const code = String(detail && detail.code || '').trim();
       const cause = String(detail && detail.cause || '').trim();
@@ -224,6 +259,7 @@
         continuous_survival_interval_result_not_estimable: intervalResultNotEstimableText(cause),
         landmark_survival_interval_result_not_estimable: intervalResultNotEstimableText(cause),
         continuous_survival_exposure_has_one_value: tr('Every analysed stay had the same value of the continuous exposure, so no association with it can be estimated. The run has no primary result. Choose an exposure, summary or window whose values differ between stays, then generate the plan again.', '分析人群中每次入住的连续暴露取值都相同，无法估计与它的关联。这次运行没有主结果。请选用在不同入住之间取值不同的暴露、汇总方式或窗口，再生成计划。'),
+        ...targetTrialStopCopy(cause),
         trajectory_stability_refit_failed: tr('The prespecified stability check needs every planned refit to succeed, and a refit could not be completed, so the run has no result. Revise the plan, for example to consider fewer classes, then generate the plan again.', '预设的稳定性检查要求每次计划的重拟合都成功，有重拟合没能完成，这次运行没有结果。请修订计划（例如考虑更少的类别数），再生成计划。'),
         progressive_product_has_multiple_owners: tr('Two steps of the candidate plan produce the same result, so EasyICU cannot tell which step it comes from; planning stopped and no analysis was run. Generate the plan again; the stop is recorded for diagnosis.', '候选计划里有两个步骤产出同一份结果，EasyICU 无法确定它来自哪一步；规划已停止，没有运行分析。请重新生成计划；这次停止已记录，便于排查。'),
         progressive_outline_replay_producer_absent: tr('A step of the candidate outline reuses the result of a method that no earlier step runs, so planning stopped and no analysis was run. Generate the plan again.', '候选大纲里有一步要沿用某个方法的结果，但前面没有步骤运行这个方法；规划已停止，没有运行分析。请重新生成计划。'),

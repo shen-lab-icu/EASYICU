@@ -319,12 +319,97 @@ class LandmarkContinuousSurvivalDesign(_ExecutedDesign):
         return self
 
 
+#: The forms the ICU-exit model of a target trial takes
+#: (``contracts.target_trial_design.ICU_EXIT_MODEL_FORMS``).
+TargetTrialExitModelForm = Literal[
+    "none", "hour_terms_and_covariates", "hour_terms_only"
+]
+#: Reader words for each form, without digits: the Methods bind every number
+#: they state.
+TARGET_TRIAL_EXIT_MODEL_WORDS: dict[str, str] = {
+    "none": "no record left the ICU within the grace period before starting, so "
+    "no ICU-exit model was fitted",
+    "hour_terms_and_covariates": "a pooled logistic model of leaving the ICU "
+    "before starting, with the hour terms and the same covariates, weighted the "
+    "censoring at ICU exit",
+    "hour_terms_only": "exits from the ICU before starting were too few for the "
+    "covariates and rare, so a pooled logistic model with the hour terms only "
+    "weighted the censoring at ICU exit, which assumes such exits depend on time "
+    "alone",
+}
+
+
+class TargetTrialDesign(_ExecutedDesign):
+    """A grace-period target trial emulated by clone, censor and weight.
+
+    Hours count from ICU admission; the grace period starts at time zero.
+    The hour terms of the weight models follow the grace period's length:
+    a restricted cubic spline from four hours, a linear term from two, none
+    for one.
+    """
+
+    design_kind: Literal["target_trial_clone_censor_weight"]
+    time_zero_hours: int = Field(ge=1)
+    grace_period_hours: int = Field(ge=1)
+    endpoint_horizon_days: int = Field(gt=0)
+    n_adjustment_covariates: int = Field(ge=1)
+    n_unmeasured_state_covariates: int = Field(ge=0)
+    hour_terms: Literal["restricted_cubic_spline", "linear", "none"]
+    icu_exit_model_form: TargetTrialExitModelForm
+    weight_truncation_percentiles: list[float] = Field(min_length=2, max_length=2)
+    positivity_window_percent: list[float] = Field(min_length=2, max_length=2)
+    bootstrap_resamples: int = Field(ge=1)
+    resampling_unit: Literal["icu_stay", "patient"]
+    #: Deaths by the horizon after hospital discharge, which the input timed
+    #: by calendar day, not by the hour.
+    deaths_timed_by_calendar_day: int = Field(ge=0)
+    #: Other deaths by the horizon the input records no time for, timed so too.
+    other_deaths_timed_by_calendar_day: int = Field(ge=0)
+    #: Of both, the deaths whose day preceded the ICU exit, placed at the exit.
+    deaths_placed_at_icu_exit: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _closed_design(self) -> "TargetTrialDesign":
+        expected = (
+            "restricted_cubic_spline"
+            if self.grace_period_hours >= 4
+            else "linear"
+            if self.grace_period_hours >= 2
+            else "none"
+        )
+        if self.hour_terms != expected:
+            raise ValueError("the hour terms follow the grace period's length")
+        if (
+            self.endpoint_horizon_days * 24
+            <= self.time_zero_hours + self.grace_period_hours
+        ):
+            raise ValueError("the horizon ends after the grace period")
+        low, high = self.weight_truncation_percentiles
+        if not 0.0 < low < high < 100.0:
+            raise ValueError("the truncation percentiles are increasing inside 0-100")
+        if not (float(low).is_integer() and float(high).is_integer()):
+            raise ValueError(
+                "the truncation percentiles are whole, as Methods names them"
+            )
+        low, high = self.positivity_window_percent
+        if not 0.0 < low < high < 100.0:
+            raise ValueError("the positivity window is increasing inside 0-100")
+        if self.n_unmeasured_state_covariates > self.n_adjustment_covariates:
+            raise ValueError("unmeasured states belong to adjusted covariates")
+        if self.deaths_placed_at_icu_exit > (
+            self.deaths_timed_by_calendar_day + self.other_deaths_timed_by_calendar_day
+        ):
+            raise ValueError("a death placed at the ICU exit was timed by its day")
+        return self
+
+
 ExecutedMethodDesign = Annotated[
     Union[
         FixedWindowRepresentationDesign,
         LatentClassModelDesign,
         LandmarkSurvivalDesign,
         LandmarkContinuousSurvivalDesign,
+        TargetTrialDesign,
     ],
     Field(discriminator="design_kind"),
 ]
@@ -352,6 +437,9 @@ __all__ = [
     "LandmarkContinuousSurvivalDesign",
     "LandmarkSurvivalDesign",
     "LatentClassModelDesign",
+    "TARGET_TRIAL_EXIT_MODEL_WORDS",
+    "TargetTrialDesign",
+    "TargetTrialExitModelForm",
     "WholeRiskSetReason",
     "executed_method_design_payload",
     "exposure_step_text",

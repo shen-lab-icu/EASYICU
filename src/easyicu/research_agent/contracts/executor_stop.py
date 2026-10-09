@@ -27,6 +27,11 @@ from types import MappingProxyType
 from typing import Any, Mapping, Optional
 
 from ..methods.time_varying_cox import TIME_VARYING_NOT_ESTIMABLE_REASONS
+from .target_trial_design import (
+    BOOTSTRAP_UNSTABLE_CAUSES,
+    TARGET_TRIAL_STOP_REASONS,
+    WEIGHT_MODEL_NOT_ESTIMABLE_CAUSES,
+)
 
 __all__ = [
     "EXECUTOR_STOP_REASONS",
@@ -68,6 +73,15 @@ class ExecutorStopReason:
     repeats_on_unchanged_retry: bool
 
 
+#: The signed target trial suite's stops (``contracts.target_trial_design``):
+#: each a threshold the host prespecified, judged on the eligible stays.  A
+#: weight model names why it was not estimable, and an unstable bootstrap why
+#: it gives no interval; the other stops name no cause.
+_TARGET_TRIAL_STOP_CAUSES = {
+    "target_trial_weight_model_not_estimable": WEIGHT_MODEL_NOT_ESTIMABLE_CAUSES,
+    "target_trial_bootstrap_unstable": BOOTSTRAP_UNSTABLE_CAUSES,
+}
+
 EXECUTOR_STOP_REASONS: Mapping[str, ExecutorStopReason] = MappingProxyType(
     {
         # The proportional-hazards check rejected a constant hazard ratio, so
@@ -105,6 +119,14 @@ EXECUTOR_STOP_REASONS: Mapping[str, ExecutorStopReason] = MappingProxyType(
             cause_codes=frozenset(),
             repeats_on_unchanged_retry=True,
         ),
+        **{
+            code: ExecutorStopReason(
+                owner="signed_target_trial_suite",
+                cause_codes=frozenset(_TARGET_TRIAL_STOP_CAUSES.get(code, ())),
+                repeats_on_unchanged_retry=True,
+            )
+            for code in TARGET_TRIAL_STOP_REASONS
+        },
     }
 )
 #: Why a record was not accepted.  A rejected record names no stop.

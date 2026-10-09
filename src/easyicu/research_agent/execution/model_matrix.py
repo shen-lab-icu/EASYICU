@@ -1,10 +1,11 @@
 """Compile Planner-declared model terms into a numeric design matrix.
 
 This is the sole execution owner for variable coding shared by the adjusted
-association and survival primary executors. It validates the observed domain
-against the closed declaration and preserves missing values for the caller's
-declared missing-data policy; it never chooses a reference or dtype-based
-encoding.
+association and survival primary executors, and by the weight models of the
+target trial executor, which have covariates only. It validates the observed
+domain against the closed declaration and preserves missing values for the
+caller's declared missing-data policy; it never chooses a reference or
+dtype-based encoding.
 """
 
 from __future__ import annotations
@@ -101,9 +102,13 @@ def compile_model_terms(
     frame: Any,
     *,
     terms: Sequence[ModelTermSpec],
-    exposure: str,
+    exposure: Optional[str],
 ) -> CompiledModelMatrix:
-    """Compile one exact term roster without inferring scientific choices."""
+    """Compile one exact term roster without inferring scientific choices.
+
+    ``exposure`` names the roster's one exposure term; ``None`` declares a
+    roster of covariates only, which may then hold no exposure term.
+    """
 
     import pandas as pd
 
@@ -117,7 +122,13 @@ def compile_model_terms(
             "model_term_source_repeated", "model term source names must be unique"
         )
     exposures = [item for item in roster if item.role == "exposure"]
-    if len(exposures) != 1 or exposures[0].name != exposure:
+    if exposure is None:
+        if exposures:
+            raise ModelTermCompilationError(
+                "model_term_exposure_mismatch",
+                "a covariate-only roster declares no exposure term",
+            )
+    elif len(exposures) != 1 or exposures[0].name != exposure:
         raise ModelTermCompilationError(
             "model_term_exposure_mismatch",
             "the compiled roster must contain one exact declared exposure",
@@ -255,7 +266,7 @@ def primary_model_rows(
     frame: Any,
     *,
     terms: Sequence[ModelTermSpec],
-    exposure: str,
+    exposure: Optional[str],
     outcome: str,
     missing_category_covariates: Sequence[str] = (),
     term_groups: Optional[Mapping[str, str]] = None,
@@ -277,6 +288,9 @@ def primary_model_rows(
     they represent, so a listed covariate expanded into several continuous
     columns is kept as one state: its columns are filled with 0 there, which
     its ``<name>__unmeasured`` indicator absorbs, and the same rule decides.
+
+    ``exposure=None`` selects the rows of a model with covariates only
+    (:func:`covariate_model_rows`).
     """
 
     roster = [
@@ -412,6 +426,29 @@ def primary_model_rows(
     )
 
 
+def covariate_model_rows(
+    frame: Any,
+    *,
+    terms: Sequence[ModelTermSpec],
+    outcome: str,
+    missing_category_covariates: Sequence[str] = (),
+) -> PrimaryModelRows:
+    """The rows and complete design of a model with covariates only.
+
+    A weight model of a target trial adjusts for baseline covariates and has
+    no exposure term; its rows follow the same rules as a primary model's,
+    with ``outcome`` the 0/1 event the model's estimability is judged on.
+    """
+
+    return primary_model_rows(
+        frame,
+        terms=terms,
+        exposure=None,
+        outcome=outcome,
+        missing_category_covariates=missing_category_covariates,
+    )
+
+
 __all__ = [
     "CompiledModelMatrix",
     "MissingCategoryTerm",
@@ -419,5 +456,6 @@ __all__ = [
     "PrimaryModelRows",
     "UnmeasuredRowsDropped",
     "compile_model_terms",
+    "covariate_model_rows",
     "primary_model_rows",
 ]

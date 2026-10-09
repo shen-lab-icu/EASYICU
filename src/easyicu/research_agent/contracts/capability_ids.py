@@ -23,10 +23,15 @@ SOURCE_FEASIBILITY_ANALYSIS_KIND: Final = "signed_source_feasibility_fail_closed
 SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID: Final = (
     "trajectory_signed_phenotyping_v1"
 )
+#: A grace-period target trial emulated by clone, censor and weight under a
+#: signed authority: reportable with template causal wording, its evidence
+#: ceiling still ``analysis_only``.
+TARGET_TRIAL_CCW_CAPABILITY_ID: Final = "causal_target_trial_ccw_v1"
 
 CAPABILITY_FAMILIES: Final[dict[str, str]] = {
     "survival_time_to_event_v1": "time_to_event",
     "causal_target_trial_v1": "causal_emulation",
+    TARGET_TRIAL_CCW_CAPABILITY_ID: "causal_emulation",
     SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID: "causal_emulation",
     "association_ordinal_trend_v1": "association",
     "association_adjusted_v1": "association",
@@ -60,5 +65,6 @@ __all__ = [
     "SOURCE_FEASIBILITY_ANALYSIS_KIND",
     "SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID",
     "SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID",
+    "TARGET_TRIAL_CCW_CAPABILITY_ID",
     "capability_family",
 ]

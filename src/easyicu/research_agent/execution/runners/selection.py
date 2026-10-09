@@ -16,6 +16,7 @@ from ...authority.landmark_continuous_survival_runtime import (
     LandmarkContinuousSurvivalRuntimeAuthority,
 )
 from ...authority.rmst_runtime import RmstRuntimeAuthority
+from ...authority.target_trial_runtime import TargetTrialRuntimeAuthority
 from ...authority.time_varying_runtime import TimeVaryingRuntimeAuthority
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...contracts.time_varying_exposure import TIME_VARYING_ANALYSIS_KIND
@@ -177,6 +178,16 @@ from .landmark_continuous_survival_figure import (
     LANDMARK_CONTINUOUS_SURVIVAL_FIGURE_ANALYSIS_KIND,
     landmark_continuous_survival_figure_executor_code,
     landmark_continuous_survival_figure_executor_owns_step,
+)
+from .target_trial_executor import (
+    TARGET_TRIAL_ANALYSIS_KIND,
+    target_trial_executor_code,
+    target_trial_executor_owns_step,
+)
+from .target_trial_figure import (
+    TARGET_TRIAL_FIGURE_ANALYSIS_KIND,
+    target_trial_figure_executor_code,
+    target_trial_figure_executor_owns_step,
 )
 from .landmark_survival_executor import (
     LANDMARK_SURVIVAL_ANALYSIS_KIND,
@@ -499,6 +510,53 @@ def _build_registry() -> StepExecutorRegistry:
             progress_message=(
                 "Using source-bound continuous-exposure landmark survival renderer"
             ),
+            consumed_input_keys=lambda c: (
+                c.current_case_scientific_runtime_authority.figure_input_products
+            ),
+            host_sealed_renderer=True,
+        ),
+        StepExecutor(
+            key=TARGET_TRIAL_ANALYSIS_KIND,
+            applicable=lambda c: isinstance(
+                c.current_case_scientific_runtime_authority,
+                TargetTrialRuntimeAuthority,
+            ),
+            owns=lambda c: target_trial_executor_owns_step(
+                c.step,
+                plan=c.plan,
+                authority=c.current_case_scientific_runtime_authority,
+            ),
+            render=lambda c: target_trial_executor_code(
+                c.step,
+                authority=c.current_case_scientific_runtime_authority,
+                runtime_projection_sha256=c.scientific_runtime_projection_sha256,
+                plausibility_scope=c.plausibility_scope,
+            ),
+            analysis_kind=TARGET_TRIAL_ANALYSIS_KIND,
+            selection_reason="signed_target_trial_suite_contract_preflight",
+            progress_message=(
+                "Using signed deterministic target trial emulation by clone, "
+                "censor and weight"
+            ),
+            consumed_input_keys=lambda c: c.typed_cohort_inputs(),
+        ),
+        StepExecutor(
+            key=TARGET_TRIAL_FIGURE_ANALYSIS_KIND,
+            applicable=lambda c: isinstance(
+                c.current_case_scientific_runtime_authority,
+                TargetTrialRuntimeAuthority,
+            ),
+            owns=lambda c: target_trial_figure_executor_owns_step(
+                c.step,
+                plan=c.plan,
+                authority=c.current_case_scientific_runtime_authority,
+            ),
+            render=lambda c: target_trial_figure_executor_code(
+                c.step, authority=c.current_case_scientific_runtime_authority
+            ),
+            analysis_kind=TARGET_TRIAL_FIGURE_ANALYSIS_KIND,
+            selection_reason="signed_target_trial_figure_contract_preflight",
+            progress_message="Using source-bound target trial emulation renderer",
             consumed_input_keys=lambda c: (
                 c.current_case_scientific_runtime_authority.figure_input_products
             ),

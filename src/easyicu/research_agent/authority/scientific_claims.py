@@ -23,6 +23,11 @@ from .continuous_survival_scientific_claims import (
     continuous_survival_reporting_requests_claims,
 )
 from .survival_scientific_claims import survival_reporting_requests_claims
+from .target_trial_claim_terms import TargetTrialClaimTerms
+from .target_trial_scientific_claims import (
+    TARGET_TRIAL_CLAIM_SCHEMA_VERSION,
+    target_trial_reporting_requests_claims,
+)
 from .prespecified_rule_outcomes import (
     RULE_OUTCOME_CLAIM_SCHEMA_VERSION,
     RULE_OUTCOMES_KEY,
@@ -210,6 +215,7 @@ class ScientificClaimDraft(BaseModel):
     schema_version: Literal[
         "easyicu.scientific_claim/1", "easyicu.scientific_claim/2",
         "easyicu.scientific_claim/3", "easyicu.scientific_claim/4",
+        "easyicu.scientific_claim/5",
     ] = "easyicu.scientific_claim/1"
     claim_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     claim_type: Literal[
@@ -217,6 +223,7 @@ class ScientificClaimDraft(BaseModel):
         "descriptive_absolute_risk",
         "descriptive_risk_difference",
         "prespecified_rule_outcome",
+        "target_trial_estimate",
     ]
     exposure: str
     outcome: str
@@ -238,21 +245,31 @@ class ScientificClaimDraft(BaseModel):
     interval_upper: float | None = None
     confidence_level: float | None = Field(default=None, gt=0.5, lt=1.0)
     interval_method: Literal[
-        "wilson", "patient_cluster_robust_wald", "linear_probability_wald"
+        "wilson",
+        "patient_cluster_robust_wald",
+        "linear_probability_wald",
+        "bootstrap_percentile",
     ] | None = None
-    effect_scale: Literal["percent", "percentage_points"] | None = None
+    effect_scale: Literal["percent", "percentage_points", "ratio"] | None = None
     rule_outcome: PrespecifiedRuleOutcome | None = None
+    #: What a target trial estimate estimates; its words are the template's
+    #: (``target_trial_claim_terms``), never this claim's free text.
+    target_trial_terms: TargetTrialClaimTerms | None = None
 
     @model_serializer(mode="wrap")
     def _preserve_legacy_payload(self, handler):
         payload = handler(self)
-        if self.schema_version != "easyicu.scientific_claim/3":
+        if self.schema_version not in {
+            "easyicu.scientific_claim/3", TARGET_TRIAL_CLAIM_SCHEMA_VERSION
+        }:
             # Old evidence seals include the exact /1 or /2 payload. New
             # optional fields must not change those persisted bytes on replay.
             for field in ("confidence_level", "interval_method", "effect_scale"):
                 payload.pop(field, None)
         if self.schema_version != RULE_OUTCOME_CLAIM_SCHEMA_VERSION:
             payload.pop("rule_outcome", None)
+        if self.schema_version != TARGET_TRIAL_CLAIM_SCHEMA_VERSION:
+            payload.pop("target_trial_terms", None)
         return payload
 
     @field_validator("exposure", "outcome", "estimand", "population")
@@ -304,6 +321,16 @@ class ScientificClaimDraft(BaseModel):
                 raise ValueError(
                     "a prespecified rule outcome carries no estimate, interval or adjustment"
                 )
+            return self
+        trial_claim = self.schema_version == TARGET_TRIAL_CLAIM_SCHEMA_VERSION
+        if trial_claim != (self.claim_type == "target_trial_estimate") or (
+            trial_claim != (self.target_trial_terms is not None)
+        ):
+            raise ValueError(
+                "target trial estimates require scientific_claim/5 and their typed terms"
+            )
+        if trial_claim:
+            self._check_target_trial_estimate()
             return self
         if self.schema_version == "easyicu.scientific_claim/3":
             if any(value is None for value in interval_metadata):
@@ -358,6 +385,64 @@ class ScientificClaimDraft(BaseModel):
                 raise ValueError("absolute risk interval must remain within 0 to 100 percent")
         return self
 
+    def _check_target_trial_estimate(self) -> None:
+        """An emulated trial's estimate: complete, on its scale, read by its interval."""
+
+        terms = self.target_trial_terms
+        assert terms is not None
+        values = (self.point_estimate, self.interval_lower, self.interval_upper)
+        if (
+            any(value is None for value in values)
+            or self.confidence_level is None
+            or self.interval_method != "bootstrap_percentile"
+            or self.effect_scale != terms.effect_scale
+        ):
+            raise ValueError(
+                "a target trial estimate states its value, its bootstrap percentile "
+                "interval and its scale"
+            )
+        point, lower, upper = (float(value) for value in values)
+        if not all(math.isfinite(value) for value in values) or not lower <= point <= upper:
+            raise ValueError("a target trial interval must contain its finite estimate")
+        if self.analysis_role not in {"primary", "sensitivity"}:
+            raise ValueError("a target trial estimate is primary or a sensitivity analysis")
+        if terms.measure == "strategy_risk":
+            if self.direction != "descriptive_only" or not 0.0 <= lower <= upper <= 100.0:
+                raise ValueError(
+                    "a strategy's risk is a percentage and states no direction"
+                )
+            return
+        null = 1.0 if terms.measure == "risk_ratio" else 0.0
+        if terms.measure == "risk_ratio" and lower <= 0.0:
+            raise ValueError("a risk ratio interval is positive")
+        expected = (
+            "positive"
+            if lower > null
+            else "negative"
+            if upper < null
+            else "no_clear_association"
+        )
+        if self.direction != expected:
+            raise ValueError("a target trial contrast's direction follows its interval")
+
+    def _target_trial_sentence(self, *, reader: bool) -> str:
+        terms = self.target_trial_terms
+        assert terms is not None
+        assert self.point_estimate is not None
+        assert self.interval_lower is not None
+        assert self.interval_upper is not None
+        assert self.confidence_level is not None
+        if reader:
+            number = _reader_ratio if terms.measure == "risk_ratio" else _reader_percent
+        else:
+            number = lambda value: f"{value:.6g}"  # noqa: E731
+        return terms.result_sentence(
+            point=number(self.point_estimate),
+            low=number(self.interval_lower),
+            high=number(self.interval_upper),
+            confidence=f"{100.0 * self.confidence_level:g}",
+        )
+
 
 class ScientificClaim(ScientificClaimDraft):
     """A validated draft bound by the host to one step and evidence record."""
@@ -388,6 +473,11 @@ class ScientificClaim(ScientificClaimDraft):
             return (
                 f"{self.rule_outcome.result_sentence()[:-1]} (prespecified rule "
                 f"outcome; analysis role: {self.analysis_role})."
+            )
+        if self.target_trial_terms is not None:
+            return (
+                f"{self._target_trial_sentence(reader=False)[:-1]} (target trial "
+                f"estimate; analysis role: {self.analysis_role})."
             )
         if self.claim_type != "association":
             return (
@@ -446,6 +536,13 @@ class ScientificClaim(ScientificClaimDraft):
             if include_estimate:
                 return self.rule_outcome.result_sentence()
             return self.rule_outcome.conclusion_sentence()
+
+        if self.target_trial_terms is not None:
+            # The template names the strategies and the outcome in the trial's
+            # own reader words, so plan labels do not apply.
+            if include_estimate:
+                return self._target_trial_sentence(reader=True)
+            return self.target_trial_terms.conclusion_sentence(self.direction)
 
         labels = _unambiguous_labels(
             labels, [self.exposure, self.outcome, *self.adjusted_for]
@@ -614,6 +711,8 @@ def scientific_claim_compilation_requested(summary: object) -> bool:
         return True
     if continuous_survival_reporting_requests_claims(summary):
         return True
+    if target_trial_reporting_requests_claims(summary):
+        return True
     interpretation_class = str(summary.get("interpretation_class") or "").strip()
     if interpretation_class == "adjusted_association":
         return True
@@ -683,6 +782,12 @@ def derive_scientific_claim_drafts(
 
         return [ScientificClaimDraft.model_validate(payload)
                 for payload in derive_continuous_survival_claim_payloads(summary)]
+
+    if target_trial_reporting_requests_claims(summary):
+        from .target_trial_scientific_claims import derive_target_trial_claim_payloads
+
+        return [ScientificClaimDraft.model_validate(payload)
+                for payload in derive_target_trial_claim_payloads(summary)]
 
     if summary.get("interpretation_class") == "prespecified_sensitivity":
         from .sensitivity_scientific_claims import derive_sensitivity_claim_payloads

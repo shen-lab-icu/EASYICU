@@ -1290,7 +1290,14 @@ class MaterializedColumnMetadataCollector:
         *,
         output_columns: Sequence[str],
         window: tuple[float, float],
+        onset_window: Optional[tuple[float, float]] = None,
     ) -> None:
+        """Describe one time-series concept's summaries over ``window``.
+
+        ``onset_window``, when given, is the window its ``<c>_onset_time`` was
+        read over instead; every other summary keeps ``window``.
+        """
+
         source = self._source_owner(concept)
         if source is None:
             return
@@ -1356,12 +1363,24 @@ class MaterializedColumnMetadataCollector:
                 )
         # The first time the window recorded the event status present: an
         # event time, where the first-time companion is an observation time.
+        if onset_window is not None and not event_like:
+            raise MaterializedMetadataError(
+                f"an onset window applies only to a typed event status: {concept!r}"
+            )
         if event_like and f"{concept}_onset_time" in names:
             self._add(
                 source,
                 column_name=f"{concept}_onset_time",
                 role=ConceptColumnRole.EVENT_TIME,
-                derivation_window=derivation_window,
+                derivation_window=(
+                    derivation_window
+                    if onset_window is None
+                    else DerivationWindow(
+                        origin="icu_admission",
+                        start_hours=onset_window[0],
+                        end_hours=onset_window[1],
+                    )
+                ),
                 representation_transform="first_truthy_event_time",
                 time_origin="icu_admission",
                 time_unit="h",
