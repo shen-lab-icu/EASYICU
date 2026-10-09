@@ -1505,6 +1505,10 @@
     ],
     [
       "easyicu.research_agent.audits.cross_step",
+      "easyicu.research_agent.audits.cross_step_source_status"
+    ],
+    [
+      "easyicu.research_agent.audits.cross_step",
       "easyicu.research_agent.authority.runtime_artifacts"
     ],
     [
@@ -1525,6 +1529,10 @@
     ],
     [
       "easyicu.research_agent.audits.cross_step",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.audits.cross_step_source_status",
       "easyicu.research_agent.schema"
     ],
     [
@@ -5697,19 +5705,11 @@
     ],
     [
       "easyicu.research_agent.execution.runners.deterministic_robustness",
-      "easyicu.research_agent.authority.step_capsule"
-    ],
-    [
-      "easyicu.research_agent.execution.runners.deterministic_robustness",
       "easyicu.research_agent.canonical_json"
     ],
     [
       "easyicu.research_agent.execution.runners.deterministic_robustness",
       "easyicu.research_agent.cohort.schema"
-    ],
-    [
-      "easyicu.research_agent.execution.runners.deterministic_robustness",
-      "easyicu.research_agent.contracts.cohort_product_keys"
     ],
     [
       "easyicu.research_agent.execution.runners.deterministic_robustness",
@@ -5726,6 +5726,10 @@
     [
       "easyicu.research_agent.execution.runners.deterministic_robustness",
       "easyicu.research_agent.execution.runners.plausibility_receipt"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.deterministic_robustness",
+      "easyicu.research_agent.execution.runners.primary_model_contracts"
     ],
     [
       "easyicu.research_agent.execution.runners.deterministic_robustness",
@@ -6478,6 +6482,18 @@
     [
       "easyicu.research_agent.execution.runners.prevalence_outcome_figure_executor",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.primary_model_contracts",
+      "easyicu.research_agent.authority.step_capsule"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.primary_model_contracts",
+      "easyicu.research_agent.contracts.cohort_product_keys"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.primary_model_contracts",
+      "easyicu.research_agent.robustness.panel"
     ],
     [
       "easyicu.research_agent.execution.runners.primary_population_descriptive",
@@ -7436,6 +7452,14 @@
       "easyicu.research_agent.figures.display_labels"
     ],
     [
+      "easyicu.research_agent.figures.main_figure_strategy",
+      "easyicu.research_agent.planning.study_design"
+    ],
+    [
+      "easyicu.research_agent.figures.main_figure_strategy",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.figures.missingness_publication",
       "easyicu.research_agent.figures.prior_output_support"
     ],
@@ -7598,6 +7622,10 @@
     [
       "easyicu.research_agent.figures.skill",
       "easyicu.research_agent.figures.exposure_outcome_distribution"
+    ],
+    [
+      "easyicu.research_agent.figures.skill",
+      "easyicu.research_agent.figures.main_figure_strategy"
     ],
     [
       "easyicu.research_agent.figures.skill",
@@ -8097,10 +8125,6 @@
     ],
     [
       "easyicu.research_agent.gates.step_contract",
-      "easyicu.research_agent.numeric_scalars"
-    ],
-    [
-      "easyicu.research_agent.gates.step_contract",
       "easyicu.research_agent.planning.figure_plan_mutation"
     ],
     [
@@ -8130,10 +8154,6 @@
     [
       "easyicu.research_agent.gates.step_repair",
       "easyicu.research_agent.schema"
-    ],
-    [
-      "easyicu.research_agent.gates.step_result_evidence",
-      "easyicu.research_agent.numeric_scalars"
     ],
     [
       "easyicu.research_agent.gates.step_result_evidence",
@@ -14116,9 +14136,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3521,
+    "edge_count": 3526,
     "largest_scc_size": 0,
-    "module_count": 810,
+    "module_count": 813,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -14169,6 +14189,7 @@
     "easyicu.research_agent.audits.clinical": "audits/clinical.py",
     "easyicu.research_agent.audits.cohort": "audits/cohort.py",
     "easyicu.research_agent.audits.cross_step": "audits/cross_step.py",
+    "easyicu.research_agent.audits.cross_step_source_status": "audits/cross_step_source_status.py",
     "easyicu.research_agent.audits.envelope_consumers": "audits/envelope_consumers.py",
     "easyicu.research_agent.audits.envelope_shadow": "audits/envelope_shadow.py",
     "easyicu.research_agent.audits.figure_empty_sources": "audits/figure_empty_sources.py",
@@ -14466,6 +14487,7 @@
     "easyicu.research_agent.execution.runners.prediction_validation_executor": "execution/runners/prediction_validation_executor.py",
     "easyicu.research_agent.execution.runners.prevalence_mortality_figure_executor": "execution/runners/prevalence_mortality_figure_executor.py",
     "easyicu.research_agent.execution.runners.prevalence_outcome_figure_executor": "execution/runners/prevalence_outcome_figure_executor.py",
+    "easyicu.research_agent.execution.runners.primary_model_contracts": "execution/runners/primary_model_contracts.py",
     "easyicu.research_agent.execution.runners.primary_population_descriptive": "execution/runners/primary_population_descriptive.py",
     "easyicu.research_agent.execution.runners.report_input_authority": "execution/runners/report_input_authority.py",
     "easyicu.research_agent.execution.runners.rmst_executor": "execution/runners/rmst_executor.py",
@@ -14502,6 +14524,7 @@
     "easyicu.research_agent.figures.display_labels": "figures/display_labels.py",
     "easyicu.research_agent.figures.distribution_availability": "figures/distribution_availability.py",
     "easyicu.research_agent.figures.exposure_outcome_distribution": "figures/exposure_outcome_distribution.py",
+    "easyicu.research_agent.figures.main_figure_strategy": "figures/main_figure_strategy.py",
     "easyicu.research_agent.figures.missingness_publication": "figures/missingness_publication.py",
     "easyicu.research_agent.figures.missingness_source": "figures/missingness_source.py",
     "easyicu.research_agent.figures.ordered_distribution": "figures/ordered_distribution.py",

@@ -253,22 +253,22 @@ def test_the_refusal_reports_what_was_fitted_not_what_survived_the_lookup(tmp_pa
 #     primary: fitted sensitivity estimate lacks an unambiguous
 #     model-contract trace (coefficient_term)
 #
-# `_matrix_model_trace` records WHICH coefficient the row used, and it picked
+# `matrix_model_trace` records WHICH coefficient the row used, and it picked
 # that with the identical "exactly one, else None" rule -- so a gradient left
 # it empty and the trace check refused a row whose coefficient is in fact
 # identified, by the contract sitting in the same object.
 
 
 def test_the_trace_records_the_named_contrast_for_a_gradient(tmp_path):
-    from easyicu.research_agent.execution.runners.deterministic_robustness import (
-        PRIMARY_SPEC_ID,
-        _matrix_model_trace,
+    from easyicu.research_agent.execution.runners.primary_model_contracts import (
+        matrix_model_trace,
     )
+    from easyicu.research_agent.robustness.panel import PRIMARY_SPEC_ID
 
     path = tmp_path / "primary_coefficients.csv"
     _ORDINAL_COEFFICIENTS.to_csv(path, index=False)
 
-    trace = _matrix_model_trace(
+    trace = matrix_model_trace(
         spec_id=PRIMARY_SPEC_ID,
         spec=None,
         structured_source={
@@ -285,15 +285,15 @@ def test_the_trace_records_the_named_contrast_for_a_gradient(tmp_path):
 def test_the_trace_still_reports_nothing_when_no_contrast_is_named(tmp_path):
     """Ambiguity must keep failing the trace check, not guess."""
 
-    from easyicu.research_agent.execution.runners.deterministic_robustness import (
-        PRIMARY_SPEC_ID,
-        _matrix_model_trace,
+    from easyicu.research_agent.execution.runners.primary_model_contracts import (
+        matrix_model_trace,
     )
+    from easyicu.research_agent.robustness.panel import PRIMARY_SPEC_ID
 
     path = tmp_path / "primary_coefficients.csv"
     _ORDINAL_COEFFICIENTS.to_csv(path, index=False)
 
-    trace = _matrix_model_trace(
+    trace = matrix_model_trace(
         spec_id=PRIMARY_SPEC_ID,
         spec=None,
         structured_source={
@@ -311,10 +311,10 @@ def test_the_trace_still_reports_nothing_when_no_contrast_is_named(tmp_path):
 
 
 def test_a_single_term_model_still_records_its_only_term(tmp_path):
-    from easyicu.research_agent.execution.runners.deterministic_robustness import (
-        PRIMARY_SPEC_ID,
-        _matrix_model_trace,
+    from easyicu.research_agent.execution.runners.primary_model_contracts import (
+        matrix_model_trace,
     )
+    from easyicu.research_agent.robustness.panel import PRIMARY_SPEC_ID
 
     single = _ORDINAL_COEFFICIENTS[
         _ORDINAL_COEFFICIENTS["term"].isin(["aki_stage_max__is_3", "age"])
@@ -322,7 +322,7 @@ def test_a_single_term_model_still_records_its_only_term(tmp_path):
     path = tmp_path / "primary_coefficients.csv"
     single.to_csv(path, index=False)
 
-    trace = _matrix_model_trace(
+    trace = matrix_model_trace(
         spec_id=PRIMARY_SPEC_ID,
         spec=None,
         structured_source={

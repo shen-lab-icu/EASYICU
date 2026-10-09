@@ -23,8 +23,8 @@ from ..scalar_utils import (
     first_present_scalar,
     first_strict_numeric_scalar_with_key_fragment,
     flatten_scalar_dict,
+    strict_optional_finite_float,
 )
-from ..numeric_scalars import strict_optional_finite_float
 from ..schema import AnalysisStep, ResearchContext, ValidationFinding
 from .step_result_evidence import (
     cluster_count_from_summary as _cluster_count_from_summary,

@@ -256,9 +256,11 @@ def test_counts_only_descriptive_bundle_is_promoted_without_invented_contrast(
         ],
     )
 
+    from easyicu.research_agent.figures.main_figure_strategy import (
+        bundle_primary_strategy_ready,
+    )
     from easyicu.research_agent.figures.skill import (
         _PrimaryLineageEvidenceView,
-        _bundle_primary_strategy_ready,
         _declared_primary_lineage_step_ids,
         _select_existing_step_publication_figure_bundle,
     )
@@ -269,9 +271,7 @@ def test_counts_only_descriptive_bundle_is_promoted_without_invented_contrast(
     )
     bundle = _select_existing_step_publication_figure_bundle(lineage)
     assert bundle is not None
-    assert _bundle_primary_strategy_ready(context, bundle), bundle[
-        "contract_payload"
-    ]
+    assert bundle_primary_strategy_ready(context, bundle), bundle["contract_payload"]
 
     result = ra.PublicationFigureSkill().run(
         context=context,

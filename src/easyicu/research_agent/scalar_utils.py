@@ -19,11 +19,22 @@ force ``pipeline`` and ``code_repair`` to import each other.
 from __future__ import annotations
 
 import json
+import math
 import re
+from numbers import Real
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 from .schema import AnalysisStep
-from .numeric_scalars import coerce_finite_float, strict_optional_finite_float
+from .numeric_scalars import coerce_finite_float
+
+
+def strict_optional_finite_float(value: Any) -> float | None:
+    """Return a finite JSON numeric scalar; reject strings and booleans."""
+
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
 
 
 def _expected_numeric_annotations_for_step(
@@ -214,6 +225,7 @@ __all__ = [
     "first_strict_numeric_scalar_with_key_fragment",
     "first_present_scalar",
     "flatten_scalar_dict",
+    "strict_optional_finite_float",
     "_expected_numeric_annotations_for_step",
     "_coerce_scalar",
     "_first_present_scalar",
