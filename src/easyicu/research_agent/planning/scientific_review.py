@@ -97,7 +97,9 @@ from ..trajectory.runtime_validation import (
 )
 from .cohort_contract import CohortDefinition
 from .cohort_eligibility import (
+    CriterionOnOutcome,
     PredicateAfterTimeZero,
+    cohort_criteria_on_outcome,
     cohort_predicates_after_time_zero,
     eligibility_after_time_zero,
 )
@@ -2981,6 +2983,80 @@ def cohort_predicate_domain_findings(
     ]
 
 
+def outcome_selection_findings(
+    context: ResearchContext,
+    plan: AnalysisPlan,
+    trajectory_representation: Optional[Mapping[str, Any]],
+    runtime_authority: CurrentCaseScientificRuntimeAuthority | None,
+) -> list[PlanScientificFinding]:
+    """Name each cohort criterion that selects stays by the study's outcome.
+
+    ``planning.cohort_eligibility`` reads the plan's cohort predicates and the
+    study's typed minimum ICU stay against the outcomes the study requests and
+    the plan models, at the plan's time zero.  Selecting on the outcome is a
+    major finding for the study to resolve; a landmark cohort whose outcome is
+    the ICU length of stay is a minor one, stated as such.  A predicate the
+    column-domain review reports as emptying the cohort or applying nothing is
+    left to that finding.
+    """
+
+    cohort = plan.cohort
+    inclusion = list(cohort.inclusion) if cohort is not None else []
+    exclusion = list(cohort.exclusion) if cohort is not None else []
+    reported = {
+        (item.side, item.index)
+        for item in cohort_predicates_outside_column_domain(
+            context, inclusion=inclusion, exclusion=exclusion
+        )
+    }
+    found = cohort_criteria_on_outcome(
+        context,
+        outcomes=(*requested_outcomes(context), *planned_model_outcomes(plan, context)),
+        inclusion=[predicate.to_dict() for predicate in inclusion],
+        exclusion=[predicate.to_dict() for predicate in exclusion],
+        time_zero_hours=plan_time_zero_hours(context, trajectory_representation, runtime_authority),
+        minimum_icu_hours=minimum_icu_stay_hours(context),
+    )
+    return [
+        _outcome_selection_finding(item)
+        for item in found
+        if (item.kind, item.index) not in reported
+    ]
+
+
+def _outcome_selection_finding(item: CriterionOnOutcome) -> PlanScientificFinding:
+    landmark = item.selection == "landmark_stay_length"
+    if landmark:
+        message = f"The cohort is a landmark cohort: {item.message()}."
+        remediation = (
+            "State the outcome for this population: the ICU length of stay of the "
+            f"stays still in the ICU at {item.time_zero_hours:g} h after admission. "
+            "Or report the ICU stay remaining after time zero instead."
+        )
+    else:
+        message = f"The plan's cohort selects on its outcome: {item.message()}."
+        remediation = (
+            "Change the study, not only the plan: count the outcome from the "
+            "analysis time zero (for a length of stay, the time remaining after "
+            "it), choose an outcome this criterion does not restrict, or remove "
+            "the criterion. If the study means this conditional population, state "
+            "the outcome as conditional on the criterion."
+        )
+    return PlanScientificFinding(
+        code="LANDMARK_STAY_LENGTH_OUTCOME" if landmark else "COHORT_SELECTS_ON_OUTCOME",
+        severity="minor" if landmark else "major",
+        dimension="icu_clinical_design",
+        message=message,
+        evidence_refs=[
+            "analysis_plan.json.cohort",
+            "research_context.json.cohort.requested_outcome_columns",
+            "research_context.json.user_preferences.data_constraints",
+        ],
+        remediation=remediation,
+        remediation_route="study_authority_change",
+    )
+
+
 def unapplied_population_findings(plan: AnalysisPlan) -> list[PlanScientificFinding]:
     """Say so for each population criterion the plan states and does not apply.
 
@@ -3271,6 +3347,9 @@ def build_plan_scientific_review(
         cohort_predicate_findings(context, plan, trajectory_representation, runtime_authority)
     )
     findings.extend(cohort_predicate_domain_findings(context, plan))
+    findings.extend(
+        outcome_selection_findings(context, plan, trajectory_representation, runtime_authority)
+    )
     findings.extend(unapplied_population_findings(plan))
     findings.extend(robustness_override_event_window_findings(context, plan))
     required_source_columns = {
