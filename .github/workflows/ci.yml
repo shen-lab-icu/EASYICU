@@ -112,7 +112,9 @@ jobs:
           # The research-agent method contracts execute these optional kernels;
           # install their tested packages without pulling the full methods extra
           # (which also includes the much larger torch runtime).
-          pip install "lifelines>=0.27" "shap>=0.44" "xgboost>=2.0"
+          # pyproject.toml's methods extra explains Python 3.10's xgboost cap.
+          pip install "lifelines>=0.27" "shap>=0.44" "xgboost>=2.0" \
+            "xgboost<3.1; python_version < '3.11'"
 
       - name: Compile Python source and tests
         run: python -m compileall -q src tests

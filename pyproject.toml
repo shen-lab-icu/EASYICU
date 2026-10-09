@@ -94,6 +94,10 @@ methods = [
   "numba>=0.59",
   "shap>=0.44",
   "xgboost>=2.0",
+  # xgboost 3.1 began storing base_score as a vector, which shap 0.49, the
+  # last release for Python 3.10, cannot parse in TreeExplainer. Python 3.10
+  # therefore keeps xgboost below 3.1.
+  "xgboost<3.1; python_version < '3.11'",
   "lightgbm>=4.0",
   # CPU wheel suffices for the sandbox (CUDA builds are a local override);
   # mirrors contracts/method_packages.py, which the Coder reads for imports.
