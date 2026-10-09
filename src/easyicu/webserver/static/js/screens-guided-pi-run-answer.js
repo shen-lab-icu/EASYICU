@@ -26,6 +26,16 @@
     [/(?:cohort|population)_(?:analysis_)?flow(?!_source)/, ['cohort flow', '队列流程']],
   ];
   const AUDIT_TABLE = /audit|missing|denominator/;
+  // Analysis types (the planner's registry keys) whose answer is a model's
+  // predictive performance rather than an estimate this card shows.
+  const PREDICTION_TYPES = new Set(['prediction_model', 'dynamic_prediction']);
+  // The methods that re-estimate on each patient's first ICU stay, as the
+  // binary-association sensitivity executor runs them.
+  const FIRST_STAY_METHODS = new Set(['first_stay_association', 'one_stay_per_patient_association']);
+  // A step's method head: the executor reads it before " with ", the planner
+  // before "(".
+  const methodHead = method => String(method || '').trim().toLowerCase()
+    .split(' with ', 1)[0].split('(', 1)[0].trim();
 
   function create(deps) {
     const { tr, esc, api, projectId, resourceButton } = deps;
@@ -111,11 +121,13 @@
       };
     }
 
-    // The registered primary estimate: the typed `estimates` of the result
-    // summary first, then the evidence-bound manuscript claims.
+    // The registered primary estimate: the typed estimate the result summary
+    // marks primary, else the evidence-bound primary_or claim. Any other
+    // estimate (a covariate's, a sensitivity analysis') is not this run's
+    // answer, so without a primary one the answer names none.
     function primaryEstimate(summary, claims) {
       const typed = Array.isArray(summary && summary.estimates)
-        ? (summary.estimates.find(row => row && row.primary === true) || summary.estimates.find(Boolean)) : null;
+        ? summary.estimates.find(row => row && row.primary === true) : null;
       if (typed && typed.display && typed.display.value) {
         return {
           measure: String(typed.measure || ''), label: String(typed.label || typed.contrast || ''),
@@ -181,6 +193,13 @@
           return pattern.test(name) && !/source_data/.test(name);
         })).map(([, names]) => tr(names[0], names[1])),
         auditTables: tables.filter(table => AUDIT_TABLE.test(String(table && table.name || '').toLowerCase())).length,
+        // An executed step bound to a declared first-stay sensitivity. A
+        // design candidate the plan rejected, or a field that only names
+        // first stays, is not one. The host's own first-stay restriction is
+        // in no run file this card reads.
+        firstStay: (Array.isArray(plan.steps) ? plan.steps : []).some(step => step
+          && FIRST_STAY_METHODS.has(methodHead(step.method))
+          && Array.isArray(step.sensitivity_spec_ids) && step.sensitivity_spec_ids.length > 0),
       };
     }
 
@@ -268,7 +287,14 @@
       return sentences;
     }
 
+    // The bound on the answer follows the study: a prediction study's answer
+    // is its model's performance, in the result tables; otherwise a
+    // registered estimate is an association and group counts a description.
     function caveat(view) {
+      if (PREDICTION_TYPES.has(view.analysisType)) {
+        return tr('A prediction study: the numbers above describe this cohort, and the model’s performance is in the result tables and needs validation in another database. Neither shows cause and effect. Each row is an analysis record (ICU stay), not necessarily an independent patient.',
+          '这是预测研究：上面的数字描述本队列，模型表现见结果表，用于其他数据库前需要另行验证；两者都不说明因果。统计单位是分析记录（ICU 入住），不一定对应独立患者。');
+      }
       return view.estimate
         ? tr('An observational association estimate; it does not establish cause and effect. Each row is an analysis record (ICU stay), not necessarily an independent patient.',
           '这是观察性关联估计，不能据此推断因果；统计单位是分析记录（ICU 入住），不一定对应独立患者。')
@@ -331,10 +357,13 @@
           `按年龄分层后，${exposure}各组的${outcome}有什么差别？`,
         ));
       }
-      list.push(tr(
-        `Keep only each patient’s first ICU stay and recompute these results.`,
-        '只保留每位患者的首次 ICU 入住，重新计算这些结果。',
-      ));
+      // A plan that already re-estimates on first stays has its answer.
+      if (!view.firstStay) {
+        list.push(tr(
+          `Keep only each patient’s first ICU stay and recompute these results.`,
+          '只保留每位患者的首次 ICU 入住，重新计算这些结果。',
+        ));
+      }
       list.push(tr(
         `Replicate this analysis in another database and compare the results.`,
         '在另一个数据库中复现这项分析，比较结果是否一致。',
