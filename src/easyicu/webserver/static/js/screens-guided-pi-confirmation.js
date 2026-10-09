@@ -526,6 +526,22 @@
             `${remediationCounts.automatic + remediationCounts.evidence} 项计划修订与补证由系统负责；另有 ${remediationCounts.runtime} 项运行时合同仍被阻断，但不需要再次回答科学设定问题。`,
           ))}</span></div>`
         : '';
+      // What the question asks of the plan under review, from its judgment or
+      // the planning record (owner: screens-guided-pi-question-requirements.js).
+      const questionOwner = window.EasyICU.guidedPi.optional('questionRequirements');
+      const reviewedRecordRunId = String(review && review.run_id || '');
+      const recordLabel = tr('View the question requirements', '查看题面要求');
+      const questionNotes = questionOwner
+        ? questionOwner.notesHtml(review, {
+          tr,
+          esc,
+          // The record the block read, unless the card already links it.
+          recordLink: artifact => reviewedRecordRunId
+            && !(confirmation.reviewResources || []).some(resource => resource && resource.artifact === artifact)
+            ? resourceButton({ kind: 'research_artifact', run_id: reviewedRecordRunId, artifact, label: recordLabel, media_type: 'application/json' }, recordLabel)
+            : '',
+        })
+        : '';
       const dataStatus = confirmation.dataStatus
         ? confirmation.compactApproval
           ? `<div class="gpi-confirmation-data-status is-compact"><strong>${esc(confirmation.dataStatus.title)}${confirmation.dataStatus.sourceLabel ? ` · ${esc(confirmation.dataStatus.sourceLabel)}` : ''}</strong><small>${esc(confirmation.dataStatus.detail)}</small></div>`
@@ -565,7 +581,7 @@
         : '';
       return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}" aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
         <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
-        <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}<small>${esc(displayedNote)}</small>${flowSteps}${dataStatus}${reviewStatus}${reviewMaterials}${compactOtherAction}</div>
+        <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}<small>${esc(displayedNote)}</small>${flowSteps}${dataStatus}${reviewStatus}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
         <div class="gpi-confirmation-actions${decisionActions ? ' has-decision-options' : ''}">
           ${confirmation.dataStatus && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-preview-data>${esc(tr('Preview analysis data', '先预览分析数据'))}</button>` : ''}
           ${decisionActions || (confirmation.hideEdit || (confirmation.code === 'plan_scientific_changes_required' && !decisionCount) ? '' : `<button class="btn ${confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>`)}
