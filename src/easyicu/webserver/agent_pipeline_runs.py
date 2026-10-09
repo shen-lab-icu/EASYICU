@@ -154,6 +154,7 @@ from easyicu.webserver.agent_review_recovery import (
     PendingReviewResumeInProgress,
     WebReviewRecoveryError,
     WebReviewRecoverySeed,
+    WebReviewWorkRootCapacityError,
     get_record as get_review_recovery_record,
     load_recovery_seed,
     pending_from_record,
@@ -242,6 +243,7 @@ _SAFE_PIPELINE_EXCEPTION_TYPES = frozenset(
         "ResearchPipelineRunError",
         "RunInputIdentityError",
         "StructuredResponseFailure",
+        "WebReviewWorkRootCapacityError",
     }
 )
 
@@ -3968,6 +3970,22 @@ def _remove_local_recovery(wrapper_dir: Path) -> None:
     unregister_pipeline_work_root_if_unused(Path(wrapper_dir).parent.parent)
 
 
+def _register_recoverable_work_root(root: Path) -> None:
+    """Register ``root`` for review discovery, or stop under the owner's reason."""
+
+    try:
+        register_pipeline_work_root(root)
+    except WebReviewWorkRootCapacityError as exc:
+        raise ResearchPipelineRunError(
+            "research_pipeline_review_recovery_capacity_full",
+            "Every project folder kept for plan-review recovery may still hold a "
+            "paused review that the recovery index has not recorded, so this run "
+            "could not keep its own review recoverable. No plan was generated and "
+            "no analysis was run. Reopen the paused reviews of earlier projects, "
+            "or reconnect the storage that holds them, and start the run again.",
+        ) from exc
+
+
 def _start_web_provider_hard_stop(
     *,
     wrapper_dir: Path,
@@ -6269,7 +6287,7 @@ def make_research_pipeline_run_runner(
                 # This local seed precedes Planner execution. If the process dies
                 # after the pipeline checkpoint but before the global index update,
                 # bounded reconciliation can still discover the exact pause.
-                register_pipeline_work_root(root)
+                _register_recoverable_work_root(root)
                 put_recovery_seed(recovery_seed)
             source_selection_basis = bound_export_selection_basis(
                 study, export_path
