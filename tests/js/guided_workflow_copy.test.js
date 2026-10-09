@@ -60,4 +60,33 @@ workflow.stages[0] = { id: 'idea', status: 'complete', required_for_completion: 
 owner.syncProjectWorkflowAside();
 assert.doesNotMatch(body.innerHTML, /· Optional/);
 
+// Once a plan exists, the open setup row says the plan fills it in, so it is
+// not read as a step the researcher skipped.
+workflow = {
+  current_stage: 'plan', completed_required_stages: 2, required_stage_count: 7,
+  missing_setup_fields: ['cohort_eligibility', 'primary_exposure', 'analysis_goal'],
+  stages: [
+    { id: 'setup', status: 'ready', reason_code: 'cohort_eligibility_confirmation_required' },
+    { id: 'plan', status: 'review_required', reason_code: 'plan_execution_upgrade_required' },
+  ],
+};
+owner.syncProjectWorkflowAside();
+assert.match(body.innerHTML, /Study setup<\/div><div class="si-s">Filled in from the plan; inclusion criteria are confirmed before approval<\/div>/);
+workflow.stages[0].reason_code = 'study_setup_incomplete';
+owner.syncProjectWorkflowAside();
+assert.match(body.innerHTML, /Study setup<\/div><div class="si-s">Filled in from the plan; nothing to enter by hand<\/div>/);
+// Before a plan exists nothing is promised, and a missing data source is the
+// researcher's choice, not the plan's.
+workflow.current_stage = 'setup';
+workflow.missing_setup_fields = ['data_source', 'outcome'];
+workflow.stages[1] = { id: 'plan', status: 'blocked', reason_code: 'active_export_or_setup_required' };
+owner.syncProjectWorkflowAside();
+assert.doesNotMatch(body.innerHTML, /Filled in from the plan/);
+assert.match(body.innerHTML, /Choose the data source for this study/);
+workflow.missing_setup_fields = ['outcome'];
+workflow.stages[0].reason_code = 'cohort_eligibility_confirmation_required';
+owner.syncProjectWorkflowAside();
+assert.match(body.innerHTML, /Confirm the inclusion criteria before the plan is approved/);
+assert.doesNotMatch(body.innerHTML, /Waiting for the preceding governed stage/);
+
 process.stdout.write(JSON.stringify({ locked: true, actionable: true }));
