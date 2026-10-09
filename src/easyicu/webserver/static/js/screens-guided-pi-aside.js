@@ -347,8 +347,10 @@
       const facts = host.demoMode() ? { stage: '', failure: '', failedRunId: '' } : runFacts(workflow);
       const stageLine = activeTask && facts.stage && facts.stage !== currentText
         ? `<div class="si-s">${esc(facts.stage)}</div>` : '';
+      // Plain words for why the run stopped; its id stays on hover, since the
+      // run list beside it already names the run.
       const failureLine = !activeTask && facts.failure
-        ? `<div class="si-s gpi-run-failure">${facts.failedRunId ? `<code>${esc(facts.failedRunId)}</code> ` : ''}${esc(facts.failure)}</div>` : '';
+        ? `<div class="si-s gpi-run-failure"${facts.failedRunId ? ` title="${esc(facts.failedRunId)}"` : ''}>${esc(facts.failure)}</div>` : '';
       const currentAction = pending
         ? `<button type="button" class="btn sm gpi-study-pending" data-gpi-aside-pending>${tr('View pending decision', '查看待确认事项')}</button>`
         : !results && reviewAction ? `<div class="gpi-study-pending">${reviewAction}</div>` : '';

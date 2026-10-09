@@ -585,7 +585,7 @@ def test_workflow_to_dos_read_as_a_checklist_with_the_current_decision() -> None
         runningSpinner: running.includes('gpi-running-spinner') && running.includes('正在生成研究计划'),
         runningStage: running.includes('<div class="si-s">候选计划 2/4 已通过校验 (planning)</div>') && !withDecision.includes('si-s'),
         fallbackReason: fallback.includes('科学计划审阅要求先形成新的研究/计划版本') && !fallback.includes('gpi-running-spinner'),
-        failureCause: fallback.includes('<div class="si-s gpi-run-failure"><code>run_20260921T173133_b0b3a6</code> 分析计划未通过校验，需要重新生成。</div>') && !running.includes('gpi-run-failure'),
+        failureCause: fallback.includes('<div class="si-s gpi-run-failure" title="run_20260921T173133_b0b3a6">分析计划未通过校验，需要重新生成。</div>') && !running.includes('gpi-run-failure'),
         noComputePanel: !fallback.includes('data-gpi-aside-section="compute"') && !fallback.includes('gpi-run-status'),
       }}));
     """

@@ -235,7 +235,7 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
     gate_detail_cause_code: 'interval_without_event' };
   const cause = 'research_agent_pipeline_failed_closed / continuous_survival_interval_result_not_estimable / interval_without_event';
   const closed = render(run);
-  assert.ok(closed.includes(`<div class="si-s gpi-run-failure"><code>run_closed</code> ${cause}</div>`), closed);
+  assert.ok(closed.includes(`<div class="si-s gpi-run-failure" title="run_closed">${cause}</div>`), closed);
   assert.ok(closed.includes(`<small class="gpi-run-cause">${cause}</small>`), closed);
   // A run waiting for its interpretation review has not failed.
   const waiting = render({ ...run, gate_reason_code: 'research_agent_pipeline_complete_human_interpretation_required',
