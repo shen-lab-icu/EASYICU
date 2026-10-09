@@ -19,6 +19,8 @@ from typing import Any, Callable, Deque, Dict, Mapping, Optional
 
 import psutil
 
+from easyicu.webserver import state_paths
+
 from .contracts import (
     PROTOCOL_VERSION,
     PiCopilotError,
@@ -169,10 +171,13 @@ class PiGatewayClient:
             else preferred_app_dir()
         ).resolve()
         self.entrypoint = self.app_dir / "src" / "main.mjs"
+        # The sessions live under EasyICU's state root, which follows
+        # $EASYICU_HOME: an isolated home's transcripts, and the storage
+        # maintenance that moves unreferenced ones, never reach the real home.
         self.declared_session_dir = (
             Path(session_dir)
             if session_dir is not None
-            else Path.home() / ".easyicu" / "pi-agent" / "sessions"
+            else state_paths.state_root() / "pi-agent" / "sessions"
         ).expanduser().absolute()
         self.session_dir = self.declared_session_dir.resolve()
         self.declared_cwd = (

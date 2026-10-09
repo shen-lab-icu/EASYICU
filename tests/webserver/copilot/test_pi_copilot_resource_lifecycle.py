@@ -8,10 +8,12 @@ import shutil
 import pytest
 
 from easyicu.webserver.pi_copilot.contracts import PiCopilotError
+from easyicu.webserver.pi_copilot.gateway import PiGatewayClient
 from easyicu.webserver.pi_copilot.resource_lifecycle import (
     WebMemoryAdmission,
     WebMemoryPolicy,
 )
+from easyicu.webserver.pi_copilot.service import PiCopilotService
 from easyicu.webserver.pi_copilot.session_storage import SessionStorageMaintenance
 
 from tests.support.node import run_node
@@ -182,6 +184,42 @@ def test_transcript_quarantine_is_recoverable_and_preserves_references(
     restored = maintenance.restore(quarantine_id, confirm=True)
     assert restored["restored_files"] == 1
     assert old_orphan.read_text(encoding="utf-8") == "old\n"
+
+
+def test_an_isolated_home_keeps_its_transcripts_and_their_quarantine(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A server under $EASYICU_HOME never stores or moves the real home's."""
+
+    real_home = tmp_path / "real"
+    isolated_home = tmp_path / "isolated"
+    monkeypatch.setenv("HOME", str(real_home))
+    monkeypatch.setenv("EASYICU_HOME", str(isolated_home))
+    orphans = []
+    for home in (real_home, isolated_home):
+        sessions = home / ".easyicu" / "pi-agent" / "sessions"
+        sessions.mkdir(parents=True)
+        orphan = sessions / "orphan.jsonl"
+        orphan.write_text("{}\n", encoding="utf-8")
+        os.utime(orphan, (100, 100))
+        orphans.append(orphan)
+    real_orphan, isolated_orphan = orphans
+
+    gateway = PiGatewayClient(environ={"PATH": os.environ.get("PATH", "")})
+    assert gateway.session_dir == isolated_orphan.parent.resolve()
+    workspace = isolated_home / ".easyicu" / "pi-agent" / "workspace"
+    assert gateway.cwd == workspace.resolve()
+    service = PiCopilotService(
+        store_path=isolated_home / ".easyicu" / "pi_copilot_sessions.json",
+        gateway=gateway,
+    )
+    moved = service.maintain_session_storage(action="quarantine", confirm=True)
+
+    assert moved["moved_files"] == 1
+    assert not isolated_orphan.exists()
+    assert real_orphan.read_text(encoding="utf-8") == "{}\n"
+    assert not (real_orphan.parent / "quarantine").exists()
 
 
 def test_transcript_inventory_ignores_symlinks(tmp_path: Path) -> None:
