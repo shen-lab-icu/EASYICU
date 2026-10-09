@@ -153,15 +153,6 @@ _PRIOR_ART_QUERY_SYNONYMS: Dict[str, Tuple[str, ...]] = {
 }
 
 
-def _top_values(values: Sequence[str], *, limit: int = 5) -> List[str]:
-    counts: Dict[str, int] = {}
-    for value in values:
-        text = str(value or "").strip()
-        if text:
-            counts[text] = counts.get(text, 0) + 1
-    return sorted(counts, key=lambda item: (-counts[item], item))[:limit]
-
-
 def _clean_literature_phrase(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())
 

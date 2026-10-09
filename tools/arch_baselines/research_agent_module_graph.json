@@ -3533,6 +3533,10 @@
     ],
     [
       "easyicu.research_agent.discovery.idea_mining",
+      "easyicu.research_agent.discovery.idea_mining_triage"
+    ],
+    [
+      "easyicu.research_agent.discovery.idea_mining",
       "easyicu.research_agent.discovery.idea_registry"
     ],
     [
@@ -3698,6 +3702,18 @@
     [
       "easyicu.research_agent.discovery.idea_mining_source_status",
       "easyicu.research_agent.canonical_json"
+    ],
+    [
+      "easyicu.research_agent.discovery.idea_mining_triage",
+      "easyicu.research_agent.concept_availability"
+    ],
+    [
+      "easyicu.research_agent.discovery.idea_mining_triage",
+      "easyicu.research_agent.discovery.idea_mining_schema"
+    ],
+    [
+      "easyicu.research_agent.discovery.idea_mining_triage",
+      "easyicu.research_agent.discovery.idea_registry"
     ],
     [
       "easyicu.research_agent.discovery.longitudinal_handoff",
@@ -14144,9 +14160,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3528,
+    "edge_count": 3532,
     "largest_scc_size": 0,
-    "module_count": 814,
+    "module_count": 815,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -14400,6 +14416,7 @@
     "easyicu.research_agent.discovery.idea_mining_schema": "discovery/idea_mining_schema.py",
     "easyicu.research_agent.discovery.idea_mining_selection": "discovery/idea_mining_selection.py",
     "easyicu.research_agent.discovery.idea_mining_source_status": "discovery/idea_mining_source_status.py",
+    "easyicu.research_agent.discovery.idea_mining_triage": "discovery/idea_mining_triage.py",
     "easyicu.research_agent.discovery.idea_registry": "discovery/idea_registry.py",
     "easyicu.research_agent.discovery.idea_scope": "discovery/idea_scope.py",
     "easyicu.research_agent.discovery.longitudinal_handoff": "discovery/longitudinal_handoff.py",
