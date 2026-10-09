@@ -3,11 +3,30 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from ..authority.evidence_store import EvidenceStore
-from ..authority.manuscript_method_facts import ManuscriptMethodFact
 from ..schema import ValidationFinding
+
+
+class SourceFact(Protocol):
+    """A host sentence its section carries exactly as its source states it.
+
+    A ``ManuscriptMethodFact`` is one; so is a limitation the approved plan
+    review left to the study (``reporting.plan_review_limitations``).
+    """
+
+    @property
+    def section(self) -> str: ...
+
+    @property
+    def scaffold(self) -> str: ...
+
+    @property
+    def source_field(self) -> str: ...
+
+    @property
+    def source_sha256(self) -> str: ...
 
 
 def _limitations_span(scaffold: str) -> tuple[int, int] | None:
@@ -41,7 +60,7 @@ _SECTION_SPANS = {"variables": _variables_span, "limitations": _limitations_span
 
 def place_manuscript_method_facts(
     scaffold: str,
-    facts: Sequence[ManuscriptMethodFact],
+    facts: Sequence[SourceFact],
 ) -> tuple[str, tuple[str, ...]]:
     """Place exact source facts in their sections without rewriting Writer prose."""
 
@@ -67,7 +86,7 @@ def place_manuscript_method_facts(
 
 def missing_bound_method_facts(
     bound: str,
-    facts: Sequence[ManuscriptMethodFact],
+    facts: Sequence[SourceFact],
     bind: Callable[[str], str],
 ) -> tuple[str, ...]:
     """Fail closed if a later provenance filter removed a required source fact."""
@@ -88,8 +107,11 @@ def project_source_method_facts(
     *,
     evidence: EvidenceStore,
     per_step_records: Sequence[Mapping[str, Any]],
+    extra_facts: Sequence[SourceFact] = (),
 ) -> tuple[str, ValidationFinding | None]:
-    facts = evidence.manuscript_method_facts(per_step_records)
+    """Place the run's source facts, then ``extra_facts``, in one ordered block."""
+
+    facts = (*evidence.manuscript_method_facts(per_step_records), *extra_facts)
     scaffold, fields = place_manuscript_method_facts(scaffold, facts)
     if not fields:
         return scaffold, None

@@ -133,6 +133,10 @@ from .manuscript_method_facts import (
     audit_bound_source_method_facts,
     project_source_method_facts,
 )
+from .plan_review_limitations import (
+    audit_bound_plan_review_limitations,
+    writer_plan_review_limitations,
+)
 from .writer_evidence_repair import decide_writer_evidence_repairs
 from .writer_stop import writer_failure_detail
 from ..replication.notebook import (
@@ -2085,8 +2089,14 @@ def _draft_manuscript(
                     detail=repair_result.finding_detail(),
                 )
             )
+    # The limitations the approved plan review left to the study follow the
+    # source facts at the top of Limitations.
+    review_limitations, review_finding = writer_plan_review_limitations(evidence)
+    if review_finding is not None:
+        findings.append(review_finding)
     scaffold, method_finding = project_source_method_facts(
         scaffold, evidence=evidence, per_step_records=per_step_records,
+        extra_facts=review_limitations,
     )
     if method_finding is not None:
         findings.append(method_finding)
@@ -2449,12 +2459,12 @@ def _bind_and_review_manuscript(
                 detail={"removed_sentences": removed_numeric_sentences},
             )
         )
-    # A Writer that failed wrote no Methods for the source definitions to survive in.
-    method_finding = None if writer_error_message else audit_bound_source_method_facts(
-        bound, evidence=evidence, per_step_records=per_step_records,
-    )
-    if method_finding is not None:
-        findings.append(method_finding)
+    # A Writer that failed wrote no sections for the host's sentences to survive in.
+    if not writer_error_message:
+        for audit in (audit_bound_source_method_facts, audit_bound_plan_review_limitations):
+            host_finding = audit(bound, evidence=evidence, per_step_records=per_step_records)
+            if host_finding is not None:
+                findings.append(host_finding)
     bound = _repair_bound_display_language(
         bound,
         reader_display_labels=reader_display_labels,

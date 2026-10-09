@@ -69,6 +69,10 @@ from .manuscript_labels import (
 from .manuscript_baseline import baseline_reporting_mentions
 from .manuscript_surface import deduplicate_claim_paragraphs, repair_filtered_section_openers
 from .manuscript_method_facts import place_manuscript_method_facts
+from .plan_review_limitations import (
+    PlanReviewLimitationError,
+    load_plan_review_limitations,
+)
 from .descriptive_report_facts import (
     DescriptiveReportFact, place_descriptive_report_facts, place_primary_result_summaries,
 )
@@ -301,7 +305,16 @@ def _claim_policy_projection(
     manuscript = _normalize_structured_abstract_labels(manuscript)
     manuscript, _ = _normalize_claim_token_sentences(manuscript)
     facts = load_manuscript_method_facts(root=run_dir, records=authority.records)
-    manuscript, _ = place_manuscript_method_facts(manuscript, facts)
+    try:
+        limitations = load_plan_review_limitations(
+            root=run_dir, records=authority.records
+        )
+    except PlanReviewLimitationError as exc:
+        raise WriterOnlyMigrationError(
+            code="WRITER_ONLY_PLAN_REVIEW_LIMITATIONS_UNSTATED",
+            detail=f"{exc.reason_code}: {exc}",
+        ) from exc
+    manuscript, _ = place_manuscript_method_facts(manuscript, (*facts, *limitations))
     filtered = filter_evidence_bound_scaffold(
         manuscript,
         resolve_claim=authority.claims_by_ref.get,
