@@ -84,6 +84,48 @@ const outcome = modules.require('runOutcome').create({
   assert.equal(followUps[0], '在调整年龄、性别、入院类型、Charlson 合并症指数后，Sepsis-3脓毒症诊断状态与院内死亡状态的关联还成立吗？');
   assert.ok(followUps.some(text => text.includes('按年龄分层')));
   assert.ok(followUps.every(text => !text.includes('sep3_sofa1')));
+  assert.ok(followUps.some(text => text.includes('只保留每位患者的首次 ICU 入住')));
+
+  // Another run of the same study, read with a changed plan.
+  let variant = 0;
+  async function reread(plan) {
+    const runId = `run_e1_variant_${variant += 1}`;
+    const saved = payloads['agent_plan.json'];
+    payloads['agent_plan.json'] = plan;
+    const run = { ...latest, run_id: runId, artifact_refs: latest.artifact_refs.map(row => ({ ...row, run_id: runId })) };
+    await outcome.loadScientificReview(run, workflow);
+    for (let turn = 0; turn < 5; turn += 1) await new Promise(resolve => setImmediate(resolve));
+    const html = outcome.render(run, workflow);
+    payloads['agent_plan.json'] = saved;
+    return { html, followUps: outcome.followUps(run, workflow) };
+  }
+  const plan = payloads['agent_plan.json'];
+  // A plan with a declared first-stay sensitivity step already re-estimates
+  // on first ICU stays, so it is not asked to.
+  const firstStay = await reread({ ...plan, steps: plan.steps.concat([{ step_id: 'sensitivity_first_stay',
+    method: 'one_stay_per_patient_association', planned_analysis_role: 'sensitivity',
+    sensitivity_spec_ids: ['sens_first_stay'], intent: '每位患者仅保留首次 ICU 入住后重新估计。' }]) });
+  assert.equal(firstStay.followUps[0], followUps[0], 'The run answer, not the file list, wrote these');
+  assert.ok(firstStay.followUps.every(text => !text.includes('首次 ICU 入住')));
+  // The executor reads a method's head before " with ", so this one runs too.
+  const qualified = await reread({ ...plan, steps: plan.steps.concat([{ step_id: 'sensitivity_first_stay',
+    method: 'first_stay_association with cluster-robust variance', planned_analysis_role: 'sensitivity',
+    sensitivity_spec_ids: ['sens_first_stay'], intent: '每位患者仅保留首次 ICU 入住后重新估计。' }]) });
+  assert.ok(qualified.followUps.every(text => !text.includes('首次 ICU 入住')));
+  // A first-stay design the plan rejected, or a step that only names first
+  // stays, re-estimates nothing: the question is still offered.
+  const rejected = await reread({ ...plan, design_selection: { candidates: [
+    { design_id: 'stay_level_descriptive', disposition: 'selected' },
+    { design_id: 'patient_level_first_stay', disposition: 'rejected' }] } });
+  assert.ok(rejected.followUps.some(text => text.includes('只保留每位患者的首次 ICU 入住')));
+  const named = await reread({ ...plan, steps: plan.steps.concat([{ step_id: 'first_icu_stay_note', method: 'descriptive',
+    intent: "Describe strategy 'first_stay'.", inputs: ['first_icu_stay'] }]) });
+  assert.ok(named.followUps.some(text => text.includes('只保留每位患者的首次 ICU 入住')));
+  // A prediction study's answer is its model's performance, so its card says
+  // where that is instead of calling the counts a descriptive comparison.
+  const prediction = await reread({ ...plan, analysis_type: 'prediction_model' });
+  assert.match(prediction.html, /这是预测研究：上面的数字描述本队列，模型表现见结果表/);
+  assert.doesNotMatch(prediction.html, /未调整的描述性比较/);
 
   // Traces: one named row per approved plan step, with how it ran.
   const activity = modules.require('activity').create({
