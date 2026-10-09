@@ -76,6 +76,15 @@ CONTRACTS: dict[str, list[str]] = {
         "screens-guided-pi-aside.js",
         "screens-guided-pi-header.js",
     ],
+    "guided_pi_run_files_manuscript.test.js": [
+        "screens-guided-pi-modules.js",
+        "html-escape.js",
+        "screens-guided-pi-resources.js",
+        "screens-agent-reader-vocab.js",
+        "screens-agent-render.js",
+        "product-labels.js",
+        "screens-guided-pi-run-files.js",
+    ],
     "guided_pi_run_answer.test.js": [
         "screens-guided-pi-modules.js",
         "screens-guided-pi-resources.js",

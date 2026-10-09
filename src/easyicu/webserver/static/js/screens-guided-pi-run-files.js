@@ -218,19 +218,40 @@
       if (!review) return error || `<p role="status">${tr('Reading files…', '正在读取文件…')}</p>`;
       const artifacts = rows(review.artifacts);
       const current = context();
+      // A run's first report is its report until a revision replaces it: then
+      // it is the historical original. Without a revision it leads the list
+      // instead of folding away as history.
+      const revised = artifacts.some(item => item.name === 'manuscript_revision.pdf');
+      // The host's file guide owns what each file is called and is for,
+      // including whether the first report is the manuscript (only on an
+      // explicit manuscript-gate pass). Without a guide the shared vocabulary
+      // names the files and the first report gets a name that claims nothing.
+      const guide = new Map(rows(review.file_guide).filter(row => row && row.name).map(row => [row.name, row]));
+      const guided = (name, key) => {
+        const text = guide.has(name) ? guide.get(name)[key] : null;
+        return text && (text.en || text.zh) ? tr(text.en || text.zh, text.zh || text.en) : '';
+      };
+      const firstReport = revised ? null
+        : [tr('Run report (PDF)', '运行报告（PDF）'), tr('The report this run produced, for download.', '本次运行生成的报告，可下载。')];
       const file = (item, index) => {
+        const own = item.name === 'manuscript_scaffold.pdf' ? firstReport : null;
+        // The resource owner titles previewable files from the shared
+        // vocabulary; a guide (or first-report) title rides along as the
+        // conversation label so the button and the reader both use it.
+        const title = guided(item.name, 'title') || (own ? own[0] : '');
         const resource = { kind: /\.(pdf|html)$/i.test(item.name) ? 'research_document' : 'research_artifact', run_id: review.run_id, artifact: item.name,
-          label: window.AGENT_RENDER.artifactTitle(item.name), sha256: item.sha256, media_type: /\.pdf$/i.test(item.name) ? 'application/pdf' : /\.html$/i.test(item.name) ? 'text/html' : 'application/json' };
+          label: title || window.AGENT_RENDER.artifactTitle(item.name), ...(title ? { conversation_label: title } : {}),
+          sha256: item.sha256, media_type: /\.pdf$/i.test(item.name) ? 'application/pdf' : /\.html$/i.test(item.name) ? 'text/html' : 'application/json' };
         const canPreview = current.projectId && review.engine === 'easyicu.research_agent.pipeline' && /\.(json|pdf|html)$/i.test(item.name);
         // A reader sees what the file is for; the exact file name stays on hover.
-        const note = window.AGENT_RENDER.artifactSummary(item.name, false);
+        const note = guided(item.name, 'purpose') || (own ? own[1] : window.AGENT_RENDER.artifactSummary(item.name, false));
         return `<div class="gpi-run-file">${canPreview ? resourceButton(resource) : /\.json$/i.test(item.name) ? `<button type="button" data-run-files-artifact="${index}" ${disabled ? 'disabled' : ''}>${esc(resource.label)}</button>` : `<span>${esc(resource.label)}</span>`}<small title="${esc(item.name)}">${esc(note || item.name)}</small><button type="button" data-run-files-download="${index}" ${disabled ? 'disabled' : ''}>${tr('Download', '下载')}</button></div>`;
       };
       // Before execution the result and figure files are empty shells; lead
       // with what the researcher reviews at that stage.
       const executed = !(review.readiness && rows(review.readiness.non_human_failures).includes('execution_complete'));
       const primaryNames = executed
-        ? ['manuscript_provenance.json', 'manuscript_revision.pdf', 'result_tables.json', 'figure_gallery.json', 'agent_plan.json', 'literature_evidence.json']
+        ? ['manuscript_provenance.json', revised ? 'manuscript_revision.pdf' : 'manuscript_scaffold.pdf', 'result_tables.json', 'figure_gallery.json', 'agent_plan.json', 'literature_evidence.json']
         : ['agent_plan.json', 'scientific_plan_review.json', 'literature_evidence.json', 'cohort_summary.json'];
       const primary = primaryNames.map(name => artifacts.findIndex(item => item.name === name)).filter(index => index >= 0).map(index => file(artifacts[index], index)).join('');
       const other = artifacts.map((item, index) => primaryNames.includes(item.name) ? '' : file(item, index)).join('');
@@ -241,10 +262,27 @@
         ${signable ? `<details class="gpi-run-signoff" ${entry.reviewOpen ? 'open' : ''}><summary>${tr('Record my review', '记录我的审阅')}</summary><p>${tr('Local review does not grant publication authority.', '本地审阅不授予发表权限。')}</p><fieldset>${confirmations.map(([id, en, zh]) => `<label><input type="checkbox" data-run-files-confirm="${id}" ${entry.checks.has(id) ? 'checked' : ''} ${disabled ? 'disabled' : ''}>${tr(en, zh)}</label>`).join('')}<button type="button" data-run-files-sign ${disabled || entry.checks.size !== confirmations.length ? 'disabled' : ''}>${tr('Sign reviewed run', '签署本次审阅')}</button></fieldset></details>` : ''}
         ${state.artifact ? `<article class="gpi-run-artifact"><h4>${esc(window.AGENT_RENDER.artifactTitle(state.artifact.name))}</h4>${window.AGENT_RENDER.artifactStructuredView(state.artifact.name, state.artifact.payload || {})}<details><summary>${tr('Source JSON', '来源 JSON')}</summary><pre>${esc(JSON.stringify(state.artifact.payload, null, 2))}</pre></details></article>` : ''}`;
     }
+    // Lifecycle states the shared status labels do not cover read in the
+    // conversation's language rather than as the raw state name.
+    const LIFECYCLE_STATUS = {
+      human_review_pending: ['Plan awaiting review', '计划待审阅'],
+      failed: ['did not complete', '未完成'],
+      running: ['running', '运行中'],
+      queued: ['queued', '排队中'],
+      done: ['complete', '已完成'],
+      complete: ['complete', '已完成'],
+      completed: ['complete', '已完成'],
+      interrupted: ['interrupted', '已中断'],
+      unknown: ['status unknown', '状态未知'],
+    };
+    function runStatus(run) {
+      const key = String(run.run_status || run.readiness_status || 'unknown').toLowerCase();
+      return LIFECYCLE_STATUS[key] ? tr(...LIFECYCLE_STATUS[key]) : window.AGENT_RENDER.runStatusLabel(key);
+    }
     function render(row) {
       return rows(row.savedRuns).map(run => {
         const entry = entries.get(run.project_dir);
-        const status = run.run_status === 'human_review_pending' ? tr('Plan awaiting review', '计划待审阅') : window.AGENT_RENDER.runStatusLabel(run.run_status || run.readiness_status || 'unknown');
+        const status = runStatus(run);
         return `<details class="gpi-run-files" data-run-files="${esc(run.project_dir)}" ${entry && entry.open ? 'open' : ''}><summary><span>${tr('Run files & review', '本次运行文件与审阅')}</span><small>${esc(run.run_id)} · ${esc(tr('Original run: ', '原运行：') + status)}</small></summary>${entry && entry.open ? detail(entry) : ''}</details>`;
       }).join('');
     }
