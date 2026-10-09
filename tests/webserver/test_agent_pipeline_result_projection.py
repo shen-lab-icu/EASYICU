@@ -53,3 +53,57 @@ def test_result_table_projection_keeps_primary_population_and_effect_tables(
     assert "time_varying_cox_estimates.csv" in names
     assert "landmark_rcs_contrasts.csv" in names
     assert "robustness_matrix.csv" in names
+
+
+def test_a_prediction_run_projects_its_model_tables_before_supporting_audits(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    evidence_dir = run_dir / "evidence"
+    evidence_dir.mkdir(parents=True)
+    records: list[dict[str, str]] = []
+    for index in range(12):
+        name = f"support_audit_{index}"
+        (evidence_dir / f"{name}.csv").write_text(
+            "variable,n_total\nvar,100\n", encoding="utf-8"
+        )
+        records.append(_table_record(index, name))
+    model_tables = {
+        "prediction_performance": "primary_performance",
+        "internal_validation": "internal_validation",
+    }
+    for offset, (name, step) in enumerate(model_tables.items(), start=12):
+        (evidence_dir / f"{name}.csv").write_text(
+            "auroc,brier_score\n0.8,0.1\n", encoding="utf-8"
+        )
+        records.append(_table_record(offset, name, step=step))
+    (evidence_dir / "evidence_index.json").write_text(
+        json.dumps(records), encoding="utf-8"
+    )
+    plan = {
+        "analysis_type": "prediction_model",
+        "steps": [
+            {
+                "step_id": "primary_performance",
+                "scientific_action_id": "prediction.discrimination_calibration",
+            },
+            {
+                "step_id": "internal_validation",
+                "scientific_action_id": "prediction.internal_validation",
+            },
+        ],
+    }
+
+    names = [table["name"] for table in _table_projection(run_dir, plan=plan)["tables"]]
+
+    assert len(names) == 12
+    assert names[:2] == ["prediction_performance.csv", "internal_validation.csv"]
+    # Read for a study that is not a prediction study, the order is unchanged.
+    unchanged = _table_projection(run_dir)
+    assert (
+        _table_projection(run_dir, plan={**plan, "analysis_type": "association"})
+        == unchanged
+    )
+    assert "prediction_performance.csv" not in {
+        table["name"] for table in unchanged["tables"]
+    }
