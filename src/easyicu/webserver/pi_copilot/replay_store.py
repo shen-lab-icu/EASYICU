@@ -243,6 +243,24 @@ class PiConversationReplayStore:
             if changed:
                 self._write(payload)
 
+    def host_action_turns(
+        self,
+        *,
+        session_id: str,
+        project_id: str,
+    ) -> list[Dict[str, Any]]:
+        """Return the active branch's host-action rows, oldest first."""
+
+        with self._lock:
+            payload = self._read(session_id, project_id)
+        return [
+            dict(turn)
+            for turn in payload["turns"]
+            if isinstance(turn, dict)
+            and not turn.get("superseded")
+            and turn.get("kind") == "host_action"
+        ]
+
     def running_host_action_child_job_ids(
         self,
         *,

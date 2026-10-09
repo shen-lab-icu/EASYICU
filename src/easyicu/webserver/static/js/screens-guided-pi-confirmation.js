@@ -94,6 +94,16 @@
         : failedRun
           ? String(host.runFailureText(failedRun.gate_reason_code, { code: failedRun.gate_detail_code, missing: failedRun.gate_missing_concepts, cause: failedRun.gate_detail_cause_code }) || '')
           : latestFailedAgentJob ? String(host.runFailureText(latestFailedAgentJob.error_code) || '') : '';
+      // The host is starting the job of a decision already taken on this
+      // study (its start checks run before the job exists): nothing to act on.
+      if (code === 'starting') return {
+        code, grants: [], nonApprovable: true, hideEdit: true,
+        title: tr('Preparing to start…', '正在准备…'),
+        note: tr(
+          'EasyICU is checking the data and the plan before the task starts. This page follows it; closing the page does not cancel it.',
+          'EasyICU 正在启动前核对数据和计划，任务开始后这里会自动更新；关闭页面不会取消它。',
+        ),
+      };
       if (code === 'extraction_ready') return {
         code, grants: ['extract'],
         message: tr('I confirm the current study setup. Start data extraction and quality review.', '我确认当前研究配置，请开始数据提取和质量审阅。'),

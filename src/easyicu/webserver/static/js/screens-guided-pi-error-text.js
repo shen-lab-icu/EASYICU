@@ -50,6 +50,27 @@
       if (error.code === 'codex_auth_url_invalid') {
         return tr('The sign-in link was blocked because it is not a valid OpenAI authorization address.', '登录链接不是有效的 OpenAI 授权地址，已被拦截。');
       }
+      // The host's answer to a repeated or stale job-starting decision
+      // (webserver/host_action_jobs.py); the page reloads its projection.
+      if (error.code === 'host_action_in_progress') {
+        return tr('EasyICU is already preparing this step; this page follows it.', 'EasyICU 正在准备这一步，页面会自动更新。');
+      }
+      if (error.code === 'study_job_running') {
+        return tr('Another task of this study is running or starting. Wait for it to finish, then choose again.', '本研究的另一个任务正在运行或准备中，请等它结束后再选择。');
+      }
+      if (error.code === 'host_action_decision_stale') {
+        const status = String(error.details && error.details.job_status || '');
+        if (status === 'done') {
+          return tr('An earlier task already completed this step. The page now shows the current step.', '之前的任务已经完成了这一步，页面已更新为当前这一步。');
+        }
+        if (['failed', 'cancelled', 'interrupted'].includes(status)) {
+          return tr('This step was started before and did not finish. The page now shows what the study offers next.', '这一步之前已经启动过，没有完成；页面已更新为本研究现在可做的下一步。');
+        }
+        return tr('The study changed after this page was loaded, so this step no longer applies. The page now shows the current step.', '页面打开后研究状态已经变化，这一步已不再适用；页面已更新为当前这一步。');
+      }
+      if (['host_action_invalid', 'host_action_request_mismatch', 'host_action_study_mismatch', 'host_action_state_unavailable'].includes(error.code)) {
+        return tr('EasyICU could not match this step to the current study. Refresh the project and try again.', 'EasyICU 无法把这一步对应到当前研究，请刷新项目后重试。');
+      }
       if (error.code === 'research_pipeline_execution_runtime_unavailable') {
         return tr('The container runtime that executes analysis code is not running. Start it (Docker Desktop, or "colima start") and run again.', '执行分析代码的容器运行环境未启动。请先启动它（Docker Desktop，或 "colima start"），然后重新运行。');
       }

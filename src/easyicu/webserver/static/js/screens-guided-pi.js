@@ -1217,9 +1217,10 @@
         state.latestRun = payload && payload.latest_run ? payload.latest_run : { present: false };
         void RUN_OUTCOME.loadScientificReview(state.latestRun, state.workflow);
         if (state.workflow) state.workflow.active_job = (payload && payload.active_job) || { present: false };
-        // The project's run record travels beside the snapshot; the aside
-        // reads it from the same workflow object as the stages.
+        // The project's run record and the host's decision coordinates travel
+        // beside the snapshot; owners read them from the same workflow object.
         if (state.workflow) state.workflow.runs = Array.isArray(payload && payload.runs) ? payload.runs : [];
+        if (state.workflow) Object.assign(state.workflow, { host_decisions: (payload && payload.host_decisions) || {}, starting: (payload && payload.starting) || null });
         reconcileDurableWrapupActivity();
         hydrateProjectedJob(payload && payload.active_job);
         const activeJob = payload && payload.active_job;

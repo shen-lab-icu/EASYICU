@@ -109,7 +109,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
     assert "js/screens-guided-pi-source-view.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-preview.js?v=20260922-demo-rewrite1" in index
-    assert "js/screens-guided-pi-replay.js?v=20260919-task-index1" in index
+    assert "js/screens-guided-pi-replay.js?v=20261009-host-action1" in index
     assert "js/screens-guided-pi-resources.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-activity.js?v=20260922-plan-steps1" in index
@@ -127,11 +127,11 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
-    assert "js/screens-guided-pi-confirmation.js?v=20260922-run-answer1" in index
-    assert "js/screens-guided-pi-plan-actions.js?v=20260930-bare-continue1" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20261009-host-action1" in index
+    assert "js/screens-guided-pi-plan-actions.js?v=20261009-host-action1" in index
     assert "js/screens-guided-pi-childjob.js?v=20260922-plan-steps1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261009-writer-stop1" in index
-    assert "js/screens-guided-pi.js?v=20261009-study-switch1" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261009-host-action1" in index
+    assert "js/screens-guided-pi.js?v=20261009-host-action1" in index
     assert "js/screens-guided.js?v=20260922-state-menus1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -560,7 +560,13 @@ def test_confirmed_plan_choice_revises_in_place_without_a_fake_user_message() ->
           binding: {{run_id: 'run_old', study_context_id: 'study1', study_revision: 7}},
           research_provider: {{provider: 'openai', credential_source: 'pi_verified'}},
         }}),
-        workflow: () => ({{next_action_code: 'plan_configuration_superseded'}}),
+        workflow: () => ({{
+          next_action_code: 'plan_configuration_superseded',
+          host_decisions: {{plan_transition: {{
+            family: 'plan_transition', next_action_code: 'plan_configuration_superseded',
+            scientific_configuration_sha256: 'a'.repeat(64), source_run_id: 'run_old',
+          }}}},
+        }}),
         busy: () => busy,
         sessionIsStale: () => false,
         api: () => ({{
@@ -589,8 +595,20 @@ def test_confirmed_plan_choice_revises_in_place_without_a_fake_user_message() ->
     calls = json.loads(completed.stdout)
     assert not any(call[0] == "message" for call in calls)
     assert ["draft", ""] in calls
-    assert ["host-action", "auto_revise_plan", "plan-new", "plan-new"] in calls
-    assert any(call[0] == "plan" for call in calls)
+    # The host records the action from the decision the submission carries.
+    plan_call = next(call for call in calls if call[0] == "plan")
+    assert plan_call[1]["host_action"] == {
+        "session_id": "s1",
+        "project_id": "p1",
+        "action_code": "auto_revise_plan",
+        "decision": {
+            "family": "plan_transition",
+            "next_action_code": "plan_configuration_superseded",
+            "scientific_configuration_sha256": "a" * 64,
+            "source_run_id": "run_old",
+        },
+    }
+    assert not any(call[0] == "host-action" for call in calls)
 
 
 def test_governed_plan_action_owner_executes_generation_review_and_retry() -> None:
@@ -603,13 +621,25 @@ def test_governed_plan_action_owner_executes_generation_review_and_retry() -> No
       eval({owner!r});
       const calls = [];
       let busy = false;
-      let workflow = {{next_action_code: 'plan_configuration_superseded'}};
+      const digest = 'a'.repeat(64);
+      const decisions = {{
+        plan_transition: {{family: 'plan_transition', next_action_code: 'plan_configuration_superseded',
+          scientific_configuration_sha256: digest, source_run_id: 'r1'}},
+        plan_review: {{family: 'plan_review', run_id: 'r1',
+          scientific_configuration_sha256: digest, review_authority_sha256: 'b'.repeat(64)}},
+        execution_retry: {{family: 'execution_retry', source_run_id: 'r1', gate_reason: '',
+          scientific_configuration_sha256: digest}},
+      }};
+      let workflow = {{next_action_code: 'plan_configuration_superseded', host_decisions: decisions}};
       const host = {{
         tr: (en, zh) => zh,
         errorText: error => String(error && error.message || error),
         regeneration: {{isPlanActionText: value => /研究计划/.test(String(value || ''))}},
         nextActions: {{governedPlanGrants: () => ['provider_run']}},
-        replay: {{retryFailedExecution: async () => ({{job_id: 'retry-job'}})}},
+        replay: {{retryFailedExecution: async options => {{
+          calls.push(['retry', options.hostAction]);
+          return {{job_id: 'retry-job'}};
+        }}}},
         session: () => ({{
           session_id: 's1',
           binding: {{run_id: 'r1', study_context_id: 'study1'}},
@@ -641,6 +671,7 @@ def test_governed_plan_action_owner_executes_generation_review_and_retry() -> No
         await actions.startFormalPlanGeneration('provider_ready_to_generate_plan');
         workflow = {{
           next_action_code: 'plan_scientific_changes_required',
+          host_decisions: decisions,
           plan_review_summary: {{
             authorization_questions: [],
             automatic_revision_blockers: ['POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED'],
@@ -704,12 +735,15 @@ def test_governed_plan_action_owner_executes_generation_review_and_retry() -> No
         call[1]["literature_search_authorized"] is True
         for call in revision_calls
     )
-    assert [
-        "host-action",
-        "auto_revise_plan",
-        "plan-job",
-        "plan-job",
-    ] in payload["calls"]
+    # Each submission carries the decision it answers and its action; the
+    # host records it, so the browser writes no row of its own.
+    host_actions = [
+        call[1]["host_action"]["action_code"]
+        for call in payload["calls"]
+        if call[0] == "plan" and "host_action" in call[1]
+    ]
+    assert "auto_revise_plan" in host_actions
+    assert not any(call[0] == "host-action" for call in payload["calls"])
     assert ["message", "重新生成研究计划"] not in payload["calls"]
     resume_message = [
         call for call in payload["calls"]
@@ -734,7 +768,8 @@ def test_governed_plan_action_owner_executes_generation_review_and_retry() -> No
     )
     prepare_calls = [
         call for call in payload["calls"]
-        if call[0] == "host-action" and call[1] == "prepare_analysis_data"
+        if call[0] == "plan"
+        and call[1].get("host_action", {}).get("action_code") == "prepare_analysis_data"
     ]
     assert len(prepare_calls) == 1
     fresh_plan_calls = [
@@ -746,9 +781,13 @@ def test_governed_plan_action_owner_executes_generation_review_and_retry() -> No
         call[:2] == ["send", "long internal data preparation prompt"]
         for call in payload["calls"]
     )
-    assert ["host-action", "generate_plan", "plan-job", "plan-job"] in payload["calls"]
-    assert ["host-action", "execute_plan", "review-job", "review-job"] in payload["calls"]
-    assert ["host-action", "retry_analysis", "retry-job", "retry-job"] in payload["calls"]
+    assert "generate_plan" in host_actions
+    review_call = next(call for call in payload["calls"] if call[0] == "review")
+    assert review_call[1]["host_action"]["action_code"] == "execute_plan"
+    assert review_call[1]["host_action"]["decision"]["family"] == "plan_review"
+    retry_call = next(call for call in payload["calls"] if call[0] == "retry")
+    assert retry_call[1]["action_code"] == "retry_analysis"
+    assert retry_call[1]["decision"]["source_run_id"] == "r1"
     assert ["child", "plan-job", "easyicu_full_run_submitted"] in payload["calls"]
     assert ["child", "review-job", "easyicu_review_submitted"] in payload["calls"]
     assert ["child", "retry-job", "easyicu_full_run_resume_submitted"] in payload["calls"]
@@ -775,7 +814,13 @@ def test_candidate_plan_upgrade_waits_for_review_then_uses_explicit_confirmation
           }},
           research_provider: {{provider: 'openai'}},
         }}),
-        workflow: () => ({{next_action_code: 'plan_execution_upgrade_required'}}),
+        workflow: () => ({{
+          next_action_code: 'plan_execution_upgrade_required',
+          host_decisions: {{plan_transition: {{
+            family: 'plan_transition', next_action_code: 'plan_execution_upgrade_required',
+            scientific_configuration_sha256: 'a'.repeat(64), source_run_id: 'candidate-run',
+          }}}},
+        }}),
         busy: () => false, sessionIsStale: () => false,
         api: () => ({{
           loadStudyContext: async () => ({{context: {{question: 'q', data_source: {{path: '/prepared'}}}}}}),
@@ -816,9 +861,11 @@ def test_candidate_plan_upgrade_waits_for_review_then_uses_explicit_confirmation
     assert [call for call in payload["calls"] if call[0] == "message"] == [
         ["message", "确认方案并准备分析数据"]
     ]
-    assert [
-        "host-action", "prepare_analysis_data", "upgrade-job", "upgrade-job"
-    ] in payload["calls"]
+    assert plan_calls[0][1]["host_action"]["action_code"] == "prepare_analysis_data"
+    assert plan_calls[0][1]["host_action"]["decision"]["next_action_code"] == (
+        "plan_execution_upgrade_required"
+    )
+    assert not any(call[0] == "host-action" for call in payload["calls"])
     assert [
         "child", "upgrade-job", "easyicu_full_run_upgrade_submitted"
     ] in payload["calls"]
@@ -897,10 +944,17 @@ def test_stale_scientific_policy_regenerates_without_fake_user_turn() -> None:
         tr: (en, zh) => zh, errorText: error => String(error), regeneration: {{}},
         nextActions: {{}}, replay: {{}}, projectId: () => 'p1', turnGrants: () => [],
         session: () => ({{
+          session_id: 'session-1',
           binding: {{run_id: 'stale-run', study_context_id: 'study1'}},
           research_provider: {{provider: 'openai'}},
         }}),
-        workflow: () => ({{next_action_code: 'scientific_plan_review_policy_stale'}}),
+        workflow: () => ({{
+          next_action_code: 'scientific_plan_review_policy_stale',
+          host_decisions: {{plan_transition: {{
+            family: 'plan_transition', next_action_code: 'scientific_plan_review_policy_stale',
+            scientific_configuration_sha256: 'a'.repeat(64), source_run_id: 'stale-run',
+          }}}},
+        }}),
         busy: () => false, sessionIsStale: () => false,
         api: () => ({{
           loadStudyContext: async () => ({{context: {{question: 'q', data_source: {{path: '/prepared'}}}}}}),
@@ -929,7 +983,8 @@ def test_stale_scientific_policy_regenerates_without_fake_user_turn() -> None:
     assert plan_calls[0][1]["planner_start_mode"] == "auto"
     assert plan_calls[0][1]["plan_revision_source_run_id"] == ""
     assert not any(call[0] == "message" for call in payload["calls"])
-    assert ["host-action", "auto_revise_plan", "fresh-job", "fresh-job"] in payload["calls"]
+    assert plan_calls[0][1]["host_action"]["action_code"] == "auto_revise_plan"
+    assert not any(call[0] == "host-action" for call in payload["calls"])
 
 
 def test_bare_continue_advances_system_owned_plan_revision_without_chat() -> None:
@@ -1426,7 +1481,13 @@ def test_initial_candidate_plan_starts_automatically_once_per_session() -> None:
           binding: {{study_context_id: 'study-1', study_revision: 4}},
           research_provider: {{provider: 'openai', credential_source: 'verified'}},
         }}),
-        workflow: () => ({{next_action_code: 'provider_ready_to_generate_plan'}}),
+        workflow: () => ({{
+          next_action_code: 'provider_ready_to_generate_plan',
+          host_decisions: {{plan_transition: {{
+            family: 'plan_transition', next_action_code: 'provider_ready_to_generate_plan',
+            scientific_configuration_sha256: 'a'.repeat(64), source_run_id: '',
+          }}}},
+        }}),
         busy: () => busy,
         sessionIsStale: () => false,
         api: () => ({{
@@ -1459,11 +1520,15 @@ def test_initial_candidate_plan_starts_automatically_once_per_session() -> None:
     assert payload["nextSession"] is True
     assert len([row for row in payload["calls"] if row[0] == "plan"]) == 2
     assert not [row for row in payload["calls"] if row[0] == "message"]
-    assert all(
-        row[2] == "auto_generate_plan"
+    assert [
+        (row[1], row[2]["host_action"]["session_id"], row[2]["host_action"]["action_code"])
         for row in payload["calls"]
-        if row[0] == "host-action"
-    )
+        if row[0] == "plan"
+    ] == [
+        ("session-1", "session-1", "auto_generate_plan"),
+        ("session-2", "session-2", "auto_generate_plan"),
+    ]
+    assert not [row for row in payload["calls"] if row[0] == "host-action"]
 
 
 def test_initial_candidate_plan_waits_for_data_source_confirmation() -> None:
@@ -6440,7 +6505,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20260922-plan-steps1" in index
-    assert "screens-guided-pi.js?v=20261009-study-switch1" in index
+    assert "screens-guided-pi.js?v=20261009-host-action1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

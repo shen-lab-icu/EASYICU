@@ -270,6 +270,8 @@
       planner_start_mode: 'auto',
       execution_resume_source_run_id: runId,
       ...(host.reportOnly === true ? { report_only: true } : {}),
+      // The decision this retry answers (plan-actions.js), passed as given.
+      ...(host.hostAction ? { host_action: host.hostAction } : {}),
     });
   }
 
