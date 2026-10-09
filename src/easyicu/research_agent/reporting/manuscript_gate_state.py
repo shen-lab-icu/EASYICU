@@ -9,6 +9,7 @@ from typing import Any, Mapping, Sequence
 from ..authority.manuscript_claim_policy import missing_scientific_claims_in_results
 from ..authority.runtime_artifacts import current_evidence_records
 from .manuscript_figures import manuscript_figure_receipt_is_current
+from .manuscript_result_facts import recorded_result_fact_carriage
 
 
 GATE_STATE_SUPERSESSION_PATTERNS = (
@@ -84,7 +85,9 @@ def current_manuscript_completion_state(
 ) -> dict[str, bool]:
     """Project quality and scientific-claim completion from current artifacts.
 
-    ``reader_labels`` are the claim labels the manuscript was bound with.
+    ``reader_labels`` are the claim labels the manuscript was bound with.  A
+    claim that a host fact recorded for these exact bytes carries is reported
+    by that fact (:func:`.manuscript_result_facts.recorded_result_fact_carriage`).
     """
 
     quality_complete = False
@@ -102,12 +105,22 @@ def current_manuscript_completion_state(
         )
 
     authoritative_claims = evidence.authoritative_scientific_claims(per_step_records)
+    carried = recorded_result_fact_carriage(
+        run_dir=run_dir,
+        manuscript_text=manuscript_text,
+        evidence=evidence,
+        claims=authoritative_claims,
+    ).carried
     claims_complete = bool(
         manuscript_text
         and authoritative_claims
         and not missing_scientific_claims_in_results(
             manuscript_text,
-            claims=authoritative_claims,
+            claims=[
+                claim
+                for claim in authoritative_claims
+                if claim.claim_ref not in carried
+            ],
             reader_labels=reader_labels,
         )
         and not stop_after_analysis
@@ -124,7 +137,27 @@ def current_manuscript_completion_state(
     }
 
 
+def manuscript_result_fact_trace(
+    *,
+    run_dir: Path,
+    manuscript_text: str,
+    evidence: Any,
+    per_step_records: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Which claims the completion state let recorded facts carry, and why
+    every other fact naming a claim carried none."""
+
+    carriage = recorded_result_fact_carriage(
+        run_dir=run_dir,
+        manuscript_text=manuscript_text,
+        evidence=evidence,
+        claims=evidence.authoritative_scientific_claims(per_step_records),
+    )
+    return {"carried": dict(carriage.carried), **carriage.trace}
+
+
 __all__ = [
     "GATE_STATE_SUPERSESSION_PATTERNS",
     "current_manuscript_completion_state",
+    "manuscript_result_fact_trace",
 ]
