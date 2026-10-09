@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import inspect
+import textwrap
 import threading
 from types import SimpleNamespace
 
@@ -10,7 +12,9 @@ from easyicu.research_agent.execution.phase import (
     _step_settle_initial_code,
 )
 from easyicu.research_agent.execution.repair_reservation import StepRepairReservation
+from easyicu.research_agent.execution.budget_epoch import runtime_attempt_identity
 from easyicu.research_agent.execution.step_attempt_bootstrap import (
+    explicit_rerun_terms,
     prepare_step_attempt_bootstrap,
 )
 from easyicu.research_agent.repairs.coordination import StepRepairBudget
@@ -141,6 +145,44 @@ def test_execute_worker_delegates_attempt_bootstrap_and_repair_reservation() -> 
     assert "prepare_step_attempt_bootstrap(" in source
     assert "StepRepairReservation(" in source
     assert "def _consume_llm_repair_budget(" not in source
+
+
+def test_only_an_explicit_rerun_reopens_generation_and_reads_the_identity() -> None:
+    bundle = {
+        "provenance": {
+            "execution_kernel_identity_sha256": "k" * 64,
+            "image_id": "sha256:" + "i" * 64,
+        }
+    }
+
+    explicit = explicit_rerun_terms(True, bundle)
+
+    assert explicit["allow_terminal_initial_generation_restart"] is True
+    assert explicit["explicit_rerun"] is True
+    assert explicit["current_identity"] == runtime_attempt_identity(bundle)
+    assert explicit["current_identity"].image_id == "sha256:" + "i" * 64
+    assert explicit_rerun_terms(False, bundle) == {
+        "allow_terminal_initial_generation_restart": False,
+        "explicit_rerun": False,
+        "current_identity": None,
+    }
+
+
+def test_the_execute_worker_takes_the_rerun_terms_from_the_resume_window() -> None:
+    tree = ast.parse(textwrap.dedent(inspect.getsource(_execute_step)))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "explicit_rerun_terms"
+    ]
+
+    assert len(calls) == 1
+    assert [ast.unparse(argument) for argument in calls[0].args] == [
+        "resume_controller.explicitly_reruns_step(step.step_id)",
+        "getattr(pipeline, '_validated_runtime_bundle', None)",
+    ]
 
 
 def _bootstrap_with_prior(tmp_path, prior, *, allow=False):
