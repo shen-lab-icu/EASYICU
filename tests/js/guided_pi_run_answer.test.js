@@ -121,11 +121,52 @@ const outcome = modules.require('runOutcome').create({
   const named = await reread({ ...plan, steps: plan.steps.concat([{ step_id: 'first_icu_stay_note', method: 'descriptive',
     intent: "Describe strategy 'first_stay'.", inputs: ['first_icu_stay'] }]) });
   assert.ok(named.followUps.some(text => text.includes('只保留每位患者的首次 ICU 入住')));
-  // A prediction study's answer is its model's performance, so its card says
-  // where that is instead of calling the counts a descriptive comparison.
-  const prediction = await reread({ ...plan, analysis_type: 'prediction_model' });
-  assert.match(prediction.html, /这是预测研究：上面的数字描述本队列，模型表现见结果表/);
-  assert.doesNotMatch(prediction.html, /未调整的描述性比较/);
+  // A prediction study answers only with the host's typed block for its
+  // primary model. Without the block nothing is shown, even beside a result
+  // table with an `auroc` column.
+  const predictionPlan = { ...plan, analysis_type: 'prediction_model' };
+  const savedTables = payloads['result_tables.json'];
+  const decoy = table('internal_validation__internal_validation.csv', ['evaluation_n', 'auroc', 'brier_score'], [['200', '0.555', '0.201']]);
+  const tablesWith = extra => ({ tables: savedTables.tables.concat([decoy]), ...extra });
+  payloads['result_tables.json'] = tablesWith({});
+  const withoutBlock = await reread(predictionPlan);
+  assert.doesNotMatch(withoutBlock.html, /gpi-run-answer"|0\.555|未调整的描述性比较/);
+  // Nor are its follow-ups built from group or estimate facts.
+  assert.ok(withoutBlock.followUps.length);
+  assert.ok(withoutBlock.followUps.every(text => !/关联还成立吗|按年龄分层|首次 ICU 入住/.test(text)));
+  const block = { schema_version: 'easyicu.web-prediction-performance/1', product: 'table:model_performance',
+    step_id: 'primary_performance', evidence_id: 'table_step_artifact_perf', model: 'logistic_regression_l2',
+    authority_scope: 'analysis_only', paper_authorization_allowed: false,
+    development_n: 800, validation_n: 200, validation_subject_n: 190, validation_event_n: 30, validation_event_rate: 0.15,
+    auroc: 0.8123, auroc_ci_low: 0.7712, auroc_ci_high: 0.8478, auroc_ci_method: 'delong_logit_normal_95pct',
+    average_precision: 0.41, brier_score: 0.1034, calibration_status: 'estimated', calibration_intercept: 0.02, calibration_slope: 0.957 };
+  payloads['result_tables.json'] = tablesWith({ prediction_performance: block });
+  const withBlock = await reread(predictionPlan);
+  assert.match(withBlock.html, /同库内部验证（验证集 200 个 ICU 入住记录，来自 190 名患者，30 个结局事件）：AUROC 0\.812（95% CI 0\.771–0\.848，DeLong），Brier 0\.103，校准斜率 0\.96。/);
+  assert.match(withBlock.html, /这是同一数据库内部验证的模型表现，仅供分析，未获论文授权；用于其他数据库前需要外部验证/);
+  assert.doesNotMatch(withBlock.html, /0\.555|未调整的描述性比较|在 MIMIC-IV 的/);
+  // With one ICU stay per patient the sentence does not repeat the count.
+  payloads['result_tables.json'] = tablesWith({ prediction_performance: { ...block, validation_subject_n: 200 } });
+  assert.match((await reread(predictionPlan)).html, /同库内部验证（验证集 200 个 ICU 入住记录，30 个结局事件）：AUROC 0\.812/);
+  // The host's authority, not the executor's: a run that failed its checks.
+  payloads['result_tables.json'] = tablesWith({ prediction_performance: { ...block, authority_scope: 'blocked' } });
+  assert.match((await reread(predictionPlan)).html, /本次运行未通过自动校验，数字仅供核对，未获论文授权/);
+  // A block that does not validate shows nothing rather than a guess.
+  // That includes a gate scope the card has no wording for, and counts the
+  // validation rows cannot hold.
+  for (const broken of [{ auroc_ci_low: 0.9 }, { evidence_id: '' }, { auroc: '0.8123' }, { schema_version: 'other/1' },
+    { authority_scope: 'paper_ready' }, { authority_scope: '' }, { validation_event_n: 201 }, { validation_subject_n: 0 },
+    { validation_n: 200.5 }]) {
+    payloads['result_tables.json'] = tablesWith({ prediction_performance: { ...block, ...broken } });
+    assert.doesNotMatch((await reread(predictionPlan)).html, /gpi-run-answer"/, JSON.stringify(broken));
+  }
+  // A study that is not a prediction study does not read the block.
+  payloads['result_tables.json'] = tablesWith({ prediction_performance: block });
+  const association = await reread(plan);
+  assert.match(association.html, /在 MIMIC-IV 的 94,458 个 ICU 入住记录中/);
+  assert.match(association.html, /这是未调整的描述性比较/);
+  assert.doesNotMatch(association.html, /AUROC|内部验证的模型表现/);
+  payloads['result_tables.json'] = savedTables;
 
   // Traces: one named row per approved plan step, with how it ran.
   const activity = modules.require('activity').create({
