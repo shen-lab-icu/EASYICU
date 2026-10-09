@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 import shutil
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -75,3 +77,44 @@ def test_runner_validates_inputs():
         rr.run_rscript(rscript="Rscript", script="   ")
     with pytest.raises(rr.RRuntimeError):
         rr.run_rscript(rscript="Rscript", script="x <- 1", timeout_s=0)
+
+
+def test_runner_passes_the_script_as_a_file_not_an_argument(monkeypatch):
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = list(argv)
+        seen["script"] = Path(argv[2]).read_text(encoding="utf-8")
+        return subprocess.CompletedProcess(argv, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(rr.subprocess, "run", fake_run)
+    script = "# " + "x" * 200_000 + "\ncat('ok')\n"
+
+    result = rr.run_rscript(rscript="Rscript", script=script, args=["a", "b"])
+
+    assert result.returncode == 0
+    assert seen["argv"][:2] == ["Rscript", "--vanilla"]
+    assert seen["argv"][3:] == ["a", "b"]
+    assert seen["script"] == script
+    # Linux limits one argument to 128 KiB; no argument carries the script.
+    assert max(len(arg.encode("utf-8")) for arg in seen["argv"]) < 4096
+    assert not Path(seen["argv"][2]).exists()
+
+
+def test_runner_runs_a_script_longer_than_one_argument_may_be():
+    _need_rscript()
+    rscript = shutil.which("Rscript")
+    assert rscript
+    script = (
+        "# " + "x" * 200_000 + "\n"
+        "args <- commandArgs(trailingOnly=TRUE)\n"
+        'cat(paste0("easyicu-", args[1], "-", args[2], "\\n"))\n'
+    )
+
+    result = rr.run_rscript(
+        rscript=rscript, script=script, args=["a", "b"], timeout_s=60
+    )
+
+    assert result.timed_out is False
+    assert result.returncode == 0
+    assert "easyicu-a-b" in result.stdout
