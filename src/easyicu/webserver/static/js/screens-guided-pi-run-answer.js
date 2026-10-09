@@ -27,8 +27,13 @@
   ];
   const AUDIT_TABLE = /audit|missing|denominator/;
   // Analysis types (the planner's registry keys) whose answer is a model's
-  // predictive performance rather than an estimate this card shows.
+  // predictive performance: the host's typed block for the primary model
+  // (result_tables.json `prediction_performance`), never a table preview.
   const PREDICTION_TYPES = new Set(['prediction_model', 'dynamic_prediction']);
+  const PREDICTION_PERFORMANCE_SCHEMA = 'easyicu.web-prediction-performance/1';
+  // The host run gate's two states. A block with any other scope shows no
+  // answer, since the card has no wording for it.
+  const PREDICTION_AUTHORITY_SCOPES = new Set(['analysis_only', 'blocked']);
   // The methods that re-estimate on each patient's first ICU stay, as the
   // binary-association sensitivity executor runs them.
   const FIRST_STAY_METHODS = new Set(['first_stay_association', 'one_stay_per_patient_association']);
@@ -146,6 +151,38 @@
       };
     }
 
+    // The primary model's performance as the host bound it to its evidence;
+    // a block that does not validate shows nothing rather than a guess.
+    function predictionPerformance(block) {
+      if (!block || typeof block !== 'object' || block.schema_version !== PREDICTION_PERFORMANCE_SCHEMA
+        || block.product !== 'table:model_performance' || !String(block.evidence_id || '').trim()
+        || !PREDICTION_AUTHORITY_SCOPES.has(block.authority_scope)) return null;
+      const unit = value => {
+        const number = typeof value === 'number' ? finite(value) : null;
+        return number != null && number >= 0 && number <= 1 ? number : null;
+      };
+      const whole = value => (Number.isInteger(value) && value >= 0 ? value : null);
+      const auroc = unit(block.auroc);
+      const low = unit(block.auroc_ci_low);
+      const high = unit(block.auroc_ci_high);
+      const brier = unit(block.brier_score);
+      if (auroc == null || low == null || high == null || brier == null || low > auroc || auroc > high) return null;
+      // The validation set's patients and events cannot outnumber its rows.
+      const records = whole(block.validation_n);
+      const patients = whole(block.validation_subject_n);
+      const events = whole(block.validation_event_n);
+      if (records == null || events == null || !patients || patients > records || events > records) return null;
+      return {
+        evidenceId: String(block.evidence_id),
+        auroc, low, high, brier, records, patients, events,
+        slope: block.calibration_status === 'estimated' && typeof block.calibration_slope === 'number'
+          ? finite(block.calibration_slope) : null,
+        delong: block.auroc_ci_method === 'delong_logit_normal_95pct',
+        analysisOnly: block.authority_scope === 'analysis_only',
+        paperAuthorized: block.paper_authorization_allowed === true,
+      };
+    }
+
     function project(rows) {
       const payload = name => (rows[name] && rows[name].payload && typeof rows[name].payload === 'object')
         ? rows[name].payload : {};
@@ -180,6 +217,8 @@
         total: total && total.display_value != null ? String(total.display_value) : '',
         overallRisk: overallRisk && overallRisk.display_value != null ? String(overallRisk.display_value) : '',
         estimate: primaryEstimate(summary, claims),
+        prediction: PREDICTION_TYPES.has(String(plan.analysis_type || ''))
+          ? predictionPerformance(payload('result_tables.json').prediction_performance) : null,
         covariates: baselineCovariates(plan, spec && spec.exposure),
         steps: (Array.isArray(plan.steps) ? plan.steps : [])
           .filter(step => step && step.method !== 'visualization' && String(step.intent || '').trim())
@@ -241,6 +280,26 @@
 
     function answerSentences(view) {
       const sentences = [];
+      // A prediction study answers only with its primary model's performance.
+      if (PREDICTION_TYPES.has(view.analysisType)) {
+        const model = view.prediction;
+        if (!model) return sentences;
+        const method = model.delong ? tr(', DeLong', '，DeLong') : '';
+        const slope = model.slope != null
+          ? tr(`, calibration slope ${model.slope.toFixed(2)}`, `，校准斜率 ${model.slope.toFixed(2)}`) : '';
+        // The sample size and event count go with the performance (TRIPOD);
+        // the patients are named when some have more than one ICU stay.
+        const sample = model.patients < model.records
+          ? tr(`validation set: ${count(model.records)} ICU stays from ${count(model.patients)} patients, ${count(model.events)} outcome events`,
+            `验证集 ${count(model.records)} 个 ICU 入住记录，来自 ${count(model.patients)} 名患者，${count(model.events)} 个结局事件`)
+          : tr(`validation set: ${count(model.records)} ICU stays, ${count(model.events)} outcome events`,
+            `验证集 ${count(model.records)} 个 ICU 入住记录，${count(model.events)} 个结局事件`);
+        sentences.push(tr(
+          `Internal validation in the same database (${sample}): AUROC ${model.auroc.toFixed(3)} (95% CI ${model.low.toFixed(3)}–${model.high.toFixed(3)}${method}), Brier score ${model.brier.toFixed(3)}${slope}.`,
+          `同库内部验证（${sample}）：AUROC ${model.auroc.toFixed(3)}（95% CI ${model.low.toFixed(3)}–${model.high.toFixed(3)}${method}），Brier ${model.brier.toFixed(3)}${slope}。`,
+        ));
+        return sentences;
+      }
       const groups = view.groups;
       const source = view.source || tr('this data source', '本数据源');
       if (groups.length === 2) {
@@ -291,9 +350,15 @@
     // is its model's performance, in the result tables; otherwise a
     // registered estimate is an association and group counts a description.
     function caveat(view) {
-      if (PREDICTION_TYPES.has(view.analysisType)) {
-        return tr('A prediction study: the numbers above describe this cohort, and the model’s performance is in the result tables and needs validation in another database. Neither shows cause and effect. Each row is an analysis record (ICU stay), not necessarily an independent patient.',
-          '这是预测研究：上面的数字描述本队列，模型表现见结果表，用于其他数据库前需要另行验证；两者都不说明因果。统计单位是分析记录（ICU 入住），不一定对应独立患者。');
+      if (view.prediction) {
+        const scope = view.prediction.analysisOnly
+          ? tr('for analysis only', '仅供分析')
+          : tr('this run did not pass its automated checks, so the numbers are for review only', '本次运行未通过自动校验，数字仅供核对');
+        const paper = view.prediction.paperAuthorized ? '' : tr(', without paper authorization', '，未获论文授权');
+        return tr(
+          `Model performance from internal validation in the same database; ${scope}${paper}. It needs external validation before use in another database, and it does not show cause and effect. Each row is an analysis record (ICU stay), not necessarily an independent patient.`,
+          `这是同一数据库内部验证的模型表现，${scope}${paper}；用于其他数据库前需要外部验证，也不说明因果。统计单位是分析记录（ICU 入住），不一定对应独立患者。`,
+        );
       }
       return view.estimate
         ? tr('An observational association estimate; it does not establish cause and effect. Each row is an analysis record (ICU stay), not necessarily an independent patient.',
@@ -336,7 +401,9 @@
     // so the card can fall back to its artifact-based suggestions.
     function followUps(latestRun) {
       const view = projectionFor(latestRun);
-      if (!view || !view.groups.length && !view.estimate) return null;
+      // A prediction study reports no group or estimate facts to build
+      // them from, so its card keeps the artifact-based suggestions.
+      if (!view || PREDICTION_TYPES.has(view.analysisType) || !view.groups.length && !view.estimate) return null;
       const exposure = view.exposureLabel || tr('the exposure', '暴露');
       const outcome = view.outcomeLabel || tr('the outcome', '结局');
       const list = [];
@@ -412,7 +479,11 @@
 
     function limitation(latestRun) {
       const view = projectionFor(latestRun);
-      return view && (view.groups.length || view.estimate) ? caveat(view) : '';
+      if (!view) return '';
+      // A prediction study's limit is stated only beside the model
+      // performance it bounds.
+      if (PREDICTION_TYPES.has(view.analysisType)) return view.prediction ? caveat(view) : '';
+      return view.groups.length || view.estimate ? caveat(view) : '';
     }
 
     return Object.freeze({ load, render, followUps, fileNote, approachSteps, materials, limitation });
