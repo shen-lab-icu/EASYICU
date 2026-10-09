@@ -88,6 +88,12 @@ CONTRACTS: dict[str, list[str]] = {
     # Loads the module registry and plan-confirmation owner itself; takes no arguments.
     "guided_plan_resource_authority.test.js": [],
     "guided_pi_modules.test.js": ["screens-guided-pi-modules.js"],
+    # Requires the popover owner; reads the two repainting consumers as text.
+    "popover_keep_open.test.js": [
+        "popover-menus.js",
+        "screens-guided-pi.js",
+        "screens-guided-pi-study-workspace.js",
+    ],
     "viz_embedded_workbench.test.js": [],
     "guided_idea_flow.test.js": ["screens-guided-idea.js"],
     "guided_project_handoff.test.js": [
