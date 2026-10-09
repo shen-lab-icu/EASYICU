@@ -721,7 +721,7 @@
       });
     }
     syncProjectWorkflowAside();
-    STUDY_WORKSPACE.syncNavigation({ projectId: projectId(), sessions: state.sessions.filter(sessionMatchesUiLanguage),
+    STUDY_WORKSPACE.syncNavigation({ projectId: projectId(), sessions: state.sessions.filter(sessionMatchesUiLanguage), otherLanguageSessions: state.sessions.filter(row => !sessionMatchesUiLanguage(row)).length, switchLanguage: () => window.setLang && window.setLang(uiLanguage() === 'zh' ? 'en' : 'zh'),
       selectedId: state.session && state.session.session_id, loading: restoring, disabled: state.busy || Boolean(state.childJobId) || state.projectLoading,
       visible: state.shell !== 'legacy', title: navigationSessionTitle, status: sessionStatusLabel,
       time: compactSessionTime, open: openSession, create: startEntry,

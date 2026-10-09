@@ -433,6 +433,19 @@ sessionRail.onclick(sessionClick('s1'));
 assert.deepEqual(navigationCalls, ['s1']);
 workspace.syncNavigation({ ...navigation, projectId: 'p2', sessions: [] });
 assert.doesNotMatch(sessionRail.innerHTML, /Current session/);
+assert.match(sessionRail.innerHTML, /No conversations yet/);
+// A conversation keeps the language it started in: a list empty in this
+// language names the other language's conversations and switches to it.
+const languageSwitches = [];
+workspace.syncNavigation({ ...navigation, projectId: 'p2', sessions: [], otherLanguageSessions: 2,
+  switchLanguage: () => languageSwitches.push('other') });
+assert.match(sessionRail.innerHTML, /This project has 2 Chinese conversations\./);
+assert.doesNotMatch(sessionRail.innerHTML, /No conversations yet/);
+assert.match(sessionRail.innerHTML, /data-gpi-rail-other-language>Switch to 中文<\/button>/);
+sessionRail.onclick({ target: { closest: query => query === '[data-gpi-rail-other-language]' ? {} : null } });
+assert.deepEqual(languageSwitches, ['other']);
+workspace.syncNavigation({ ...navigation, projectId: 'p2', sessions: [], otherLanguageSessions: 1 });
+assert.match(sessionRail.innerHTML, /This project has 1 Chinese conversation\./);
 
 // Empty drafts collapse behind one count so the rail stays readable, and the
 // selected conversation is never hidden inside a closed group.

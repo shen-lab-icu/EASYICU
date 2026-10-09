@@ -90,14 +90,21 @@
 
     // A reopened page can meet a decision whose job the host is still
     // starting; follow the projection until the job exists or the start ends.
+    // A repaint replaces the log, closing what the researcher opened and
+    // moving the view, so a poll repaints only when the start moved on.
     const STARTING_REFRESH_MS = 3000;
     let startingRefresh = null;
+    function startingState() {
+      const workflow = host.workflow() || {};
+      return `${workflowCode()}|${String(workflow.starting && workflow.starting.started_at || '')}`;
+    }
     function followStartingDecision() {
       if (startingRefresh || typeof host.loadWorkflow !== 'function') return;
       startingRefresh = setTimeout(async () => {
         startingRefresh = null;
+        const before = startingState();
         try { await host.loadWorkflow(); } catch (error) { return; }
-        host.render();
+        if (startingState() !== before) host.render(true);
         if (workflowCode() === 'starting') followStartingDecision();
       }, STARTING_REFRESH_MS);
     }
@@ -110,7 +117,7 @@
       if (!['host_action_in_progress', 'study_job_running', 'host_action_decision_stale'].includes(code)) return false;
       if (typeof host.loadWorkflow === 'function') {
         void Promise.resolve(host.loadWorkflow()).then(() => {
-          host.render();
+          host.render(true);
           if (workflowCode() === 'starting') followStartingDecision();
         }).catch(() => null);
       }
