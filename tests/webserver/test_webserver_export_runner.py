@@ -22,6 +22,23 @@ def _disable_real_provider_env_file(monkeypatch) -> None:
     monkeypatch.setenv("EASYICU_DISABLE_PROVIDER_ENV_FILE", "1")
 
 
+def test_an_export_without_a_folder_stays_in_the_servers_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "real"))
+    monkeypatch.setenv("EASYICU_HOME", str(tmp_path / "isolated"))
+
+    out = dataio._resolve_export_out_dir(
+        out_dir=None,
+        database="miiv",
+        export_format="parquet",
+        create_run_subdir=False,
+    )
+
+    assert out == tmp_path / "isolated" / ".easyicu" / "exports"
+
+
 class _ExportJob:
     def __init__(self) -> None:
         self.events: list[dict[str, object]] = []
