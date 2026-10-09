@@ -9,11 +9,11 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from pydantic import ValidationError
 
-from ..numeric_scalars import strict_optional_finite_float
 from ..scalar_utils import (
     _first_present_scalar,
     _first_strict_numeric_scalar_with_key_fragment,
     _flatten_scalar_dict,
+    strict_optional_finite_float,
 )
 from ..schema import AnalysisStep, ClusterSelectionManifest, ResearchContext, ValidationFinding
 

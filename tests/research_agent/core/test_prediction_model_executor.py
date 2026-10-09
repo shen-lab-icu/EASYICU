@@ -382,9 +382,11 @@ def test_prediction_workflow_is_group_safe_source_bound_and_renderable(
     assert {panel["metadata"]["placement"] for panel in contract["panels"]} == {"main"}
     # The composite is the figure the article leads with; on its own it must
     # satisfy the prediction strategy (calibration hero and three roles).
-    from easyicu.research_agent.figures.skill import _contract_primary_strategy_ready
+    from easyicu.research_agent.figures.main_figure_strategy import (
+        contract_primary_strategy_ready,
+    )
 
-    assert _contract_primary_strategy_ready(_context(len(frame)), contract) is (
+    assert contract_primary_strategy_ready(_context(len(frame)), contract) is (
         not separate_surface
     )
     if separate_surface:

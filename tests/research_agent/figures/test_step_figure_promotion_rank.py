@@ -15,9 +15,11 @@ from PIL import Image
 import easyicu.research_agent as ra
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.figures.publication import make_figure_contract
+from easyicu.research_agent.figures.main_figure_strategy import (
+    step_publication_bundle_rank,
+)
 from easyicu.research_agent.figures.skill import (
     _select_existing_step_publication_figure_bundle,
-    _step_publication_bundle_rank,
 )
 from easyicu.research_agent.planning.study_design import infer_study_design_family
 from easyicu.research_agent.schema import VariableRole
@@ -88,7 +90,8 @@ def _rank(bundles: list[dict], context=None) -> list[str]:
     return [
         bundle["stem"]
         for bundle in sorted(
-            bundles, key=lambda item: _step_publication_bundle_rank(item, context=context)
+            bundles,
+            key=lambda item: step_publication_bundle_rank(item, context=context),
         )
     ]
 

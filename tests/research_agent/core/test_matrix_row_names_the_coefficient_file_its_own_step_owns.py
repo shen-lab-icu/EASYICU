@@ -29,9 +29,12 @@ from pathlib import Path
 
 import pytest
 
-from easyicu.research_agent.execution.runners import deterministic_robustness
-from easyicu.research_agent.execution.runners.deterministic_robustness import (
-    _PRIMARY_COEFFICIENT_COPY_NAME,
+from easyicu.research_agent.execution.runners import (
+    deterministic_robustness,
+    primary_model_contracts,
+)
+from easyicu.research_agent.execution.runners.primary_model_contracts import (
+    PRIMARY_COEFFICIENT_COPY_NAME,
 )
 
 
@@ -43,7 +46,7 @@ def test_the_row_and_the_copy_use_one_name() -> None:
     own.
     """
 
-    source = inspect.getsource(deterministic_robustness)
+    source = inspect.getsource(primary_model_contracts)
     tree = ast.parse(source)
 
     # The invariant is not "one constant everywhere": a variant row legitimately
@@ -59,7 +62,7 @@ def test_the_row_and_the_copy_use_one_name() -> None:
     ]
     assert assignments, "nothing assigns the row's coefficient source any more"
     for rendered in assignments:
-        if rendered == "_PRIMARY_COEFFICIENT_COPY_NAME":
+        if rendered == "PRIMARY_COEFFICIENT_COPY_NAME":
             continue
         literal = ast.literal_eval(rendered)
         assert Path(literal).stem in owned, (
@@ -67,9 +70,9 @@ def test_the_row_and_the_copy_use_one_name() -> None:
         )
 
     copy_fn = inspect.getsource(
-        deterministic_robustness._copy_structured_primary_contract_artifacts
+        primary_model_contracts.copy_structured_primary_contract_artifacts
     )
-    assert "_PRIMARY_COEFFICIENT_COPY_NAME" in copy_fn
+    assert "PRIMARY_COEFFICIENT_COPY_NAME" in copy_fn
     assert (
         '"coefficients.csv"' not in copy_fn
     ), "the copy respells the filename instead of using the shared constant"
@@ -87,7 +90,7 @@ def test_the_row_no_longer_takes_the_upstream_filename() -> None:
     fail on correct code and say nothing about this defect.
     """
 
-    tree = ast.parse(inspect.getsource(deterministic_robustness._matrix_model_trace))
+    tree = ast.parse(inspect.getsource(primary_model_contracts.matrix_model_trace))
     offenders = [
         ast.unparse(node)
         for node in ast.walk(tree)
@@ -103,9 +106,9 @@ def test_the_name_is_a_bare_filename() -> None:
     """It is resolved by joining onto an outputs directory, so it must not
     carry a path of its own."""
 
-    assert _PRIMARY_COEFFICIENT_COPY_NAME
-    assert "/" not in _PRIMARY_COEFFICIENT_COPY_NAME
-    assert Path(_PRIMARY_COEFFICIENT_COPY_NAME).name == _PRIMARY_COEFFICIENT_COPY_NAME
+    assert PRIMARY_COEFFICIENT_COPY_NAME
+    assert "/" not in PRIMARY_COEFFICIENT_COPY_NAME
+    assert Path(PRIMARY_COEFFICIENT_COPY_NAME).name == PRIMARY_COEFFICIENT_COPY_NAME
 
 
 # --- the recorded corpus ------------------------------------------------------
@@ -127,7 +130,7 @@ def test_the_name_this_step_writes_is_the_one_recorded_runs_hold() -> None:
     for path in sorted(
         _CORPUS.glob("batch_*/*/aware/run_*/steps/*/outputs/robustness_matrix.csv")
     ):
-        if (path.parent / _PRIMARY_COEFFICIENT_COPY_NAME).is_file():
+        if (path.parent / PRIMARY_COEFFICIENT_COPY_NAME).is_file():
             owned += 1
     if not owned:
         pytest.skip("no recorded robustness step kept a coefficient copy")
@@ -159,7 +162,7 @@ def test_the_recorded_rows_that_are_unreadable_are_the_ones_this_fixes() -> None
             named = (row.get("coefficient_source_table") or "").strip()
             if not named or (path.parent / named).is_file():
                 continue
-            if (path.parent / _PRIMARY_COEFFICIENT_COPY_NAME).is_file():
+            if (path.parent / PRIMARY_COEFFICIENT_COPY_NAME).is_file():
                 continue
             unexplained.append((path.parent.parent.name, row.get("spec_id"), named))
 
