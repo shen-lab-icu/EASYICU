@@ -10136,6 +10136,22 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.planning.exposure_group_compile",
+      "easyicu.research_agent.planning.exposure_group_spec"
+    ],
+    [
+      "easyicu.research_agent.planning.exposure_group_compile",
+      "easyicu.research_agent.planning.population_compile"
+    ],
+    [
+      "easyicu.research_agent.planning.exposure_group_compile",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.planning.exposure_group_spec",
+      "easyicu.research_agent.planning.population_spec"
+    ],
+    [
       "easyicu.research_agent.planning.family_spec",
       "easyicu.research_agent.planning.family_spec.continuous_survival_template"
     ],
@@ -14472,9 +14488,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3610,
+    "edge_count": 3614,
     "largest_scc_size": 0,
-    "module_count": 826,
+    "module_count": 828,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -15029,6 +15045,8 @@
     "easyicu.research_agent.planning.design_selection": "planning/design_selection.py",
     "easyicu.research_agent.planning.distribution_authority": "planning/distribution_authority.py",
     "easyicu.research_agent.planning.endpoint_contract": "planning/endpoint_contract.py",
+    "easyicu.research_agent.planning.exposure_group_compile": "planning/exposure_group_compile.py",
+    "easyicu.research_agent.planning.exposure_group_spec": "planning/exposure_group_spec.py",
     "easyicu.research_agent.planning.family_spec": "planning/family_spec/__init__.py",
     "easyicu.research_agent.planning.family_spec.continuous_survival_template": "planning/family_spec/continuous_survival_template.py",
     "easyicu.research_agent.planning.family_spec.contract": "planning/family_spec/contract.py",

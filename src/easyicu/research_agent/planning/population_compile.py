@@ -331,6 +331,95 @@ def compile_population(
     return population
 
 
+#: The summary that names a value recorded once per stay, read over the window
+#: its column states.
+ONE_VALUE_SUMMARY = "value"
+
+
+@dataclass(frozen=True)
+class ThresholdReading:
+    """How this owner reads one threshold on one concept's summary of the input.
+
+    ``column`` is the column a predicate would filter.  ``reason`` is the code
+    of the first finding against reading the threshold, one of this module's
+    population codes, with ``detail`` saying why.
+    """
+
+    column: Optional[str]
+    reason: Optional[str] = None
+    detail: str = ""
+
+    @property
+    def requires_extraction(self) -> bool:
+        """An extraction would hold what reads the threshold."""
+
+        return self.reason in REQUIRES_EXTRACTION_REASONS
+
+
+def read_threshold(
+    context: ResearchContext,
+    *,
+    concept: str,
+    summary: str,
+    window: Optional[SpecWindow],
+    op: str,
+    value: float,
+    unit: Optional[str],
+) -> ThresholdReading:
+    """Whether ``summary`` of ``concept`` over ``window`` can be held to a threshold.
+
+    The column, the summary it records, the window it summarizes and the unit
+    are judged as a population measurement's are.  A value recorded once per
+    stay (:data:`ONE_VALUE_SUMMARY`, no window) is read over the window its
+    column states.  No time zero is judged here.
+    """
+
+    reading = _read_input(context, time_zero_hours=None)
+    with cohort_concept_id_scope(sealed_cohort_concept_ids(context)):
+        try:
+            if summary == ONE_VALUE_SUMMARY:
+                column = _resolve(reading, concept, "first")
+                if not _one_value_per_stay(reading, column, concept):
+                    raise _NotApplied(
+                        "population_column_unresolved",
+                        f"{column!r} does not record one value of {concept!r} "
+                        "per stay.",
+                    )
+                hours = _stay_value_window(reading, column)
+                predicate = _threshold_predicate(
+                    reading, concept, "first", hours, op=op, value=value, unit=unit
+                )
+            elif window is None:
+                raise ValueError("a windowed summary is read over a stated window")
+            else:
+                predicate = _threshold_predicate(
+                    reading,
+                    concept,
+                    summary,
+                    (window.start_hours, window.end_hours),
+                    op=op,
+                    value=value,
+                    unit=unit,
+                )
+            _judge(reading, predicate, "inclusion", label=f"{concept} ({summary})")
+        except _NotApplied as found:
+            return ThresholdReading(
+                column=None, reason=found.reason, detail=found.detail
+            )
+        return ThresholdReading(column=_column_of(predicate, reading))
+
+
+def _one_value_per_stay(reading: _Input, column: str, concept: str) -> bool:
+    variable = reading.variables[column]
+    if str(getattr(variable, "unit_normalization", None) or "") == _ONE_VALUE_TRANSFORM:
+        return True
+    source = str(getattr(variable, "source_concept", None) or "").strip()
+    kind = column_kind(
+        variable, column=column, concept=source or concept, outcomes=reading.outcomes
+    )
+    return kind in _ONE_VALUE_KINDS
+
+
 # -- what the input holds -----------------------------------------------------
 
 
@@ -597,38 +686,53 @@ def _hours(window: Optional[SpecWindow]) -> tuple[float, float]:
 
 
 def _measurement_predicate(reading: _Input, criterion: Measurement) -> ConceptPredicate:
-    column = _resolve(reading, criterion.concept, criterion.summary)
+    return _threshold_predicate(
+        reading,
+        criterion.concept,
+        criterion.summary,
+        (criterion.window.start_hours, criterion.window.end_hours),
+        op=criterion.op,
+        value=criterion.value,
+        unit=criterion.unit,
+    )
+
+
+def _threshold_predicate(
+    reading: _Input,
+    concept: str,
+    summary: str,
+    hours: tuple[float, float],
+    *,
+    op: str,
+    value: float,
+    unit: Optional[str],
+) -> ConceptPredicate:
+    """``summary`` of ``concept`` over ``hours`` compared with a threshold."""
+
+    column = _resolve(reading, concept, summary)
     variable = reading.variables[column]
-    if not _holds_summary(
-        reading, variable, column, criterion.concept, criterion.summary
-    ):
+    if not _holds_summary(reading, variable, column, concept, summary):
         raise _NotApplied(
             "population_column_unresolved",
             f"The cohort builder would filter {column!r}, which this input does not "
-            f"record as the {criterion.summary} of {criterion.concept!r}.",
+            f"record as the {summary} of {concept!r}.",
         )
-    if criterion.unit is not None:
+    if unit is not None:
         recorded = _unit_key(getattr(variable, "unit", None))
         if not recorded:
             raise _NotApplied(
                 "population_unit_unrecorded",
-                f"The threshold is in {criterion.unit!r}, but this input does not "
+                f"The threshold is in {unit!r}, but this input does not "
                 f"record the unit of {column!r}.",
             )
-        if recorded != _unit_key(criterion.unit):
+        if recorded != _unit_key(unit):
             raise _NotApplied(
                 "population_unit_mismatch",
-                f"The threshold is in {criterion.unit!r}, but this input records "
+                f"The threshold is in {unit!r}, but this input records "
                 f"{column!r} in {getattr(variable, 'unit', None)!r}.",
             )
-    return _predicate(
-        criterion.concept,
-        criterion.window.start_hours,
-        criterion.window.end_hours,
-        aggregation=criterion.summary,
-        op=criterion.op,
-        value=criterion.value,
-    )
+    start, end = hours
+    return _predicate(concept, start, end, aggregation=summary, op=op, value=value)
 
 
 def _holds_summary(
@@ -1015,6 +1119,7 @@ def _unit_key(unit: Any) -> str:
 
 __all__ = [
     "NOT_APPLIED_REASONS",
+    "ONE_VALUE_SUMMARY",
     "POPULATION_APPROVAL_STOPS",
     "POPULATION_COMPILE_SCHEMA_VERSION",
     "REQUIRES_EXTRACTION_REASONS",
@@ -1023,5 +1128,7 @@ __all__ = [
     "Disposition",
     "ProofKind",
     "SourceProof",
+    "ThresholdReading",
     "compile_population",
+    "read_threshold",
 ]
