@@ -491,7 +491,10 @@ def _pipeline_failure_code(
         "codex_auth_notification_timeout",
     }:
         return "research_pipeline_provider_timeout"
-    if typed_failure.get("owner") == "easyicu.planning.progressive_compiler_v1":
+    if typed_failure.get("owner") in {
+        "easyicu.planning.progressive_compiler_v1",
+        _TARGET_TRIAL_CONFIRMATION_OWNER,
+    }:
         return "research_pipeline_progressive_compile_failed"
     if typed_failure.get("owner") == "easyicu.schema_validation_v1":
         return "research_pipeline_schema_validation_failed"
@@ -516,14 +519,33 @@ def _pipeline_failure_code(
     return "research_pipeline_execution_failed"
 
 
+#: The owner whose stop says the run's data no longer compiles to the
+#: target trial the researcher approved (``planning.target_trial_configuration``).
+_TARGET_TRIAL_CONFIRMATION_OWNER = "easyicu.planning.target_trial_confirmation_v1"
+
 #: What stopped planning, and what the researcher changes, for a typed stop
 #: whose remedy is the researcher's.  Any other stop is described by what is
 #: true of it.
 _PLANNING_STOP_SENTENCES = {
+    "tte_trial_not_confirmed": (
+        "This study has no confirmed target trial, so planning stopped before "
+        "any model was called and no analysis was run. Set up the target trial "
+        "in the conversation and approve it on its confirmation card, then "
+        "generate the plan."
+    ),
+    "target_trial_compile_drifted": (
+        "EasyICU derived the approved target trial again from this run's data, "
+        "and the result differs from the version approved on its confirmation "
+        "card; the data may have been prepared again, or the study setup or "
+        "EasyICU's rules may have changed since. EasyICU runs only the trial "
+        "that was approved, so planning stopped before any model was called "
+        "and no analysis was run. Review the target trial on its confirmation "
+        "card and approve it again, then generate the plan."
+    ),
     "progressive_family_result_contract_unwritable": (
         "No executable EasyICU method can yet produce the primary result this "
-        "causal or survival question needs, so planning stopped before its "
-        "analysis steps were drafted. No analysis was run."
+        "survival question needs, so planning stopped before its analysis steps "
+        "were drafted. No analysis was run."
     ),
     "progressive_family_spec_cohort_eligibility_after_time_zero": (
         "This study decides who is in its cohort after the analysis time zero: "
@@ -697,6 +719,13 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
             from easyicu.research_agent.planning.dependence_authority import DEPENDENCE_REASON_CODES
 
             if raw.get("reason_code") in DEPENDENCE_REASON_CODES:
+                return {"owner": owner, "reason_code": raw["reason_code"]}
+        if owner == _TARGET_TRIAL_CONFIRMATION_OWNER:
+            from easyicu.research_agent.planning.target_trial_configuration import (
+                TARGET_TRIAL_CONFIRMATION_REASON_CODES,
+            )
+
+            if raw.get("reason_code") in TARGET_TRIAL_CONFIRMATION_REASON_CODES:
                 return {"owner": owner, "reason_code": raw["reason_code"]}
         if owner == "easyicu.planning.progressive_compiler_v1":
             reason_code = raw.get("reason_code")
@@ -6185,6 +6214,11 @@ def make_research_pipeline_run_runner(
                 bound_analysis_inputs=(
                     bound_analysis_inputs.model_dump(mode="json")
                     if bound_analysis_inputs is not None
+                    else None
+                ),
+                bound_target_trial=(
+                    runtime_projection.bound_target_trial
+                    if runtime_projection is not None
                     else None
                 ),
                 # Live PubMed is frozen by the selected additive profile, not

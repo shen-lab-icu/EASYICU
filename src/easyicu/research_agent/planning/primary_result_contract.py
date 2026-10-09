@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Sequence
+from typing import Collection, Sequence
 
 from ..schema import (
     SURVIVAL_ANALYSIS_RECEIPT_PRODUCT,
@@ -123,21 +123,25 @@ def model_terms_retry_guide() -> str:
 #: ``family_primary_result_requirement`` once the context declares an exposure
 #: and an outcome.
 FAMILY_RESULT_CONTRACT_FAMILIES = frozenset({"causal_inference", "survival"})
+#: The stop of a causal plan without a confirmed target trial: the host plans a
+#: causal question only as the emulation of one its researcher confirmed.
+TTE_TRIAL_NOT_CONFIRMED = "tte_trial_not_confirmed"
 
 
 def families_requiring_family_result_contract(
     context: ResearchContext,
     *,
     analysis_types: Sequence[str],
-    sealed_survival_suite: bool,
+    sealed_families: Collection[str],
 ) -> tuple[str, ...]:
     """The candidate families, when final acceptance needs that contract from each.
 
     Returns ``()`` unless every candidate family is causal or survival, the
     context declares its exposure and outcome, and no sealed fail-closed
-    source-feasibility scope replaces the effect step.  A host-sealed landmark
-    survival suite (``sealed_survival_suite``) is accepted by its primary
-    method instead, so a survival candidate beside it is not counted.
+    source-feasibility scope replaces the effect step.  A family whose suite
+    the host sealed (``sealed_families``: a landmark survival suite, a
+    confirmed target trial) is accepted by that suite's primary method
+    instead, so a candidate of that family is not counted.
     """
 
     families = tuple(str(value).strip() for value in analysis_types)
@@ -148,9 +152,7 @@ def families_requiring_family_result_contract(
         or not str(context.target_outcome or "").strip()
     ):
         return ()
-    required = FAMILY_RESULT_CONTRACT_FAMILIES - (
-        {"survival"} if sealed_survival_suite else set()
-    )
+    required = FAMILY_RESULT_CONTRACT_FAMILIES - set(sealed_families)
     return families if all(family in required for family in families) else ()
 
 
@@ -175,6 +177,12 @@ def family_result_stop_reason(
             "progressive_family_template_required",
             f"{lead}the host template that writes the primary result contract for "
             f"{named} is planned only by the {template_strategy} strategy",
+        )
+    if "causal_inference" in families:
+        return (
+            TTE_TRIAL_NOT_CONFIRMED,
+            f"{lead}a causal question is planned only as the emulation of a target "
+            "trial its researcher confirmed, and this study has no confirmed trial",
         )
     return (
         "progressive_family_result_contract_unwritable",
@@ -459,6 +467,7 @@ def family_primary_result_execution_guide(step: AnalysisStep) -> str:
 
 __all__ = [
     "FAMILY_RESULT_CONTRACT_FAMILIES",
+    "TTE_TRIAL_NOT_CONFIRMED",
     "families_requiring_family_result_contract",
     "family_result_stop_reason",
     "family_primary_result_execution_guide",

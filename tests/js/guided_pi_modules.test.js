@@ -71,7 +71,7 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   // A typed compile stop names its own cause; the generic compile sentence
   // would name one that did not happen.
   const unwritable = runFailure('research_pipeline_progressive_compile_failed', { code: 'progressive_family_result_contract_unwritable' });
-  assert.match(unwritable, /causal or survival question/);
+  assert.match(unwritable, /this survival question needs/);
   assert.doesNotMatch(unwritable, /variable level or model term/);
   assert.match(runFailure('research_pipeline_progressive_compile_failed'), /variable level or model term/);
 
@@ -84,6 +84,7 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   assert.match(late, /move time zero later/);
   assert.doesNotMatch(late, /variable level or model term/);
   const runFailureZh = guided.require('errorText').create({ tr: (en, zh) => zh, staticPreview: () => false }).runFailureText;
+  assert.match(runFailureZh('research_pipeline_progressive_compile_failed', { code: 'progressive_family_result_contract_unwritable' }), /固定时间内发生/);
   assert.match(runFailureZh('research_pipeline_progressive_compile_failed', lateCohort), /把时间零点后移/);
   const familyStop = runFailure('research_pipeline_progressive_compile_failed', { code: 'progressive_family_spec_accepted_baseline_grouping_unsupported' });
   assert.match(familyStop, /progressive_family_spec_accepted_baseline_grouping_unsupported/);
@@ -159,7 +160,7 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   // bootstrap why; the remedy revises the confirmed design.
   const weightModel = runFailure(failedClosed, { code: 'target_trial_weight_model_not_estimable', cause: 'separation' });
   assert.match(weightModel, /weights could not be estimated: the model predicted almost perfectly when stays started the treatment or left the ICU/);
-  assert.match(weightModel, /Revise the trial's design, for example with merged sparse categories or fewer covariates, confirm it again/);
+  assert.match(weightModel, /Revise the target trial's design, for example with merged sparse categories or fewer covariates, confirm it again/);
   assert.doesNotMatch(weightModel, /did not pass EasyICU's checks/);
   assert.match(runFailure(failedClosed, { code: 'target_trial_weight_model_not_estimable', cause: 'singular_design' }), /covariates repeated each other's information/);
   for (const cause of ['unregistered_cause', 'constructor', 'toString']) {
@@ -181,10 +182,25 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
     'target_trial_weight_model_not_estimable', 'target_trial_bootstrap_unstable',
   ]) {
     assert.doesNotMatch(runFailure(failedClosed, { code }), /did not pass EasyICU's checks/);
-    assert.match(runFailure(failedClosed, { code }), /the run has no primary result\. Revise the trial's design/);
-    assert.match(runFailureZh(failedClosed, { code }), /这次运行没有主结果。请修订模拟试验的设计/);
+    assert.match(runFailure(failedClosed, { code }), /the run has no primary result\. Revise the target trial's design/);
+    assert.match(runFailureZh(failedClosed, { code }), /这次运行没有主结果。请修订目标试验的设计/);
   }
   assert.match(runFailure(failedClosed, { code: 'target_trial_bootstrap_unstable', cause: 'estimate_outside_interval' }), /outside its own bootstrap interval/);
+  // A causal plan stops before the Planner without a confirmed target trial,
+  // or when the approved trial no longer compiles on the run's data.
+  const compileFailed = 'research_pipeline_progressive_compile_failed';
+  assert.match(runFailure(compileFailed, { code: 'tte_trial_not_confirmed' }), /no confirmed target trial, so planning stopped before any model was called/);
+  assert.match(runFailureZh(compileFailed, { code: 'tte_trial_not_confirmed' }), /还没有已确认的目标试验/);
+  const drifted = runFailure(compileFailed, { code: 'target_trial_compile_drifted' });
+  assert.match(drifted, /differs from the version approved on its confirmation card/);
+  assert.match(drifted, /approve it again, then generate the plan/);
+  assert.match(runFailureZh(compileFailed, { code: 'target_trial_compile_drifted' }), /请在确认卡片上复核目标试验并重新批准/);
+  // The stops at run start name what to prepare or change.
+  assert.match(runFailure('target_trial_materialization_mismatch'), /Prepare the data again for the target trial's windows/);
+  assert.match(runFailure('target_trial_family_mismatch'), /not declared as causal inference/);
+  assert.match(runFailure('target_trial_configuration_invalid'), /Set up the target trial again in the conversation/);
+  assert.match(runFailure('research_pipeline_conflicting_sealed_suites'), /a run can follow only one of them/);
+  assert.match(runFailureZh('target_trial_materialization_mismatch'), /请按目标试验的时间窗重新准备数据/);
   assert.match(runFailure(failedClosed, { code: 'target_trial_icu_exit_excessive' }), /left the ICU within the grace period before starting the treatment/);
   assert.match(runFailureZh(failedClosed, { code: 'target_trial_positivity_violated' }), /重新确认后再生成计划/);
   assert.match(runFailureZh(failedClosed, { code: 'target_trial_bootstrap_unstable', cause: 'resamples_failed' }), /自助法重抽样无法估计/);

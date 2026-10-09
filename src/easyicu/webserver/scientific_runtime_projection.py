@@ -4,8 +4,8 @@ Owner
 -----
 This module owns the Web-to-Research-Agent projection for closed landmark
 associations, including categorical exposures and their prespecified model
-grids, and routes the time-varying, RMST and landmark-survival designs to
-their sibling adapters. StudyContext owns the user's scientific choices;
+grids, and routes the approved target trial, time-varying, RMST and
+landmark-survival designs to their sibling adapters. StudyContext owns the user's scientific choices;
 current-case runtime authority owns deterministic execution. The public contract joins those two
 typed boundaries only after every required coordinate is explicit. For a
 categorical landmark study whose adjustment roster is ``planner_selectable``,
@@ -63,6 +63,8 @@ class WebScientificRuntimeProjection:
     authority: dict[str, Any]
     projection_sha256: str
     analysis_only_execution: bool = False
+    #: The approved target trial the run binds onto its research context.
+    bound_target_trial: dict[str, Any] | None = None
 
 
 #: The concept owner declares which KDIGO stage bindings coalesce an
@@ -213,8 +215,36 @@ def export_kdigo_strict_derivation_available(source_path: object) -> bool:
     return kdigo_strict_derivation_available(tuple(columns))
 
 
+#: Sensitivity strategies an adapter below routes to a suite of its own.
+_ROUTED_DESIGN_STRATEGIES = frozenset(
+    {"time_varying", "restricted_mean_survival", "landmark"}
+)
+
+
 def compile_web_scientific_runtime_projection(**coordinates: Any) -> WebScientificRuntimeProjection | None:
     """Route only explicit typed specifications to their execution owner."""
+    from .target_trial_runtime_projection import (
+        compile_target_trial_runtime_projection,
+    )
+
+    # An approved target trial is the run's one sealed contract.  A study that
+    # also declares another routed design is refused, not resolved by the
+    # order of the adapters below.
+    projection = compile_target_trial_runtime_projection(**coordinates)
+    if projection is not None:
+        routed = [
+            spec.spec_id
+            for spec in coordinates.get("sensitivity_specs") or ()
+            if spec.strategy in _ROUTED_DESIGN_STRATEGIES
+        ]
+        if routed:
+            raise WebScientificRuntimeProjectionError(
+                "research_pipeline_conflicting_sealed_suites",
+                "This study states an approved target trial and another sealed "
+                "design; one run carries one sealed scientific contract.",
+                details={"field": "sensitivity_specs", "spec_ids": routed},
+            )
+        return projection
     from .time_varying_runtime_projection import compile_time_varying_runtime_projection
 
     projection = compile_time_varying_runtime_projection(**coordinates)
