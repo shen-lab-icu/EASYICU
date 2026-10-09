@@ -627,9 +627,10 @@ def _claim_target_position(
             if heading is not None:
                 return heading.end()
         return 0
-    if claim.claim_type == "association":
-        # The family's primary subsection reports its association, whatever
-        # the family names it ("Primary association", "Survival results").
+    if claim.claim_type in {"association", "target_trial_estimate"}:
+        # The family's primary subsection reports its association, or an
+        # emulated trial's estimate, whatever the family names it ("Primary
+        # association", "Survival results", "Primary results").
         for name in PRIMARY_RESULT_HEADINGS:
             heading = re.search(
                 rf"^###\s+{re.escape(name)}[ \t]*$", results_section, re.I | re.MULTILINE,
@@ -812,6 +813,13 @@ def _heading_requires_evidence(content: str) -> bool:
     )
 
 
+#: The (section, subsection) headings a host method fact is admitted under.
+_METHOD_FACT_PLACES = {
+    "variables": ("## Methods", "### Variables"),
+    "limitations": ("## Limitations", ""),
+}
+
+
 def filter_evidence_bound_scaffold(
     scaffold: str,
     *,
@@ -825,7 +833,7 @@ def filter_evidence_bound_scaffold(
     unsupported_scientific_claims: list[str] = []
     filtered_claims: list[str] = []
     filtered_lines: list[str] = []
-    method_lines = {fact.scaffold for fact in method_facts}
+    method_lines = {fact.scaffold: fact.section for fact in method_facts}
     executed_spans = frozenset(
         _hour_span(*span) for fact in method_facts for span in fact.executed_hour_spans
     )
@@ -840,10 +848,9 @@ def filter_evidence_bound_scaffold(
             section, subsection = stripped, ""
         elif re.fullmatch(r"###\s+.+", stripped):
             subsection = stripped
-        if (
-            section == "## Methods" and subsection == "### Variables"
-            and line in method_lines
-        ):
+        if line in method_lines and (section, subsection) == _METHOD_FACT_PLACES[
+            method_lines[line]
+        ]:
             filtered_lines.append(line)
             continue
         if is_method_fact_candidate(line):

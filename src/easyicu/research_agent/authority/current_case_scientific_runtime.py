@@ -23,6 +23,7 @@ from .landmark_continuous_survival_runtime import (
     LandmarkContinuousSurvivalRuntimeAuthority,
 )
 from .rmst_runtime import RmstRuntimeAuthority
+from .target_trial_runtime import TargetTrialRuntimeAuthority
 from .time_varying_runtime import TimeVaryingRuntimeAuthority
 
 from ..contracts.association_execution import (
@@ -2998,6 +2999,7 @@ CurrentCaseScientificRuntimeAuthority = Annotated[
         SourceFeasibilityRuntimeAuthority,
         TimeVaryingRuntimeAuthority,
         RmstRuntimeAuthority,
+        TargetTrialRuntimeAuthority,
     ],
     Field(discriminator="authority_kind"),
 ]
@@ -3018,6 +3020,7 @@ def load_current_case_scientific_runtime_authority(
             SourceFeasibilityRuntimeAuthority,
             TimeVaryingRuntimeAuthority,
             RmstRuntimeAuthority,
+            TargetTrialRuntimeAuthority,
         ),
     ):
         return value

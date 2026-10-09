@@ -59,6 +59,7 @@ from ...utils.death_time_semantics import (
     death_time_read_to_the_hour,
     native_export_death_time_semantics,
 )
+from ..authority.target_trial_claim_terms import TARGET_TRIAL_ASSUMPTION_PHRASE
 from ..cohort.schema import context_materialized_columns
 from ..concept_availability import (
     explain_concept_availability,
@@ -67,6 +68,11 @@ from ..concept_availability import (
 from ..contracts.model_retention import (
     MISSING_CATEGORY_MIN_ROWS,
     MISSING_CATEGORY_SHARE_THRESHOLD,
+)
+from ..contracts.target_trial_design import (
+    MAX_GRACE_PERIOD_HOURS,
+    MAX_TIME_ZERO_HOURS,
+    MIN_TIME_ZERO_HOURS,
 )
 from ..research_context.materialization_window import (
     ColumnWindow,
@@ -96,11 +102,11 @@ TARGET_TRIAL_COMPILE_SCHEMA_VERSION = "easyicu.target_trial_compile/1"
 
 #: The time zeros the host offers, in whole hours after ICU admission.  Hour 0
 #: is not one: a treatment start in ``[0, T0)`` marks a prevalent user, and
-#: only a time zero of at least one hour leaves an hour to see it in.
-TIME_ZERO_MENU_HOURS = tuple(range(1, 73))
-#: The longest grace period the host offers: within it, the start of the
-#: treatment is adjusted for baseline covariates only.
-MAX_GRACE_PERIOD_HOURS = 24
+#: only a time zero of at least one hour leaves an hour to see it in.  The
+#: bounds, and the longest grace period, are the emulation's
+#: (``contracts.target_trial_design``), so its estimator refuses what this
+#: compiler does not offer.
+TIME_ZERO_MENU_HOURS = tuple(range(MIN_TIME_ZERO_HOURS, MAX_TIME_ZERO_HOURS + 1))
 #: v1 emulations are analyses; their causal wording stays in templates.
 EVIDENCE_CEILING = "analysis_only"
 
@@ -112,6 +118,7 @@ ConfirmationKind = Literal[
     "treatment_outside_class",
     "design_choice",
     "confounder_set",
+    "emulation_assumptions",
     "not_typed",
 ]
 
@@ -326,6 +333,24 @@ class CompiledTargetTrial:
             if item.element == name:
                 return item
         raise KeyError(name)
+
+    def acquisition_windows(
+        self,
+    ) -> tuple[tuple[float, float], dict[str, tuple[float, float]]]:
+        """The windows an extraction for the trial reads, in hours after ICU admission.
+
+        ``(cohort_window, event_onset_windows)`` as the acquisition takes them:
+        covariates summarized over ``[0, T0)`` and each treatment concept's
+        onset read over ``[0, T0 + G)``.
+        """
+
+        covariate = self.materialization["covariate_window"]
+        onset = self.materialization["treatment_onset_window"]
+        onset_window = (float(onset["start_hours"]), float(onset["end_hours"]))
+        return (
+            (float(covariate["start_hours"]), float(covariate["end_hours"])),
+            {concept: onset_window for concept in self.spec.treatment.concepts},
+        )
 
     def record(self) -> dict[str, Any]:
         return {
@@ -1116,7 +1141,8 @@ def _protocol(reading: _Reading) -> tuple[tuple[str, str], ...]:
             "eligibility",
             f"ICU stays in the study population at {t0} h after ICU admission, "
             f"{indication}, alive and in the ICU then, with no recorded start of "
-            f"{treatment} before {t0} h.",
+            f"{treatment} before {t0} h, and with a known vital status "
+            f"{horizon_text} after ICU admission.",
         ),
         (
             "treatment_strategies",
@@ -1246,6 +1272,7 @@ def _confirmations(
                 )
             )
     lines.append(_confounder_set(spec, confounders))
+    lines.append(_emulation_assumptions())
     for item in spec.not_typed:
         lines.append(
             Confirmation(
@@ -1300,6 +1327,18 @@ def _confounder_set(
     parts.append("The comparison assumes no confounding beyond the adjusted set.")
     return Confirmation(
         kind="confounder_set", element="confounders", text=" ".join(parts)
+    )
+
+
+def _emulation_assumptions() -> Confirmation:
+    """What every estimate rests on, in the words the manuscript states it."""
+
+    return Confirmation(
+        kind="emulation_assumptions",
+        element="analysis",
+        text=f"Every estimate of the emulation holds only under "
+        f"{TARGET_TRIAL_ASSUMPTION_PHRASE}, none of which the data can test; the "
+        "manuscript states them with each estimate and among its limitations.",
     )
 
 

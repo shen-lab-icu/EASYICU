@@ -10,6 +10,15 @@ from ..authority.manuscript_method_facts import ManuscriptMethodFact
 from ..schema import ValidationFinding
 
 
+def _limitations_span(scaffold: str) -> tuple[int, int] | None:
+    limitations = re.search(r"^## Limitations[ \t]*$", scaffold, re.M)
+    if limitations is None:
+        return None
+    following = re.search(r"^##\s+", scaffold[limitations.end() :], re.M)
+    end = limitations.end() + following.start() if following else len(scaffold)
+    return limitations.end(), end
+
+
 def _variables_span(scaffold: str) -> tuple[int, int] | None:
     methods = re.search(r"^## Methods[ \t]*$", scaffold, re.M)
     if methods is None:
@@ -27,24 +36,33 @@ def _variables_span(scaffold: str) -> tuple[int, int] | None:
     )
 
 
+_SECTION_SPANS = {"variables": _variables_span, "limitations": _limitations_span}
+
+
 def place_manuscript_method_facts(
     scaffold: str,
     facts: Sequence[ManuscriptMethodFact],
 ) -> tuple[str, tuple[str, ...]]:
-    """Place exact source facts in Variables without rewriting Writer prose."""
+    """Place exact source facts in their sections without rewriting Writer prose."""
 
-    span = _variables_span(scaffold)
-    if span is None:
-        return scaffold, ()
-    position, variable_end = span
-    existing = scaffold[position:variable_end].splitlines()
-    missing = [fact for fact in facts if fact.scaffold not in existing]
-    if not missing:
-        return scaffold, ()
-    block = "\n\n" + "\n\n".join(fact.scaffold for fact in missing) + "\n\n"
-    return scaffold[:position] + block + scaffold[position:].lstrip("\n"), tuple(
-        fact.source_field for fact in missing
-    )
+    placed: list[str] = []
+    for section, span_of in _SECTION_SPANS.items():
+        span = span_of(scaffold)
+        if span is None:
+            continue
+        position, section_end = span
+        existing = scaffold[position:section_end].splitlines()
+        missing = [
+            fact
+            for fact in facts
+            if fact.section == section and fact.scaffold not in existing
+        ]
+        if not missing:
+            continue
+        block = "\n\n" + "\n\n".join(fact.scaffold for fact in missing) + "\n\n"
+        scaffold = scaffold[:position] + block + scaffold[position:].lstrip("\n")
+        placed.extend(fact.source_field for fact in missing)
+    return scaffold, tuple(placed)
 
 
 def missing_bound_method_facts(
@@ -54,10 +72,14 @@ def missing_bound_method_facts(
 ) -> tuple[str, ...]:
     """Fail closed if a later provenance filter removed a required source fact."""
 
-    span = _variables_span(bound)
-    lines = bound[span[0] : span[1]].splitlines() if span is not None else []
+    lines: dict[str, list[str]] = {}
+    for section, span_of in _SECTION_SPANS.items():
+        span = span_of(bound)
+        lines[section] = bound[span[0] : span[1]].splitlines() if span else []
     return tuple(
-        fact.source_field for fact in facts if bind(fact.scaffold) not in lines
+        fact.source_field
+        for fact in facts
+        if bind(fact.scaffold) not in lines[fact.section]
     )
 
 
@@ -71,10 +93,19 @@ def project_source_method_facts(
     scaffold, fields = place_manuscript_method_facts(scaffold, facts)
     if not fields:
         return scaffold, None
+    sections = {fact.section for fact in facts if fact.source_field in fields}
+    restored = " and ".join(
+        text
+        for section, text in (
+            ("variables", "exact source definitions in Methods"),
+            ("limitations", "exact source limitations in Limitations"),
+        )
+        if section in sections
+    )
     return scaffold, ValidationFinding(
         validator="evidence_bound_writer",
         severity="info",
-        message="Restored exact source definitions in Methods; no clinical or result authority was added.",
+        message=f"Restored {restored}; no clinical or result authority was added.",
         detail={
             "reason_code": "writer_source_method_facts_placed",
             "source_fields": list(fields),

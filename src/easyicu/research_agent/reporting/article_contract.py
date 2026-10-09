@@ -84,6 +84,20 @@ _SEALED_HOST_SUITE_ROLES: Dict[str, frozenset] = {
     "signed_landmark_survival_suite": _LANDMARK_SURVIVAL_SUITE_ROLES,
     "signed_landmark_continuous_survival_suite": _LANDMARK_SURVIVAL_SUITE_ROLES,
     "signed_source_feasibility_fail_closed": frozenset({"feasibility_decision"}),
+    # The target trial suite writes its protocol table, its time-zero
+    # eligibility flow, Table 1, the weights' balance and positivity, the
+    # strategies' risks and their contrast, and the truncated-weight and
+    # unweighted sensitivity estimates.
+    "signed_target_trial_suite": frozenset(
+        {
+            "causal_protocol",
+            "cohort_accounting",
+            "baseline_context",
+            "balance_positivity",
+            "causal_contrast",
+            "robustness",
+        }
+    ),
 }
 #: A sealed host suite that publishes its own measurement audit owns the
 #: data-quality role through that product; a suite signed without it does not.

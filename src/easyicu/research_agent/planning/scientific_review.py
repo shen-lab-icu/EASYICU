@@ -502,13 +502,29 @@ _LANDMARK_SURVIVAL_SUITE_METHODS = frozenset(
         "signed_landmark_continuous_survival_suite",
     }
 )
+#: Signed suites that close a temporal design only once their runtime
+#: authority binds the step: the landmark survival suites, and the target
+#: trial emulation, whose time zero and grace period fix when a treatment
+#: start counts.
+_BOUND_TEMPORAL_SUITE_METHODS = frozenset(
+    {*_LANDMARK_SURVIVAL_SUITE_METHODS, "signed_target_trial_suite"}
+)
 _EXECUTABLE_TEMPORAL_METHODS = frozenset(
     {
         "signed_landmark_restricted_cubic_spline",
         "signed_landmark_categorical_association",
-        *_LANDMARK_SURVIVAL_SUITE_METHODS,
+        *_BOUND_TEMPORAL_SUITE_METHODS,
         "time_varying_exposure_model",
         "landmark_analysis",
+    }
+)
+#: Signed runtimes that resample or cluster by the verified patient group
+#: when their step consumes it.
+_PATIENT_GROUP_RUNTIME_METHODS = frozenset(
+    {
+        "signed_landmark_restricted_cubic_spline",
+        "time_varying_exposure_model",
+        "signed_target_trial_suite",
     }
 )
 _EXECUTABLE_DEPENDENCE_METHODS = frozenset(
@@ -701,7 +717,7 @@ def timing_design_closed(plan: Optional[AnalysisPlan]) -> bool:
             and _bound_to_runtime_contract(step)
         ))
         and (
-            _method_head(step) not in _LANDMARK_SURVIVAL_SUITE_METHODS
+            _method_head(step) not in _BOUND_TEMPORAL_SUITE_METHODS
             or _bound_to_runtime_contract(step)
         )
         for step in applicable
@@ -793,8 +809,7 @@ def _repeated_stay_step_declared(step: Any, context: Any) -> bool:
         # prose.
         return True
     return bool(
-        _method_head(step)
-        in {"signed_landmark_restricted_cubic_spline", "time_varying_exposure_model"}
+        _method_head(step) in _PATIENT_GROUP_RUNTIME_METHODS
         and patient_group is not None
         and patient_group.group_source in (step.inputs or ())
     )
@@ -824,11 +839,12 @@ def _repeated_stay_rule_declared(
     return "readmission" in set(sensitivity_executable_axes or ())
 
 
-def _signed_landmark_dependence(step: AnalysisStep, context: ResearchContext) -> bool:
+def _signed_patient_group_dependence(
+    step: AnalysisStep, context: ResearchContext
+) -> bool:
     patient_group = context_patient_group_authority(context)
     return bool(
-        _method_head(step)
-        in {"signed_landmark_restricted_cubic_spline", "time_varying_exposure_model"}
+        _method_head(step) in _PATIENT_GROUP_RUNTIME_METHODS
         and patient_group is not None
         and patient_group.group_source in step.inputs
         and any(
@@ -846,8 +862,11 @@ def _repeated_unit_consumer(step: AnalysisStep, context: ResearchContext) -> boo
         step.model_requirements
         or step.exposure_outcome_distribution_spec is not None
         or method in _EXECUTABLE_DEPENDENCE_METHODS
-        or method == "signed_landmark_restricted_cubic_spline"
-        or _signed_landmark_dependence(step, context)
+        or method in {
+            "signed_landmark_restricted_cubic_spline",
+            "signed_target_trial_suite",
+        }
+        or _signed_patient_group_dependence(step, context)
         or method == "non_readmission_restriction"
     )
 
@@ -892,7 +911,9 @@ def repeated_unit_design_closed(
         method = _method_head(step)
         model_requirements = tuple(step.model_requirements)
         distribution = step.exposure_outcome_distribution_spec
-        signed_landmark_dependence = _signed_landmark_dependence(step, context)
+        signed_patient_group_dependence = _signed_patient_group_dependence(
+            step, context
+        )
         counts_only_distribution = bool(
             distribution is not None
             and distribution.schema_version
@@ -925,7 +946,7 @@ def repeated_unit_design_closed(
         # is complete regardless of the human-readable method label.
         if model_requirements or distribution is not None:
             continue
-        if signed_landmark_dependence:
+        if signed_patient_group_dependence:
             continue
         if has_patient_authority and method in _EXECUTABLE_DEPENDENCE_METHODS:
             continue

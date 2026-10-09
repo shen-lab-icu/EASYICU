@@ -5,7 +5,9 @@ definitions and windows.  A deterministic owner's sealed step summary supplies
 the design it executed (``executed_method_design``): its time grid and
 eligibility minimum, its model and selection rule.  These facts quote a
 recorded or executed design; they do not validate a clinical definition,
-infer a result, or exempt any value from numeric provenance.
+infer a result, or exempt any value from numeric provenance.  A fact sits in
+Methods' Variables, except the assumptions an executed target trial emulation
+rests on, which open the Limitations.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ import json
 import math
 from pathlib import Path
 import re
-from typing import Sequence
+from typing import Literal, Sequence
 
 from ..contracts.executed_method_design import (
     EXECUTED_METHOD_DESIGN_KEY,
@@ -27,6 +29,8 @@ from ..contracts.executed_method_design import (
     LandmarkContinuousSurvivalDesign,
     LandmarkSurvivalDesign,
     LatentClassModelDesign,
+    TARGET_TRIAL_EXIT_MODEL_WORDS,
+    TargetTrialDesign,
     exposure_step_text,
     validate_executed_method_design,
 )
@@ -37,6 +41,7 @@ from ..research_context.typed import (
 )
 from ..schema import EvidenceRecord, RESEARCH_CONTEXT_SCHEMA_VERSION
 from .runtime_artifacts import verified_run_evidence_path
+from .target_trial_claim_terms import TARGET_TRIAL_ASSUMPTION_PHRASE, ordinal
 
 # Every typed context version; a context prepared from a materialized extract
 # is /3.  Anything else is a legacy untyped artifact and gains no authority.
@@ -60,7 +65,12 @@ def is_method_fact_candidate(text: str) -> bool:
             text,
             re.I,
         )
-        or re.search(r"\bExecuted (?:time design|class model|survival design)\s*:", text, re.I)
+        or re.search(
+            r"\bExecuted (?:time design|class model|survival design|target trial design)\s*:",
+            text,
+            re.I,
+        )
+        or re.search(r"\bTarget trial emulation assumptions\s*:", text, re.I)
     )
 
 
@@ -73,6 +83,8 @@ class ManuscriptMethodFact:
     #: The windows an executed time design ran on, each (start, end) in hours
     #: from its time origin; reader prose may state a window only as one of them.
     executed_hour_spans: tuple[tuple[float, float], ...] = ()
+    #: The manuscript section the fact is placed in.
+    section: Literal["variables", "limitations"] = "variables"
 
     @property
     def scaffold(self) -> str:
@@ -132,6 +144,10 @@ def _executed_hour_spans(design: object) -> tuple[tuple[float, float], ...]:
                 for span in ((0.0, float(hour)), (float(hour), window_end))
             ),
         )))
+    if isinstance(design, TargetTrialDesign):
+        time_zero = float(design.time_zero_hours)
+        grace_end = time_zero + float(design.grace_period_hours)
+        return tuple(dict.fromkeys(((0.0, time_zero), (time_zero, grace_end), (0.0, grace_end))))
     if isinstance(design, LandmarkContinuousSurvivalDesign):
         return tuple(dict.fromkeys((
             (0.0, float(design.landmark_hours)),
@@ -166,6 +182,8 @@ def _design_text(design: object) -> str:
         )
     if isinstance(design, LandmarkSurvivalDesign):
         return _survival_design_text(design)
+    if isinstance(design, TargetTrialDesign):
+        return _target_trial_design_text(design)
     if isinstance(design, LandmarkContinuousSurvivalDesign):
         return _continuous_survival_design_text(design)
     assert isinstance(design, LatentClassModelDesign)
@@ -391,6 +409,97 @@ def _continuous_survival_design_text(design: LandmarkContinuousSurvivalDesign) -
     return text
 
 
+_HOUR_TERM_WORDS = {
+    "restricted_cubic_spline": "a restricted cubic spline of the hour",
+    "linear": "a linear term in the hour",
+    "none": "no hour term",
+}
+
+
+def _deaths(count: int, kind: str = "") -> str:
+    return f"{count} {kind}death{'' if count == 1 else 's'}"
+
+
+def _target_trial_design_text(design: TargetTrialDesign) -> str:
+    """The emulated target trial: its timing, its weights and its uncertainty."""
+
+    unmeasured = (
+        f", {design.n_unmeasured_state_covariates} of them with an unmeasured "
+        "state kept as its own category"
+        if design.n_unmeasured_state_covariates
+        else ""
+    )
+    low, high = design.weight_truncation_percentiles
+    window_low, window_high = design.positivity_window_percent
+    unit = "patient" if design.resampling_unit == "patient" else "ICU stay"
+    after_discharge = design.deaths_timed_by_calendar_day
+    untimed = design.other_deaths_timed_by_calendar_day
+    timed_by_day = []
+    if after_discharge:
+        timed_by_day.append(f"{_deaths(after_discharge)} after hospital discharge")
+    if untimed:
+        other = "other " if after_discharge else ""
+        timed_by_day.append(f"{_deaths(untimed, other)} without a recorded time")
+    calendar = ""
+    if timed_by_day:
+        verb = "was" if after_discharge + untimed == 1 else "were"
+        calendar = f"; {' and '.join(timed_by_day)} {verb} timed by calendar day"
+    if design.deaths_placed_at_icu_exit:
+        calendar += (
+            f", {design.deaths_placed_at_icu_exit} of them placed at the ICU exit "
+            "because their day fell before it"
+        )
+    # No result vocabulary ("risk difference", "confidence interval"): the
+    # numeric binder would then accept only result fields for its numbers.
+    # The interval level is each result's own (its claim states "95% CI"); a
+    # second copy here would give the binder two owners for one number.
+    return (
+        "Executed target trial design: records alive and in the ICU "
+        f"{design.time_zero_hours:g} hours after ICU admission, with no recorded "
+        "treatment start before then, were each cloned into a strategy that "
+        f"starts the treatment within a {design.grace_period_hours:g}-hour grace "
+        "period and one that does not start it then; a clone was censored when "
+        "its record deviated from its strategy, and when it left the ICU within "
+        "the grace period before starting for the starting strategy; pooled "
+        f"logistic models with {_HOUR_TERM_WORDS[design.hour_terms]} and "
+        f"{design.n_adjustment_covariates} prespecified covariates{unmeasured} "
+        f"weighted the censoring by starting, and "
+        f"{TARGET_TRIAL_EXIT_MODEL_WORDS[design.icu_exit_model_form]}; the weights "
+        "were stabilized by models with the hour terms only, held constant after "
+        "the grace period and used untruncated for the primary analysis, with "
+        "sensitivity analyses truncating every weight of each strategy, in and "
+        f"after the grace period, at the {ordinal(low)} and {ordinal(high)} "
+        "percentiles of "
+        "the weights that strategy carries past the grace period, and using no "
+        "weights; weighted Kaplan-Meier estimates gave the "
+        f"proportion dead by day {design.endpoint_horizon_days:g} under each "
+        f"strategy; {design.bootstrap_resamples:g} bootstrap resamples by {unit}, "
+        "each refitting every model, gave percentile intervals; the modelled "
+        "probability of "
+        f"starting within the grace period was checked against {window_low:g}% "
+        f"and {window_high:g}%{calendar}"
+    )
+
+
+def _target_trial_assumptions_text(design: TargetTrialDesign) -> str:
+    """The assumptions every estimate of an emulation rests on, as a limitation.
+
+    Eligibility also needs the vital status at the horizon, which is known only
+    after time zero; the eligibility flow counts the stays it leaves out.
+    """
+
+    return (
+        "Target trial emulation assumptions: every estimate of the emulation "
+        f"holds only under {TARGET_TRIAL_ASSUMPTION_PHRASE}, none of which the "
+        "data can test; within the grace period the weights use the baseline covariates only, "
+        "so a change in a record's condition after time zero that prompts the "
+        "start of the treatment is not in the weight models; eligibility also "
+        f"required a known vital status at day {design.endpoint_horizon_days}, "
+        "which is learned only after time zero, so a stay whose follow-up ended "
+        "earlier without a death was not in the trial"
+    )
+
+
 def _executed_design_facts(
     root: Path, records: Sequence[EvidenceRecord],
 ) -> list[ManuscriptMethodFact]:
@@ -417,15 +526,26 @@ def _executed_design_facts(
             design = validate_executed_method_design(raw)
         except (OSError, UnicodeError, ValueError) as exc:
             raise MethodFactAuthorityError("an executed design cannot be reproduced") from exc
+        source_field = f"{record.produced_by_step}.{EXECUTED_METHOD_DESIGN_KEY}"
         facts.append(
             ManuscriptMethodFact(
-                source_field=f"{record.produced_by_step}.{EXECUTED_METHOD_DESIGN_KEY}",
+                source_field=source_field,
                 text=_design_text(design),
                 source_sha256=record.sha256,
                 evidence_id=record.evidence_id,
                 executed_hour_spans=_executed_hour_spans(design),
             )
         )
+        if isinstance(design, TargetTrialDesign):
+            facts.append(
+                ManuscriptMethodFact(
+                    source_field=f"{source_field}.assumptions",
+                    text=_target_trial_assumptions_text(design),
+                    source_sha256=record.sha256,
+                    evidence_id=record.evidence_id,
+                    section="limitations",
+                )
+            )
     return facts
 
 

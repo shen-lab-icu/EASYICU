@@ -11,6 +11,7 @@ from easyicu.research_agent.authority.evidence_store import (
     EvidenceStore,
 )
 from easyicu.research_agent.authority.manuscript_method_facts import (
+    ManuscriptMethodFact,
     MethodFactAuthorityError,
     load_manuscript_method_facts,
 )
@@ -227,6 +228,44 @@ def test_placement_is_idempotent_scoped_and_does_not_rewrite_prose(tmp_path):
     assert place_manuscript_method_facts(actual, facts) == (actual, ())
     no_variables = original.replace("### Variables", "### Other")
     assert place_manuscript_method_facts(no_variables, facts) == (no_variables, ())
+
+
+def test_each_fact_is_placed_in_its_own_section_and_audited_there():
+    design = ManuscriptMethodFact(
+        source_field="s.design",
+        text="Executed target trial design: one",
+        source_sha256="a" * 64,
+        evidence_id="e",
+    )
+    limits = ManuscriptMethodFact(
+        source_field="s.design.assumptions",
+        text="Target trial emulation assumptions: two",
+        source_sha256="a" * 64,
+        evidence_id="e",
+        section="limitations",
+    )
+    facts = [design, limits]
+    original = (
+        "## Methods\n\n### Variables\n\nAge was recorded.\n\n"
+        "## Limitations\n\nThe study is observational.\n\n## Conclusion\n\nDone.\n"
+    )
+
+    actual, fields = place_manuscript_method_facts(original, facts)
+
+    assert fields == ("s.design", "s.design.assumptions")
+    variables = actual.split("### Variables")[1].split("## Limitations")[0]
+    limitations = actual.split("## Limitations")[1].split("## Conclusion")[0]
+    assert design.scaffold in variables and limits.scaffold not in variables
+    assert limits.scaffold in limitations
+    assert "The study is observational." in limitations
+    assert place_manuscript_method_facts(actual, facts) == (actual, ())
+    assert missing_bound_method_facts(actual, facts, lambda text: text) == ()
+    moved = actual.replace("\n" + limits.scaffold, "").replace(
+        "## Conclusion\n\nDone.", f"## Conclusion\n\n{limits.scaffold}\n\nDone."
+    )
+    assert missing_bound_method_facts(moved, facts, lambda text: text) == (
+        "s.design.assumptions",
+    )
 
 
 def test_writer_authority_syntax_inside_metadata_is_not_executable(tmp_path):

@@ -42,7 +42,9 @@ from ..contracts.capability_ids import (
     PHENOTYPING_CLUSTER_CAPABILITY_ID,
     SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID,
     SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID,
+    TARGET_TRIAL_CCW_CAPABILITY_ID,
 )
+from ..authority.target_trial_runtime import signed_target_trial_plan_claimed
 from ..contracts.source_feasibility_validation import (
     source_feasibility_plan_claimed,
     source_feasibility_plan_contract_errors,
@@ -295,6 +297,51 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
             "positivity and balance",
         ),
         scientific_validation="analysis_only",
+    ),
+    ScientificCapability(
+        family="causal_emulation",
+        label="Causal inference / grace-period target trial (clone, censor, weight)",
+        primary_analysis="deterministic",
+        primary_estimand=(
+            "Host-computed per-protocol risks of a fixed-horizon death under two "
+            "treatment-start strategies of a signed target trial, their difference "
+            "and ratio, with bootstrap percentile intervals"
+        ),
+        primary_runner=None,
+        primary_runner_module="execution.runners.target_trial_executor",
+        figure="deterministic",
+        figure_renderer="causal_emulation",
+        data_contract=(
+            "signed target trial authority with the researcher's confirmation",
+            "treatment onsets captured from ICU admission through the grace period",
+            "fixed-horizon death with an hourly death time",
+            "ICU length of stay and the confounders observed by time zero",
+        ),
+        fail_closed=(
+            "Any authority, digest or host-policy mismatch fails; the suite stops "
+            "on an insufficient sample or events, an unobserved strategy, a "
+            "positivity violation, extreme weights, excessive ICU exits, a weight "
+            "model without an estimate or an unstable bootstrap."
+        ),
+        notes=(
+            "Reportable with fixed causal templates that state the emulation's "
+            "untestable assumptions; the evidence ceiling stays analysis_only and "
+            "a draft is not publication authorization."
+        ),
+        capability_id=TARGET_TRIAL_CCW_CAPABILITY_ID,
+        result_contract=(
+            "TargetTrialRuntimeAuthority + easyicu.target_trial_runtime_receipt/1 "
+            "+ easyicu.target_trial_reporting/1"
+        ),
+        required_diagnostics=(
+            "time-zero eligibility flow",
+            "weight distribution and effective sample size before truncation",
+            "positivity and covariate balance",
+            "truncated-weight and unweighted sensitivity estimates",
+        ),
+        scientific_validation="reportable",
+        scientific_validator_owner="execution.runners.target_trial_executor",
+        scientific_validator_contract="easyicu.target_trial_reporting/1",
     ),
     ScientificCapability(
         family="causal_emulation",
@@ -1410,6 +1457,27 @@ def resolve_primary_capability(
             owner_reason=(
                 "the sole auxiliary step declares the signed fail-closed source "
                 "feasibility owner and no effect analysis"
+            ),
+        )
+
+    if signed_target_trial_plan_claimed(plan):
+        trial_capability = get_capability_by_id(TARGET_TRIAL_CCW_CAPABILITY_ID)
+        if canonical != "causal_inference":
+            return _verdict_for(
+                capability,
+                analysis_family=canonical,
+                owner_claimed=False,
+                failure_reason="signed_target_trial_family_mismatch",
+                detail="The signed target trial suite may only own a causal-inference plan.",
+            )
+        return _verdict_for(
+            trial_capability,
+            analysis_family=canonical,
+            owner_claimed=True,
+            owner_reason=(
+                "the primary step declares the signed target trial suite; its "
+                "runtime authority verifies the digest-bound protocol, the "
+                "researcher's confirmation and the host policy"
             ),
         )
 

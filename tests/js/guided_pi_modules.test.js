@@ -155,6 +155,39 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   assert.match(binaryNoEvents, /Choose interval cut points with events in every interval/);
   assert.doesNotMatch(binaryNoEvents, /did not pass EasyICU's checks/);
   assert.match(runFailureZh(failedClosed, { code: binaryStop, cause: 'did_not_converge' }), /区间模型没有收敛/);
+  // The target trial emulation names its stop, and a weight model or its
+  // bootstrap why; the remedy revises the confirmed design.
+  const weightModel = runFailure(failedClosed, { code: 'target_trial_weight_model_not_estimable', cause: 'separation' });
+  assert.match(weightModel, /weights could not be estimated: the model predicted almost perfectly when stays started the treatment or left the ICU/);
+  assert.match(weightModel, /Revise the trial's design, for example with merged sparse categories or fewer covariates, confirm it again/);
+  assert.doesNotMatch(weightModel, /did not pass EasyICU's checks/);
+  assert.match(runFailure(failedClosed, { code: 'target_trial_weight_model_not_estimable', cause: 'singular_design' }), /covariates repeated each other's information/);
+  for (const cause of ['unregistered_cause', 'constructor', 'toString']) {
+    const unnamedWeights = runFailure(failedClosed, { code: 'target_trial_weight_model_not_estimable', cause });
+    assert.match(unnamedWeights, /could not be estimated, so the run has no primary result/);
+    assert.doesNotMatch(unnamedWeights, /function|native code/);
+  }
+  // Dropping a confounder is no remedy for positivity or extreme weights.
+  for (const code of ['target_trial_positivity_violated', 'target_trial_weights_extreme']) {
+    assert.doesNotMatch(runFailure(failedClosed, { code }), /fewer covariates/);
+    assert.doesNotMatch(runFailureZh(failedClosed, { code }), /减少协变量/);
+    assert.match(runFailure(failedClosed, { code }), /covariates that affect starting the treatment but not the outcome/);
+  }
+  // Every stop the suite names has its own sentence in both languages.
+  for (const code of [
+    'target_trial_sample_insufficient', 'target_trial_events_insufficient',
+    'target_trial_strategy_unobserved', 'target_trial_positivity_violated',
+    'target_trial_weights_extreme', 'target_trial_icu_exit_excessive',
+    'target_trial_weight_model_not_estimable', 'target_trial_bootstrap_unstable',
+  ]) {
+    assert.doesNotMatch(runFailure(failedClosed, { code }), /did not pass EasyICU's checks/);
+    assert.match(runFailure(failedClosed, { code }), /the run has no primary result\. Revise the trial's design/);
+    assert.match(runFailureZh(failedClosed, { code }), /这次运行没有主结果。请修订模拟试验的设计/);
+  }
+  assert.match(runFailure(failedClosed, { code: 'target_trial_bootstrap_unstable', cause: 'estimate_outside_interval' }), /outside its own bootstrap interval/);
+  assert.match(runFailure(failedClosed, { code: 'target_trial_icu_exit_excessive' }), /left the ICU within the grace period before starting the treatment/);
+  assert.match(runFailureZh(failedClosed, { code: 'target_trial_positivity_violated' }), /重新确认后再生成计划/);
+  assert.match(runFailureZh(failedClosed, { code: 'target_trial_bootstrap_unstable', cause: 'resamples_failed' }), /自助法重抽样无法估计/);
   const axisSentences = {
     execution_complete_not_satisfied: /An analysis step did not finish/,
     analysis_validated_not_satisfied: /automated validation did not pass/,

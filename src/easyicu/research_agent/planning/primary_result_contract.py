@@ -22,6 +22,13 @@ SEALED_LANDMARK_SURVIVAL_SUITE_METHOD = "signed_landmark_survival_suite"
 SEALED_LANDMARK_SURVIVAL_SUITE_METHODS = frozenset(
     {SEALED_LANDMARK_SURVIVAL_SUITE_METHOD, "signed_landmark_continuous_survival_suite"}
 )
+#: The host-sealed suites that own a family's primary result, by family: the
+#: landmark survival suites, and the target trial emulation
+#: (``authority/target_trial_runtime``).
+_SEALED_SUITE_METHODS_BY_FAMILY = {
+    "survival": SEALED_LANDMARK_SURVIVAL_SUITE_METHODS,
+    "causal_inference": frozenset({"signed_target_trial_suite"}),
+}
 from ..contracts.survival_execution import survival_execution_verdict
 from ..contracts.capability_ids import LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID
 from ..contracts.source_feasibility_validation import (
@@ -226,13 +233,12 @@ def validate_required_primary_result(
         )
 
     primary = primary_steps[0]
-    if (
-        declared_family == "survival"
-        and str(primary.method or "").strip() in SEALED_LANDMARK_SURVIVAL_SUITE_METHODS
+    if str(primary.method or "").strip() in _SEALED_SUITE_METHODS_BY_FAMILY.get(
+        declared_family, frozenset()
     ):
-        # A sealed landmark survival suite is a host owner whose exposure,
-        # endpoint, horizon, adjustment set and PH policy are signed in the
-        # runtime authority, not written by the Planner. Its step can only
+        # A sealed suite is a host owner whose exposure (or strategies),
+        # endpoint, horizon, adjustment set and stopping policy are signed in
+        # the runtime authority, not written by the Planner. Its step can only
         # execute under that authority (executor ownership and the effect
         # gate both require the digest-bound rule ref), so a plan naming it
         # without the authority fails closed at execution rather than here.

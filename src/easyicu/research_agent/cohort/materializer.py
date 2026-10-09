@@ -25,7 +25,10 @@ materialisation window. These are observation-coverage coordinates, not
 certified clinical onset, treatment initiation, resolution, or cessation
 times. A typed event status also gets ``<c>_onset_time``, the first time inside
 the window that its source recorded the event as present: the owner-authorized
-event time a landmark design times an exposure by.
+event time a landmark design times an exposure by.  A caller may read that onset
+over a window of its own (``event_onset_windows``): a target trial reads its
+baseline covariates up to time zero but the treatment's start through the end
+of its grace period.
 Timing-dependent definitions must use an owner-authorized event time or
 derive a qualifying transition from the bound long trajectory.
 Each outcome is emitted as a whole-stay binary ``<outcome>`` and, when its
@@ -694,15 +697,28 @@ def _timing_columns(w: pd.DataFrame, concept: str) -> pd.DataFrame:
     )
 
 
+def _decoded_event_status(col: pd.Series, *, concept: str) -> pd.Series:
+    """A typed event status as 1/0, NaN where nothing was recorded."""
+
+    encoded = pd.Series(np.nan, index=col.index, dtype=float)
+    nonnull = col.notna()
+    encoded.loc[nonnull] = _strict_event_status_series(
+        col.loc[nonnull], concept=concept
+    ).astype(float)
+    return encoded
+
+
 def _event_onset_column(w: pd.DataFrame, concept: str) -> pd.DataFrame:
     """Per-stay ``<c>_onset_time`` for one decoded typed event status.
 
     The time index (``charttime``, hours from ICU admission) of the first record
     inside the window whose status is present, so a stay first recorded absent
     takes its later present record, where ``<c>_first_time`` keeps the absent
-    one.  A stay recorded in the window but never present gets NaN, so the
-    column is set exactly where ``<c>_max`` is 1.  Like the window it reads, it
-    does not observe a state that began before the window's first record.
+    one.  A stay recorded in the window but never present gets NaN, so over the
+    cohort window the column is set exactly where ``<c>_max`` is 1; over an
+    onset window of its own, where the window recorded the status present.  Like
+    the window it reads, it does not observe a state that began before the
+    window's first record.
     """
     if TIME_COL not in w.columns:
         return pd.DataFrame(columns=[ID_COL])
@@ -925,6 +941,32 @@ def _export_authority_provenance(
     }
 
 
+def _validated_event_onset_windows(
+    event_onset_windows: Optional[Mapping[str, Window]],
+    feature_concepts: Sequence[str],
+) -> Dict[str, Window]:
+    """Each requested onset window: a materialized feature's finite ``[start, end)``."""
+
+    validated: Dict[str, Window] = {}
+    for concept, window in dict(event_onset_windows or {}).items():
+        if concept not in feature_concepts:
+            raise MaterializedMetadataError(
+                f"an onset window names a concept that is not a feature: {concept!r}"
+            )
+        try:
+            start, end = (float(value) for value in window)
+        except (TypeError, ValueError) as exc:
+            raise MaterializedMetadataError(
+                f"the onset window of {concept!r} is not a pair of hours"
+            ) from exc
+        if not (np.isfinite(start) and np.isfinite(end) and start < end):
+            raise MaterializedMetadataError(
+                f"the onset window of {concept!r} is not a finite, increasing span"
+            )
+        validated[concept] = (start, end)
+    return validated
+
+
 def _summarize_timeseries(
     df: pd.DataFrame, concept: str, window: Window
 ) -> pd.DataFrame:
@@ -941,12 +983,32 @@ def _summarize_timeseries_with_representation(
     window: Window,
     *,
     source_role: Optional[ConceptColumnRole] = None,
+    onset_window: Optional[Window] = None,
 ) -> tuple[pd.DataFrame, bool]:
-    """Return the summary plus whether values were encoded as event presence."""
+    """Return the summary plus whether values were encoded as event presence.
+
+    ``onset_window`` reads a typed event status's ``<c>_onset_time`` over that
+    window instead of ``window``; a stay recorded only there keeps its onset.
+    """
 
     w = _window(df, window[0], window[1])
+    onset_rows: Optional[pd.DataFrame] = None
+    if onset_window is not None:
+        if source_role is not ConceptColumnRole.EVENT_STATUS:
+            raise MaterializedMetadataError(
+                f"an onset window applies only to a typed event status: {concept!r}"
+            )
+        onset_rows = _window(df, onset_window[0], onset_window[1])
+        if onset_rows.empty or concept not in onset_rows.columns:
+            onset_rows = None
+        else:
+            onset_rows = onset_rows.assign(
+                **{concept: _decoded_event_status(onset_rows[concept], concept=concept)}
+            )
     if w.empty or concept not in w.columns:
-        return pd.DataFrame(columns=[ID_COL]), False
+        if onset_rows is None:
+            return pd.DataFrame(columns=[ID_COL]), False
+        return _event_onset_column(onset_rows, concept), True
     # Observation bounds are taken from RAW non-null values before the
     # presence-coercion below. They deliberately do not claim clinical onset,
     # initiation, resolution, or cessation.
@@ -961,14 +1023,12 @@ def _summarize_timeseries_with_representation(
     col = w[concept]
     onset = pd.DataFrame(columns=[ID_COL])
     if source_role is ConceptColumnRole.EVENT_STATUS:
-        encoded = pd.Series(np.nan, index=col.index, dtype=float)
-        nonnull = col.notna()
-        encoded.loc[nonnull] = _strict_event_status_series(
-            col.loc[nonnull], concept=concept
-        ).astype(float)
-        w = w.assign(**{concept: encoded})
+        w = w.assign(**{concept: _decoded_event_status(col, concept=concept)})
         presence_encoded = True
-        onset = _event_onset_column(w, concept)
+        if onset_window is None:
+            onset = _event_onset_column(w, concept)
+        elif onset_rows is not None:
+            onset = _event_onset_column(onset_rows, concept)
     elif source_role is ConceptColumnRole.VALUE:
         if pd.api.types.is_bool_dtype(col):
             raise MaterializedMetadataError(
@@ -1031,7 +1091,9 @@ def _summarize_timeseries_with_representation(
     if not timing.empty:
         out = out.merge(timing, on=ID_COL, how="left")
     if not onset.empty:
-        out = out.merge(onset, on=ID_COL, how="left")
+        # Over a window of its own, a stay recorded only there keeps its onset.
+        how = "left" if onset_window is None else "outer"
+        out = out.merge(onset, on=ID_COL, how=how)
     return out, presence_encoded
 
 
@@ -1406,12 +1468,16 @@ def materialize_cohort(
     bounds_violation_policy: str = "reject",
     positive_only_event_concepts: Sequence[str] = (),
     host_derivations: Sequence[str] = (),
+    event_onset_windows: Optional[Mapping[str, Window]] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """Build a per-stay analysis cohort from the EasyICU data layer.
 
     Returns ``(cohort_df, provenance)``. ``cohort_df`` is one row per ICU stay
     after applying ``cohort_definition`` (纳入排除); ``provenance`` records the
     source mode, concept list, window, attrition counts and hashes for audit.
+    ``event_onset_windows`` maps a typed event-status feature to the window
+    its ``<c>_onset_time`` is read over, in hours after ICU admission; its
+    other summaries keep ``cohort_window``.
     """
     cohort, provenance, _collector = _materialize_cohort_with_metadata(
         feature_concepts=feature_concepts,
@@ -1426,6 +1492,7 @@ def materialize_cohort(
         bounds_violation_policy=bounds_violation_policy,
         positive_only_event_concepts=positive_only_event_concepts,
         host_derivations=host_derivations,
+        event_onset_windows=event_onset_windows,
     )
     return cohort, provenance
 
@@ -1444,6 +1511,7 @@ def _materialize_cohort_with_metadata(
     bounds_violation_policy: str,
     positive_only_event_concepts: Sequence[str],
     host_derivations: Sequence[str] = (),
+    event_onset_windows: Optional[Mapping[str, Window]] = None,
 ) -> tuple[pd.DataFrame, Dict[str, Any], MaterializedColumnMetadataCollector]:
     t0 = time.time()
     source_mode, root = _resolve_source(data_path, prefer_existing)
@@ -1461,6 +1529,7 @@ def _materialize_cohort_with_metadata(
         bounds_violation_policy=bounds_violation_policy,
         positive_only_event_concepts=positive_only_event_concepts,
         host_derivations=host_derivations,
+        event_onset_windows=event_onset_windows,
     )
     if source_mode == "export" and is_export_package(root):
         with open_export_package(root) as export_package:
@@ -1491,6 +1560,7 @@ def _materialize_cohort_from_resolved_source(
     positive_only_event_concepts: Sequence[str],
     host_derivations: Sequence[str] = (),
     verify_source_package: bool = True,
+    event_onset_windows: Optional[Mapping[str, Window]] = None,
 ) -> tuple[pd.DataFrame, Dict[str, Any], MaterializedColumnMetadataCollector]:
     """Materialize from one already-resolved, explicitly owned source."""
 
@@ -1658,6 +1728,7 @@ def _materialize_cohort_from_resolved_source(
         raise MaterializedMetadataError(
             "positive-only event concepts must be unique materialized features"
         )
+    onset_windows = _validated_event_onset_windows(event_onset_windows, feature_set)
 
     # A native export records its outcome module at the stay's coordinate
     # (``_export_concept_is_stay_level``).  Requested as a feature or a cohort
@@ -1733,13 +1804,20 @@ def _materialize_cohort_from_resolved_source(
     # The columns summarized over the cohort window, which a predicate reads
     # only over that window.
     window_summaries: List[str] = []
+    # An onset read over a window of its own, by its column.
+    onset_column_windows: Dict[str, Window] = {}
     # The window each bare predicate column was derived over: its first
     # predicate's.  Another predicate on that concept reads the same column.
     predicate_windows: Dict[str, Window] = {}
 
     # ---- time-series features -> wide per-stay summaries (over cohort_window)
     for c in feature_set:
+        onset_window = onset_windows.get(c)
         if c in stay_level_issued_times:
+            if onset_window is not None:
+                raise MaterializedMetadataError(
+                    f"stay-level concept {c!r} has no onset to read over a window"
+                )
             # An outcome already carries the same stay-level columns.
             if c not in outcome_set:
                 frames.extend(read_at_stay_level(c))
@@ -1752,15 +1830,28 @@ def _materialize_cohort_from_resolved_source(
                 c,
                 cohort_window,
                 source_role=source_role,
+                onset_window=onset_window,
             )
             frames.append(summary)
-            window_summaries.extend(str(column) for column in summary.columns)
+            onset_column = f"{c}_onset_time"
+            if onset_window is not None and onset_column in summary.columns:
+                onset_column_windows[onset_column] = onset_window
+            window_summaries.extend(
+                str(column)
+                for column in summary.columns
+                if column not in onset_column_windows
+            )
             metadata_collector.add_timeseries(
                 c,
                 output_columns=summary.columns,
                 window=cohort_window,
+                onset_window=onset_window,
             )
         else:
+            if onset_window is not None:
+                raise MaterializedMetadataError(
+                    f"concept {c!r} records no times to read its onset over a window"
+                )
             static_frame = _static_column(df, c, source_role=source_role)
             frames.append(static_frame)
             metadata_collector.add_static(c, output_columns=static_frame.columns)
@@ -1949,6 +2040,10 @@ def _materialize_cohort_from_resolved_source(
                     if column != ID_COL
                 },
                 **{
+                    column: host_column_window(*window)
+                    for column, window in onset_column_windows.items()
+                },
+                **{
                     concept: ColumnWindow(
                         label=f"icu_admission[{start:g},{end:g}]h",
                         anchor="icu_admission",
@@ -1997,6 +2092,16 @@ def _materialize_cohort_from_resolved_source(
         "dense_status_outcomes_preserving_unknown": sorted(dense_status_outcomes),
         "declared_positive_only_event_concepts": list(declared_positive_only),
         "host_derivations": list(resolved_host_derivations),
+        **(
+            {
+                "event_onset_windows": {
+                    concept: list(window)
+                    for concept, window in sorted(onset_windows.items())
+                }
+            }
+            if onset_windows
+            else {}
+        ),
         "source_bounds_violation_policy": bounds_violation_policy,
         "source_bounds_exclusions": dict(sorted(bounds_violation_counts.items())),
         "legacy_export_domain_normalizations": (
@@ -2348,6 +2453,7 @@ def _materialize_with_open_export_package(
         positive_only_event_concepts=materialize_args["positive_only_event_concepts"],
         host_derivations=materialize_args.get("host_derivations", ()),
         verify_source_package=False,
+        event_onset_windows=materialize_args.get("event_onset_windows"),
     )
 
 
@@ -2562,6 +2668,7 @@ def materialize_to_parquet(
                 "positive_only_event_concepts"
             ],
             host_derivations=materialize_args.get("host_derivations", ()),
+            event_onset_windows=materialize_args.get("event_onset_windows"),
         )
     else:
         cohort, provenance, metadata_collector = _materialize_with_open_export_package(
@@ -2645,6 +2752,12 @@ def materialize_to_parquet(
         # produced columns in this cohort; a replay that omits one cannot
         # reproduce the same authority.
         "host_derivations": list(provenance["host_derivations"]),
+        # A replay that reads an onset over another window issues other values.
+        **(
+            {"event_onset_windows": provenance["event_onset_windows"]}
+            if "event_onset_windows" in provenance
+            else {}
+        ),
         "identity_column": identity_column,
         "replacement_row_identity": identity_binding,
     }

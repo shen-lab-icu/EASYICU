@@ -92,6 +92,15 @@ _CURRENT_CASE_PLAN_COMPILERS: Mapping[str, _RuntimePlanCompilerSpec] = {
         governed_steps=(("step_id", "governed_step"),),
         sequence_details=(("output_products", "plan_outputs"),),
     ),
+    "target_trial_suite": _RuntimePlanCompilerSpec(
+        message=(
+            "Compiled the signed target trial emulation into one deterministic "
+            "host-tool route."
+        ),
+        reason_code="target_trial_suite_host_compiled",
+        governed_steps=(("step_id", "governed_step"),),
+        sequence_details=(("output_products", "plan_outputs"),),
+    ),
     "landmark_categorical_association": _RuntimePlanCompilerSpec(
         message=(
             "Compiled the categorical landmark cohort and primary association "
@@ -157,6 +166,14 @@ _CURRENT_CASE_DEVELOPMENT_PLAN_COMPILERS: Mapping[
         analysis_only=True,
     ),
     "landmark_continuous_survival_suite": _RuntimePlanCompilerSpec(
+        message=_DEVELOPMENT_MESSAGE,
+        reason_code="development_execution_only_authority_compiled",
+        project_research_question=True,
+        enabled_flag="development_execution_only_allowed",
+        governed_steps=(("step_id", "governed_step"),),
+        analysis_only=True,
+    ),
+    "target_trial_suite": _RuntimePlanCompilerSpec(
         message=_DEVELOPMENT_MESSAGE,
         reason_code="development_execution_only_authority_compiled",
         project_research_question=True,

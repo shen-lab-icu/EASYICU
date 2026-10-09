@@ -62,6 +62,11 @@ SEALED_SUITE_ROBUSTNESS_AXES = MappingProxyType(
         # interval model and the spline check of its linear term are
         # alternative specifications of the same per-unit estimand.
         "signed_landmark_continuous_survival_suite": ("timing", "model_specification"),
+        # The target trial reports its contrast with the weights truncated at
+        # prespecified percentiles beside the untruncated primary, and the
+        # unweighted contrast: alternative estimator specifications of the
+        # same per-protocol estimand.
+        "signed_target_trial_suite": ("model_specification",),
         # The sealed candidate grid fits every admissible cluster count and
         # fails closed when the BIC optimum sits at the upper boundary, which
         # is the "alternative cluster number" the phenotyping playbook asks for.

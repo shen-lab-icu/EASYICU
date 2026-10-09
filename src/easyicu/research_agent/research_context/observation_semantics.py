@@ -140,6 +140,19 @@ def _positive_only_event_updates(
     return updates
 
 
+def _read_over_one_window(time: ConceptDescriptor, status: ConceptDescriptor) -> bool:
+    """Whether ``status`` was read over the window ``time`` was read over.
+
+    A status stands for a time only over that window: an onset read past the
+    cohort window is not applicable where a cohort-window status says so.  A
+    column without a window states none, so it is not judged.
+    """
+
+    time_window = str(time.analysis_window or "").strip()
+    status_window = str(status.analysis_window or "").strip()
+    return not (time_window and status_window) or status_window == time_window
+
+
 def _conditional_event_time_updates(
     frame: pd.DataFrame,
     descriptors: dict[str, ConceptDescriptor],
@@ -186,6 +199,12 @@ def _conditional_event_time_updates(
         ):
             continue
         source_concept = str(descriptor.source_concept or legacy_event_base)
+        if declared_event and not _read_over_one_window(
+            descriptor, descriptors[declared_event]
+        ):
+            raise ValueError(
+                "declared event time was read over another window than its status"
+            )
         # A first/last *observation* time is conditional on observing the
         # source, not on a clinical value happening to equal one. Both the
         # count and availability transforms must be published and reconcile.
@@ -218,6 +237,7 @@ def _conditional_event_time_updates(
             for candidate in descriptors.values()
             if candidate.name != descriptor.name
             and candidate.name in frame.columns
+            and _read_over_one_window(descriptor, candidate)
             and (
                 candidate.name == declared_event
                 if declared_event
