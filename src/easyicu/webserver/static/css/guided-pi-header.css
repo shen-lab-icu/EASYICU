@@ -1,0 +1,13 @@
+/* Owner: Guided Copilot conversation header — its layout below the desktop
+   width. screens-guided-pi-header.js owns the markup and guided-pi.css the
+   header's base rules. This sheet loads right after guided-pi.css, before
+   the workspace, desktop and skin sheets that also style the header. */
+/* Below the desktop layout the title stacks: the project on one clipped line
+   (an inline span cannot clip, so it ran under the header actions), the
+   conversation under it; the one-line breadcrumb's slash has no place, and
+   the ready/working status stays for assistive technology without taking a
+   third line in the 56px bar. */
+@media(max-width:1180px){
+ .gpi-head-title .gpi-kicker{display:block;max-width:100%}.gpi-head-title .gpi-head-separator{display:none}
+ .gpi-head-title .gpi-live{position:absolute;width:1px;height:1px;margin:0;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+}
