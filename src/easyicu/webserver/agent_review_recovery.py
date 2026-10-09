@@ -33,6 +33,10 @@ class WebReviewRecoveryError(RuntimeError):
     """The private Web recovery index is absent, corrupt, or drifted."""
 
 
+class WebReviewWorkRootCapacityError(WebReviewRecoveryError):
+    """Every registered work root may still hold a pause the index lacks."""
+
+
 @dataclass
 class PendingReviewEntry:
     """Live resources bound to one paused Research Agent review."""
@@ -734,8 +738,19 @@ def register_pipeline_work_root(
     *,
     path: Optional[Path] = None,
     max_roots: int = _DEFAULT_MAX_ROOTS,
+    max_candidates: int = _DEFAULT_MAX_CANDIDATES,
 ) -> Path:
-    """Persist one host-selected project root before pipeline work begins."""
+    """Persist one host-selected project root before pipeline work begins.
+
+    The roots tell reconciliation where to find a pause that the index has not
+    recorded yet; the newest registration is last. A full list does not refuse
+    new work while some root holds nothing the index lacks: the oldest such
+    root is no longer scanned, and its seeds and records stay where they are.
+    A root that registers again moves to the end, and a run registers its root
+    just before it writes its seed, so a root whose planning is still running
+    is among the newest. The registration is refused only when every root may
+    still hold a pause the index lacks, or cannot be checked now.
+    """
 
     selected_root = Path(root).expanduser().resolve()
     if Path(root).expanduser().is_symlink():
@@ -758,12 +773,23 @@ def register_pipeline_work_root(
             if not temporary or candidate.is_dir():
                 roots.append(value)
         rendered = str(selected_root)
-        if rendered not in roots:
-            if len(roots) >= max_roots:
-                raise WebReviewRecoveryError(
-                    "Web review pipeline work-root capacity is full"
-                )
-            roots.append(rendered)
+        roots = [value for value in roots if value != rendered]
+        excess = len(roots) + 1 - max_roots
+        released: list[str] = []
+        for value in roots:
+            if len(released) >= excess:
+                break
+            if _root_pauses_are_indexed(
+                selected, payload, Path(value), limit=max_candidates
+            ):
+                released.append(value)
+        if len(released) < excess:
+            raise WebReviewWorkRootCapacityError(
+                "Web review pipeline work-root capacity is full: every root may "
+                "still hold a pause the recovery index lacks"
+            )
+        roots = [value for value in roots if value not in released]
+        roots.append(rendered)
         if roots != stored_roots:
             _write(selected, {**payload, "work_roots": roots})
     return selected_root
@@ -908,27 +934,32 @@ def _record_from_seed_path(path: Path, *, root: Path) -> list[WebReviewRecoveryR
     return records
 
 
-def _bounded_seed_paths(root: Path, *, limit: int) -> tuple[list[Path], int]:
-    """Inspect at most ``limit`` studies and wrapper directories in one root."""
+def _bounded_seed_paths(root: Path, *, limit: int) -> tuple[list[Path], int, bool]:
+    """Inspect at most ``limit`` studies and wrapper directories in one root.
+
+    The flag is true only when the whole root was listed within both bounds.
+    """
 
     paths: list[Path] = []
     wrappers_inspected = 0
+    complete = True
     try:
         studies = root.iterdir()
     except OSError:
-        return paths, wrappers_inspected
+        return paths, wrappers_inspected, False
     for study_index, study_dir in enumerate(studies):
         if study_index >= limit:
-            break
+            return paths, wrappers_inspected, False
         if not study_dir.is_dir() or study_dir.is_symlink():
             continue
         try:
             wrappers = study_dir.iterdir()
         except OSError:
+            complete = False
             continue
         for wrapper_dir in wrappers:
             if wrappers_inspected >= limit:
-                return paths, wrappers_inspected
+                return paths, wrappers_inspected, False
             wrappers_inspected += 1
             if (
                 not wrapper_dir.name.startswith("run_")
@@ -939,7 +970,31 @@ def _bounded_seed_paths(root: Path, *, limit: int) -> tuple[list[Path], int]:
             seed_path = recovery_seed_path(wrapper_dir)
             if seed_path.is_file() and not seed_path.is_symlink():
                 paths.append(seed_path)
-    return paths, wrappers_inspected
+    return paths, wrappers_inspected, complete
+
+
+def _root_pauses_are_indexed(
+    index: Path, payload: Mapping[str, Any], root: Path, *, limit: int
+) -> bool:
+    """Whether the index holds every pause reconciliation would find in ``root``.
+
+    A root that is missing, a symlink, unreadable, or larger than one bounded
+    scan cannot be checked now, so it counts as holding a pause.
+    """
+
+    if root.is_symlink() or not root.is_dir():
+        return False
+    try:
+        seed_paths, _inspected, complete = _bounded_seed_paths(root, limit=limit)
+        if not complete:
+            return False
+        for seed_path in seed_paths:
+            for record in _record_from_seed_path(seed_path, root=root):
+                if _record_payload_locked(index, payload, record.run_id) is None:
+                    return False
+    except OSError:
+        return False
+    return True
 
 
 def reconcile_records(
@@ -966,7 +1021,9 @@ def reconcile_records(
             if not root.is_dir():
                 continue
             remaining = max_candidates - inspected
-            seed_paths, root_inspected = _bounded_seed_paths(root, limit=remaining)
+            seed_paths, root_inspected, _complete = _bounded_seed_paths(
+                root, limit=remaining
+            )
             inspected += root_inspected
             for seed_path in seed_paths:
                 for record in _record_from_seed_path(seed_path, root=root):

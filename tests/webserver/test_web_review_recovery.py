@@ -19,6 +19,7 @@ from easyicu.webserver.agent_review_recovery import (
     WebReviewRecoveryError,
     WebReviewRecoveryRecord,
     WebReviewRecoverySeed,
+    WebReviewWorkRootCapacityError,
     load_recovery_seed,
     get_record,
     put_record,
@@ -462,6 +463,133 @@ def test_register_pipeline_work_root_retains_unavailable_non_temporary_roots(
 
     with pytest.raises(WebReviewRecoveryError, match="capacity"):
         register_pipeline_work_root(candidate, path=index, max_roots=1)
+
+
+def _unreviewed_seed(root: Path, *, run_id: str, study_id: str) -> Path:
+    """A seed whose planning never reached a review, as a failed run leaves it."""
+
+    wrapper, _run_id = _durable_seed(root, run_id=run_id, study_id=study_id)
+    (wrapper / "pipeline" / run_id / "human_review_checkpoint.json").unlink()
+    return wrapper
+
+
+def test_a_full_root_list_lets_go_of_the_oldest_root_the_index_covers(
+    tmp_path,
+) -> None:
+    index = tmp_path / "review-index.json"
+    oldest, newer, current = (
+        tmp_path / name for name in ("oldest", "newer", "current")
+    )
+    _unreviewed_seed(oldest, run_id="run_unreviewed", study_id="study-unreviewed")
+    _wrapper, paused = _durable_seed(
+        oldest, run_id="run_paused", study_id="study-paused"
+    )
+    _unreviewed_seed(newer, run_id="run_newer", study_id="study-newer")
+    current.mkdir()
+    register_pipeline_work_root(oldest, path=index, max_roots=2)
+    register_pipeline_work_root(newer, path=index, max_roots=2)
+    # Reconciliation records the pause, so the oldest root holds nothing the
+    # index lacks.
+    assert get_record(paused, path=index) is not None
+    seeds = sorted(oldest.rglob("web_review_recovery_seed.json"))
+    records = json.loads(index.read_text(encoding="utf-8"))["records"]
+
+    register_pipeline_work_root(current, path=index, max_roots=2)
+
+    payload = json.loads(index.read_text(encoding="utf-8"))
+    assert payload["work_roots"] == [str(newer.resolve()), str(current.resolve())]
+    # Only where to look is forgotten: every seed and record is still there.
+    assert len(seeds) == 2
+    assert sorted(oldest.rglob("web_review_recovery_seed.json")) == seeds
+    assert payload["records"] == records
+    assert get_record(paused, path=index).run_id == paused
+
+
+def test_a_root_that_registers_again_is_the_newest_and_stays(tmp_path) -> None:
+    index = tmp_path / "review-index.json"
+    first, second, third = (tmp_path / name for name in ("first", "second", "third"))
+    _unreviewed_seed(first, run_id="run_first", study_id="study-first")
+    _unreviewed_seed(second, run_id="run_second", study_id="study-second")
+    third.mkdir()
+    register_pipeline_work_root(first, path=index, max_roots=2)
+    register_pipeline_work_root(second, path=index, max_roots=2)
+    # A new run in the first project registers its root again.
+    register_pipeline_work_root(first, path=index, max_roots=2)
+
+    register_pipeline_work_root(third, path=index, max_roots=2)
+
+    payload = json.loads(index.read_text(encoding="utf-8"))
+    assert payload["work_roots"] == [str(first.resolve()), str(third.resolve())]
+
+
+def test_a_full_root_list_of_unrecorded_pauses_refuses_a_new_root(tmp_path) -> None:
+    index = tmp_path / "review-index.json"
+    first, second, current = (
+        tmp_path / name for name in ("first", "second", "current")
+    )
+    _durable_seed(first, run_id="run_first", study_id="study-first")
+    _durable_seed(second, run_id="run_second", study_id="study-second")
+    current.mkdir()
+    register_pipeline_work_root(first, path=index, max_roots=2)
+    register_pipeline_work_root(second, path=index, max_roots=2)
+    before = index.read_bytes()
+
+    with pytest.raises(WebReviewWorkRootCapacityError, match="capacity"):
+        register_pipeline_work_root(current, path=index, max_roots=2)
+
+    # Both pauses stay discoverable; once the index records them, there is room.
+    assert index.read_bytes() == before
+    assert reconcile_records(path=index) == 2
+    register_pipeline_work_root(current, path=index, max_roots=2)
+    payload = json.loads(index.read_text(encoding="utf-8"))
+    assert payload["work_roots"] == [str(second.resolve()), str(current.resolve())]
+
+
+def test_a_root_one_bounded_scan_cannot_finish_is_kept(tmp_path) -> None:
+    index = tmp_path / "review-index.json"
+    large, current = tmp_path / "large", tmp_path / "current"
+    _unreviewed_seed(large, run_id="run_one", study_id="study-one")
+    _unreviewed_seed(large, run_id="run_two", study_id="study-two")
+    current.mkdir()
+    register_pipeline_work_root(large, path=index, max_roots=1)
+
+    # Only one of its two run folders fits the scan, so the root is not checked.
+    with pytest.raises(WebReviewWorkRootCapacityError, match="capacity"):
+        register_pipeline_work_root(current, path=index, max_roots=1, max_candidates=1)
+    register_pipeline_work_root(current, path=index, max_roots=1, max_candidates=2)
+    payload = json.loads(index.read_text(encoding="utf-8"))
+    assert payload["work_roots"] == [str(current.resolve())]
+
+
+def test_a_run_refused_for_a_full_root_list_keeps_its_reason_and_cause(
+    tmp_path, monkeypatch
+) -> None:
+    from easyicu.webserver import agent_pipeline_runs
+    from easyicu.webserver.research_pipeline_run_errors import (
+        ResearchPipelineRunError,
+    )
+
+    def full(_root: Path) -> Path:
+        raise WebReviewWorkRootCapacityError(
+            "Web review pipeline work-root capacity is full"
+        )
+
+    monkeypatch.setattr(agent_pipeline_runs, "register_pipeline_work_root", full)
+
+    with pytest.raises(ResearchPipelineRunError) as refused:
+        agent_pipeline_runs._register_recoverable_work_root(tmp_path / "projects")
+
+    code = "research_pipeline_review_recovery_capacity_full"
+    assert refused.value.code == code
+    relative = agent_pipeline_runs._write_pipeline_failure_diagnostic(
+        wrapper_dir=tmp_path, exc=refused.value, code=refused.value.code
+    )
+    payload = json.loads((tmp_path / str(relative)).read_text(encoding="utf-8"))
+    assert payload["code"] == code
+    assert payload["exception_types"] == [
+        "ResearchPipelineRunError",
+        "WebReviewWorkRootCapacityError",
+    ]
 
 
 def test_reconciliation_rejects_a_tampered_local_seed(tmp_path) -> None:
