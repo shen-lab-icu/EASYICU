@@ -62,9 +62,12 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # This gate checks the explicitly installed runtime on supported Python versions.
-# Lower-bound requirements let pip resolve a compatible current combination;
-# they do not test the lowest supported versions. Preserve the actual resolved
-# environment in the receipts instead of claiming a minimum-version matrix.
+# Lower-bound requirements let pip resolve a current combination; they do not
+# test the lowest supported versions. On Python 3.10 that combination was not
+# compatible: shap 0.49, the last release for 3.10, cannot parse the vector
+# base_score that xgboost writes from 3.1, so 3.10 also caps xgboost below 3.1.
+# Preserve the actual resolved environment in the receipts instead of claiming
+# a minimum-version matrix.
 jobs:
   architecture:
     name: research_agent architecture
@@ -147,6 +150,7 @@ jobs:
             "lifelines>=0.27" \
             "shap>=0.44" \
             "xgboost>=2.0" \
+            "xgboost<3.1; python_version < '3.11'" \
             "tomli>=2.0; python_version < '3.11'"
           # Editable install of the easyicu package without extras so
           # import easyicu.research_agent succeeds.
