@@ -292,8 +292,8 @@
       "shim_bypass_violations": []
     },
     "authority/evidence_store.py": {
-      "loc": 4030,
-      "sha256": "1df9740efd0475f0ff4b64378d52a815cdcc7b0bc69f7fef596ef8a59e6f8689",
+      "loc": 4048,
+      "sha256": "ccdca5194617dd4c9a4dc8c465c31e2e090005467a0b51c6bdbb99162acb0873",
       "intra_package_import_edges": 10,
       "shim_bypass_violations": []
     },
@@ -412,11 +412,11 @@
       "callable_closure_captured_names": 3
     }
   },
-  "baseline_reason": "Explicit retry after an engine change (2026-09-26), reviewed growth: execution/phase_support.py +18 (one branch in _step_resolve_initial_code, before the resume-capsule branch, that asks the step's existing deterministic host generators for code when the failed candidate was sealed under another engine; the policy itself lives in execution/step_authority_resume.py). No import edge added. Targeted move of this file only: the regressions already present in other files are not absorbed here and remain for their owners.",
+  "baseline_reason": "Reviewed growth accepted by the user on 2026-10-09 in the coordinator session (option: accept these 18 lines, Recommended): authority/evidence_store.py +18 from fb266278a (2026-09-24, a host claim reads by the names of its variables: reader_labels reach the claim expansion, and prose_requires_numeric_provenance became public so a reader label that carries a value is refused before a host-rendered sentence). evidence_store.py is a file the scorer trusts; its bytes do not change with this move, which acknowledges only this reviewed growth and loosens no other ceiling. No import edge added. Targeted move of this file only: every other file and function entry, and the tool digest, stay as they were.",
   "baseline_accepted_growth": {
-    "execution/phase_support.py": {
-      "loc_was": 3780,
-      "loc_now": 3798
+    "authority/evidence_store.py": {
+      "loc_was": 4030,
+      "loc_now": 4048
     }
   },
   "baseline_history": [
@@ -1278,6 +1278,16 @@
           "loc_now": 3798
         }
       }
+    },
+    {
+      "reason": "Reviewed growth accepted by the user on 2026-10-09 in the coordinator session (option: accept these 18 lines, Recommended): authority/evidence_store.py +18 from fb266278a (2026-09-24, a host claim reads by the names of its variables: reader_labels reach the claim expansion, and prose_requires_numeric_provenance became public so a reader label that carries a value is refused before a host-rendered sentence). evidence_store.py is a file the scorer trusts; its bytes do not change with this move, which acknowledges only this reviewed growth and loosens no other ceiling. No import edge added. Targeted move of this file only: every other file and function entry, and the tool digest, stay as they were.",
+      "accepted_growth": {
+        "authority/evidence_store.py": {
+          "loc_was": 4030,
+          "loc_now": 4048
+        }
+      },
+      "scope": "targeted:authority/evidence_store.py"
     }
   ]
 }
