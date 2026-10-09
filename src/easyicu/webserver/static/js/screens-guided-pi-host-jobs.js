@@ -204,20 +204,42 @@
         return;
       }
       const expectedSession = sessionId();
+      // The source belongs to this conversation's study. The researcher can
+      // open another conversation while this waits, so every wait is
+      // followed by a check, and the source is written only while the
+      // store's active context is that study (update and persist run with
+      // no wait between them).
+      const contextId = String(session.binding && session.binding.study_context_id || '');
+      if (!contextId || typeof store.active !== 'function') {
+        host.setError(tr('This conversation is not linked to a study, so the demo source was not saved. Reopen the conversation and try again.', '这个对话没有关联到研究，Demo 数据源未保存。请重新打开对话后再试。'));
+        host.render();
+        return;
+      }
+      const current = () => sessionId() === expectedSession
+        && String(host.session() && host.session().binding && host.session().binding.study_context_id || '') === contextId;
+      const activeIsStudy = () => {
+        const active = store.active();
+        return Boolean(active && active.id === contextId);
+      };
+      const stale = () => { row.pending = false; };
       row.pending = true;
       host.setError('');
       host.render();
       try {
-        const contextId = String(session.binding && session.binding.study_context_id || '');
         if (typeof store.hydrate === 'function') await store.hydrate({ force: true });
-        const active = typeof store.active === 'function' ? store.active() : null;
-        if (contextId && (!active || active.id !== contextId) && typeof store.activate === 'function') {
+        if (!current()) return stale();
+        if (!activeIsStudy() && typeof store.activate === 'function') {
           await store.activate(contextId);
+          if (!current()) return stale();
         }
-        if (typeof store.refreshActiveFromServer === 'function') await store.refreshActiveFromServer();
+        if (!activeIsStudy()) return stale();
+        if (typeof store.refreshActiveFromServer === 'function') {
+          await store.refreshActiveFromServer();
+          if (!current() || !activeIsStudy()) return stale();
+        }
         store.update({ data_source: sourceSnapshot(source) }, { persist: false, reason: 'demo-source-binding' });
         const saved = await store.persist();
-        if (sessionId() !== expectedSession) return;
+        if (!current()) return stale();
         if (DATA_CONSENT.selectionInProgress(host.session())) {
           await host.confirmDataSourceBinding({
             id: 'source-binding-' + Date.now(), receipt_kind: 'data_source_binding',
@@ -227,10 +249,10 @@
           });
         } else {
           await host.rebind();
-          if (sessionId() !== expectedSession) return;
+          if (!current()) return stale();
           await host.authorizeDataSource('use_study_required_data');
         }
-        if (sessionId() !== expectedSession) return;
+        if (!current()) return stale();
         removeNotice(row.id);
         host.render();
       } catch (error) {

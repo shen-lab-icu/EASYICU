@@ -100,6 +100,15 @@ CONTRACTS: dict[str, list[str]] = {
         "screens-guided-pi-data-binding.js",
         "screens-guided-pi.js",
     ],
+    # Requires the module registry, the data-binding and host-jobs owners,
+    # and the StudyContext store they write through.
+    "guided_pi_study_switch.test.js": [
+        "screens-guided-pi-modules.js",
+        "screens-guided-pi-data-binding.js",
+        "screens-guided-pi-host-jobs.js",
+        "study-context.js",
+        "screens-guided-pi.js",
+    ],
     "guided_pi_run_answer.test.js": [
         "screens-guided-pi-modules.js",
         "screens-guided-pi-resources.js",

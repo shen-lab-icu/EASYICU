@@ -48,6 +48,10 @@
           // cache finished hydrating. Refresh the owner list before activating
           // the session-bound context so a brand-new project cannot look missing.
           if (store && typeof store.hydrate === 'function') await store.hydrate({ force: true });
+          // Activating also moves the host's active study, so a conversation
+          // left while this waited does not activate its study over the one
+          // now open.
+          if (!isCurrent()) return;
           const active = store && typeof store.active === 'function' ? store.active() : null;
           if (contextId && (!active || active.id !== contextId) && store && typeof store.activate === 'function') {
             await store.activate(contextId);
@@ -172,7 +176,12 @@
        continues instead of asking them to send it again. Only their own
        typed first message counts (host.researchQuestion), never a starter
        card's or a model option's text; the text is saved as written and
-       nothing is inferred from it. */
+       nothing is inferred from it.
+       It belongs to the conversation and study context it started in. The
+       researcher can open another one while it waits, so after every wait
+       it checks that both are still current, and it writes only while the
+       store's active context is that study: update and persist then run
+       with no wait between them. Otherwise it stops without writing. */
     async function carryQuestionIntoSetup() {
       const workflow = typeof host.workflow === 'function' ? host.workflow() : null;
       const missing = Array.isArray(workflow && workflow.missing_setup_fields) ? workflow.missing_setup_fields : [];
@@ -180,19 +189,35 @@
       const question = typeof host.researchQuestion === 'function' ? String(host.researchQuestion() || '').trim() : '';
       const store = window.EU_STUDY_CONTEXT;
       const session = host.session();
-      if (!question || !session || !store || typeof store.update !== 'function' || typeof store.persist !== 'function') return false;
+      if (!question || !session || !store || typeof store.update !== 'function' || typeof store.persist !== 'function'
+        || typeof store.active !== 'function') return false;
       const expectedSessionId = session.session_id;
+      const contextId = String(session.binding && session.binding.study_context_id || '');
+      if (!contextId) return false;
+      const current = () => {
+        const now = host.session();
+        return Boolean(now && now.session_id === expectedSessionId
+          && String(now.binding && now.binding.study_context_id || '') === contextId);
+      };
+      const activeIsStudy = () => {
+        const active = store.active();
+        return Boolean(active && active.id === contextId);
+      };
       try {
-        const contextId = String(session.binding && session.binding.study_context_id || '');
         if (typeof store.hydrate === 'function') await store.hydrate({ force: true });
-        const active = typeof store.active === 'function' ? store.active() : null;
-        if (contextId && (!active || active.id !== contextId) && typeof store.activate === 'function') {
+        if (!current()) return false;
+        if (!activeIsStudy() && typeof store.activate === 'function') {
           await store.activate(contextId);
+          if (!current()) return false;
         }
-        if (typeof store.refreshActiveFromServer === 'function') await store.refreshActiveFromServer();
+        if (!activeIsStudy()) return false;
+        if (typeof store.refreshActiveFromServer === 'function') {
+          await store.refreshActiveFromServer();
+          if (!current() || !activeIsStudy()) return false;
+        }
         store.update({ question }, { persist: false, reason: 'conversation-question-carry', continueExisting: true });
         await store.persist();
-        if (!host.session() || host.session().session_id !== expectedSessionId) return false;
+        if (!current()) return false;
         if (typeof host.rebind === 'function') await host.rebind();
         await loadWorkflow();
         return true;

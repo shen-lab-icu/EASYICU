@@ -1526,9 +1526,16 @@
   }
   async function continueAfterDataSourceConfirmation() {
     if (!state.session || state.busy || state.childJobId || sessionIsStale()) return false;
+    // The carry waits on the study store. A conversation opened meanwhile,
+    // this one reopened included, does not receive this continue message.
+    const expectedSessionId = state.session.session_id;
+    const expectedProjectId = projectId();
+    const selectionRevision = state.sessionSelectionRevision;
+    const isCurrent = () => state.session && state.session.session_id === expectedSessionId
+      && projectId() === expectedProjectId && state.sessionSelectionRevision === selectionRevision;
     if (DATA_BINDING && typeof DATA_BINDING.carryQuestionIntoSetup === 'function') {
       await DATA_BINDING.carryQuestionIntoSetup();
-      if (!state.session || state.busy || state.childJobId || sessionIsStale()) return false;
+      if (!isCurrent() || state.busy || state.childJobId || sessionIsStale()) return false;
     }
     await sendText(
       tr(
