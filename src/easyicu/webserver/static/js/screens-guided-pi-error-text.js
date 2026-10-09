@@ -255,8 +255,8 @@
           '问题里要求的某个变量在该数据库没有受支持的来源。请更换变量或数据库后再规划。',
         ),
         research_pipeline_plan_contract_exhausted: tr(
-          'Four plan drafts were rejected by the scientific contract before analysis.',
-          '系统在分析前连续否决了 4 版计划草案。',
+          'Four plan drafts in a row did not pass the scientific checks, so analysis did not start.',
+          '连续 4 版计划草案都没有通过科学检查，分析没有开始。',
         ),
         research_pipeline_planner_provider_unavailable: tr(
           'The model service was unavailable while planning. Check the connection and generate the plan again.',
@@ -293,6 +293,67 @@
         agent_plan_configuration_failed: tr(
           'EasyICU could not configure the reviewed plan for execution automatically.',
           'EasyICU 无法自动为已审阅的计划完成执行配置。',
+        ),
+        web_scientific_runtime_columns_missing: tr(
+          'Some adjustment variables in the plan are not in the prepared data, so analysis stopped before it began. The data must be prepared again with those variables.',
+          '计划要调整的变量有几列不在准备好的数据里，分析在开始前停止。需要重新准备包含这些变量的数据。',
+        ),
+        web_scientific_runtime_schema_unavailable: tr(
+          'The prepared data table could not be read, so analysis stopped before it began. Prepare the data again.',
+          '准备好的数据表无法读取，分析在开始前停止。请重新准备数据。',
+        ),
+        web_scientific_runtime_covariate_encoding_unsupported: tr(
+          'One adjustment variable has a data type the model cannot use yet.',
+          '有一个调整变量的数据类型目前无法用于建模。',
+        ),
+        web_scientific_runtime_projection_ambiguous: tr(
+          'The plan does not map to the prepared data unambiguously, so analysis stopped before it began.',
+          '计划与准备好的数据对应关系不唯一，分析在开始前停止。',
+        ),
+        research_pipeline_execution_failed: tr(
+          'An analysis step failed while running.',
+          '有一个分析步骤在运行中失败了。',
+        ),
+        research_pipeline_provider_timeout: tr(
+          'The model service did not answer in time. Try again shortly.',
+          '模型服务响应超时，请稍后重试。',
+        ),
+        research_pipeline_time_window_invalid: tr(
+          'The study time window is not valid for this data.',
+          '研究时间窗对这份数据无效。',
+        ),
+        research_pipeline_package_binding_changed: tr(
+          'The analysis data changed while the run was in progress, so the run stopped.',
+          '运行期间分析数据发生了变化，本次运行已停止。',
+        ),
+        research_pipeline_database_required: tr(
+          'No confirmed database was available for this run.',
+          '这次运行没有已确认的数据库。',
+        ),
+        research_pipeline_database_unknown: tr(
+          'The run named a database EasyICU does not support.',
+          '这次运行使用的数据库不受 EasyICU 支持。',
+        ),
+        research_pipeline_cancelled: tr('The run was cancelled.', '运行已取消。'),
+        research_pipeline_codex_user_auth_required: tr(
+          'The model account needs to sign in again.',
+          '模型账户需要重新登录。',
+        ),
+        research_pipeline_pi_verified_credentials_required: tr(
+          'The model connection must be verified before this run.',
+          '需要先验证模型连接，才能运行。',
+        ),
+        research_pipeline_schema_validation_failed: tr(
+          'A plan or result file did not pass its structure check.',
+          '计划或结果文件没有通过结构校验。',
+        ),
+        research_pipeline_execution_retry_input_invalid: tr(
+          'The inputs this retry needs are incomplete.',
+          '这次重试需要的运行输入不完整。',
+        ),
+        WRITER_ONLY_AUTHORITY_REPAIR_FAILED_PRIOR_PRESERVED: tr(
+          'The new report version did not pass the number and evidence checks; the previous version is kept.',
+          '新版本报告没有通过数字与证据校验，保留原版本。',
         ),
       };
       // A typed compile reason explains the stop itself; the generic compile

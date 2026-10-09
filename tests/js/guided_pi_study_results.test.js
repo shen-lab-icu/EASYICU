@@ -56,7 +56,7 @@ const resultShelf = outcome.renderShelf({ ...latest, artifact_refs: latest.artif
 assert.match(resultShelf, /data-gpi-results-search/);
 assert.match(resultShelf, /result_tables\.json/);
 assert.match(resultShelf, /2\.0 KB/);
-assert.match(outcome.renderShelf(latest, workflow, 'no-such-file'), /data-gpi-result-file="result_tables\.json" hidden/);
+assert.match(outcome.renderShelf(latest, workflow, 'no-such-file'), /data-gpi-result-file="result_tables\.json"[^>]* hidden/);
 assert.match(outcome.renderShelf(latest, workflow, 'no-such-file'), /No matching files/);
 assert.ok(outcome.followUps(latest, workflow).length >= 3);
 assert.match(outcome.render(latest, workflow), /data-gpi-followup="0"/);

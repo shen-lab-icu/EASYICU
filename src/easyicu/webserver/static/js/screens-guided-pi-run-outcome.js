@@ -19,6 +19,9 @@
     };
     let activeReviewTab = 0;
     const dismissedFollowUps = new Set();
+    const answerOwner = window.EasyICU.guidedPi.optional('runAnswer');
+    const ANSWER = answerOwner && typeof answerOwner.create === 'function'
+      ? answerOwner.create({ tr, esc, api, projectId, resourceButton }) : null;
     let scientificReview = { key: '', payload: null, loading: false, error: '' };
     const reviewCopyZh = Object.freeze({
       'Technical executability is not evidence of novelty or publication value.': '技术上可以执行，不等于已经证明研究具有创新性或投稿价值。',
@@ -39,7 +42,23 @@
       'Prespecified model is incomplete.': '预先设定的模型尚未完成。',
       'A required model is missing.': '缺少一项必需模型。',
       'Complete the model.': '完成该模型并重新审阅。',
+      'Provenance exists, but scientific population scope is not fully established.': '已有溯源记录，但研究人群的科学范围尚未完全确立。',
+      'The materialized cohort may be technically traceable, but the source population, selection path, and representativeness are not explicitly closed.': '队列在技术上可以追溯，但来源人群、筛选路径和代表性尚未明确写清。',
+      'Persist the source population, eligibility/exclusion flow, source coverage, and final denominator as a reproducible cohort definition.': '把来源人群、纳入与排除流程、来源覆盖和最终分母保存为可复现的队列定义。',
+      'Retrieved records have no inspectable, included direct-comparator screening decision for this exact ICU question.': '检索到的文献还没有针对这个 ICU 问题、可核查的“是否为直接对照”逐条筛选记录。',
+      'Screen each retrieved record against the declared population, exposure, outcome, and estimand; retain a record-level decision without conflating design analogy with a direct effect comparator.': '按声明的人群、暴露、结局和估计目标逐条筛选检索记录并保留判断；设计相似不等于直接对照。',
+      'Exposure status is ascertained after time zero, but the final plan does not close exposure opportunity, early events, or a landmark/time-varying alternative.': '暴露在时间零点之后才判定，但最终计划没有处理暴露机会、早期事件，也没有采用 landmark 或时变设计。',
+      'Pre-specify a non-overlapping follow-up strategy and early death/discharge accounting, or explicitly retain the estimate as descriptive and non-article-grade.': '预先设定不重叠的随访方案并处理早期死亡或出院，或者明确把结果保留为描述性、非论文级估计。',
+      'ICU stays are the analysis unit, but patient identity is unavailable; repeated stays cannot be identified or clustered.': '分析单位是 ICU 入住，但缺少患者标识，无法识别或聚类同一患者的多次入住。',
+      'Have EasyICU materialize a verified patient-level identifier when the source can provide one. Otherwise keep the dependence limitation explicit and paper authority off.': '数据源能提供时，由 EasyICU 生成经核验的患者级标识；否则明确保留这项依赖性局限，并且不授予投稿使用权限。',
+      'The final plan tests fewer than two distinct, executable robustness axes.': '最终计划中可执行的稳健性分析少于两个不同维度。',
+      'Pre-specify task-supported definition/window, cohort, outcome, or missing-data alternatives; never invent an unsupported variant.': '预先设定数据支持的替代定义或时间窗、队列、结局或缺失数据方案；不要虚构数据不支持的变体。',
+      'Expand only from run-bound evidence and exact literature keys: state the clinical rationale, reproducible design, complete results, interpretation, comparison and limitations. The section floors are anti-stub checks, not journal word targets.': '只依据本次运行的证据和确切文献补充：临床依据、可复现的设计、完整结果、解读、比较和局限。章节下限用于防止空壳，不是期刊字数要求。',
     });
+    // Reviewer sentences that carry a run-specific list keep the list as is.
+    const reviewPatternsZh = [
+      [/^Core manuscript sections remain stub-like: (.+)\.$/, list => `稿件核心章节仍过于单薄：${list}。`],
+    ];
     const reviewCodeZh = Object.freeze({
       IDEA_PRIOR_ART_AUTHORITY_NOT_ESTABLISHED: '既往研究依据尚未建立',
       SCIENTIFIC_REVIEW_MAJOR_REVISION_OPEN: '重大科学修订尚未关闭',
@@ -47,6 +66,12 @@
       REPORTING_CHECKLIST_ITEMS_OPEN: '报告规范项目尚未关闭',
       PAPER_AUTHORITY_NOT_GRANTED: '尚未取得投稿使用权限',
       MODEL_INCOMPLETE: '预设模型尚未完成',
+      COHORT_SOURCE_SCOPE_NOT_EXPLICIT: '队列来源范围尚未写明',
+      DIRECT_COMPARATOR_SCREENING_NOT_ESTABLISHED: '直接对照文献筛选未完成',
+      POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED: '暴露判定晚于时间零点',
+      REPEATED_STAY_DEPENDENCE_UNRESOLVED: '同一患者多次入住未处理',
+      ROBUSTNESS_AXES_TOO_NARROW: '稳健性分析维度不足',
+      MANUSCRIPT_CORE_SECTIONS_TOO_THIN: '稿件核心章节过于单薄',
     });
     const reviewCodeEn = Object.freeze({
       IDEA_PRIOR_ART_AUTHORITY_NOT_ESTABLISHED: 'Prior-art evidence is not established',
@@ -55,10 +80,18 @@
       REPORTING_CHECKLIST_ITEMS_OPEN: 'Reporting checklist items remain open',
       PAPER_AUTHORITY_NOT_GRANTED: 'Publication use is not authorized',
       MODEL_INCOMPLETE: 'Prespecified model is incomplete',
+      COHORT_SOURCE_SCOPE_NOT_EXPLICIT: 'Cohort source scope is not explicit',
+      DIRECT_COMPARATOR_SCREENING_NOT_ESTABLISHED: 'Direct-comparator screening is not established',
+      POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED: 'Exposure is ascertained after time zero',
+      REPEATED_STAY_DEPENDENCE_UNRESOLVED: 'Repeated ICU stays are not handled',
+      ROBUSTNESS_AXES_TOO_NARROW: 'Too few robustness axes',
+      MANUSCRIPT_CORE_SECTIONS_TOO_THIN: 'Core manuscript sections are too thin',
     });
     function localizedReviewText(value) {
       const text = String(value || '');
-      return reviewCopyZh[text] ? tr(text, reviewCopyZh[text]) : text;
+      if (reviewCopyZh[text]) return tr(text, reviewCopyZh[text]);
+      const pattern = reviewPatternsZh.find(([rule]) => rule.test(text));
+      return pattern ? tr(text, text.replace(pattern[0], (_match, list) => pattern[1](list))) : text;
     }
     function findingTitle(code, domainLabel) {
       const value = String(code || '');
@@ -73,7 +106,22 @@
           && /^[a-f0-9]{64}$/.test(String(row.sha256 || '')));
     }
 
+    /* The card is first drawn with a reading placeholder; once the run's own
+       numbers are read, the card is redrawn in place with its answer, file
+       notes and follow-ups. */
+    async function loadAnswer(latestRun, workflow) {
+      if (!ANSWER || !resultsAvailable(latestRun, workflow)) return;
+      if (!await ANSWER.load(latestRun)) return;
+      const root = typeof host === 'function' ? host() : null;
+      const card = root && Array.from(root.querySelectorAll('[data-gpi-run-outcome]'))
+        .find(node => node.dataset.gpiRunOutcome === String(latestRun.run_id || ''));
+      if (card) card.outerHTML = render(latestRun, workflow);
+    }
+
+    // The workflow owner calls this once per projected workflow; the run's
+    // answer and its scientific review load side by side.
     async function loadScientificReview(latestRun, workflow) {
+      void loadAnswer(latestRun, workflow);
       if (!resultsAvailable(latestRun, workflow) || typeof projectId !== 'function') return;
       const ref = scientificReviewReference(latestRun);
       if (!ref) return;
@@ -176,7 +224,15 @@
       if (sort === 'size') files.sort((left, right) => Number(right.size || 0) - Number(left.size || 0)
         || String(left.artifact).localeCompare(String(right.artifact)));
       const needle = String(query || '').trim().toLocaleLowerCase();
-      const filtered = files.filter(row => String(row.artifact).toLocaleLowerCase().includes(needle));
+      // A reader sees what each file is; the file name stays beside it for
+      // the details view and search. Audit and provenance files keep their
+      // place in a folded group instead of leading the list.
+      const title = row => {
+        const render = window.AGENT_RENDER;
+        return render && typeof render.artifactTitle === 'function' ? String(render.artifactTitle(row.artifact) || row.artifact) : row.artifact;
+      };
+      const matches = row => `${row.artifact} ${title(row)}`.toLocaleLowerCase().includes(needle);
+      const filtered = files.filter(matches);
       const size = value => Number.isFinite(value) && value >= 0
         ? (value < 1024 ? `${value} B` : value < 1024 * 1024
           ? `${(value / 1024).toFixed(1)} KB` : `${(value / (1024 * 1024)).toFixed(1)} MB`) : '';
@@ -194,6 +250,9 @@
           : tr('Download safe review copy', '下载脱敏审阅副本');
         return url ? `<a class="gpi-result-download" href="${esc(url)}" download="${esc(name)}" aria-label="${esc(title + ' ' + row.artifact)}" title="${title}">${iconHtml('download', 14)}</a>` : '';
       };
+      const fileRow = row => `<div class="gpi-study-file" data-gpi-result-file="${esc(row.artifact)}" data-gpi-result-title="${esc(title(row))}"${needle && !matches(row) ? ' hidden' : ''}><span aria-hidden="true">${iconHtml(resourceIcon(row), 15)}</span>${resourceButton(row, title(row))}<small class="gpi-study-file-name">${esc(row.artifact)}</small>${size(row.size) ? `<small>${esc(size(row.size))}</small>` : ''}${download(row)}</div>`;
+      const readerFiles = files.filter(row => READER_FILES.has(row.artifact));
+      const auditFiles = files.filter(row => !READER_FILES.has(row.artifact));
       return `<section class="gpi-study-results" aria-label="${esc(tr('Current study results', '当前研究成果'))}">
         <div class="gpi-study-results-heading"><span>${tr('Current run', '本次运行')} · ${files.length} ${tr('files', '个文件')}</span></div>
         <div class="gpi-study-results-primary">${rows.slice(0, 3).map(row => resourceButton(row, row.label)).join('')}</div>
@@ -203,12 +262,17 @@
           <label><span class="shell-sr-only">${tr('Sort files', '文件排序')}</span><select data-gpi-results-sort><option value="recommended"${sort === 'recommended' ? ' selected' : ''}>${tr('Recommended', '推荐')}</option><option value="name"${sort === 'name' ? ' selected' : ''}>${tr('Name', '名称')}</option><option value="size"${sort === 'size' ? ' selected' : ''}>${tr('Size', '大小')}</option></select></label>
         </div>
         <label class="gpi-results-search"><span class="shell-sr-only">${tr('Filter result files', '筛选成果文件')}</span><input type="search" data-gpi-results-search placeholder="${tr('Filter files…', '搜索文件…')}" value="${esc(query)}"></label>
-        <div class="gpi-study-results-links" data-gpi-results-list data-view="${view}">${files.map(row => `<div class="gpi-study-file" data-gpi-result-file="${esc(row.artifact)}"${needle && !String(row.artifact).toLocaleLowerCase().includes(needle) ? ' hidden' : ''}><span aria-hidden="true">${iconHtml(resourceIcon(row), 15)}</span>${resourceButton(row, row.artifact)}${size(row.size) ? `<small>${esc(size(row.size))}</small>` : ''}${download(row)}</div>`).join('')}</div>
+        <div class="gpi-study-results-links" data-gpi-results-list data-view="${view}">${readerFiles.map(fileRow).join('')}${auditFiles.length ? `<details class="gpi-study-results-audit"${needle && auditFiles.some(matches) ? ' open' : ''}><summary>${tr('Audit and provenance files', '审计与溯源文件')} · ${auditFiles.length}</summary>${auditFiles.map(fileRow).join('')}</details>` : ''}</div>
         <p class="gpi-aside-empty" data-gpi-results-empty${filtered.length ? ' hidden' : ''}>${tr('No matching files', '没有匹配的文件')}</p>
         <small>${esc(tr('Files from the current run · publication review pending', '当前运行文件 · 投稿审阅尚未完成'))}</small>
         <details class="gpi-study-results-source"><summary>${tr('Result source', '成果来源')}</summary><code>${esc(latestRun.run_id)}</code></details>
       </section>`;
     }
+
+    // Files a reader opens; everything else in the run is audit and provenance.
+    const READER_FILES = new Set(['result_tables.json', 'figure_gallery.json', 'manuscript_revision.pdf',
+      'manuscript_scaffold.pdf', 'manuscript_draft.json', 'literature_evidence.json',
+      'scientific_readiness.json', 'agent_plan.json', 'cohort_summary.json']);
 
     function resourceIcon(row) {
       const names = { 'full_analysis_report.json': 'layers', 'result_tables.json': 'rows',
@@ -228,7 +292,8 @@
         'manuscript_scaffold.pdf': tr('Manuscript draft for download', '稿件草稿，可下载'),
       };
       const rows = collection(latestRun, workflow).filter(row => descriptions[row.artifact]);
-      return rows.length ? `<table class="gpi-deliverables"><caption>${tr('Results from this run', '本次研究产物')}</caption><thead><tr><th>${tr('Result', '成果')}</th><th>${tr('Contents', '内容')}</th></tr></thead><tbody>${rows.map(row => `<tr><td>${resourceButton(row, row.label)}</td><td>${esc(descriptions[row.artifact])}</td></tr>`).join('')}</tbody></table>` : '';
+      const note = row => (ANSWER && ANSWER.fileNote(latestRun, row.artifact)) || descriptions[row.artifact];
+      return rows.length ? `<table class="gpi-deliverables"><caption>${tr('Results from this run', '本次研究产物')}</caption><thead><tr><th>${tr('Result', '成果')}</th><th>${tr('Contents', '内容')}</th></tr></thead><tbody>${rows.map(row => `<tr><td>${resourceButton(row, row.label)}</td><td>${esc(note(row))}</td></tr>`).join('')}</tbody></table>` : '';
     }
 
     function renderReviewAction(latestRun, workflow) {
@@ -242,6 +307,8 @@
     }
 
     function followUps(latestRun, workflow) {
+      const specific = ANSWER ? ANSWER.followUps(latestRun) : null;
+      if (specific && specific.length) return specific;
       const available = new Set(collection(latestRun, workflow).map(row => row.artifact));
       const suggestions = [];
       if (available.has('result_tables.json')) suggestions.push(tr(
@@ -280,12 +347,23 @@
       const refs = (latestRun.artifact_refs || []).filter(row => row && row.run_id === latestRun.run_id);
       const evidence = name => refs.find(row => row.artifact === name);
       const row = (title, description, value, resource) => `<li><div><strong>${esc(title)}</strong><p>${esc(description)}</p></div><span class="gpi-review-state${value === true ? ' is-checked' : ''}">${value === true ? tr('Recorded', '有记录') : value === false ? tr('Open', '待处理') : tr('Unreported', '未返回')}</span>${resource ? resourceButton(resource, tr('View evidence', '查看依据')) : ''}</li>`;
+      // What was done, on what data, and the bound on it, from the run's own
+      // plan and results, before the reviewer's findings.
+      const steps = ANSWER ? ANSWER.approachSteps(latestRun) : [];
+      const approachLead = steps.length
+        ? `<li class="gpi-review-narrative"><div><strong>${tr('What this run did', '本次运行做了什么')}</strong><ol>${steps.map(step => `<li>${esc(step)}</li>`).join('')}</ol></div></li>` : '';
+      const materialsText = ANSWER ? ANSWER.materials(latestRun) : '';
+      const materialsLead = materialsText
+        ? `<li class="gpi-review-narrative"><div><strong>${tr('Data analysed', '分析数据')}</strong><p>${esc(materialsText)}</p></div></li>` : '';
+      const limitationText = ANSWER ? ANSWER.limitation(latestRun) : '';
+      const limitationLead = limitationText
+        ? `<li class="gpi-review-narrative"><div><strong>${tr('How to read the result', '结果的解读边界')}</strong><p>${esc(limitationText)}</p></div></li>` : '';
       let panels = [
-        [tr('Approach', '方法'), row(tr('Execution', '分析执行'), tr('Whether the approved analysis finished according to the run gate.', '依据运行闸门核对已批准分析是否完成。'), latestRun.execution_complete, evidence('quality_gate.json') || evidence('evidence_ledger.json'))
+        [tr('Approach', '方法'), approachLead + row(tr('Execution', '分析执行'), tr('Whether the approved analysis finished according to the run gate.', '依据运行闸门核对已批准分析是否完成。'), latestRun.execution_complete, evidence('quality_gate.json') || evidence('evidence_ledger.json'))
           + row(tr('Validation', '分析校验'), tr('Inspect validation findings before interpreting estimates.', '解释估计前先查看分析校验发现。'), latestRun.analysis_validated, evidence('quality_report.json') || evidence('quality_gate.json'))],
-        [tr('Materials', '材料'), row(tr('Evidence record', '证据记录'), tr('Source and artifact registration can be inspected; this does not itself establish data suitability.', '可查看来源与产物登记；登记本身不等于数据适用性已获确认。'), latestRun.evidence_complete, evidence('evidence_ledger.json') || evidence('source_run_manifest.json'))],
+        [tr('Materials', '材料'), materialsLead + row(tr('Evidence record', '证据记录'), tr('Source and artifact registration can be inspected; this does not itself establish data suitability.', '可查看来源与产物登记；登记本身不等于数据适用性已获确认。'), latestRun.evidence_complete, evidence('evidence_ledger.json') || evidence('source_run_manifest.json'))],
         [tr('Evidence checks', '证据核对'), row(tr('Numeric provenance', '数字溯源'), tr('This gate compares manuscript numbers with run evidence. It is not an independent hallucination audit.', '此闸门核对稿件数字与运行证据，不等同于独立的幻觉审查。'), latestRun.numeric_verified, evidence('manuscript_provenance.json') || evidence('evidence_ledger.json'))],
-        [tr('Limitations', '局限'), row(tr('Scientific and human review', '科学与人工审阅'), tr('Read unresolved scientific issues before any publication claim.', '形成投稿结论前应查看未解决的科学问题。'), latestRun.reportable === true, evidence('scientific_readiness.json'))],
+        [tr('Limitations', '局限'), limitationLead + row(tr('Scientific and human review', '科学与人工审阅'), tr('Read unresolved scientific issues before any publication claim.', '形成投稿结论前应查看未解决的科学问题。'), latestRun.reportable === true, evidence('scientific_readiness.json'))],
       ];
       const reviewRef = evidence('scientific_readiness.json');
       const expectedKey = reviewRef && typeof projectId === 'function'
@@ -294,10 +372,20 @@
       if (payload) {
         const domainNames = { idea: tr('Research idea', '研究问题'), literature: tr('Literature', '文献'),
           data: tr('Data', '数据'), analysis: tr('Analysis', '分析'), manuscript: tr('Manuscript', '稿件') };
-        const stateNames = { passed: tr('Passed', '通过'), blocked: tr('Blocked', '阻断'),
+        // An open finding blocks publication use, not the analysis the reader
+        // is looking at; it reads as an open item rather than a failure.
+        const stateNames = { passed: tr('Passed', '通过'), blocked: tr('Open', '待处理'),
           not_assessed: tr('Not assessed', '未评估'), warning: tr('Attention', '需关注') };
         const safe = (value, limit = 700) => esc(String(value || '').slice(0, limit));
-        const item = (title, summary, status, refsHtml, remedy, rawCode) => `<li class="gpi-review-record"${rawCode ? ` data-review-code="${safe(rawCode, 120)}"` : ''}><div><strong>${safe(title, 180)}</strong><p>${safe(localizedReviewText(summary))}</p>${remedy ? `<p class="gpi-review-remedy">${tr('Next step: ', '待处理：')}${safe(localizedReviewText(remedy))}</p>` : ''}${refsHtml || ''}</div><span class="gpi-review-state${status === 'passed' ? ' is-checked' : ''}">${safe(stateNames[status] || status, 40)}</span></li>`;
+        // Reviewer wording without a Chinese rendering stays available, folded
+        // under its Chinese title instead of filling the Chinese panel.
+        const translated = value => !value || window.EU_LANG !== 'zh' || /[\u3400-\u9fff]/.test(localizedReviewText(value));
+        const item = (title, summary, status, refsHtml, remedy, rawCode) => {
+          const body = translated(summary) && translated(remedy)
+            ? `${summary ? `<p>${safe(localizedReviewText(summary))}</p>` : ''}${remedy ? `<p class="gpi-review-remedy">${tr('Next step: ', '待处理：')}${safe(localizedReviewText(remedy))}</p>` : ''}`
+            : `<details class="gpi-review-original"><summary>${tr('Reviewer wording', '审阅原文（英文）')}</summary>${summary ? `<p>${safe(localizedReviewText(summary))}</p>` : ''}${remedy ? `<p class="gpi-review-remedy">${safe(localizedReviewText(remedy))}</p>` : ''}</details>`;
+          return `<li class="gpi-review-record"${rawCode ? ` data-review-code="${safe(rawCode, 120)}"` : ''}><div><strong>${safe(title, 180)}</strong>${body}${refsHtml || ''}</div><span class="gpi-review-state${status === 'passed' ? ' is-checked' : ''}">${safe(stateNames[status] || status, 40)}</span></li>`;
+        };
         const domains = payload.domains.slice(0, 12).filter(value => value && typeof value === 'object');
         const findings = payload.findings.slice(0, 16).filter(value => value && typeof value === 'object');
         const reviewEvidence = Array.isArray(latestRun.review_evidence_refs)
@@ -339,11 +427,11 @@
           return content || `<li><small>${tr('No item was recorded in this area.', '本项没有返回记录。')}</small></li>`;
         };
         panels = [
-          [tr('Approach', '方法'), forDomains(['analysis'])],
-          [tr('Materials', '材料'), forDomains(['data', 'literature'])],
+          [tr('Approach', '方法'), approachLead + forDomains(['analysis'])],
+          [tr('Materials', '材料'), materialsLead + forDomains(['data', 'literature'])],
           [tr('Evidence checks', '证据核对'), forDomains(['manuscript'])
             + row(tr('Numeric provenance', '数字溯源'), tr('A numeric gate is separate from an independent hallucination audit.', '数字核验闸门不等于独立的幻觉审查。'), latestRun.numeric_verified, evidence('manuscript_provenance.json'))],
-          [tr('Limitations', '局限'), forDomains(['idea'])],
+          [tr('Limitations', '局限'), limitationLead + forDomains(['idea'])],
         ];
       }
       return `<section class="gpi-review-summary" data-gpi-review-run="${esc(latestRun.run_id)}" aria-label="${tr('Scientific review', '科学审阅')}">
@@ -430,24 +518,29 @@
       const figureNote = figureCount === 0
         ? `<p class="gpi-run-outcome-figure-note">${esc(tr('No figure was registered for this analysis; review the result tables first.', '本次分析未登记图件；请先查看结果表。'))}</p>`
         : '';
-      return `<section class="gpi-run-outcome" aria-label="${esc(tr('Completed analysis results', '已完成的分析结果'))}">
+      // The answer comes first, in the run's own numbers; the file table,
+      // actions, follow-ups and review follow it. A run whose registered
+      // results carry no summarizable answer keeps one short sentence.
+      const answer = ANSWER ? ANSWER.render(latestRun) : '';
+      const lead = answer || `<p>${esc(tr(
+        validated
+          ? 'Open the study overview, result tables and figures below.'
+          : 'The generated results are available below. Review the check records before interpreting them.',
+        validated
+          ? '可从下方打开研究总览、结果表和图表。'
+          : '下方可以查看已生成的结果。解读前，请先核对各项检查记录。',
+      ))}</p>`;
+      const status = validated
+        ? (numericVerified ? tr('Analysis review only · publication review pending', '仅供分析审阅 · 投稿审阅未完成')
+          : tr('Analysis review only · numeric provenance open', '仅供分析审阅 · 数字溯源未闭合'))
+        : tr('Validation needs review', '校验待核对');
+      return `<section class="gpi-run-outcome" data-gpi-run-outcome="${esc(latestRun.run_id || '')}" aria-label="${esc(tr('Completed analysis results', '已完成的分析结果'))}">
         <div class="gpi-run-outcome-icon" aria-hidden="true">${iconHtml(validated ? 'check' : 'shield', 17)}</div>
         <div class="gpi-run-outcome-copy">
           <strong>${esc(validated
-            ? tr('Analysis complete — results are ready for review', '分析已完成，可以审阅结果')
-            : tr('Results generated — validation needs review', '结果已生成，请核对待处理事项'))}</strong>
-          <p>${esc(tr(
-            validated
-              ? numericVerified
-                ? 'The analysis and numeric checks are complete. Explore the results below; manuscript and publication review remain open.'
-                : 'The approved analysis and automated validation completed. Manuscript-level numeric provenance and publication review remain open, so these results are for analysis review only.'
-              : 'The generated results are available below. Review the check records before interpreting them.',
-            validated
-              ? numericVerified
-                ? '分析与数值核验已完成。可以从下方浏览成果，稿件与投稿审阅仍待完成。'
-                : '已批准的分析与自动校验已经完成。稿件级数字溯源和投稿审阅尚未闭合，因此当前结果仅供分析审阅。'
-              : '下方可以查看已生成的结果。解读前，请先核对各项检查记录。',
-          ))}</p>
+            ? tr('Analysis complete', '分析已完成')
+            : tr('Results generated — validation needs review', '结果已生成，请核对待处理事项'))}<span class="gpi-run-outcome-status">${esc(status)}</span></strong>
+          ${lead}
           ${renderDeliverables(latestRun, workflow)}
           ${figureNote}
           <div class="gpi-run-outcome-actions gpi-run-outcome-primary">${primaryActions.join('')}</div>
