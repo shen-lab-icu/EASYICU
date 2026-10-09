@@ -20,6 +20,7 @@ from ..planning.adjustment_authority import (
     validate_plan_against_adjustment_authority,
 )
 from ..planning.analysis_types import (
+    get_analysis_type,
     infer_analysis_type,
     list_analysis_types,
     validate_host_authorized_analysis_family,
@@ -848,6 +849,29 @@ def _tokens(value: object) -> set[str]:
     return {token for token in (*compounds, *pieces) if len(token) >= 2}
 
 
+#: Families offered whatever the question's wording.  The keyword scorer reads
+#: only some phrasings, in some languages, so it orders these but cannot drop
+#: one a question asks for.  Survival, trajectory and causal families need data
+#: the host does not check here yet, so they still come from the question.
+_ALWAYS_OFFERED_ANALYSIS_TYPES = (
+    "descriptive_epidemiology",
+    "association_study",
+    "prediction_model",
+)
+
+
+def _offerable_analysis_type(context: ResearchContext, key: str) -> bool:
+    """An executable family the caller's own family choice does not exclude."""
+
+    if get_analysis_type(key).capability_id is None:
+        return False
+    try:
+        validate_host_authorized_analysis_family(context, key)
+    except ValueError:
+        return False
+    return True
+
+
 def candidate_analysis_types(
     context: ResearchContext,
     *,
@@ -858,6 +882,8 @@ def candidate_analysis_types(
     Scoring uses the research question only.  Case notes can contain required
     audits and sensitivities without changing the headline study family, which
     is exactly how a measurement-audit keyword displaced E1's association.
+    Scoring ranks up to ``max_candidates`` families; the always-offered ones
+    follow, and a family nothing executes is never offered.
     """
 
     question = str(context.research_question or "").casefold()
@@ -881,18 +907,18 @@ def candidate_analysis_types(
     # does not make association a better candidate than description,
     # prediction, or causal inference.
     candidates = [inferred, *(key for _score, _position, key in scored)]
-    candidates.append("descriptive_epidemiology")
     authorized: list[str] = []
     for key in candidates:
-        if key in authorized:
-            continue
-        try:
-            validate_host_authorized_analysis_family(context, key)
-        except ValueError:
+        if key in authorized or not _offerable_analysis_type(context, key):
             continue
         authorized.append(key)
         if len(authorized) >= max(1, int(max_candidates)):
             break
+    authorized.extend(
+        key
+        for key in _ALWAYS_OFFERED_ANALYSIS_TYPES
+        if key not in authorized and _offerable_analysis_type(context, key)
+    )
     if not authorized:
         raise ProgressivePlanCompileError(
             "progressive_no_authorized_analysis_type",
@@ -1388,7 +1414,9 @@ class ProgressivePlannerAgent:
             )
         blocks = [
             "PROGRESSIVE PLANNER RUN AUTHORITY",
-            "Candidate analysis families (choose exactly one):\n"
+            "Candidate analysis families (choose exactly one; the order is the "
+            "host's reading of the question's wording, not a ruling, so choose "
+            "the family the question asks for):\n"
             + json.dumps(list(analysis_types), ensure_ascii=False),
             "Allowed ProgressiveOutlineStep.module_id values by candidate "
             "analysis family (use only these exact strings):\n"
