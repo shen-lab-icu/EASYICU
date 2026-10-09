@@ -1036,6 +1036,14 @@ def _metadata_only_planning_coordinates(
     ``configured_outcome`` is the StudyContext's typed outcome concept, which
     the researcher confirmed; it takes precedence over a question-named one,
     and its binary endpoint follows the same concept-owner rule.
+
+    A question the reader reads as a prediction study names no exposure: a
+    prediction model has predictors and may be compared with an existing
+    score, and which a named concept is, the plan states as the question's
+    requirements.  Every concept the question names besides its outcome and
+    the exposure projected here is returned as ``question_named_concepts``:
+    the source columns its name can denote and the words that name it, which
+    the plan must account for.
     """
 
     from easyicu.research_agent.acquisition.catalog import (
@@ -1045,6 +1053,7 @@ def _metadata_only_planning_coordinates(
     from easyicu.webserver.study_intent import (
         deterministic_intent,
         explicit_exposure_aggregation,
+        named_study_concepts,
     )
 
     intent = deterministic_intent(question)
@@ -1062,7 +1071,13 @@ def _metadata_only_planning_coordinates(
         return value if value in catalog_by_id else None
 
     target_outcome = named_concept("outcome")
-    named_exposure = named_concept("exposure")
+    family = slots.get("analysis_family")
+    family = family if isinstance(family, Mapping) else {}
+    prediction = (
+        str(family.get("value") or "") == "prediction"
+        and str(family.get("provenance") or "") == "user_text"
+    )
+    named_exposure = None if prediction else named_concept("exposure")
     primary_exposure = _observability_preserving_exposure(named_exposure, export_path)
     source_column = _bound_source_column(export_path)
     # A host-derived window reading is already one value per stay; an
@@ -1098,9 +1113,28 @@ def _metadata_only_planning_coordinates(
             absence_semantics="no_absent_rows",
             levels=[0, 1],
         )
+    # The concept projected as the exposure is sealed as the exposure, which
+    # accounts for it; a question that names nothing else keeps its identity.
+    named_concepts = [
+        {
+            "concepts": list(
+                dict.fromkeys(
+                    source_column(concept)
+                    for concept in concepts
+                    if concept in catalog_by_id
+                )
+            ),
+            "evidence": _clean_text(phrase, 120),
+        }
+        for concepts, phrase in named_study_concepts(question)
+        if any(concept in catalog_by_id for concept in concepts)
+        and _clean_text(phrase, 120)
+        and named_exposure not in concepts
+    ]
     return {
         "target_outcome": source_column(target_outcome),
         "primary_exposure": source_column(primary_exposure),
+        "question_named_concepts": named_concepts,
         "primary_exposure_aggregation": (
             exposure_operation.aggregation if exposure_operation is not None else None
         ),

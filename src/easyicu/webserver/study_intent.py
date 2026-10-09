@@ -53,6 +53,7 @@ __all__ = [
     "explicit_outcome_concepts",
     "explicit_exposure_aggregation",
     "explicit_landmark_hours",
+    "named_study_concepts",
     "SLOTS",
 ]
 
@@ -425,6 +426,8 @@ _CONCEPT_FAMILIES: Tuple[frozenset, ...] = (
     frozenset({"los_icu", "los_hosp"}),
     frozenset({"vent_ind", "vent_free_days_28", "peep", "tidal_vol"}),
     frozenset({"sep3", "sep3_sofa2", "susp_inf"}),
+    # One score and the risk it predicts: "APACHE IVa" names either.
+    frozenset({"apache_iv", "apache_iv_pred_hosp_mort"}),
 )
 
 
@@ -860,11 +863,28 @@ def explicit_exposure_aggregation(
 # --------------------------------------------------------------------------
 # Deterministic reader (always available, offline, no provider)
 # --------------------------------------------------------------------------
-def deterministic_intent(question: str) -> Dict[str, Any]:
-    """Read what the sentence actually says. Leave the rest unread."""
+def named_study_concepts(question: str) -> Tuple[Tuple[Tuple[str, ...], str], ...]:
+    """Every concept the sentence names besides its outcome, its population and its setting.
+
+    Each comes with the concepts its name can denote (its clinical family:
+    "APACHE IVa" names the score and the risk it predicts) and the words
+    that name it, in the order the sentence names them.  This is what the
+    sentence studies or asks about; which of them is an exposure, a
+    predictor or a benchmark is not read here.
+    """
+
     text = _clean_question(question)
-    lowered = text.lower()
-    slots: Dict[str, Dict[str, Any]] = {name: _empty_slot() for name in SLOTS}
+    _outcome, _phrase, named = _study_concept_readings(text, text.lower())
+    return tuple(
+        (tuple(dict.fromkeys((concept, *sorted(_family_of(concept) or ())))), phrase)
+        for concept, phrase in named
+    )
+
+
+def _study_concept_readings(
+    text: str, lowered: str
+) -> Tuple[Optional[str], Optional[str], List[Tuple[str, str]]]:
+    """The outcome reading, and every other concept the sentence studies, in text order."""
 
     concepts = _match_concept(lowered)
     primary = [(c, p) for c, p in concepts if c in _OUTCOME_CONCEPTS_PRIMARY]
@@ -876,18 +896,6 @@ def deterministic_intent(question: str) -> Dict[str, Any]:
         outcome_concept, outcome_phrase = primary[0]
     elif events:
         outcome_concept, outcome_phrase = events[0]
-
-    if outcome_concept:
-        slots["outcome"] = _slot(outcome_concept, "user_text", outcome_phrase)
-        if outcome_concept in _TIME_TO_EVENT_CONCEPTS:
-            kind = "time_to_event"
-        elif outcome_concept in _ORDINAL_CONCEPTS:
-            kind = "ordinal"
-        elif outcome_concept in _COUNT_CONCEPTS:
-            kind = "count"
-        else:
-            kind = "binary"
-        slots["outcome_type"] = _slot(kind, "user_text", outcome_phrase)
 
     # Everything else the sentence names is an exposure candidate — including a
     # tier-2 event concept that did not win the outcome slot. A concept from the
@@ -909,7 +917,32 @@ def deterministic_intent(question: str) -> Dict[str, Any]:
         and c not in listed_outcomes
         and not (outcome_family and _family_of(c) == outcome_family)
     ]
-    exposures = _exposure_candidates_in_text_order(text, exposures)
+    return (
+        outcome_concept,
+        outcome_phrase,
+        _exposure_candidates_in_text_order(text, exposures),
+    )
+
+
+def deterministic_intent(question: str) -> Dict[str, Any]:
+    """Read what the sentence actually says. Leave the rest unread."""
+    text = _clean_question(question)
+    lowered = text.lower()
+    slots: Dict[str, Dict[str, Any]] = {name: _empty_slot() for name in SLOTS}
+
+    outcome_concept, outcome_phrase, exposures = _study_concept_readings(text, lowered)
+    if outcome_concept:
+        slots["outcome"] = _slot(outcome_concept, "user_text", outcome_phrase)
+        if outcome_concept in _TIME_TO_EVENT_CONCEPTS:
+            kind = "time_to_event"
+        elif outcome_concept in _ORDINAL_CONCEPTS:
+            kind = "ordinal"
+        elif outcome_concept in _COUNT_CONCEPTS:
+            kind = "count"
+        else:
+            kind = "binary"
+        slots["outcome_type"] = _slot(kind, "user_text", outcome_phrase)
+
     if exposures:
         concept, phrase = exposures[0]
         slots["exposure"] = _slot(concept, "user_text", phrase)

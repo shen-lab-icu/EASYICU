@@ -1,19 +1,21 @@
 """Digest-bound coverage projection for explicit study requirements.
 
 The scientific-review owner has already decided whether a typed outcome,
-sensitivity, or exact covariate is covered.  This module records that decision
-as a stable row and binds it to the exact context and plan.  It does not infer
-requirements from prose or grant execution/reporting authority.
+sensitivity, or exact covariate is covered, and the question-requirements
+owner (``planning.question_requirements``) whether an analysis the question
+asks for is.  This module records that decision as a stable row and binds it
+to the exact context and plan.  It does not infer requirements from prose or
+grant execution/reporting authority.
 """
 
 from __future__ import annotations
 
-from typing import Literal, Mapping, Sequence
+from typing import Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-RequirementKind = Literal["outcome", "sensitivity", "covariate"]
+RequirementKind = Literal["outcome", "sensitivity", "covariate", "question"]
 RequirementCoverageStatus = Literal["covered", "missing", "unsupported"]
 
 
@@ -22,6 +24,9 @@ class PlanRequirementCoverageRecord(BaseModel):
 
     requirement_id: str = Field(min_length=3, max_length=256)
     kind: RequirementKind
+    #: What a question requirement asks for (``benchmark``, ``subgroup`` ...);
+    #: set on question rows only.
+    question_kind: Optional[str] = Field(default=None, pattern=r"^[a-z][a-z_]{2,31}$")
     concept_identity: str = Field(min_length=1, max_length=256)
     source_ref: str = Field(min_length=3, max_length=512)
     status: RequirementCoverageStatus
@@ -36,6 +41,10 @@ class PlanRequirementCoverageRecord(BaseModel):
             raise ValueError("covered requirement must name at least one owner step")
         if self.status != "covered" and self.owner_step_ids:
             raise ValueError("uncovered requirement cannot name an owner step")
+        if (self.kind == "question") != (self.question_kind is not None):
+            raise ValueError(
+                "a question requirement row states what the question asks for"
+            )
         return self
 
 

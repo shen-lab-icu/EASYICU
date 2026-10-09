@@ -30,6 +30,13 @@ from ..literature_design_authority import (
     CandidateLiteratureDesignDecision,
     LiteratureDesignEvidenceCard,
 )
+from ..question_requirements import (
+    MAX_NAMED_QUESTION_CONCEPTS,
+    MAX_QUESTION_REQUIREMENTS,
+    NamedQuestionConcept,
+    QuestionRequirement,
+    question_requirement_problems,
+)
 from ..progressive_contract import (
     ModelTermCoding,
     ProgressiveCohortPredicate,
@@ -739,6 +746,16 @@ class FamilySpecRequest(BaseModel):
     source_selection_recorded: bool = Field(
         default=False, exclude_if=lambda value: not value
     )
+    #: The concepts the research question names, each as the roster columns
+    #: its name or the concept dictionary relates to it
+    #: (``question_requirements.bind_named_question_concepts``).  The spec's
+    #: question requirements must account for every one that is not the
+    #: sealed exposure or outcome.  Omitted from the digest when empty.
+    question_named_concepts: list[NamedQuestionConcept] = Field(
+        default_factory=list,
+        max_length=MAX_NAMED_QUESTION_CONCEPTS,
+        exclude_if=lambda value: not value,
+    )
 
     @field_validator(
         "exposure_levels",
@@ -1264,6 +1281,14 @@ class FamilyPlanSpec(BaseModel):
     population: Optional[SpecPopulation] = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    #: What the question asks for beyond the sealed design, in its words
+    #: (``planning.question_requirements``).  Omitted from the spec digest
+    #: when empty.
+    question_requirements: list[QuestionRequirement] = Field(
+        default_factory=list,
+        max_length=MAX_QUESTION_REQUIREMENTS,
+        exclude_if=lambda value: not value,
+    )
 
     @field_validator("reader_display_labels", mode="before")
     @classmethod
@@ -1602,6 +1627,24 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
         )
     _validate_literature_design_decisions(spec, request)
     _validate_population(spec, request)
+    _validate_question_requirements(spec, request)
+
+
+def _validate_question_requirements(
+    spec: FamilyPlanSpec, request: FamilySpecRequest
+) -> None:
+    """The question's requirements quote it, read offered concepts, and account for its names."""
+
+    problems = question_requirement_problems(
+        spec.question_requirements,
+        question=request.research_question,
+        roster=request.variable_roster,
+        named=request.question_named_concepts,
+        sealed=(request.primary_exposure, request.outcome),
+    )
+    if problems:
+        first = problems[0]
+        raise FamilySpecError(first.code, first.message, path=first.path)
 
 
 def population_required(request: FamilySpecRequest) -> bool:

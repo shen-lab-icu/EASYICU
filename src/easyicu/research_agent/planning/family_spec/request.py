@@ -67,6 +67,12 @@ from ..literature_design_authority import (
     LiteratureDesignEvidenceCard,
 )
 from ..ordinal_multi_outcome import resolve_ordinal_multi_outcome_contract
+from ..question_requirements import (
+    QuestionRequirementsError,
+    bind_named_question_concepts,
+    concept_relatives,
+    named_question_concepts,
+)
 from ..progressive_compiler import cohort_identity_columns, compile_cohort_predicate
 from ..scientific_review import post_baseline_exposure
 from .contract import (
@@ -1195,6 +1201,7 @@ def build_family_spec_request(
         cohort_concept_ids=cohort_concept_ids,
         required_primary_cohort_selection_mode=required_primary_cohort_selection_mode,
     )
+    request = _bind_question_named_concepts(context, request)
     _refuse_unfilterable_cohort(request)
     _refuse_eligibility_after_time_zero(request)
     return request
@@ -1272,6 +1279,38 @@ def _bind_population_authority(
             "source_applied_inclusion": list(known.inclusion),
             "source_applied_exclusion": list(known.exclusion),
             "source_selection_recorded": selection.recorded,
+        }
+    )
+
+
+def _bind_question_named_concepts(
+    context: ResearchContext, request: FamilySpecRequest
+) -> FamilySpecRequest:
+    """Seal the concepts the question names, as the roster columns each can denote.
+
+    The Web reader's reading (``question_requirements.named_question_concepts``)
+    widened by the concept dictionary's relatives: the spec's question
+    requirements must account for each one that is not the sealed exposure or
+    outcome.  A run the Web did not launch names none.
+    """
+
+    try:
+        stated = named_question_concepts(context)
+    except QuestionRequirementsError as exc:
+        raise FamilySpecError(
+            exc.reason_code, str(exc), path="question_named_concepts"
+        ) from exc
+    named = bind_named_question_concepts(
+        stated,
+        roster=request.variable_roster,
+        relatives=concept_relatives(context),
+    )
+    if not named:
+        return request
+    return FamilySpecRequest.model_validate(
+        {
+            **request.model_dump(mode="json"),
+            "question_named_concepts": [item.model_dump(mode="json") for item in named],
         }
     )
 
