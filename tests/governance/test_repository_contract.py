@@ -37,12 +37,17 @@ def test_package_exposes_installed_distribution_version() -> None:
     assert easyicu.__version__ == distribution_version("easyicu")
 
 
-def test_static_build_metadata_does_not_require_setuptools_scm() -> None:
+def test_the_version_is_static_and_setuptools_scm_only_finds_sdist_files() -> None:
+    # The sdist carries the tracked tests, tools and documentation through the
+    # setuptools-scm file finder (docs/installation.md); the version stays
+    # static, so building from an existing sdist needs no Git metadata.
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert "version" in pyproject["project"]
-    assert all(
-        not requirement.startswith("setuptools-scm")
+    assert "version" not in pyproject["project"].get("dynamic", [])
+    assert "setuptools_scm" not in pyproject.get("tool", {})
+    assert any(
+        requirement.startswith("setuptools-scm")
         for requirement in pyproject["build-system"]["requires"]
     )
 
