@@ -1017,7 +1017,9 @@ def test_model_follow_up_questions_are_lifted_from_the_reply_and_offered_as_sugg
     assert "FOLLOW_UPS.split(publicAssistantText(row.text))" in view
     assert "${messageActions.actionsHtml}\n          ${followUpsHtml}" in view
     assert "const modelFollowUp = event.target.closest('[data-gpi-model-followup]');" in events
-    assert "if (question) sendText(question, []);" in events
+    # The model wrote the question, so the click is a model option: it never
+    # mints a privileged grant such as a report revision or a provider run.
+    assert "if (question) sendText(question, [], undefined, true, 'model_option');" in events
     assert "FOLLOW_UPS ? FOLLOW_UPS.split(visible).text : visible" in live_stream
     assert index.index("screens-guided-pi-follow-ups.js") < index.index("js/screens-guided-pi.js?v=")
     script = f"""

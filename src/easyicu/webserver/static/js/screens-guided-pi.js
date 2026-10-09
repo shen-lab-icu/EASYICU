@@ -28,6 +28,7 @@
     demoMode: false, demoScrollTopPending: false, currentTurnResources: [],
     workflowReceipts: [], editingMessageId: '', sessionSelectionRevision: 0,
     pendingLanguageReload: false, pendingEntryIntent: '', regenerating: false, regeneration: null,
+    openingQuestion: null,
     startupPromise: null, projectPreparePromise: null, projectPrepareId: '',
   };
   const ACCESS_MODE_GRANTS = Object.freeze({
@@ -1416,7 +1417,7 @@
     };
     state.source.onerror = () => { if (!state.busy) closeSource(); };
   }
-  async function sendText(text, grantsOverride, turnIntent, visibleUserMessage = true, messageOrigin = '') {
+  async function sendText(text, grantsOverride, turnIntent, visibleUserMessage = true, messageOrigin = '', openingQuestion = '') {
     if (!state.session || state.projectLoading || state.busy || state.childJobId || sessionIsStale()) return;
     if (!sessionMatchesUiLanguage(state.session)) {
       handleLanguageChange();
@@ -1444,6 +1445,7 @@
     const submittedAt = Date.now();
     state.currentTurnResources = [];
     if (visibleUserMessage) state.messages.push({ id: 'user-' + submittedAt, role: 'user', text, complete: true });
+    if (visibleUserMessage && openingQuestion) state.openingQuestion = { sessionId: state.session.session_id, text: openingQuestion };
     const activity = ensureActivity(new Date(submittedAt).toISOString());
     upsertActivityStep(activity, { id: 'submitted', kind: 'submitted', status: 'complete', at: submittedAt });
     if (visibleUserMessage) { state.draft = ''; STUDY_WORKSPACE.consume(expectedProjectId, expectedSessionId); STUDY_WORKSPACE.consumeSkill(expectedProjectId, state.session); }
@@ -1511,11 +1513,15 @@
       render();
     }
   }
-  // The researcher's opening question: the first thing they wrote in this
-  // conversation, when it is a question rather than a short choice.
+  // The researcher's opening question: the first message they typed in this
+  // conversation on this page, sent as written. A starter card, a model
+  // option, or a message carrying a reference or Skill is not one, and
+  // messages restored from history do not say how they were written, so
+  // none of them is used; the conversation then asks for the question once.
   function conversationResearchQuestion() {
-    const first = state.messages.find(row => row && row.role === 'user' && String(row.text || '').trim());
-    const text = first ? String(first.text).trim() : '';
+    const opening = state.openingQuestion;
+    const text = opening && state.session && opening.sessionId === state.session.session_id
+      ? String(opening.text || '').trim() : '';
     return text.length >= 12 ? text : '';
   }
   async function continueAfterDataSourceConfirmation() {
@@ -1543,9 +1549,13 @@
     if (!referencing && await PLAN_ACTIONS.continueUserRequestedSystemProgression(text)) return;
     const intent = referencing ? undefined : state.pendingEntryIntent
       || (IDEA_SOURCE && IDEA_SOURCE.suggestsIdeaMining(text) ? 'idea_mining_entry' : undefined);
-    await sendText(STUDY_WORKSPACE.decorateMessage(
+    const decorated = STUDY_WORKSPACE.decorateMessage(
       STUDY_WORKSPACE.decorateSkillMessage(text, projectId(), state.session), projectId(), state.session.session_id,
-    ), undefined, intent);
+    );
+    // The first message, typed and sent as written (no starter intent, no
+    // reference or Skill around it), is the researcher's opening question.
+    const opening = !intent && decorated === text && !state.messages.some(row => row && row.role === 'user') ? text : '';
+    await sendText(decorated, undefined, intent, true, '', opening);
   }
   async function confirmCohortEligibility(selection) {
     if (!selection || !state.session || state.busy || state.childJobId || sessionIsStale()) return;

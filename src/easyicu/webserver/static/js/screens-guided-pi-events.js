@@ -168,7 +168,9 @@
         if (modelFollowUp) {
           if (state.busy || state.childJobId || !state.session || state.session.stale?.stale) return;
           const question = String(modelFollowUp.dataset.gpiModelFollowup || '').trim();
-          if (question) sendText(question, []);
+          // The model wrote this question: it continues the conversation but,
+          // like a clicked model option, never mints a privileged grant.
+          if (question) sendText(question, [], undefined, true, 'model_option');
           return;
         }
         const followUp = event.target.closest('[data-gpi-followup]');
