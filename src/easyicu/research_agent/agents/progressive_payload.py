@@ -32,6 +32,10 @@ from ..providers.strict_json_schema import (
     assert_closed_json_schema,
     strictify_json_schema,
 )
+from .population_spec_transport import (
+    PopulationSpecTransportError,
+    bind_population_spec_transport,
+)
 
 
 class ProgressiveTransportSchemaError(ValueError):
@@ -821,6 +825,15 @@ def _bind_foundation_authorities(
         )
     # A stated criterion names the same concepts its predicates may read.
     criterion["properties"]["concept_ids"]["items"] = _string_enum(cohort_concept_ids)
+    try:
+        bind_population_spec_transport(
+            definitions,
+            cohort_properties,
+            concept_ids=cohort_concept_ids,
+            stated=required_cohort_selection_mode != "all_input_rows",
+        )
+    except PopulationSpecTransportError as exc:
+        raise ProgressiveTransportSchemaError(str(exc)) from exc
     if required_cohort_selection_mode is not None:
         if required_cohort_selection_mode not in {
             "all_input_rows",
