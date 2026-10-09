@@ -61,7 +61,6 @@ from ..planning.planner_output_contract import (
 from ..planning.preplan_know_how import verify_know_how_decisions
 from ..planning.primary_result_contract import (
     families_requiring_family_result_contract,
-    family_result_stop_reason,
     validate_required_primary_result,
 )
 from ..planning.progressive_compiler import (
@@ -158,7 +157,7 @@ from .progressive_payload import (
     progressive_step_materialization_request,
 )
 from .plan_payload import bind_literature_citation_authority
-from .family_spec_planner import FAMILY_SPEC_STRATEGY, run_family_spec_attempt
+from .family_spec_planner import FAMILY_SPEC_STRATEGY, family_result_stop, run_family_spec_attempt
 from .progressive_prompt_contracts import (
     custom_analysis_step_shape as _custom_analysis_step_shape,
     foundation_shape_contract as _foundation_shape_contract,
@@ -1292,26 +1291,6 @@ def _family_spec_fallback_reason(
     ):
         return "no_family_template_for_context"
     return None
-
-
-def _family_result_stop(
-    context: ResearchContext,
-    *,
-    families: Sequence[str],
-    planner_strategy: str,
-    planning_contract_context: str,
-    outline_selected: bool = False,
-) -> ProgressivePlanCompileError:
-    """Stop for families whose result contract Progressive v2 cannot write."""
-
-    templated = planner_strategy != FAMILY_SPEC_STRATEGY and family_template_id_for_context(
-        context, analysis_types=families, planning_contract_context=planning_contract_context,
-    ) is not None
-    reason, message = family_result_stop_reason(
-        families, template_strategy=FAMILY_SPEC_STRATEGY if templated else None,
-        outline_selected=outline_selected,
-    )
-    return ProgressivePlanCompileError(reason, message, path="analysis_type")
 
 
 def _accept_compiled_plan(
@@ -4436,7 +4415,7 @@ class ProgressivePlannerAgent:
             sealed_survival_suite=sealed_survival_suite,
         )
         if unwritable:
-            raise _family_result_stop(
+            raise family_result_stop(
                 context,
                 families=unwritable,
                 planner_strategy=planner_strategy,
@@ -4744,7 +4723,7 @@ class ProgressivePlannerAgent:
         # contract, stop without a retry that would re-read the question.
         unwritable = unwritable_outline_family(outline)
         if unwritable:
-            raise _family_result_stop(
+            raise family_result_stop(
                 context,
                 families=unwritable,
                 planner_strategy=planner_strategy,

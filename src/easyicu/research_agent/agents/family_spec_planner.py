@@ -9,6 +9,9 @@ are closed enums taken from the sealed request, so a provider that honors
 strict schemas cannot spell a coordinate the host did not offer.  A route
 without strict-schema support receives the same contract in words with its
 first request; on every route the parser re-validates each coordinate.
+
+When Progressive v2 stops for a family whose primary result contract only
+a host template writes, :func:`family_result_stop` names this strategy.
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ from ..planning.family_spec import (
     build_landmark_survival_skeleton,
     build_prediction_skeleton,
     build_source_feasibility_skeleton,
+    family_template_id_for_context,
     keeps_unmeasured_covariate_rows,
 )
 from ..contracts.model_retention import MISSING_CATEGORY_SHARE_THRESHOLD
@@ -55,6 +59,7 @@ from ..planning.literature_design_authority import (
     LiteratureDesignEvidenceCard,
     render_literature_design_card_facts,
 )
+from ..planning.primary_result_contract import family_result_stop_reason
 from ..planning.progressive_artifacts import ProgressivePlannerCheckpointEmitter
 from ..planning.progressive_compiler import (
     progressive_cohort_concept_ids,
@@ -1062,11 +1067,43 @@ def run_family_spec_attempt(
     return plan
 
 
+def family_result_stop(
+    context: ResearchContext,
+    *,
+    families: Sequence[str],
+    planner_strategy: str,
+    planning_contract_context: str,
+    outline_selected: bool = False,
+) -> ProgressivePlanCompileError:
+    """Progressive v2's stop for families whose result contract it cannot write.
+
+    It names this strategy when the run uses another one and a host template
+    plans these families.
+    """
+
+    templated = (
+        planner_strategy != FAMILY_SPEC_STRATEGY
+        and family_template_id_for_context(
+            context,
+            analysis_types=families,
+            planning_contract_context=planning_contract_context,
+        )
+        is not None
+    )
+    reason, message = family_result_stop_reason(
+        families,
+        template_strategy=FAMILY_SPEC_STRATEGY if templated else None,
+        outline_selected=outline_selected,
+    )
+    return ProgressivePlanCompileError(reason, message, path="analysis_type")
+
+
 __all__ = [
     "FAMILY_SPEC_GUIDE",
     "FAMILY_SPEC_MAX_OUTPUT_TOKENS",
     "FAMILY_SPEC_ROLE",
     "FAMILY_SPEC_STRATEGY",
+    "family_result_stop",
     "family_spec_messages",
     "family_spec_response_shape",
     "family_spec_structured_output_request",
