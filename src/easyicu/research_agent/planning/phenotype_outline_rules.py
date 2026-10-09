@@ -6,8 +6,10 @@ This module owns the outline-stage rules for ``phenotyping.outcome_by_cluster``,
 checked before a foundation is sealed or a step call is spent.  Requested
 outcomes after a cross-sectional cluster solution need one separate
 description step.  A model-coded trajectory primary has no host-owned label
-source to describe.  The executed step itself belongs to the host comparison
-contract (:mod:`..contracts.phenotype_comparison`).
+source to describe.  The same rules state, for the Planner's action menu,
+where an outline may select the comparison and which primary excludes it
+(:func:`phenotype_comparison_position`).  The executed step itself belongs to
+the host comparison contract (:mod:`..contracts.phenotype_comparison`).
 """
 
 from __future__ import annotations
@@ -21,7 +23,11 @@ from ..contracts.trajectory_design import (
 )
 from .progressive_contract import ProgressivePlanCompileError, ProgressivePlanOutline
 
-__all__ = ["validate_outline_phenotype_comparison"]
+__all__ = [
+    "phenotype_comparison_excluded_by",
+    "phenotype_comparison_position",
+    "validate_outline_phenotype_comparison",
+]
 
 _CLUSTER_PRIMARY_ACTION = "phenotyping.cluster_solution"
 
@@ -57,15 +63,48 @@ def validate_outline_phenotype_comparison(
                 "A fit/profile/figure step is not the comparison owner.", path="steps",
                 findings=({"required_outcomes": sorted(required_cluster_outcomes), "primary_step_ids": primary_clusters},),
             )
-    trajectory_primaries = _primaries(outline, TRAJECTORY_PRIMARY_ACTION)
-    if trajectory_primaries and any(
-        step.scientific_action_id == COMPARISON_ACTION for step in outline.steps
-    ):
+    excluding_primaries = [
+        step.step_id
+        for step in outline.steps
+        if step.planned_analysis_role == "primary"
+        and any(
+            phenotype_comparison_excluded_by(
+                str(step.scientific_action_id or ""),
+                str(other.scientific_action_id or ""),
+            )
+            for other in outline.steps
+        )
+    ]
+    if excluding_primaries:
         raise ProgressivePlanCompileError(
             "progressive_outline_trajectory_comparison_unowned",
             "phenotyping.outcome_by_cluster describes only frozen cross-sectional assignments or the "
             "signed fixed-window suite's frozen trajectory labels, which the host wires. A model-coded "
             "phenotyping.trajectory_feature_clustering primary has neither. "
             + TRAJECTORY_OUTCOME_DESCRIPTION_RULE, path="steps",
-            findings=({"primary_step_ids": trajectory_primaries},),
+            findings=({"primary_step_ids": excluding_primaries},),
         )
+
+
+def phenotype_comparison_position(action_id: str) -> str:
+    """Where an outline may select the comparison, as the check above reads it.
+
+    Empty for any other action.
+    """
+
+    if action_id != COMPARISON_ACTION:
+        return ""
+    return (
+        "Select it in one secondary custom_analysis step that depends directly on "
+        f"the single {_CLUSTER_PRIMARY_ACTION} primary and names every requested "
+        f"outcome; never in an outline with a {TRAJECTORY_PRIMARY_ACTION} primary."
+    )
+
+
+def phenotype_comparison_excluded_by(primary_action_id: str, action_id: str) -> bool:
+    """Whether an outline with this primary refuses ``action_id`` as its comparison."""
+
+    return (
+        action_id == COMPARISON_ACTION
+        and primary_action_id == TRAJECTORY_PRIMARY_ACTION
+    )

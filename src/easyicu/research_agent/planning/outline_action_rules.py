@@ -6,7 +6,9 @@ This module owns the outline-stage rule that a host action replaying another
 action's sealed result follows a step that selects that producer, and the one
 entry point through which the Planner's outline check runs every outline-stage
 action rule (the phenotype comparison rules stay with
-:mod:`.phenotype_outline_rules`).
+:mod:`.phenotype_outline_rules`).  It also states those rules for the
+Planner's action menu (:func:`outline_action_position`), so the row an action
+is selected from says what the check enforces before any refusal does.
 
 A replaying action reads its producer's own output under the same host
 executor: the cross-sectional cluster-number selection replays the cluster
@@ -23,7 +25,11 @@ from __future__ import annotations
 
 from typing import Iterable, Sequence
 
-from .phenotype_outline_rules import validate_outline_phenotype_comparison
+from .phenotype_outline_rules import (
+    phenotype_comparison_excluded_by,
+    phenotype_comparison_position,
+    validate_outline_phenotype_comparison,
+)
 from .progressive_contract import ProgressivePlanCompileError, ProgressivePlanOutline
 from .scientific_action_catalog import (
     ScientificAction,
@@ -31,6 +37,7 @@ from .scientific_action_catalog import (
 )
 
 __all__ = [
+    "outline_action_position",
     "replay_producer_rule_text",
     "replayed_producer_action_ids",
     "validate_outline_action_rules",
@@ -154,4 +161,56 @@ def replay_producer_rule_text(analysis_types: Sequence[str]) -> str:
         "action's own output, so select it only after a step that selects its "
         f"producer: {clauses}. Any other primary selects and checks its own result "
         "in its own step or with the action registered for that primary."
+    )
+
+
+def _series(action_ids: Sequence[str]) -> str:
+    if len(action_ids) == 1:
+        return action_ids[0]
+    return ", ".join(action_ids[:-1]) + " and " + action_ids[-1]
+
+
+def outline_action_position(analysis_type: str, action_id: str) -> str:
+    """Where an outline may select ``action_id``, as the outline check enforces it.
+
+    A replaying action names its producers; the phenotype comparison states its
+    own rule; a primary names the supporting actions that do not follow it.
+    Empty when no outline-stage rule places the action.
+    """
+
+    actions = _actions(analysis_type)
+    producers = _replayed_producers(actions, action_id)
+    if producers:
+        return (
+            f"Select it only in a step after one that selects {' or '.join(producers)}: "
+            "it replays that action's sealed result."
+        )
+    comparison = phenotype_comparison_position(action_id)
+    if comparison:
+        return comparison
+    action = next((item for item in actions if item.action_id == action_id), None)
+    if action is None or action.tier != "primary":
+        return ""
+
+    def reads_another_primary(other: ScientificAction) -> bool:
+        replayed = _replayed_producers(actions, other.action_id)
+        return (bool(replayed) and action_id not in replayed) or (
+            phenotype_comparison_excluded_by(action_id, other.action_id)
+        )
+
+    unread = [
+        other.action_id
+        for other in actions
+        if other.execution_mode != "not_available" and reads_another_primary(other)
+    ]
+    if not unread:
+        return ""
+    if len(unread) == 1:
+        return (
+            f"{unread[0]} reads another primary's result, so it does not follow "
+            "this one: see its outline_position."
+        )
+    return (
+        f"{_series(unread)} read another primary's result, so they do not follow "
+        "this one: see each one's outline_position."
     )
