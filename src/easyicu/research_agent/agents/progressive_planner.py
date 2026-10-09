@@ -166,6 +166,7 @@ from .progressive_payload import (
     progressive_step_materialization_request,
 )
 from .plan_payload import bind_literature_citation_authority
+from ..planning.capability_gap import CapabilityGapCheck, check_capability_gap
 from .family_spec_planner import (
     FAMILY_SPEC_STRATEGY,
     family_result_stop,
@@ -4465,6 +4466,13 @@ class ProgressivePlannerAgent:
                 continuous_domain_variables=continuous_domain_variables,
             )
 
+        def capability_gap_check(candidate: ProgressivePlanOutline) -> CapabilityGapCheck:
+            return check_capability_gap(
+                candidate.declared_capability_gap(),
+                context=context,
+                planning_contract_context=planning_contract_context,
+            )
+
         def unwritable_outline_family(
             candidate: ProgressivePlanOutline,
         ) -> tuple[str, ...]:
@@ -4500,6 +4508,20 @@ class ProgressivePlannerAgent:
                     # The outline committed its family. A retry for any other
                     # violation would only ask the question again; the stop
                     # below needs no further validation.
+                    return parsed
+                if parsed.capability_gap is not None:
+                    gap = capability_gap_check(parsed)
+                    if gap.verification == "unverified":
+                        raise ProgressivePlanCompileError(
+                            "progressive_capability_gap_claim_unverified",
+                            f"the declared capability gap does not hold: {gap.fact}; "
+                            "draft the steps the offered families can express, or "
+                            "declare a gap the study shows",
+                            path="capability_gap",
+                            cause_code=parsed.capability_gap,
+                        )
+                    # A gap the host verified, or cannot check, stops planning
+                    # below; it drafts no steps to validate.
                     return parsed
                 self._validate_outline_authority(
                     parsed,
@@ -4579,6 +4601,26 @@ class ProgressivePlannerAgent:
                 planner_strategy=planner_strategy,
                 planning_contract_context=planning_contract_context,
                 outline_selected=True,
+            )
+        # A design element the question needs and no offered family expresses:
+        # stop instead of compiling steps that answer another question.
+        gap = outline.declared_capability_gap()
+        if gap is not None:
+            check = capability_gap_check(outline)
+            raise ProgressivePlanCompileError(
+                "progressive_capability_gap",
+                "the question needs something no offered family can express "
+                f"({gap.requirement}, {check.verification}): {outline.rationale}",
+                path="capability_gap",
+                cause_code=gap.requirement,
+                findings=[
+                    {
+                        "requirement": gap.requirement,
+                        "concept": gap.concept,
+                        "verification": check.verification,
+                        "fact": check.fact,
+                    }
+                ],
             )
         self._validate_outline_authority(
             outline,

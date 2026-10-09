@@ -231,6 +231,24 @@
       };
     }
 
+    /* A Planner's capability gap: what the question needs that no executable
+       family expresses, keyed by its requirement
+       (progressive_contract.CapabilityGapRequirement). The host may have been
+       unable to check the claim, so the copy says planning found it. */
+    function capabilityGapCopy(cause) {
+      const why = {
+        levels_from_thresholds_unavailable: tr('it groups a variable by thresholds, and EasyICU cannot yet build those groups from this data. Ask about the variable as a continuous measure, or use a variable the data already groups.', '它需要把某个变量按阈值分组，而 EasyICU 目前还不能从这份数据构建这些分组。可以把这个变量作为连续变量来问，或改用数据中已有分组的变量。'),
+        longitudinal_representation_unavailable: tr('it needs repeated measurements over time for each stay, and this study\'s data has no such time series. Extract the time series it needs, or ask about a summary over a fixed window.', '它需要每次入住随时间的重复测量，而本研究的数据里没有这样的时间序列。请提取这个问题需要的时间序列，或改为询问固定时间窗内的汇总值。'),
+        multiple_sources_required: tr('it needs more than one database, and this study uses one. Ask the question within one database, or run it as a separate study in each database.', '它需要不止一个数据库，而本研究只使用一个。请在单个数据库内提出这个问题，或在每个数据库各开一项研究。'),
+        estimand_unsupported: tr('it asks for an estimate no executable EasyICU method produces. Ask for an estimate EasyICU supports instead, for example an association, a prediction or a descriptive summary.', '它要求的估计量没有 EasyICU 的可执行方法能给出。可以改问 EasyICU 支持的估计，例如关联、预测或描述性汇总。'),
+        design_element_unsupported: tr('it needs a design element no executable EasyICU method provides yet. Ask the question without it, or with a design EasyICU supports.', '它需要一项 EasyICU 目前没有可执行方法提供的设计要素。可以去掉这个要素再问，或改用 EasyICU 支持的设计。'),
+      };
+      if (!Object.prototype.hasOwnProperty.call(why, cause)) {
+        return tr('Planning found that the question needs something no executable EasyICU method can yet provide, so it stopped before the analysis steps were drafted. No analysis was run.', '规划发现这个问题需要 EasyICU 目前没有可执行方法提供的能力，因此在起草分析步骤之前已停止，没有运行任何分析。');
+      }
+      return tr('Planning found that the question needs something no executable EasyICU method can yet provide, so it stopped and no analysis was run: ', '规划发现这个问题需要 EasyICU 目前没有可执行方法提供的能力，因此已停止，没有运行任何分析：') + why[cause];
+    }
+
     function runFailureDetailText(detail) {
       const code = String(detail && detail.code || '').trim();
       const cause = String(detail && detail.cause || '').trim();
@@ -262,6 +280,7 @@
         ...targetTrialStopCopy(cause),
         tte_trial_not_confirmed: tr('This study has no confirmed target trial, so planning stopped before any model was called and no analysis was run. Set up the target trial in the conversation and approve it on its confirmation card, then generate the plan.', '这项研究还没有已确认的目标试验，规划在调用模型之前已停止，没有运行分析。请先在对话里设定目标试验，并在确认卡片上批准，再生成计划。'),
         target_trial_compile_drifted: tr('EasyICU derived the approved target trial again from this run\'s data, and the result differs from the version approved on its confirmation card; the data may have been prepared again, or the study setup or EasyICU\'s rules may have changed since. EasyICU runs only the trial that was approved, so planning stopped before any model was called and no analysis was run. Review the target trial on its confirmation card and approve it again, then generate the plan.', 'EasyICU 按这次运行的数据重新生成了已批准的目标试验，结果与确认卡片上批准的版本不同；批准之后数据可能重新准备过，研究配置或 EasyICU 的规则也可能有变化。EasyICU 只运行已批准的目标试验，所以规划在调用模型之前已停止，没有运行分析。请在确认卡片上复核目标试验并重新批准，再生成计划。'),
+        progressive_capability_gap: capabilityGapCopy(cause),
         trajectory_stability_refit_failed: tr('The prespecified stability check needs every planned refit to succeed, and a refit could not be completed, so the run has no result. Revise the plan, for example to consider fewer classes, then generate the plan again.', '预设的稳定性检查要求每次计划的重拟合都成功，有重拟合没能完成，这次运行没有结果。请修订计划（例如考虑更少的类别数），再生成计划。'),
         progressive_product_has_multiple_owners: tr('Two steps of the candidate plan produce the same result, so EasyICU cannot tell which step it comes from; planning stopped and no analysis was run. Generate the plan again; the stop is recorded for diagnosis.', '候选计划里有两个步骤产出同一份结果，EasyICU 无法确定它来自哪一步；规划已停止，没有运行分析。请重新生成计划；这次停止已记录，便于排查。'),
         progressive_outline_replay_producer_absent: tr('A step of the candidate outline reuses the result of a method that no earlier step runs, so planning stopped and no analysis was run. Generate the plan again.', '候选大纲里有一步要沿用某个方法的结果，但前面没有步骤运行这个方法；规划已停止，没有运行分析。请重新生成计划。'),

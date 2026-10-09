@@ -23,6 +23,7 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
+from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
 from easyicu.research_agent.orchestration.workflow import (
     HumanReviewPending,
     HumanReviewRequest,
@@ -334,6 +335,29 @@ def test_a_runtime_failure_that_ends_the_review_keeps_its_own_code(
     assert row["gate_reason"] == "research_pipeline_execution_runtime_unavailable"
     assert row["gate_detail"] == {"reason_code": "docker_daemon_unreachable"}
 
+
+def test_a_typed_stop_that_ends_the_review_keeps_its_cause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Any owner's typed stop and cause; the record carries the codes only.
+    stop = ProgressivePlanCompileError(
+        "progressive_resume_outline_authority_mismatch",
+        "the resumed outline offers other families than the approved one",
+        path="outline",
+        cause_code="candidate_families_changed",
+    )
+    project_root, _wrapper, study = _paused(
+        tmp_path, monkeypatch, _FailingPipeline(stop, resumable=False)
+    )
+
+    _approve(study)
+
+    row = _row(project_root, study)
+    assert row["run_status"] == "failed"
+    assert row["gate_detail"] == {
+        "reason_code": "progressive_resume_outline_authority_mismatch",
+        "cause_code": "candidate_families_changed",
+    }
 
 def test_a_failure_that_leaves_the_review_open_keeps_the_paused_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

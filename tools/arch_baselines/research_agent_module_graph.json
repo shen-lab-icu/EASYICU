@@ -1109,6 +1109,10 @@
     ],
     [
       "easyicu.research_agent.agents.progressive_planner",
+      "easyicu.research_agent.planning.capability_gap"
+    ],
+    [
+      "easyicu.research_agent.agents.progressive_planner",
       "easyicu.research_agent.planning.dependence_authority"
     ],
     [
@@ -9968,6 +9972,26 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.planning.capability_gap",
+      "easyicu.research_agent.authority.declared_levels"
+    ],
+    [
+      "easyicu.research_agent.planning.capability_gap",
+      "easyicu.research_agent.planning.family_spec.request"
+    ],
+    [
+      "easyicu.research_agent.planning.capability_gap",
+      "easyicu.research_agent.planning.progressive_contract"
+    ],
+    [
+      "easyicu.research_agent.planning.capability_gap",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.planning.capability_gap",
+      "easyicu.research_agent.trajectory.plan_contract"
+    ],
+    [
       "easyicu.research_agent.planning.capability_registry",
       "easyicu.research_agent.authority.target_trial_runtime"
     ],
@@ -14448,9 +14472,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3604,
+    "edge_count": 3610,
     "largest_scc_size": 0,
-    "module_count": 825,
+    "module_count": 826,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -14995,6 +15019,7 @@
     "easyicu.research_agent.planning.analysis_method_suite": "planning/analysis_method_suite.py",
     "easyicu.research_agent.planning.analysis_types": "planning/analysis_types.py",
     "easyicu.research_agent.planning.baseline_requirements": "planning/baseline_requirements.py",
+    "easyicu.research_agent.planning.capability_gap": "planning/capability_gap.py",
     "easyicu.research_agent.planning.capability_registry": "planning/capability_registry.py",
     "easyicu.research_agent.planning.cohort_contract": "planning/cohort_contract.py",
     "easyicu.research_agent.planning.cohort_eligibility": "planning/cohort_eligibility.py",
