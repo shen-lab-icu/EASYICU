@@ -14,11 +14,11 @@ from __future__ import annotations
 import json
 import re
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
 
+from tests.support.node import run_node
 from tests.support.review_decisions import decision_codes
 
 STATIC = Path(__file__).parents[3] / "src" / "easyicu" / "webserver" / "static"
@@ -82,9 +82,7 @@ def _card(code: str, *, lang: str, decision_context: dict | None = None) -> str:
       }});
       process.stdout.write(confirmation.workflowConfirmationHtml());
     """
-    return subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    ).stdout
+    return run_node(node, script, check=True).stdout
 
 
 def _shown(html: str) -> tuple[str, str, str]:

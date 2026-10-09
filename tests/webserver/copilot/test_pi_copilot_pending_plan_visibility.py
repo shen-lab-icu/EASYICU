@@ -2,13 +2,14 @@
 
 import json
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
 
 from easyicu.webserver import study_contexts
 from easyicu.webserver.pi_copilot.workflow import build_research_workflow_snapshot
+
+from tests.support.node import run_node
 
 
 STATIC = Path(__file__).parents[3] / "src/easyicu/webserver/static"
@@ -72,7 +73,7 @@ def test_candidate_review_has_no_duplicate_preplan_cohort_card(action, expected)
       const cohort = window.EasyICU.guidedPi.require('cohortEligibility');
       process.stdout.write(cohort.create(host).render());
     """
-    result = subprocess.run([node, "--eval", script], capture_output=True, text=True, check=True, timeout=15)
+    result = run_node(node, script, check=True, timeout=15)
     assert bool(result.stdout) is expected
 
 

@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
+
+from tests.support.node import run_node
 
 APP_DIR = Path(__file__).resolve().parents[3] / "src" / "easyicu" / "webserver" / "pi_copilot" / "node_app"
 
@@ -67,9 +68,8 @@ def _finalize_initial_question_with_preloaded_catalog(question: str, **catalog_d
       const message = await stream.result();
       console.log(JSON.stringify(message.content[0].text));
     """
-    completed = subprocess.run(
-        [node, "--input-type=module", "--eval", script],
-        cwd=APP_DIR, text=True, capture_output=True, timeout=30, check=False,
+    completed = run_node(
+        node, script, module=True, cwd=APP_DIR, timeout=30, check=False
     )
     assert completed.returncode == 0, completed.stderr or completed.stdout
     return json.loads(completed.stdout)

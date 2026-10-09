@@ -3,9 +3,9 @@
 from __future__ import annotations
 import json
 import shutil
-import subprocess
 import pytest
 
+from tests.support.node import run_node
 from tests.webserver.copilot.pi_copilot_static_fixtures import (
     STATIC as STATIC,
     _ESCAPE_OWNER as _ESCAPE_OWNER,
@@ -95,9 +95,7 @@ def test_copilot_next_step_owner_projects_clickable_choices_and_safe_fallback() 
         {{language: 'zh', suppressFallback: true}}
       ));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     assert '"body":"已确认 MIMIC-IV v3.1。"' in completed.stdout
     assert '"choices":["所有符合条件的 ICU stays","每位患者首次 ICU stay"]' in completed.stdout
     assert '"prompt":"请选择主要结局："' in completed.stdout
@@ -183,9 +181,7 @@ def test_model_plan_choice_is_replaced_until_workflow_owner_is_ready() -> None:
         workflowActionCode: 'provider_ready_to_generate_plan',
       }}));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
 
     blocked, ready = completed.stdout.split("READY=", 1)
     assert "data-gpi-premature-plan-guard" in blocked
@@ -238,9 +234,7 @@ def test_model_plan_choice_can_only_receive_provider_grant_from_plan_workflow() 
         'plan_configuration_superseded'
       )));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
 
     assert completed.stdout.splitlines() == [
         '["provider_run"]',
@@ -294,9 +288,7 @@ def test_demo_next_step_is_one_click_and_supports_an_existing_local_copy() -> No
       );
       console.log(window.EU_GUIDED_PI_NEXT_ACTIONS.render(projected, {{ language: 'zh' }}));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
 
     assert 'data-gpi-next-grants="extract"' in completed.stdout
     assert "确认并授权本轮准备并注册" in completed.stdout
@@ -321,9 +313,7 @@ def test_recommended_prepared_export_choice_receives_configuration_grant() -> No
       );
       console.log(window.EU_GUIDED_PI_NEXT_ACTIONS.render(projected, {{ language: 'zh' }}));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
 
     assert 'data-gpi-next-grants="configure"' in completed.stdout
     assert 'data-gpi-next-local-database="miiv"' in completed.stdout
@@ -459,9 +449,7 @@ def test_copilot_message_action_owner_renders_copy_edit_and_latest_retry() -> No
         {{canRetry: false, retryUserEntryId: 'entry-u0'}}
       ).actionsHtml);
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     assert "data-gpi-message-copy" in completed.stdout
     assert "data-gpi-message-edit" in completed.stdout
     assert "这条之后的回答会被替换；原分支仍保留在历史中可恢复。" in completed.stdout
@@ -509,9 +497,7 @@ def test_editing_an_earlier_turn_rewinds_instead_of_appending() -> None:
       }});
       console.log(JSON.stringify(calls));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
 
     calls = json.loads(completed.stdout)
     # It rewinds to the edited turn with the new text, targeting that turn's
@@ -559,9 +545,7 @@ def test_editing_host_generated_plan_action_resubmits_without_appending() -> Non
       }});
       console.log(JSON.stringify(calls));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
 
     assert json.loads(completed.stdout) == [
         ["resubmitHostGenerated", "history-9", "重新生成研究计划"]
@@ -611,9 +595,7 @@ def test_retrying_candidate_plan_action_uses_governed_host_starter() -> None:
       actions.handleClick({{target: retry}});
       console.log(JSON.stringify(calls));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
 
     assert json.loads(completed.stdout) == [
         ["resubmitHostGenerated", "history-plan", "生成候选研究计划"]
@@ -677,9 +659,7 @@ def test_candidate_plan_can_be_explicitly_regenerated_before_data_preparation() 
       );
       console.log(JSON.stringify(grants));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     assert json.loads(completed.stdout) == ["provider_run"]
 
 
@@ -699,9 +679,7 @@ def test_failed_analysis_still_allows_an_explicit_fresh_plan_request() -> None:
         )
       ));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     assert json.loads(completed.stdout) == ["provider_run"]
 
     plan_actions = _read("js/screens-guided-pi-plan-actions.js")
@@ -736,9 +714,7 @@ def test_failed_pipeline_never_renders_partial_cohort_decision() -> None:
       }}).render;
       process.stdout.write(render());
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     assert completed.stdout == ""
 
 
@@ -775,9 +751,7 @@ def test_fresh_plan_after_failed_execution_binds_source(workflow_code, run_id, e
       actions.startFormalPlanGeneration('failed_pipeline_requires_fresh_plan')
         .then(() => console.log(JSON.stringify({{submitted, error}})));
     """
-    payload = json.loads(subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True,
-    ).stdout)
+    payload = json.loads(run_node(node, script, check=True).stdout)
     if expected_source is None:
         assert payload["submitted"] is None
         assert "source is unavailable" in payload["error"]
@@ -811,9 +785,7 @@ def test_failed_analysis_retry_submits_exact_resume_without_chat_roundtrip() -> 
         }},
       }}).then(result => console.log(JSON.stringify({{result, submitted}})));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     payload = json.loads(completed.stdout)
     assert payload["result"]["job_id"] == "retry-job"
     assert payload["submitted"] == {
@@ -865,9 +837,7 @@ def test_copilot_regeneration_projects_activity_and_answer_in_place() -> None:
         projectedStatuses: owner.visibleRows(rows, replacement).map(row => owner.project(row, replacement).status || ''),
       }}));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     assert json.loads(completed.stdout) == {
         "targetMessageId": "a1",
         "targetActivityId": "activity-1",
@@ -931,9 +901,7 @@ def test_plan_retry_appends_a_short_host_owned_action() -> None:
         withoutReceipt: window.EU_GUIDED_PI_REGENERATION.latestPlanRequest(receiptHiddenRows),
       }}));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     assert json.loads(completed.stdout) == {
         "withReceipt": {
             "userEntryId": "entry-plan",
@@ -1002,9 +970,7 @@ def test_agent_plan_runtime_configuration_is_compiled_without_prompt_or_user_tur
       actions.continueSystemOwnedPlanProgression()
         .then(() => process.stdout.write(JSON.stringify(calls)));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     calls = json.loads(completed.stdout)
 
     assert not any(row[0] in {"message", "send"} for row in calls)

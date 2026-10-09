@@ -7,10 +7,10 @@ only ever reformatted for display.
 
 import json
 import shutil
-import subprocess
 
 import pytest
 
+from tests.support.node import run_node
 from tests.webserver.copilot.pi_copilot_static_fixtures import _read
 
 
@@ -31,7 +31,7 @@ def render(name, payload, *, lang="zh"):
       eval({json.dumps(_read('js/screens-agent-render.js'))});
       process.stdout.write(window.AGENT_RENDER.artifactStructuredView({json.dumps(name)}, {json.dumps(payload)}));
     """
-    return subprocess.run([node, "-e", script], check=True, capture_output=True, text=True).stdout
+    return run_node(node, script, check=True).stdout
 
 
 REVIEW = {

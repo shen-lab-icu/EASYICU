@@ -8,11 +8,11 @@ so the conversation can offer that exact source.
 
 import json
 import shutil
-import subprocess
 
 import pytest
 
 from easyicu.research_agent.method_skills import method_skill_catalog
+from tests.support.node import run_node
 from tests.webserver.copilot.pi_copilot_static_fixtures import (
     _load_guided_pi_module_harness as _load_guided_pi_module_harness,
     _read,
@@ -40,7 +40,7 @@ def _render(lang):
       const tr = (en, zh) => {json.dumps(lang)} === 'zh' ? zh : en;
       process.stdout.write(window.EU_GUIDED_PI_STARTERS.render({{tr, composer: '<textarea></textarea>'}}));
     """
-    return subprocess.run([node, "-e", script], check=True, capture_output=True, text=True).stdout
+    return run_node(node, script, check=True).stdout
 
 
 def test_the_official_demo_card_offers_one_runnable_named_demo_question():

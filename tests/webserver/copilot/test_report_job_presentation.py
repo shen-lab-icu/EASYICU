@@ -2,10 +2,11 @@
 import copy
 import json
 from pathlib import Path
-import subprocess
 
 import pytest
 from easyicu.webserver.pi_copilot.projections import project_job
+
+from tests.support.node import run_node
 
 
 def snapshot():
@@ -66,7 +67,7 @@ global.window = {EasyICU: {guidedPi: {declare: (name, api) => {global.api = api;
 require(process.argv[1]);
 process.stdout.write(JSON.stringify(JSON.parse(process.argv[2]).map(j=>api.childJobPresentation(j,(en,zh)=>zh))));
 '''
-    result = subprocess.run(['node', '-e', script, str(source), json.dumps(cases)], capture_output=True, text=True, check=True)
+    result = run_node('node', script, str(source), json.dumps(cases), check=True)
     rows = json.loads(result.stdout)
     assert rows[0]['title'] == '新版报告与 PDF 已生成，待审阅'
     assert not rows[0]['blocked']

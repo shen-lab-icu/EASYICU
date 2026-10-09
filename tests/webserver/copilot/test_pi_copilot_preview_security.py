@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 
 import pytest
 
+from tests.support.node import run_node
 from tests.webserver.copilot.pi_copilot_static_fixtures import (
     NODE_APP as NODE_APP,
     STATIC as STATIC,
@@ -64,12 +64,7 @@ def test_workspace_preview_never_requests_an_empty_checked_digest() -> None:
       console.log(String(calls.length));
       console.log(String(host.innerHTML.includes('{digest}')));
     """
-    completed = subprocess.run(
-        [node, "--eval", script],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    completed = run_node(node, script, check=True)
 
     assert completed.stdout.splitlines() == [
         "false",
@@ -122,12 +117,7 @@ def test_preview_keeps_bounded_project_scoped_recent_resources() -> None:
       window.EU_GUIDED_PI_PREVIEW.open(first, 'project-b');
       console.log(String(host.innerHTML.includes('gpi-preview-recent')));
     """
-    completed = subprocess.run(
-        [node, "--eval", script],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    completed = run_node(node, script, check=True)
 
     assert completed.stdout.splitlines() == ["false", "true", "true", "true", "false"]
 
@@ -278,11 +268,8 @@ const cases = [
 ];
 process.stdout.write(JSON.stringify(cases.map(([c, r]) => providerPreset(c, r))));
 """
-    completed = subprocess.run(
-        [node, "-e", script, str(STATIC / "js" / "screens-guided-pi-error-text.js")],
-        check=True,
-        capture_output=True,
-        text=True,
+    completed = run_node(
+        node, script, str(STATIC / "js" / "screens-guided-pi-error-text.js"), check=True
     )
     assert json.loads(completed.stdout) == [
         "openai", "custom-openai", "custom-openai", "openrouter", "custom-openai",

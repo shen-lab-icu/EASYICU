@@ -12,10 +12,10 @@ from __future__ import annotations
 import json
 import re
 import shutil
-import subprocess
 
 import pytest
 
+from tests.support.node import run_node
 from tests.support.review_decisions import finding_codes
 from tests.webserver.copilot.pi_copilot_static_fixtures import _read
 
@@ -42,7 +42,7 @@ def _render_zh(findings: list[dict]) -> str:
       eval({json.dumps(_read('js/screens-agent-render.js'))});
       process.stdout.write(window.AGENT_RENDER.artifactStructuredView('scientific_plan_review.json', {json.dumps(payload)}));
     """
-    return subprocess.run([node, "-e", script], check=True, capture_output=True, text=True).stdout
+    return run_node(node, script, check=True).stdout
 
 
 def test_the_review_owner_findings_are_found() -> None:

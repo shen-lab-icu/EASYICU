@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 from pathlib import Path
 
 import pandas as pd
@@ -18,6 +17,8 @@ from easyicu.webserver.pi_copilot.contracts import (
     PiSessionRecord,
     ToolExecutionContext,
 )
+
+from tests.support.node import run_node
 
 
 def _context(user_message: str = "") -> ToolExecutionContext:
@@ -289,12 +290,7 @@ def test_sidecar_projection_preserves_expected_database() -> None:
       }});
       console.log(JSON.stringify(message));
     """
-    completed = subprocess.run(
-        [node, "--input-type=module", "--eval", script],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    completed = run_node(node, script, module=True, check=True)
     payload = json.loads(completed.stdout)
     assert payload["content"][0]["resource"]["expected_database"] == "miiv"
 

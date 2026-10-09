@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import subprocess
+
+from tests.support.node import run_node
 
 
 def test_literature_reader_deduplicates_sources_across_semantic_decisions() -> None:
@@ -61,12 +62,7 @@ require({json.dumps(str(renderer))});
 const html = window.EasyICU.guidedPi.require('literature').renderArtifact({json.dumps(payload)}, {{}});
 process.stdout.write(html);
 """
-    html = subprocess.run(
-        ["node", "-e", script],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
+    html = run_node("node", script, check=True).stdout
 
     assert html.count("Unique model paper") == 1
     assert html.count("Unique reporting guide") == 1

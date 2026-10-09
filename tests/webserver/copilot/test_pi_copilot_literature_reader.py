@@ -2,13 +2,14 @@
 
 import json
 import shutil
-import subprocess
 
 import pytest
 
 from .test_pi_copilot_static import _ESCAPE_OWNER, _read
 from easyicu.webserver.pi_copilot import projections
 from easyicu.webserver.literature_projection import project_run_literature
+
+from tests.support.node import run_node
 
 
 _MODULE_OWNER = _read("js/screens-guided-pi-modules.js")
@@ -33,7 +34,7 @@ def test_chinese_reader_preserves_the_exact_article_title(renderer, title):
       eval({_ESCAPE_OWNER!r}); eval({_MODULE_OWNER!r}); eval({source!r});
       console.log(window.EasyICU.guidedPi.require('literature').{renderer}({json.dumps(payload)}));
     """
-    html = subprocess.run([node, "--eval", script], check=True, capture_output=True, text=True).stdout
+    html = run_node(node, script, check=True).stdout
     assert f"<h4>{title}</h4>" in html
     assert "脓毒症 Sepsis-3 共识定义" not in html
     assert "SOFA 器官功能评分定义" not in html
@@ -70,7 +71,7 @@ def test_reader_displays_escaped_bibliographic_notices(renderer):
       eval({_ESCAPE_OWNER!r}); eval({_MODULE_OWNER!r}); eval({source!r});
       console.log(window.EasyICU.guidedPi.require('literature').{renderer}({json.dumps(payload)}));
     """
-    html = subprocess.run([node, "--eval", script], check=True, capture_output=True, text=True).stdout
+    html = run_node(node, script, check=True).stdout
     assert "来源勘误与声明" in html
     assert "Correction: &lt;script&gt;alert(1)&lt;/script&gt;" in html
     assert "<script>" not in html
@@ -118,9 +119,7 @@ def test_literature_reader_separates_direct_evidence_from_system_references() ->
       }});
       console.log(html);
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     html = completed.stdout
     assert "没有找到能直接支持这个问题的研究" in html
     assert "共检索到 8 篇候选、完成 8 篇筛选" in html
@@ -158,9 +157,7 @@ def test_literature_source_preview_preserves_retrieval_fit_without_claiming_acce
         retrieval_rationale: 'Direct retrieval fit; full screening remains pending.',
       }}));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     html = completed.stdout
     assert "直接检索匹配 · 待筛选" in html
     assert "检索到但未采用" not in html
@@ -191,9 +188,7 @@ def test_literature_source_preview_explains_article_type_and_full_text_boundary(
         ]}},
       }}));
     """
-    completed = subprocess.run(
-        [node, "--eval", script], check=True, capture_output=True, text=True
-    )
+    completed = run_node(node, script, check=True)
     html = completed.stdout
     assert "系统综述 / Meta 分析" in html
     assert "为什么收录这篇文献" in html

@@ -20,6 +20,8 @@ def test_workspace_security_workflow_covers_sidecar_and_browser_helper_dependenc
     assert '"src/easyicu/webserver/routes/agent.py"' in workflow
     assert '"src/easyicu/webserver/static/js/screens-agent-render.js"' in workflow
     assert '"tests/js/*.test.js"' in workflow
+    # The Pi contract tests start every Node harness through this runner.
+    assert '"tests/support/node.py"' in workflow
     assert "python tools/run_js_contracts.py" in workflow
     js_runner = (STATIC.parents[3] / "tools" / "run_js_contracts.py").read_text(
         encoding="utf-8"
