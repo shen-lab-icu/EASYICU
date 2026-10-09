@@ -200,7 +200,21 @@
         return;
       }
       if (!['start', 'progress', 'gate', 'artifact', 'cancel_requested'].includes(String(event.type || ''))) return;
+      // A coder/runner event belongs to the plan step it names: it becomes
+      // that row's detail and leaves the step running.
+      const subStep = typeof ACTIVITY.planSubStepFacts === 'function' ? ACTIVITY.planSubStepFacts(event) : null;
+      if (subStep && ACTIVITY.notePlanSubStep(activity.steps, subStep)) { render(); return; }
       completeRunningPipelineSteps(activity);
+      const planStep = typeof ACTIVITY.planStepFacts === 'function' ? ACTIVITY.planStepFacts(event) : null;
+      if (planStep) {
+        const now = Date.now();
+        const row = ACTIVITY.planStepRow(planStep, now);
+        const existing = activity.steps.find(item => item.id === row.id);
+        // A completed step keeps the start time its "started" event recorded.
+        upsertActivityStep(activity, existing && existing.startedAt ? { ...row, startedAt: existing.startedAt } : row);
+        render();
+        return;
+      }
       const step = String(event.step || event.type || 'pipeline').slice(0, 80);
       if (step === 'report_repair') {
         activity.reportOnly = true;
@@ -296,6 +310,15 @@
       activity.planningProgress = null;
       progress.forEach(event => {
         if (String(event.type || '') === 'end') return;
+        // Snapshot rows carry no timestamps, so plan-step rows show no time.
+        const planStep = typeof ACTIVITY.planStepFacts === 'function' ? ACTIVITY.planStepFacts(event) : null;
+        if (planStep) {
+          const row = ACTIVITY.planStepRow(planStep, Date.now(), { durationKnown: false });
+          upsertActivityStep(activity, row.status === 'running' ? { ...row, status: 'complete' } : row);
+          return;
+        }
+        if (typeof ACTIVITY.planSubStepFacts === 'function'
+          && ACTIVITY.notePlanSubStep(activity.steps, ACTIVITY.planSubStepFacts(event))) return;
         const step = String(event.step || event.type || 'pipeline').slice(0, 80);
         const kind = childEventKind(event);
         const count = event.current != null && event.total != null ? `${event.current}/${event.total}` : '';

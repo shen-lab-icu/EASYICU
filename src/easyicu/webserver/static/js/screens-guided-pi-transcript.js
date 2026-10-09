@@ -118,6 +118,49 @@
     const modelErrorText = host.modelErrorText;
     const activityHasCompletedAction = host.activityHasCompletedAction || (() => false);
     const workflowActionCode = host.workflowActionCode;
+    const runFailureText = typeof host.runFailureText === 'function' ? host.runFailureText : (() => '');
+
+    /* A job the model submitted from a conversation turn -- a report rewrite,
+       a replan -- settles after that turn ended. Its handoff reply is hidden
+       and no host action records it, so without this message a reloaded
+       conversation shows the researcher's request with no answer at all. */
+    function submittedJobOutcome(job) {
+      if (!job || String(job.kind || '') !== 'agent-run') return null;
+      const status = String(job.status || '');
+      if (!['done', 'failed', 'cancelled', 'interrupted'].includes(status)) return null;
+      const refs = Array.isArray(job.artifact_refs) ? job.artifact_refs : [];
+      const reason = String(runFailureText(job.error_code || job.gate_reason_code || '') || '').replace(/[。.]\s*$/, '');
+      if (job.report_only === true) {
+        if (status === 'done' && job.report_revision_ready === true) {
+          const pdf = refs.find(ref => ref && ref.artifact === 'manuscript_revision.pdf');
+          return {
+            text: tr('The report was rewritten from the sealed analysis results and a new PDF was generated; no analysis was re-run.',
+              '报告已基于封存的分析结果重写，并生成了新的 PDF；没有重跑分析。'),
+            resources: pdf ? [{ ...pdf, conversation_label: tr('Current report PDF', '当前报告 PDF') }] : [],
+          };
+        }
+        if (status === 'cancelled') return { text: tr('The report rewrite was cancelled; the existing report is unchanged.', '报告重写已取消，原报告保持不变。'), resources: [] };
+        return {
+          text: status === 'done'
+            ? tr('The report rewrite ended without a new verified revision; the existing report is unchanged.', '报告重写已结束，但没有生成通过校验的新版本；原报告保持不变。')
+            : /保留|kept/.test(reason)
+              ? tr(`The report rewrite did not complete: ${reason}.`, `报告重写没有完成：${reason}。`)
+              : tr(`The report rewrite did not complete${reason ? `: ${reason}` : ''}. The existing report is unchanged.`,
+                `报告重写没有完成${reason ? `：${reason}` : ''}。原报告保持不变。`),
+          resources: [],
+        };
+      }
+      if (status === 'cancelled') return { text: tr('The research task was cancelled.', '科研任务已取消。'), resources: [] };
+      if (status !== 'done') {
+        return { text: tr(`The research task did not complete${reason ? `: ${reason}` : ''}.`, `科研任务没有完成${reason ? `：${reason}` : ''}。`), resources: [] };
+      }
+      if (job.human_review_pending === true) {
+        return { text: tr('The research plan is ready for your review below; analysis has not started.', '研究计划已生成，请在下方审阅；分析尚未开始。'), resources: [] };
+      }
+      return job.analysis_results_available === true
+        ? { text: tr('The research task finished; its results are summarised below.', '科研任务已完成，结果汇总见下方。'), resources: [] }
+        : { text: tr(`The research task ended${reason ? `: ${reason}` : ''}.`, `科研任务已结束${reason ? `：${reason}` : ''}。`), resources: [] };
+    }
 
     function hostActionFailed(actionCode, job, status) {
       const normalizedStatus = String(status || '');
@@ -179,7 +222,7 @@
         retry_analysis: {
           user: tr('Retry the incomplete analysis', '重试未完成的分析'),
           running: tr('Retrying the approved research run', '正在重试已批准的科研任务'),
-          done: tr('The retry is complete. Review the refreshed results and validation evidence.', '重试已完成，请审阅更新后的结果和校验证据。'),
+          done: tr('The retry re-ran the unfinished approved steps and re-validated the results. The refreshed results are below.', '重试已补跑未完成的获批步骤并重新校验，更新后的结果见下方。'),
           failed: tr('The retry did not complete. Review the execution details before trying again.', '重试仍未完成，请查看执行明细后再试。'),
         },
         review_prepared_data: {
@@ -238,6 +281,21 @@
           `EasyICU completed ${stepText}, numeric validation, figure regeneration, and evidence-bound article generation in this run. Review each output below; publication approval remains separate.`,
           `EasyICU 已在本轮完成 ${stepText}、数值校验、图件重绘和证据绑定文章生成。请在下方逐项审阅；投稿授权仍需另行完成。`,
         );
+      } else if (actionCode === 'retry_analysis' && normalizedStatus === 'done') {
+        // Say what the retry actually did: which steps it reused and how far
+        // the approved plan got, from the job's own progress receipts.
+        const reused = progress.filter(row => /^Skipped completed step/i.test(String(row && row.label || ''))).length;
+        const reach = completedSteps
+          ? tr(` The approved plan reached step ${completedSteps[0]}/${completedSteps[1]}.`, `获批计划已执行到第 ${completedSteps[0]}/${completedSteps[1]} 步。`) : '';
+        if (reused) {
+          doneCopy = tr(
+            `The retry reused ${reused} completed steps, re-ran the unfinished ones and re-validated the results.${reach} The refreshed results are below.`,
+            `这次重试复用了 ${reused} 个已完成的步骤，补跑了其余步骤并重新校验。${reach}更新后的结果见下方。`,
+          );
+        } else if (reach) {
+          doneCopy = tr(`The retry re-ran the unfinished approved steps and re-validated the results.${reach} The refreshed results are below.`,
+            `重试已补跑未完成的获批步骤并重新校验。${reach}更新后的结果见下方。`);
+        }
       } else if (actionCode === 'review_results' && actionArtifact === 'full_analysis_report.json') {
         doneCopy = tr('The complete analysis report is open. It connects the approved plan, executed steps, results, figures, and evidence boundaries.', '完整分析报告已打开，按批准计划、执行步骤、结果、图件和证据边界组织本轮分析。');
       } else if (actionCode === 'review_results' && actionArtifact === 'technical_report.json') {
@@ -344,6 +402,20 @@
       progress.forEach((row, index) => {
         const step = String(row && row.step || '').trim();
         if (!step || step === 'run') return;
+        // Approved plan steps keep one row each; their coder/runner rows
+        // become that step's detail.
+        const planStep = typeof ACTIVITY.planStepFacts === 'function' ? ACTIVITY.planStepFacts(row) : null;
+        if (planStep) {
+          const planRow = ACTIVITY.planStepRow(planStep, startedAt + index + 2, { durationKnown: false });
+          const existing = steps.findIndex(item => item.id === planRow.id);
+          const settled = planRow.status === 'running' && (jobStatus === 'done' || failed)
+            ? { ...planRow, status: failed ? 'error' : 'complete' } : planRow;
+          if (existing >= 0) steps[existing] = { ...steps[existing], ...settled };
+          else steps.push(settled);
+          return;
+        }
+        if (typeof ACTIVITY.planSubStepFacts === 'function'
+          && ACTIVITY.notePlanSubStep(steps, ACTIVITY.planSubStepFacts(row))) return;
         const complete = row.status !== 'failed'
           && (row.status === 'complete' || (jobStatus === 'done' && !failed));
         steps.push({
@@ -582,6 +654,27 @@
       const archivedJobRows = Array.isArray(session && session.archived_child_jobs)
         ? session.archived_child_jobs : [];
       const archivedJobs = new Map(archivedJobRows.map(job => [String(job && job.job_id || ''), job]));
+      const hostJobIds = new Set(hostTurns.map(turn => String(turn && turn.child_job_id || '')).filter(Boolean));
+      const outcomeJobIds = new Set();
+      messages.filter(row => row && row.role === 'activity').forEach(activity => {
+        const submitted = [String(activity.childJobHandoff || '')].concat((activity.steps || [])
+          .filter(step => step && step.kind === 'tool' && step.jobId && CHILD_JOB_SUBMISSION_CODES.has(String(step.code || '')))
+          .map(step => String(step.jobId)));
+        submitted.filter(Boolean).forEach(jobId => {
+          if (hostJobIds.has(jobId) || outcomeJobIds.has(jobId)) return;
+          const job = archivedJobs.get(jobId);
+          const outcome = submittedJobOutcome(job);
+          if (!outcome) return;
+          outcomeJobIds.add(jobId);
+          const finishedAt = Number(job.finished_at_epoch) * 1000;
+          messages.push({
+            id: 'submitted-job-' + jobId, role: 'assistant', text: outcome.text, resources: outcome.resources,
+            complete: true, hostActionCode: 'submitted_job_outcome',
+            timelineAt: Number.isFinite(finishedAt) && finishedAt > 0 ? finishedAt : Number(activity.endedAt || activity.startedAt || 0) + 1,
+            timelineOrder: Number(activity.timelineOrder || 0) + 5,
+          });
+        });
+      });
       const planTurnIndexes = [];
       const planRunIds = new Map();
       const latestHostTurnByHistoryKey = new Map();
