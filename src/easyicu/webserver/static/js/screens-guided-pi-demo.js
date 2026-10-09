@@ -464,7 +464,14 @@
         'I drafted a six-step descriptive plan. Please confirm it before the analysis starts:\n\n- **Population**: all adult ICU stays in MIMIC-IV (94,458)\n- **Exposure**: the experimental SOFA-2 sepsis phenotype within 24 hours of ICU admission (yes / no)\n- **Outcome**: in-hospital death\n- **Method**: counts and proportions by phenotype; no adjustment and no significance test\n- **Data quality**: a separate audit of missing values that keeps not-applicable death times apart from true missingness\n\nThe complete plan and its methods references are below.',
         '我拟定了一份 6 步的描述性分析计划，开始分析前请你确认：\n\n- **人群**：MIMIC-IV 中全部成人 ICU 入住（94,458 个）\n- **暴露**：入 ICU 后 24 小时内是否出现实验性 SOFA-2 脓毒症表型\n- **结局**：院内死亡\n- **方法**：按有无表型计数并计算比例，不做调整，不做显著性检验\n- **数据质量**：单独审计缺失值，并把“不适用”的死亡时间和真正的缺失分开\n\n完整计划和方法学依据可以从下方打开。',
       ), [resource('agent_plan.json'), resource('literature_evidence.json'), resource('scientific_plan_review.json')]),
-      message('reviewer-user-2', 'user', tr('Approve this plan and start the analysis.', '批准这份计划，开始分析。')),
+      // In a project only the review control approves a plan; a chat message
+      // cannot, so the walkthrough shows the control that was pressed.
+      {
+        id: 'reviewer-plan-approval', role: 'demo_action',
+        label: tr('Plan confirmed: “Confirm plan and prepare data”', '已确认方案：「确认方案并准备数据」'),
+        note: tr('Pressed in the review control under the plan; typing in the conversation does not approve a plan.',
+          '在计划下方的审阅控件中点击；在对话里打字不会批准计划。'),
+      },
       activity('reviewer-execution', 200000, 578000, [
         traceStep('e-1', tr('Step 1/6: Cohort and denominators', '第 1/6 步：队列与分母核算'), tr('All 94,458 stays retained.', '94,458 个入住全部保留。'), resource('cohort_summary.json')),
         traceStep('e-2', tr('Step 2/6: Measurement and missingness audit', '第 2/6 步：测量与缺失审计'), tr('Death time applies only to the 9,466 deaths; 0 of them missing.', '死亡时间只对 9,466 例死亡适用，其中缺失 0 例。'), artifactResource('applicability_audit.json', tr('Applicability audit', '适用性审计'))),

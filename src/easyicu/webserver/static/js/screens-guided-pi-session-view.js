@@ -27,6 +27,10 @@
           : tr('Saved run synchronized from this research project.', '已从本研究同步保存的运行记录。');
         return `<article class="gpi-message assistant gpi-saved-run"><div class="gpi-message-body"><p>${note}</p>${RUN_FILES.render(row)}</div></article>`;
       }
+      // The demo's record of a host control that was pressed, not typed.
+      if (row.role === 'demo_action') {
+        return `<article class="gpi-message assistant gpi-workflow-receipt" role="status"><div class="gpi-message-body"><div class="gpi-workflow-receipt-head">${iconHtml('check', 15)}<div><strong>${esc(row.label)}</strong><span>${esc(row.note)}</span></div></div></div></article>`;
+      }
       if (row.role === 'workflow_receipt') {
         const rows = row.total_rows == null ? Number.NaN : Number(row.total_rows);
         const files = Number(row.data_file_count);
