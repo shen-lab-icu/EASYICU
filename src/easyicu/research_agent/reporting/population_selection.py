@@ -10,7 +10,11 @@ no one.  Rows enter an analysis in two typed ways only:
 
 This module reads those owners and says which population the manuscript
 describes.  The Writer receives it as the ANALYZED POPULATION block, so no
-section calls the analyzed stays a population only the question names.  An
+section calls the analyzed stays a population only the question names.  A
+population no plan predicate selected gets a name for the title and the
+Abstract, its unit and the source database's display name ("ICU stays in"
+the database), so that no title calls a study population the rows of an
+export.  An
 export whose selection the host did not record may have applied criteria the
 context does not state (a preset's age bound, a prepared package's own
 cohort), so the block then asserts neither that it applied any nor that the
@@ -45,6 +49,8 @@ import math
 import re
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Optional, Sequence
+
+from easyicu.databases.profiles import get_database_profile
 
 from ..research_context.concept_population import (
     ConceptCohortWindow,
@@ -140,6 +146,10 @@ class AnalyzedPopulation:
     #: Why ``selection_counts`` is ``None``: for audit, never in ``record()``
     #: or the Writer's block.
     selection_counts_unavailable: Optional[str] = None
+    #: The source database's display name (its ``databases.profiles``
+    #: profile), which names the population for readers; ``None`` for a
+    #: database without a profile.  A reader label, not part of ``record()``.
+    source_database_label: Optional[str] = None
 
     def record(self) -> dict[str, Any]:
         """The JSON shape both owners of this record agree on."""
@@ -229,7 +239,16 @@ def analyzed_population(
         selection_counts=counts.counts,
         export_cap=counts.cap,
         selection_counts_unavailable=counts.unavailable,
+        source_database_label=_database_label(context.cohort.database),
     )
+
+
+def _database_label(database: Any) -> Optional[str]:
+    try:
+        label = get_database_profile(str(database or "")).display_name
+    except KeyError:
+        return None
+    return " ".join(str(label or "").split()) or None
 
 
 def host_may_cite_population_statement(population: AnalyzedPopulation | None) -> bool:
@@ -311,6 +330,11 @@ _DECLARED_CONSEQUENCE = (
     "the package declares itself this study's cohort, so name that cohort only as "
     "the package's declaration, never as selected or verified by this study."
 )
+#: The rows of an unfiltered input are a reader's population only by name.
+_NAME_RULE = (
+    "- In the title and the Abstract, call this population by its population "
+    "name, never by its rows, records or export."
+)
 
 
 def writer_population_block(population: AnalyzedPopulation | None) -> str:
@@ -322,6 +346,7 @@ def writer_population_block(population: AnalyzedPopulation | None) -> str:
         population is not None
         and population.source_selection_basis == "package_declaration"
     )
+    name = _population_name(population) if population is not None else None
     if population is None:
         lines.append(
             "- Rows analyzed: not stated by the host, because the plan states no "
@@ -330,6 +355,8 @@ def writer_population_block(population: AnalyzedPopulation | None) -> str:
         )
     else:
         lines.append("- Rows analyzed: " + _SCOPE_TEXT[population.source_scope])
+        if name is not None:
+            lines.append(f"- Population name: {name}.")
         concept = _concept_items(population.concept_population)
         applied = _contract_items(population.applied_contracts)
         if recorded:
@@ -374,6 +401,8 @@ def writer_population_block(population: AnalyzedPopulation | None) -> str:
                 + _listed(list(population.unapplied_population_criteria))
             )
     lines.append(_DESCRIBE_RULE)
+    if name is not None:
+        lines.append(_NAME_RULE)
     if population is not None and population.unapplied_population_criteria:
         lines.append(_UNAPPLIED_RULE)
     lines.append(
@@ -388,6 +417,32 @@ def writer_population_block(population: AnalyzedPopulation | None) -> str:
         )
     )
     return "\n".join(lines) + "\n\n"
+
+
+def _population_name(population: AnalyzedPopulation) -> Optional[str]:
+    """What the title and Abstract call a population no plan predicate selected.
+
+    Plan predicates name the population they select, and a declared package
+    is named only as its declaration, so neither gets a name here; nor does
+    a database without a profile, whose population the block then states by
+    its scope alone.  The criteria known to be applied before analysis
+    qualify the name, as the block lists them.
+    """
+
+    if population.source_scope in (
+        "predicate_selected",
+        "all_input_rows_of_declared_package",
+    ):
+        return None
+    label = population.source_database_label
+    if label is None:
+        return None
+    applied = _contract_items(population.applied_contracts)
+    if population.source_selection_recorded:
+        applied += _concept_items(population.concept_population)
+    if applied:
+        return f"ICU stays in {label} that meet the criteria applied before analysis"
+    return f"ICU stays in {label}"
 
 
 #: How a cap chose the stays it kept, for the rules that keep the first ones.

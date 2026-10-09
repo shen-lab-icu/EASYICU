@@ -104,6 +104,7 @@ def _context(
     recorded: bool = True,
     host_applied: tuple[str, ...] = (),
     basis: str | None = None,
+    database: str = "miiv",
 ) -> ResearchContext:
     """A Web context; unrecorded without a host criterion or a basis, it has no selection record."""
 
@@ -116,7 +117,7 @@ def _context(
         research_question=question,
         cohort=CohortDescriptor(
             cohort_name="web_study",
-            database="miiv",
+            database=database,
             n_stays=100,
             inclusion_criteria=list(inclusion),
             exclusion_criteria=list(exclusion),
@@ -758,6 +759,127 @@ def test_the_population_sections_ask_for_the_analyzed_population() -> None:
         assert "ANALYZED POPULATION" in instructions[key]
     assert "inclusion/exclusion criteria" not in instructions["methods"]
     assert "State no inclusion or exclusion criterion it does not list." in instructions["methods"]
+
+
+# The population's name ---------------------------------------------------
+
+
+_NAME_RULE = (
+    "- In the title and the Abstract, call this population by its population "
+    "name, never by its rows, records or export."
+)
+_QUALIFIED = " that meet the criteria applied before analysis"
+_CONCEPT = {"concept_cohort_window": {"definition": "aki", "window_end_hours": 48.0}}
+
+
+@pytest.mark.parametrize(
+    ("database", "label"),
+    [
+        ("miiv", "MIMIC-IV"),
+        ("eicu", "eICU"),
+        ("aumc", "AmsterdamUMCdb"),
+        ("sic", "SICdb"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("scope", "context_kwargs", "qualifier"),
+    [
+        ("all_icu_stays_of_source_export", {}, ""),
+        (
+            "all_input_rows_of_contracted_export",
+            {"inclusion": ("age range: 18 to *",)},
+            _QUALIFIED,
+        ),
+        ("all_input_rows_of_contracted_export", {"constraints": _CONCEPT}, _QUALIFIED),
+        ("all_input_rows_of_unrecorded_export", {"recorded": False}, ""),
+        # Without a record the concept population is declared, not applied.
+        (
+            "all_input_rows_of_unrecorded_export",
+            {"recorded": False, "constraints": _CONCEPT},
+            "",
+        ),
+        (
+            "all_input_rows_of_unrecorded_export",
+            {
+                "recorded": False,
+                "exclusion": (_LATER_STAYS,),
+                "host_applied": (_LATER_STAYS,),
+            },
+            _QUALIFIED,
+        ),
+    ],
+    ids=[
+        "every_stay",
+        "contracted",
+        "concept_population",
+        "unrecorded",
+        "unrecorded_concept",
+        "unrecorded_host_applied",
+    ],
+)
+def test_a_population_no_predicate_selected_is_named_by_its_unit_and_database(
+    database: str, label: str, scope: str, context_kwargs: dict, qualifier: str
+) -> None:
+    # A title that states such a population by its scope calls the study
+    # population "every input row in a source export".
+    population = analyzed_population(
+        plan=_plan(_ALL_ROWS), context=_context(database=database, **context_kwargs)
+    )
+
+    assert population is not None
+    assert population.source_scope == scope
+    block = writer_population_block(population)
+    assert f"\n- Population name: ICU stays in {label}{qualifier}.\n" in block
+    assert _NAME_RULE in block
+    # A reader label: the record both owners share does not carry it.
+    assert "source_database_label" not in population.record()
+
+
+@pytest.mark.parametrize(
+    "case", ["predicate_selected", "declared_package", "unknown_database"]
+)
+def test_a_population_the_host_cannot_name_gets_no_name(case: str) -> None:
+    cohort = _SELECTED if case == "predicate_selected" else _ALL_ROWS
+    if case == "declared_package":
+        context = _context(
+            exclusion=(_LATER_STAYS,),
+            constraints={"cohort": {"label": "Adults after cardiac surgery"}},
+            basis="package_declaration",
+            host_applied=(_LATER_STAYS,),
+        )
+    else:
+        context = _context(
+            database="a_local_registry" if case == "unknown_database" else "miiv"
+        )
+
+    population = analyzed_population(plan=_plan(cohort), context=context)
+
+    assert population is not None
+    block = writer_population_block(population)
+    # Predicates and a declaration name their own population; an unknown
+    # database is stated by its scope alone.
+    assert "- Population name:" not in block
+    assert _NAME_RULE not in block
+
+
+def test_the_title_request_names_the_population_by_the_hosts_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    common = _common(_QUESTIONS[0])
+
+    requests = _section_requests("draft", common, monkeypatch)
+
+    # A retried title asks again, with the same block and rule.
+    titles = [
+        item["instruction"]
+        for item in requests
+        if item["section_name"] == "Title and Keywords"
+    ]
+    assert titles
+    for instruction in titles:
+        assert "\n- Population name: ICU stays in MIMIC-IV.\n" in instruction
+        assert _NAME_RULE in instruction
+        assert "by the population name ANALYZED POPULATION gives" in instruction
 
 
 # The host's citation repair ---------------------------------------------
