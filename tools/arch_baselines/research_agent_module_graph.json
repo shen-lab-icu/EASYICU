@@ -11124,6 +11124,50 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.planning.target_trial_compile",
+      "easyicu.research_agent.cohort.schema"
+    ],
+    [
+      "easyicu.research_agent.planning.target_trial_compile",
+      "easyicu.research_agent.concept_availability"
+    ],
+    [
+      "easyicu.research_agent.planning.target_trial_compile",
+      "easyicu.research_agent.contracts.model_retention"
+    ],
+    [
+      "easyicu.research_agent.planning.target_trial_compile",
+      "easyicu.research_agent.planning.adjustment_authority"
+    ],
+    [
+      "easyicu.research_agent.planning.target_trial_compile",
+      "easyicu.research_agent.planning.dependence_authority"
+    ],
+    [
+      "easyicu.research_agent.planning.target_trial_compile",
+      "easyicu.research_agent.planning.population_compile"
+    ],
+    [
+      "easyicu.research_agent.planning.target_trial_compile",
+      "easyicu.research_agent.planning.target_trial_spec"
+    ],
+    [
+      "easyicu.research_agent.planning.target_trial_compile",
+      "easyicu.research_agent.planning.treatment_capture"
+    ],
+    [
+      "easyicu.research_agent.planning.target_trial_compile",
+      "easyicu.research_agent.research_context.materialization_window"
+    ],
+    [
+      "easyicu.research_agent.planning.target_trial_compile",
+      "easyicu.research_agent.research_context.stay_events"
+    ],
+    [
+      "easyicu.research_agent.planning.target_trial_compile",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.prediction_model_fit_owner",
       "easyicu.research_agent.authority.typed_input_receipt"
     ],
@@ -13916,9 +13960,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3471,
+    "edge_count": 3482,
     "largest_scc_size": 0,
-    "module_count": 794,
+    "module_count": 797,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -14509,6 +14553,9 @@
     "easyicu.research_agent.planning.step_phase": "planning/step_phase.py",
     "easyicu.research_agent.planning.study_design": "planning/study_design.py",
     "easyicu.research_agent.planning.study_design_playbook": "planning/study_design_playbook.py",
+    "easyicu.research_agent.planning.target_trial_compile": "planning/target_trial_compile.py",
+    "easyicu.research_agent.planning.target_trial_spec": "planning/target_trial_spec.py",
+    "easyicu.research_agent.planning.treatment_capture": "planning/treatment_capture.py",
     "easyicu.research_agent.prediction_model_fit_owner": "prediction_model_fit_owner.py",
     "easyicu.research_agent.prediction_validation_owner": "prediction_validation_owner.py",
     "easyicu.research_agent.providers": "providers/__init__.py",
