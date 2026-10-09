@@ -11312,6 +11312,10 @@
       "easyicu.research_agent.providers.capabilities"
     ],
     [
+      "easyicu.research_agent.providers.client_trust",
+      "easyicu.research_agent.providers.transport_retry"
+    ],
+    [
       "easyicu.research_agent.providers.clients",
       "easyicu.research_agent.authority.provider_budget"
     ],
@@ -11330,6 +11334,10 @@
     [
       "easyicu.research_agent.providers.clients",
       "easyicu.research_agent.providers.protocol"
+    ],
+    [
+      "easyicu.research_agent.providers.clients",
+      "easyicu.research_agent.providers.transport_retry"
     ],
     [
       "easyicu.research_agent.providers.codex_app_server",
@@ -11370,6 +11378,10 @@
     [
       "easyicu.research_agent.providers.factory",
       "easyicu.research_agent.providers.clients"
+    ],
+    [
+      "easyicu.research_agent.providers.factory",
+      "easyicu.research_agent.providers.transport_retry"
     ],
     [
       "easyicu.research_agent.providers.hard_stop",
@@ -12677,6 +12689,10 @@
     ],
     [
       "easyicu.research_agent.reporting.readiness",
+      "easyicu.research_agent.reporting.writer_stop"
+    ],
+    [
+      "easyicu.research_agent.reporting.readiness",
       "easyicu.research_agent.research_context.cohort_granularity"
     ],
     [
@@ -13109,6 +13125,10 @@
     ],
     [
       "easyicu.research_agent.reporting.write_phase",
+      "easyicu.research_agent.reporting.writer_stop"
+    ],
+    [
+      "easyicu.research_agent.reporting.write_phase",
       "easyicu.research_agent.review.causal_audit"
     ],
     [
@@ -13234,6 +13254,14 @@
     [
       "easyicu.research_agent.reporting.writer_only_migration",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.reporting.writer_stop",
+      "easyicu.research_agent.providers.clients"
+    ],
+    [
+      "easyicu.research_agent.reporting.writer_stop",
+      "easyicu.research_agent.providers.transport_retry"
     ],
     [
       "easyicu.research_agent.research_context.builder",
@@ -14088,9 +14116,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3514,
+    "edge_count": 3521,
     "largest_scc_size": 0,
-    "module_count": 808,
+    "module_count": 810,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -14714,6 +14742,7 @@
     "easyicu.research_agent.providers.structured_diagnostics": "providers/structured_diagnostics.py",
     "easyicu.research_agent.providers.structured_retry": "providers/structured_retry.py",
     "easyicu.research_agent.providers.subprocess_env": "providers/subprocess_env.py",
+    "easyicu.research_agent.providers.transport_retry": "providers/transport_retry.py",
     "easyicu.research_agent.publication_skills": "publication_skills.py",
     "easyicu.research_agent.r_runtime": "r_runtime.py",
     "easyicu.research_agent.repair_registry": "repair_registry.py",
@@ -14835,6 +14864,7 @@
     "easyicu.research_agent.reporting.writer_evidence_repair": "reporting/writer_evidence_repair.py",
     "easyicu.research_agent.reporting.writer_only_migration": "reporting/writer_only_migration.py",
     "easyicu.research_agent.reporting.writer_repair_decision": "reporting/writer_repair_decision.py",
+    "easyicu.research_agent.reporting.writer_stop": "reporting/writer_stop.py",
     "easyicu.research_agent.research_context": "research_context/__init__.py",
     "easyicu.research_agent.research_context.builder": "research_context/builder.py",
     "easyicu.research_agent.research_context.clinical_definition": "research_context/clinical_definition.py",

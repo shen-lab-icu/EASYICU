@@ -31,6 +31,7 @@ from .capabilities import (
     provider_profile,
     user_account_profile,
 )
+from .transport_retry import TRANSPORT_RETRY_POLICY_SCHEMA, TransportRetrySchedule
 
 
 # Provider configuration error vocabulary, owned here with the exception
@@ -222,6 +223,7 @@ def _configured_transport_policy(
     stream_enabled: bool,
     supports_strict_json_schema: bool,
     transport: str = "openai_compatible",
+    retry_schedule: Optional[TransportRetrySchedule] = None,
 ) -> dict[str, Any]:
     timeout = float(request_timeout)
     if not math.isfinite(timeout) or timeout <= 0:
@@ -244,7 +246,7 @@ def _configured_transport_policy(
                 raise ValueError("retryable HTTP statuses must be in 100..599")
             statuses.append(status)
         statuses = sorted(set(statuses))
-    return {
+    policy = {
         "schema_version": "easyicu.provider_transport_policy/2",
         "transport": str(transport),
         "request_timeout_seconds": timeout,
@@ -253,6 +255,16 @@ def _configured_transport_policy(
         "stream_enabled": bool(stream_enabled),
         "strict_json_schema_enabled": bool(supports_strict_json_schema),
     }
+    if retry_schedule is not None:
+        # A stated schedule is part of what was reviewed: its waits join the
+        # policy, and it must account for every retry the policy allows.
+        if not isinstance(retry_schedule, TransportRetrySchedule) or (
+            total_attempts != 1 + retry_schedule.max_retries
+        ):
+            raise ValueError("transport retry schedule does not match its attempts")
+        policy.update(retry_schedule.policy_fields())
+        policy["schema_version"] = TRANSPORT_RETRY_POLICY_SCHEMA
+    return policy
 
 
 def _configured_cli_transport_policy(
@@ -303,6 +315,7 @@ def _provider_transport_policy(
             supports_strict_json_schema=bool(
                 instance_vars.get("supports_strict_json_schema", False)
             ),
+            retry_schedule=instance_vars.get("_retry_schedule"),
         )
     if _is_reviewed_client_type(client, "AnthropicMessagesClient"):
         instance_vars = _safe_instance_vars(client)
@@ -319,6 +332,7 @@ def _provider_transport_policy(
                 instance_vars.get("supports_strict_json_schema", False)
             ),
             transport="anthropic_messages",
+            retry_schedule=instance_vars.get("_retry_schedule"),
         )
     if _is_reviewed_client_type(client, "CLIAgentLLMClient"):
         instance_vars = _safe_instance_vars(client)
@@ -529,6 +543,7 @@ def _reviewed_dispatch_identity(client: Any) -> tuple[Any, ...]:
                     sorted(instance_vars.get("_retryable_http_status_codes") or ())
                 )
             ),
+            instance_vars.get("_retry_schedule"),
         )
     if _is_reviewed_client_type(client, "AnthropicMessagesClient"):
         instance_vars = _safe_instance_vars(client)
@@ -555,6 +570,7 @@ def _reviewed_dispatch_identity(client: Any) -> tuple[Any, ...]:
                     sorted(instance_vars.get("_retryable_http_status_codes") or ())
                 )
             ),
+            instance_vars.get("_retry_schedule"),
         )
     if _is_reviewed_client_type(client, "CLIAgentLLMClient"):
         instance_vars = _safe_instance_vars(client)

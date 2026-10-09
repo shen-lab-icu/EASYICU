@@ -18,6 +18,7 @@ import json
 import math
 import mimetypes
 import os
+import random
 import re
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -36,6 +37,7 @@ from ..authority.secret_redaction import (
 from .capabilities import (
     model_looks_vision_capable,
 )
+from .transport_retry import TransportRetrySchedule, mark_retry_exhausted
 from .protocol import (
     LLMMessage,
     ProviderRefusal,
@@ -302,6 +304,23 @@ def _is_transient_connection_error(exc: Exception) -> bool:
     )
 
 
+def _checked_retry_schedule(
+    schedule: Optional[TransportRetrySchedule], max_retries: int
+) -> Optional[TransportRetrySchedule]:
+    """A schedule states one wait per retry, so it fixes the retry count."""
+
+    if schedule is None:
+        return None
+    if not isinstance(schedule, TransportRetrySchedule):
+        raise ValueError("retry_schedule must be a TransportRetrySchedule")
+    if schedule.max_retries != max_retries:
+        raise ValueError(
+            "a transport retry schedule states one wait per retry: "
+            "max_retries must equal its delays"
+        )
+    return schedule
+
+
 def _is_retryable_transport_error(exc: Exception) -> bool:
     status_code = _provider_http_status_code(exc)
     if status_code in _TRANSIENT_HTTP_STATUS_CODES:
@@ -469,6 +488,7 @@ class OpenAIClient:
         supports_strict_json_schema: bool = False,
         stream_enabled: Optional[bool] = None,
         allow_environment_overrides: bool = True,
+        retry_schedule: Optional[TransportRetrySchedule] = None,
     ) -> None:
         # 🔧 2026-07-10: allow env overrides so a flaky SHARED local proxy (the
         # cli-proxy-api / Codex Tools instance that intermittently rotates its key
@@ -603,6 +623,10 @@ class OpenAIClient:
                     raise ValueError("retryable HTTP statuses must be in 100..599")
                 normalized_statuses.add(code)
             self._retryable_http_status_codes = frozenset(normalized_statuses)
+        self._retry_schedule = _checked_retry_schedule(
+            retry_schedule, self._max_retries
+        )
+        self._retry_random = random.random
         self._stream_enabled = bool(stream_enabled)
         self._allow_environment_overrides = bool(allow_environment_overrides)
         self._extra_body = dict(extra_body or {})
@@ -820,8 +844,12 @@ class OpenAIClient:
         last_exc: Optional[Exception] = None
         import json as _json
 
+        retry_started = _time.monotonic()
+        reservation: Dict[str, Any] = {"remaining": None, "at": retry_started}
+
         def _do_call():
             hard_stop_remaining = consume_active_transport_attempt()
+            reservation.update(remaining=hard_stop_remaining, at=_time.monotonic())
             transport_kwargs = dict(create_kwargs)
             if hard_stop_remaining is not None:
                 transport_kwargs["timeout"] = min(
@@ -965,11 +993,26 @@ class OpenAIClient:
                         # proxy rotates its upstream key or drops a pooled
                         # connection. The SDK itself owns no retries.
                         self._rebuild_openai_client()
+                    _retry_after = _extract_retry_after(exc)
+                    if self._retry_schedule is not None:
+                        now = _time.monotonic()
+                        wait, stopped = self._retry_schedule.next_wait(
+                            retry_index=attempt,
+                            since_start=now - retry_started,
+                            since_reservation=now - reservation["at"],
+                            wall_clock_remaining=reservation["remaining"],
+                            retry_after=_retry_after,
+                            draw=self._retry_random,
+                        )
+                        if wait is None:
+                            mark_retry_exhausted(exc, stopped)
+                            raise
+                        _time.sleep(wait)
+                        continue
                     # Respect provider-supplied Retry-After (e.g. Venice's
                     # ~30 s for llama-3.3-70b:free). Fall back to a quadratic
                     # backoff so consecutive failures don't hammer the
                     # endpoint (5s, 20s, 45s, 80s, ...).
-                    _retry_after = _extract_retry_after(exc)
                     if _retry_after is not None:
                         backoff = float(_retry_after) + 2.0
                     else:
@@ -1288,6 +1331,7 @@ class AnthropicMessagesClient:
         supports_strict_json_schema: bool = False,
         stream_enabled: Optional[bool] = False,
         allow_environment_overrides: bool = True,
+        retry_schedule: Optional[TransportRetrySchedule] = None,
         **unsupported: Any,
     ) -> None:
         if unsupported:
@@ -1350,6 +1394,10 @@ class AnthropicMessagesClient:
                     raise ValueError("retryable HTTP statuses must be in 100..599")
                 statuses.add(raw_status)
             self._retryable_http_status_codes = frozenset(statuses)
+        self._retry_schedule = _checked_retry_schedule(
+            retry_schedule, self._max_retries
+        )
+        self._retry_random = random.random
         self._stream_enabled = False
         self._allow_environment_overrides = bool(allow_environment_overrides)
         self.supports_strict_json_schema = bool(supports_strict_json_schema)
@@ -1458,9 +1506,11 @@ class AnthropicMessagesClient:
         attempts = 1 + self._max_retries
         last_exc: Optional[Exception] = None
         response: Any = None
+        retry_started = _time.monotonic()
         for attempt in range(attempts):
             self.last_transport_attempts = attempt + 1
             hard_stop_remaining = consume_active_transport_attempt()
+            reserved_at = _time.monotonic()
             transport_kwargs = dict(create_kwargs)
             if hard_stop_remaining is not None:
                 transport_kwargs["timeout"] = min(
@@ -1482,9 +1532,26 @@ class AnthropicMessagesClient:
                     if self._retryable_http_status_codes is not None
                     else _is_retryable_transport_error(exc)
                 )
-                if not retryable or attempt + 1 >= attempts:
+                if not retryable:
                     raise
                 retry_after = _extract_retry_after(exc)
+                if self._retry_schedule is not None:
+                    now = _time.monotonic()
+                    wait, stopped = self._retry_schedule.next_wait(
+                        retry_index=attempt,
+                        since_start=now - retry_started,
+                        since_reservation=now - reserved_at,
+                        wall_clock_remaining=hard_stop_remaining,
+                        retry_after=retry_after,
+                        draw=self._retry_random,
+                    )
+                    if wait is None:
+                        mark_retry_exhausted(exc, stopped)
+                        raise
+                    _time.sleep(wait)
+                    continue
+                if attempt + 1 >= attempts:
+                    raise
                 backoff = (
                     float(retry_after) + 1.0
                     if retry_after is not None

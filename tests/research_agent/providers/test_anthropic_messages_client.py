@@ -243,3 +243,53 @@ def test_anthropic_client_is_exported_from_research_agent() -> None:
     )
 
     assert AnthropicMessagesClient is CanonicalClient
+
+
+def test_anthropic_client_waits_the_schedule_it_states(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.providers.factory import build_provider_client
+    from easyicu.research_agent.providers.protocol import LLMMessage
+    from easyicu.research_agent.providers.transport_retry import (
+        RETRY_ATTEMPTS_EXHAUSTED,
+        TransportRetrySchedule,
+    )
+
+    failures = []
+    for status in (500, 503, 502):
+        failure = RuntimeError("synthetic upstream failure")
+        failure.status_code = status
+        failures.append(failure)
+    _constructors, messages = _install_fake_sdk(
+        monkeypatch, [failures[0], _response(), failures[1], failures[2]]
+    )
+    client = build_provider_client(
+        provider="anthropic",
+        model="claude-sonnet-4-5",
+        request_timeout=17.0,
+        title="EasyICU Anthropic test",
+        environment={
+            "ANTHROPIC_API_KEY": "test-private-key",
+            "EASYICU_ALLOW_EXTERNAL_LLM": "1",
+        },
+        max_retries=1,
+        retryable_http_status_codes=(500, 502, 503, 504),
+        allow_environment_overrides=False,
+        retry_schedule=TransportRetrySchedule((180.0,), window_seconds=300.0),
+    )
+    client._retry_random = lambda: 0.5
+    sleeps: list[float] = []
+    monkeypatch.setattr("time.sleep", sleeps.append)
+    ask = [LLMMessage(role="user", content="Synthetic request.")]
+
+    assert client.complete(ask) == '{"status":"ready"}'
+    assert sleeps == [pytest.approx(180.0)]
+
+    with pytest.raises(RuntimeError) as raised:
+        client.complete(ask)
+
+    assert raised.value.status_code == 502
+    assert raised.value.easyicu_transport_attempts == 2
+    assert raised.value.easyicu_transport_retry_exhausted == RETRY_ATTEMPTS_EXHAUSTED
+    assert sleeps == [pytest.approx(180.0), pytest.approx(180.0)]
+    assert len(messages.calls) == 4

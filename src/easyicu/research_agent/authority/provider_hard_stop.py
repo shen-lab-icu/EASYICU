@@ -11,15 +11,13 @@ atomically persists that reservation *before* the transport starts.  A
 successful response releases the conservative difference between the
 reservation and provider-reported usage.
 
-A failed or interrupted attempt stays charged, because a remote provider may
-have accepted work even when the client never received usage metadata -- but
-charged for what could actually be at risk, not for the worst case.  Both
-worst-case terms are deliberate over-reservations with no report to settle
-against, and each has an explicit release keyed to what the caller itself
-authorized: the completion hold falls to ``requested_completion_tokens``, and
-the prompt hold to ``estimate_prompt_tokens`` of the bytes actually sent.  See
-``finish_transport_attempt``; each release records the measured run that
-motivated it.
+A failed or interrupted attempt stays charged at its full reservation,
+because a remote provider may have accepted work even when the client never
+received usage metadata.  The prompt byte bound and the completion floor made
+the decision before transport, and only a provider usage receipt proves a
+lower charge, so unknown usage releases neither hold (``finish_transport_
+attempt``).  Read spend that was actually incurred from the provider-reported
+calls in ``task_accounting_summary``.
 
 The ledger intentionally contains no prompts, responses, credentials, or
 patient data.  It is also the batch progress checkpoint: task transitions and

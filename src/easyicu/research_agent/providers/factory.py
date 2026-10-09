@@ -25,6 +25,7 @@ from .capabilities import (
     provider_profile,
     user_account_profile,
 )
+from .transport_retry import TransportRetrySchedule
 
 # Client introspection lives in its own dependency-neutral owner so that
 # layers which only inspect a client do not depend on client construction.
@@ -400,6 +401,7 @@ def provider_authorization_for_configuration(
     retryable_http_status_codes: Optional[Sequence[int]] = None,
     stream_enabled: bool = False,
     supports_strict_json_schema: bool = False,
+    retry_schedule: Optional[TransportRetrySchedule] = None,
 ) -> dict[str, Any]:
     """Mint non-secret identity coordinates without constructing a client."""
 
@@ -414,6 +416,7 @@ def provider_authorization_for_configuration(
         retryable_http_status_codes=retryable_http_status_codes,
         stream_enabled=stream_enabled,
         supports_strict_json_schema=supports_strict_json_schema,
+        retry_schedule=retry_schedule,
     )
     if normalized == "mock":
         return {
@@ -443,7 +446,7 @@ def provider_authorization_for_configuration(
     if cli_profile is not None:
         if profile != "provider_default":
             raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, normalized)
-        if stream_enabled or transport_max_attempts != 1:
+        if stream_enabled or transport_max_attempts != 1 or retry_schedule is not None:
             raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, normalized)
         if not _external_llm_allowed(env):
             raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, normalized)
@@ -496,6 +499,7 @@ def provider_authorization_for_configuration(
             if profile_definition.transport == ANTHROPIC_MESSAGES
             else "openai_compatible"
         ),
+        retry_schedule=retry_schedule,
     )
     base_url = resolve_provider_base_url(normalized, environment=env)
     if not base_url or base_url == "unknown":
@@ -593,6 +597,7 @@ def build_provider_client(
     stream_enabled: Optional[bool] = None,
     supports_strict_json_schema: bool = False,
     allow_environment_overrides: bool = True,
+    retry_schedule: Optional[TransportRetrySchedule] = None,
 ) -> Any:
     """Build a reviewed API client under the canonical key policy.
 
@@ -660,6 +665,8 @@ def build_provider_client(
             kwargs["retryable_http_status_codes"] = tuple(
                 retryable_http_status_codes
             )
+        if retry_schedule is not None:
+            kwargs["retry_schedule"] = retry_schedule
         client = selected_client_cls(**kwargs)
         return _attach_provider_authorization(
             client,
@@ -708,6 +715,8 @@ def build_provider_client(
         }
         if retryable_http_status_codes is not None:
             kwargs["retryable_http_status_codes"] = tuple(retryable_http_status_codes)
+        if retry_schedule is not None:
+            kwargs["retry_schedule"] = retry_schedule
         provider_extra_body = _openrouter_reasoning_extra_body(model)
         merged_extra_body = dict(provider_extra_body or {})
         merged_extra_body.update(dict(extra_body or {}))
@@ -812,6 +821,8 @@ def build_provider_client(
         }
         if retryable_http_status_codes is not None:
             kwargs["retryable_http_status_codes"] = tuple(retryable_http_status_codes)
+        if retry_schedule is not None:
+            kwargs["retry_schedule"] = retry_schedule
         if base_url:
             kwargs["base_url"] = base_url
         if extra_body:

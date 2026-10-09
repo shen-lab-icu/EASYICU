@@ -74,6 +74,7 @@ from easyicu.research_agent.reporting.system_validation_report import (
     projection_payload_sha256,
     render_system_validation_html,
 )
+from easyicu.research_agent.reporting.writer_stop import writer_stop
 from easyicu.research_agent.execution.runners.missingness_measurement_figure_executor import (
     run_measurement_missingness_figure,
 )
@@ -2923,6 +2924,7 @@ def _readiness_axes(run_dir: Path) -> Dict[str, Any]:
             "failed_steps",
             "missing_steps",
             "analysis_errors",
+            "writer_stop",
         )
         if key in merged
     }
@@ -2942,6 +2944,9 @@ _FAILED_CLOSED_AXES = (
     "evidence_complete",
     "numeric_verified",
 )
+#: The axes a run that has no draft fails; a stop the Writer named is their
+#: cause (``reporting.writer_stop``).
+_DRAFT_AXES = frozenset({"evidence_complete", "numeric_verified"})
 
 
 def _failed_closed_detail(axes: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
@@ -2951,7 +2956,9 @@ def _failed_closed_detail(axes: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     (``contracts.executor_stop``), readiness carries the stop's reason and
     lower-layer cause on that step.  Otherwise the first axis the run did not
     satisfy names it: a run can complete every step and still not be
-    reportable.
+    reportable.  When that axis is one a missing draft fails and the Writer
+    named its stop, the stop names it, with the transport's typed status and
+    attempts; why the transport stopped retrying is its cause.
     """
 
     failed = [entry for entry in axes.get("failed_steps") or [] if isinstance(entry, Mapping)]
@@ -2966,7 +2973,13 @@ def _failed_closed_detail(axes: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
             return detail
     for axis in _FAILED_CLOSED_AXES:
         if not axes.get(axis):
-            return {"reason_code": f"{axis}_not_satisfied"}
+            writer = (
+                writer_stop(axes.get("writer_stop")) if axis in _DRAFT_AXES else None
+            )
+            if writer is None:
+                return {"reason_code": f"{axis}_not_satisfied"}
+            exhausted = writer.pop("transport_retry_exhausted", None)
+            return {**writer, "cause_code": exhausted} if exhausted else writer
     return None
 
 
