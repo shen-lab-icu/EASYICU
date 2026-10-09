@@ -82,13 +82,18 @@ from ..research_context.materialization_window import (
     host_column_window,
 )
 from ..research_context.stay_events import ICU_LENGTH_OF_STAY_CONCEPT
-from ..schema import ResearchContext
+from ..schema import EndpointSpec, ResearchContext
 from .adjustment_authority import host_proven_temporal_roles
 from .dependence_authority import (
     context_patient_group_authority,
     repeat_units_possible,
 )
-from .population_compile import POPULATION_APPROVAL_STOPS, CompiledPopulation
+from .population_compile import (
+    POPULATION_APPROVAL_STOPS,
+    CompiledPopulation,
+    population_spec_concepts,
+)
+from .population_spec import PopulationSpec
 from .target_trial_spec import (
     TARGET_TRIAL_SPEC_SCHEMA_VERSION,
     TargetTrialSpec,
@@ -423,6 +428,95 @@ class CompiledTargetTrial:
 
     def sha256(self) -> str:
         return compile_record_sha256(self.record())
+
+
+def _trial_windows(spec: TargetTrialSpec) -> tuple[tuple[int, int], tuple[int, int]]:
+    """The covariate window ``[0, T0)`` and the onset window ``[0, T0 + G)``, in hours."""
+
+    time_zero = spec.time_zero.hours_after_icu_admission
+    return (0, time_zero), (0, time_zero + spec.grace_period.hours)
+
+
+@dataclass(frozen=True)
+class TargetTrialAcquisition:
+    """What an extraction for a stated trial reads, before the trial is compiled.
+
+    The windows are the ones a compiled record states
+    (:meth:`CompiledTargetTrial.acquisition_windows`): covariates summarized
+    over ``[0, T0)`` and the treatment's onsets read over ``[0, T0 + G)``.
+    """
+
+    cohort_window: tuple[float, float]
+    event_onset_windows: Mapping[str, tuple[float, float]]
+    #: The endpoint's event, which is the extraction's outcome.
+    target_outcome: str
+    #: Event statuses read as outcomes besides it: the death.
+    other_outcomes: tuple[str, ...]
+    #: The treatment, the endpoint's follow-up, the ICU stay and the
+    #: concepts the population reads.
+    design_concepts: tuple[str, ...]
+    #: The stated confounders, by the column or the concept each names.
+    confounders: tuple[str, ...]
+
+
+def target_trial_acquisition(
+    spec: TargetTrialSpec, population_spec: PopulationSpec
+) -> TargetTrialAcquisition:
+    """What an extraction for ``spec`` and its population reads.
+
+    The compile, not this reading, decides what the extraction can carry:
+    an endpoint no fixed horizon defines is asked for by its name, and the
+    compile refuses it.
+    """
+
+    covariate, onset = _trial_windows(spec)
+    endpoint = fixed_horizon_mortality_endpoint(spec.outcome.endpoint)
+    onset_window = (float(onset[0]), float(onset[1]))
+    return TargetTrialAcquisition(
+        cohort_window=(float(covariate[0]), float(covariate[1])),
+        event_onset_windows=_frozen(
+            {concept: onset_window for concept in spec.treatment.concepts}
+        ),
+        target_outcome=(
+            endpoint.event_concept if endpoint is not None else spec.outcome.endpoint
+        ),
+        other_outcomes=(DEATH_STATUS,),
+        design_concepts=tuple(
+            dict.fromkeys(
+                (
+                    *spec.treatment.concepts,
+                    *([endpoint.followup_concept] if endpoint is not None else []),
+                    ICU_LENGTH_OF_STAY_CONCEPT,
+                    *population_spec_concepts(population_spec),
+                )
+            )
+        ),
+        confounders=tuple(item.name for item in spec.confounders),
+    )
+
+
+def target_trial_context_endpoint(spec: TargetTrialSpec) -> Optional[EndpointSpec]:
+    """The time-to-event endpoint a run of the trial carries on its context.
+
+    The signed suite projects the same endpoint onto the run's inputs
+    (``TargetTrialRuntimeAuthority.research_context_endpoint``); the host's
+    compile for the card builds its context with it.  ``None`` for an
+    endpoint no fixed horizon defines, which the compile refuses.
+    """
+
+    endpoint = fixed_horizon_mortality_endpoint(spec.outcome.endpoint)
+    if endpoint is None:
+        return None
+    return EndpointSpec(
+        name=endpoint.event_concept,
+        kind="time_to_event",
+        absence_semantics="absent_row_is_unmeasured",
+        levels=[0, 1],
+        event_column=endpoint.event_concept,
+        time_column=endpoint.followup_concept,
+        time_origin=endpoint.time_origin,
+        censoring_rule=endpoint.censoring_rule,
+    )
 
 
 def compile_record_sha256(record: Mapping[str, Any]) -> str:
@@ -1260,10 +1354,17 @@ def _materialization(
         ICU_LENGTH_OF_STAY_CONCEPT,
         *(item.name for item in confounders if item.disposition != "not_applied"),
     ]
+    covariate_window, onset_window = _trial_windows(reading.spec)
     return {
         "anchor": _ANCHOR,
-        "covariate_window": {"start_hours": 0, "end_hours": reading.time_zero},
-        "treatment_onset_window": {"start_hours": 0, "end_hours": reading.grace_end},
+        "covariate_window": {
+            "start_hours": covariate_window[0],
+            "end_hours": covariate_window[1],
+        },
+        "treatment_onset_window": {
+            "start_hours": onset_window[0],
+            "end_hours": onset_window[1],
+        },
         "treatment_onset_columns": onset,
         "columns": list(dict.fromkeys(columns)),
     }
@@ -1462,10 +1563,13 @@ __all__ = [
     "TARGET_TRIAL_COMPILE_SCHEMA_VERSION",
     "TIME_ZERO_MENU_HOURS",
     "ApprovalBlocker",
+    "TargetTrialAcquisition",
     "CompiledConfounder",
     "CompiledElement",
     "CompiledTargetTrial",
     "Confirmation",
     "compile_record_sha256",
     "compile_target_trial",
+    "target_trial_acquisition",
+    "target_trial_context_endpoint",
 ]

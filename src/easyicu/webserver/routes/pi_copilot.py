@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StringConstraints
 
 from easyicu.webserver.pi_copilot import get_pi_copilot_service
 from easyicu.webserver.ideas import mining as idea_mining
@@ -299,6 +299,18 @@ class PiHostActionRequest(BaseModel):
     ]
     action_key: ShortText
     child_job_id: ShortText | None = None
+
+
+class PiTargetTrialApprovalRequest(BaseModel):
+    """The researcher's click on the target trial card the page shows."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: ShortText
+    study_context_id: ShortText
+    expected_revision: StrictInt = Field(ge=0)
+    compile_sha256: Sha256Text
+    n_lines_confirmed: StrictInt = Field(ge=1)
 
 
 class PiPresentationPinRequest(BaseModel):
@@ -1028,6 +1040,24 @@ def post_pi_copilot_host_action(
             action_code=body.action_code,
             action_key=body.action_key,
             child_job_id=body.child_job_id,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/sessions/{session_id}/target-trial-approval")
+def post_pi_copilot_target_trial_approval(
+    session_id: ShortText,
+    body: PiTargetTrialApprovalRequest,
+) -> dict:
+    try:
+        return get_pi_copilot_service().approve_target_trial(
+            session_id,
+            project_id=body.project_id,
+            study_context_id=body.study_context_id,
+            expected_revision=body.expected_revision,
+            compile_sha256=body.compile_sha256,
+            n_lines_confirmed=body.n_lines_confirmed,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

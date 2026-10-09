@@ -11637,6 +11637,10 @@
     ],
     [
       "easyicu.research_agent.planning.target_trial_compile",
+      "easyicu.research_agent.planning.population_spec"
+    ],
+    [
+      "easyicu.research_agent.planning.target_trial_compile",
       "easyicu.research_agent.planning.target_trial_spec"
     ],
     [
@@ -14556,7 +14560,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3631,
+    "edge_count": 3632,
     "largest_scc_size": 0,
     "module_count": 830,
     "package_count": 36,

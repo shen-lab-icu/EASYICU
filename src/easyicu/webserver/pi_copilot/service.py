@@ -32,9 +32,11 @@ from easyicu.webserver import (
     source_identity_authority,
     sources,
     study_contexts,
+    target_trial_card,
 )
 from easyicu.webserver.data_package_review import DataPackageReviewSnapshotStore
 from easyicu.webserver.host_action_contracts import host_action_id
+from easyicu.webserver.target_trial_setup import TARGET_TRIAL_COMPILE_SUBMITTED
 from easyicu.webserver.copilot_data_workbench import (
     CopilotDataWorkbenchError,
     CopilotDataWorkbenchSnapshotStore,
@@ -171,6 +173,8 @@ HOST_ACTIONS_WITHOUT_JOBS = frozenset(
         "review_figures",
         "review_manuscript",
         "review_scientific_review",
+        # Written by the host in the approval request, never by the browser.
+        target_trial_card.TARGET_TRIAL_APPROVED,
     }
 )
 _RETIRED_SESSION_METADATA_FIELDS = frozenset(
@@ -2352,6 +2356,7 @@ class PiCopilotService:
                         "easyicu_run_submitted",
                         "easyicu_full_run_submitted",
                         "easyicu_report_repair_submitted",
+                        TARGET_TRIAL_COMPILE_SUBMITTED,
                     }
                 ):
                     self._watch_child_job_for_replay(
@@ -2657,6 +2662,54 @@ class PiCopilotService:
                 status_code=409,
                 details={"session_id": record.session_id},
             )
+
+    def approve_target_trial(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        study_context_id: str,
+        expected_revision: int,
+        compile_sha256: str,
+        n_lines_confirmed: int,
+    ) -> Dict[str, Any]:
+        """Record the researcher's click on the study's target trial card.
+
+        The conversation must be bound to the study; the card's owner decides
+        whether the click approves (``target_trial_card``).  The row the
+        conversation shows is keyed by the approval's event id, so a repeated
+        click adds none.
+        """
+
+        self.host_action_session(
+            session_id, project_id=project_id, study_context_id=study_context_id
+        )
+        try:
+            approved = target_trial_card.approve_target_trial(
+                study_context_id,
+                expected_revision=expected_revision,
+                compile_sha256=compile_sha256,
+                n_lines_confirmed=n_lines_confirmed,
+            )
+        except target_trial_card.TargetTrialApprovalError as exc:
+            raise PiCopilotError(
+                exc.code, str(exc), status_code=exc.status_code
+            ) from exc
+        event_id = str(approved["approval_event_id"])
+        self._record_host_action(
+            session_id,
+            project_id=project_id,
+            action_code=target_trial_card.TARGET_TRIAL_APPROVED,
+            action_key=event_id,
+        )
+        study = approved["study"]
+        return {
+            "ok": True,
+            "study_context_id": str(study.get("id") or ""),
+            "study_context_revision": int(study.get("revision") or 0),
+            "approval_event_id": event_id,
+            "repeated": bool(approved["repeated"]),
+        }
 
     def host_action_child_job(
         self, session_id: str, *, project_id: str, action_key: str

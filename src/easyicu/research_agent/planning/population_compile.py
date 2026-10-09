@@ -302,6 +302,31 @@ class CompiledPopulation:
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def population_spec_concepts(spec: PopulationSpec) -> tuple[str, ...]:
+    """The concepts compiling ``spec`` reads, in the order its criteria state them.
+
+    An extraction for the study holds them, so each criterion the plan can
+    apply is compiled over its data: the age, the ICU stay, a condition's or
+    an event's status, a measurement and the death the kinds read.  Diagnosis
+    codes and a first ICU stay are applied by the export or the host, over no
+    column.
+    """
+
+    concepts: list[str] = []
+    for criterion in spec.criteria:
+        if isinstance(criterion, AgeYears):
+            concepts.append(_AGE_CONCEPT)
+        elif isinstance(criterion, IcuStayHours):
+            concepts.append(ICU_LENGTH_OF_STAY_CONCEPT)
+        elif isinstance(criterion, ConditionPresent):
+            concepts.extend(criterion.concepts_all_of)
+        elif isinstance(criterion, (Measurement, EventAbsent)):
+            concepts.append(criterion.concept)
+        elif isinstance(criterion, AliveAt):
+            concepts.append(_DEATH_CONCEPT)
+    return tuple(dict.fromkeys(concepts))
+
+
 def compile_population(
     spec: PopulationSpec,
     context: ResearchContext,
@@ -1130,5 +1155,6 @@ __all__ = [
     "SourceProof",
     "ThresholdReading",
     "compile_population",
+    "population_spec_concepts",
     "read_threshold",
 ]

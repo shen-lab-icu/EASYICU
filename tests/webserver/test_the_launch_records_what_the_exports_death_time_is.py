@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
+from easyicu.webserver import agent_pipeline_runs
 from easyicu.webserver.agent_pipeline_runs import _research_user_preferences
 from easyicu.webserver.research_launch_scientific import (
     bound_export_event_time_semantics,
@@ -96,16 +98,24 @@ def test_planning_reads_the_record_the_launch_writes() -> None:
     )
 
 
-def test_the_launch_passes_the_bound_exports_label_to_planning() -> None:
-    import inspect
+def test_the_launch_passes_the_bound_exports_label_to_planning(
+    tmp_path: Path,
+) -> None:
+    """A run declares its context through one owner, which reads the export it binds."""
 
-    from easyicu.webserver import agent_pipeline_runs
-
-    source = inspect.getsource(agent_pipeline_runs)
-    call = source.index("preferences = _research_user_preferences(")
-    assert (
-        "event_time_semantics=bound_export_event_time_semantics(export_path)"
-        in source[
-            call : source.index(")", source.index("event_time_semantics=", call)) + 1
-        ]
+    export = _export(tmp_path / "miiv", _death("recorded_deathtime"))
+    study = complete_study()
+    scientific = SimpleNamespace(
+        study=study,
+        materialization_study=study,
+        patient_grouping=None,
+        cohort_window=(0.0, 24.0),
+        metadata_planning_coordinates={},
     )
+
+    declared = agent_pipeline_runs.research_context_declarations(
+        scientific, export_path=export
+    )
+
+    constraints = json.loads(declared["user_preferences"]["data_constraints"])
+    assert constraints["event_time_semantics"] == {"death_time": "recorded_deathtime"}

@@ -15,13 +15,14 @@ from __future__ import annotations
 import inspect
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from easyicu.research_agent.icu_rules import default_time_windows
 from easyicu.research_agent.research_context.temporal_semantics import (
     TemporalAlignmentEngine,
 )
 from easyicu.research_agent.schema import TimeWindow
-from easyicu.webserver import study_contexts
+from easyicu.webserver import agent_pipeline_runs, study_contexts
 from easyicu.webserver.primary_cohort import MAX_DIAGNOSIS_TOKENS
 from easyicu.webserver.agent_pipeline_runs import (
     _cohort_window,
@@ -60,13 +61,30 @@ def test_the_materialized_window_is_declared_as_the_analysis_window() -> None:
     assert window.rationale, "a declared window states where it came from"
 
 
-def test_the_declared_window_is_the_one_materialization_used() -> None:
+def test_the_declared_window_is_the_one_materialization_used(tmp_path: Path) -> None:
     """Recomputing it from the study would let the two drift apart."""
 
+    # The study states 24 hours; the run materialized 6 (a trial's [0, T0)).
+    study = {"time_window": {"hours": 24, "anchor": "icu_admission"}}
+    scientific = SimpleNamespace(
+        study=study,
+        materialization_study=study,
+        patient_grouping=None,
+        cohort_window=(0.0, 6.0),
+        metadata_planning_coordinates={},
+    )
+
+    declared = agent_pipeline_runs.research_context_declarations(
+        scientific, export_path=str(tmp_path / "export")
+    )
+
+    assert [
+        (window.start_hours, window.end_hours) for window in declared["time_windows"]
+    ] == [(0.0, 6.0)]
+    # The run materializes the tuple it declares.
     source = _RUNS.read_text(encoding="utf-8")
     preparation = _PREPARATION.read_text(encoding="utf-8")
-    assert "time_windows=_declared_time_windows(window, study)," in source
-    # `window` is the tuple already passed as `cohort_window=` for materialization
+    assert "window = scientific.cohort_window" in source
     assert "cohort_window=window," in source
     assert "window = _cohort_window(materialization_study)" in preparation
 

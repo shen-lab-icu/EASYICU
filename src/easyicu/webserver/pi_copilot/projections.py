@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from easyicu.research_agent.planning.approval_stops import PLAN_APPROVAL_STOPS
 
 from ..research_input_progress import project_research_input_state
+from ..target_trial_setup import project_target_trial_compile
 from . import cohort_eligibility
 from .contracts import PiCopilotError, plan_approval_allowed
 from .user_visible_text import project_user_turn_text, sanitize_user_visible_text
@@ -481,6 +482,8 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     }
     artifacts = result.get("artifacts")
     artifacts = artifacts if isinstance(artifacts, list) else []
+    # A target trial compile's own result: codes and numbers only.
+    trial_compile = project_target_trial_compile(result.get("target_trial_compile"))
     revision = result.get("report_revision")
     revision = revision if isinstance(revision, Mapping) else {}
     own_revision = bool(revision.get("revision_id") == snapshot.get("id") and revision)
@@ -623,6 +626,11 @@ def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             "report_revision_id": stable_code(revision.get("revision_id")) if own_revision else "",
             "reportable": bool(gate.get("reportable")),
             "human_review_pending": bool(result.get("human_review_pending")),
+            **(
+                {"target_trial_compile": trial_compile}
+                if trial_compile is not None
+                else {}
+            ),
         }
     )
 

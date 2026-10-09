@@ -51,6 +51,7 @@ from easyicu.webserver.research_launch_runtime import (
     _validated_pipeline_credential_source,
 )
 from easyicu.webserver.research_launch_scientific import (
+    TargetTrialLaunchInputs,
     _cohort_window,
     _configured_covariate_selection,
     _configured_covariates,
@@ -67,7 +68,12 @@ from easyicu.webserver.research_launch_scientific import (
     _validate_analysis_design,
     _validate_primary_concept_selection,
     _validate_trajectory_design,
+    target_trial_launch_inputs,
 )
+from easyicu.webserver.scientific_runtime_projection import (
+    WebScientificRuntimeProjectionError,
+)
+from easyicu.webserver.target_trial_runtime_projection import approved_target_trial
 
 _RUNNER_IMAGE_ENV = "EASYICU_RUNNER_IMAGE"
 _DEVELOPMENT_RESUME_JOB_ENV = "EASYICU_DEVELOPMENT_PROGRESSIVE_RESUME_SOURCE_JOB_ID"
@@ -103,7 +109,6 @@ class PreparedScientificLaunch:
     question: str
     database: str
     materialization_study: Mapping[str, Any]
-    configured_target: Optional[str]
     configured_primary_exposure: Optional[str]
     target: Optional[str]
     primary_exposure: Optional[str]
@@ -120,6 +125,17 @@ class PreparedScientificLaunch:
     metadata_operationalized_columns: tuple[str, ...]
     prepared_package_binding: Optional[Mapping[str, Any]]
     foundation_profile: Mapping[str, Any]
+    #: What a study with a target trial acquires: its covariate and onset
+    #: windows and concepts replace the study's own materialization request.
+    target_trial_inputs: Optional[TargetTrialLaunchInputs] = None
+
+
+@dataclass(frozen=True)
+class _StatedTrial:
+    """A trial and its population, approved or stated for a compile."""
+
+    spec: Any
+    population_spec: Any
 
 
 @dataclass(frozen=True)
@@ -173,8 +189,20 @@ def _clean_text(value: Any, limit: int) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
 
 
+def _approved_trial(study: Mapping[str, Any]) -> Optional[_StatedTrial]:
+    try:
+        confirmed = approved_target_trial(study)
+    except WebScientificRuntimeProjectionError as exc:
+        raise ResearchPipelineRunError(exc.code, str(exc), details=exc.details) from exc
+    if confirmed is None:
+        return None
+    return _StatedTrial(confirmed.spec, confirmed.population_spec)
+
+
 def _prepare_scientific_launch(
     request: ResearchPipelineLaunchRequest,
+    *,
+    stated_trial: Optional[_StatedTrial] = None,
 ) -> PreparedScientificLaunch:
     study = dict(request.study_context)
     question = _clean_text(study.get("question"), 1_200)
@@ -303,6 +331,22 @@ def _prepare_scientific_launch(
         else ()
     )
 
+    # A run of a study whose trial is approved reads what the trial reads,
+    # as the compile for its card did (``prepare_target_trial_launch``).
+    trial = stated_trial
+    if trial is None:
+        approved = _approved_trial(study)
+        if approved is not None and metadata_only_planning:
+            # A candidate plan reads metadata only, and the run of an
+            # approved trial compiles it again on the study's rows.
+            raise ResearchPipelineRunError(
+                "research_pipeline_target_trial_plans_on_data",
+                "This study's target trial is approved, so its plan is generated "
+                "on the study's data, where the run compiles the approved trial "
+                "again; a candidate plan reads metadata only and cannot.",
+            )
+        trial = approved
+    target_trial_inputs: Optional[TargetTrialLaunchInputs] = None
     prepared_package_binding: Optional[Dict[str, Any]] = None
     if metadata_only_planning:
         foundation_profile: Dict[str, Any] = {
@@ -314,23 +358,52 @@ def _prepare_scientific_launch(
             "primary_exposure_source_concept": None,
         }
     else:
-        foundation_profile = _data_foundation_profile(
-            export_path=request.export_path,
-            study=materialization_study,
-            target=target,
-            primary_exposure=primary_exposure,
-            require_target=bool(configured_target),
-            require_primary_exposure=bool(configured_primary_exposure),
-            covariates=covariates,
-            sensitivity_specs=sensitivity_specs,
-            # The population's predicates read stay-level columns of the
-            # same universe, so they are materialized with the coordinates.
-            trajectory_concepts=(
-                (*trajectory_design.required_concepts, *trajectory_design.population_concepts)
-                if trajectory_design is not None
-                else ()
-            ),
-        )
+        if trial is not None:
+            target_trial_inputs = target_trial_launch_inputs(
+                export_path=request.export_path,
+                materialization_study=materialization_study,
+                spec=trial.spec,
+                population_spec=trial.population_spec,
+            )
+            foundation_profile = dict(target_trial_inputs.foundation_profile)
+            # The run summarizes its columns over the trial's [0, T0), so the
+            # scope it materializes, declares and plans under is that window.
+            materialization_study = {
+                **materialization_study,
+                "time_window": target_trial_inputs.materialization_window,
+            }
+            window = _cohort_window(materialization_study)
+            if window != target_trial_inputs.cohort_window:  # pragma: no cover
+                raise ResearchPipelineRunError(
+                    "research_pipeline_target_trial_window_unreadable",
+                    "The trial's covariate window does not read as a run window.",
+                )
+            # The trial names the run's outcome; its treatment is a strategy
+            # the signed suite emulates, not an exposure column.
+            target = target_trial_inputs.target_outcome
+            primary_exposure = None
+            configured_primary_exposure = None
+        else:
+            foundation_profile = _data_foundation_profile(
+                export_path=request.export_path,
+                study=materialization_study,
+                target=target,
+                primary_exposure=primary_exposure,
+                require_target=bool(configured_target),
+                require_primary_exposure=bool(configured_primary_exposure),
+                covariates=covariates,
+                sensitivity_specs=sensitivity_specs,
+                # The population's predicates read stay-level columns of the
+                # same universe, so they are materialized with the coordinates.
+                trajectory_concepts=(
+                    (
+                        *trajectory_design.required_concepts,
+                        *trajectory_design.population_concepts,
+                    )
+                    if trajectory_design is not None
+                    else ()
+                ),
+            )
         try:
             package_receipt = dataio.validate_research_pipeline_source(
                 request.export_path,
@@ -369,7 +442,6 @@ def _prepare_scientific_launch(
         question=question,
         database=database,
         materialization_study=materialization_study,
-        configured_target=configured_target,
         configured_primary_exposure=configured_primary_exposure,
         target=target,
         primary_exposure=primary_exposure,
@@ -386,6 +458,41 @@ def _prepare_scientific_launch(
         metadata_operationalized_columns=metadata_operationalized_columns,
         prepared_package_binding=prepared_package_binding,
         foundation_profile=foundation_profile,
+        target_trial_inputs=target_trial_inputs,
+    )
+
+
+def prepare_target_trial_launch(
+    *,
+    export_path: str,
+    study: Mapping[str, Any],
+    spec: Any,
+    population_spec: Any,
+) -> PreparedScientificLaunch:
+    """The scientific launch a run of ``study`` prepares once ``spec`` is approved.
+
+    The host's compile job for the trial's card prepares it here, before any
+    approval, so the record it compiles is the one the run compiles again: a
+    package-bound launch, with no provider, workspace or job.  It refuses as
+    that run would.
+    """
+
+    request = ResearchPipelineLaunchRequest(
+        export_path=export_path,
+        study_context=study,
+        project_root=None,
+        provider={},
+        provider_environment=None,
+        credential_source="",
+        literature_search_authorized=False,
+        plan_revision_source_run_id="",
+        execution_resume_source_run_id="",
+        development_resume_source_job_id="",
+        budget_mode="full_reviewed",
+        runner_image=None,
+    )
+    return _prepare_scientific_launch(
+        request, stated_trial=_StatedTrial(spec, population_spec)
     )
 
 

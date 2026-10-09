@@ -11,6 +11,11 @@ from easyicu.research_agent.acquisition.first_icu_stay import FirstIcuStayBindin
 from easyicu.research_agent.acquisition.patient_grouping import PatientGroupingBinding
 from easyicu.research_agent.contracts.trajectory_design import FixedWindowTrajectoryDesign
 from easyicu.research_agent.icu_rules import VariableKind
+from easyicu.research_agent.planning.population_spec import PopulationSpec
+from easyicu.research_agent.planning.target_trial_compile import (
+    target_trial_acquisition,
+)
+from easyicu.research_agent.planning.target_trial_spec import TargetTrialSpec
 from easyicu.research_agent.research_context.export_selection import SelectionBasis
 from easyicu.webserver import dataio, primary_cohort, source_identity_authority
 from easyicu.webserver import study_contexts as study_context_owner
@@ -1392,3 +1397,96 @@ def _data_foundation_profile(
         # stay; a cohort that keeps every stay carries no such coordinate.
         **({"first_icu_stay": first_icu_stay} if first_icu_stay is not None else {}),
     }
+
+
+@dataclasses.dataclass(frozen=True)
+class TargetTrialLaunchInputs:
+    """What a run of a study with a target trial acquires.
+
+    The host's compile job for the trial's card acquires the same, so the
+    record the researcher approves is the record the run compiles again on
+    its own context (``bind_confirmed_target_trial``): covariates summarized
+    over ``[0, T0)``, the treatment's onsets read over ``[0, T0 + G)``, the
+    trial's concepts and the study's modules, every concept by the host.
+    """
+
+    cohort_window: tuple[float, float]
+    event_onset_windows: Mapping[str, tuple[float, float]]
+    target_outcome: str
+    foundation_profile: Mapping[str, Any]
+
+    @property
+    def materialization_window(self) -> Dict[str, Any]:
+        """The study's ``time_window`` as the run executes it: ``[0, T0)``.
+
+        A run declares the window it summarized its columns over, so its
+        scope carries the trial's covariate window in place of the study's.
+        """
+
+        start, end = self.cohort_window
+        if start != 0.0:
+            raise ValueError("a trial's covariate window opens at ICU admission")
+        return {"hours": end, "anchor": "icu_admission"}
+
+    def acquisition_arguments(
+        self, *, database: str, patient_grouping: Any
+    ) -> Dict[str, Any]:
+        """The acquisition's arguments besides its export, question, model and output."""
+
+        profile = self.foundation_profile
+        return {
+            "target_outcome": self.target_outcome,
+            "primary_exposure_concept": None,
+            # A concept the trial reads twice -- a confounder its population
+            # also reads -- is acquired once.
+            "outcome_concepts": list(dict.fromkeys(profile["outcome_concepts"])),
+            "required_feature_concepts": list(
+                dict.fromkeys(profile["required_feature_concepts"])
+            ),
+            "static_concepts": list(dict.fromkeys(profile["static_concepts"])),
+            "allowed_modules": profile["allowed_modules"],
+            "concept_selection_authority": "host_exact",
+            "cohort_window": self.cohort_window,
+            "trajectory_window": self.cohort_window,
+            "database": database,
+            "require_outcome": profile["require_outcome"],
+            "emit_trajectory": False,
+            "patient_grouping": patient_grouping,
+            "host_derivations": (),
+            "first_icu_stay": profile.get("first_icu_stay"),
+            "event_onset_windows": dict(self.event_onset_windows),
+        }
+
+
+def target_trial_launch_inputs(
+    *,
+    export_path: str,
+    materialization_study: Mapping[str, Any],
+    spec: TargetTrialSpec,
+    population_spec: PopulationSpec,
+) -> TargetTrialLaunchInputs:
+    """What a run of ``materialization_study`` acquires for ``spec``.
+
+    The study's modules bound what can be read, as for any run; a concept the
+    trial reads that they do not provide raises the launch's own typed error
+    with the concept, so the compile job and the run stop alike.
+    """
+
+    acquisition = target_trial_acquisition(spec, population_spec)
+    profile = _data_foundation_profile(
+        export_path=export_path,
+        study=materialization_study,
+        target=acquisition.target_outcome,
+        require_target=True,
+        require_primary_exposure=False,
+        covariates=acquisition.confounders,
+        additional_outcomes=acquisition.other_outcomes,
+        analysis_inputs=acquisition.design_concepts,
+    )
+    return TargetTrialLaunchInputs(
+        cohort_window=acquisition.cohort_window,
+        event_onset_windows=acquisition.event_onset_windows,
+        target_outcome=acquisition.target_outcome,
+        foundation_profile=profile,
+    )
+
