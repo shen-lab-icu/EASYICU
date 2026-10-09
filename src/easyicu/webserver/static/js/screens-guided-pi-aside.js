@@ -265,6 +265,11 @@
         // remedy (population_compile.POPULATION_APPROVAL_STOPS).
         population_inclusion_requires_extraction: tr('A stated inclusion criterion cannot be applied with the bound data package; extract the data for this study’s population, then plan again. This plan cannot be approved', '研究写明的纳入条件，当前数据包无法施加；按本研究人群重新提取数据后再生成计划，此计划不能批准'),
         population_inclusion_not_applied: tr('A stated inclusion criterion cannot be applied as written, so this plan cannot be approved; revise the criterion or generate a new plan', '研究写明的纳入条件按原文无法施加，此计划不能批准；请修改该条件或重新生成计划'),
+        // A causal study states and approves its target trial before it plans
+        // (target_trial_card.TARGET_TRIAL_WORKFLOW_CODES).
+        target_trial_statement_needed: tr('State the target trial in the conversation before planning', '先在对话里说明所模拟的目标试验，再生成计划'),
+        target_trial_review: tr('See the target trial card; planning waits until the trial is approved', '请查看试验卡片；试验批准后才能生成计划'),
+        target_trial_plan_ready: tr('The target trial is approved; the plan can be generated on this study’s data', '目标试验已批准，可以按本研究数据生成计划'),
         // An analysis the question asks for that the plan leaves unanswered or
         // cannot answer, or a plan the host could not check against the question
         // (question_requirements.QUESTION_REQUIREMENT_APPROVAL_STOPS).

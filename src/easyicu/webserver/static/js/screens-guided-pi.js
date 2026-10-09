@@ -1220,7 +1220,7 @@
         // The project's run record and the host's decision coordinates travel
         // beside the snapshot; owners read them from the same workflow object.
         if (state.workflow) state.workflow.runs = Array.isArray(payload && payload.runs) ? payload.runs : [];
-        if (state.workflow) Object.assign(state.workflow, { host_decisions: (payload && payload.host_decisions) || {}, starting: (payload && payload.starting) || null });
+        if (state.workflow) Object.assign(state.workflow, { host_decisions: (payload && payload.host_decisions) || {}, starting: (payload && payload.starting) || null, target_trial_card: (payload && payload.target_trial_card) || null });
         reconcileDurableWrapupActivity();
         hydrateProjectedJob(payload && payload.active_job);
         const activeJob = payload && payload.active_job;
@@ -1228,6 +1228,7 @@
           const kind = String(activeJob.kind || '');
           const code = activeJob.report_only === true
             ? 'easyicu_report_repair_submitted'
+            : kind === 'target-trial-compile' ? 'easyicu_target_trial_compile_submitted'
             : /extract/i.test(kind)
             ? 'easyicu_extraction_submitted'
             : (/research|agent/i.test(kind) ? 'easyicu_full_run_submitted' : 'easyicu_run_submitted');

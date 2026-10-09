@@ -52,7 +52,7 @@ const SESSION_DIR = resolve(
 const CWD = resolve(process.env.EASYICU_PI_CWD || process.cwd());
 const TOOL_CATALOG_FIELDS = new Set([
   "name", "surface", "policy_group", "execution_mode",
-  "host_mutating", "data_source_required", "arguments",
+  "host_mutating", "data_source_required", "arguments", "model_schema",
 ]);
 const TOOL_ARGUMENT_FIELDS = new Set(["model", "host", "required"]);
 // Effort ("thinking") levels the researcher may pick per session. Pi clamps
@@ -79,7 +79,7 @@ const TOOL_CATALOG = (() => {
     throw Object.assign(new Error("Pi tool catalog is unreadable"), { code: "pi_tool_catalog_unreadable", cause: error });
   }
   const rootFields = Object.keys(payload || {});
-  if (payload?.schema_version !== "easyicu.pi-tool-catalog/2"
+  if (payload?.schema_version !== "easyicu.pi-tool-catalog/3"
     || rootFields.length !== 3
     || !rootFields.every((field) => ["schema_version", "_arguments", "tools"].includes(field))
     || !Array.isArray(payload?._arguments)
@@ -121,6 +121,15 @@ const TOOL_CATALOG = (() => {
       || entry.arguments.required.some((name) => !modelArguments.has(name) && !hostArguments.has(name))) {
       throw Object.assign(new Error("Pi tool catalog arguments are inconsistent"), { code: "pi_tool_catalog_arguments_invalid" });
     }
+    // A schema the host generates must offer the model exactly its arguments.
+    const schema = entry.model_schema;
+    if (schema !== null && (typeof schema !== "object" || Array.isArray(schema)
+      || schema.type !== "object" || schema.additionalProperties !== false
+      || !schema.properties || typeof schema.properties !== "object"
+      || Object.keys(schema.properties).length !== modelArguments.size
+      || Object.keys(schema.properties).some((name) => !modelArguments.has(name)))) {
+      throw Object.assign(new Error("Pi tool catalog model schema is invalid"), { code: "pi_tool_catalog_model_schema_invalid" });
+    }
     names.add(entry.name);
   }
   if (!payload.tools.length) {
@@ -136,6 +145,21 @@ const TOOL_CATALOG = (() => {
   })));
 })();
 const TOOL_CATALOG_BY_NAME = new Map(TOOL_CATALOG.map((entry) => [entry.name, entry]));
+// Parameters read from a catalog `model_schema`, keyed to the tool they belong
+// to, so hostTool can refuse a tool that declares a second schema.
+const CATALOG_PARAMETERS = new WeakMap();
+function catalogParameters(name) {
+  const schema = TOOL_CATALOG_BY_NAME.get(name)?.model_schema;
+  if (!schema) {
+    throw Object.assign(new Error(`Pi tool catalog has no model schema for ${name}`), {
+      code: "pi_tool_catalog_model_schema_missing",
+    });
+  }
+  // TypeBox 1.x schemas are plain JSON schema, so the generated one is used as is.
+  const parameters = Type.Unsafe(schema);
+  CATALOG_PARAMETERS.set(parameters, name);
+  return parameters;
+}
 const RESEARCH_TOOL_NAMES = Object.freeze(
   TOOL_CATALOG.filter((entry) => entry.surface === "research").map((entry) => entry.name),
 );
@@ -768,6 +792,11 @@ function hostTool(sessionId, definition) {
       code: "pi_tool_definition_not_catalogued",
     });
   }
+  if ((catalogEntry.model_schema !== null) !== (CATALOG_PARAMETERS.get(definition.parameters) === definition.name)) {
+    throw Object.assign(new Error(`Pi tool parameters must come from one source: ${definition.name}`), {
+      code: "pi_tool_definition_schema_source_mismatch",
+    });
+  }
   return defineTool({
     ...definition,
     executionMode: catalogEntry.execution_mode,
@@ -1011,6 +1040,7 @@ function customTools(sessionId, agentMode, extensionSnapshot) {
       bind_active_export: Type.Optional(Type.Boolean()),
       bind_source_id: optionalText(80),
     }, { additionalProperties: false }) }),
+    hostTool(sessionId, { name: "easyicu_state_target_trial", label: "State target trial", description: "Submit a causal study's target trial for EasyICU to compile against the bound data package: the treatment whose start the two fixed strategies time, time zero, the grace period, the fixed-horizon outcome, confounders, the indication, protocol elements the menus cannot type, and the population criteria. Use only values this schema offers. Call it when the researcher has stated or changed the trial and the workflow's next action is target_trial_statement_needed or target_trial_review. Requires the one-use Configure grant. The result is a compile job; the researcher reviews and approves the trial on its card, so never describe the trial as approved or a plan as started from this result.", parameters: catalogParameters("easyicu_state_target_trial") }),
     hostTool(sessionId, { name: "easyicu_mine_ideas", label: "Mine research ideas", description: "Create one local, metadata-only Idea Mining candidate from the bound question or a bounded source seed. The receipt includes typed construct answerability that distinguishes direct concepts, registered derivations, reconstructable events, non-equivalent proxies, and unavailable constructs before real data is selected. Requires the one-use Idea Mining grant and never produces a novelty or scientific result claim.", parameters: Type.Object({ topic: optionalText(1200), title: optionalText(220), excerpt: optionalText(1200), journal: optionalText(160), year: Type.Optional(Type.Integer({ minimum: 1800, maximum: 2200 })), doi: optionalText(240), pmid: optionalText(80) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_search_literature", label: "Search PubMed literature", description: "Run the existing Idea Mining stratified PubMed metadata and bounded-abstract owner. Pass run_id and idea_id together to search the latest mined candidate before handoff; one authorized call automatically covers the owner-prespecified clinical landscape, candidate topic, observational candidates, review/guideline, and critical-care-database strata. The exact receipt is persisted on that run and feeds its Idea Plan. Returned rows and per-stratum counts are unreviewed retrieval signals, never verified evidence, crowding, novelty, or direct comparators until Research Agent screens them against the sealed study. With an accepted idea it requires that exact handoff to be accepted again before Plan/run. Without a candidate identity, a completed search binds an exact digest receipt to StudyContext and requires host rebind. Requires the separate one-turn literature-network grant; no full text, patient rows, or external LLM is used.", parameters: Type.Object({ topic: optionalText(1200), journal: optionalText(160), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })), run_id: optionalText(160), idea_id: optionalText(160) }, { additionalProperties: false }) }),
     hostTool(sessionId, { name: "easyicu_adjudicate_idea_literature", label: "Adjudicate idea literature", description: "Record the researcher's typed already_answered, differentiated, or uncertain decision against the exact Idea Mining literature receipt and complete confirmed definition. This is a human-confirmed prior-art gate, not an automatic novelty claim. Requires the one-use Idea Mining grant.", parameters: Type.Object({ run_id: Type.String({ minLength: 1, maxLength: 160 }), idea_id: Type.String({ minLength: 1, maxLength: 160 }), decision: Type.Union([Type.Literal("already_answered"), Type.Literal("differentiated"), Type.Literal("uncertain")]), rationale: Type.String({ minLength: 1, maxLength: 1200 }), plan_fields: Type.Object({ research_question: optionalText(1200), population: optionalText(500), exposure: optionalText(500), outcome: optionalText(800), time_zero: optionalText(500), time_window: optionalText(500) }, { additionalProperties: false }) }, { additionalProperties: false }) }),

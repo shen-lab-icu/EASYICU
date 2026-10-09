@@ -1,58 +1,1108 @@
 {
-  "schema_version": "easyicu.pi-tool-catalog/2",
+  "schema_version": "easyicu.pi-tool-catalog/3",
   "_arguments": [
     "`arguments` is the single declaration of a tool's argument names.",
     "`model` must equal the TypeBox property names in node_app/src/main.mjs;",
     "  a contract test fails the build when they drift.",
     "`host` are keys only the host may inject, never exposed to the model.",
     "`required` must be present and non-empty.",
-    "webserver/pi_copilot/tools.py reads this; it declares nothing itself."
+    "webserver/pi_copilot/tools.py reads this; it declares nothing itself.",
+    "`model_schema` is null when main.mjs declares the tool's TypeBox schema.",
+    "  Otherwise it is the schema the host generates from its own models",
+    "  (see test_pi_copilot_tool_catalog.py), and main.mjs reads it from here."
   ],
   "tools": [
-    {"name": "easyicu_workspace_status", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": false, "arguments": {"model": [], "host": [], "required": []}},
-    {"name": "easyicu_list_data_sources", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": false, "arguments": {"model": ["database"], "host": [], "required": []}},
-    {"name": "easyicu_list_source_concepts", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["limit", "modules", "query", "source_id"], "host": [], "required": []}},
-    {"name": "easyicu_inspect_data_package", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": [], "host": [], "required": []}},
-    {"name": "easyicu_review_cohort", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["features", "source_id"], "host": [], "required": []}},
-    {"name": "easyicu_open_data_download", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["source_id"], "host": [], "required": []}},
-    {"name": "easyicu_preview_icd_cohort", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["exclude_codes", "include_codes", "source_id"], "host": [], "required": ["include_codes"]}},
-    {"name": "easyicu_review_patient_timeline", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["entity_ordinal", "features", "source_id"], "host": [], "required": []}},
-    {"name": "easyicu_compare_data_sources", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["features", "source_ids"], "host": [], "required": ["source_ids"]}},
-    {"name": "easyicu_inspect_workflow", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": false, "arguments": {"model": [], "host": [], "required": []}},
-    {"name": "easyicu_inspect_context", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": false, "arguments": {"model": [], "host": [], "required": []}},
-    {"name": "easyicu_inspect_plan", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": false, "arguments": {"model": ["run_id"], "host": [], "required": []}},
-    {"name": "easyicu_inspect_literature", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": false, "arguments": {"model": ["run_id"], "host": [], "required": []}},
-    {"name": "easyicu_inspect_capability", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": false, "arguments": {"model": [], "host": [], "required": []}},
-    {"name": "easyicu_inspect_run", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["job_id", "run_id"], "host": [], "required": []}},
-    {"name": "easyicu_inspect_step", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["run_id", "step_id"], "host": [], "required": ["step_id"]}},
-    {"name": "easyicu_inspect_validation", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["run_id"], "host": [], "required": []}},
-    {"name": "easyicu_list_artifacts", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["run_id"], "host": [], "required": []}},
-    {"name": "easyicu_inspect_evidence", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["run_id"], "host": [], "required": []}},
-    {"name": "easyicu_explain_blocker", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": false, "arguments": {"model": ["job_id", "run_id"], "host": [], "required": []}},
-    {"name": "easyicu_inspect_interpretation", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["run_id"], "host": [], "required": []}},
-    {"name": "easyicu_inspect_manuscript", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["run_id"], "host": [], "required": []}},
-    {"name": "easyicu_update_study_context", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["analysis_design", "analysis_goal", "bind_active_export", "bind_source_id", "cohort", "comparator", "confirmations", "covariate_operationalizations", "covariate_rationales", "covariate_selection", "covariate_temporal_roles", "covariates", "execution_concepts", "export_format", "modules", "outcome", "primary_exposure", "purpose", "question", "sensitivity_specs", "time_window", "title", "trajectory_design"], "host": [], "required": []}},
-    {"name": "easyicu_mine_ideas", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["doi", "excerpt", "journal", "pmid", "title", "topic", "year"], "host": [], "required": []}},
-    {"name": "easyicu_search_literature", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["idea_id", "journal", "limit", "run_id", "topic"], "host": [], "required": []}},
-    {"name": "easyicu_adjudicate_idea_literature", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["decision", "idea_id", "plan_fields", "rationale", "run_id"], "host": [], "required": ["decision", "idea_id", "plan_fields", "rationale", "run_id"]}},
-    {"name": "easyicu_assess_idea_feasibility", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": true, "arguments": {"model": ["concept_bindings", "idea_id", "max_records", "run_id"], "host": [], "required": ["concept_bindings", "idea_id", "run_id"]}},
-    {"name": "easyicu_prepare_idea_handoff", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["idea_id", "plan_edits", "plan_fields", "run_id"], "host": [], "required": ["run_id"]}},
-    {"name": "easyicu_accept_idea_handoff", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["idea_id", "plan_edits", "run_id"], "host": [], "required": ["idea_id", "run_id"]}},
-    {"name": "easyicu_prepare_demo_source", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["source_id"], "host": [], "required": ["source_id"]}},
-    {"name": "easyicu_start_extraction", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["database", "source_mode"], "host": [], "required": []}},
-    {"name": "easyicu_run", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": true, "arguments": {"model": ["run_type"], "host": ["llm_provider"], "required": []}},
-    {"name": "easyicu_repair_report", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": true, "arguments": {"model": ["run_id"], "host": [], "required": []}},
-    {"name": "easyicu_resume", "surface": "research", "policy_group": "read", "execution_mode": "sequential", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["job_id", "run_id"], "host": [], "required": []}},
-    {"name": "easyicu_cancel", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["job_id"], "host": [], "required": []}},
-    {"name": "easyicu_request_replan", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["reason", "strategy"], "host": [], "required": ["reason"]}},
-    {"name": "easyicu_list_extensions", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": false, "arguments": {"model": [], "host": [], "required": []}},
-    {"name": "easyicu_load_skill", "surface": "research", "policy_group": "read", "execution_mode": "sequential", "host_mutating": false, "data_source_required": false, "arguments": {"model": ["name"], "host": [], "required": ["name"]}},
-    {"name": "easyicu_call_mcp_tool", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["arguments", "server", "tool"], "host": [], "required": ["server", "tool"]}},
-    {"name": "easyicu_list_project_files", "surface": "workspace", "policy_group": "workspace", "execution_mode": "sequential", "host_mutating": false, "data_source_required": false, "arguments": {"model": [], "host": [], "required": []}},
-    {"name": "easyicu_read_project_file", "surface": "workspace", "policy_group": "workspace", "execution_mode": "sequential", "host_mutating": false, "data_source_required": false, "arguments": {"model": ["end_line", "file", "start_line"], "host": [], "required": ["file"]}},
-    {"name": "easyicu_write_project_file", "surface": "workspace", "policy_group": "workspace", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["content", "file"], "host": [], "required": ["content", "file"]}},
-    {"name": "easyicu_edit_project_file", "surface": "workspace", "policy_group": "workspace", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["expected_sha256", "file", "new_text", "old_text"], "host": [], "required": ["expected_sha256", "file", "old_text"]}},
-    {"name": "easyicu_check_project_file", "surface": "workspace", "policy_group": "workspace", "execution_mode": "sequential", "host_mutating": false, "data_source_required": false, "arguments": {"model": ["file"], "host": [], "required": ["file"]}},
-    {"name": "easyicu_preview_project_file", "surface": "workspace", "policy_group": "workspace", "execution_mode": "sequential", "host_mutating": false, "data_source_required": false, "arguments": {"model": ["checked_sha256", "file"], "host": [], "required": ["checked_sha256", "file"]}}
+    {"name": "easyicu_workspace_status", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": false, "arguments": {"model": [], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_list_data_sources", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": false, "arguments": {"model": ["database"], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_list_source_concepts", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["limit", "modules", "query", "source_id"], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_inspect_data_package", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": [], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_review_cohort", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["features", "source_id"], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_open_data_download", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["source_id"], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_preview_icd_cohort", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["exclude_codes", "include_codes", "source_id"], "host": [], "required": ["include_codes"]}, "model_schema": null},
+    {"name": "easyicu_review_patient_timeline", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["entity_ordinal", "features", "source_id"], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_compare_data_sources", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["features", "source_ids"], "host": [], "required": ["source_ids"]}, "model_schema": null},
+    {"name": "easyicu_inspect_workflow", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": false, "arguments": {"model": [], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_inspect_context", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": false, "arguments": {"model": [], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_inspect_plan", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": false, "arguments": {"model": ["run_id"], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_inspect_literature", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": false, "arguments": {"model": ["run_id"], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_inspect_capability", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": false, "arguments": {"model": [], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_inspect_run", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["job_id", "run_id"], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_inspect_step", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["run_id", "step_id"], "host": [], "required": ["step_id"]}, "model_schema": null},
+    {"name": "easyicu_inspect_validation", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["run_id"], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_list_artifacts", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["run_id"], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_inspect_evidence", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["run_id"], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_explain_blocker", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": false, "arguments": {"model": ["job_id", "run_id"], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_inspect_interpretation", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["run_id"], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_inspect_manuscript", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["run_id"], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_update_study_context", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["analysis_design", "analysis_goal", "bind_active_export", "bind_source_id", "cohort", "comparator", "confirmations", "covariate_operationalizations", "covariate_rationales", "covariate_selection", "covariate_temporal_roles", "covariates", "execution_concepts", "export_format", "modules", "outcome", "primary_exposure", "purpose", "question", "sensitivity_specs", "time_window", "title", "trajectory_design"], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_state_target_trial", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": true, "arguments": {"model": ["population_spec", "spec"], "host": [], "required": ["population_spec", "spec"]}, "model_schema":
+      {
+        "additionalProperties": false,
+        "properties": {
+          "population_spec": {
+            "additionalProperties": false,
+            "description": "Every restriction the study states on whom it includes; none for all rows.",
+            "properties": {
+              "criteria": {
+                "items": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "description": "Age at ICU admission within ``[min_years, max_years]``.",
+                      "properties": {
+                        "id": {
+                          "pattern": "^c[1-9][0-9]?$",
+                          "title": "Id",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "age_years",
+                          "title": "Kind",
+                          "type": "string"
+                        },
+                        "max_years": {
+                          "anyOf": [
+                            {
+                              "maximum": 130,
+                              "minimum": 0,
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "default": null,
+                          "title": "Max Years"
+                        },
+                        "min_years": {
+                          "anyOf": [
+                            {
+                              "maximum": 130,
+                              "minimum": 0,
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "default": null,
+                          "title": "Min Years"
+                        },
+                        "quote": {
+                          "maxLength": 160,
+                          "minLength": 2,
+                          "title": "Quote",
+                          "type": "string"
+                        },
+                        "role": {
+                          "enum": [
+                            "include",
+                            "exclude"
+                          ],
+                          "title": "Role",
+                          "type": "string"
+                        },
+                        "source": {
+                          "enum": [
+                            "question",
+                            "study_wording",
+                            "outline",
+                            "preset"
+                          ],
+                          "title": "Source",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "quote",
+                        "source",
+                        "role",
+                        "kind"
+                      ],
+                      "title": "AgeYears",
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "description": "Each patient's first ICU stay.",
+                      "properties": {
+                        "id": {
+                          "pattern": "^c[1-9][0-9]?$",
+                          "title": "Id",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "first_icu_stay",
+                          "title": "Kind",
+                          "type": "string"
+                        },
+                        "quote": {
+                          "maxLength": 160,
+                          "minLength": 2,
+                          "title": "Quote",
+                          "type": "string"
+                        },
+                        "role": {
+                          "enum": [
+                            "include",
+                            "exclude"
+                          ],
+                          "title": "Role",
+                          "type": "string"
+                        },
+                        "source": {
+                          "enum": [
+                            "question",
+                            "study_wording",
+                            "outline",
+                            "preset"
+                          ],
+                          "title": "Source",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "quote",
+                        "source",
+                        "role",
+                        "kind"
+                      ],
+                      "title": "FirstIcuStay",
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "description": "An ICU length of stay within ``[min_hours, max_hours]``.",
+                      "properties": {
+                        "id": {
+                          "pattern": "^c[1-9][0-9]?$",
+                          "title": "Id",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "icu_stay_hours",
+                          "title": "Kind",
+                          "type": "string"
+                        },
+                        "max_hours": {
+                          "anyOf": [
+                            {
+                              "exclusiveMinimum": 0,
+                              "maximum": 8760.0,
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "default": null,
+                          "title": "Max Hours"
+                        },
+                        "min_hours": {
+                          "anyOf": [
+                            {
+                              "exclusiveMinimum": 0,
+                              "maximum": 8760.0,
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "default": null,
+                          "title": "Min Hours"
+                        },
+                        "quote": {
+                          "maxLength": 160,
+                          "minLength": 2,
+                          "title": "Quote",
+                          "type": "string"
+                        },
+                        "role": {
+                          "enum": [
+                            "include",
+                            "exclude"
+                          ],
+                          "title": "Role",
+                          "type": "string"
+                        },
+                        "source": {
+                          "enum": [
+                            "question",
+                            "study_wording",
+                            "outline",
+                            "preset"
+                          ],
+                          "title": "Source",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "quote",
+                        "source",
+                        "role",
+                        "kind"
+                      ],
+                      "title": "IcuStayHours",
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "description": "Each concept's status is present within the window: no threshold.\n\nAn inclusion keeps the stays with every concept present; an exclusion\nremoves the stays with its one concept present.  A stay is removed when\nit meets any exclusion, so an exclusion cannot name a combination.  With\nno window, the status counts over the whole stay.",
+                      "properties": {
+                        "concepts_all_of": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "maxItems": 4,
+                          "minItems": 1,
+                          "title": "Concepts All Of",
+                          "type": "array"
+                        },
+                        "id": {
+                          "pattern": "^c[1-9][0-9]?$",
+                          "title": "Id",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "condition_present",
+                          "title": "Kind",
+                          "type": "string"
+                        },
+                        "quote": {
+                          "maxLength": 160,
+                          "minLength": 2,
+                          "title": "Quote",
+                          "type": "string"
+                        },
+                        "role": {
+                          "enum": [
+                            "include",
+                            "exclude"
+                          ],
+                          "title": "Role",
+                          "type": "string"
+                        },
+                        "source": {
+                          "enum": [
+                            "question",
+                            "study_wording",
+                            "outline",
+                            "preset"
+                          ],
+                          "title": "Source",
+                          "type": "string"
+                        },
+                        "window": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "description": "``[start_hours, end_hours)`` after ICU admission, both finite.",
+                              "properties": {
+                                "end_hours": {
+                                  "maximum": 8760.0,
+                                  "minimum": -8760.0,
+                                  "title": "End Hours",
+                                  "type": "number"
+                                },
+                                "start_hours": {
+                                  "maximum": 8760.0,
+                                  "minimum": -8760.0,
+                                  "title": "Start Hours",
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "start_hours",
+                                "end_hours"
+                              ],
+                              "title": "SpecWindow",
+                              "type": "object"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "quote",
+                        "source",
+                        "role",
+                        "kind",
+                        "concepts_all_of",
+                        "window"
+                      ],
+                      "title": "ConditionPresent",
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "description": "A recorded diagnosis code begins with one of ``codes``.",
+                      "properties": {
+                        "codes": {
+                          "items": {
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9.]{0,9}$",
+                            "type": "string"
+                          },
+                          "maxItems": 64,
+                          "minItems": 1,
+                          "title": "Codes",
+                          "type": "array"
+                        },
+                        "id": {
+                          "pattern": "^c[1-9][0-9]?$",
+                          "title": "Id",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "diagnosis_codes",
+                          "title": "Kind",
+                          "type": "string"
+                        },
+                        "quote": {
+                          "maxLength": 160,
+                          "minLength": 2,
+                          "title": "Quote",
+                          "type": "string"
+                        },
+                        "role": {
+                          "enum": [
+                            "include",
+                            "exclude"
+                          ],
+                          "title": "Role",
+                          "type": "string"
+                        },
+                        "source": {
+                          "enum": [
+                            "question",
+                            "study_wording",
+                            "outline",
+                            "preset"
+                          ],
+                          "title": "Source",
+                          "type": "string"
+                        },
+                        "system": {
+                          "enum": [
+                            "icd9",
+                            "icd10"
+                          ],
+                          "title": "System",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "quote",
+                        "source",
+                        "role",
+                        "kind",
+                        "system",
+                        "codes"
+                      ],
+                      "title": "DiagnosisCodes",
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "description": "A value's summary over the window meets a threshold.",
+                      "properties": {
+                        "concept": {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "title": "Concept",
+                          "type": "string"
+                        },
+                        "id": {
+                          "pattern": "^c[1-9][0-9]?$",
+                          "title": "Id",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "measurement",
+                          "title": "Kind",
+                          "type": "string"
+                        },
+                        "op": {
+                          "enum": [
+                            ">",
+                            ">=",
+                            "<",
+                            "<=",
+                            "==",
+                            "!="
+                          ],
+                          "title": "Op",
+                          "type": "string"
+                        },
+                        "quote": {
+                          "maxLength": 160,
+                          "minLength": 2,
+                          "title": "Quote",
+                          "type": "string"
+                        },
+                        "role": {
+                          "enum": [
+                            "include",
+                            "exclude"
+                          ],
+                          "title": "Role",
+                          "type": "string"
+                        },
+                        "source": {
+                          "enum": [
+                            "question",
+                            "study_wording",
+                            "outline",
+                            "preset"
+                          ],
+                          "title": "Source",
+                          "type": "string"
+                        },
+                        "summary": {
+                          "enum": [
+                            "max",
+                            "min",
+                            "first",
+                            "last",
+                            "mean"
+                          ],
+                          "title": "Summary",
+                          "type": "string"
+                        },
+                        "unit": {
+                          "anyOf": [
+                            {
+                              "maxLength": 32,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "default": null,
+                          "title": "Unit"
+                        },
+                        "value": {
+                          "title": "Value",
+                          "type": "number"
+                        },
+                        "window": {
+                          "additionalProperties": false,
+                          "description": "``[start_hours, end_hours)`` after ICU admission, both finite.",
+                          "properties": {
+                            "end_hours": {
+                              "maximum": 8760.0,
+                              "minimum": -8760.0,
+                              "title": "End Hours",
+                              "type": "number"
+                            },
+                            "start_hours": {
+                              "maximum": 8760.0,
+                              "minimum": -8760.0,
+                              "title": "Start Hours",
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "start_hours",
+                            "end_hours"
+                          ],
+                          "title": "SpecWindow",
+                          "type": "object"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "quote",
+                        "source",
+                        "role",
+                        "kind",
+                        "concept",
+                        "summary",
+                        "window",
+                        "op",
+                        "value"
+                      ],
+                      "title": "Measurement",
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "description": "No death the input records happened before this hour after ICU admission.",
+                      "properties": {
+                        "hours": {
+                          "exclusiveMinimum": 0,
+                          "maximum": 8760.0,
+                          "title": "Hours",
+                          "type": "number"
+                        },
+                        "id": {
+                          "pattern": "^c[1-9][0-9]?$",
+                          "title": "Id",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "alive_at",
+                          "title": "Kind",
+                          "type": "string"
+                        },
+                        "quote": {
+                          "maxLength": 160,
+                          "minLength": 2,
+                          "title": "Quote",
+                          "type": "string"
+                        },
+                        "role": {
+                          "enum": [
+                            "include",
+                            "exclude"
+                          ],
+                          "title": "Role",
+                          "type": "string"
+                        },
+                        "source": {
+                          "enum": [
+                            "question",
+                            "study_wording",
+                            "outline",
+                            "preset"
+                          ],
+                          "title": "Source",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "quote",
+                        "source",
+                        "role",
+                        "kind",
+                        "hours"
+                      ],
+                      "title": "AliveAt",
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "description": "The concept's event did not happen within the window, or in the stay.",
+                      "properties": {
+                        "concept": {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "title": "Concept",
+                          "type": "string"
+                        },
+                        "id": {
+                          "pattern": "^c[1-9][0-9]?$",
+                          "title": "Id",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "event_absent",
+                          "title": "Kind",
+                          "type": "string"
+                        },
+                        "quote": {
+                          "maxLength": 160,
+                          "minLength": 2,
+                          "title": "Quote",
+                          "type": "string"
+                        },
+                        "role": {
+                          "enum": [
+                            "include",
+                            "exclude"
+                          ],
+                          "title": "Role",
+                          "type": "string"
+                        },
+                        "source": {
+                          "enum": [
+                            "question",
+                            "study_wording",
+                            "outline",
+                            "preset"
+                          ],
+                          "title": "Source",
+                          "type": "string"
+                        },
+                        "window": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "description": "``[start_hours, end_hours)`` after ICU admission, both finite.",
+                              "properties": {
+                                "end_hours": {
+                                  "maximum": 8760.0,
+                                  "minimum": -8760.0,
+                                  "title": "End Hours",
+                                  "type": "number"
+                                },
+                                "start_hours": {
+                                  "maximum": 8760.0,
+                                  "minimum": -8760.0,
+                                  "title": "Start Hours",
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "start_hours",
+                                "end_hours"
+                              ],
+                              "title": "SpecWindow",
+                              "type": "object"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "quote",
+                        "source",
+                        "role",
+                        "kind",
+                        "concept",
+                        "window"
+                      ],
+                      "title": "EventAbsent",
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "description": "A restriction no kind expresses, kept with the reason.",
+                      "properties": {
+                        "id": {
+                          "pattern": "^c[1-9][0-9]?$",
+                          "title": "Id",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "const": "not_typed",
+                          "title": "Kind",
+                          "type": "string"
+                        },
+                        "quote": {
+                          "maxLength": 160,
+                          "minLength": 2,
+                          "title": "Quote",
+                          "type": "string"
+                        },
+                        "role": {
+                          "enum": [
+                            "include",
+                            "exclude"
+                          ],
+                          "title": "Role",
+                          "type": "string"
+                        },
+                        "source": {
+                          "enum": [
+                            "question",
+                            "study_wording",
+                            "outline",
+                            "preset"
+                          ],
+                          "title": "Source",
+                          "type": "string"
+                        },
+                        "why": {
+                          "maxLength": 240,
+                          "minLength": 8,
+                          "title": "Why",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "quote",
+                        "source",
+                        "role",
+                        "kind",
+                        "why"
+                      ],
+                      "title": "NotTyped",
+                      "type": "object"
+                    }
+                  ]
+                },
+                "maxItems": 8,
+                "title": "Criteria",
+                "type": "array"
+              }
+            },
+            "title": "PopulationSpec",
+            "type": "object"
+          },
+          "spec": {
+            "additionalProperties": false,
+            "description": "The protocol elements of one target trial; at most one per study.",
+            "properties": {
+              "confounders": {
+                "default": [],
+                "items": {
+                  "additionalProperties": false,
+                  "description": "One baseline covariate with its clinical confounding rationale.",
+                  "properties": {
+                    "clinical_rationale": {
+                      "maxLength": 500,
+                      "minLength": 16,
+                      "title": "Clinical Rationale",
+                      "type": "string"
+                    },
+                    "name": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "title": "Name",
+                      "type": "string"
+                    },
+                    "source": {
+                      "enum": [
+                        "question",
+                        "conversation",
+                        "design_choice"
+                      ],
+                      "title": "Source",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "clinical_rationale",
+                    "source"
+                  ],
+                  "title": "TrialConfounder",
+                  "type": "object"
+                },
+                "maxItems": 24,
+                "title": "Confounders",
+                "type": "array"
+              },
+              "grace_period": {
+                "additionalProperties": false,
+                "description": "The hours after time zero within which the treatment may start.",
+                "properties": {
+                  "hours": {
+                    "maximum": 168,
+                    "minimum": 1,
+                    "title": "Hours",
+                    "type": "integer"
+                  },
+                  "quote": {
+                    "maxLength": 160,
+                    "minLength": 2,
+                    "title": "Quote",
+                    "type": "string"
+                  },
+                  "source": {
+                    "enum": [
+                      "question",
+                      "conversation",
+                      "design_choice"
+                    ],
+                    "title": "Source",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "quote",
+                  "source",
+                  "hours"
+                ],
+                "title": "TrialGracePeriod",
+                "type": "object"
+              },
+              "indication": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "description": "The population criteria that state why either strategy is plausible.",
+                    "properties": {
+                      "criterion_ids": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "maxItems": 4,
+                        "minItems": 1,
+                        "title": "Criterion Ids",
+                        "type": "array"
+                      },
+                      "quote": {
+                        "maxLength": 160,
+                        "minLength": 2,
+                        "title": "Quote",
+                        "type": "string"
+                      },
+                      "source": {
+                        "enum": [
+                          "question",
+                          "conversation",
+                          "design_choice"
+                        ],
+                        "title": "Source",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "quote",
+                      "source",
+                      "criterion_ids"
+                    ],
+                    "title": "TrialIndication",
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "not_typed": {
+                "default": [],
+                "items": {
+                  "additionalProperties": false,
+                  "description": "An element of the study that no field of this spec expresses.",
+                  "properties": {
+                    "affects_strategy": {
+                      "title": "Affects Strategy",
+                      "type": "boolean"
+                    },
+                    "quote": {
+                      "maxLength": 160,
+                      "minLength": 2,
+                      "title": "Quote",
+                      "type": "string"
+                    },
+                    "source": {
+                      "enum": [
+                        "question",
+                        "conversation",
+                        "design_choice"
+                      ],
+                      "title": "Source",
+                      "type": "string"
+                    },
+                    "why": {
+                      "maxLength": 240,
+                      "minLength": 8,
+                      "title": "Why",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "quote",
+                    "source",
+                    "why",
+                    "affects_strategy"
+                  ],
+                  "title": "TrialNotTyped",
+                  "type": "object"
+                },
+                "maxItems": 6,
+                "title": "Not Typed",
+                "type": "array"
+              },
+              "outcome": {
+                "additionalProperties": false,
+                "description": "The fixed-horizon endpoint whose risk the strategies are compared on.",
+                "properties": {
+                  "endpoint": {
+                    "pattern": "^[a-z][a-z0-9_]{1,63}$",
+                    "title": "Endpoint",
+                    "type": "string"
+                  },
+                  "quote": {
+                    "maxLength": 160,
+                    "minLength": 2,
+                    "title": "Quote",
+                    "type": "string"
+                  },
+                  "source": {
+                    "enum": [
+                      "question",
+                      "conversation",
+                      "design_choice"
+                    ],
+                    "title": "Source",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "quote",
+                  "source",
+                  "endpoint"
+                ],
+                "title": "TrialOutcome",
+                "type": "object"
+              },
+              "strategies": {
+                "additionalProperties": false,
+                "description": "The reader labels of the two strategies, whose kinds are fixed.\n\nOne strategy starts the treatment within the grace period; the other does\nnot start it within that period and leaves it unrestricted afterwards.",
+                "properties": {
+                  "defer_label": {
+                    "maxLength": 80,
+                    "minLength": 2,
+                    "title": "Defer Label",
+                    "type": "string"
+                  },
+                  "initiate_label": {
+                    "maxLength": 80,
+                    "minLength": 2,
+                    "title": "Initiate Label",
+                    "type": "string"
+                  },
+                  "quote": {
+                    "maxLength": 160,
+                    "minLength": 2,
+                    "title": "Quote",
+                    "type": "string"
+                  },
+                  "source": {
+                    "enum": [
+                      "question",
+                      "conversation",
+                      "design_choice"
+                    ],
+                    "title": "Source",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "quote",
+                  "source",
+                  "initiate_label",
+                  "defer_label"
+                ],
+                "title": "TrialStrategies",
+                "type": "object"
+              },
+              "time_zero": {
+                "additionalProperties": false,
+                "description": "The hour after ICU admission at which eligibility and follow-up start.",
+                "properties": {
+                  "hours_after_icu_admission": {
+                    "maximum": 168,
+                    "minimum": 0,
+                    "title": "Hours After Icu Admission",
+                    "type": "integer"
+                  },
+                  "quote": {
+                    "maxLength": 160,
+                    "minLength": 2,
+                    "title": "Quote",
+                    "type": "string"
+                  },
+                  "source": {
+                    "enum": [
+                      "question",
+                      "conversation",
+                      "design_choice"
+                    ],
+                    "title": "Source",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "quote",
+                  "source",
+                  "hours_after_icu_admission"
+                ],
+                "title": "TrialTimeZero",
+                "type": "object"
+              },
+              "treatment": {
+                "additionalProperties": false,
+                "description": "The treatment whose start the strategies time.\n\n``concepts`` are event-status concepts read together: the treatment\nstarts at the first hour any of them is recorded.  ``treatment_class``\nnames the class of drug the study means, from the capture registry's\nclosed vocabulary, so the host can tell whether the concepts record every\ndrug of that class.",
+                "properties": {
+                  "concepts": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 4,
+                    "minItems": 1,
+                    "title": "Concepts",
+                    "type": "array"
+                  },
+                  "quote": {
+                    "maxLength": 160,
+                    "minLength": 2,
+                    "title": "Quote",
+                    "type": "string"
+                  },
+                  "source": {
+                    "enum": [
+                      "question",
+                      "conversation",
+                      "design_choice"
+                    ],
+                    "title": "Source",
+                    "type": "string"
+                  },
+                  "treatment_class": {
+                    "pattern": "^[a-z][a-z0-9_]{1,63}$",
+                    "title": "Treatment Class",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "quote",
+                  "source",
+                  "concepts",
+                  "treatment_class"
+                ],
+                "title": "TrialTreatment",
+                "type": "object"
+              }
+            },
+            "required": [
+              "treatment",
+              "strategies",
+              "time_zero",
+              "grace_period",
+              "outcome"
+            ],
+            "title": "TargetTrialSpec",
+            "type": "object"
+          }
+        },
+        "required": [
+          "spec",
+          "population_spec"
+        ],
+        "type": "object"
+      }
+    },
+    {"name": "easyicu_mine_ideas", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["doi", "excerpt", "journal", "pmid", "title", "topic", "year"], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_search_literature", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["idea_id", "journal", "limit", "run_id", "topic"], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_adjudicate_idea_literature", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["decision", "idea_id", "plan_fields", "rationale", "run_id"], "host": [], "required": ["decision", "idea_id", "plan_fields", "rationale", "run_id"]}, "model_schema": null},
+    {"name": "easyicu_assess_idea_feasibility", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": true, "arguments": {"model": ["concept_bindings", "idea_id", "max_records", "run_id"], "host": [], "required": ["concept_bindings", "idea_id", "run_id"]}, "model_schema": null},
+    {"name": "easyicu_prepare_idea_handoff", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["idea_id", "plan_edits", "plan_fields", "run_id"], "host": [], "required": ["run_id"]}, "model_schema": null},
+    {"name": "easyicu_accept_idea_handoff", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["idea_id", "plan_edits", "run_id"], "host": [], "required": ["idea_id", "run_id"]}, "model_schema": null},
+    {"name": "easyicu_prepare_demo_source", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["source_id"], "host": [], "required": ["source_id"]}, "model_schema": null},
+    {"name": "easyicu_start_extraction", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["database", "source_mode"], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_run", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": true, "arguments": {"model": ["run_type"], "host": ["llm_provider"], "required": []}, "model_schema": null},
+    {"name": "easyicu_repair_report", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": true, "arguments": {"model": ["run_id"], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_resume", "surface": "research", "policy_group": "read", "execution_mode": "sequential", "host_mutating": false, "data_source_required": true, "arguments": {"model": ["job_id", "run_id"], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_cancel", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["job_id"], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_request_replan", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["reason", "strategy"], "host": [], "required": ["reason"]}, "model_schema": null},
+    {"name": "easyicu_list_extensions", "surface": "research", "policy_group": "read", "execution_mode": "parallel", "host_mutating": false, "data_source_required": false, "arguments": {"model": [], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_load_skill", "surface": "research", "policy_group": "read", "execution_mode": "sequential", "host_mutating": false, "data_source_required": false, "arguments": {"model": ["name"], "host": [], "required": ["name"]}, "model_schema": null},
+    {"name": "easyicu_call_mcp_tool", "surface": "research", "policy_group": "control", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["arguments", "server", "tool"], "host": [], "required": ["server", "tool"]}, "model_schema": null},
+    {"name": "easyicu_list_project_files", "surface": "workspace", "policy_group": "workspace", "execution_mode": "sequential", "host_mutating": false, "data_source_required": false, "arguments": {"model": [], "host": [], "required": []}, "model_schema": null},
+    {"name": "easyicu_read_project_file", "surface": "workspace", "policy_group": "workspace", "execution_mode": "sequential", "host_mutating": false, "data_source_required": false, "arguments": {"model": ["end_line", "file", "start_line"], "host": [], "required": ["file"]}, "model_schema": null},
+    {"name": "easyicu_write_project_file", "surface": "workspace", "policy_group": "workspace", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["content", "file"], "host": [], "required": ["content", "file"]}, "model_schema": null},
+    {"name": "easyicu_edit_project_file", "surface": "workspace", "policy_group": "workspace", "execution_mode": "sequential", "host_mutating": true, "data_source_required": false, "arguments": {"model": ["expected_sha256", "file", "new_text", "old_text"], "host": [], "required": ["expected_sha256", "file", "old_text"]}, "model_schema": null},
+    {"name": "easyicu_check_project_file", "surface": "workspace", "policy_group": "workspace", "execution_mode": "sequential", "host_mutating": false, "data_source_required": false, "arguments": {"model": ["file"], "host": [], "required": ["file"]}, "model_schema": null},
+    {"name": "easyicu_preview_project_file", "surface": "workspace", "policy_group": "workspace", "execution_mode": "sequential", "host_mutating": false, "data_source_required": false, "arguments": {"model": ["checked_sha256", "file"], "host": [], "required": ["checked_sha256", "file"]}, "model_schema": null}
   ]
 }

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 
-_SCHEMA_VERSION = "easyicu.pi-tool-catalog/2"
+_SCHEMA_VERSION = "easyicu.pi-tool-catalog/3"
 # ``_arguments`` is a prose note in the file, addressed to whoever edits it.
 _ROOT_FIELDS = frozenset({"schema_version", "_arguments", "tools"})
 _ARGUMENT_FIELDS = frozenset({"model", "host", "required"})
@@ -21,6 +21,7 @@ _TOOL_FIELDS = frozenset(
         "host_mutating",
         "data_source_required",
         "arguments",
+        "model_schema",
     }
 )
 
@@ -30,8 +31,9 @@ class ToolArguments:
     """The one declaration of what a host tool accepts.
 
     ``model`` is what the language model may send, and must equal the TypeBox
-    property names declared for this tool in ``node_app/src/main.mjs``; a
-    contract test fails the build when the two drift. ``host`` are keys only
+    property names declared for this tool in ``node_app/src/main.mjs``, or the
+    properties of the entry's generated ``model_schema``; a contract test
+    fails the build when the two drift. ``host`` are keys only
     the host injects and the model never sees — ``easyicu_run``'s
     ``llm_provider`` is one, which is why the JavaScript schema deliberately
     omits it. ``required`` must be present and non-empty.
@@ -60,6 +62,9 @@ class ToolCatalogEntry:
     host_mutating: bool
     data_source_required: bool
     arguments: ToolArguments
+    # The JSON schema main.mjs gives the model, when the host generates it
+    # from its own models instead of main.mjs declaring it in TypeBox.
+    model_schema: Mapping[str, object] | None = None
 
 
 def _parse_arguments(raw: object) -> ToolArguments:
@@ -82,6 +87,32 @@ def _parse_arguments(raw: object) -> ToolArguments:
     if not set(parsed["required"]) <= accepted:
         raise RuntimeError("pi_tool_catalog_arguments_required_unknown")
     return ToolArguments(**parsed)
+
+
+def _parse_model_schema(
+    raw: object, arguments: ToolArguments
+) -> Mapping[str, object] | None:
+    """Read a generated parameter schema; it must offer exactly ``model``."""
+
+    if raw is None:
+        return None
+    if (
+        not isinstance(raw, Mapping)
+        or raw.get("type") != "object"
+        or raw.get("additionalProperties") is not False
+        or not isinstance(raw.get("properties"), Mapping)
+    ):
+        raise RuntimeError("pi_tool_catalog_model_schema_invalid")
+    if set(raw["properties"]) != set(arguments.model):
+        raise RuntimeError("pi_tool_catalog_model_schema_arguments_mismatch")
+    required = raw.get("required", [])
+    if (
+        not isinstance(required, Sequence)
+        or isinstance(required, (str, bytes))
+        or not set(required) <= set(arguments.model)
+    ):
+        raise RuntimeError("pi_tool_catalog_model_schema_invalid")
+    return raw
 
 
 def load_tool_catalog(path: Path | None = None) -> tuple[ToolCatalogEntry, ...]:
@@ -123,6 +154,7 @@ def load_tool_catalog(path: Path | None = None) -> tuple[ToolCatalogEntry, ...]:
         ):
             raise RuntimeError("pi_tool_catalog_boolean_invalid")
         arguments = _parse_arguments(row.get("arguments"))
+        model_schema = _parse_model_schema(row.get("model_schema"), arguments)
         names.add(name)
         entries.append(
             ToolCatalogEntry(
@@ -133,6 +165,7 @@ def load_tool_catalog(path: Path | None = None) -> tuple[ToolCatalogEntry, ...]:
                 host_mutating=row["host_mutating"],
                 data_source_required=row["data_source_required"],
                 arguments=arguments,
+                model_schema=model_schema,
             )
         )
     if not entries:
@@ -158,6 +191,9 @@ RESEARCH_TOOL_NAMES = tuple(
 )
 ALL_TOOL_NAMES = tuple(row.name for row in TOOL_CATALOG)
 TOOL_ARGUMENTS = {row.name: row.arguments for row in TOOL_CATALOG}
+TOOL_MODEL_SCHEMAS = {
+    row.name: row.model_schema for row in TOOL_CATALOG if row.model_schema is not None
+}
 
 
 __all__ = [
@@ -170,6 +206,7 @@ __all__ = [
     "RESEARCH_TOOL_NAMES",
     "TOOL_ARGUMENTS",
     "TOOL_CATALOG",
+    "TOOL_MODEL_SCHEMAS",
     "ToolArguments",
     "ToolCatalogEntry",
     "WORKSPACE_TOOLS",

@@ -198,7 +198,11 @@
       const retryExecution = reasonCode === 'failed_pipeline_execution_retry_available';
       const executionUpgrade = reasonCode === 'plan_execution_upgrade_required';
       const resumeCheckpoint = reasonCode === 'planner_checkpoint_resume_available';
+      // A causal study whose target trial is approved plans on its data; the
+      // request is the ordinary formal generation (routes/agent.py decides).
+      const trialPlan = reasonCode === 'target_trial_plan_ready';
       const fresh = reasonCode !== 'provider_ready_to_generate_plan'
+        && !trialPlan
         && !resumeCheckpoint
         && !retryExecution
         && !executionUpgrade;
@@ -211,13 +215,15 @@
             ? tr('Confirm the plan and prepare analysis data', '确认方案并准备分析数据')
           : resumeCheckpoint
             ? tr('Continue generating the candidate research plan', '继续生成候选研究计划')
+          : trialPlan
+            ? tr('Generate the plan on this study’s data', '按本研究数据生成计划')
           : fresh
             ? tr('Generate a fresh research plan', '重新生成研究计划')
             : tr('Generate the candidate research plan', '生成候选研究计划'),
         grants: ['provider_run'],
         intent: fresh
           ? 'confirm_fresh_plan_generation'
-          : reasonCode === 'provider_ready_to_generate_plan'
+          : reasonCode === 'provider_ready_to_generate_plan' || trialPlan
             ? 'confirm_formal_plan_generation'
             : '',
       };
@@ -275,6 +281,7 @@
       // process-wide boolean would incorrectly suppress later conversations.
       const guardedTransition = [
         'provider_ready_to_generate_plan',
+        'target_trial_plan_ready',
         'plan_scientific_changes_required',
         'plan_execution_upgrade_required',
         'scientific_plan_review_policy_stale',
@@ -722,7 +729,42 @@
         await startFormalPlanGeneration(confirmation.code);
         return;
       }
+      if (confirmation.code === 'target_trial_plan_ready') {
+        await startFormalPlanGeneration(confirmation.code);
+        return;
+      }
+      if (confirmation.approveTrial) {
+        await approveTargetTrial();
+        return;
+      }
       await host.sendText(confirmation.message, confirmation.grants);
+    }
+
+    // The researcher's click on an approvable target trial card, every line
+    // ticked: the host records it against the record the card shows
+    // (webserver/target_trial_card.py) and writes the conversation's row.
+    async function approveTargetTrial() {
+      if (unavailable()) return;
+      const owner = window.EasyICU.guidedPi.optional('targetTrial');
+      const session = host.session() || {};
+      const body = owner ? owner.approvalRequest(host.workflow(), session, host.projectId()) : null;
+      const api = host.api();
+      if (!body || typeof api.approvePiCopilotTargetTrial !== 'function') return;
+      setPending(true);
+      try {
+        await api.approvePiCopilotTargetTrial(session.session_id, body);
+        await host.refreshSession(true);
+        await host.loadWorkflow();
+        host.setBusy(false);
+        host.render();
+      } catch (error) {
+        host.setBusy(false);
+        // A stale card is the study's state, not this click's failure: show
+        // the card the host has now, with why the click did not approve.
+        await Promise.resolve(host.loadWorkflow()).catch(() => null);
+        host.setError((owner && owner.refusalText(error, tr)) || host.errorText(error));
+        host.render();
+      }
     }
 
     async function rejectWorkflow(confirmation) {
