@@ -11,9 +11,11 @@ generic.
 
 from __future__ import annotations
 
-import inspect
 import json
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from easyicu.webserver import agent_pipeline_runs
 from easyicu.webserver.agent_pipeline_runs import _research_user_preferences
@@ -82,11 +84,30 @@ def test_only_a_recorded_selection_carries_the_report() -> None:
     assert "export_report" not in unreported
 
 
-def test_the_launch_passes_the_bound_exports_report_to_planning() -> None:
-    source = inspect.getsource(agent_pipeline_runs)
-    call = source.index("preferences = _research_user_preferences(")
-    end = source.index(")\n", source.index("source_selection_report=", call))
-    assert (
-        "source_selection_report=bound_export_selection_report(export_path)"
-        in source[call : end + 1]
+def test_the_launch_passes_the_bound_exports_report_to_planning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run declares its context through one owner, which reads the export it binds."""
+
+    export = _export(tmp_path / "miiv", {"files": [], "cohort_report": _REPORT})
+    study = complete_study()
+    # The export's contract selected this study's rows.
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "bound_export_selection_basis",
+        lambda _study, _export_path: "export_contract",
     )
+    scientific = SimpleNamespace(
+        study=study,
+        materialization_study=study,
+        patient_grouping=None,
+        cohort_window=(0.0, 24.0),
+        metadata_planning_coordinates={},
+    )
+
+    declared = agent_pipeline_runs.research_context_declarations(
+        scientific, export_path=export
+    )
+
+    constraints = json.loads(declared["user_preferences"]["data_constraints"])
+    assert constraints["source_selection"]["export_report"] == _REPORT

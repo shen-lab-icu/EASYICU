@@ -44,7 +44,6 @@ def _scientific() -> PreparedScientificLaunch:
         question="How common is sepsis?",
         database="miiv",
         materialization_study={},
-        configured_target=None,
         configured_primary_exposure=None,
         target=None,
         primary_exposure=None,

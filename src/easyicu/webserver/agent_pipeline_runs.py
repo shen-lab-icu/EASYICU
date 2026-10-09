@@ -150,6 +150,7 @@ from easyicu.webserver.research_launch_scientific import (
     validate_analysis_design_for_execution,
 )
 from easyicu.webserver.research_pipeline_run_preparation import (
+    PreparedScientificLaunch,
     ResearchPipelineLaunchRequest,
     prepare_research_pipeline_run,
 )
@@ -2693,6 +2694,183 @@ def _require_first_icu_stay_materialized(acquisition: Any, binding: Any) -> None
             "The prepared universe does not carry the verified first ICU stay restriction.",
             details={"field": "cohort.exclude_readmissions"},
         )
+
+
+def research_context_declarations(
+    scientific: PreparedScientificLaunch, *, export_path: str
+) -> Dict[str, Any]:
+    """What a run declares on its research context besides its rows and coordinates.
+
+    The criteria as the bound export executed them, the window the run
+    materialized, the patient grouping, the study's preferences and its goal.
+    A run passes them to the pipeline; the host's compile for a target trial's
+    card builds its context with the same (:func:`target_trial_research_context`).
+    """
+
+    study = scientific.study
+    patient_grouping = scientific.patient_grouping
+    selection_basis = bound_export_selection_basis(study, export_path)
+    recorded = selection_basis == "export_contract"
+    return {
+        "cohort_name": f"web_{_slug(study.get('id'))}",
+        "inclusion_criteria": _inclusion_criteria(study, export_recorded=recorded),
+        "exclusion_criteria": _exclusion_criteria(study, export_recorded=recorded),
+        # The scope the run materialized under names its window.
+        "time_windows": _declared_time_windows(
+            scientific.cohort_window, scientific.materialization_study
+        ),
+        "id_columns": (
+            [patient_grouping.output_identity_column]
+            if patient_grouping is not None
+            else None
+        ),
+        # The identity column's description is agent guidance by contract;
+        # reader-label projections skip row identities
+        # (``reporting.manuscript_labels``), so it never reaches a figure,
+        # table, or manuscript label.
+        "concept_descriptions": (
+            {
+                patient_grouping.output_identity_column: (
+                    "Host-verified unique ICU-stay identity. Derive the "
+                    "patient cluster only from the prefix before ':s'; "
+                    "never report identifier values."
+                )
+            }
+            if patient_grouping is not None
+            else None
+        ),
+        "user_preferences": _research_user_preferences(
+            scientific.materialization_study,
+            patient_grouping=patient_grouping,
+            cohort_study=study,
+            source_selection_basis=selection_basis,
+            event_time_semantics=bound_export_event_time_semantics(export_path),
+            source_selection_report=bound_export_selection_report(export_path),
+            question_named_concepts=(
+                scientific.metadata_planning_coordinates.get("question_named_concepts")
+                or ()
+            ),
+        ),
+        "notes": _clean_text(study.get("analysis_goal"), 1_200) or None,
+    }
+
+
+def acquire_target_trial_universe(
+    scientific: PreparedScientificLaunch,
+    *,
+    export_path: str,
+    llm: Any,
+    output_dir: Path,
+) -> Any:
+    """Acquire what the study's target trial reads, for its run or its card's compile.
+
+    Every concept is the host's; covariates are summarized over ``[0, T0)``
+    and the treatment's onsets read over ``[0, T0 + G)``
+    (``TargetTrialLaunchInputs``).  A first ICU stay the study binds must be
+    on the universe, as for any run.
+    """
+
+    from easyicu.research_agent.acquisition.foundation import (
+        acquire_universe_for_question,
+    )
+
+    inputs = scientific.target_trial_inputs
+    if inputs is None:
+        raise ValueError("the launch prepared no target trial")
+    acquisition = acquire_universe_for_question(
+        export_dir=Path(export_path).expanduser(),
+        question=scientific.question,
+        llm=llm,
+        output_dir=output_dir,
+        stem="web_research_universe",
+        **inputs.acquisition_arguments(
+            database=scientific.database,
+            patient_grouping=scientific.patient_grouping,
+        ),
+    )
+    first_icu_stay = inputs.foundation_profile.get("first_icu_stay")
+    if first_icu_stay is not None and not acquisition.blocked:
+        _require_first_icu_stay_materialized(acquisition, first_icu_stay)
+    return acquisition
+
+
+def target_trial_run_coordinates(
+    scientific: PreparedScientificLaunch, acquisition: Any
+) -> Dict[str, Any]:
+    """The coordinates a run of the study's approved trial names on its context.
+
+    The trial's event, as the acquisition materialized it, is the outcome and
+    the only one.  The run names no endpoint or exposure of its own: the
+    signed suite binds its time-to-event endpoint, and the treatment is a
+    strategy the suite emulates, not a column.
+    """
+
+    inputs = scientific.target_trial_inputs
+    if inputs is None:
+        raise ValueError("the launch prepared no target trial")
+    target = _resolve_materialized_target_outcome(
+        source_concept=inputs.target_outcome, acquisition=acquisition
+    )
+    if not target:
+        raise ResearchPipelineRunError(
+            "research_pipeline_target_outcome_materialization_unavailable",
+            "The trial's outcome is not available as a verified analysis column "
+            "in the materialized cohort.",
+            details={
+                "concept_id": inputs.target_outcome,
+                "available_analysis_columns": dict(
+                    getattr(acquisition, "analysis_columns", {}) or {}
+                ),
+            },
+        )
+    return {
+        "target_outcome": target,
+        "outcome_columns": (target,),
+        "endpoint": None,
+        "primary_exposure": None,
+    }
+
+
+def target_trial_research_context(
+    scientific: PreparedScientificLaunch,
+    acquisition: Any,
+    *,
+    export_path: str,
+    endpoint: Any,
+) -> Any:
+    """The research context a run of the study's trial builds on ``acquisition``.
+
+    The pipeline builds it from what the run passes
+    (:func:`research_context_declarations`, :func:`target_trial_run_coordinates`)
+    once the signed suite bound its endpoint onto them; ``endpoint`` is that
+    endpoint (``target_trial_context_endpoint``), which a compile before
+    approval states without a suite.
+    """
+
+    from easyicu.research_agent.research_context.builder import (
+        build_research_context,
+    )
+
+    coordinates = target_trial_run_coordinates(scientific, acquisition)
+    declarations = research_context_declarations(scientific, export_path=export_path)
+    return build_research_context(
+        research_question=scientific.question,
+        cohort=Path(acquisition.universe_path),
+        cohort_name=declarations["cohort_name"],
+        database=scientific.database,
+        target_outcome=coordinates["target_outcome"],
+        endpoint=endpoint,
+        primary_exposure=coordinates["primary_exposure"],
+        inclusion_criteria=declarations["inclusion_criteria"],
+        exclusion_criteria=declarations["exclusion_criteria"],
+        id_columns=declarations["id_columns"],
+        outcome_columns=coordinates["outcome_columns"],
+        concept_descriptions=declarations["concept_descriptions"],
+        time_windows=declarations["time_windows"],
+        user_preferences=declarations["user_preferences"],
+        notes=declarations["notes"],
+        trajectory_binding=None,
+    )
 
 
 def _primary_cohort_selection_mode(study: Mapping[str, Any]) -> str:
@@ -5618,7 +5796,12 @@ def make_research_pipeline_run_runner(
             if bound_change_request is not None
             else ""
         )
-        candidate_outcome_concepts = explicit_outcome_concepts(question)
+        trial_run = scientific.target_trial_inputs is not None
+        # A trial's outcome is the event its statement names, which the
+        # compile already read from the question.
+        candidate_outcome_concepts = (
+            () if trial_run else explicit_outcome_concepts(question)
+        )
         candidate_exposure_aggregation: Optional[str] = None
         candidate_authority: Optional[_CandidatePlanMaterializationAuthority] = None
         bound_baseline_requirements = (
@@ -5849,6 +6032,15 @@ def make_research_pipeline_run_runner(
                     first_icu_stay=_verified_first_icu_stay_or_none(study),
                     required_coordinates=(primary_exposure, target),
                 )
+            elif trial_run:
+                # What the compile for the trial's card acquired, so the run
+                # compiles the approved record again on its own context.
+                acquisition = acquire_target_trial_universe(
+                    scientific,
+                    export_path=export_path,
+                    llm=acquisition_client,
+                    output_dir=wrapper_dir / "pipeline_input",
+                )
             else:
                 materialization_roster = _materialization_concept_roster(
                     foundation_profile=foundation_profile,
@@ -6070,6 +6262,12 @@ def make_research_pipeline_run_runner(
                         "research_pipeline_plan_primary_outcome_missing",
                         "The requested outcome roster lost its primary endpoint.",
                     )
+            if trial_run and execution_resume_inputs is None:
+                # The coordinates the compile for the trial's card named.
+                trial_coordinates = target_trial_run_coordinates(scientific, acquisition)
+                pipeline_target = trial_coordinates["target_outcome"]
+                pipeline_outcome_columns = trial_coordinates["outcome_columns"]
+                resolved_primary_exposure = trial_coordinates["primary_exposure"]
             try:
                 bound_preplan_literature = idea_mining.load_bound_prior_art_literature(
                     dict(study.get("idea_handoff") or {}),
@@ -6456,20 +6654,8 @@ def make_research_pipeline_run_runner(
                 # bounded reconciliation can still discover the exact pause.
                 _register_recoverable_work_root(root)
                 put_recovery_seed(recovery_seed)
-            source_selection_basis = bound_export_selection_basis(
-                study, export_path
-            )
-            source_selection_recorded = source_selection_basis == "export_contract"
-            preferences = _research_user_preferences(
-                candidate_planning_study,
-                patient_grouping=patient_grouping,
-                cohort_study=study,
-                source_selection_basis=source_selection_basis,
-                event_time_semantics=bound_export_event_time_semantics(export_path),
-                source_selection_report=bound_export_selection_report(export_path),
-                question_named_concepts=(
-                    metadata_planning_coordinates.get("question_named_concepts") or ()
-                ),
+            declarations = research_context_declarations(
+                scientific, export_path=export_path
             )
             _progress(
                 job,
@@ -6519,41 +6705,13 @@ def make_research_pipeline_run_runner(
                         else None
                     )
                 ),
-                cohort_name=f"web_{_slug(study.get('id'))}",
                 database=database,
                 target_outcome=pipeline_target,
                 outcome_columns=pipeline_outcome_columns,
-                endpoint=acquisition.endpoint,
+                # A trial run names no endpoint: its signed suite binds one.
+                endpoint=None if trial_run else acquisition.endpoint,
                 primary_exposure=resolved_primary_exposure,
-                inclusion_criteria=_inclusion_criteria(
-                    study, export_recorded=source_selection_recorded
-                ),
-                exclusion_criteria=_exclusion_criteria(
-                    study, export_recorded=source_selection_recorded
-                ),
-                time_windows=_declared_time_windows(window, study),
-                id_columns=(
-                    [patient_grouping.output_identity_column]
-                    if patient_grouping is not None
-                    else None
-                ),
-                # The identity column's description is agent guidance by
-                # contract; reader-label projections skip row identities
-                # (``reporting.manuscript_labels``), so it never reaches a
-                # figure, table, or manuscript label.
-                concept_descriptions=(
-                    {
-                        patient_grouping.output_identity_column: (
-                            "Host-verified unique ICU-stay identity. Derive the "
-                            "patient cluster only from the prefix before ':s'; "
-                            "never report identifier values."
-                        )
-                    }
-                    if patient_grouping is not None
-                    else None
-                ),
-                user_preferences=preferences,
-                notes=_clean_text(study.get("analysis_goal"), 1_200) or None,
+                **declarations,
                 resume_run_id=(
                     execution_resume_target.pipeline_run_id
                     if execution_resume_target is not None

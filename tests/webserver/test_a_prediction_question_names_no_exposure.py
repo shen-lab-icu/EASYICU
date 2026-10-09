@@ -16,6 +16,9 @@ from __future__ import annotations
 
 import inspect
 import json
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -101,15 +104,36 @@ def test_the_named_concepts_reach_planning_in_the_data_constraints() -> None:
     assert constraints["question_named_concepts"] == named
 
 
-def test_the_launch_passes_the_named_concepts_and_requires_them_in_the_roster() -> None:
-    source = inspect.getsource(agent_pipeline_runs)
-    call = source.index("preferences = _research_user_preferences(")
-    end = source.index("\n            )\n", call)
+def test_a_run_declares_the_named_concepts_in_its_data_constraints(
+    tmp_path: Path,
+) -> None:
+    """Every run declares its context through one owner, a trial's run included."""
 
-    assert (
-        'metadata_planning_coordinates.get("question_named_concepts")'
-        in source[call:end]
-    )
+    named = [{"concepts": ["sofa"], "evidence": "sofa"}]
+    study = complete_study()
+
+    def constraints(coordinates: dict[str, Any]) -> dict[str, Any]:
+        scientific = SimpleNamespace(
+            study=study,
+            materialization_study=study,
+            patient_grouping=None,
+            cohort_window=(0.0, 24.0),
+            metadata_planning_coordinates=coordinates,
+        )
+        declared = agent_pipeline_runs.research_context_declarations(
+            scientific, export_path=str(tmp_path / "export")
+        )
+        return json.loads(declared["user_preferences"].get("data_constraints") or "{}")
+
+    assert constraints({"question_named_concepts": named})[
+        "question_named_concepts"
+    ] == named
+    # Coordinates that name nothing else declare nothing.
+    assert "question_named_concepts" not in constraints({})
+
+
+def test_the_candidate_roster_requires_the_named_concepts() -> None:
+    source = inspect.getsource(agent_pipeline_runs)
     acquisition = source.index("acquisition = _metadata_only_planning_acquisition(")
     roster = source.index("required_concepts=(", acquisition)
     closing = source.index("patient_grouping=patient_grouping", roster)

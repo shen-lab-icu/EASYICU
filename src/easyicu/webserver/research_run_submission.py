@@ -34,6 +34,8 @@ from easyicu.webserver.pi_copilot.run_authority import (
 from easyicu.webserver.pi_copilot.workflow import build_research_workflow_snapshot
 from easyicu.webserver.research_launch_resume import _development_resume_launch_scope
 from easyicu.webserver.research_plan_revision import load_prepared_plan_revision
+from easyicu.webserver.target_trial_card import target_trial_plans_on_data
+from easyicu.webserver.target_trial_setup import latest_target_trial_compile
 
 
 _DEVELOPMENT_REVIEWED_EXECUTION_ENV = "EASYICU_DEVELOPMENT_REVIEWED_EXECUTION"
@@ -171,6 +173,22 @@ def server_research_pipeline_budget_mode() -> str:
         return "full_reviewed"
     _reject({"error": "research_pipeline_development_mode_invalid"}, status_code=500)
     raise AssertionError("unreachable")
+
+
+def candidate_plan_authorized(study: Mapping[str, Any], *, intent: RunIntent) -> bool:
+    """Whether a submission plans as a metadata-only candidate.
+
+    A study whose approved target trial a run binds plans on its data,
+    whatever an adapter asked (``target_trial_card.target_trial_plans_on_data``):
+    a candidate plan reads metadata only and cannot verify the approved record
+    its run compiles again.  Its plan still pauses for the researcher's review.
+    """
+
+    if intent != "candidate_plan":
+        return False
+    return not target_trial_plans_on_data(
+        study, latest_target_trial_compile(str(study.get("id") or ""))
+    )
 
 
 def research_pipeline_budget_mode_for_source(
@@ -318,7 +336,9 @@ def submit_research_run(
     prepared_manifest = dataio.prepared_export_manifest_path(Path(path).expanduser())
     budget_mode = research_pipeline_budget_mode_for_source(
         prepared_manifest=prepared_manifest,
-        metadata_only_planning_authorized=request.intent == "candidate_plan",
+        metadata_only_planning_authorized=candidate_plan_authorized(
+            study_context, intent=request.intent
+        ),
     )
     if budget_mode == "full_reviewed" or prepared_manifest is not None:
         try:

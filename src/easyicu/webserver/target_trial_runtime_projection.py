@@ -210,6 +210,22 @@ def _design(study: Mapping[str, Any]) -> Optional[TargetTrialDesign]:
     return design
 
 
+def approved_target_trial(study: Mapping[str, Any]) -> Optional[ConfirmedTargetTrial]:
+    """The trial the study's researcher approved, as a run binds it.
+
+    ``None`` for a study of another family, or whose trial is not stated or
+    not approved.  An approval whose record the host no longer keeps raises
+    this adapter's typed error, as the run's projection would.
+    """
+
+    if not target_trial_family_declared(study):
+        return None
+    section = _design(study)
+    if section is None or section.approval is None:
+        return None
+    return _kept(str(study.get("id")), section).confirmed()
+
+
 def _mismatch(design: _ApprovedTrial, message: str, **details: Any) -> None:
     """The extraction does not hold what the trial reads: name what it needs."""
 
@@ -598,6 +614,7 @@ def compile_target_trial_runtime_projection(
 
 
 __all__ = [
+    "approved_target_trial",
     "compile_target_trial_runtime_projection",
     "target_trial_family_declared",
 ]

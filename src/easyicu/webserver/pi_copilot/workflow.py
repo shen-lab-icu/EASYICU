@@ -35,6 +35,15 @@ from easyicu.webserver.study_scientific_configuration import (
     ScientificConfiguration,
     SetupFacts,
 )
+from easyicu.webserver.target_trial_card import (
+    TARGET_TRIAL_HOLDS_PLAN,
+    target_trial_card,
+    target_trial_next_action,
+)
+from easyicu.webserver.target_trial_setup import (
+    latest_target_trial_compile,
+    target_trial_family_declared,
+)
 
 from . import cohort_eligibility, plan_decisions, plan_review_progress
 from .contracts import (
@@ -125,6 +134,9 @@ class ResearchWorkflowSnapshot(BaseModel):
     #: The launch's refusal of the bound export as this study's rows: the
     #: error a new plan or run on it meets and the codes saying why.
     bound_export_cohort_refusal: Optional[Mapping[str, Any]] = None
+    #: A causal study's latest target trial compile job: its id, status,
+    #: reason, record digest and detail (``target_trial_setup``).
+    target_trial_compile: Optional[Mapping[str, Any]] = None
 
 
 class ProjectWorkflowProjection(BaseModel):
@@ -147,6 +159,9 @@ class ProjectWorkflowProjection(BaseModel):
     # A host decision whose job this process is starting; the browser's
     # projection then names ``starting`` as the next action.
     starting: Optional[HostActionStarting] = None
+    # The approval card of a causal study's target trial, as its owner
+    # computes it (``target_trial_card``); for the browser only.
+    target_trial_card: Optional[Mapping[str, Any]] = None
 
 
 RUN_HISTORY_LIMIT = 10
@@ -318,6 +333,7 @@ def build_research_workflow_snapshot(
     report_revision_ready: bool = False,
     execution_retry: Optional[Mapping[str, Any]] = None,
     export_cohort_refusal: Optional[ExportCohortRefusal] = None,
+    target_trial_compile: Optional[Mapping[str, Any]] = None,
 ) -> ResearchWorkflowSnapshot:
     """Compile owner receipts into one deterministic Copilot workflow state."""
 
@@ -1095,6 +1111,17 @@ def build_research_workflow_snapshot(
     next_action = next_stage.reason_code
     if all(row.status == "complete" for row in required):
         next_action = "human_review_and_reporting"
+    trial_action = (
+        target_trial_next_action(study_row, target_trial_compile)
+        if next_stage.id == "plan" and next_stage.status == "ready"
+        else None
+    )
+    if trial_action is not None:
+        # A causal study states and approves its target trial before it
+        # plans, and then plans on its data: the plan step says so as well.
+        next_action = trial_action
+        next_stage = next_stage.model_copy(update={"reason_code": trial_action})
+        stages = [next_stage if row.id == "plan" else row for row in stages]
     return ResearchWorkflowSnapshot(
         current_stage=next_stage.id,
         next_action_code=next_action,
@@ -1119,6 +1146,9 @@ def build_research_workflow_snapshot(
             }
             if export_cohort_refusal is not None
             else None
+        ),
+        target_trial_compile=(
+            dict(target_trial_compile) if target_trial_compile is not None else None
         ),
     )
 
@@ -1348,13 +1378,15 @@ def host_decision_offers(
     )
     offers: Dict[str, Any] = {}
     # A state whose coordinates do not fit the contract offers nothing to
-    # echo; the button then submits without a host decision, as before.
+    # echo; the button then submits without a host decision, as before.  A
+    # causal study plans only once its target trial is approved.
     try:
-        offers["plan_transition"] = PlanTransitionDecision(
-            next_action_code=snapshot.next_action_code,
-            scientific_configuration_sha256=digest,
-            source_run_id=run_id,
-        )
+        if snapshot.next_action_code not in TARGET_TRIAL_HOLDS_PLAN:
+            offers["plan_transition"] = PlanTransitionDecision(
+                next_action_code=snapshot.next_action_code,
+                scientific_configuration_sha256=digest,
+                source_run_id=run_id,
+            )
     except ValidationError:
         pass
     if (
@@ -1442,6 +1474,11 @@ def build_project_workflow_projection(
     )
     bound_source = study.get("data_source")
     bound_source = bound_source if isinstance(bound_source, Mapping) else {}
+    trial_compile = (
+        latest_target_trial_compile(clean_study_id)
+        if clean_study_id and target_trial_family_declared(study)
+        else None
+    )
 
     snapshot_inputs: Dict[str, Any] = dict(
         study=study,
@@ -1458,6 +1495,7 @@ def build_project_workflow_projection(
         export_cohort_refusal=bound_export_cohort_refusal(
             study, str(bound_source.get("path") or "").strip()
         ),
+        target_trial_compile=trial_compile,
     )
     snapshot = build_research_workflow_snapshot(**snapshot_inputs)
     if (
@@ -1520,6 +1558,7 @@ def build_project_workflow_projection(
             if starting is not None
             else None
         ),
+        target_trial_card=target_trial_card(study, trial_compile),
     )
 
 

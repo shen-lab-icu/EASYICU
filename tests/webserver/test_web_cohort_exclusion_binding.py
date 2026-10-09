@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from easyicu.research_agent.research_context.outbound import (
     outbound_safe_context_payload,
 )
+from easyicu.webserver import agent_pipeline_runs
 from easyicu.webserver.agent_pipeline_runs import (
     _exclusion_criteria,
     _inclusion_criteria,
@@ -77,19 +79,46 @@ def test_a_readmission_exclusion_alone_still_produces_an_exclusion() -> None:
     assert _exclusion_criteria(_study(exclude_readmissions=False)) == []
 
 
-def test_the_pipeline_call_passes_the_exclusion_channel() -> None:
+def test_the_pipeline_call_passes_the_exclusion_channel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Compiling exclusions and not sending them changes nothing."""
 
+    study = _study(
+        label="ICU stays",
+        age_min=18,
+        exclude_readmissions=True,
+        icd_enabled=True,
+        exclude_diagnoses=["condition-b"],
+    )
+    scientific = SimpleNamespace(
+        study=study,
+        materialization_study=study,
+        patient_grouping=None,
+        cohort_window=(0.0, 24.0),
+        metadata_planning_coordinates={},
+    )
+    # Both sides, as the bound export's record allows them to be declared.
+    for basis, recorded in (("export_contract", True), ("unrecorded", False)):
+        monkeypatch.setattr(
+            agent_pipeline_runs,
+            "bound_export_selection_basis",
+            lambda _study, _export_path, basis=basis: basis,
+        )
+        declared = agent_pipeline_runs.research_context_declarations(
+            scientific, export_path=str(tmp_path / "export")
+        )
+        assert declared["inclusion_criteria"] == _inclusion_criteria(
+            study, export_recorded=recorded
+        )
+        assert declared["exclusion_criteria"] == _exclusion_criteria(
+            study, export_recorded=recorded
+        )
+    assert _exclusion_criteria(study, export_recorded=True)
+    # the reviewer-facing cohort summary reports both sides too
     source = " ".join(
         Path("src/easyicu/webserver/agent_pipeline_runs.py").read_text(encoding="utf-8").split()
     )
-    # Both sides, as the bound export's record allows them to be declared.
-    for side in ("inclusion", "exclusion"):
-        assert (
-            f"{side}_criteria=_{side}_criteria( study, "
-            "export_recorded=source_selection_recorded ),"
-        ) in source
-    # the reviewer-facing cohort summary reports both sides too
     assert '"exclusion_criteria": _exclusion_criteria(study),' in source
 
 
