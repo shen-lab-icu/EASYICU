@@ -1,9 +1,11 @@
-"""The host compiles the Planner's spec beside the plan's cohort and records both.
+"""The host compiles the Planner's spec beside the Planner's own cohort and records both.
 
-In step 2a the plan's own predicates still select the rows.  The shadow audit
-compiles the spec the Planner wrote beside them and compares the two
-predicate by predicate, so each difference can be explained before the
-cohort is ever compiled from a spec.  Two predicates that select the same
+The audit compiles the spec the Planner wrote beside its cohort predicates
+and compares the two predicate by predicate.  In step 2a the predicates
+selected the rows, so each difference could be explained before the cohort
+was compiled from a spec; since step 2b the spec decides the plan's cohort
+and a difference is a typed finding
+(``test_a_stated_population_decides_the_plans_cohort``).  Two predicates that select the same
 rows are not a difference: the same threshold written as 1 or 1.0, ICU
 admission under either of its anchor names, a window on a column that holds
 one value per stay, and no predicates with or without a stated mode.  A
@@ -398,18 +400,23 @@ def test_the_audit_is_written_beside_the_plan(tmp_path: Path) -> None:
     assert [row["id"] for row in audit["criteria"]] == ["c1"]
 
 
-def test_the_writer_reads_the_criteria_the_plan_states_but_does_not_apply(
+def test_the_writer_reads_the_criteria_the_planner_states_but_does_not_apply(
     tmp_path: Path,
 ) -> None:
-    plan = _plan_object(
-        {
-            "selection_mode": "all_input_rows",
-            "unapplied_population_criteria": ["patients referred by a named service"],
-        }
+    # The spec decides the plan's cohort, so the audit sets the Planner's own
+    # cohort beside it, with the criteria the Planner states but does not apply.
+    cohort = ProgressiveCohortIntent(
+        name="all",
+        selection_mode="all_input_rows",
+        population_criteria=[{"criterion": "patients referred by a named service"}],
+        population_spec={"criteria": []},
     )
 
     path = write_population_shadow_audit(
-        tmp_path, context=_context(), plan=plan, cohort=_intent({"criteria": []})
+        tmp_path,
+        context=_context(),
+        plan=_plan_object({"selection_mode": "all_input_rows"}),
+        cohort=cohort,
     )
 
     comparison = json.loads(path.read_text(encoding="utf-8"))["comparison"]
@@ -503,10 +510,10 @@ def _written(run_dir: Path) -> dict:
     return json.loads((run_dir / POPULATION_SHADOW_AUDIT_FILENAME).read_text("utf-8"))
 
 
-def test_planning_writes_the_audit_and_still_applies_its_own_cohort(
+def test_planning_writes_the_audit_and_applies_the_cohort_its_spec_states(
     tmp_path: Path,
 ) -> None:
-    spec = {"criteria": [_criterion(1, kind="age_years", min_years=18)]}
+    spec = {"criteria": []}
 
     plain = _plan_with(tmp_path / "plain", None)
     stated = _plan_with(tmp_path / "stated", spec)
@@ -514,7 +521,10 @@ def test_planning_writes_the_audit_and_still_applies_its_own_cohort(
     assert _written(tmp_path / "plain")["status"] == "no_spec"
     audit = _written(tmp_path / "stated")
     assert audit["status"] == "compiled"
+    assert audit["cohort_source"] == "population_spec"
+    assert audit["plan_applies_compiled"] is True
     assert audit["spec"] == PopulationSpec.model_validate(spec).model_dump(mode="json")
+    # Every input row, as the Planner's own cohort also states.
     assert stated.plan.cohort.to_dict() == plain.plan.cohort.to_dict()
     assert [step.step_id for step in stated.plan.steps] == [
         step.step_id for step in plain.plan.steps

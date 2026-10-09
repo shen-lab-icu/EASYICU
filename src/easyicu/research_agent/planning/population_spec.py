@@ -24,14 +24,29 @@ Windows are hours after ICU admission, ``[start_hours, end_hours)``; a
 condition or an event with no window (``null``) is read over the whole stay,
 as its status records it.  A study whose time zero is another event is
 version 2's.
+
+A stated spec decides the plan's cohort (step 2b of the design), so the
+planning foundation reads it strictly (:func:`read_stated_population_spec`)
+and holds each criterion that cites the study's own words to them as written
+(:func:`unquoted_criteria`): a paraphrase or a translation cannot be checked
+against what the researcher asked.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Annotated, Any, Literal, Mapping, Optional, Union, get_args
+import re
+import unicodedata
+from typing import Annotated, Any, Literal, Mapping, Optional, Sequence, Union, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 POPULATION_SPEC_SCHEMA_VERSION = "easyicu.population_spec/1"
 MAX_POPULATION_CRITERIA = 8
@@ -308,6 +323,71 @@ def diagnosis_code_token(code: str) -> str:
     return str(code or "").strip().upper().replace(".", "")
 
 
+#: The sources that cite the researcher's own words.  The others, the outline
+#: and a preset, are the Planner's or the host's, with no text of the study's
+#: to hold a quote against.
+STUDY_WORDING_SOURCES = frozenset({"question", "study_wording"})
+#: The owner's errors kept for a refused spec.
+_MAX_SPEC_ERRORS = 20
+_SPACE = re.compile(r"\s+")
+
+
+class PopulationSpecRefused(ValueError):
+    """The owner refuses a stated spec; ``errors`` locate why, without its input."""
+
+    def __init__(self, errors: list[dict[str, str]]) -> None:
+        self.errors = errors
+        located = "; ".join(
+            f"{item['loc'] or '<spec>'}: {item['msg']}" for item in errors
+        )
+        super().__init__(f"the population spec is refused: {located}")
+
+
+def read_stated_population_spec(raw: Any) -> Optional[PopulationSpec]:
+    """The spec as stated, read strictly; ``None`` when none is stated."""
+
+    if raw is None:
+        return None
+    try:
+        return PopulationSpec.model_validate(raw)
+    except ValidationError as exc:
+        raise PopulationSpecRefused(
+            [
+                {
+                    "loc": ".".join(str(part) for part in error["loc"]),
+                    "type": error["type"],
+                    "msg": error["msg"],
+                }
+                for error in exc.errors(include_url=False, include_input=False)
+            ][:_MAX_SPEC_ERRORS]
+        ) from exc
+
+
+def _words(text: Any) -> str:
+    """``text`` as words are compared: one form per character, no case, no spacing."""
+
+    folded = unicodedata.normalize("NFKC", str(text or "")).casefold()
+    return _SPACE.sub("", folded)
+
+
+def unquoted_criteria(
+    spec: PopulationSpec, study_texts: Sequence[str]
+) -> tuple[PopulationCriterion, ...]:
+    """The criteria citing the study's words whose quote is not written in them.
+
+    ``study_texts`` are the question and the study's own statements of whom it
+    includes.  Spacing, letter case and full-width forms are not words.
+    """
+
+    texts = [_words(text) for text in study_texts]
+    return tuple(
+        criterion
+        for criterion in spec.criteria
+        if criterion.source in STUDY_WORDING_SOURCES
+        and not any(_words(criterion.quote) in text for text in texts)
+    )
+
+
 __all__ = [
     "CRITERION_MODELS",
     "KEPT_KINDS",
@@ -316,6 +396,7 @@ __all__ = [
     "MAX_POPULATION_CRITERIA",
     "MAX_POPULATION_HOURS",
     "POPULATION_SPEC_SCHEMA_VERSION",
+    "STUDY_WORDING_SOURCES",
     "AgeYears",
     "AliveAt",
     "ConditionPresent",
@@ -331,6 +412,9 @@ __all__ = [
     "NotTyped",
     "PopulationCriterion",
     "PopulationSpec",
+    "PopulationSpecRefused",
     "SpecWindow",
     "diagnosis_code_token",
+    "read_stated_population_spec",
+    "unquoted_criteria",
 ]

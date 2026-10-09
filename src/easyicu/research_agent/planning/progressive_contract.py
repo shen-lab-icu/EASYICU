@@ -254,11 +254,13 @@ class ProgressiveCohortIntent(BaseModel):
         default_factory=list, max_length=6, exclude_if=lambda value: not value
     )
     #: The same population stated again as a typed spec
-    #: (``planning.population_spec``).  In this step it is a shadow: the host
-    #: compiles it beside the predicates above and records how the two compare
-    #: (``planning.population_shadow``), and the predicates still select the
-    #: rows.  It is kept as the Planner wrote it, any JSON value, and read
-    #: only by that audit, so a spec of any shape never stops planning.
+    #: (``planning.population_spec``).  Once stated, it decides the plan's
+    #: cohort: the host compiles the cohort from it
+    #: (``planning.progressive_compiler``), and the predicates above no longer
+    #: select rows; the audit records where they differ
+    #: (``planning.population_shadow``).  It is kept as the Planner wrote it,
+    #: any JSON value, so parsing never refuses it; the foundation check reads
+    #: it strictly and sends a spec its owner refuses back to the Planner.
     #: Omitted from the digest when absent.  The model's own schema is a
     #: closed null, so every strict request built from these models stays
     #: closed; the foundation request alone offers the spec's schema

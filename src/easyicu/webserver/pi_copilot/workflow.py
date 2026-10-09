@@ -14,6 +14,9 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from easyicu.research_agent.planning.population_compile import (
+    POPULATION_APPROVAL_STOPS,
+)
 from easyicu.webserver import agent_pipeline_runs, agent_runs, jobs, sources
 from easyicu.webserver import host_action_starting
 from easyicu.webserver.host_action_contracts import (
@@ -474,6 +477,9 @@ def build_research_workflow_snapshot(
         "plan_scientific_changes_required",
         "scientific_plan_review_policy_stale",
         "agent_plan_revision_nonconvergent",
+        # The plan is reviewed, but an inclusion its cohort does not apply
+        # refuses its approval (``population_compile.POPULATION_APPROVAL_STOPS``).
+        *POPULATION_APPROVAL_STOPS.values(),
     }
     active_plan_review_codes = sorted(pending_review_reason_codes & plan_review_codes)
     plan_review_declared = bool(
@@ -680,9 +686,21 @@ def build_research_workflow_snapshot(
         if "scientific_plan_review_policy_stale" in active_plan_review_codes
         else "plan_scientific_changes_required"
         if "plan_scientific_changes_required" in active_plan_review_codes
-        else "operator_plan_approval_required"
-        if plan_execution_ready
-        else "plan_execution_upgrade_required"
+        # An extraction of the study's own population (BX) can lift the stop;
+        # an inclusion nothing can apply as stated leaves it to the study.
+        else next(
+            (
+                code
+                for code in POPULATION_APPROVAL_STOPS.values()
+                if code in active_plan_review_codes
+            ),
+            None,
+        )
+        or (
+            "operator_plan_approval_required"
+            if plan_execution_ready
+            else "plan_execution_upgrade_required"
+        )
     )
     plan_review_reason_code = (
         "plan_scientific_changes_required"

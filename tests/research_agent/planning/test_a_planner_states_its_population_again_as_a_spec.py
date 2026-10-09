@@ -7,9 +7,11 @@ strict JSON schema receives the spec owner's schema made strict: one closed
 alternative per kind, the run's allowed concepts, an inclusion-only role where
 a kind states the stays kept, and a required but nullable spec.  Every other
 strict request built from the plan models sees the field as a closed null.  A
-Provider without one reads the same shape and rules in the contract text.  The
-spec is a shadow: the cohort keeps it as written, so a spec its owner would
-refuse does not stop the foundation.  Rosters and concepts are synthetic.
+Provider without one reads the same shape and rules in the contract text.
+Parsing keeps the spec as written, whatever its shape; since step 2b the spec
+decides the plan's cohort, and the foundation check sends one its owner
+refuses back to the Planner (``test_a_stated_population_decides_the_plans_cohort``).
+Rosters and concepts are synthetic.
 """
 
 from __future__ import annotations
@@ -426,8 +428,10 @@ def test_the_spec_rules_name_no_case() -> None:
         "a-number",
     ],
 )
-def test_a_spec_of_any_shape_does_not_stop_the_foundation(refused) -> None:
-    # A Provider without a schema may write what the owner refuses, in any shape.
+def test_a_spec_of_any_shape_is_parsed_as_written(refused) -> None:
+    # A Provider without a schema may write what the owner refuses, in any
+    # shape; parsing keeps it for the foundation check to refuse with the
+    # owner's errors.
     with pytest.raises(ValidationError):
         PopulationSpec.model_validate(refused)
 

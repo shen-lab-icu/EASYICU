@@ -17,9 +17,10 @@ already writes, and as a typed :class:`.population_spec.PopulationSpec`
   shape, kinds and rules in the foundation contract's text
   (:func:`population_spec_shape`, :func:`population_spec_contract`).
 
-The spec is a shadow in this step: the host compiles it beside the cohort
-intent and records how the two compare (``planning.population_shadow``),
-while the intent's predicates still select the rows.
+Since step 2b the spec decides the plan's cohort: the host compiles the
+cohort from it (``planning.progressive_compiler``), and the intent's predicates
+no longer select rows; where they differ, the host records it
+(``planning.population_shadow``).
 """
 
 from __future__ import annotations
@@ -171,14 +172,16 @@ def population_spec_contract(concept_ids: Sequence[str]) -> str:
             "the contract text and the spec owner name different kinds"
         )
     return (
-        "\npopulation_spec states the same population again as typed criteria. "
-        "The host compiles it beside this cohort and records how the two "
-        "compare; the predicates above still select the rows. Write "
-        '{"criteria":[]} when the study includes every input row. Each '
-        "criterion keeps the words that state it (quote, verbatim; criteria "
-        "stated in one sentence share it), where they come from (source: the "
-        "question, study_wording for the study's own cohort wording, the "
-        "outline, or a preset), and its role (include keeps the stays that "
+        "\npopulation_spec states the same population again as typed criteria, "
+        "and the host compiles the plan's cohort from it: the predicates above "
+        "no longer select the rows, and where they differ the host records it. "
+        'Write {"criteria":[]} when the study includes every input row. Each '
+        "criterion keeps the words that state it (quote: copied exactly from "
+        "its source, in the source's own language, never paraphrased or "
+        "translated; criteria stated in one sentence share it), where they "
+        "come from (source: the question, study_wording for the study's own "
+        "cohort wording, the outline, or a preset), and its role (include "
+        "keeps the stays that "
         "meet it, exclude removes them). A criterion is one flat object: "
         "beside kind it holds exactly the fields of its kind, never nested "
         "under the kind's name. One object per kind:\n"

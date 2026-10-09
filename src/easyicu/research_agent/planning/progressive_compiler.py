@@ -85,6 +85,13 @@ from .distribution_authority import distribution_policy_issues
 from .literature_contract import LiteratureDesignBinding
 from .method_literature import METHOD_CARDS, method_binding_support
 from .ordinal_multi_outcome import resolve_ordinal_multi_outcome_contract
+from .population_compile import CompiledPopulation, compile_population
+from .population_spec import (
+    PopulationSpec,
+    PopulationSpecRefused,
+    read_stated_population_spec,
+    unquoted_criteria,
+)
 from .progressive_contract import (
     PROGRESSIVE_HOST_COMPILED_OUTPUTS,
     ProgressiveCompiledStepReceipt,
@@ -109,7 +116,11 @@ from .scientific_action_catalog import (
     scientific_actions_for_analysis_type,
     validate_plan_scientific_action_selections,
 )
-from .scientific_review import post_baseline_exposure
+from .scientific_review import (
+    plan_time_zero_hours,
+    post_baseline_exposure,
+    trajectory_representation_facts,
+)
 from .sensitivity_authority import FUNCTIONAL_FORM_EXECUTABLE_METHODS
 
 
@@ -419,6 +430,18 @@ def _compile_cohort_intent(
     )
 
 
+def planner_cohort_definition(
+    cohort_intent: ProgressiveCohortIntent,
+) -> CohortDefinition:
+    """The cohort the Planner's own predicates state, unvalidated.
+
+    Read under the run's cohort concept scope.  Since a stated population
+    spec decides the plan's cohort, the audit sets these predicates beside it.
+    """
+
+    return _compile_cohort_intent(cohort_intent)
+
+
 def _validate_progressive_cohort_intent(
     cohort_intent: ProgressiveCohortIntent,
     *,
@@ -506,6 +529,132 @@ def _require_stated_population_applied(
             )
 
 
+def _stated_population_spec(
+    cohort_intent: ProgressiveCohortIntent,
+    *,
+    context: ResearchContext,
+) -> PopulationSpec | None:
+    """The population spec the Planner stated, held to its owner and its words.
+
+    A spec decides the plan's cohort (:func:`_plan_applying_population_spec`),
+    so a spec its owner refuses, or one that does not quote the study as
+    written (the question, or the study's own statements of whom it
+    includes), goes back to the Planner instead of being compiled.
+    """
+
+    try:
+        spec = read_stated_population_spec(cohort_intent.population_spec)
+    except PopulationSpecRefused as exc:
+        raise _fail(
+            "progressive_population_spec_invalid",
+            f"{exc}; write population_spec as the foundation contract shows it",
+            path="cohort.population_spec",
+        ) from exc
+    if spec is None:
+        return None
+    study_texts = (
+        str(context.research_question or ""),
+        *(str(item) for item in context.cohort.inclusion_criteria),
+        *(str(item) for item in context.cohort.exclusion_criteria),
+    )
+    for criterion in unquoted_criteria(spec, study_texts):
+        index = next(i for i, item in enumerate(spec.criteria) if item is criterion)
+        raise _fail(
+            "progressive_population_quote_not_verbatim",
+            f"criterion {criterion.id} cites the {criterion.source.replace('_', ' ')}, "
+            f"but {criterion.quote!r} is not written there: quote the words that "
+            "state it exactly as the study writes them, in their own language; "
+            "never paraphrase or translate them",
+            path=f"cohort.population_spec.criteria[{index}].quote",
+        )
+    return spec
+
+
+def stated_population(
+    cohort_intent: ProgressiveCohortIntent,
+    *,
+    context: ResearchContext,
+    plan: AnalysisPlan,
+) -> Optional[CompiledPopulation]:
+    """The population that decided ``plan``'s cohort; ``None`` without a spec.
+
+    Read, held to the study's words and compiled at the plan's time zero
+    exactly as compiling the plan did (:func:`_plan_applying_population_spec`),
+    so planning can say which criteria the cohort does not apply.
+    """
+
+    spec = _stated_population_spec(cohort_intent, context=context)
+    if spec is None:
+        return None
+    return _compiled_population(spec, context=context, plan=plan)
+
+
+def _compiled_population(
+    spec: PopulationSpec, *, context: ResearchContext, plan: AnalysisPlan
+) -> CompiledPopulation:
+    """``spec`` compiled at the time zero the plan review holds the cohort to.
+
+    That is ``scientific_review.plan_time_zero_hours``: a trajectory plan's
+    window end, else the study's landmark or the end of the host-bound
+    feature window.
+    """
+
+    time_zero_hours = plan_time_zero_hours(
+        context, trajectory_representation_facts(context, plan), None
+    )
+    try:
+        return compile_population(spec, context, time_zero_hours=time_zero_hours)
+    except ValueError as exc:
+        raise _fail(
+            "progressive_population_spec_uncompilable",
+            f"the host could not compile the population spec: {exc}",
+            path="cohort.population_spec",
+        ) from exc
+
+
+def _plan_applying_population_spec(
+    plan: AnalysisPlan,
+    spec: PopulationSpec,
+    *,
+    cohort_name: str,
+    context: ResearchContext,
+) -> AnalysisPlan:
+    """``plan`` with the cohort its population spec compiles to at its time zero.
+
+    Step 2b of the population spec design: a stated spec decides the cohort,
+    and the predicates the Planner wrote beside it no longer select rows (the
+    population audit records where they differ, ``population_shadow``).  A
+    criterion the host cannot apply is listed as such
+    (``CohortDefinition.unapplied_population_criteria``) and does not stop
+    planning; an inclusion among them leaves a plan that cannot be approved,
+    with its typed reason (``orchestration.progressive_planning``).  Unless the
+    study states its own eligibility, the cohort step documents as eligibility
+    the criteria the cohort applies, and only those.
+    """
+
+    compiled = _compiled_population(spec, context=context, plan=plan)
+    payload = plan.model_dump(mode="json")
+    payload["cohort"] = compiled.cohort_definition(cohort_name).plan_dict()
+    if not _study_eligibility(context):
+        documented = [
+            row.model_dump(mode="json")
+            for row in _eligibility_rows(
+                dict.fromkeys(
+                    f"Exclude: {item.criterion.quote}"
+                    if item.criterion.role == "exclude"
+                    else item.criterion.quote
+                    for item in compiled.criteria
+                    if item.applied
+                )
+            )
+        ]
+        for step in payload["steps"]:
+            if step.get("cohort_definition_spec") is not None:
+                step["cohort_definition_spec"]["eligibility_criteria"] = documented
+    with cohort_concept_id_scope(_context_cohort_concept_ids(context)):
+        return AnalysisPlan.model_validate(payload)
+
+
 def validate_progressive_foundation(
     foundation: ProgressivePlanFoundation,
     *,
@@ -518,9 +667,11 @@ def validate_progressive_foundation(
 ) -> None:
     """Fail before step generation when a sealed Foundation cannot compile."""
 
-    _validate_progressive_cohort_intent(foundation.cohort, context=context)
-    _refuse_identity_predicates(foundation.cohort, context=context)
-    _require_stated_population_applied(foundation.cohort, context=context)
+    if _stated_population_spec(foundation.cohort, context=context) is None:
+        # Without a spec, the Planner's own predicates select the rows.
+        _validate_progressive_cohort_intent(foundation.cohort, context=context)
+        _refuse_identity_predicates(foundation.cohort, context=context)
+        _require_stated_population_applied(foundation.cohort, context=context)
     labels = {
         str(item.key or "").strip(): " ".join(str(item.value or "").split())
         for item in foundation.display_labels
@@ -1105,14 +1256,32 @@ def _identity_column(
     )
 
 
+def _study_eligibility(context: ResearchContext) -> list[str]:
+    """The eligibility the study states itself, as the cohort step documents it."""
+
+    return [
+        *[str(value) for value in context.cohort.inclusion_criteria],
+        *[f"Exclude: {value}" for value in context.cohort.exclusion_criteria],
+    ]
+
+
+def _eligibility_rows(descriptions: Iterable[str]) -> list[CohortEligibilityCriterion]:
+    return [
+        CohortEligibilityCriterion(
+            criterion_id=f"criterion_{index:02d}",
+            description=description,
+        )
+        for index, description in enumerate(descriptions, start=1)
+    ]
+
+
 def _eligibility_criteria(
     context: ResearchContext,
     skeleton: ProgressivePlanSkeleton,
 ) -> list[CohortEligibilityCriterion]:
-    descriptions = [
-        *[str(value) for value in context.cohort.inclusion_criteria],
-        *[f"Exclude: {value}" for value in context.cohort.exclusion_criteria],
-    ]
+    descriptions = _study_eligibility(context)
+    # A stated spec replaces these once it is compiled; see
+    # ``_plan_applying_population_spec``.
     if not descriptions and skeleton.cohort.selection_mode == "predicate_filtered":
         for group, items in (
             ("include", skeleton.cohort.inclusion),
@@ -1124,13 +1293,7 @@ def _eligibility_criteria(
                     f"{item.anchor}[{item.start_offset_hours:g},"
                     f"{item.end_offset_hours:g})h using {item.aggregation}"
                 )
-    return [
-        CohortEligibilityCriterion(
-            criterion_id=f"criterion_{index:02d}",
-            description=description,
-        )
-        for index, description in enumerate(descriptions, start=1)
-    ]
+    return _eligibility_rows(descriptions)
 
 
 def _compile_table_one(
@@ -2857,9 +3020,15 @@ def compile_progressive_plan(
                 path="module_id",
             )
     variables = _variable_index(context)
-    cohort = _validate_progressive_cohort_intent(
-        skeleton.cohort,
-        context=context,
+    population_spec = _stated_population_spec(skeleton.cohort, context=context)
+    cohort = (
+        _validate_progressive_cohort_intent(skeleton.cohort, context=context)
+        if population_spec is None
+        # Replaced below by the cohort the spec compiles to at the time zero
+        # that the assembled plan decides.
+        else CohortDefinition(
+            name=skeleton.cohort.name, selection_mode="all_input_rows"
+        )
     )
     allowed_citations = frozenset(
         str(value).strip() for value in allowed_literature_citation_keys
@@ -3073,6 +3242,13 @@ def compile_progressive_plan(
             inferred_analysis_type=analysis_type_spec.key,
             require_result_actions=True,
         )
+        if population_spec is not None:
+            plan = _plan_applying_population_spec(
+                plan,
+                population_spec,
+                cohort_name=skeleton.cohort.name,
+                context=context,
+            )
     except ProgressivePlanCompileError:
         raise
     except (ValidationError, ValueError, ScientificActionGapError) as exc:
@@ -3095,9 +3271,11 @@ __all__ = [
     "compile_progressive_plan",
     "cohort_identity_columns",
     "compile_cohort_predicate",
+    "planner_cohort_definition",
     "progressive_cohort_concept_ids",
     "progressive_population_concept_ids",
     "required_binary_display_label_scopes",
     "required_reader_display_label_keys",
+    "stated_population",
     "validate_progressive_foundation",
 ]
