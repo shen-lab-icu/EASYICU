@@ -156,7 +156,9 @@ def test_a_question_with_another_executable_family_still_reaches_the_planner():
 def test_a_family_template_route_owns_its_contract_and_is_not_stopped(monkeypatch):
     # A selected family template composes its own sealed contract; the stop
     # guards only the Progressive v2 compiler.
-    monkeypatch.setattr(progressive_planner, "_family_spec_fallback_reason", lambda *a, **k: None)
+    monkeypatch.setattr(
+        progressive_planner, "family_spec_fallback_reason", lambda *a, **k: None
+    )
 
     _llm, stopped = _plan(_family_context("causal_inference"))
 

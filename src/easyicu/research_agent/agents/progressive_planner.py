@@ -72,7 +72,7 @@ from ..planning.progressive_compiler import (
     required_reader_display_label_keys,
     validate_progressive_foundation,
 )
-from ..planning.family_spec import family_template_id_for_context, landmark_survival_suite_sealed
+from ..planning.family_spec import landmark_survival_suite_sealed
 from ..planning.dependence_authority import (
     context_counts_only_authority,
     descriptive_counts_only_required,
@@ -157,7 +157,12 @@ from .progressive_payload import (
     progressive_step_materialization_request,
 )
 from .plan_payload import bind_literature_citation_authority
-from .family_spec_planner import FAMILY_SPEC_STRATEGY, family_result_stop, run_family_spec_attempt
+from .family_spec_planner import (
+    FAMILY_SPEC_STRATEGY,
+    family_result_stop,
+    family_spec_fallback_reason,
+    run_family_spec_attempt,
+)
 from .progressive_prompt_contracts import (
     custom_analysis_step_shape as _custom_analysis_step_shape,
     foundation_shape_contract as _foundation_shape_contract,
@@ -1265,32 +1270,6 @@ def _article_reporting_source_keys(
         analysis_type=analysis_type,
     )
     return reporting_method_source_keys_for_guidelines(contract.reporting_guidelines)
-
-
-def _family_spec_fallback_reason(
-    context: ResearchContext,
-    *,
-    analysis_types: Sequence[str],
-    resume_checkpoint: ProgressivePlannerCheckpoint | None,
-    stop_after_outline: bool,
-    planning_contract_context: str = "",
-) -> str | None:
-    """Return why the family-spec strategy must yield to Progressive v2, or None."""
-
-    if resume_checkpoint is not None:
-        return "development_resume_checkpoint_uses_progressive_v2"
-    if stop_after_outline:
-        return "design_canary_uses_progressive_v2"
-    if (
-        family_template_id_for_context(
-            context,
-            analysis_types=analysis_types,
-            planning_contract_context=planning_contract_context,
-        )
-        is None
-    ):
-        return "no_family_template_for_context"
-    return None
 
 
 def _accept_compiled_plan(
@@ -4391,23 +4370,23 @@ class ProgressivePlannerAgent:
                 host_cohort.model_dump(mode="json") if host_cohort is not None else None
             ),
         }
-        family_spec_fallback_reason: str | None = None
+        fallback_reason: str | None = None
         if planner_strategy == FAMILY_SPEC_STRATEGY:
-            family_spec_fallback_reason = _family_spec_fallback_reason(
+            fallback_reason = family_spec_fallback_reason(
                 context,
                 analysis_types=analysis_types,
                 resume_checkpoint=resume_checkpoint,
                 stop_after_outline=stop_after_outline,
                 planning_contract_context=planning_contract_context,
             )
-            if family_spec_fallback_reason is None:
+            if fallback_reason is None:
                 scientific_authority["planner_strategy"] = FAMILY_SPEC_STRATEGY
         # The Progressive v2 compiler never writes a family result contract, so
         # a final plan whose every candidate family needs one cannot pass
         # acceptance: stop before any Provider call instead of spending.
         sealed_survival_suite = landmark_survival_suite_sealed(planning_contract_context)
         v2_compiles_final_plan = resume_checkpoint is None and not stop_after_outline and (
-            planner_strategy != FAMILY_SPEC_STRATEGY or family_spec_fallback_reason is not None
+            planner_strategy != FAMILY_SPEC_STRATEGY or fallback_reason is not None
         )
         unwritable = v2_compiles_final_plan and families_requiring_family_result_contract(
             context,
@@ -4436,7 +4415,7 @@ class ProgressivePlannerAgent:
             ),
             source_checkpoint=resume_checkpoint,
         )
-        if planner_strategy == FAMILY_SPEC_STRATEGY and family_spec_fallback_reason is None:
+        if planner_strategy == FAMILY_SPEC_STRATEGY and fallback_reason is None:
             return self._run_family_spec_output(
                 context,
                 article_context=article_context,
@@ -4575,7 +4554,7 @@ class ProgressivePlannerAgent:
             "selected_scientific_action_ids": list(action_ids),
             "planner_strategy": "progressive_v2",
             "requested_planner_strategy": planner_strategy,
-            "family_spec_fallback_reason": family_spec_fallback_reason,
+            "family_spec_fallback_reason": fallback_reason,
             "foundation_cohort_owner": (
                 "host_required_primary_cohort" if host_cohort is not None else "planner"
             ),
