@@ -33,7 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tools.web_ui_audit_routes import DEFAULT_VIEWPORTS, ROUTES_WITHOUT_SESSION, settle  # noqa: E402
+from tools.web_ui_audit_routes import DEFAULT_VIEWPORTS, ROUTES_WITHOUT_SESSION, new_audit_page, settle  # noqa: E402
 
 
 JS = r"""
@@ -95,9 +95,13 @@ JS = r"""
     if (h) { const r = h.getBoundingClientRect(); if (r.width && r.height && r.top >= 0 && r.bottom <= innerHeight) return [r.left + Math.min(16, r.width / 2), r.top + r.height / 2]; }
     return [innerWidth / 2, 2];
   }
-  function reset(initialOpen) { document.querySelectorAll('details[open]').forEach(d => { if (!initialOpen.includes(sig(d))) d.open = false; }); }
-  function openDetailsSigs() { return Array.from(document.querySelectorAll('details[open]')).map(sig); }
-  window.__audit = { openers, isOpen, floatingSigs, center, under, measure, neutral, reset, openDetailsSigs };
+  // Disclosures open at load are remembered by class and summary text, not by
+  // position: scrolling an earlier opener into view moves them, and closing a
+  // moved parent would hide the openers nested inside it.
+  const detailsKey = d => { const s = d.querySelector(':scope > summary'); return cls(d) + '|' + (s ? label(s) : ''); };
+  function reset(initialOpen) { document.querySelectorAll('details[open]').forEach(d => { if (!initialOpen.includes(detailsKey(d))) d.open = false; }); }
+  function openDetailsKeys() { return Array.from(document.querySelectorAll('details[open]')).map(detailsKey); }
+  window.__audit = { openers, isOpen, floatingSigs, center, under, measure, neutral, reset, openDetailsKeys };
 })();
 """
 
@@ -121,7 +125,7 @@ def audit_route(page, base: str, url: str, *, new_conversation: bool) -> list[di
     if new_conversation:
         page.click("[data-gpi-rail-new]:visible, .gpi-head-new:visible")
         settle(page)
-    initial_open = _ev(page, "() => window.__audit.openDetailsSigs()")
+    initial_open = _ev(page, "() => window.__audit.openDetailsKeys()")
     rows: list[dict] = []
     for opener in _ev(page, "() => window.__audit.openers()"):
         if opener["wasOpen"]:
@@ -207,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
         browser = playwright.chromium.launch(channel="chrome", headless=True)
         for size in args.viewports.split(","):
             width, height = (int(part) for part in size.lower().split("x"))
-            page = browser.new_page(viewport={"width": width, "height": height})
+            page = new_audit_page(browser, args.base, width, height)
             for name, (url, new_conversation) in routes.items():
                 try:
                     report[f"{name}@{size}"] = audit_route(page, args.base, url, new_conversation=new_conversation)
