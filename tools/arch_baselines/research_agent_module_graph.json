@@ -8001,6 +8001,10 @@
     ],
     [
       "easyicu.research_agent.gates.preflight",
+      "easyicu.research_agent.gates.structural_accounting"
+    ],
+    [
+      "easyicu.research_agent.gates.preflight",
       "easyicu.research_agent.gates.typed_binding_identity"
     ],
     [
@@ -8161,6 +8165,10 @@
     ],
     [
       "easyicu.research_agent.gates.step_result_evidence",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.gates.structural_accounting",
       "easyicu.research_agent.schema"
     ],
     [
@@ -14136,9 +14144,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3526,
+    "edge_count": 3528,
     "largest_scc_size": 0,
-    "module_count": 813,
+    "module_count": 814,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -14573,6 +14581,7 @@
     "easyicu.research_agent.gates.step_contract": "gates/step_contract.py",
     "easyicu.research_agent.gates.step_repair": "gates/step_repair.py",
     "easyicu.research_agent.gates.step_result_evidence": "gates/step_result_evidence.py",
+    "easyicu.research_agent.gates.structural_accounting": "gates/structural_accounting.py",
     "easyicu.research_agent.gates.typed_binding_identity": "gates/typed_binding_identity.py",
     "easyicu.research_agent.gates.typed_input": "gates/typed_input.py",
     "easyicu.research_agent.gates.typed_input_symbols": "gates/typed_input_symbols.py",

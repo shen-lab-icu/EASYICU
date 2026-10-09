@@ -20,17 +20,6 @@ _TYPE_PARAMETER_NODE_TYPES = tuple(
         (getattr(ast, name, None) for name in ("TypeVar", "ParamSpec", "TypeVarTuple")),
     )
 )
-_STRUCTURAL_ACCOUNTING_PRODUCTS = frozenset(
-    {
-        "attrition",
-        "cohort_accounting",
-        "cohort_flow",
-        "denominator_reconciliation",
-        "source_availability",
-        "source_availability_audit",
-        "universe_count_reconciliation",
-    }
-)
 _RENDER_METHODS = frozenset(
     {"figure", "publication_figure", "visualization", "descriptive_visualization"}
 )

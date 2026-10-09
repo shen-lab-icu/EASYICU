@@ -63,15 +63,6 @@ def _is_frame_columns(node: ast.AST) -> bool:
     return isinstance(node, ast.Attribute) and node.attr == "columns"
 
 
-def _typed_input_products(step: AnalysisStep) -> set[str]:
-    products = set()
-    for raw in step.inputs or []:
-        kind, separator, name = str(raw or "").strip().lower().partition(":")
-        if separator and kind == "table" and name:
-            products.add(name)
-    return products
-
-
 def _mask_name_from_slice(node: ast.AST) -> Optional[str]:
     target = node
     if isinstance(target, ast.Tuple) and target.elts:

@@ -49,6 +49,9 @@ from .typed_input import (
     resolved_input_shadowed_by_cohort_env_findings,
 )
 from .typed_binding_identity import direct_resolved_input_key_findings
+from .structural_accounting import (
+    structural_accounting_products as _structural_accounting_products,
+)
 from .preflight_support import (
     unparseable_python_finding,
     _assigned_name_for_slot,
@@ -70,7 +73,6 @@ from .preflight_support import (
     _subscript_key,
     _target_names,
     _typed_dataframe_erasure_findings,
-    _typed_input_products,
     _undefined_direct_call_findings,
     _unresolvable_name_findings,
     _uses_zero_decimal_count_rendering,
@@ -88,92 +90,9 @@ _TYPE_PARAMETER_NODE_TYPES = tuple(
         (getattr(ast, name, None) for name in ("TypeVar", "ParamSpec", "TypeVarTuple")),
     )
 )
-_STRUCTURAL_ACCOUNTING_PRODUCTS = frozenset(
-    {
-        "attrition",
-        "cohort_accounting",
-        "cohort_flow",
-        "denominator_reconciliation",
-        "source_availability",
-        "source_availability_audit",
-        "universe_count_reconciliation",
-    }
-)
 _RENDER_METHODS = frozenset(
     {"figure", "publication_figure", "visualization", "descriptive_visualization"}
 )
-
-
-def _is_structural_accounting_name(value: object) -> bool:
-    token = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
-    if not token:
-        return False
-    if token in _STRUCTURAL_ACCOUNTING_PRODUCTS:
-        return True
-    parts = {part for part in token.split("_") if part}
-    if "attrition" in parts or "consort" in parts:
-        return True
-    return bool(
-        parts & {"cohort", "population", "participant", "eligibility", "denominator"}
-        and parts & {"account", "accounting", "flow", "funnel", "reconciliation"}
-        or "source" in parts and "availability" in parts
-        or "universe" in parts and parts & {"count", "counts", "reconciliation"}
-    )
-
-
-def _typed_table_products(tokens: object) -> set[str]:
-    products: set[str] = set()
-    for raw in tokens or ():
-        kind, separator, name = str(raw or "").strip().lower().partition(":")
-        if separator and kind == "table" and name:
-            products.add(name)
-    return products
-
-
-def _structural_accounting_products(step: AnalysisStep) -> set[str]:
-    """Resolve accounting inputs by semantic role, not an exact product name.
-
-    Resolution order keeps the guard bound to the tables it protects: an
-    accounting-named product wins; otherwise an accounting-role panel binds
-    only its own declared ``source_products``; only a step whose own
-    intent/outputs are accounting-shaped, with no panel-level binding to
-    consult, treats every table input as an accounting table.
-    """
-
-    table_products = _typed_input_products(step)
-    matched = {
-        product for product in table_products if _is_structural_accounting_name(product)
-    }
-    if matched:
-        return matched
-
-    panels = list(step.figure_panels or [])
-    panel_matched: set[str] = set()
-    for panel in panels:
-        panel_roles = (
-            getattr(panel, "panel_id", ""),
-            getattr(panel, "article_role", ""),
-            getattr(panel, "figure_output", ""),
-        )
-        if not any(_is_structural_accounting_name(role) for role in panel_roles):
-            continue
-        sources = _typed_table_products(getattr(panel, "source_products", ()))
-        panel_matched |= (sources & table_products) if sources else table_products
-    if panel_matched:
-        return panel_matched
-    if panels and all(
-        _typed_table_products(getattr(panel, "source_products", ())) for panel in panels
-    ):
-        # Every panel binds explicit sources and none of them is an
-        # accounting panel; the step-level label cannot widen that binding.
-        return set()
-
-    step_roles: list[object] = [step.intent, *(step.expected_outputs or [])]
-    if any(_is_structural_accounting_name(role) for role in step_roles):
-        return table_products
-    return set()
-
-
 
 
 def _function_arbitrary_column_fallback(
