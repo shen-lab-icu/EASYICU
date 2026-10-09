@@ -225,10 +225,12 @@ def test_c_f8_isolation_degraded_marker() -> None:
 
 
 def test_c_f9_fallback_downgraded_unless_plan_allows() -> None:
+    from easyicu.research_agent.gates.fallback_generation import (
+        fallback_primary_allowed,
+        primary_records_for_readiness,
+    )
     from easyicu.research_agent.reporting.readiness import (
         _deterministic_primary_estimate_bound,
-        _fallback_primary_allowed,
-        _primary_records_for_readiness,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
@@ -246,14 +248,14 @@ def test_c_f9_fallback_downgraded_unless_plan_allows() -> None:
         "deterministic_standard_analysis": "survival_primary_cox",
         "step_summary": {"receipt_issuer": "x"},
     }
-    assert _fallback_primary_allowed(plan, "s1") is False
-    assert _primary_records_for_readiness([fallback_record], plan) == []
+    assert fallback_primary_allowed(plan, "s1") is False
+    assert primary_records_for_readiness([fallback_record], plan) == []
     assert _deterministic_primary_estimate_bound([fallback_record], plan) is False
 
     step_allow = step.model_copy(update={"allow_fallback_as_primary": True})
     plan_allow = AnalysisPlan(research_question="q", steps=[step_allow])
-    assert _fallback_primary_allowed(plan_allow, "s1") is True
-    assert _primary_records_for_readiness([fallback_record], plan_allow) == [
+    assert fallback_primary_allowed(plan_allow, "s1") is True
+    assert primary_records_for_readiness([fallback_record], plan_allow) == [
         fallback_record
     ]
 
@@ -262,8 +264,8 @@ def test_c_f9_fallback_requires_compatibility_gate() -> None:
     from easyicu.research_agent.gates.method_compatibility import (
         fallback_method_compatibility_findings,
     )
-    from easyicu.research_agent.reporting.readiness import (
-        _fallback_method_compatibility_errors,
+    from easyicu.research_agent.gates.fallback_generation import (
+        fallback_method_compatibility_errors,
     )
 
     assert callable(fallback_method_compatibility_findings)
@@ -272,7 +274,7 @@ def test_c_f9_fallback_requires_compatibility_gate() -> None:
         "generation_mode": "fallback",
         "step_summary": {"status": "ok"},
     }
-    errors = _fallback_method_compatibility_errors(
+    errors = fallback_method_compatibility_errors(
         per_step_records=[record], context=None, plan=None
     )
     assert len(errors) == 1

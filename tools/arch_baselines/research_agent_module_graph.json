@@ -7792,6 +7792,14 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.gates.fallback_generation",
+      "easyicu.research_agent.contracts.runtime"
+    ],
+    [
+      "easyicu.research_agent.gates.fallback_generation",
+      "easyicu.research_agent.gates.method_compatibility"
+    ],
+    [
       "easyicu.research_agent.gates.family_primary_result",
       "easyicu.research_agent.canonical_json"
     ],
@@ -12541,10 +12549,6 @@
     ],
     [
       "easyicu.research_agent.reporting.readiness",
-      "easyicu.research_agent.contracts.runtime"
-    ],
-    [
-      "easyicu.research_agent.reporting.readiness",
       "easyicu.research_agent.contracts.source_feasibility_validation"
     ],
     [
@@ -12573,7 +12577,7 @@
     ],
     [
       "easyicu.research_agent.reporting.readiness",
-      "easyicu.research_agent.gates.method_compatibility"
+      "easyicu.research_agent.gates.fallback_generation"
     ],
     [
       "easyicu.research_agent.reporting.readiness",
@@ -14052,9 +14056,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3505,
+    "edge_count": 3506,
     "largest_scc_size": 0,
-    "module_count": 805,
+    "module_count": 806,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -14460,6 +14464,7 @@
     "easyicu.research_agent.gates.concept": "gates/concept.py",
     "easyicu.research_agent.gates.contract": "gates/contract.py",
     "easyicu.research_agent.gates.data_answerability": "gates/data_answerability.py",
+    "easyicu.research_agent.gates.fallback_generation": "gates/fallback_generation.py",
     "easyicu.research_agent.gates.family_primary_result": "gates/family_primary_result.py",
     "easyicu.research_agent.gates.figure_egress": "gates/figure_egress.py",
     "easyicu.research_agent.gates.figure_privacy": "gates/figure_privacy.py",
