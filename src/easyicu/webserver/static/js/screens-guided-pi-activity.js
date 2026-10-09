@@ -251,6 +251,8 @@
       if (['figure', 'visual_qa'].includes(step)) return 'figure';
       if (['writer', 'latex', 'manuscript', 'report'].includes(step)) return 'report';
       if (step === 'terminal') return 'terminal';
+      if (step === 'resume') return 'resume';
+      if (step === 'report_repair') return 'report_repair';
       if (['event_stream', 'cancel_requested'].includes(step)) return 'attention';
       return 'progress';
     }
@@ -278,10 +280,116 @@
       if (stage === 'report') return done
         ? tr('Manuscript generation and checks finished; see the result verdict', '稿件生成与检查流程已结束；是否通过请看结果审阅')
         : tr('Regenerating the evidence-bound article and manuscript exports', '正在重新生成证据绑定文章与稿件导出');
+      if (stage === 'resume') return done
+        ? tr('Reused the steps this approved run had already completed', '复用了这次获批运行已完成的步骤')
+        : tr('Checking which approved steps already completed', '正在核对已完成的步骤');
+      if (stage === 'report_repair') return done
+        ? tr('Report rewritten from the sealed results; no analysis re-run', '已基于封存结果重写报告，未重跑分析')
+        : tr('Rewriting the report from the sealed results', '正在基于封存结果重写报告');
       if (stage === 'progress') return done
         ? tr('Research-task progress updated', '研究任务进度已更新')
         : tr('Research task is progressing', '研究任务正在推进');
       return String(fallback || tr('Research-task status updated', '研究任务状态已更新'));
+    }
+
+    /* An approved plan step reports "Step n/N started|complete: <step_id>."
+       and its coder/runner events name the same step ("... for <step_id>.").
+       Each plan step is its own trace row, named for a reader, with how it
+       ran as its detail; the step id stays in the persisted receipt. */
+    const PLAN_STEP_EVENT = /^Step\s+(\d+)\/(\d+)\s+(started|complete|failed contract checks)\b:?\s*([A-Za-z0-9_.-]*)/i;
+    const PLAN_SUB_STEP_EVENT = /\bfor\s+([A-Za-z0-9_.-]+?)\.?$/;
+    const STEP_NAMES = {
+      cohort_accounting: ['Cohort and denominators', '队列与分母核算'],
+      cohort_definition: ['Cohort definition', '队列定义'],
+      baseline_context: ['Baseline characteristics', '基线特征'],
+      table_one: ['Baseline characteristics', '基线特征'],
+      exposure_outcome_distribution: ['Group proportions and outcomes', '分组比例与结局'],
+      measurement_audit: ['Measurement and missingness audit', '测量与缺失审计'],
+      measurement_quality: ['Measurement quality audit', '测量质量审计'],
+      descriptive_context_figure: ['Result figure', '结果图'],
+      cohort_accounting_figure: ['Cohort flow figure', '队列流程图'],
+      data_quality_figure: ['Data-quality figure', '数据质量图'],
+      article_report: ['Article report', '文章报告'],
+      article_display_report: ['Article figures and tables', '文章图表'],
+      robustness_replay: ['Robustness re-analysis', '稳健性重分析'],
+      robustness_replay_figure: ['Robustness figure', '稳健性图'],
+      functional_form_sensitivity: ['Functional-form sensitivity', '函数形式敏感性分析'],
+    };
+    const STEP_TOKENS = {
+      cohort: ['cohort', '队列'], accounting: ['accounting', '核算'], baseline: ['baseline', '基线'],
+      context: ['context', '背景'], exposure: ['exposure', '暴露'], outcome: ['outcome', '结局'],
+      distribution: ['distribution', '分布'], measurement: ['measurement', '测量'], audit: ['audit', '审计'],
+      quality: ['quality', '质量'], missingness: ['missingness', '缺失'], missing: ['missing', '缺失'],
+      figure: ['figure', '图'], data: ['data', '数据'], descriptive: ['descriptive', '描述性'],
+      primary: ['primary', '主要'], model: ['model', '模型'], logistic: ['logistic', 'Logistic'],
+      cox: ['Cox', 'Cox'], sensitivity: ['sensitivity', '敏感性分析'], robustness: ['robustness', '稳健性'],
+      subgroup: ['subgroup', '亚组'], spline: ['spline', '样条'], landmark: ['landmark', 'landmark'],
+      time: ['time', '时间'], varying: ['varying', '时变'], association: ['association', '关联'],
+      adjusted: ['adjusted', '校正'], absolute: ['absolute', '绝对'], risk: ['risk', '风险'],
+      trend: ['trend', '趋势'], report: ['report', '报告'], article: ['article', '文章'],
+      survival: ['survival', '生存'], analysis: ['analysis', '分析'], flow: ['flow', '流程'],
+      mortality: ['mortality', '死亡'], stage: ['stage', '分期'], aki: ['AKI', 'AKI'], kdigo: ['KDIGO', 'KDIGO'],
+      trajectory: ['trajectory', '轨迹'], phenotype: ['phenotype', '表型'], prediction: ['prediction', '预测'],
+      calibration: ['calibration', '校准'], discrimination: ['discrimination', '区分度'], table: ['table', '表'],
+    };
+    function planStepName(stepId) {
+      const id = String(stepId || '').replace(/^\d+_/, '').toLowerCase();
+      if (!id) return tr('Analysis step', '分析步骤');
+      if (STEP_NAMES[id]) return tr(...STEP_NAMES[id]);
+      const tokens = id.split(/[_.-]+/).filter(Boolean);
+      if (tokens.length && tokens.every(token => STEP_TOKENS[token])) {
+        const words = tokens.map(token => STEP_TOKENS[token]);
+        return tr(words.map(word => word[0]).join(' '), words.map(word => word[1]).join(''));
+      }
+      return id.replace(/[_.-]+/g, ' ');
+    }
+    function planStepFacts(event) {
+      if (String(event && event.step || '').toLowerCase() !== 'step') return null;
+      const match = PLAN_STEP_EVENT.exec(String(event && (event.label || event.message) || '').trim());
+      if (!match) return null;
+      const phase = /^complete/i.test(match[3]) ? 'complete' : /^failed/i.test(match[3]) ? 'failed' : 'started';
+      return { index: Number(match[1]), total: Number(match[2]), phase, stepId: match[4].replace(/\.$/, '') };
+    }
+    function planStepLabel(facts) {
+      return tr(`Step ${facts.index}/${facts.total}: ${planStepName(facts.stepId)}`,
+        `第 ${facts.index}/${facts.total} 步：${planStepName(facts.stepId)}`);
+    }
+    // One trace row per approved plan step; `at` is when this event arrived.
+    function planStepRow(facts, at, options) {
+      const opts = options || {};
+      const status = facts.phase === 'complete' ? 'complete' : facts.phase === 'failed' ? 'error' : 'running';
+      return {
+        id: `pipeline-plan-step-${facts.index}`, kind: 'pipeline', step: 'plan_step', stepId: facts.stepId,
+        label: planStepLabel(facts), status, at,
+        ...(facts.phase === 'started' ? { startedAt: at } : { endedAt: at }),
+        ...(opts.durationKnown === false ? { durationKnown: false } : {}),
+      };
+    }
+    // How a coder/runner event says the step ran, for the step row's detail.
+    function planSubStepFacts(event) {
+      const step = String(event && event.step || '').toLowerCase();
+      if (!['coder', 'runner'].includes(step)) return null;
+      const label = String(event && (event.label || event.message) || '').trim();
+      const match = PLAN_SUB_STEP_EVENT.exec(label);
+      if (!match) return null;
+      const text = /^Running standard executor script/i.test(label)
+        ? tr('Ran the standard executor script; no model call.', '运行标准执行脚本，不调用模型。')
+        : /^Using (?:planner-scoped|digest-bound)\b/i.test(label) || /deterministic standard executor/i.test(label)
+          ? tr('Rendered by the deterministic renderer the plan names.', '由计划指定的确定性渲染器生成。')
+          : /generat|draft|writ/i.test(label) && step === 'coder'
+            ? tr('The model wrote the analysis code for this step.', '由模型为这一步编写分析代码。')
+            : tr(label, '');
+      return { stepId: match[1], text };
+    }
+    // Attach a coder/runner event to its plan-step row. False when no row
+    // names that step, so the caller can keep its generic analysis row.
+    function notePlanSubStep(steps, facts) {
+      if (!facts) return false;
+      const row = (Array.isArray(steps) ? steps : []).slice().reverse()
+        .find(item => item && item.step === 'plan_step' && item.stepId === facts.stepId);
+      if (!row) return false;
+      if (facts.text) row.text = facts.text;
+      return true;
     }
 
     /* Planning events reach the browser as job progress rows whose typed
@@ -392,7 +500,7 @@
       const projected = [];
       const stageIndexes = new Map();
       source.forEach(step => {
-        if (step.kind !== 'pipeline') { projected.push(step); return; }
+        if (step.kind !== 'pipeline' || step.step === 'plan_step') { projected.push(step); return; }
         const sourceStage = pipelineStage(step.step);
         let stage = sourceStage;
         if (stage === 'terminal' && hasPlanStage) stage = 'plan';
@@ -429,13 +537,15 @@
        then replays the full event stream, so later stages can arrive first.
        Present lifecycle stages in pipeline order; rows that are not stages
        (tool calls, retries) stay attached to the stage that preceded them. */
-    const STAGE_ORDER = ['submitted', 'setup', 'inputs', 'evidence', 'plan', 'analysis', 'figure', 'report', 'progress', 'attention', 'terminal'];
+    const STAGE_ORDER = ['submitted', 'setup', 'resume', 'inputs', 'evidence', 'plan', 'analysis', 'figure', 'report', 'report_repair', 'progress', 'attention', 'terminal'];
     function orderPipelineStages(rows) {
       let previous = -1;
       const keyed = rows.map((row, index) => {
         const isStage = row.kind === 'pipeline' && String(row.id || '').startsWith('pipeline-stage-');
         const order = isStage ? STAGE_ORDER.indexOf(String(row.step || '')) : -1;
         if (isStage && order >= 0) previous = order;
+        // Plan-step rows are the analysis stage, in the order they ran.
+        if (row.kind === 'pipeline' && row.step === 'plan_step') return { row, index, key: STAGE_ORDER.indexOf('analysis') };
         return { row, index, key: isStage && order >= 0 ? order : previous };
       });
       keyed.sort((a, b) => (a.key - b.key) || (a.index - b.index));
@@ -749,7 +859,7 @@
       return output.join('');
     }
 
-    return Object.freeze({ appendPublicDelta, durationText, finishTurn, focusLatest, pipelineEventLabel, planningEventFacts, planningProgressText, reasoningHtml, render, renderTimeline, startTurn, stepLabel, syncLiveClock, timeMs });
+    return Object.freeze({ appendPublicDelta, durationText, finishTurn, focusLatest, notePlanSubStep, pipelineEventLabel, planStepFacts, planStepRow, planSubStepFacts, planningEventFacts, planningProgressText, reasoningHtml, render, renderTimeline, startTurn, stepLabel, syncLiveClock, timeMs });
   }
 
   window.EasyICU.guidedPi.declare('activity', { create });

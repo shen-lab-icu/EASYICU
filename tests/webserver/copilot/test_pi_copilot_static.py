@@ -107,7 +107,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-replay.js?v=20260919-task-index1" in index
     assert "js/screens-guided-pi-resources.js?v=20260921-evidence1" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20260921-fit2" in index
-    assert "js/screens-guided-pi-activity.js?v=20260921-turn-traces3" in index
+    assert "js/screens-guided-pi-activity.js?v=20260922-plan-steps1" in index
     assert (
         "js/screens-guided-pi-provider.js?v=20260922-demo-entry2"
         in index
@@ -124,7 +124,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     )
     assert "js/screens-guided-pi-confirmation.js?v=20260921-run-failure1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20260930-bare-continue1" in index
-    assert "js/screens-guided-pi-childjob.js?v=20260921-plan-progress1" in index
+    assert "js/screens-guided-pi-childjob.js?v=20260922-plan-steps1" in index
     assert "js/screens-guided-pi-error-text.js?v=20260923-gate-detail1" in index
     assert "js/screens-guided-pi.js?v=20260923-no-legacy1" in index
     assert "js/screens-guided.js?v=20260922-state-menus1" in index
@@ -6625,7 +6625,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "showProjectContinuationCards && !dataConsentRequired" in session_panel
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
-    assert "screens-guided-pi-transcript.js?v=20260921-turn-traces3" in index
+    assert "screens-guided-pi-transcript.js?v=20260922-plan-steps1" in index
     assert "screens-guided-pi.js?v=20260923-no-legacy1" in index
 
 
