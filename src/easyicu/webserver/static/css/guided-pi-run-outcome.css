@@ -43,7 +43,7 @@
 .gpi-study-results-source summary{cursor:pointer}
 .gpi-study-results-source code{display:block;margin-top:5px;overflow-wrap:anywhere;font-size:10px}
 .gpi-study-pending{margin-top:12px}
-.gpi-run-outcome-actions .gpi-resource-link { margin: 0; }
+.gpi-run-outcome-actions .gpi-resource-link { display: inline-flex; align-items: center; min-height: 24px; margin: 0; }
 .gpi-run-outcome-actions > .btn {
   max-width: 100%;
   white-space: normal;
@@ -86,7 +86,7 @@
 .gpi-run-answer-figure-open:hover,.gpi-run-answer-figure-open:focus-visible{border-color:var(--accent,#187d78)}
 .gpi-run-answer-figure-open img{display:block;width:100%;height:auto;border-radius:4px}
 .gpi-run-answer-figure figcaption{margin-top:5px;color:var(--muted,#66716f);font-size:11.5px}
-.gpi-run-answer-figure figcaption .gpi-resource-link{font-size:11.5px}
+.gpi-run-answer-figure figcaption .gpi-resource-link{display:inline-flex;align-items:center;min-height:24px;font-size:11.5px}
 .gpi-review-narrative ol{margin:6px 0 0;padding-left:18px;list-style:decimal}
 .gpi-review-summary .gpi-review-narrative ol>li{display:list-item;margin:0;padding:3px 0;border:0;line-height:1.55}
 .gpi-review-original{margin-top:4px}

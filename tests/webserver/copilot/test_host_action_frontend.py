@@ -93,7 +93,7 @@ _ACTIONS = """
       calls.push(['workflow']);
       workflow = {...workflow, next_action_code: AFTER};
     },
-    render: () => calls.push(['render']),
+    render: (...args) => calls.push(['render', ...args]),
     recordHostAction: async (...args) => calls.push(['host-action', ...args]),
     watchChildJob: (...args) => calls.push(['child', ...args]),
     setBusy: () => {}, setError: value => calls.push(['error', value]),
@@ -182,6 +182,26 @@ def test_a_reopened_page_follows_a_starting_decision_without_starting_a_plan() -
     assert ["workflow"] in result["calls"]
     assert result["rescheduled"] == 2  # still starting: follow again
     assert not any(call[0] == "plan" for call in result["calls"])
+    # Nothing moved on: no repaint closes what the researcher opened.
+    assert not any(call[0] == "render" for call in result["calls"])
+
+
+def test_a_start_that_moves_on_is_repainted_once_keeping_the_view() -> None:
+    result = _plan_actions(
+        """
+      workflow = {...workflow, next_action_code: 'starting'};
+      (async () => {
+        await actions.continueSystemOwnedPlanProgression({passive: true});
+        await timers[0][0]();
+        process.stdout.write(JSON.stringify({calls, rescheduled: timers.length}));
+      })().catch(error => { console.error(error); process.exit(1); });
+        """,
+        after="research_planning_running",
+    )
+
+    renders = [call for call in result["calls"] if call[0] == "render"]
+    assert renders == [["render", True]]  # the log keeps its scroll position
+    assert result["rescheduled"] == 1  # the job exists: the follow ends
 
 
 def test_host_decision_refusals_have_their_own_copy() -> None:

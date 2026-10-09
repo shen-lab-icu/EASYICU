@@ -306,6 +306,16 @@
         + `<details class="gpi-conversation-empty-group" data-gpi-rail-empty-group>`
         + `${summary}${empty.map(index => rendered[index]).join('')}</details>`;
     }
+    // A conversation keeps the language it started in and the rail lists the
+    // interface language's, so a list empty in this language names the
+    // conversations kept in the other one instead of reading as empty.
+    function otherLanguageNotice(count) {
+      const text = tr(
+        `No English conversations yet. This project has ${count} Chinese conversation${count === 1 ? '' : 's'}.`,
+        `暂无中文对话。本项目还有 ${count} 个英文对话。`,
+      );
+      return `<p>${esc(text)}</p><button class="btn sm" type="button" data-gpi-rail-other-language>${esc(tr('Switch to 中文', '切换到 English'))}</button>`;
+    }
     function syncNavigation(ctx) {
       const rail = document.getElementById('gdConversationRail');
       if (!rail) return;
@@ -331,6 +341,7 @@
             });
             return groupEmptyTaskRows(ctx.sessions, rendered, ctx.selectedId);
           })()
+            : ctx.otherLanguageSessions > 0 ? otherLanguageNotice(ctx.otherLanguageSessions)
             : `<p>${tr('No conversations yet. Start one in this project.', '暂无对话，可在当前项目中开始。')}</p>`}</nav></div>
         <section class="gpi-project-materials" aria-label="${tr('Drive', '资料')}"><div class="gpi-conversations-heading"><strong>${tr('Drive', '资料')}</strong><button type="button" data-gpi-rail-material-search-toggle aria-label="${tr('Search Drive', '搜索资料')}" title="${tr('Search', '搜索')}">${iconHtml('search', 15)}</button></div>
           <label class="gpi-project-material-search" hidden><span class="shell-sr-only">${tr('Search Drive', '搜索资料')}</span><input type="search" data-gpi-rail-material-search placeholder="${tr('Filter files…', '筛选文件…')}" autocomplete="off"></label>
@@ -383,6 +394,10 @@
         if (remove && typeof ctx.remove === 'function') {
           const row = ctx.sessions.find(item => item.session_id === remove.dataset.gpiRailRemove);
           if (row) ctx.remove(row);
+          return;
+        }
+        if (event.target.closest('[data-gpi-rail-other-language]') && typeof ctx.switchLanguage === 'function') {
+          ctx.switchLanguage();
           return;
         }
         const session = event.target.closest('[data-gpi-rail-session]');
