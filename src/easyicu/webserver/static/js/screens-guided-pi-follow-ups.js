@@ -3,7 +3,8 @@
    questions:' block of 2-3 questions (prompt contract in the Pi bridge).
    This owner lifts that block out of the reply text and renders it as the
    reference-style suggestion list under the latest reply. Clicking one sends
-   it as the researcher's own next message; it carries no grant. */
+   it as the next message marked as a model option: the model wrote it, so it
+   carries no grant and never mints a privileged one. */
 (function () {
   'use strict';
 

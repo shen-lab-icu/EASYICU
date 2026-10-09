@@ -166,11 +166,13 @@
       return true;
     }
 
-    /* The research question the researcher already wrote in this
-       conversation goes into the study setup when the source confirmation
-       finds the setup without one (a first-turn save that did not land), so
-       the conversation continues instead of asking them to send it again.
-       The text is theirs, saved as written; nothing is inferred from it. */
+    /* The opening question the researcher typed in this conversation goes
+       into the study setup when the source confirmation finds the setup
+       without one (a first-turn save that did not land), so the conversation
+       continues instead of asking them to send it again. Only their own
+       typed first message counts (host.researchQuestion), never a starter
+       card's or a model option's text; the text is saved as written and
+       nothing is inferred from it. */
     async function carryQuestionIntoSetup() {
       const workflow = typeof host.workflow === 'function' ? host.workflow() : null;
       const missing = Array.isArray(workflow && workflow.missing_setup_fields) ? workflow.missing_setup_fields : [];
