@@ -11,7 +11,9 @@ from __future__ import annotations
 import pytest
 
 from easyicu.config import load_src_cfg
-from easyicu.research_agent.pipeline import typed_cohort_source_resolution_chain
+from easyicu.research_agent.intake.typed_cohort_source import (
+    typed_cohort_source_resolution_chain,
+)
 
 
 def _registry(database: str) -> tuple[str, ...]:
