@@ -16,6 +16,7 @@
   // baseline characteristic a follow-up question could adjust for.
   const NON_COVARIATE = /^artifact:|^table:|(?:^|_)(?:id|n|measured|time)$/;
   const AGGREGATE_SUFFIX = /_(?:first|last|min|max|mean|median)$/;
+  const CJK = /[\u3400-\u9fff]/;
   // Reader names for the result-table kinds a file note mentions, in the
   // order a reader meets them; audits are counted rather than named.
   const TABLE_KINDS = [
@@ -82,6 +83,21 @@
     // stays in the plan and the report; a sentence needs the name.
     function shortLabel(value) {
       return String(value || '').replace(/\s*[（(][^）)]*[）)]\s*$/, '').trim();
+    }
+
+    // The name a Chinese reader sees for one plan column. The plan registers
+    // its display labels for the English manuscript; a Chinese label stays as
+    // registered. Otherwise a column that is itself a catalog concept (an
+    // exact id, not an aggregate such as `_max`) takes the catalog's governed
+    // Chinese name. Any other column keeps its registered label, so nothing
+    // is translated or guessed.
+    function readerLabel(labels, column) {
+      const registered = typeof labels[column] === 'string' ? labels[column] : '';
+      if (window.EU_LANG !== 'zh' || CJK.test(registered)) return registered;
+      const dict = window.EU_CATALOG && window.EU_CATALOG.dict ? window.EU_CATALOG.dict : {};
+      const row = Object.prototype.hasOwnProperty.call(dict, column) ? dict[column] : null;
+      const name = Array.isArray(row) && typeof row[1] === 'string' ? row[1].trim() : '';
+      return CJK.test(name) ? name : registered;
     }
 
     function conceptName(variable) {
@@ -197,8 +213,8 @@
       const claim = field => claims.find(row => row && row.source_field === field) || null;
       const spec = primarySpec(plan);
       const labels = plan.display_labels && typeof plan.display_labels === 'object' ? plan.display_labels : {};
-      const exposureLabel = spec && typeof labels[spec.exposure] === 'string' ? shortLabel(labels[spec.exposure]) : '';
-      const outcomeLabel = shortLabel(summary.outcomeLabel || (spec && labels[spec.outcome]) || '');
+      const exposureLabel = spec ? shortLabel(readerLabel(labels, spec.exposure)) : '';
+      const outcomeLabel = shortLabel((spec && readerLabel(labels, spec.outcome)) || summary.outcomeLabel || '');
       const groups = (Array.isArray(summary.exposureLevels) ? summary.exposureLevels : [])
         .filter(row => row && row.label && finite(row.n) != null);
       const figures = mainFigure(payload('figure_gallery.json'));
