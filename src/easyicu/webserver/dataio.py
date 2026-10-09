@@ -43,6 +43,7 @@ from easyicu.outcome_availability import structural_outcome_unavailability
 from easyicu.scores.aki_profiles import renal_bundle_column_unavailability
 from easyicu.webserver import entity_ids as entity_id_contract
 from easyicu.webserver import primary_cohort
+from easyicu.webserver import state_paths
 
 # Core metadata tables per database — a folder that holds these (as parquet or
 # csv) is recognised as that database. Mirrors check_data_status' core_tables.
@@ -849,10 +850,12 @@ def _resolve_export_out_dir(
     export_format: str,
     create_run_subdir: bool,
 ) -> Path:
+    # Without a folder the export stays in this server's state root, which
+    # follows $EASYICU_HOME like the rest of EasyICU's state.
     root = (
         Path(out_dir).expanduser()
         if out_dir
-        else (Path.home() / ".easyicu" / "exports")
+        else (state_paths.state_root() / "exports")
     )
     if not create_run_subdir:
         return root
