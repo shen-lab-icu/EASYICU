@@ -12,9 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import ValidationError
 
-from easyicu.research_agent.planning.population_compile import (
-    POPULATION_APPROVAL_STOPS,
-)
+from easyicu.research_agent.planning.approval_stops import PLAN_APPROVAL_STOPS
 from easyicu.webserver import state_paths
 from easyicu.webserver import agent_runs
 from easyicu.webserver import agent_pipeline_runs
@@ -60,8 +58,8 @@ _CANDIDATE_PLAN_WORKFLOW_CODES = frozenset(
         "plan_configuration_superseded",
         "plan_review_not_resumable",
         "scientific_plan_review_policy_stale",
-        # A reviewed plan whose population refuses its approval.
-        *POPULATION_APPROVAL_STOPS.values(),
+        # A reviewed plan that refuses its approval.
+        *PLAN_APPROVAL_STOPS,
     }
 )
 

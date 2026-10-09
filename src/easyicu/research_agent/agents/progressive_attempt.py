@@ -13,6 +13,7 @@ from ..planning.progressive_contract import (
     ProgressivePlanSkeleton,
     ProgressiveStepMaterialization,
 )
+from ..planning.question_requirements import QuestionRequirement
 from ..schema import AnalysisPlan
 
 
@@ -29,6 +30,12 @@ class ProgressivePlannerRunFacts:
     skeleton: Optional[ProgressivePlanSkeleton]
     resume_validated: bool
     dropped_plan_keys: Mapping[str, tuple[str, ...]]
+    #: What the question asks beyond the design, as the family spec states it;
+    #: empty on the outline route, which states none.
+    question_requirements: tuple[QuestionRequirement, ...] = ()
+    #: The plan was projected from a family template (the family-spec route),
+    #: whose steps are the template's: set by that route alone.
+    family_template: bool = False
 
     @property
     def complete_for_persistence(self) -> bool:
@@ -66,6 +73,8 @@ class ProgressivePlannerAttemptState:
     dropped_plan_keys: dict[str, list[str]] = field(
         default_factory=lambda: {"top_level": [], "steps": []}
     )
+    question_requirements: list[QuestionRequirement] = field(default_factory=list)
+    family_template: bool = False
 
     def freeze(self) -> ProgressivePlannerRunFacts:
         return ProgressivePlannerRunFacts(
@@ -81,6 +90,8 @@ class ProgressivePlannerAttemptState:
                 str(key): tuple(str(value) for value in values)
                 for key, values in self.dropped_plan_keys.items()
             },
+            question_requirements=tuple(self.question_requirements),
+            family_template=self.family_template,
         )
 
 

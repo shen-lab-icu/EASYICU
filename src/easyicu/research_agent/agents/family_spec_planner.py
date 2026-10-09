@@ -53,7 +53,13 @@ from ..planning.family_spec.contract import (
     population_required,
     validate_family_plan_spec,
 )
+from ..planning.capability_gap import check_capability_gap
 from ..planning.literature_bindings import missing_required_method_layers
+from ..planning.question_requirements import (
+    QUESTION_REQUIREMENTS_GUIDE,
+    question_requirements_schema,
+    question_requirements_shape,
+)
 from ..planning.literature_design_authority import (
     LITERATURE_DESIGN_DIMENSIONS,
     LiteratureDesignEvidenceCard,
@@ -97,7 +103,8 @@ FAMILY_SPEC_STRATEGY = "family_spec_v1"
 FAMILY_SPEC_ROLE = "family_spec_planner"
 FAMILY_SPEC_MAX_OUTPUT_TOKENS = 6000
 
-FAMILY_SPEC_GUIDE = """You are the EasyICU study statistician completing one typed planning spec.
+FAMILY_SPEC_GUIDE = (
+    """You are the EasyICU study statistician completing one typed planning spec.
 
 The host has already fixed the study family, exposure, outcome, time zero, the typed cohort bounds, dependence handling, sensitivity axes, and every executable step. You decide only what a statistician decides at this point:
 
@@ -114,9 +121,13 @@ The host has already fixed the study family, exposure, outcome, time zero, the t
 2. Reader labels: a concise clinical label for every required variable key, derived from the sealed variable descriptions (never a restatement of the identifier). When level label keys such as `<exposure>=0` and `<exposure>=1` are required, give the two groups distinct clinical names.
 3. Comparator applications: for each screened direct comparator, one sentence on how this study is compared with it (population, exposure, time zero, estimand) without copying its design and without claiming novelty.
 4. Population, only when the request offers population concepts (otherwise omit it or return null): the host applies only the typed cohort bounds and the source export's own population. A population that the research question or the study's own cohort wording names beyond them (for example an age group, a diagnosis or syndrome, or a treatment received) is applied only by the population you state. List each restriction in population.criteria in the words that state it, with the offered concepts that express it, and apply every criterion that has concepts with at least one inclusion or exclusion predicate over one of them, anchored at icu_admission and decided by time zero (end_offset_hours at most the time zero shown). Every predicate applies a listed criterion. Give a criterion no concepts only when no offered concept expresses it over the window the criterion states. Return population null when the study includes every row the typed bounds keep. When population_required is true, the caller has bound a filtered cohort that no typed bound filters: state the population with at least one inclusion or exclusion predicate (a phenotyping plan may restrict by its membership flag instead). A restriction already_applied states (a typed bound, the source concept population, or a source inclusion or exclusion contract) is applied already: do not state it again. When source_selection_recorded is true, already_applied is everything that selected the input rows, and no other condition, treatment or age restriction has.
+5. """
+    + QUESTION_REQUIREMENTS_GUIDE
+    + """
 
 Return exactly one JSON object and nothing else, in the response contract attached to the request: the provided schema, or the written response shape when no schema is attached. Copy request_sha256 exactly. Never invent variables, citations, results, or significance.
 """
+)
 
 
 def _candidate_rows(request: FamilySpecRequest) -> list[dict[str, Any]]:
@@ -315,6 +326,19 @@ def family_spec_user_prompt(
             "Population authority (the host applies only what already_applied lists; a "
             "population stated beyond it is applied only by the population you write):\n"
             + json.dumps(_population_authority(request), ensure_ascii=False)
+        )
+    if request.question_named_concepts:
+        sections.append(
+            "Concepts the research question names (question_named_concepts: each is "
+            "accounted for by a question requirement that reads one of its columns, "
+            "unless it is the sealed exposure or outcome):\n"
+            + json.dumps(
+                [
+                    item.model_dump(mode="json")
+                    for item in request.question_named_concepts
+                ],
+                ensure_ascii=False,
+            )
         )
     if know_how_context:
         sections.append("Know-how context:\n" + know_how_context)
@@ -536,6 +560,7 @@ def family_spec_structured_output_request(
             *(["literature_design_decisions"] if design_cards else []),
             "roster_decision_note",
             *(["population"] if request.population_concepts else []),
+            "question_requirements",
         ],
         "properties": {
             "schema_version": {"type": "string", "enum": [FAMILY_SPEC_SCHEMA_VERSION]},
@@ -641,6 +666,9 @@ def family_spec_structured_output_request(
                 if request.population_concepts
                 else {}
             ),
+            "question_requirements": question_requirements_schema(
+                request.variable_roster
+            ),
         },
     }
     strictify_json_schema(schema)
@@ -672,6 +700,39 @@ def parse_family_plan_spec(raw: str, request: FamilySpecRequest) -> FamilyPlanSp
     )
     validate_family_plan_spec(spec, request)
     return spec
+
+
+def check_question_requirement_gaps(
+    spec: FamilyPlanSpec,
+    *,
+    context: ResearchContext,
+    planning_contract_context: str = "",
+) -> None:
+    """A gap the spec declares stops the plan, so the host checks it first.
+
+    One the study's typed context contradicts goes back to the Planner with
+    what the context shows (``planning.capability_gap``), under the outline
+    route's code; a verified or unverifiable gap stands and is judged once the
+    plan exists.
+    """
+
+    for index, item in enumerate(spec.question_requirements):
+        if item.gap is None:
+            continue
+        check = check_capability_gap(
+            item.gap,
+            context=context,
+            planning_contract_context=planning_contract_context,
+        )
+        if check.verification == "unverified":
+            raise ProgressivePlanCompileError(
+                "progressive_capability_gap_claim_unverified",
+                f"question requirement {item.id} declares a capability gap the study "
+                f"contradicts: {check.fact}; state what the plan answers, or a gap the "
+                "study shows",
+                path=f"question_requirements[{index}].gap",
+                cause_code=item.gap.requirement,
+            )
 
 
 def family_spec_response_shape(request: FamilySpecRequest) -> str:
@@ -777,6 +838,7 @@ def family_spec_response_shape(request: FamilySpecRequest) -> str:
             "concepts is applied by at least one predicate over one of them, and every "
             "predicate reads a concept that a criterion names"
         )
+    lines.append(question_requirements_shape(request.variable_roster))
     return "\n".join(lines)
 
 
@@ -928,7 +990,11 @@ def run_family_spec_attempt(
     }
 
     def parse_spec(raw: str) -> FamilyPlanSpec:
-        return parse_family_plan_spec(raw, request)
+        spec = parse_family_plan_spec(raw, request)
+        check_question_requirement_gaps(
+            spec, context=context, planning_contract_context=planning_contract_context
+        )
+        return spec
 
     spec = call_llm_with_structured_retry(
         llm,
@@ -953,6 +1019,10 @@ def run_family_spec_attempt(
     attempt.prompt_metrics["family_spec_adjustment_set"] = [
         item.name for item in spec.adjustment_set
     ]
+    # What the question asks beyond the design, judged once the plan exists,
+    # and that the plan's steps are the family template's.
+    attempt.question_requirements = list(spec.question_requirements)
+    attempt.family_template = True
 
     builder = {
         DESCRIPTIVE_FAMILY_ID: build_descriptive_skeleton,
@@ -1130,6 +1200,7 @@ __all__ = [
     "FAMILY_SPEC_MAX_OUTPUT_TOKENS",
     "FAMILY_SPEC_ROLE",
     "FAMILY_SPEC_STRATEGY",
+    "check_question_requirement_gaps",
     "family_result_stop",
     "family_spec_fallback_reason",
     "family_spec_messages",

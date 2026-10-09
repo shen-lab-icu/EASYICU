@@ -22,6 +22,7 @@ from ..planning.progressive_artifacts import (
     persist_progressive_planning_artifacts,
 )
 from ..planning.progressive_contract import (
+    ProgressivePlanCompileError,
     ProgressivePlanOutline,
     ProgressivePlannerCheckpoint,
 )
@@ -35,7 +36,21 @@ from ..planning.population_shadow import (
     superseded_predicates_finding,
     write_population_audit,
 )
+from ..planning.approval_stops import PLAN_APPROVAL_STOPS
+from ..planning.capability_gap import check_capability_gap
 from ..planning.population_spec import STUDY_WORDING_SOURCES
+from ..planning.question_requirements import (
+    QuestionRequirementsError,
+    bind_named_question_concepts,
+    concept_relatives,
+    judge_question_requirements,
+    named_question_concepts,
+    outline_route_unstated,
+    question_requirement_coverage,
+    question_requirement_findings,
+    question_requirements_record,
+    write_question_requirements,
+)
 from ..planning.preplan_know_how import PlannerKnowHowBinding
 from ..planning.progressive_compiler import stated_population
 from ..planning import literature_design_authority as _literature_design
@@ -300,6 +315,106 @@ def population_proposals_finding(
     )
 
 
+def registered_stop(finding: ValidationFinding) -> ValidationFinding:
+    """A finding that refuses approval names a stop every plan-review reader knows.
+
+    The readers (the conversation's workflow, the run projection, the agent
+    route) spread ``approval_stops.PLAN_APPROVAL_STOPS``; a stop missing from
+    it would leave a plan that cannot be approved looking ready, so planning
+    stops with a typed reason instead.
+    """
+
+    detail = finding.detail or {}
+    if (
+        detail.get("approval_allowed") is False
+        and detail.get("reason") not in PLAN_APPROVAL_STOPS
+    ):
+        raise ProgressivePlanCompileError(
+            "progressive_approval_stop_unregistered",
+            f"approval stop {detail.get('reason')!r} is not in "
+            "approval_stops.PLAN_APPROVAL_STOPS",
+            path="plan_review",
+        )
+    return finding
+
+
+def question_requirement_outcome(
+    *,
+    context: ResearchContext,
+    plan: AnalysisPlan,
+    facts: Any,
+    run_dir: Path,
+    planning_contract_context: str = "",
+) -> list[ValidationFinding]:
+    """Judge the question's requirements on the compiled plan and record them.
+
+    The family route (``facts.family_template``) states its requirements in
+    the spec, and its templates have no comparing or subgroup step, so the
+    host decides those gaps.  The outline route states none: each concept the
+    question names, other than a sealed coordinate, is a warning there.  A gap
+    the Planner declared is checked against the study as the spec parser
+    checked it (``planning.capability_gap``).  The record is a run fact beside
+    the plan, not evidence; it carries what the judgment read of the study, so
+    the plan a review request offers is judged again from it
+    (``question_requirements_on_plan_under_review``).
+    """
+
+    family_template = bool(facts.family_template)
+    requirements = tuple(facts.question_requirements)
+    relatives = concept_relatives(context)
+    try:
+        stated = named_question_concepts(context)
+    except QuestionRequirementsError as exc:
+        raise ProgressivePlanCompileError(
+            f"progressive_{exc.reason_code}", str(exc), path="question_named_concepts"
+        ) from exc
+    named = bind_named_question_concepts(
+        stated,
+        roster=[str(variable.name) for variable in context.variables],
+        relatives=relatives,
+    )
+    if not requirements and not named:
+        return []
+    sealed = tuple(
+        value
+        for value in (context.primary_exposure or "", context.target_outcome or "")
+        if value
+    )
+    judged = judge_question_requirements(
+        requirements,
+        plan=plan,
+        family_template=family_template,
+        relatives=relatives,
+        check_gap=lambda gap: check_capability_gap(
+            gap, context=context, planning_contract_context=planning_contract_context
+        ),
+    )
+    unstated = (
+        ()
+        if family_template
+        else outline_route_unstated(named, plan=plan, sealed=sealed)
+    )
+    write_question_requirements(
+        run_dir,
+        question_requirements_record(
+            route="family_template" if family_template else "outline",
+            plan=plan,
+            requirements=requirements,
+            named=named,
+            judged=judged,
+            unstated=unstated,
+            coverage=question_requirement_coverage(judged, context=context, plan=plan),
+            denoted={
+                concept: relatives(concept)
+                for item in requirements
+                for concept in item.concepts
+            },
+            sealed=sealed,
+        ),
+    )
+    return question_requirement_findings(judged, unstated=unstated)
+
+
 def run_progressive_planner(
     *,
     planner: ProgressivePlannerAgent,
@@ -444,10 +559,20 @@ def run_progressive_planner(
     )
     if population is not None:
         for finding in population_approval_findings(population):
-            finding_sink(finding)
+            finding_sink(registered_stop(finding))
         proposals = population_proposals_finding(population)
         if proposals is not None:
             finding_sink(proposals)
+    # What the question asks beyond the design: an analysis the plan does not
+    # answer, or cannot, refuses approval, never planning.
+    for finding in question_requirement_outcome(
+        context=context,
+        plan=generated,
+        facts=facts,
+        run_dir=run_dir,
+        planning_contract_context=planning_contract_context,
+    ):
+        finding_sink(registered_stop(finding))
     return ProgressivePlannerRunResult(
         plan=generated,
         generation_mode=(
@@ -494,6 +619,8 @@ __all__ = [
     "ProgressivePlannerRunResult",
     "persist_progressive_planner_output",
     "population_approval_findings",
+    "question_requirement_outcome",
+    "registered_stop",
     "population_proposals_finding",
     "run_progressive_planner",
     "run_pipeline_progressive_planner",

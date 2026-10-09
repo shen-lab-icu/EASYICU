@@ -51,6 +51,13 @@ from easyicu.research_agent.planning.cohort_contract import (
     cohort_definition_has_explicit_selection,
     coerce_cohort_definition,
 )
+from easyicu.research_agent.canonical_json import canonical_sha256
+from easyicu.research_agent.planning.question_requirements import (
+    QUESTION_REQUIREMENTS_FILENAME,
+    QUESTION_REQUIREMENTS_REVIEW_FILENAME,
+    QUESTION_REQUIREMENTS_REVIEW_SCHEMA_VERSION,
+    QUESTION_REQUIREMENTS_SCHEMA_VERSION,
+)
 from easyicu.research_agent.planning.scientific_review import (
     CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION,
     PlanScientificReview,
@@ -390,6 +397,68 @@ def _pending_bound_evidence_sha256(
             return None
         expected = observed
     return expected
+
+
+def _question_record(
+    run_dir: Optional[Path], filename: str, schema_version: str
+) -> Dict[str, Any]:
+    if run_dir is None:
+        return {}
+    try:
+        raw = (run_dir / filename).read_bytes()
+        if len(raw) > _MAX_JSON_BYTES:
+            return {}
+        record = json.loads(raw)
+    except (FileNotFoundError, OSError, ValueError):
+        return {}
+    if not isinstance(record, dict) or record.get("schema_version") != schema_version:
+        return {}
+    return record
+
+
+def _load_question_requirements(
+    run_dir: Optional[Path], plan: Mapping[str, Any]
+) -> Dict[str, Dict[str, Any]]:
+    """Project the records of what the question asks of the plan.
+
+    Both are run facts, not evidence (``planning.question_requirements``),
+    shown beside the review with every claim the host could not verify
+    marked: the planning record, judged on the compiled plan, and the
+    judgment of the plan a review request offers, which binds that plan's
+    digest.  The latter says whether it judged the plan under review: only
+    then does it describe the plan a reviewer approves.  ``plan`` is the
+    review authority's plan payload, so its canonical digest is the one the
+    authority binds; it is not validated again here, where the cohort
+    concepts a host sealed for that plan are not registered.
+    """
+
+    planning = _question_record(
+        run_dir, QUESTION_REQUIREMENTS_FILENAME, QUESTION_REQUIREMENTS_SCHEMA_VERSION
+    )
+    review = _question_record(
+        run_dir,
+        QUESTION_REQUIREMENTS_REVIEW_FILENAME,
+        QUESTION_REQUIREMENTS_REVIEW_SCHEMA_VERSION,
+    )
+    if review:
+        try:
+            digest = canonical_sha256(dict(plan)) if plan else None
+        except (TypeError, ValueError):
+            digest = None
+        review = {
+            **review,
+            "judged_on_plan_under_review": bool(
+                digest and review.get("plan_sha256") == digest
+            ),
+        }
+    return {
+        name: record
+        for name, record in (
+            (QUESTION_REQUIREMENTS_FILENAME, planning),
+            (QUESTION_REQUIREMENTS_REVIEW_FILENAME, review),
+        )
+        if record
+    }
 
 
 def _load_pending_scientific_review(
@@ -2162,6 +2231,7 @@ def _research_user_preferences(
     source_selection_basis: Optional[SelectionBasis] = None,
     event_time_semantics: Optional[Mapping[str, str]] = None,
     source_selection_report: Optional[Mapping[str, Any]] = None,
+    question_named_concepts: Sequence[Mapping[str, Any]] = (),
 ) -> Dict[str, Any]:
     """Compile StudyContext into the existing strict preference contract.
 
@@ -2327,6 +2397,14 @@ def _research_user_preferences(
             "role": "outer_observation_window",
             **dict(time_window),
         }
+    if question_named_concepts:
+        # The concepts the question names (the planning coordinates' reading):
+        # the plan states what the question asks of each, or the review says
+        # it does not.
+        constraints["question_named_concepts"] = [
+            {"concepts": list(item["concepts"]), "evidence": str(item["evidence"])}
+            for item in question_named_concepts
+        ]
     if constraints:
         preferences["data_constraints"] = _compile_data_constraints(constraints)
     sensitivity_specs = _configured_sensitivity_specs(study)
@@ -3706,6 +3784,7 @@ def _write_projection(
         }
     )
     scientific_plan_review = _load_pending_scientific_review(run_dir, pending)
+    question_requirements = _load_question_requirements(run_dir, plan)
     current_review_approval_allowed = _pending_plan_approval_allowed(
         run_dir=run_dir,
         pending=pending,
@@ -3891,6 +3970,7 @@ def _write_projection(
             if scientific_plan_review
             else {}
         ),
+        **question_requirements,
         "scientific_readiness.json": scientific_readiness,
         "manuscript_draft.json": {
             "run_id": run_id,
@@ -5732,6 +5812,16 @@ def make_research_pipeline_run_runner(
                         primary_exposure,
                         metadata_planning_coordinates.get("target_outcome"),
                         metadata_planning_coordinates.get("primary_exposure"),
+                        # Every concept the question names reaches the roster,
+                        # so the plan can state what the question asks of it.
+                        *(
+                            column
+                            for item in metadata_planning_coordinates.get(
+                                "question_named_concepts"
+                            )
+                            or ()
+                            for column in item["concepts"]
+                        ),
                         *candidate_outcome_concepts,
                         *covariates,
                         *(
@@ -6377,6 +6467,9 @@ def make_research_pipeline_run_runner(
                 source_selection_basis=source_selection_basis,
                 event_time_semantics=bound_export_event_time_semantics(export_path),
                 source_selection_report=bound_export_selection_report(export_path),
+                question_named_concepts=(
+                    metadata_planning_coordinates.get("question_named_concepts") or ()
+                ),
             )
             _progress(
                 job,

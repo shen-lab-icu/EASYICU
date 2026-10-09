@@ -32,6 +32,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from copy import copy, deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import (
     Any,
     Callable,
@@ -52,6 +53,7 @@ from ..contracts.runtime import (
     PlanPhaseResult,
     WritePhaseResult,
 )
+from ..planning.approval_stops import judged_on_plan_under_review
 from ..schema import AnalysisPlan, PipelineResult
 
 
@@ -401,6 +403,13 @@ def human_review_requests_for_plan(
     changes, so a stale approval cannot be replayed onto revised work.
     """
 
+    root = getattr(evidence, "root", None)
+    if isinstance(plan, AnalysisPlan) and root is not None:
+        # The requests offer this plan, which the pipeline shaped after the
+        # plan phase judged its stops: they are judged again on it.
+        findings = judged_on_plan_under_review(
+            findings or (), plan=plan, run_dir=Path(root)
+        )
     reviewable: list[tuple[Any, str, str, Mapping[str, Any]]] = []
     for finding in findings or ():
         # Severity is the run's own statement about whether the state blocks.

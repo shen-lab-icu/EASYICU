@@ -745,6 +745,10 @@
     ],
     [
       "easyicu.research_agent.agents.family_spec_planner",
+      "easyicu.research_agent.planning.capability_gap"
+    ],
+    [
+      "easyicu.research_agent.agents.family_spec_planner",
       "easyicu.research_agent.planning.family_spec"
     ],
     [
@@ -778,6 +782,10 @@
     [
       "easyicu.research_agent.agents.family_spec_planner",
       "easyicu.research_agent.planning.progressive_resume"
+    ],
+    [
+      "easyicu.research_agent.agents.family_spec_planner",
+      "easyicu.research_agent.planning.question_requirements"
     ],
     [
       "easyicu.research_agent.agents.family_spec_planner",
@@ -1006,6 +1014,10 @@
     [
       "easyicu.research_agent.agents.progressive_attempt",
       "easyicu.research_agent.planning.progressive_contract"
+    ],
+    [
+      "easyicu.research_agent.agents.progressive_attempt",
+      "easyicu.research_agent.planning.question_requirements"
     ],
     [
       "easyicu.research_agent.agents.progressive_attempt",
@@ -9033,6 +9045,14 @@
     ],
     [
       "easyicu.research_agent.orchestration.progressive_planning",
+      "easyicu.research_agent.planning.approval_stops"
+    ],
+    [
+      "easyicu.research_agent.orchestration.progressive_planning",
+      "easyicu.research_agent.planning.capability_gap"
+    ],
+    [
+      "easyicu.research_agent.orchestration.progressive_planning",
       "easyicu.research_agent.planning.literature_design_authority"
     ],
     [
@@ -9062,6 +9082,10 @@
     [
       "easyicu.research_agent.orchestration.progressive_planning",
       "easyicu.research_agent.planning.progressive_contract"
+    ],
+    [
+      "easyicu.research_agent.orchestration.progressive_planning",
+      "easyicu.research_agent.planning.question_requirements"
     ],
     [
       "easyicu.research_agent.orchestration.progressive_planning",
@@ -9278,6 +9302,10 @@
     [
       "easyicu.research_agent.orchestration.workflow",
       "easyicu.research_agent.contracts.runtime"
+    ],
+    [
+      "easyicu.research_agent.orchestration.workflow",
+      "easyicu.research_agent.planning.approval_stops"
     ],
     [
       "easyicu.research_agent.orchestration.workflow",
@@ -9964,6 +9992,18 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.planning.approval_stops",
+      "easyicu.research_agent.planning.population_compile"
+    ],
+    [
+      "easyicu.research_agent.planning.approval_stops",
+      "easyicu.research_agent.planning.question_requirements"
+    ],
+    [
+      "easyicu.research_agent.planning.approval_stops",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.planning.baseline_requirements",
       "easyicu.research_agent.contracts.cohort_summary"
     ],
@@ -10244,6 +10284,10 @@
       "easyicu.research_agent.planning.progressive_contract"
     ],
     [
+      "easyicu.research_agent.planning.family_spec.contract",
+      "easyicu.research_agent.planning.question_requirements"
+    ],
+    [
       "easyicu.research_agent.planning.family_spec.descriptive_template",
       "easyicu.research_agent.canonical_json"
     ],
@@ -10438,6 +10482,10 @@
     [
       "easyicu.research_agent.planning.family_spec.request",
       "easyicu.research_agent.planning.progressive_compiler"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.request",
+      "easyicu.research_agent.planning.question_requirements"
     ],
     [
       "easyicu.research_agent.planning.family_spec.request",
@@ -11201,6 +11249,26 @@
     ],
     [
       "easyicu.research_agent.planning.publication_readiness",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.planning.question_requirements",
+      "easyicu.research_agent.canonical_json"
+    ],
+    [
+      "easyicu.research_agent.planning.question_requirements",
+      "easyicu.research_agent.planning.population_spec"
+    ],
+    [
+      "easyicu.research_agent.planning.question_requirements",
+      "easyicu.research_agent.planning.progressive_contract"
+    ],
+    [
+      "easyicu.research_agent.planning.question_requirements",
+      "easyicu.research_agent.planning.requirement_coverage"
+    ],
+    [
+      "easyicu.research_agent.planning.question_requirements",
       "easyicu.research_agent.schema"
     ],
     [
@@ -14488,9 +14556,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3614,
+    "edge_count": 3631,
     "largest_scc_size": 0,
-    "module_count": 828,
+    "module_count": 830,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -15034,6 +15102,7 @@
     "easyicu.research_agent.planning.analysis_blueprint": "planning/analysis_blueprint.py",
     "easyicu.research_agent.planning.analysis_method_suite": "planning/analysis_method_suite.py",
     "easyicu.research_agent.planning.analysis_types": "planning/analysis_types.py",
+    "easyicu.research_agent.planning.approval_stops": "planning/approval_stops.py",
     "easyicu.research_agent.planning.baseline_requirements": "planning/baseline_requirements.py",
     "easyicu.research_agent.planning.capability_gap": "planning/capability_gap.py",
     "easyicu.research_agent.planning.capability_registry": "planning/capability_registry.py",
@@ -15095,6 +15164,7 @@
     "easyicu.research_agent.planning.progressive_resume": "planning/progressive_resume.py",
     "easyicu.research_agent.planning.prompt_projection": "planning/prompt_projection.py",
     "easyicu.research_agent.planning.publication_readiness": "planning/publication_readiness.py",
+    "easyicu.research_agent.planning.question_requirements": "planning/question_requirements.py",
     "easyicu.research_agent.planning.replan_gate": "planning/replan_gate.py",
     "easyicu.research_agent.planning.requirement_coverage": "planning/requirement_coverage.py",
     "easyicu.research_agent.planning.robustness_contract": "planning/robustness_contract.py",

@@ -16,8 +16,9 @@ again on that export.
 
 The run the conversation reads is a plan under review too, with nothing
 analysed.  Each consumer keeps its own set of the codes that mean a plan
-review, and a new code can miss one of them: every such set names the
-stops that refuse approval, or this file says why it need not.
+review, and a new code can miss one of them: every such set spreads the
+stops that refuse approval (``approval_stops.PLAN_APPROVAL_STOPS``, which
+the population owner's stops join), or this file says why it need not.
 Synthetic studies only.
 """
 
@@ -30,6 +31,7 @@ from typing import Any, Iterator, Mapping
 import pytest
 
 import easyicu.webserver as webserver_package
+from easyicu.research_agent.planning.approval_stops import PLAN_APPROVAL_STOPS
 from easyicu.research_agent.planning.population_compile import (
     POPULATION_APPROVAL_STOPS,
 )
@@ -156,6 +158,7 @@ def test_the_export_extracted_for_the_study_supersedes_the_plan() -> None:
 
 def test_a_fresh_candidate_plan_from_either_stop_reads_no_patient_row() -> None:
     assert set(POPULATION_APPROVAL_STOPS.values()) == {_EXTRACT, _UNAPPLIED}
+    assert {_EXTRACT, _UNAPPLIED} <= set(PLAN_APPROVAL_STOPS)
     assert {_EXTRACT, _UNAPPLIED} <= agent_routes._CANDIDATE_PLAN_WORKFLOW_CODES
 
 
@@ -206,7 +209,7 @@ def test_the_conversation_reads_a_plan_under_review_with_nothing_analysed(
 _PLAN_REVIEW_CODES = frozenset(
     {"operator_plan_approval_required", "plan_scientific_changes_required"}
 )
-_STOPS_SPREAD = "POPULATION_APPROVAL_STOPS.values()"
+_STOPS_SPREAD = "PLAN_APPROVAL_STOPS"
 
 # Sets that read a plan review without naming the stops, and why they need not.
 _NEED_NOT_NAME_THE_STOPS = {
@@ -224,8 +227,8 @@ _NEED_NOT_NAME_THE_STOPS = {
         "preparation launched from it; a plan that refuses approval launches none"
     ),
     ("pi_copilot/workflow.py", "_enrich_plan_review", ""): (
-        "it sends a reviewer's runtime gap to the host compiler; a population "
-        "stop is no such gap, and replacing its next action would hide it"
+        "it sends a reviewer's runtime gap to the host compiler; a stop that "
+        "refuses approval is no such gap, and replacing its next action would hide it"
     ),
 }
 
@@ -234,7 +237,7 @@ def _plan_review_code_sets() -> Iterator[tuple[tuple[str, str, str], bool]]:
     """Yield (file, function, assigned name) of each set, and whether it names the stops."""
 
     root = Path(webserver_package.__file__).parent
-    stops = set(POPULATION_APPROVAL_STOPS.values())
+    stops = set(PLAN_APPROVAL_STOPS)
     for source in sorted(root.rglob("*.py")):
         tree = ast.parse(source.read_text(encoding="utf-8"))
         parents = {

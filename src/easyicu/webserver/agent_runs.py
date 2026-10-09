@@ -66,6 +66,8 @@ _RUN_ARTIFACT_NAMES = [
     "agent_plan.json",
     "literature_evidence.json",
     "scientific_plan_review.json",
+    "question_requirements.json",
+    "question_requirements_review.json",
     "scientific_readiness.json",
     "manuscript_draft.json",
     "manuscript_provenance.json",

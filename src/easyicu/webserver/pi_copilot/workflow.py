@@ -14,9 +14,7 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from easyicu.research_agent.planning.population_compile import (
-    POPULATION_APPROVAL_STOPS,
-)
+from easyicu.research_agent.planning.approval_stops import PLAN_APPROVAL_STOPS
 from easyicu.webserver import agent_pipeline_runs, agent_runs, jobs, sources
 from easyicu.webserver import host_action_starting
 from easyicu.webserver.host_action_contracts import (
@@ -477,9 +475,9 @@ def build_research_workflow_snapshot(
         "plan_scientific_changes_required",
         "scientific_plan_review_policy_stale",
         "agent_plan_revision_nonconvergent",
-        # The plan is reviewed, but an inclusion its cohort does not apply
-        # refuses its approval (``population_compile.POPULATION_APPROVAL_STOPS``).
-        *POPULATION_APPROVAL_STOPS.values(),
+        # The plan is reviewed, but its population or an analysis the question
+        # asks for refuses its approval (``approval_stops.PLAN_APPROVAL_STOPS``).
+        *PLAN_APPROVAL_STOPS,
     }
     active_plan_review_codes = sorted(pending_review_reason_codes & plan_review_codes)
     plan_review_declared = bool(
@@ -687,13 +685,10 @@ def build_research_workflow_snapshot(
         else "plan_scientific_changes_required"
         if "plan_scientific_changes_required" in active_plan_review_codes
         # An extraction of the study's own population (BX) can lift the stop;
-        # an inclusion nothing can apply as stated leaves it to the study.
+        # an inclusion nothing can apply as stated, or an analysis the plan
+        # does not answer, leaves it to the study or a new plan.
         else next(
-            (
-                code
-                for code in POPULATION_APPROVAL_STOPS.values()
-                if code in active_plan_review_codes
-            ),
+            (code for code in PLAN_APPROVAL_STOPS if code in active_plan_review_codes),
             None,
         )
         or (

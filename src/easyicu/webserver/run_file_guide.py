@@ -98,6 +98,18 @@ _FILES: Dict[str, _Text] = {
         "Digest-bound multi-dimensional review before the plan can be approved.",
         "计划批准前的摘要绑定多维科学审阅。",
     ),
+    "question_requirements.json": (
+        "plan", "Question requirements", "题面要求",
+        "What the research question asks of the plan and how each requirement was "
+        "judged on the plan as planned; claims the host could not verify are marked.",
+        "题面对计划提出的要求及按规划所得计划的判定；宿主无法核实的声明会标出。",
+    ),
+    "question_requirements_review.json": (
+        "plan", "Question requirements (plan under review)", "题面要求（待审计划）",
+        "Each requirement judged again on the exact plan offered for review, bound "
+        "to that plan's digest; this is the judgment approval rests on.",
+        "在提交审阅的确切计划上重新判定的每一项要求，绑定该计划的摘要；批准依据的是这一份。",
+    ),
     "literature_evidence.json": (
         "plan", "Literature evidence", "文献证据",
         "Search provenance, article metadata, and exact plan-step citation bindings.",
@@ -211,7 +223,8 @@ _ORDER = (
     "manuscript_scaffold.tex", "manuscript_scaffold.bib",
     "result_tables.json", "figure_gallery.json", "cohort_summary.json", "table1_summary.json",
     "missingness_audit.json", "roc_curve.json", "calibration_curve.json",
-    "agent_plan.json", "scientific_plan_review.json", "literature_evidence.json",
+    "agent_plan.json", "scientific_plan_review.json", "question_requirements.json",
+    "question_requirements_review.json", "literature_evidence.json",
     "quality_gate.json", "scientific_readiness.json", "human_signoff.json",
     "benchmark_scorecard.json", "system_validation_report.pdf", "system_validation_report.html",
     "system_validation_report.json",
