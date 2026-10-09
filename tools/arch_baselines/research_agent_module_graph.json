@@ -449,6 +449,10 @@
     ],
     [
       "easyicu.research_agent.agents._support",
+      "easyicu.research_agent.agents.critic_evidence"
+    ],
+    [
+      "easyicu.research_agent.agents._support",
       "easyicu.research_agent.authority.coder_authority"
     ],
     [
@@ -673,6 +677,10 @@
     ],
     [
       "easyicu.research_agent.agents.core",
+      "easyicu.research_agent.agents.article_contract_switch"
+    ],
+    [
+      "easyicu.research_agent.agents.core",
       "easyicu.research_agent.agents.coder"
     ],
     [
@@ -869,6 +877,10 @@
     ],
     [
       "easyicu.research_agent.agents.planner",
+      "easyicu.research_agent.agents.article_contract_switch"
+    ],
+    [
+      "easyicu.research_agent.agents.planner",
       "easyicu.research_agent.agents.plan_payload"
     ],
     [
@@ -1000,6 +1012,10 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.agents.progressive_literature_repair",
+      "easyicu.research_agent.planning.progressive_contract"
+    ],
+    [
       "easyicu.research_agent.agents.progressive_payload",
       "easyicu.research_agent.agents.population_spec_transport"
     ],
@@ -1034,6 +1050,10 @@
     [
       "easyicu.research_agent.agents.progressive_planner",
       "easyicu.research_agent.agents.progressive_attempt"
+    ],
+    [
+      "easyicu.research_agent.agents.progressive_planner",
+      "easyicu.research_agent.agents.progressive_literature_repair"
     ],
     [
       "easyicu.research_agent.agents.progressive_planner",
@@ -1358,6 +1378,10 @@
     [
       "easyicu.research_agent.agents.roles",
       "easyicu.research_agent.agents._support"
+    ],
+    [
+      "easyicu.research_agent.agents.roles",
+      "easyicu.research_agent.agents.critic_evidence"
     ],
     [
       "easyicu.research_agent.agents.roles",
@@ -1920,6 +1944,26 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.authority.executed_step_snapshots",
+      "easyicu.research_agent.authority.plan_scope"
+    ],
+    [
+      "easyicu.research_agent.authority.executed_step_snapshots",
+      "easyicu.research_agent.authority.planned_role"
+    ],
+    [
+      "easyicu.research_agent.authority.executed_step_snapshots",
+      "easyicu.research_agent.authority.runtime_artifacts"
+    ],
+    [
+      "easyicu.research_agent.authority.executed_step_snapshots",
+      "easyicu.research_agent.planning.cohort_contract"
+    ],
+    [
+      "easyicu.research_agent.authority.executed_step_snapshots",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.authority.execution_identity",
       "easyicu.research_agent.authority.runtime_artifacts"
     ],
@@ -2089,15 +2133,15 @@
     ],
     [
       "easyicu.research_agent.authority.plan_authority",
+      "easyicu.research_agent.authority.executed_step_snapshots"
+    ],
+    [
+      "easyicu.research_agent.authority.plan_authority",
       "easyicu.research_agent.authority.plan_input_closure"
     ],
     [
       "easyicu.research_agent.authority.plan_authority",
       "easyicu.research_agent.authority.plan_scope"
-    ],
-    [
-      "easyicu.research_agent.authority.plan_authority",
-      "easyicu.research_agent.authority.planned_role"
     ],
     [
       "easyicu.research_agent.authority.plan_authority",
@@ -4406,10 +4450,6 @@
     [
       "easyicu.research_agent.execution.phase",
       "easyicu.research_agent.execution.article_audit"
-    ],
-    [
-      "easyicu.research_agent.execution.phase",
-      "easyicu.research_agent.execution.budget_epoch"
     ],
     [
       "easyicu.research_agent.execution.phase",
@@ -13972,9 +14012,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3485,
+    "edge_count": 3495,
     "largest_scc_size": 0,
-    "module_count": 798,
+    "module_count": 802,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -13995,16 +14035,19 @@
     "easyicu.research_agent.agents": "agents/__init__.py",
     "easyicu.research_agent.agents._support": "agents/_support.py",
     "easyicu.research_agent.agents.agentic_coder": "agents/agentic_coder.py",
+    "easyicu.research_agent.agents.article_contract_switch": "agents/article_contract_switch.py",
     "easyicu.research_agent.agents.coder": "agents/coder.py",
     "easyicu.research_agent.agents.coder_generation": "agents/coder_generation.py",
     "easyicu.research_agent.agents.coder_output_contract": "agents/coder_output_contract.py",
     "easyicu.research_agent.agents.core": "agents/core.py",
+    "easyicu.research_agent.agents.critic_evidence": "agents/critic_evidence.py",
     "easyicu.research_agent.agents.family_spec_planner": "agents/family_spec_planner.py",
     "easyicu.research_agent.agents.manuscript": "agents/manuscript.py",
     "easyicu.research_agent.agents.plan_payload": "agents/plan_payload.py",
     "easyicu.research_agent.agents.planner": "agents/planner.py",
     "easyicu.research_agent.agents.population_spec_transport": "agents/population_spec_transport.py",
     "easyicu.research_agent.agents.progressive_attempt": "agents/progressive_attempt.py",
+    "easyicu.research_agent.agents.progressive_literature_repair": "agents/progressive_literature_repair.py",
     "easyicu.research_agent.agents.progressive_payload": "agents/progressive_payload.py",
     "easyicu.research_agent.agents.progressive_planner": "agents/progressive_planner.py",
     "easyicu.research_agent.agents.progressive_prompt_contracts": "agents/progressive_prompt_contracts.py",
@@ -14049,6 +14092,7 @@
     "easyicu.research_agent.authority.evidence_record_resolution": "authority/evidence_record_resolution.py",
     "easyicu.research_agent.authority.evidence_snapshot": "authority/evidence_snapshot.py",
     "easyicu.research_agent.authority.evidence_store": "authority/evidence_store.py",
+    "easyicu.research_agent.authority.executed_step_snapshots": "authority/executed_step_snapshots.py",
     "easyicu.research_agent.authority.execution_identity": "authority/execution_identity.py",
     "easyicu.research_agent.authority.execution_input": "authority/execution_input.py",
     "easyicu.research_agent.authority.figure_renderer": "authority/figure_renderer.py",
