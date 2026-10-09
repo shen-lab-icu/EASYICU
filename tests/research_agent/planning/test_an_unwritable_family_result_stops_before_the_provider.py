@@ -13,7 +13,10 @@ the outline selects such a family, without retrying the choice.  When the
 family-spec strategy has a host template for the family (a survival question
 with a proposable landmark suite), an owner exists that Progressive v2 does
 not use, and the stop says so with ``progressive_family_template_required``.
-Synthetic contexts only.
+A causal question is planned only as the emulation of a target trial its
+researcher confirmed, so its stop names that: ``tte_trial_not_confirmed``;
+once the host seals the confirmed trial, causal planning goes on.  Synthetic
+contexts only.
 """
 
 from __future__ import annotations
@@ -31,8 +34,11 @@ from easyicu.research_agent.agents.progressive_planner import (
 from easyicu.research_agent.planning.family_spec import family_template_id_for_context
 from easyicu.research_agent.planning.family_spec.request import (
     SEALED_SURVIVAL_SUITE_MARKER,
+    SEALED_TARGET_TRIAL_SUITE_MARKER,
+    sealed_result_families,
 )
 from easyicu.research_agent.planning.primary_result_contract import (
+    TTE_TRIAL_NOT_CONFIRMED,
     families_requiring_family_result_contract,
 )
 from easyicu.research_agent.planning.progressive_contract import (
@@ -57,6 +63,8 @@ from tests.support.survival_proposal import survival_context
 
 UNWRITABLE = "progressive_family_result_contract_unwritable"
 TEMPLATE_REQUIRED = "progressive_family_template_required"
+#: Each family's stop when no owner can write its result contract.
+STOPS = {"causal_inference": TTE_TRIAL_NOT_CONFIRMED, "survival": UNWRITABLE}
 QUESTIONS = {
     "causal_inference": (
         "Among adult ICU stays, what is the effect of a higher first-24 h injury stage "
@@ -111,7 +119,7 @@ def test_a_family_result_no_owner_can_write_stops_before_the_provider(family, st
     llm, stopped = _plan(context, strategy=strategy)
 
     assert isinstance(stopped, ProgressivePlanCompileError)
-    assert stopped.reason_code == UNWRITABLE
+    assert stopped.reason_code == STOPS[family]
     assert stopped.details["owner"] == "easyicu.planning.progressive_compiler_v1"
     assert stopped.path == "analysis_type"
     assert llm.calls == []
@@ -144,12 +152,12 @@ def test_a_question_with_another_executable_family_still_reaches_the_planner():
     types = candidate_analysis_types(context)
     assert "association_study" in types and "causal_inference" in types
     assert families_requiring_family_result_contract(
-        context, analysis_types=types, sealed_survival_suite=False
+        context, analysis_types=types, sealed_families=()
     ) == ()
 
     llm, stopped = _plan(context)
 
-    assert getattr(stopped, "reason_code", None) != UNWRITABLE
+    assert getattr(stopped, "reason_code", None) not in STOPS.values()
     assert llm.calls
 
 
@@ -162,7 +170,7 @@ def test_a_family_template_route_owns_its_contract_and_is_not_stopped(monkeypatc
 
     _llm, stopped = _plan(_family_context("causal_inference"))
 
-    assert getattr(stopped, "reason_code", None) != UNWRITABLE
+    assert getattr(stopped, "reason_code", None) not in STOPS.values()
 
 
 def test_a_sealed_survival_suite_keeps_survival_planning_open():
@@ -191,7 +199,7 @@ def test_a_sealed_survival_suite_keeps_survival_planning_open():
 def test_a_design_canary_never_reaches_final_acceptance_and_is_not_stopped():
     llm, stopped = _plan(_family_context("causal_inference"), stop_after_outline=True)
 
-    assert getattr(stopped, "reason_code", None) != UNWRITABLE
+    assert getattr(stopped, "reason_code", None) not in STOPS.values()
     assert llm.calls
 
 
@@ -200,21 +208,21 @@ def test_the_contract_counts_only_contexts_final_acceptance_would_reject():
     causal = _family_context("causal_inference")
 
     assert families_requiring_family_result_contract(
-        survival, analysis_types=("survival",), sealed_survival_suite=False
+        survival, analysis_types=("survival",), sealed_families=()
     ) == ("survival",)
     # A host-sealed landmark survival suite is accepted by its primary method.
     assert families_requiring_family_result_contract(
-        survival, analysis_types=("survival",), sealed_survival_suite=True
+        survival, analysis_types=("survival",), sealed_families={"survival"}
     ) == ()
     assert families_requiring_family_result_contract(
-        causal, analysis_types=("causal_inference", "survival"), sealed_survival_suite=True
+        causal, analysis_types=("causal_inference", "survival"), sealed_families={"survival"}
     ) == ()
     # Without a declared exposure or outcome there is no family headline to require.
     for field in ("primary_exposure", "target_outcome"):
         assert families_requiring_family_result_contract(
             causal.model_copy(update={field: None}),
             analysis_types=("causal_inference",),
-            sealed_survival_suite=False,
+            sealed_families=(),
         ) == ()
     # A sealed fail-closed feasibility scope replaces the effect step.
     feasibility = causal.model_copy(
@@ -225,7 +233,7 @@ def test_the_contract_counts_only_contexts_final_acceptance_would_reject():
         }
     )
     assert families_requiring_family_result_contract(
-        feasibility, analysis_types=("causal_inference",), sealed_survival_suite=False
+        feasibility, analysis_types=("causal_inference",), sealed_families=()
     ) == ()
 
 
@@ -291,11 +299,11 @@ def test_an_outline_that_selects_a_family_no_owner_can_finish_stops_before_its_s
     types = candidate_analysis_types(context)
     assert family in types
     assert families_requiring_family_result_contract(
-        context, analysis_types=types, sealed_survival_suite=False
+        context, analysis_types=types, sealed_families=()
     ) == ()
 
     assert isinstance(stopped, ProgressivePlanCompileError)
-    assert stopped.reason_code == UNWRITABLE
+    assert stopped.reason_code == STOPS[family]
     assert stopped.path == "analysis_type"
     assert family in str(stopped)
     # The outline was the only request: no foundation, step or retry call.
@@ -308,7 +316,7 @@ def test_an_outline_that_selects_an_executable_family_goes_on_to_its_steps():
 
     _context_, llm, result = _plan_from_outline("causal_inference", outline)
 
-    assert getattr(result, "reason_code", None) != UNWRITABLE
+    assert getattr(result, "reason_code", None) not in STOPS.values()
     assert len(llm.calls) > 1
 
 
@@ -339,6 +347,45 @@ def test_a_design_canary_returns_its_causal_outline():
         "causal_inference", _outline_for("causal_inference"), stop_after_outline=True
     )
 
-    assert getattr(result, "reason_code", None) != UNWRITABLE
+    assert getattr(result, "reason_code", None) not in STOPS.values()
     assert result.output.analysis_type == "causal_inference"
     assert len(llm.calls) == 1
+
+
+def _trial_disclosure(owner: str = "signed_target_trial_suite") -> str:
+    coordinates = {
+        "sealed_primary_owner": owner,
+        "treatment_onset_columns": ["exposure_flag_onset_time"],
+        "time_zero_hours": 6,
+        "grace_period_hours": 6,
+        "event_column": "mort_28d",
+        "followup_time_column": "followup_days_28d",
+        "endpoint_horizon_days": 28,
+        "adjustment_columns": ["age"],
+        "resampling_unit": "icu_stay",
+        "plan_outputs": ["table:target_trial_protocol"],
+    }
+    return SEALED_TARGET_TRIAL_SUITE_MARKER + "\n" + json.dumps(coordinates)
+
+
+def test_a_confirmed_target_trial_keeps_causal_planning_open():
+    # The host sealed the trial the researcher confirmed: its suite owns the
+    # causal result, so neither stop applies and the Planner is asked.
+    causal = _family_context("causal_inference")
+    disclosure = _trial_disclosure()
+
+    assert sealed_result_families(disclosure) == {"causal_inference"}
+    assert sealed_result_families(_trial_disclosure("signed_other_suite")) == set()
+    assert (
+        families_requiring_family_result_contract(
+            causal,
+            analysis_types=("causal_inference",),
+            sealed_families=sealed_result_families(disclosure),
+        )
+        == ()
+    )
+
+    llm, stopped = _plan(causal, planning_contract_context=disclosure)
+
+    assert getattr(stopped, "reason_code", None) not in STOPS.values()
+    assert llm.calls

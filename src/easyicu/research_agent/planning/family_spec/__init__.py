@@ -62,8 +62,10 @@ from .request import (
     landmark_survival_suite_sealed,
     sealed_continuous_survival_suite_coordinates,
     sealed_feasibility_coordinates,
+    sealed_result_families,
     sealed_survival_suite_coordinates,
     sealed_trajectory_suite_coordinates,
+    target_trial_suite_sealed,
 )
 from .landmark_categorical_template import (
     FamilySkeletonDraft,
@@ -118,7 +120,9 @@ __all__ = [
     "landmark_survival_suite_sealed",
     "sealed_continuous_survival_suite_coordinates",
     "sealed_feasibility_coordinates",
+    "sealed_result_families",
     "sealed_survival_suite_coordinates",
     "sealed_trajectory_suite_coordinates",
+    "target_trial_suite_sealed",
     "validate_family_plan_spec",
 ]

@@ -454,6 +454,9 @@ class PipelineConfig:
     # The accepted candidate's primary-analysis input concepts, kept visible
     # to the package-bound Planner (planning.accepted_analysis_inputs).
     bound_analysis_inputs: Optional[Dict[str, Any]] = None
+    # The target trial the researcher approved on its card; the run compiles
+    # it on its own context before planning (planning.target_trial_configuration).
+    bound_target_trial: Optional[Dict[str, Any]] = None
     enable_tavily: bool = False
     tavily_api_key: Optional[str] = None
     tavily_retmax: int = 5
@@ -690,6 +693,17 @@ class PipelineConfig:
                 raise ValueError("bound_analysis_inputs requires require_human_plan_review")
             parsed = AcceptedAnalysisInputs.model_validate(self.bound_analysis_inputs)
             object.__setattr__(self, "bound_analysis_inputs", parsed.model_dump(mode="json"))
+        if self.bound_target_trial is not None:
+            from ..planning.target_trial_configuration import ConfirmedTargetTrial
+
+            if not self.require_human_plan_review:
+                raise ValueError(
+                    "bound_target_trial requires require_human_plan_review"
+                )
+            parsed = ConfirmedTargetTrial.model_validate(self.bound_target_trial)
+            object.__setattr__(
+                self, "bound_target_trial", parsed.model_dump(mode="json")
+            )
         for field_def in fields(self):
             value = getattr(self, field_def.name)
             frozen = _deep_freeze(value)
@@ -1120,6 +1134,7 @@ class PipelineConfig:
                 "bound_analysis_inputs",
                 "bound_baseline_requirements",
                 "bound_population_requirements",
+                "bound_target_trial",
             } or value is not None
         }
 

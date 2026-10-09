@@ -377,10 +377,14 @@ class CompiledTargetTrial:
         }
 
     def sha256(self) -> str:
-        raw = json.dumps(
-            self.record(), sort_keys=True, ensure_ascii=False, separators=(",", ":")
-        )
-        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        return compile_record_sha256(self.record())
+
+
+def compile_record_sha256(record: Mapping[str, Any]) -> str:
+    """The digest of a compile record, kept or just compiled."""
+
+    raw = json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def compile_target_trial(
@@ -1408,5 +1412,6 @@ __all__ = [
     "CompiledElement",
     "CompiledTargetTrial",
     "Confirmation",
+    "compile_record_sha256",
     "compile_target_trial",
 ]

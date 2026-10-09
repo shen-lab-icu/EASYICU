@@ -1,7 +1,9 @@
 """An outline that commits a family no owner can finish stops at once.
 
-The planner stops with ``progressive_family_result_contract_unwritable`` when
-its outline selects a causal or unsealed survival family, because final
+The planner stops when its outline selects a causal or unsealed survival
+family -- with ``tte_trial_not_confirmed`` for a causal one, which is planned
+only as the emulation of a confirmed target trial, and with
+``progressive_family_result_contract_unwritable`` otherwise -- because final
 acceptance would reject every later request. That check ran only after the
 outline passed its other checks. A causal outline rejected for an unrelated
 violation was retried first, and the retries kept the committed family: the
@@ -40,6 +42,8 @@ from tests.research_agent.planning.progressive_planner_fixtures import (
 )
 
 UNWRITABLE = "progressive_family_result_contract_unwritable"
+#: Each family's stop when no owner can write its result contract.
+STOPS = {"causal_inference": "tte_trial_not_confirmed", "survival": UNWRITABLE}
 QUESTIONS = {
     "causal_inference": "Estimate the effect of exposure_flag on outcome_flag.",
     "survival": "Estimate time to outcome_flag by exposure_flag (survival).",
@@ -121,7 +125,7 @@ def test_a_committed_family_no_owner_can_finish_is_not_retried(family, strategy)
     )
 
     assert isinstance(stopped, ProgressivePlanCompileError)
-    assert stopped.reason_code == UNWRITABLE
+    assert stopped.reason_code == STOPS[family]
     assert stopped.path == "analysis_type"
     assert family in str(stopped)
     # The first outline was the only request: no retry, foundation or step call.
@@ -145,7 +149,7 @@ def test_a_design_canary_still_validates_and_retries_its_outline():
         stop_after_outline=True,
     )
 
-    assert getattr(result, "reason_code", None) != UNWRITABLE
+    assert getattr(result, "reason_code", None) not in STOPS.values()
     assert result.output.analysis_type == "causal_inference"
     assert len(llm.calls) == 2
 
@@ -166,5 +170,5 @@ def test_an_outline_that_does_not_parse_is_retried_before_the_stop():
 
     # Nothing committed a family, so the parse retry runs; the next outline does.
     assert isinstance(stopped, ProgressivePlanCompileError)
-    assert stopped.reason_code == UNWRITABLE
+    assert stopped.reason_code == STOPS["causal_inference"]
     assert len(llm.calls) == 2

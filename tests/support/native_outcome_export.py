@@ -49,12 +49,16 @@ def typed_native_export(
     outcome_concepts: list[str],
     longitudinal: pd.DataFrame | None = None,
     longitudinal_concepts: list[str] | None = None,
+    statics: pd.DataFrame | None = None,
 ) -> Path:
+    """Write the export; ``statics`` holds each stay's age, else one per index."""
+
     root.mkdir()
-    stays = sorted(int(value) for value in outcome["stay_id"].unique())
-    statics = pd.DataFrame(
-        {"stay_id": stays, "age": [50 + 5 * index for index in range(len(stays))]}
-    )
+    if statics is None:
+        stays = sorted(int(value) for value in outcome["stay_id"].unique())
+        statics = pd.DataFrame(
+            {"stay_id": stays, "age": [50 + 5 * index for index in range(len(stays))]}
+        )
     members: list[tuple[str, str, pd.DataFrame, list[str]]] = [
         ("demographics.parquet", "demographics", statics, ["age"]),
         ("outcome.parquet", "outcome", outcome, list(outcome_concepts)),

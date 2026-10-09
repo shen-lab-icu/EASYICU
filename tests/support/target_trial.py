@@ -2,7 +2,9 @@
 
 Test modules may not import one another (``tests/governance/test_test_organization.py``).
 The signed target trial suite's authority body and a synthetic cohort with a
-known answer serve the authority, executor, claim and figure tests: does
+known answer serve the authority, executor, claim and figure tests; a research
+context the trial compiles on, and the study section a researcher approved,
+serve the configuration, binding and projection tests: does
 starting a vasopressor within six hours of time zero, six hours after ICU
 admission, change 28-day mortality?  No benchmark item asks it.  The cohort
 is simulated: sicker stays start sooner and die more often, a start lowers the
@@ -14,14 +16,34 @@ real patient rows.
 
 from __future__ import annotations
 
+import json
 import math
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
 
 from easyicu.research_agent.contracts.target_trial_design import (
     target_trial_host_policy_sha256,
+)
+from easyicu.research_agent.planning.population_compile import compile_population
+from easyicu.research_agent.planning.population_spec import PopulationSpec
+from easyicu.research_agent.planning.target_trial_compile import (
+    CompiledTargetTrial,
+    compile_target_trial,
+)
+from easyicu.research_agent.planning.target_trial_configuration import (
+    TARGET_TRIAL_DESIGN_SCHEMA_VERSION,
+    target_trial_approval_event_id,
+)
+from easyicu.research_agent.planning.target_trial_spec import TargetTrialSpec
+from easyicu.research_agent.schema import (
+    CohortDescriptor,
+    ConceptDescriptor,
+    ObservationSemantics,
+    ResearchContext,
+    UserPreferences,
+    VariableRole,
 )
 
 OUTPUTS = (
@@ -244,13 +266,272 @@ def synthetic_target_trial_cohort(
     return stays
 
 
+# -- the trial as a study states it and a researcher approves it --------------
+
+STUDY_ID = "study_trial0001"
+CONFIRMED_AT = "2026-10-09T14:00:00Z"
+_BINARY = {"n_unique": 2, "is_binary": True, "levels": [0, 1]}
+_TREATMENTS = ("vaso_ind", "other_vaso")
+
+
+def _windowed(
+    name: str, window: str, *, role: VariableRole = VariableRole.OTHER, **fields: Any
+) -> ConceptDescriptor:
+    return ConceptDescriptor(name=name, role=role, analysis_window=window, **fields)
+
+
+def target_trial_context(
+    *,
+    onset_window: str = f"icu_admission[0,{TIME_ZERO + GRACE}]h",
+    covariate_window: str = f"icu_admission[0,{TIME_ZERO}]h",
+    without: tuple[str, ...] = (),
+) -> ResearchContext:
+    """A research context the synthetic trial compiles on, every element carried.
+
+    The treatment's onsets are read through the grace period, the
+    indication over the hours before time zero and the blood pressure over
+    ``covariate_window``, by default the same hours.
+    """
+
+    variables = [
+        ConceptDescriptor(name="stay_id", role=VariableRole.ID, dtype="int64"),
+        ConceptDescriptor(
+            name="age", role=VariableRole.DEMOGRAPHIC, dtype="float64", unit="years"
+        ),
+        ConceptDescriptor(
+            name="los_icu", role=VariableRole.OUTCOME, dtype="float64", unit="days"
+        ),
+        ConceptDescriptor(
+            name="death",
+            role=VariableRole.OUTCOME,
+            dtype="int64",
+            observed_domain=_BINARY,
+        ),
+        ConceptDescriptor(
+            name="death_time",
+            role=VariableRole.OTHER,
+            dtype="float64",
+            observation_semantics=ObservationSemantics(
+                kind="conditional_event_time",
+                event_status_column="death",
+                representative_column="death_time",
+                time_origin="icu_admission",
+                time_unit="h",
+            ),
+        ),
+        ConceptDescriptor(
+            name="mort_28d",
+            role=VariableRole.OUTCOME,
+            dtype="int64",
+            observed_domain=_BINARY,
+        ),
+        ConceptDescriptor(
+            name="followup_days_28d",
+            role=VariableRole.OUTCOME,
+            dtype="float64",
+            unit="days",
+        ),
+        _windowed(
+            "shock",
+            f"icu_admission[0,{TIME_ZERO}]h",
+            dtype="int64",
+            observed_domain=_BINARY,
+        ),
+        _windowed(
+            "map_min",
+            covariate_window,
+            role=VariableRole.VITAL,
+            dtype="float64",
+            source_concept="map",
+            unit="mmHg",
+        ),
+        *(
+            _windowed(f"{concept}_onset_time", onset_window, dtype="float64")
+            for concept in _TREATMENTS
+        ),
+    ]
+    return ResearchContext(
+        research_question="Does an earlier start of the treatment change death?",
+        cohort=CohortDescriptor(
+            cohort_name="synthetic",
+            database="miiv",
+            n_stays=100,
+            n_patients=100,
+            id_columns=["stay_id"],
+            outcome_columns=["mort_28d"],
+        ),
+        variables=[item for item in variables if item.name not in without],
+        target_outcome="mort_28d",
+        user_preferences=UserPreferences(
+            data_constraints=json.dumps(
+                {
+                    "materialization_window": {
+                        "role": "outer_observation_window",
+                        "anchor": "ICU admission",
+                        "hours": 24,
+                    }
+                }
+            )
+        ),
+    )
+
+
+def target_trial_population() -> PopulationSpec:
+    return PopulationSpec.model_validate(
+        {
+            "criteria": [
+                {
+                    "id": "c1",
+                    "source": "question",
+                    "role": "include",
+                    "quote": "patients in shock",
+                    "kind": "condition_present",
+                    "concepts_all_of": ["shock"],
+                    "window": {"start_hours": 0, "end_hours": TIME_ZERO},
+                },
+                {
+                    "id": "c2",
+                    "source": "question",
+                    "role": "include",
+                    "quote": "adults",
+                    "kind": "age_years",
+                    "min_years": 18,
+                },
+            ]
+        }
+    )
+
+
+def target_trial_spec(**changes: Any) -> TargetTrialSpec:
+    data: dict[str, Any] = {
+        "treatment": {
+            "quote": "a vasoactive drug",
+            "source": "question",
+            "concepts": list(_TREATMENTS),
+            "treatment_class": "vasoactive",
+        },
+        "strategies": {
+            "quote": "start it early or not",
+            "source": "question",
+            "initiate_label": "Early start",
+            "defer_label": "No early start",
+        },
+        "time_zero": {
+            "quote": "six hours after ICU admission",
+            "source": "question",
+            "hours_after_icu_admission": TIME_ZERO,
+        },
+        "grace_period": {
+            "quote": "within six hours",
+            "source": "question",
+            "hours": GRACE,
+        },
+        "outcome": {
+            "quote": "death by day 28",
+            "source": "question",
+            "endpoint": "mort_28d",
+        },
+        "indication": {
+            "quote": "patients in shock",
+            "source": "question",
+            "criterion_ids": ["c1"],
+        },
+        "confounders": [
+            {
+                "name": "age",
+                "source": "question",
+                "clinical_rationale": "Older patients are started later and die more often.",
+            },
+            {
+                "name": "map_min",
+                "source": "conversation",
+                "clinical_rationale": "A lower blood pressure prompts the start and predicts death.",
+            },
+        ],
+    }
+    for key, value in changes.items():
+        if isinstance(value, dict) and isinstance(data.get(key), dict):
+            data[key] = {**data[key], **value}
+        else:
+            data[key] = value
+    return TargetTrialSpec.model_validate(data)
+
+
+def compiled_target_trial(
+    context: Optional[ResearchContext] = None,
+    *,
+    spec: Optional[TargetTrialSpec] = None,
+    population: Optional[PopulationSpec] = None,
+) -> CompiledTargetTrial:
+    """The record the host compiles for the approval card."""
+
+    spec = spec or target_trial_spec()
+    context = context or target_trial_context()
+    return compile_target_trial(
+        spec,
+        context,
+        population=compile_population(
+            population or target_trial_population(),
+            context,
+            time_zero_hours=spec.time_zero.hours_after_icu_admission,
+        ),
+    )
+
+
+def target_trial_design(
+    *,
+    compiled: Optional[CompiledTargetTrial] = None,
+    population: Optional[PopulationSpec] = None,
+    study_id: str = STUDY_ID,
+    approved: bool = True,
+    confirmed_at: str = CONFIRMED_AT,
+) -> dict[str, Any]:
+    """The study's ``target_trial_design`` section, approved by default.
+
+    The approval carries the event id the host mints for the study's click.
+    """
+
+    population = population or target_trial_population()
+    compiled = compiled or compiled_target_trial(population=population)
+    record = compiled.record()
+    design: dict[str, Any] = {
+        "schema_version": TARGET_TRIAL_DESIGN_SCHEMA_VERSION,
+        "spec": compiled.spec.model_dump(mode="json"),
+        "population_spec": population.model_dump(mode="json"),
+        "compile_record": record,
+        "compile_sha256": compiled.sha256(),
+        "confirmation_lines": len(compiled.confirmations),
+    }
+    if approved:
+        lines = len(compiled.confirmations)
+        design["approval"] = {
+            "approval_event_id": target_trial_approval_event_id(
+                study_id=study_id,
+                compile_sha256=compiled.sha256(),
+                n_lines_confirmed=lines,
+                confirmed_at=confirmed_at,
+            ),
+            "n_lines_confirmed": lines,
+            "confirmed_compile_sha256": compiled.sha256(),
+            "confirmed_at": confirmed_at,
+        }
+    return design
+
+
 __all__ = [
     "COMPILE_SHA256",
+    "CONFIRMED_AT",
     "GRACE",
     "HORIZON_DAYS",
     "OUTPUTS",
+    "STUDY_ID",
     "TIME_ZERO",
+    "compiled_target_trial",
     "synthetic_target_trial_cohort",
     "target_trial_authority_body",
+    "target_trial_context",
     "target_trial_covariates",
+    "target_trial_design",
+    "target_trial_population",
+    "target_trial_spec",
 ]

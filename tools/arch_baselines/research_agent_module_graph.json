@@ -8773,6 +8773,10 @@
     ],
     [
       "easyicu.research_agent.orchestration.config",
+      "easyicu.research_agent.planning.target_trial_configuration"
+    ],
+    [
+      "easyicu.research_agent.orchestration.config",
       "easyicu.research_agent.providers.efficiency_budget"
     ],
     [
@@ -9146,6 +9150,10 @@
     [
       "easyicu.research_agent.orchestration.reviewed_requirements",
       "easyicu.research_agent.planning.population_requirements"
+    ],
+    [
+      "easyicu.research_agent.orchestration.reviewed_requirements",
+      "easyicu.research_agent.planning.target_trial_configuration"
     ],
     [
       "easyicu.research_agent.orchestration.reviewed_requirements",
@@ -11537,6 +11545,30 @@
     ],
     [
       "easyicu.research_agent.planning.target_trial_compile",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.planning.target_trial_configuration",
+      "easyicu.research_agent.canonical_json"
+    ],
+    [
+      "easyicu.research_agent.planning.target_trial_configuration",
+      "easyicu.research_agent.planning.population_compile"
+    ],
+    [
+      "easyicu.research_agent.planning.target_trial_configuration",
+      "easyicu.research_agent.planning.population_spec"
+    ],
+    [
+      "easyicu.research_agent.planning.target_trial_configuration",
+      "easyicu.research_agent.planning.target_trial_compile"
+    ],
+    [
+      "easyicu.research_agent.planning.target_trial_configuration",
+      "easyicu.research_agent.planning.target_trial_spec"
+    ],
+    [
+      "easyicu.research_agent.planning.target_trial_configuration",
       "easyicu.research_agent.schema"
     ],
     [
@@ -14416,9 +14448,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3596,
+    "edge_count": 3604,
     "largest_scc_size": 0,
-    "module_count": 824,
+    "module_count": 825,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -15033,6 +15065,7 @@
     "easyicu.research_agent.planning.study_design": "planning/study_design.py",
     "easyicu.research_agent.planning.study_design_playbook": "planning/study_design_playbook.py",
     "easyicu.research_agent.planning.target_trial_compile": "planning/target_trial_compile.py",
+    "easyicu.research_agent.planning.target_trial_configuration": "planning/target_trial_configuration.py",
     "easyicu.research_agent.planning.target_trial_spec": "planning/target_trial_spec.py",
     "easyicu.research_agent.planning.treatment_capture": "planning/treatment_capture.py",
     "easyicu.research_agent.prediction_model_fit_owner": "prediction_model_fit_owner.py",

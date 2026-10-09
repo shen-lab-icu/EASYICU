@@ -76,6 +76,7 @@ _CONTEXT_FIELDS = {
     "execution_concepts",
     "analysis_design",
     "trajectory_design",
+    "target_trial_design",
     "sensitivity_specs",
     "time_window",
     "comparator",
@@ -298,6 +299,7 @@ _SCIENTIFIC_CONFIGURATION_FIELDS = (
     *_LITERATURE_SCOPE_FIELDS_V2,
     "cohort_eligibility_authority",
     "literature_authority",
+    "target_trial_design",
 )
 
 
@@ -1164,6 +1166,49 @@ def normalize_trajectory_design(
         ) from exc
 
 
+def normalize_target_trial_design(
+    value: Any, *, study_id: Optional[str]
+) -> Dict[str, Any]:
+    """Validate the study's target trial section at its planning owner.
+
+    An approval is held to the event id the host mints for this study's
+    click, so a section without its study cannot carry one.
+    """
+
+    from easyicu.research_agent.planning.target_trial_configuration import (
+        TargetTrialDesignError,
+        normalize_target_trial_design as _normalize,
+    )
+
+    try:
+        design = _normalize(value, study_id=study_id)
+    except TargetTrialDesignError as exc:
+        raise StudyContextError(
+            {"error": exc.code, "field": exc.field, "detail": str(exc)}
+        ) from exc
+    if design.get("approval") is not None and study_id is None:
+        raise StudyContextError(
+            {
+                "error": "target_trial_approval_event_mismatch",
+                "field": "target_trial_design.approval.approval_event_id",
+            }
+        )
+    return design
+
+
+def _stored_target_trial_design(value: Any, *, study_id: str) -> Dict[str, Any]:
+    """A stored section, kept inspectable when a later contract refuses it.
+
+    Execution validates it again and refuses what it cannot bind; the
+    project list does not break or drop it.
+    """
+
+    try:
+        return normalize_target_trial_design(value, study_id=study_id)
+    except StudyContextError:
+        return dict(value) if isinstance(value, Mapping) else {}
+
+
 def normalize_sensitivity_specs(value: Any) -> List[Dict[str, Any]]:
     """Normalize typed user-reviewed sensitivities at the StudyContext owner."""
 
@@ -1250,6 +1295,7 @@ def _default_context(context_id: str, timestamp: str) -> Dict[str, Any]:
         "execution_concepts": {},
         "analysis_design": {},
         "trajectory_design": {},
+        "target_trial_design": {},
         "sensitivity_specs": [],
         "time_window": {},
         "comparator": "",
@@ -1273,6 +1319,7 @@ def _sanitize_patch(
     allow_literature_authority: bool = False,
     allow_cohort_eligibility_authority: bool = False,
     allow_concept_selection_authority: bool = False,
+    allow_target_trial_design: bool = False,
 ) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise StudyContextError({"error": "study_context_body_required"})
@@ -1358,6 +1405,17 @@ def _sanitize_patch(
     if "trajectory_design" in raw:
         patch["trajectory_design"] = normalize_trajectory_design(
             raw.get("trajectory_design")
+        )
+    if "target_trial_design" in raw:
+        if not allow_target_trial_design:
+            raise StudyContextError(
+                {
+                    "error": "study_target_trial_design_server_owned",
+                    "field": "target_trial_design",
+                }
+            )
+        patch["target_trial_design"] = normalize_target_trial_design(
+            raw.get("target_trial_design"), study_id=patch.get("id")
         )
     if "sensitivity_specs" in raw:
         patch["sensitivity_specs"] = normalize_sensitivity_specs(
@@ -1587,7 +1645,9 @@ def _contexts_from_raw(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
             {
                 field: row[field]
                 for field in _CONTEXT_FIELDS
-                if field in row and field not in ("analysis_design", "trajectory_design")
+                if field in row
+                and field
+                not in ("analysis_design", "trajectory_design", "target_trial_design")
             },
             allow_literature_authority=True,
             allow_cohort_eligibility_authority=True,
@@ -1604,6 +1664,10 @@ def _contexts_from_raw(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
             # scientific rules, which a later revision may have tightened.
             patch["trajectory_design"] = normalize_trajectory_design(
                 row["trajectory_design"], enforce_design_rules=False
+            )
+        if "target_trial_design" in row:
+            patch["target_trial_design"] = _stored_target_trial_design(
+                row["target_trial_design"], study_id=patch["id"]
             )
         context_id = patch.pop("id")
         created_at = (
@@ -1879,6 +1943,7 @@ def upsert_context(
     _server_literature_authority_write: bool = False,
     _server_cohort_eligibility_authority_write: bool = False,
     _server_concept_selection_authority_write: bool = False,
+    _server_target_trial_design_write: bool = False,
 ) -> Dict[str, Any]:
     client_concept_selection_authority: Dict[str, Any] = {}
     if not _server_concept_selection_authority_write and isinstance(raw_context, dict):
@@ -1894,6 +1959,7 @@ def upsert_context(
         allow_concept_selection_authority=(
             _server_concept_selection_authority_write
         ),
+        allow_target_trial_design=_server_target_trial_design_write,
     )
     if expected_revision is not None and (
         isinstance(expected_revision, bool)
@@ -2075,6 +2141,95 @@ def bind_literature_authority(
         require_revision=True,
         lifecycle_write=False,
         _server_literature_authority_write=True,
+    )
+
+
+def bind_target_trial_design(
+    context_id: str,
+    design: Mapping[str, Any],
+    *,
+    expected_revision: int,
+) -> Dict[str, Any]:
+    """Commit the trial the host compiled for the study's card, or clear it.
+
+    ``design`` carries the stated trial and its population, the compile record
+    and its digest, without an approval: the approval is the researcher's own
+    click (:func:`record_target_trial_approval`), and no other write carries
+    one.  ``{}`` clears the section.
+    """
+
+    if isinstance(design, Mapping) and design.get("approval") is not None:
+        raise StudyContextError(
+            {
+                "error": "target_trial_approval_click_only",
+                "field": "target_trial_design.approval",
+            }
+        )
+    return upsert_context(
+        {
+            "id": _identifier(context_id, field="id"),
+            "target_trial_design": dict(design),
+        },
+        active=True,
+        expected_revision=expected_revision,
+        require_revision=True,
+        lifecycle_write=False,
+        _server_target_trial_design_write=True,
+    )
+
+
+def record_target_trial_approval(
+    context_id: str,
+    *,
+    confirmed_compile_sha256: str,
+    n_lines_confirmed: int,
+    expected_revision: int,
+) -> Dict[str, Any]:
+    """Record the researcher's click on the card showing one compile record.
+
+    The host mints the event id from the study, the record's digest, the
+    lines confirmed and the time of the click.  The click must be on the
+    record the study keeps, and confirm every line it lists.
+    """
+
+    from easyicu.research_agent.planning.target_trial_configuration import (
+        target_trial_approval_event_id,
+    )
+
+    clean_id = _identifier(context_id, field="id")
+    current = get_context(clean_id)
+    if current is None:
+        raise StudyContextError(
+            {"error": "study_context_not_found", "study_context_id": clean_id}
+        )
+    design = current.get("target_trial_design")
+    design = dict(design) if isinstance(design, Mapping) else {}
+    if not design or design.get("compile_sha256") != confirmed_compile_sha256:
+        raise StudyContextError(
+            {
+                "error": "target_trial_approval_record_mismatch",
+                "field": "target_trial_design.compile_sha256",
+            }
+        )
+    confirmed_at = _now()
+    design["approval"] = {
+        "approval_event_id": target_trial_approval_event_id(
+            study_id=clean_id,
+            compile_sha256=confirmed_compile_sha256,
+            n_lines_confirmed=n_lines_confirmed,
+            confirmed_at=confirmed_at,
+        ),
+        "n_lines_confirmed": n_lines_confirmed,
+        "confirmed_compile_sha256": confirmed_compile_sha256,
+        "confirmed_at": confirmed_at,
+    }
+    return upsert_context(
+        {"id": clean_id, "target_trial_design": design},
+        active=True,
+        expected_revision=expected_revision,
+        require_revision=True,
+        lifecycle_write=False,
+        _server_target_trial_design_write=True,
     )
 
 
@@ -2282,17 +2437,27 @@ def _scientific_fields_sha256(
     *,
     fields: tuple[str, ...],
 ) -> str:
+    scoped = {key: context.get(key) for key in fields}
+    if "target_trial_design" in fields and context.get("id"):
+        # The trial's approval is checked against the study it was minted for;
+        # the id itself is no scientific field.
+        scoped["id"] = context.get("id")
     sanitized = _sanitize_patch(
-        {key: context.get(key) for key in fields},
+        scoped,
         allow_literature_authority=True,
         allow_cohort_eligibility_authority=True,
         allow_concept_selection_authority=True,
+        allow_target_trial_design=True,
     )
+    sanitized.pop("id", None)
     # An undeclared trajectory design contributes nothing, so every digest
     # recorded before this field existed stays byte-identical; declaring one
     # is a scientific change and does move the digest.
     if not sanitized.get("trajectory_design"):
         sanitized.pop("trajectory_design", None)
+    # Likewise a study that states no target trial.
+    if not sanitized.get("target_trial_design"):
+        sanitized.pop("target_trial_design", None)
     encoded = json.dumps(
         sanitized,
         ensure_ascii=False,
@@ -2530,11 +2695,15 @@ def restore_turn_configuration_snapshot(
         "idea_handoff": {},
         "literature_authority": {},
         "cohort_eligibility_authority": {},
+        # The trial is compiled for and approved on one exact state of the
+        # study; it is set up and approved again after a restore.
+        "target_trial_design": {},
     }
     non_replayable_authorities = {
         "idea_handoff",
         "literature_authority",
         "cohort_eligibility_authority",
+        "target_trial_design",
     }
     for field in tuple(defaults):
         if field == "data_source" or field in non_replayable_authorities:
@@ -2549,6 +2718,7 @@ def restore_turn_configuration_snapshot(
         lifecycle_write=False,
         _server_literature_authority_write=True,
         _server_cohort_eligibility_authority_write=True,
+        _server_target_trial_design_write=True,
     )
 
 
@@ -2558,6 +2728,7 @@ __all__ = [
     "analysis_dependence_finding",
     "materialization_window_finding",
     "bind_literature_authority",
+    "bind_target_trial_design",
     "build_agent_context_binding",
     "clear_active_job_if",
     "cohort_eligibility_scope_sha256",
@@ -2572,6 +2743,7 @@ __all__ = [
     "normalize_covariate_operationalizations",
     "normalize_sensitivity_specs",
     "normalize_execution_concepts",
+    "record_target_trial_approval",
     "restore_turn_configuration_snapshot",
     "validate_context_update",
     "literature_search_scope_sha256",

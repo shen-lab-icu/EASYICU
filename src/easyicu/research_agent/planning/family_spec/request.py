@@ -103,13 +103,15 @@ from .contract import (
 
 #: Marker lines the sealed authorities print before their JSON coordinates
 #: (``LandmarkSurvivalRuntimeAuthority.planning_contract_context``,
-#: ``LandmarkContinuousSurvivalRuntimeAuthority.planning_contract_context`` and
-#: ``TrajectoryScientificRuntimeAuthority.planning_contract_context``).
+#: ``LandmarkContinuousSurvivalRuntimeAuthority.planning_contract_context``,
+#: ``TrajectoryScientificRuntimeAuthority.planning_contract_context`` and
+#: ``TargetTrialRuntimeAuthority.planning_contract_context``).
 SEALED_SURVIVAL_SUITE_MARKER = "CALLER-BOUND LANDMARK SURVIVAL SUITE:"
 SEALED_CONTINUOUS_SURVIVAL_SUITE_MARKER = (
     "CALLER-BOUND LANDMARK CONTINUOUS-EXPOSURE SURVIVAL SUITE:"
 )
 SEALED_TRAJECTORY_SUITE_MARKER = "CALLER-BOUND FIXED-WINDOW TRAJECTORY SUITE:"
+SEALED_TARGET_TRIAL_SUITE_MARKER = "CALLER-BOUND TARGET TRIAL EMULATION SUITE:"
 SEALED_FEASIBILITY_MARKER = "CALLER-BOUND SOURCE FEASIBILITY DECISION:"
 
 
@@ -291,6 +293,29 @@ def landmark_survival_suite_sealed(planning_contract_context: str) -> bool:
         sealed_survival_suite_coordinates(planning_contract_context) is not None
         or sealed_continuous_survival_suite_coordinates(planning_contract_context) is not None
     )
+
+
+def target_trial_suite_sealed(planning_contract_context: str) -> bool:
+    """Whether the host has sealed the emulation of a confirmed target trial."""
+
+    payload = _sealed_disclosure_payload(
+        planning_contract_context, SEALED_TARGET_TRIAL_SUITE_MARKER
+    )
+    return (
+        payload is not None
+        and payload.get("sealed_primary_owner") == "signed_target_trial_suite"
+    )
+
+
+def sealed_result_families(planning_contract_context: str) -> frozenset[str]:
+    """The research families whose primary result a sealed host suite owns."""
+
+    families: set[str] = set()
+    if landmark_survival_suite_sealed(planning_contract_context):
+        families.add("survival")
+    if target_trial_suite_sealed(planning_contract_context):
+        families.add("causal_inference")
+    return frozenset(families)
 
 #: The one owner a proposed survival design names; the host seals it only after
 #: the reviewed design is compiled into the study configuration.
@@ -2741,6 +2766,8 @@ __all__ = [
     "proposed_continuous_survival_suite_coordinates",
     "sealed_continuous_survival_suite_coordinates",
     "sealed_feasibility_coordinates",
+    "sealed_result_families",
     "sealed_survival_suite_coordinates",
     "sealed_trajectory_suite_coordinates",
+    "target_trial_suite_sealed",
 ]
