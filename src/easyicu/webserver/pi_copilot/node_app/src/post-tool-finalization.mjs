@@ -133,6 +133,34 @@ function studyUpdateIsReadyForPlanning(update) {
   return workflow?.next_action_code === "provider_ready_to_generate_plan";
 }
 
+// The design the update owner withheld while saving the rest
+// (details.unsaved_design): which one, why, and who supplies it.  A reply the
+// host finalizes states it, so the researcher is told even when no second
+// provider call is made.
+function withheldDesignText(update, language) {
+  const withheld = update?.receipt?.details?.unsaved_design;
+  if (!withheld || typeof withheld !== "object") return "";
+  const zh = language === "zh";
+  if (withheld.code === "web_trajectory_design_required") {
+    return zh
+      ? "分析设计这次没有保存：轨迹聚类需要先有经审阅的轨迹设计（建模哪些指标、固定窗口和网格、可选的类别数、什么算稳定），EasyICU 不替研究者选定。候选研究计划会提出轨迹设计，你在审阅中批准后，EasyICU 会把它连同分析设计一起写入研究配置。"
+      : "The analysis design was not saved: trajectory clustering needs a reviewed trajectory design first (which measures are modelled, the fixed window and grid, the admissible numbers of classes, and what counts as stable), and EasyICU does not choose these for the study. The candidate research plan proposes one; once you approve it in the review, EasyICU records it together with the analysis design.";
+  }
+  const code = boundedLabel(withheld.code);
+  return zh
+    ? `分析设计这次没有保存：EasyICU 的执行检查没有接受它（代码：${code}）。候选研究计划会提出设计，供你审阅。`
+    : `The analysis design was not saved: EasyICU's execution check did not accept it (code: ${code}). The candidate research plan proposes a design for your review.`;
+}
+
+// The withheld design goes before the reply's next-step list, or at its end.
+function withWithheldDesign(text, withheld) {
+  if (!withheld) return text;
+  const at = text.indexOf("\n\n**");
+  return at >= 0
+    ? `${text.slice(0, at)}\n\n${withheld}${text.slice(at)}`
+    : `${text}\n\n${withheld}`;
+}
+
 function finalizedMessage(model, text) {
   return {
     role: "assistant",
@@ -333,15 +361,19 @@ export function hostPostToolFinalization(model, context, language) {
     return toolCallStream(model, "easyicu_search_literature", literatureSearch);
   }
   const update = latestStudyContextUpdate(context);
+  const withheld = withheldDesignText(update, language);
   if (initialQuestionSaveNeedsDataSourceSelection(update)) {
     return completedStream(finalizedMessage(
       model,
-      dataSourceSelectionText(language, latestDataSourceCatalog(context), researcherText(context)),
+      withWithheldDesign(
+        dataSourceSelectionText(language, latestDataSourceCatalog(context), researcherText(context)),
+        withheld,
+      ),
     ));
   }
   if (!studyUpdateIsReadyForPlanning(update)) return null;
   const text = language === "zh"
     ? "研究问题和数据源已就绪，可以生成候选研究计划，供你审阅。尚未开始数据提取或分析。"
     : "The research question and data source are ready for a candidate research plan for your review. Data extraction and analysis have not started.";
-  return completedStream(finalizedMessage(model, text));
+  return completedStream(finalizedMessage(model, withWithheldDesign(text, withheld)));
 }
