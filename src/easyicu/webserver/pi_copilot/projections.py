@@ -10,6 +10,10 @@ from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from easyicu.research_agent.planning.population_compile import (
+    POPULATION_APPROVAL_STOPS,
+)
+
 from ..research_input_progress import project_research_input_state
 from . import cohort_eligibility
 from .contracts import PiCopilotError, plan_approval_allowed
@@ -1191,6 +1195,9 @@ def project_run_row(row: Mapping[str, Any]) -> Dict[str, Any]:
                 "plan_scientific_changes_required",
                 "scientific_plan_review_policy_stale",
                 "agent_plan_revision_nonconvergent",
+                # A plan whose population refuses its approval is still a plan
+                # under review: nothing has been analysed.
+                *POPULATION_APPROVAL_STOPS.values(),
             }
             & set(pending_review_reason_codes)
         )

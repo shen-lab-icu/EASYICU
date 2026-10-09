@@ -12,18 +12,30 @@ as ready and named preparing its data as the next action.  It now shows the
 plan under review with the reason as its next action, offers no approval,
 and lets a fresh candidate plan be generated; once the study binds the
 export extracted for its own population, the plan is superseded and planned
-again on that export.  Synthetic studies only.
+again on that export.
+
+The run the conversation reads is a plan under review too, with nothing
+analysed.  Each consumer keeps its own set of the codes that mean a plan
+review, and a new code can miss one of them: every such set names the
+stops that refuse approval, or this file says why it need not.
+Synthetic studies only.
 """
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+import ast
+from pathlib import Path
+from typing import Any, Iterator, Mapping
 
+import pytest
+
+import easyicu.webserver as webserver_package
 from easyicu.research_agent.planning.population_compile import (
     POPULATION_APPROVAL_STOPS,
 )
 from easyicu.webserver import agent_pipeline_runs
 from easyicu.webserver import study_contexts as study_context_owner
+from easyicu.webserver.pi_copilot.projections import project_run_row
 from easyicu.webserver.pi_copilot.workflow import (
     build_research_workflow_snapshot,
     host_decision_offers,
@@ -167,3 +179,116 @@ def test_the_pending_review_keeps_the_typed_reason() -> None:
             )
             == reason
         )
+
+
+@pytest.mark.parametrize("reason", [_EXTRACT, _UNAPPLIED])
+def test_the_conversation_reads_a_plan_under_review_with_nothing_analysed(
+    reason: str,
+) -> None:
+    run, _review = _run_and_review(complete_study(), [reason], digest="d" * 64)
+    # The plan stage writes placeholders for the results and the manuscript.
+    run["artifact_names"] += ["result_tables.json", "manuscript_draft.json"]
+
+    projected = project_run_row(run)
+
+    assert projected["execution_phase"] == "plan_review"
+    assert projected["human_plan_review_pending"] is True
+    assert projected["plan_approval_allowed"] is False
+    assert projected["analysis_executed"] is False
+    assert projected["scientific_results_available"] is False
+    assert (
+        projected["artifact_semantics"]
+        == "plan_stage_placeholders_not_analysis_results"
+    )
+
+
+# A set naming either of these codes reads a plan review.
+_PLAN_REVIEW_CODES = frozenset(
+    {"operator_plan_approval_required", "plan_scientific_changes_required"}
+)
+_STOPS_SPREAD = "POPULATION_APPROVAL_STOPS.values()"
+
+# Sets that read a plan review without naming the stops, and why they need not.
+_NEED_NOT_NAME_THE_STOPS = {
+    ("pi_copilot/tools.py", "_request_replan", "review_declared"): (
+        "it picks a review whose live authority may still resume; a plan "
+        "that refuses approval never does, and without the code the request "
+        "already starts a fresh plan"
+    ),
+    (
+        "pi_copilot/run_authority.py",
+        "workflow_authoritative_run",
+        "candidate_waits_for_execution_upgrade",
+    ): (
+        "it keeps a candidate waiting for its execution upgrade over a failed "
+        "preparation launched from it; a plan that refuses approval launches none"
+    ),
+    ("pi_copilot/workflow.py", "_enrich_plan_review", ""): (
+        "it sends a reviewer's runtime gap to the host compiler; a population "
+        "stop is no such gap, and replacing its next action would hide it"
+    ),
+}
+
+
+def _plan_review_code_sets() -> Iterator[tuple[tuple[str, str, str], bool]]:
+    """Yield (file, function, assigned name) of each set, and whether it names the stops."""
+
+    root = Path(webserver_package.__file__).parent
+    stops = set(POPULATION_APPROVAL_STOPS.values())
+    for source in sorted(root.rglob("*.py")):
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        parents = {
+            child: node
+            for node in ast.walk(tree)
+            for child in ast.iter_child_nodes(node)
+        }
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Set, ast.List, ast.Tuple)):
+                continue
+            codes = {
+                item.value
+                for item in node.elts
+                if isinstance(item, ast.Constant) and isinstance(item.value, str)
+            }
+            if not codes & _PLAN_REVIEW_CODES:
+                continue
+            spreads = {
+                ast.unparse(item.value)
+                for item in node.elts
+                if isinstance(item, ast.Starred)
+            }
+            function, name, parent = "", "", parents.get(node)
+            while parent is not None:
+                if not name and isinstance(parent, ast.Assign):
+                    name = ast.unparse(parent.targets[0])
+                if not function and isinstance(
+                    parent, (ast.FunctionDef, ast.AsyncFunctionDef)
+                ):
+                    function = parent.name
+                parent = parents.get(parent)
+            key = (source.relative_to(root).as_posix(), function or "<module>", name)
+            yield key, stops <= codes or _STOPS_SPREAD in spreads
+
+
+def test_every_set_that_reads_a_plan_review_names_the_stops_or_says_why_not() -> None:
+    sets: dict[tuple[str, str, str], bool] = {}
+    for key, names_stops in _plan_review_code_sets():
+        # Two unnamed sets in one function share a key; both must name them.
+        sets[key] = sets.get(key, True) and names_stops
+
+    assert {
+        (
+            "pi_copilot/workflow.py",
+            "build_research_workflow_snapshot",
+            "plan_review_codes",
+        ),
+        ("pi_copilot/projections.py", "project_run_row", "waiting_for_plan_review"),
+        ("routes/agent.py", "<module>", "_CANDIDATE_PLAN_WORKFLOW_CODES"),
+    } <= {key for key, names_stops in sets.items() if names_stops}
+    assert [
+        key
+        for key, names_stops in sorted(sets.items())
+        if not names_stops and key not in _NEED_NOT_NAME_THE_STOPS
+    ] == []
+    # Each reason still describes a set that exists and omits the stops.
+    assert [key for key in _NEED_NOT_NAME_THE_STOPS if sets.get(key) is not False] == []
