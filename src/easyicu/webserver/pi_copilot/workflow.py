@@ -12,9 +12,18 @@ import functools
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from easyicu.webserver import agent_pipeline_runs, agent_runs, jobs, sources
+from easyicu.webserver import host_action_starting
+from easyicu.webserver.host_action_contracts import (
+    ExecutionRetryDecision,
+    HostActionStarting,
+    HostDecisionOffers,
+    PlanReviewDecision,
+    PlanTransitionDecision,
+    review_authority_sha256,
+)
 from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.research_evidence_preview import project_review_evidence_refs
 from easyicu.webserver.research_launch_scientific import (
@@ -129,6 +138,14 @@ class ProjectWorkflowProjection(BaseModel):
     # (bounded), so the workspace can show the project's run record rather
     # than only the run that currently owns the workflow.
     runs: Sequence[Mapping[str, Any]] = ()
+    # The decision each job-starting host button can answer now.  The browser
+    # echoes the one it acts on; they are coordinates, not permissions
+    # (``webserver.host_action_contracts``).  Kept beside the snapshot, which
+    # the conversation's model also reads.
+    host_decisions: HostDecisionOffers = Field(default_factory=HostDecisionOffers)
+    # A host decision whose job this process is starting; the browser's
+    # projection then names ``starting`` as the next action.
+    starting: Optional[HostActionStarting] = None
 
 
 RUN_HISTORY_LIMIT = 10
@@ -1297,12 +1314,73 @@ def _scientific_review_references(review: Mapping[str, Any]) -> List[str]:
     return references[:80]
 
 
+def host_decision_offers(
+    snapshot: ResearchWorkflowSnapshot,
+    *,
+    study: Mapping[str, Any],
+    latest_run: Optional[Mapping[str, Any]],
+    plan_review_authority: Optional[Mapping[str, Any]],
+) -> HostDecisionOffers:
+    """The decision each job-starting host button can answer in this state."""
+
+    if not str(study.get("id") or "").strip():
+        return HostDecisionOffers()
+    digest = study_context_owner.scientific_configuration_sha256(dict(study))
+    run = latest_run or {}
+    run_id = str(run.get("run_id") or "").strip()
+    review = plan_review_authority if isinstance(plan_review_authority, Mapping) else {}
+    requests = review.get("requests")
+    authority = (
+        review_authority_sha256(requests) if isinstance(requests, list) else None
+    )
+    offers: Dict[str, Any] = {}
+    # A state whose coordinates do not fit the contract offers nothing to
+    # echo; the button then submits without a host decision, as before.
+    try:
+        offers["plan_transition"] = PlanTransitionDecision(
+            next_action_code=snapshot.next_action_code,
+            scientific_configuration_sha256=digest,
+            source_run_id=run_id,
+        )
+    except ValidationError:
+        pass
+    if (
+        snapshot.next_action_code == "operator_plan_approval_required"
+        and authority
+        and str(review.get("run_id") or "").strip() == run_id
+    ):
+        try:
+            offers["plan_review"] = PlanReviewDecision(
+                run_id=run_id,
+                scientific_configuration_sha256=digest,
+                review_authority_sha256=authority,
+            )
+        except ValidationError:
+            pass
+    if run_id:
+        try:
+            offers["execution_retry"] = ExecutionRetryDecision(
+                source_run_id=run_id,
+                gate_reason=str(run.get("gate_reason") or ""),
+                scientific_configuration_sha256=digest,
+            )
+        except ValidationError:
+            pass
+    return HostDecisionOffers(**offers)
+
+
 def build_project_workflow_projection(
     *,
     study_context_id: Optional[str],
     study_override: Optional[Mapping[str, Any]] = None,
+    include_starting: bool = False,
 ) -> ProjectWorkflowProjection:
-    """Collect raw receipts once, compile once, and project only at the end."""
+    """Collect raw receipts once, compile once, and project only at the end.
+
+    ``include_starting`` is for the browser's projection alone: while a host
+    decision's job is being started its next action is ``starting``.  Every
+    authority read keeps the state that decision answers.
+    """
 
     clean_study_id = str(study_context_id or "").strip()
     if study_override is not None:
@@ -1394,6 +1472,23 @@ def build_project_workflow_projection(
         )
     if latest_run:
         snapshot = _enrich_plan_review(snapshot, study=study, review=review)
+    host_decisions = host_decision_offers(
+        snapshot,
+        study=study,
+        latest_run=latest_run,
+        plan_review_authority=plan_review_authority,
+    )
+    starting = (
+        host_action_starting.starting_for(clean_study_id)
+        if include_starting and clean_study_id
+        else None
+    )
+    if starting is not None and (active_job or {}).get("status") == "running":
+        # The job exists and the projection names it; the entry is cleared
+        # once the job is tagged.
+        starting = None
+    if starting is not None:
+        snapshot = snapshot.model_copy(update={"next_action_code": "starting"})
 
     return ProjectWorkflowProjection(
         workflow=snapshot,
@@ -1402,6 +1497,15 @@ def build_project_workflow_projection(
         runs=project_run_history(
             rows,
             authoritative_run_id=str((latest_run or {}).get("run_id") or ""),
+        ),
+        host_decisions=host_decisions,
+        starting=(
+            HostActionStarting(
+                action_code=starting.action_code,
+                started_at=starting.started_at,
+            )
+            if starting is not None
+            else None
         ),
     )
 
@@ -1417,4 +1521,5 @@ __all__ = [
     "registered_export_matches_study",
     "build_research_workflow_snapshot",
     "build_project_workflow_projection",
+    "host_decision_offers",
 ]

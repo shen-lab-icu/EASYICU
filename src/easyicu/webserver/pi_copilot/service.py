@@ -34,6 +34,7 @@ from easyicu.webserver import (
     study_contexts,
 )
 from easyicu.webserver.data_package_review import DataPackageReviewSnapshotStore
+from easyicu.webserver.host_action_contracts import host_action_id
 from easyicu.webserver.copilot_data_workbench import (
     CopilotDataWorkbenchError,
     CopilotDataWorkbenchSnapshotStore,
@@ -2578,8 +2579,111 @@ class PiCopilotService:
         action_key: str,
         child_job_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Bind one explicit host-UI action to the durable conversation replay."""
+        """Bind one explicit host-UI action to the durable conversation replay.
 
+        A job-starting action is recorded by the host in the request that
+        starts its job (``webserver.host_action_jobs``).  For one, this returns
+        the row the host wrote, so a cached page cannot add a second row under
+        a key of its own.
+        """
+
+        action = str(action_code or "").strip()
+        if action in HOST_ACTION_JOB_KINDS:
+            record = self._scoped_record(session_id, project_id=project_id)
+            child_id = str(child_job_id or "").strip()
+            row = next(
+                (
+                    turn
+                    for turn in reversed(
+                        self.replay_store.host_action_turns(
+                            session_id=record.session_id,
+                            project_id=str(record.project_id),
+                        )
+                    )
+                    if child_id and turn.get("child_job_id") == child_id
+                ),
+                None,
+            )
+            if row is None:
+                raise PiCopilotError(
+                    "host_action_server_recorded",
+                    "EasyICU records this action when it starts its job.",
+                    status_code=409,
+                )
+            return {"ok": True, "host_action": row}
+        return self._record_host_action(
+            session_id,
+            project_id=project_id,
+            action_code=action,
+            action_key=action_key,
+            child_job_id=child_job_id,
+        )
+
+    def record_job_host_action(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        action_code: str,
+        action_key: str,
+        child_job_id: str,
+    ) -> Dict[str, Any]:
+        """Record a job-starting host action for the host that started its job."""
+
+        if str(action_code or "").strip() not in HOST_ACTION_JOB_KINDS:
+            raise PiCopilotError(
+                "pi_host_action_unsupported",
+                "This host conversation action does not start a job.",
+                status_code=400,
+            )
+        return self._record_host_action(
+            session_id,
+            project_id=project_id,
+            action_code=action_code,
+            action_key=action_key,
+            child_job_id=child_job_id,
+        )
+
+    def host_action_session(
+        self, session_id: str, *, project_id: str, study_context_id: str
+    ) -> None:
+        """Refuse a conversation that is not this project's, bound to the study."""
+
+        record = self._scoped_record(session_id, project_id=project_id)
+        if record.binding.study_context_id != str(study_context_id or "").strip():
+            raise PiCopilotError(
+                "host_action_study_mismatch",
+                "This conversation is bound to a different study.",
+                status_code=409,
+                details={"session_id": record.session_id},
+            )
+
+    def host_action_child_job(
+        self, session_id: str, *, project_id: str, action_key: str
+    ) -> Optional[Dict[str, Any]]:
+        """The child job this conversation last recorded for one decision."""
+
+        record = self._scoped_record(session_id, project_id=project_id)
+        for turn in reversed(
+            self.replay_store.host_action_turns(
+                session_id=record.session_id,
+                project_id=str(record.project_id),
+            )
+        ):
+            child_id = str(turn.get("child_job_id") or "").strip()
+            if child_id and turn.get("action_key") == action_key:
+                return {"child_job_id": child_id, "status": str(turn.get("status") or "")}
+        return None
+
+    def _record_host_action(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        action_code: str,
+        action_key: str,
+        child_job_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         record = self._scoped_record(session_id, project_id=project_id)
         action = str(action_code or "").strip()
         key = str(action_key or "").strip()
@@ -2618,9 +2722,7 @@ class PiCopilotService:
                 "This host conversation action must not bind a child job.",
                 status_code=400,
             )
-        action_id = "host_" + hashlib.sha256(
-            f"{record.session_id}\0{action}\0{key}".encode("utf-8")
-        ).hexdigest()[:24]
+        action_id = host_action_id(record.session_id, action, key)
         child_status = str(child.status) if child is not None else "done"
         status = child_status if child_status in {"done", "failed", "cancelled"} else "running"
         turn = self.replay_store.record_host_action(
@@ -3497,6 +3599,7 @@ class PiCopilotService:
         study_context_id = self.project_store.resolve(clean)
         projection = build_project_workflow_projection(
             study_context_id=study_context_id,
+            include_starting=True,
         )
         return {
             "ok": True,
@@ -4516,7 +4619,53 @@ class PiCopilotService:
                     project_id=str(record.project_id),
                     job=project_job(child.snapshot()),
                 )
+        self._backfill_host_action_row(record)
         return record
+
+    def _backfill_host_action_row(self, record: PiSessionRecord) -> None:
+        """Write the row a job-starting host action could not record.
+
+        The host records it in the request that starts the job and retries
+        once (``webserver.host_action_jobs``).  When both writes fail, the
+        study's running job still names this conversation in its tag.
+        """
+
+        study_id = str(record.binding.study_context_id or "").strip()
+        if not study_id:
+            return
+        try:
+            study = study_contexts.get_context(study_id) or {}
+        except study_contexts.StudyContextError:
+            return
+        job_id = str(study.get("active_job_id") or "").strip()
+        job = jobs.MANAGER.get(job_id) if job_id else None
+        tag = job.host_action if job is not None else None
+        if (
+            tag is None
+            or tag.session_id != record.session_id
+            or tag.project_id != str(record.project_id)
+            or tag.study_context_id != study_id
+        ):
+            return
+        if any(
+            turn.get("job_id") == tag.action_id
+            for turn in self.replay_store.host_action_turns(
+                session_id=record.session_id,
+                project_id=str(record.project_id),
+            )
+        ):
+            return
+        try:
+            self.record_job_host_action(
+                record.session_id,
+                project_id=str(record.project_id),
+                action_code=tag.action_code,
+                action_key=tag.decision_key,
+                child_job_id=job.id,
+            )
+        except PiCopilotError:
+            # The next read of this conversation tries again.
+            return
 
     def close(self) -> None:
         self.gateway.close()

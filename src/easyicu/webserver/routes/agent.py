@@ -6,7 +6,7 @@ import hashlib
 import json
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
@@ -17,6 +17,7 @@ from easyicu.webserver import agent_runs
 from easyicu.webserver import agent_pipeline_runs
 from easyicu.webserver import capabilities
 from easyicu.webserver import dataio
+from easyicu.webserver import host_action_jobs
 from easyicu.webserver import provider_adapter
 from easyicu.webserver import research_run_submission
 from easyicu.webserver import codex_account_sessions
@@ -24,6 +25,10 @@ from easyicu.webserver import settings as settings_store
 from easyicu.webserver import science_workbench
 from easyicu.webserver import sources as source_store
 from easyicu.webserver import study_contexts as context_store
+from easyicu.webserver.host_action_contracts import (
+    HostActionRequest,
+    retry_options_sha256,
+)
 from easyicu.webserver.ideas.mining import EXECUTION_GATE_BLOCKERS
 from easyicu.webserver.pi_copilot.contracts import (
     plan_approval_allowed,
@@ -451,10 +456,42 @@ def submit_agent_run(
     }
 
 
+def _host_action(body: Mapping[str, Any]) -> Optional[HostActionRequest]:
+    try:
+        return host_action_jobs.parse_host_action(body.get("host_action"))
+    except host_action_jobs.HostActionJobError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+def _submit_host_decision(
+    host_action: HostActionRequest,
+    body: Mapping[str, Any],
+    submit: Callable[[], Mapping[str, Any]],
+    **key_inputs: str,
+) -> dict:
+    """One job per host decision of a study (``webserver.host_action_jobs``)."""
+
+    try:
+        return host_action_jobs.submit_with_host_action(
+            host_action,
+            study_context_id=str(body.get("study_context_id") or ""),
+            submit=submit,
+            **key_inputs,
+        )
+    except host_action_jobs.HostActionJobError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
 @control_router.post("/api/jobs/agent-run")
 def jobs_agent_run(body: Dict[str, Any], request: Request) -> dict:
     """HTTP adapter that resolves only the current browser's account authority."""
 
+    host_action = _host_action(body)
+    if host_action is not None:
+        try:
+            host_action_jobs.check_agent_run_request(host_action, body)
+        except host_action_jobs.HostActionJobError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     llm_provider = str(body.get("llm_provider") or body.get("provider") or "mock")
     account_environment: Optional[Mapping[str, str]] = None
     if provider_adapter.is_user_account_provider(llm_provider):
@@ -467,13 +504,29 @@ def jobs_agent_run(body: Dict[str, Any], request: Request) -> dict:
                 status_code=400,
                 detail={"error": exc.code},
             ) from exc
-    return submit_agent_run(
+
+    def submit() -> dict:
+        return submit_agent_run(
+            body,
+            account_environment=account_environment,
+            # The browser cannot grant execution or select a permissive budget.
+            # Candidate-plan authority is recovered from the current
+            # server-owned workflow; the legacy boolean can only narrow to a
+            # zero-row canary.
+            metadata_only_planning_authorized=_candidate_plan_only_authorized(body),
+        )
+
+    if host_action is None:
+        return submit()
+    return _submit_host_decision(
+        host_action,
         body,
-        account_environment=account_environment,
-        # The browser cannot grant execution or select a permissive budget.
-        # Candidate-plan authority is recovered from the current server-owned
-        # workflow; the legacy boolean can only narrow to a zero-row canary.
-        metadata_only_planning_authorized=_candidate_plan_only_authorized(body),
+        submit,
+        retry_options=retry_options_sha256(
+            report_only=body_bool(body, "report_only"),
+            provider=llm_provider,
+            credential_source=str(body.get("credential_source") or ""),
+        ),
     )
 
 
@@ -481,6 +534,12 @@ def jobs_agent_run(body: Dict[str, Any], request: Request) -> dict:
 def jobs_agent_run_review(body: Dict[str, Any], request: Request) -> dict:
     """HTTP adapter that resolves only this browser's account authority."""
 
+    host_action = _host_action(body)
+    if host_action is not None:
+        try:
+            host_action_jobs.check_review_request(host_action, body)
+        except host_action_jobs.HostActionJobError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     run_id = str(body.get("run_id") or "").strip()
     pending = agent_pipeline_runs.pending_review(run_id) if run_id else None
     account_environment: Optional[Mapping[str, str]] = None
@@ -496,9 +555,20 @@ def jobs_agent_run_review(body: Dict[str, Any], request: Request) -> dict:
                 status_code=400,
                 detail={"error": exc.code},
             ) from exc
-    return submit_agent_run_review(
+
+    def submit() -> dict:
+        return submit_agent_run_review(
+            body,
+            account_environment=account_environment,
+        )
+
+    if host_action is None:
+        return submit()
+    return _submit_host_decision(
+        host_action,
         body,
-        account_environment=account_environment,
+        submit,
+        review_decision=str(body.get("decision") or "").strip().lower(),
     )
 
 

@@ -53,6 +53,11 @@ SCRIPT = r"""
     next_action_code: 'failed_pipeline_execution_retry_available',
     plan_review_summary: null,
     latest_attempt_failure: null,
+    host_decisions: {execution_retry: {
+      family: 'execution_retry', source_run_id: 'failed-approved-execution',
+      gate_reason: 'research_pipeline_execution_failed',
+      scientific_configuration_sha256: 'a'.repeat(64),
+    }},
   };
   const host = {
     tr: (en, zh) => zh, esc: value => String(value), iconHtml: () => '',
@@ -168,6 +173,18 @@ def test_retry_of_a_failed_execution_resumes_the_failed_run_not_the_reviewed_pla
     assert body["planner_start_mode"] == "auto"
     assert body.get("report_only") is None
     assert body["external_llm_opt_in"] is True
+    # The retry carries the decision the projection offers for that run.
+    assert body["host_action"] == {
+        "session_id": "session",
+        "project_id": "project",
+        "action_code": "retry_analysis",
+        "decision": {
+            "family": "execution_retry",
+            "source_run_id": "failed-approved-execution",
+            "gate_reason": "research_pipeline_execution_failed",
+            "scientific_configuration_sha256": "a" * 64,
+        },
+    }
 
 
 def test_retry_falls_back_to_the_binding_only_when_no_run_is_projected() -> None:
@@ -175,6 +192,8 @@ def test_retry_falls_back_to_the_binding_only_when_no_run_is_projected() -> None
 
     body = _launch(exercise("no-projection")["calls"])
     assert body["execution_resume_source_run_id"] == "reviewed-candidate-plan"
+    # The offered decision names another run, so it is not sent for this one.
+    assert "host_action" not in body
 
 
 @pytest.mark.parametrize(
@@ -194,7 +213,12 @@ def test_restore_keeps_its_selected_run_and_session_during_refresh(case: str) ->
         assert body["study_context_id"] == "study"
         assert body["llm_provider"] == "openai"
         assert body["credential_source"] == "pi_verified"
-    assert sum(call[0] == "record" for call in calls if isinstance(call, list)) == 1
+        # The fallback answers the same decision the first request named.
+        assert body["host_action"]["session_id"] == "session"
+        decision = body["host_action"]["decision"]
+        assert decision["source_run_id"] == "failed-approved-execution"
+    # The host records the started job; the browser writes no row.
+    assert not any(call[0] == "record" for call in calls if isinstance(call, list))
     assert sum(call[0] == "watch" for call in calls if isinstance(call, list)) == 1
 
 

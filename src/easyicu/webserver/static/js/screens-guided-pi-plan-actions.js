@@ -69,6 +69,56 @@
       return String((host.workflow() && host.workflow().next_action_code) || '');
     }
 
+    // The decision a job-starting button answers, as the host's projection
+    // offers it. The host starts one job per decision of the study, refuses a
+    // stale one, and records the click in this conversation itself
+    // (webserver/host_action_jobs.py); a page without the projection submits
+    // without it, as before.
+    function hostAction(actionCode, family) {
+      const session = host.session() || {};
+      if (!session.session_id || typeof host.workflow !== 'function') return null;
+      const decisions = (host.workflow() || {}).host_decisions || {};
+      const decision = decisions[family];
+      if (!decision) return null;
+      return {
+        session_id: String(session.session_id),
+        project_id: String((typeof host.projectId === 'function' && host.projectId()) || ''),
+        action_code: actionCode,
+        decision,
+      };
+    }
+
+    // A reopened page can meet a decision whose job the host is still
+    // starting; follow the projection until the job exists or the start ends.
+    const STARTING_REFRESH_MS = 3000;
+    let startingRefresh = null;
+    function followStartingDecision() {
+      if (startingRefresh || typeof host.loadWorkflow !== 'function') return;
+      startingRefresh = setTimeout(async () => {
+        startingRefresh = null;
+        try { await host.loadWorkflow(); } catch (error) { return; }
+        host.render();
+        if (workflowCode() === 'starting') followStartingDecision();
+      }, STARTING_REFRESH_MS);
+    }
+
+    // The host's answer to a repeated or stale decision is the study's state,
+    // not a failure of this click: reload the projection so the page shows
+    // it. A decision still starting needs no banner.
+    function followHostDecisionRefusal(error) {
+      const code = String(error && error.code || '');
+      if (!['host_action_in_progress', 'study_job_running', 'host_action_decision_stale'].includes(code)) return false;
+      if (typeof host.loadWorkflow === 'function') {
+        void Promise.resolve(host.loadWorkflow()).then(() => {
+          host.render();
+          if (workflowCode() === 'starting') followStartingDecision();
+        }).catch(() => null);
+      }
+      if (code !== 'host_action_in_progress') return false;
+      host.render();
+      return true;
+    }
+
     function automaticRevisionBlocked() {
       const summary = (host.workflow() || {}).plan_review_summary || {};
       return Array.isArray(summary.automatic_revision_blockers)
@@ -257,6 +307,16 @@
         const source = study && study.data_source;
         const sourcePath = String((source && source.path) || '').trim();
         if (!study || !sourcePath) throw new Error('prepared_data_source_unavailable');
+        const decision = hostAction(
+          automatic && !executionUpgrade
+            ? reasonCode === 'provider_ready_to_generate_plan'
+              ? 'auto_generate_plan'
+              : 'auto_revise_plan'
+            : executionUpgrade
+            ? 'prepare_analysis_data'
+            : 'generate_plan',
+          'plan_transition',
+        );
         const payload = await api.startAgentRun({
           path: sourcePath,
           study_id: studyContextId,
@@ -266,6 +326,7 @@
           llm_provider: String(provider.provider || ''),
           credential_source: String(provider.credential_source || ''),
           external_llm_opt_in: true,
+          ...(decision ? { host_action: decision } : {}),
           // The natural research request authorizes evidence gathering for the
           // candidate plan. Dropping this flag made every Web revision repeat
           // the same "no direct evidence search" finding.
@@ -283,18 +344,6 @@
         });
         jobStarted = true;
         if (!stillCurrent()) return false;
-        await host.recordHostAction(
-          automatic && !executionUpgrade
-            ? reasonCode === 'provider_ready_to_generate_plan'
-              ? 'auto_generate_plan'
-              : 'auto_revise_plan'
-            : executionUpgrade
-            ? 'prepare_analysis_data'
-            : 'generate_plan',
-          String(payload.job_id || ''),
-          String(payload.job_id || ''),
-        );
-        if (!stillCurrent()) return false;
         host.setBusy(false);
         host.watchChildJob(
           String(payload.job_id || ''),
@@ -307,6 +356,7 @@
         if (!stillCurrent()) return false;
         if (guardedTransition) startedTransitions.delete(guardKey);
         host.setBusy(false);
+        if (followHostDecisionRefusal(error)) return false;
         host.setError(host.errorText(error));
         host.render();
         return false;
@@ -368,6 +418,10 @@
     async function continueSystemOwnedPlanProgression(options = {}) {
       const workflow = host.workflow() || {};
       const actionCode = String(workflow.next_action_code || '');
+      if (actionCode === 'starting') {
+        followStartingDecision();
+        return false;
+      }
       if (unavailable()) return false;
       // Opening, restoring, or rebinding a conversation is a read operation.
       // It must never be treated as fresh user authority to start another
@@ -514,6 +568,7 @@
           ? tr('Approve plan and start analysis', '批准计划并开始分析')
           : tr('Reject this plan', '拒绝当前计划'),
       });
+      const hostDecision = hostAction('execute_plan', 'plan_review');
       setPending(true);
       try {
         const payload = await api.submitAgentRunReview({
@@ -521,14 +576,13 @@
           study_context_id: studyContextId,
           decision,
           external_llm_opt_in: true,
+          ...(hostDecision && hostDecision.decision.run_id === runId ? { host_action: hostDecision } : {}),
         });
-        await host.recordHostAction(
-          'execute_plan', String(payload.job_id || ''), String(payload.job_id || ''),
-        );
         host.setBusy(false);
         host.watchChildJob(String(payload.job_id || ''), 'easyicu_review_submitted');
       } catch (error) {
         host.setBusy(false);
+        if (followHostDecisionRefusal(error)) return;
         host.setError(host.errorText(error));
         host.render();
       }
@@ -550,6 +604,8 @@
       // A workflow/session refresh can settle while the report request is in
       // flight. Its fallback must retain this action's approved run and route.
       const session = host.session() || {};
+      const resumeRunId = retrySourceRunId();
+      const hostDecision = hostAction('retry_analysis', 'execution_retry');
       const retryOptions = {
         api: host.api(),
         session: {
@@ -557,7 +613,11 @@
           binding: { ...session.binding },
           research_provider: { ...session.research_provider },
         },
-        resumeRunId: retrySourceRunId(),
+        resumeRunId,
+        // The decision names the run the projection reads; a retry of any
+        // other run submits without it.
+        hostAction: hostDecision && hostDecision.decision.source_run_id === resumeRunId
+          ? hostDecision : null,
       };
       host.appendMessage({
         id: 'execution-retry-' + Date.now(), role: 'user', complete: true,
@@ -597,9 +657,6 @@
             ...retryOptions, reportOnly: false,
           });
         }
-        await host.recordHostAction(
-          'retry_analysis', String(payload.job_id || ''), String(payload.job_id || ''),
-        );
         host.setBusy(false);
         host.watchChildJob(
           String(payload.job_id || ''),
@@ -609,6 +666,7 @@
         );
       } catch (error) {
         host.setBusy(false);
+        if (followHostDecisionRefusal(error)) return;
         host.setError(host.errorText(error));
         host.render();
       }

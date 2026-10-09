@@ -153,7 +153,8 @@ test('P2-11 send and regenerate discard stale success and errors after session s
 });
 
 test('P2-11 formal plan checks identity at every awaited boundary', async () => {
-  for (const boundary of ['load', 'start', 'record']) {
+  // The host records the started job itself; the browser awaits no record.
+  for (const boundary of ['load', 'start']) {
     let revision = 1; const pending = deferred(), calls = []; let current = { session_id: 'A', binding: { study_context_id: 'study' }, research_provider: {} };
     let owner; const c = context(); c.window.EasyICU = { guidedPi: { declare: (_name, value) => { owner = value; } } };
     vm.runInContext(read('screens-guided-pi-plan-actions.js'), c);
@@ -169,7 +170,7 @@ test('P2-11 formal plan checks identity at every awaited boundary', async () => 
     pending.resolve(boundary === 'load' ? { data_source: { path: '/synthetic' } } : { job_id: 'job-A' });
     assert.equal(await result, false); assert(!calls.includes('watch'));
     if (boundary === 'load') assert(!calls.includes('start'));
-    if (boundary === 'start') assert(!calls.includes('record'));
+    assert(!calls.includes('record'));
   }
 });
 

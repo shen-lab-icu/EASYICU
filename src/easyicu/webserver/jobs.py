@@ -23,7 +23,10 @@ import logging
 import threading
 import time
 import uuid
-from typing import Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from easyicu.webserver.host_action_contracts import HostActionTag
 
 
 logger = logging.getLogger(__name__)
@@ -124,6 +127,10 @@ class Job:
         # Such a job remains a real local-capacity consumer until that reader
         # exits, even though SSE has already published cancelled/failed.
         self.draining = False
+        # The host decision this job answers (``webserver.host_action_jobs``).
+        # Not in the snapshot: the browser reads jobs through it, and the tag
+        # names the conversation that asked.
+        self._host_action: Optional[HostActionTag] = None
 
     def _append_event_locked(self, event: Dict[str, Any]) -> None:
         payload = dict(event)
@@ -247,6 +254,19 @@ class Job:
                 self._cancel_callbacks.pop(callback_id, None)
 
         return unregister
+
+    def tag_host_action(self, tag: HostActionTag) -> bool:
+        """Record the one host decision this job answers."""
+        with self._lock:
+            if self._host_action is not None:
+                return self._host_action == tag
+            self._host_action = tag
+            return True
+
+    @property
+    def host_action(self) -> Optional[HostActionTag]:
+        with self._lock:
+            return self._host_action
 
     def begin_draining(self) -> None:
         with self._lock:

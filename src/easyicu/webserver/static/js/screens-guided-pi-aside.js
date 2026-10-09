@@ -267,6 +267,7 @@
         scientific_plan_review_policy_stale: tr('The scientific review policy changed; regenerate the plan while keeping the prepared data', '科学审阅规则已更新；保留已准备数据并重新生成计划'),
         operator_plan_approved: tr('Digest-bound plan approved by the user', '摘要绑定计划已由用户批准'),
         analysis_ready: tr('Ready for analysis after plan approval', '计划确认后可以执行分析'),
+        starting: tr('Checking the data and plan before the task starts', '任务启动前正在核对数据和计划'),
         research_planning_running: tr('The research task is running; no analysis execution progress is available yet', '科研任务运行中；尚无分析执行进度回执'),
         analysis_running: tr('The approved analysis is running', '已批准的分析正在执行'),
         report_repair_running: tr('Revising the report from sealed evidence; analysis is not being rerun', '正在用封存证据修订报告；不会重跑分析'),
