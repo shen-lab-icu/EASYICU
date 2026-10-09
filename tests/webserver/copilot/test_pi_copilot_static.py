@@ -68,7 +68,7 @@ process.stdout.write(JSON.stringify({candidate, executable, requiredDecision}));
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20260922-popover2" in index
+    assert "css/guided-pi.css?v=20260923-head-fit2" in index
     assert "css/guided-pi-idea-source.css?v=20260922-connectors1" in index
     assert "css/guided-pi-demo.css?v=20260815-reviewer-demo2" in index
     assert "css/guided-pi-preview.css?v=20260916-study-workspace3" in index

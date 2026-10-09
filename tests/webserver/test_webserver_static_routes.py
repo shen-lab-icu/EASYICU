@@ -553,7 +553,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     redesign_css = _static_css("redesign.css")
 
     assert "css/guided.css?v=20260829-readability2" in index_html
-    assert "css/guided-projects.css?v=20260922-popover1" in index_html
+    assert "css/guided-projects.css?v=20260923-rail-fit1" in index_html
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
     assert "js/api.js?v=20260922-notes1" in index_html
     assert (
@@ -2661,7 +2661,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     )
     assert "screens-guided.js?v=20260922-state-menus1" in index_html
     assert "guided.css?v=20260829-readability2" in index_html
-    assert "guided-projects.css?v=20260922-popover1" in index_html
+    assert "guided-projects.css?v=20260923-rail-fit1" in index_html
     assert "gd-rail-heading" in projects_js
     assert "<summary title=\"${esc(t('Switch research project', '切换研究项目'))}\"><small>${t('Project', '项目')}</small><span title=\"${esc(pickerTitle)}\">${esc(pickerTitle)}</span><i aria-hidden=\"true\">⌄</i></summary>" in projects_js
     assert "${t('New / open research project', '新建 / 打开研究项目')}" in projects_js

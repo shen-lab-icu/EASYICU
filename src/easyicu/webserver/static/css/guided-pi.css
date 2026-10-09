@@ -122,6 +122,15 @@
   flex:0 0 auto;padding:11px 22px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--wash) 55%,var(--paper))
 }
 .gpi-head-title{min-width:0;flex:1 1 160px}.gpi-head-title .gpi-kicker,.gpi-head-title .gpi-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Below the desktop layout the title stacks: the project on one clipped line
+   (an inline span cannot clip, so it ran under the header actions), the
+   conversation under it; the one-line breadcrumb's slash has no place, and
+   the ready/working status stays for assistive technology without taking a
+   third line in the 56px bar. */
+@media(max-width:1180px){
+ .gpi-head-title .gpi-kicker{display:block;max-width:100%}.gpi-head-title .gpi-head-separator{display:none}
+ .gpi-head-title .gpi-live{position:absolute;width:1px;height:1px;margin:0;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+}
 .gpi-title{margin-top:2px;font-size:17.5px;font-weight:700;letter-spacing:-.01em}
 .gpi-live{margin-left:6px;padding:2px 7px;border-radius:99px;background:color-mix(in srgb,#2d8a62 10%,transparent);color:#23704f;font:600 11.5px/1.5 var(--mono)}
 .gpi-head-meta{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:8px;flex:0 1 auto;min-width:0;max-width:100%;justify-content:flex-end}
@@ -303,6 +312,8 @@
 .gpi-confirmation-resources{margin-top:10px}.gpi-confirmation-resources>summary{cursor:pointer;color:var(--ink-3);font-size:12.5px;font-weight:650}.gpi-confirmation-resources>div{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
 .gpi-confirmation-resources.is-expanded>strong{font-size:12px;color:var(--ink-3)}
 .gpi-confirmation-resources.is-expanded>div{gap:6px 14px;margin-top:5px;padding:7px 9px;border:1px solid var(--hair-2);border-radius:8px;background:color-mix(in srgb,var(--paper) 82%,var(--surface-2))}
+/* Standalone links in a row, not words in a sentence: a 24px press target. */
+.gpi-confirmation-resources.is-expanded .gpi-resource-link{display:inline-flex;align-items:center;min-height:24px}
 .gpi-confirmation-resources.is-historical{border-top:1px solid var(--hair-2);padding-top:9px}
 .gpi-confirmation-resources.is-historical>summary{font-size:12.5px;line-height:1.5}
 .gpi-confirmation-resources.is-historical>div{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-top:9px}
@@ -398,7 +409,7 @@
 .gpi-file-card+.gpi-file-card{border-top:1px solid var(--line)}
 .gpi-file-card>div{min-width:0}
 .gpi-file-card>div>span{display:block;margin-top:4px;font-size:14px;color:var(--ink-3);overflow-wrap:anywhere}
-.gpi-file-card .gpi-resource-link{font-size:15px}
+.gpi-file-card .gpi-resource-link{display:inline-flex;align-items:center;min-height:24px;font-size:15px}
 .gpi-resource-technical{margin-top:10px;font-size:14px;color:var(--ink-3)}
 .gpi-resource-section+.gpi-resource-section{margin-top:10px}
 .gpi-resource-section-title{display:block;color:var(--ink-3);font-size:var(--type-label);font-weight:650;letter-spacing:.02em}

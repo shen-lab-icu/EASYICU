@@ -8,6 +8,9 @@ shell registers on ``window.SCREENS``.
 
 from __future__ import annotations
 
+import json
+import urllib.request
+
 # Routes that render without a Guided conversation. The Guided route itself is
 # audited through ``--session`` (its conversation and entry composers).
 ROUTES_WITHOUT_SESSION = {
@@ -29,6 +32,34 @@ EXCLUDED_ROUTES = {
 }
 # Desktop and laptop sizes, then the tablet and phone widths the shell supports.
 DEFAULT_VIEWPORTS = ("1542x1000", "1280x760", "1180x680", "768x1024", "390x844")
+
+
+def new_audit_page(browser, base: str, width: int, height: int):
+    """A page that starts in the server's saved language and data mode.
+
+    A fresh browser profile renders English demo mode first and rebuilds the
+    whole screen once ``/api/settings`` says otherwise; that late rebuild
+    replaces the very menus an audit is pressing. Seeding the browser choice
+    with the server's own settings keeps the first render final, and nothing
+    is written back because the two already agree.
+    """
+    try:
+        with urllib.request.urlopen(base + "/api/settings", timeout=10) as response:
+            settings = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError):
+        settings = {}
+    seed = {
+        key: settings[field]
+        for key, field in (("easyicu_lang", "language"), ("easyicu_home_data", "data_mode"))
+        if isinstance(settings.get(field), str) and settings[field]
+    }
+    page = browser.new_page(viewport={"width": width, "height": height})
+    if seed:
+        page.add_init_script(
+            "(() => { try { for (const [k, v] of Object.entries(%s)) localStorage.setItem(k, v); } catch (e) {} })();"
+            % json.dumps(seed)
+        )
+    return page
 
 
 def settle(page) -> None:

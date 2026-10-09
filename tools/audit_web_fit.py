@@ -3,7 +3,8 @@
 On every route and viewport size this finds controls that cannot be pressed
 (covered at their centre by something else), floating elements resting outside
 the viewport, text silently clipped by ``overflow: hidden`` without an ellipsis,
-controls too small to hit, and page-level horizontal overflow. It complements
+text drawn beneath a control it does not belong to, controls too small to hit,
+and page-level horizontal overflow. It complements
 ``audit_web_popovers.py``, which exercises the menus.
 
 Requires a running EasyICU web server and Playwright with a Chrome channel::
@@ -26,7 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tools.web_ui_audit_routes import DEFAULT_VIEWPORTS, ROUTES_WITHOUT_SESSION, settle  # noqa: E402
+from tools.web_ui_audit_routes import DEFAULT_VIEWPORTS, ROUTES_WITHOUT_SESSION, new_audit_page, settle  # noqa: E402
 
 MIN_HIT = 24
 
@@ -39,7 +40,8 @@ JS = r"""
   const fullyInScrollBox = el => { const r = el.getBoundingClientRect(); for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) { const acs = getComputedStyle(a); if (/(auto|scroll|hidden)/.test(acs.overflowY + acs.overflowX) && getComputedStyle(el).position !== 'fixed') { const ar = a.getBoundingClientRect(); if (r.top < ar.top - 1 || r.bottom > ar.bottom + 1 || r.left < ar.left - 1 || r.right > ar.right + 1) return false; } } return true; };
   const cls = el => el.tagName.toLowerCase() + '.' + String(el.className && el.className.baseVal !== undefined ? el.className.baseVal : el.className || '').split(/\s+/).filter(Boolean).slice(0, 2).join('.');
   const label = el => (el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40);
-  const vis = el => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none' && Number(cs.opacity) > 0 && !inClosedDetails(el) && inScrollBox(el); };
+  // A 1px box is the visually-hidden pattern: kept for assistive technology, not drawn.
+  const vis = el => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return r.width > 1 && r.height > 1 && cs.visibility !== 'hidden' && cs.display !== 'none' && Number(cs.opacity) > 0 && !inClosedDetails(el) && inScrollBox(el); };
   // Content under a fixed bar (the phone bottom nav) is a scroll position, not a
   // defect, while its scroll container can still move it clear of the bar.
   const fixedAncestor = node => { for (let a = node; a && a !== document.body; a = a.parentElement) { if (getComputedStyle(a).position === 'fixed') return a; } return null; };
@@ -54,7 +56,42 @@ JS = r"""
     return br.top >= r.top ? below >= r.bottom - br.top : above >= br.bottom - r.top;
   };
   const vw = innerWidth, vh = innerHeight;
-  const out = { pageOverflowX: document.documentElement.scrollWidth - document.documentElement.clientWidth, covered: [], floatingOutside: [], clippedText: [], tiny: [] };
+  const out = { pageOverflowX: document.documentElement.scrollWidth - document.documentElement.clientWidth, covered: [], floatingOutside: [], clippedText: [], tiny: [], textUnderControl: [] };
+  // Text drawn beneath a control it does not belong to -- a project title that
+  // cannot clip running under the header buttons -- once every overflow
+  // ancestor has clipped it. A control's centre can stay free, so `covered`
+  // does not see this.
+  const CONTROLS = 'button, summary, a[href], input, select, textarea, [role="button"], [role="tab"]';
+  const controls = Array.from(document.querySelectorAll(CONTROLS)).filter(c => vis(c) && !c.matches('.shell-sr-only, .sr-only'));
+  const intersect = (a, b) => ({ left: Math.max(a.left, b.left), top: Math.max(a.top, b.top), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) });
+  // What is drawn of a box: every overflow ancestor clips it (a control
+  // scrolled past its list's edge is not drawn over the strip above it).
+  const drawn = (el, rect) => {
+    let box = { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+    for (let a = el; a && a !== document.body && box.right > box.left && box.bottom > box.top; a = a.parentElement) {
+      const acs = getComputedStyle(a);
+      if (acs.overflowX !== 'visible' || acs.overflowY !== 'visible') box = intersect(box, a.getBoundingClientRect());
+    }
+    return box;
+  };
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const host = node.parentElement;
+    if (!node.textContent.trim() || !host || !vis(host) || host.closest(`${CONTROLS}, .shell-sr-only, .sr-only`)) continue;
+    const range = document.createRange(); range.selectNodeContents(node);
+    const text = range.getBoundingClientRect();
+    if (!text.width || !text.height) continue;
+    const box = drawn(host, text);
+    if (box.right - box.left < 4 || box.bottom - box.top < 4) continue;
+    const under = controls.find(c => {
+      if (c.contains(host) || host.contains(c)) return false;
+      const bar = fixedAncestor(c);
+      if (bar && !bar.contains(host)) return false;
+      const o = intersect(box, drawn(c, c.getBoundingClientRect()));
+      return o.right - o.left >= 4 && o.bottom - o.top >= 4;
+    });
+    if (under) out.textUnderControl.push({ el: cls(host), text: node.textContent.trim().slice(0, 40), control: `${cls(under)} «${label(under)}»` });
+  }
   document.querySelectorAll('button, summary, a[href], input, select, textarea, [role="button"], [role="tab"]').forEach(el => {
     if (!vis(el) || el.matches('.shell-sr-only, .sr-only')) return;
     const r = el.getBoundingClientRect();
@@ -101,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
         browser = playwright.chromium.launch(channel="chrome", headless=True)
         for size in args.viewports.split(","):
             width, height = (int(part) for part in size.lower().split("x"))
-            page = browser.new_page(viewport={"width": width, "height": height})
+            page = new_audit_page(browser, args.base, width, height)
             for name, (url, new_conversation) in routes.items():
                 page.goto(args.base + url, wait_until="load")
                 settle(page)
@@ -123,6 +160,7 @@ def main(argv: list[str] | None = None) -> int:
         flags += [f"floating outside viewport: {f['el']} {f['rect']}" for f in result["floatingOutside"]]
         flags += [f"clipped text: {t['el']} «{t['text']}» ({t['hidden']}px hidden)" for t in result["clippedText"]]
         flags += [f"small control (<{args.min_hit}px): {t['el']} «{t['label']}» {t['rect']}" for t in result["tiny"]]
+        flags += [f"text under a control: {t['el']} «{t['text']}» beneath {t['control']}" for t in result["textUnderControl"]]
         total += len(flags)
         print(f"== {key}: {len(flags)} flags")
         for flag in flags:
