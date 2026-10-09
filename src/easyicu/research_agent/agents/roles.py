@@ -35,9 +35,9 @@ from ._support import (
     _coerce_primary_estimate,
     _empty_df_placeholder,
     _initial_reflection_memory,
-    _sentences_missing_evidence_tokens,
     _suggest_repairs_for,
 )
+from .critic_evidence import sentences_missing_evidence_tokens
 from .manuscript import ManuscriptAgent  # noqa: F401 - compatibility re-export
 
 # ---------------------------------------------------------------------------
@@ -337,7 +337,7 @@ class CriticAgent:
         concerns: List[str] = []
         if missing:
             concerns.append("Manuscript contains unresolved evidence placeholders.")
-        unsupported = _sentences_missing_evidence_tokens(
+        unsupported = sentences_missing_evidence_tokens(
             scaffold,
             available_evidence_ids=available_evidence_ids,
         )

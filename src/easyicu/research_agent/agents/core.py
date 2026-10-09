@@ -76,8 +76,8 @@ from .planner import (  # noqa: F401 — re-export facade
     _planner_prompt_within_budget,
     _planner_retry_response_projection,
     _validate_table_one_observed_levels,
-    describe_article_contract_family_switch,
 )
+from .article_contract_switch import describe_article_contract_family_switch  # noqa: F401
 
 from .replanner import ReplannerAgent  # noqa: F401 — re-export facade
 from .replanner_context import (  # noqa: F401 — re-export facade
