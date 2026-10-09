@@ -73,6 +73,7 @@ from ..planning.progressive_contract import (
     ProgressivePredicateValue,
     ProgressivePlanCompileReceipt,
     ProgressivePlanOutline,
+    ProgressivePlannerCheckpoint,
 )
 from ..planning.progressive_resume import (
     ProgressivePrefixState,
@@ -1067,6 +1068,32 @@ def run_family_spec_attempt(
     return plan
 
 
+def family_spec_fallback_reason(
+    context: ResearchContext,
+    *,
+    analysis_types: Sequence[str],
+    resume_checkpoint: ProgressivePlannerCheckpoint | None,
+    stop_after_outline: bool,
+    planning_contract_context: str = "",
+) -> str | None:
+    """Return why the family-spec strategy must yield to Progressive v2, or None."""
+
+    if resume_checkpoint is not None:
+        return "development_resume_checkpoint_uses_progressive_v2"
+    if stop_after_outline:
+        return "design_canary_uses_progressive_v2"
+    if (
+        family_template_id_for_context(
+            context,
+            analysis_types=analysis_types,
+            planning_contract_context=planning_contract_context,
+        )
+        is None
+    ):
+        return "no_family_template_for_context"
+    return None
+
+
 def family_result_stop(
     context: ResearchContext,
     *,
@@ -1104,6 +1131,7 @@ __all__ = [
     "FAMILY_SPEC_ROLE",
     "FAMILY_SPEC_STRATEGY",
     "family_result_stop",
+    "family_spec_fallback_reason",
     "family_spec_messages",
     "family_spec_response_shape",
     "family_spec_structured_output_request",
