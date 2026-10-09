@@ -23,6 +23,9 @@ from starlette.staticfiles import NotModifiedResponse
 from easyicu.webserver.host_security import (
     PROXY_HEADERS,
     AllowedHostsMiddleware,
+    configured_unix_socket,
+    is_local_unix_socket_peer,
+    require_private_unix_socket_directory,
     resolve_allowed_hosts,
     trusts_proxy,
 )
@@ -115,6 +118,15 @@ install_desktop_session(app)
 
 
 @app.on_event("startup")
+def _refuse_a_shared_unix_socket() -> None:
+    # First, before the lease or any service starts: uvicorn binds the socket
+    # only after startup, so a refusal here never opens it.
+    socket_path = configured_unix_socket()
+    if socket_path:
+        require_private_unix_socket_directory(socket_path)
+
+
+@app.on_event("startup")
 def _acquire_web_deployment_lease() -> None:
     acquire_single_process_lease()
     try:
@@ -144,7 +156,11 @@ def _is_proxied_request(request: Request) -> bool:
 
 
 def _is_local_web_client(request: Request) -> bool:
-    peer = request.client.host if request.client else ""
+    if request.client is None:
+        # A Unix-socket peer has no address. Only the private socket this
+        # server was configured for counts (host_security).
+        return is_local_unix_socket_peer(request.scope)
+    peer = request.client.host
     if peer in {"testclient", "testserver"}:
         return True
     try:
