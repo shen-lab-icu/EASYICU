@@ -78,7 +78,7 @@ def test_plan_ready_receipt_stops_questionnaire_even_when_proposed_slots_were_om
 
 def test_no_source_still_requires_source_selection_not_a_plan():
     result = _finalize(_workflow(source=False))
-    assert "请先选择数据库" in result["content"][0]["text"]
+    assert "请先选择这项研究使用的数据库" in result["content"][0]["text"]
 
 
 @pytest.mark.parametrize("code", [

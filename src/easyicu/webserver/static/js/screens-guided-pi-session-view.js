@@ -235,7 +235,11 @@
       const resultsView = Boolean(outcome) && !dataConsentRequired;
       const conversation = messages;
       const dataConsentHtml = dataConsentRequired
-        ? DATA_CONSENT.render(session, { tr, esc, icon: iconHtml, namedDemo: HOST_JOBS && typeof HOST_JOBS.namedDemo === 'function' ? HOST_JOBS.namedDemo() : null })
+        ? DATA_CONSENT.render(session, {
+          tr, esc, icon: iconHtml,
+          namedDemo: HOST_JOBS && typeof HOST_JOBS.namedDemo === 'function' ? HOST_JOBS.namedDemo() : null,
+          namedDatabase: HOST_JOBS && typeof HOST_JOBS.namedDatabase === 'function' ? HOST_JOBS.namedDatabase() : null,
+        })
         : '';
       const headerOptions = {
         tr, esc, icon: iconHtml,

@@ -123,6 +123,19 @@
         <small>${ctx.tr('Official demo data only; EasyICU registers it and confirms it as this conversation’s source, then proposes the plan. Confirming a source does not approve analysis.', '仅官方 Demo 数据；EasyICU 注册后将其确认为本次会话的数据源，再拟定研究计划。确认数据源不等于批准分析。')}</small>
       </div></section>`;
     }
+    const database = current.status === 'pending' && ctx.namedDatabase && ctx.namedDatabase.key ? ctx.namedDatabase : null;
+    if (database) {
+      // The question already names this database: open its source selection
+      // directly instead of asking which database to use.
+      return `<section class="gpi-data-consent" aria-label="${ctx.tr('Bind data source', '绑定数据源')}"><div class="gpi-data-consent-body">
+        <strong>${ctx.tr('Your question names ', '你的问题指定了 ')}${ctx.esc(database.label)}</strong>
+        <p>${ctx.tr(`Choose the ${database.label} data for this conversation. EasyICU then proposes the research plan; no analysis starts yet.`, `选择本次会话要用的 ${database.label} 数据，EasyICU 随后拟定研究计划，此时不会开始分析。`)}</p>
+        <div class="gpi-data-consent-actions">
+          <button class="btn primary" type="button" data-gpi-data-source-action="begin_local_selection" data-gpi-data-source-database="${ctx.esc(database.key)}">${ctx.tr(`Choose ${database.label} data`, `选择 ${database.label} 数据`)}</button>
+          <button class="btn" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Choose another source', '选择其他数据源')}</button>
+        </div>
+      </div></section>`;
+    }
     if (current.status === 'pending') {
       return `<section class="gpi-data-consent" aria-label="${ctx.tr('Bind data source', '绑定数据源')}"><div class="gpi-data-consent-body">
         <strong>${ctx.tr('Next, choose the data for this question', '接下来，请为这个问题选择数据源')}</strong>
@@ -151,6 +164,14 @@
     return target ? String(target.dataset.gpiDataSourceAction || '') : '';
   }
 
+  // The database a card action is scoped to, when the card names one.
+  function databaseFromEvent(event) {
+    const target = event && event.target && event.target.closest
+      ? event.target.closest('[data-gpi-data-source-action]')
+      : null;
+    return target ? String(target.dataset.gpiDataSourceDatabase || '') : '';
+  }
+
   window.EasyICU.guidedPi.declare('dataConsent', {
     authorization,
     requiresConfirmation,
@@ -160,5 +181,6 @@
     renderPast,
     render,
     actionFromEvent,
+    databaseFromEvent,
   });
 })();

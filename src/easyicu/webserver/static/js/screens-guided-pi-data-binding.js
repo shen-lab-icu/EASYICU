@@ -166,7 +166,42 @@
       return true;
     }
 
-    return { authorizeDataSource, notifyExtractionHandoff, confirmDataSourceBinding };
+    /* The research question the researcher already wrote in this
+       conversation goes into the study setup when the source confirmation
+       finds the setup without one (a first-turn save that did not land), so
+       the conversation continues instead of asking them to send it again.
+       The text is theirs, saved as written; nothing is inferred from it. */
+    async function carryQuestionIntoSetup() {
+      const workflow = typeof host.workflow === 'function' ? host.workflow() : null;
+      const missing = Array.isArray(workflow && workflow.missing_setup_fields) ? workflow.missing_setup_fields : [];
+      if (!missing.includes('question')) return false;
+      const question = typeof host.researchQuestion === 'function' ? String(host.researchQuestion() || '').trim() : '';
+      const store = window.EU_STUDY_CONTEXT;
+      const session = host.session();
+      if (!question || !session || !store || typeof store.update !== 'function' || typeof store.persist !== 'function') return false;
+      const expectedSessionId = session.session_id;
+      try {
+        const contextId = String(session.binding && session.binding.study_context_id || '');
+        if (typeof store.hydrate === 'function') await store.hydrate({ force: true });
+        const active = typeof store.active === 'function' ? store.active() : null;
+        if (contextId && (!active || active.id !== contextId) && typeof store.activate === 'function') {
+          await store.activate(contextId);
+        }
+        if (typeof store.refreshActiveFromServer === 'function') await store.refreshActiveFromServer();
+        store.update({ question }, { persist: false, reason: 'conversation-question-carry', continueExisting: true });
+        await store.persist();
+        if (!host.session() || host.session().session_id !== expectedSessionId) return false;
+        if (typeof host.rebind === 'function') await host.rebind();
+        await loadWorkflow();
+        return true;
+      } catch (error) {
+        host.setError(errorText(error));
+        render();
+        return false;
+      }
+    }
+
+    return { authorizeDataSource, notifyExtractionHandoff, confirmDataSourceBinding, carryQuestionIntoSetup };
   }
 
   window.EasyICU.guidedPi.declare('dataBinding', { create });

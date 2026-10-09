@@ -17,7 +17,7 @@ import pytest
 APP_DIR = Path(__file__).resolve().parents[3] / "src" / "easyicu" / "webserver" / "pi_copilot" / "node_app"
 
 
-def _finalize_initial_question_with_preloaded_catalog(question: str) -> str:
+def _finalize_initial_question_with_preloaded_catalog(question: str, **catalog_details) -> str:
     """Run the initial-question finalization the way a real turn delivers it.
 
     The data-source catalog is not a tool result in a real first turn: main.mjs
@@ -43,6 +43,7 @@ def _finalize_initial_question_with_preloaded_catalog(question: str) -> str:
                 {"source_id": "mimic_iv_demo_v2_2", "label": "MIMIC-IV Clinical Database Demo", "database": "miiv", "version": "2.2"},
                 {"source_id": "eicu_demo_v2_0_1", "label": "eICU Collaborative Research Database Demo", "database": "eicu", "version": "2.0.1"},
             ],
+            **catalog_details,
         },
     }
     script = f"""
@@ -101,13 +102,15 @@ def test_initial_question_reads_the_preloaded_catalog_for_database_choices() -> 
     """
 
     text = _finalize_initial_question_with_preloaded_catalog("我想研究乳酸与院内死亡的关系")
-    assert "请先选择数据库" in text
+    assert "请先选择这项研究使用的数据库" in text
     assert text.count("\n- 使用 ") == 6
     assert "- 使用 eICU v2.0" in text
     assert "查看并选择 EasyICU 支持的数据库" not in text
     # A bare database name is not a demo; two named demos are ambiguous.
     for question in ("在 eICU 数据里评估乳酸", "对比 mimic-iv demo 和 eicu demo 的乳酸分布"):
-        assert "请先选择数据库" in _finalize_initial_question_with_preloaded_catalog(question)
+        assert "请先选择这项研究使用的数据库" in _finalize_initial_question_with_preloaded_catalog(question)
+    # A release footnote about one database does not belong in this reply.
+    assert "参考版本" not in text
 
 
 def test_owner_context_marker_is_shared_with_the_prompt_builder() -> None:
@@ -119,3 +122,53 @@ def test_owner_context_marker_is_shared_with_the_prompt_builder() -> None:
     assert "`\\n\\n[EASYICU_CURRENT_TURN_OWNER_CONTEXT_V1]\\n${boundedText(JSON.stringify(receipts), 24000)}`" in entrypoint
     # The researcher's text precedes every host section.
     assert "return `${message}${HOST_LANGUAGE_MARKER}${requirement}${currentContext}${sourceContext}${transition}`;" in entrypoint
+
+
+MIMIC_IV = {"database": "miiv", "label": "MIMIC-IV", "reference_release": "3.1"}
+RECOMMENDED = {
+    "source_id": "src_full", "label": "MIMIC-IV v3.1", "database": "miiv",
+    "availability": "available_in_easyicu", "module_count": 19,
+    "aggregate": {"stays": 94458, "modules": 19},
+    "auto_select_for_exact_database_request": True,
+}
+
+
+def test_a_question_naming_a_registered_database_is_offered_that_export() -> None:
+    """「用 MIMIC-IV 看…」 is not answered with the six-database list.
+
+    The host's catalog resolved MIMIC-IV from the researcher's own words and
+    recommends the most complete EasyICU export; the reply offers it as the
+    one next step. The choice itself carries the registered-source wording
+    that both the host grant and the browser choice owner recognise.
+    """
+
+    text = _finalize_initial_question_with_preloaded_catalog(
+        "我想用 MIMIC-IV 看一下 Sepsis-3 脓毒症有多常见，并比较院内死亡情况",
+        selected_database=MIMIC_IV, recommended_source=RECOMMENDED,
+    )
+    assert "你的问题指定了 MIMIC-IV v3.1，EasyICU 中已有可直接使用的 MIMIC-IV v3.1 数据（94,458 个 ICU 入住记录，19 个数据模块）" in text
+    assert text.endswith("**下一步：**\n- 使用 EasyICU 中已准备好的 MIMIC-IV v3.1 数据导出（推荐）")
+    assert "请先选择" not in text
+    assert "AmsterdamUMCdb" not in text
+
+    from easyicu.webserver.pi_copilot.turn_authority import explicitly_confirms_easyicu_registered_source
+
+    assert explicitly_confirms_easyicu_registered_source("使用 EasyICU 中已准备好的 MIMIC-IV v3.1 数据导出（推荐）")
+
+
+def test_a_named_database_without_an_export_points_to_the_source_card() -> None:
+    text = _finalize_initial_question_with_preloaded_catalog(
+        "用 MIMIC-IV 研究乳酸与院内死亡", selected_database=MIMIC_IV, recommended_source=None,
+    )
+    assert "你的问题指定了 MIMIC-IV v3.1，但 EasyICU 里还没有登记这份数据" in text
+    assert "\n- " not in text
+
+
+def test_a_database_the_researcher_did_not_name_is_not_credited_to_them() -> None:
+    """A catalog scoped by the model or an active source is not the question's choice."""
+
+    text = _finalize_initial_question_with_preloaded_catalog(
+        "我想研究乳酸与院内死亡的关系", selected_database=MIMIC_IV, recommended_source=RECOMMENDED,
+    )
+    assert "你的问题指定了" not in text
+    assert "请先选择这项研究使用的数据库" in text

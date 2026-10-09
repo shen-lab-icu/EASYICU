@@ -386,7 +386,11 @@
         const namedDemo = event.target.closest('[data-gpi-named-demo]');
         if (namedDemo && HOST_JOBS && typeof HOST_JOBS.useNamedDemo === 'function') { void HOST_JOBS.useNamedDemo(namedDemo.dataset.gpiNamedDemo); return; }
         const dataSourceAction = DATA_CONSENT && DATA_CONSENT.actionFromEvent(event);
-        if (dataSourceAction) { authorizeDataSource(dataSourceAction); return; }
+        if (dataSourceAction) {
+          const database = typeof DATA_CONSENT.databaseFromEvent === 'function' ? DATA_CONSENT.databaseFromEvent(event) : '';
+          authorizeDataSource(dataSourceAction, database ? { database } : undefined);
+          return;
+        }
         if (MESSAGE_ACTIONS.handleClick(event)) return;
         if (event.target.closest('[data-gpi-starter-browse]')) { location.hash = '#skills'; return; }
         if (event.target.closest('[data-gpi-starter-shuffle]')) {
