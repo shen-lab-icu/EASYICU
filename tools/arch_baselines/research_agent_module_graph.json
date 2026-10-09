@@ -7133,6 +7133,10 @@
     ],
     [
       "easyicu.research_agent.execution.runners.target_trial_figure",
+      "easyicu.research_agent.numeric_scalars"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.target_trial_figure",
       "easyicu.research_agent.schema"
     ],
     [
@@ -14384,7 +14388,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3588,
+    "edge_count": 3589,
     "largest_scc_size": 0,
     "module_count": 823,
     "package_count": 36,
