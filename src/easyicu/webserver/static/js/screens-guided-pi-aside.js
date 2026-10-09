@@ -215,7 +215,7 @@
         return `<details class="gpi-aside-section" data-gpi-aside-section="${key}"${open ? ' open' : ''}><summary>${title}</summary><div>${content}</div></details>`;
       };
       const emptyResults = `<p class="gpi-aside-empty">${tr('Results will appear here when available.', '生成的成果将在这里集中展示。')}</p>`;
-      head.innerHTML = `<div class="at">${host.demoMode() ? tr('Reviewer demonstration', '审稿人演示') : tr('Research workspace', '研究工作区')}</div>`;
+      head.innerHTML = `<div class="at">${host.demoMode() ? tr('Workflow demo', '流程演示') : tr('Research workspace', '研究工作区')}</div>`;
       if (!workflow) {
         const error = host.workflowError && host.workflowError();
         body.innerHTML = section('progress', tr('To-dos', '待办'), `<div class="gd-pipeline-summary" data-gpi-project-workflow-loading role="status" aria-live="polite"><div class="gd-pipeline-value">${esc(error || tr('Loading project progress…', '正在读取项目进度…'))}</div></div>`)
@@ -291,9 +291,32 @@
         six_of_six_steps_complete: tr('All six required steps completed', '6 个必需步骤全部完成'),
         descriptive_ceiling_preserved: tr('Interpretation stayed within the descriptive ceiling', '结果解读保持在描述性上限内'),
         reviewer_dossier_complete: tr('The reviewer HTML and PDF dossier are complete', '审稿 HTML 与 PDF 报告已完整生成'),
+        question_required: tr('Describe the research question in the conversation', '在对话中说明研究问题'),
+        study_setup_incomplete: tr('The research plan fills in the remaining setup', '其余配置由研究计划补齐'),
+        cohort_eligibility_confirmation_required: tr('Confirm the inclusion criteria before the plan is approved', '批准计划前需确认纳入条件'),
+        extraction_ready: tr('Ready to prepare the research data', '可以准备研究数据'),
+        extraction_running: tr('Preparing the research data', '正在准备研究数据'),
+        // The workflow demo's locked last stage.
+        manuscript_withheld_by_design: tr('No clinical manuscript: novelty search and independent review are open', '没有生成临床论文：新颖性检索和独立审阅尚未完成'),
       };
-      const reasonText = stage => reasons[stage && stage.reason_code]
+      // A plan cannot fill in the data source; the researcher chooses it.
+      const missingSetup = Array.isArray(workflow.missing_setup_fields) ? workflow.missing_setup_fields : [];
+      const reasonText = stage => (stage && stage.reason_code === 'study_setup_incomplete' && missingSetup.includes('data_source')
+        ? tr('Choose the data source for this study', '请为这项研究选择数据源')
+        : reasons[stage && stage.reason_code])
         || tr('Waiting for the preceding governed stage', '等待前一受治理阶段完成');
+      // Once a plan exists, the setup fields it covers are written back when
+      // the plan is confirmed; missing inclusion criteria get their own card
+      // before approval. Say so, so the open setup row is not read as a
+      // step the researcher skipped.
+      const planStage = stages.find(stage => stage.id === 'plan');
+      const planExists = Boolean(planStage && ['review_required', 'complete'].includes(planStage.status));
+      const setupNote = stage => (stage.id === 'setup' && stage.status !== 'complete' && planExists
+        && !missingSetup.includes('data_source')
+        ? stage.reason_code === 'cohort_eligibility_confirmation_required'
+          ? tr('Filled in from the plan; inclusion criteria are confirmed before approval', '由计划补齐；纳入条件在批准前确认')
+          : tr('Filled in from the plan; nothing to enter by hand', '由计划补齐，无需手动填写')
+        : '');
       const done = Number(workflow.completed_required_stages || 0);
       const total = Math.max(1, Number(workflow.required_stage_count || 7));
       const current = stages.find(stage => stage.id === workflow.current_stage)
@@ -304,7 +327,11 @@
       const nextCaption = nextIsActionable
         ? tr('Next step', '下一步')
         : tr('Later stage', '后续阶段');
-      const results = !host.demoMode() && host.resultsHtml
+      // The demo lists its own read-only files; a project lists its run's.
+      const demoFiles = host.demoMode() && demo && typeof demo.shelfResources === 'function'
+        && typeof host.resourceButton === 'function'
+        ? `<div class="gpi-study-results-links">${demo.shelfResources().map(resource => `<div class="gpi-study-file">${host.resourceButton(resource)}</div>`).join('')}</div>` : '';
+      const results = host.demoMode() ? demoFiles : host.resultsHtml
         ? host.resultsHtml(resultQuery, { sort: resultSort, view: resultView }) : '';
       const pending = !host.demoMode() && host.hasPendingReview && host.hasPendingReview();
       const reviewAction = !host.demoMode() && host.reviewActionHtml ? host.reviewActionHtml() : '';
@@ -337,8 +364,10 @@
           : status === 'locked' ? iconHtml('lock', 10) : iconHtml('dot', 10);
         const caption = stage === next && !results
           ? `<span class="gd-pipeline-next">${nextCaption}</span>` : '';
+        const note = isCurrent ? '' : setupNote(stage);
         const detail = isCurrent
-          ? `<div class="si-v">${esc(currentText)}</div>${stageLine}${failureLine}${currentAction}` : '';
+          ? `<div class="si-v">${esc(currentText)}</div>${stageLine}${failureLine}${currentAction}`
+          : note ? `<div class="si-s">${esc(note)}</div>` : '';
         return `<li class="study-item ${status}${isCurrent ? ' current' : ''}"${isCurrent ? ' aria-current="step"' : ''}><span class="si-dot">${marker}</span><div class="si-txt"><div class="si-t">${esc(names[stage.id] || stage.label || stage.id)}${optional ? tr(' · Optional', ' · 可选') : ''}${caption}</div>${detail}</div></li>`;
       }).join('')}</ol>
       <div class="gd-pipeline-meta"><span><strong>${done}/${total}</strong> ${tr('required stages complete', '个必需阶段已完成')}</span></div>
@@ -354,8 +383,13 @@
         const needle = resultQuery.trim().toLocaleLowerCase();
         let visible = 0;
         body.querySelectorAll('[data-gpi-result-file]').forEach(row => {
-          row.hidden = !String(row.dataset.gpiResultFile || '').toLocaleLowerCase().includes(needle);
+          const haystack = `${row.dataset.gpiResultFile || ''} ${row.dataset.gpiResultTitle || ''}`.toLocaleLowerCase();
+          row.hidden = !haystack.includes(needle);
           if (!row.hidden) visible++;
+        });
+        // A match inside the folded audit group opens it.
+        body.querySelectorAll('.gpi-study-results-audit').forEach(group => {
+          if (needle && group.querySelector('[data-gpi-result-file]:not([hidden])')) group.open = true;
         });
         const empty = body.querySelector('[data-gpi-results-empty]');
         if (empty) empty.hidden = visible !== 0;
