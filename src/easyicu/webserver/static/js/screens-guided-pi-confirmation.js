@@ -363,6 +363,41 @@
           { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'literature_evidence.json', label: tr('View literature evidence', '查看文献依据'), media_type: 'application/json' },
         ] : [],
       };
+      // A reviewed plan whose cohort leaves out a stated inclusion cannot be
+      // approved (population_compile.POPULATION_APPROVAL_STOPS). Nothing applies
+      // the criterion as written: a fresh candidate plan, which the host keeps
+      // metadata-only. An extraction of the study's own population applies it:
+      // the conversation asks for that extraction, and binding it supersedes
+      // this plan, so the card offers no plan action.
+      const populationStopResources = reviewedPlanRunId ? [
+        { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'agent_plan.json', label: tr('Open the complete plan', '打开完整计划'), media_type: 'application/json' },
+        { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'scientific_plan_review.json', label: tr('View review details', '查看审阅详情'), media_type: 'application/json' },
+      ] : [];
+      if (code === 'population_inclusion_not_applied') return {
+        code, grants: ['provider_run', 'literature'],
+        message: tr(
+          'Keep the current candidate plan as review evidence. Generate a fresh candidate plan from the current study configuration, and pause again for my review before analysis.',
+          '保留当前候选计划作为审阅记录。请按当前研究配置重新生成候选计划，并在分析前再次停下让我审核。',
+        ),
+        title: tr('A stated inclusion criterion cannot be applied as written', '研究写明的纳入条件按原文无法施加'),
+        note: tr(
+          'This plan cannot be approved, and no analysis has started. Revise the criterion in the conversation, or generate a new candidate plan; it reads metadata only.',
+          '这份计划不能批准，分析尚未开始。可以在对话中修改这个条件，或重新生成候选计划；新计划只读元数据。',
+        ),
+        approve: tr('Generate fresh plan', '重新生成计划'),
+        reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
+        reviewResources: populationStopResources,
+      };
+      if (code === 'population_inclusion_requires_extraction') return {
+        code, grants: [], nonApprovable: true,
+        title: tr('A stated inclusion criterion needs data extracted for this study’s population', '研究写明的纳入条件需要按本研究人群重新提取数据'),
+        note: tr(
+          'The bound data package cannot apply it, so this plan cannot be approved, and no analysis has started. Ask in the conversation to extract the data for this study’s population; once the study binds that package, this plan is superseded and EasyICU plans again from the new data.',
+          '当前数据包无法施加这个条件，这份计划不能批准，分析尚未开始。请在对话中要求按本研究人群提取数据；研究绑定新数据包后，这份计划会失效，EasyICU 会按新数据重新生成计划。',
+        ),
+        reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
+        reviewResources: populationStopResources,
+      };
       if (code === 'plan_scientific_changes_required') return {
         code, grants: ['provider_run', 'literature'],
         nonApprovable: !(

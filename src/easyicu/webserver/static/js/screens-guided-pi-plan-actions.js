@@ -13,6 +13,8 @@
     'plan_configuration_superseded',
     'plan_review_not_resumable',
     'scientific_plan_review_policy_stale',
+    // routes/agent.py keeps a plan generated from it metadata-only.
+    'population_inclusion_not_applied',
   ]);
   const REPLAY_GRANT_INTENTS = new Set([
     'user_edited_message',

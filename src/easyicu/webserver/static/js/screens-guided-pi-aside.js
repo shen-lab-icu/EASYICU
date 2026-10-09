@@ -261,6 +261,10 @@
         plan_scientific_changes_required: tr('The scientific plan review requires a new study/plan version before analysis', '科学计划审阅要求先形成新的研究/计划版本，当前不能继续分析'),
         plan_configuration_superseded: tr('The study configuration changed; the old plan is superseded and cannot be approved', '研究配置已变化；旧计划已失效，不能再批准'),
         plan_review_not_resumable: tr('The old plan no longer has a live resume authority and must be regenerated', '旧计划的可恢复执行权限已失效，必须重新生成'),
+        // A reviewed plan whose cohort leaves out a stated inclusion: one code per
+        // remedy (population_compile.POPULATION_APPROVAL_STOPS).
+        population_inclusion_requires_extraction: tr('A stated inclusion criterion cannot be applied with the bound data package; extract the data for this study’s population, then plan again. This plan cannot be approved', '研究写明的纳入条件，当前数据包无法施加；按本研究人群重新提取数据后再生成计划，此计划不能批准'),
+        population_inclusion_not_applied: tr('A stated inclusion criterion cannot be applied as written, so this plan cannot be approved; revise the criterion or generate a new plan', '研究写明的纳入条件按原文无法施加，此计划不能批准；请修改该条件或重新生成计划'),
         failed_pipeline_requires_fresh_plan: tr('The previous run failed. Review the record before creating a fresh plan.', '上次任务未完成，请查看记录后重新生成计划。'),
         failed_pipeline_execution_retry_available: tr('The approved analysis stopped at one step; it can be retried from that step', '已批准的分析停在某一步，可从该步重试'),
         failed_pipeline_execution_retry_futile: tr('A retry would repeat the failure; generate a fresh plan or update EasyICU first', '重试只会重复同样的失败；请重新生成计划，或先更新 EasyICU'),
