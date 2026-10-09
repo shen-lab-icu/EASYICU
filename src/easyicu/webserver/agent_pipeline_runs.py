@@ -75,6 +75,9 @@ from easyicu.research_agent.reporting.system_validation_report import (
     render_system_validation_html,
 )
 from easyicu.research_agent.reporting.writer_stop import writer_stop
+from easyicu.research_agent.trajectory.scientific_runtime_authority import (
+    TrajectoryScientificAuthorityError,
+)
 from easyicu.research_agent.execution.runners.missingness_measurement_figure_executor import (
     run_measurement_missingness_figure,
 )
@@ -234,18 +237,26 @@ _MATERIALIZED_FEATURE_SUFFIXES = tuple(
     )
 )
 
-_SAFE_PIPELINE_EXCEPTION_TYPES = frozenset(
-    {
-        "CodexAppServerError",
-        "ExecutionRuntimeUnavailableError",
-        "PlannerEfficiencyBudgetExhausted",
-        "ProgressivePlanCompileError",
-        "ResearchPipelineRunError",
-        "RunInputIdentityError",
-        "StructuredResponseFailure",
-        "WebReviewWorkRootCapacityError",
-    }
-)
+_RECORDED_EXCEPTION_NAME_RE = re.compile(r"[A-Z][A-Za-z0-9_]{0,79}")
+
+
+def _recorded_exception_type(item: BaseException) -> Optional[str]:
+    """The class name a failure diagnostic records for one chain member.
+
+    A class EasyICU defines is recorded by its name: the name is code, not
+    data, and it says which owner refused. Builtin and third-party classes are
+    not: ``RuntimeError`` names no owner, and the repair for an unattributable
+    failure is a typed EasyICU exception, never persisted exception text. The
+    review-resume diagnostic reads the defining module the same way.
+    """
+
+    cls = type(item)
+    name = cls.__name__
+    if not str(cls.__module__).startswith("easyicu."):
+        return None
+    if _RECORDED_EXCEPTION_NAME_RE.fullmatch(name) is None:
+        return None
+    return name
 
 
 @dataclass(frozen=True)
@@ -486,6 +497,10 @@ def _pipeline_failure_code(
         return "research_pipeline_schema_validation_failed"
     if typed_failure.get("owner") == "easyicu.planning.dependence_authority_v1":
         return "research_pipeline_analysis_design_conflict"
+    if any(isinstance(item, TrajectoryScientificAuthorityError) for item in chain):
+        # The signed trajectory design refused the plan. Its class carries no
+        # reason code; the recorded type and code frames say which check.
+        return "research_pipeline_trajectory_authority_refused"
     if typed_failure.get("owner") == _EXECUTION_RUNTIME_DIAGNOSTIC_OWNER:
         if typed_failure.get("reason_code") in _RUNNER_IMAGE_MISMATCH_REASONS:
             return "research_pipeline_runner_image_mismatch"
@@ -889,9 +904,9 @@ def _write_pipeline_failure_diagnostic(
         "failure_type": _pipeline_failure_category(exc),
         "typed_failure": _safe_pipeline_typed_failure(exc),
         "exception_types": [
-            type(item).__name__
+            name
             for item in _pipeline_exception_chain(exc)
-            if type(item).__name__ in _SAFE_PIPELINE_EXCEPTION_TYPES
+            if (name := _recorded_exception_type(item)) is not None
         ],
         # Bounded code coordinates make an otherwise generic RuntimeError
         # attributable without persisting exception messages, prompts, paths,
@@ -6546,6 +6561,13 @@ def make_research_pipeline_run_runner(
                 message = (
                     "The container runtime that executes analysis code was not "
                     "available, so no analysis was run. Start it and run again."
+                )
+            elif code == "research_pipeline_trajectory_authority_refused":
+                message = (
+                    "The plan departed from the trajectory design EasyICU signed "
+                    "for this study (its signed steps, their order and methods, "
+                    "or the sealed population), so the host refused it and the "
+                    "run stopped before producing a governed result."
                 )
             elif code == "research_pipeline_runner_image_mismatch":
                 message = (
