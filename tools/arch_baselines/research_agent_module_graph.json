@@ -753,6 +753,10 @@
     ],
     [
       "easyicu.research_agent.agents.family_spec_planner",
+      "easyicu.research_agent.planning.primary_result_contract"
+    ],
+    [
+      "easyicu.research_agent.agents.family_spec_planner",
       "easyicu.research_agent.planning.progressive_artifacts"
     ],
     [
@@ -980,6 +984,10 @@
       "easyicu.research_agent.trajectory.plan_contract"
     ],
     [
+      "easyicu.research_agent.agents.population_spec_transport",
+      "easyicu.research_agent.planning.population_spec"
+    ],
+    [
       "easyicu.research_agent.agents.progressive_attempt",
       "easyicu.research_agent.planning.progressive_artifacts"
     ],
@@ -990,6 +998,10 @@
     [
       "easyicu.research_agent.agents.progressive_attempt",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.agents.progressive_payload",
+      "easyicu.research_agent.agents.population_spec_transport"
     ],
     [
       "easyicu.research_agent.agents.progressive_payload",
@@ -1194,6 +1206,10 @@
     [
       "easyicu.research_agent.agents.progressive_planner",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.agents.progressive_prompt_contracts",
+      "easyicu.research_agent.agents.population_spec_transport"
     ],
     [
       "easyicu.research_agent.agents.progressive_prompt_contracts",
@@ -8705,6 +8721,10 @@
     ],
     [
       "easyicu.research_agent.orchestration.progressive_planning",
+      "easyicu.research_agent.planning.population_shadow"
+    ],
+    [
+      "easyicu.research_agent.orchestration.progressive_planning",
       "easyicu.research_agent.planning.preplan_know_how"
     ],
     [
@@ -10405,6 +10425,34 @@
     ],
     [
       "easyicu.research_agent.planning.population_requirements",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.planning.population_shadow",
+      "easyicu.research_agent.planning.cohort_contract"
+    ],
+    [
+      "easyicu.research_agent.planning.population_shadow",
+      "easyicu.research_agent.planning.cohort_eligibility"
+    ],
+    [
+      "easyicu.research_agent.planning.population_shadow",
+      "easyicu.research_agent.planning.population_compile"
+    ],
+    [
+      "easyicu.research_agent.planning.population_shadow",
+      "easyicu.research_agent.planning.population_spec"
+    ],
+    [
+      "easyicu.research_agent.planning.population_shadow",
+      "easyicu.research_agent.planning.scientific_review"
+    ],
+    [
+      "easyicu.research_agent.planning.population_shadow",
+      "easyicu.research_agent.research_context.materialization_window"
+    ],
+    [
+      "easyicu.research_agent.planning.population_shadow",
       "easyicu.research_agent.schema"
     ],
     [
@@ -13868,9 +13916,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3459,
+    "edge_count": 3471,
     "largest_scc_size": 0,
-    "module_count": 792,
+    "module_count": 794,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -13899,6 +13947,7 @@
     "easyicu.research_agent.agents.manuscript": "agents/manuscript.py",
     "easyicu.research_agent.agents.plan_payload": "agents/plan_payload.py",
     "easyicu.research_agent.agents.planner": "agents/planner.py",
+    "easyicu.research_agent.agents.population_spec_transport": "agents/population_spec_transport.py",
     "easyicu.research_agent.agents.progressive_attempt": "agents/progressive_attempt.py",
     "easyicu.research_agent.agents.progressive_payload": "agents/progressive_payload.py",
     "easyicu.research_agent.agents.progressive_planner": "agents/progressive_planner.py",
@@ -14435,6 +14484,7 @@
     "easyicu.research_agent.planning.planner_output_contract": "planning/planner_output_contract.py",
     "easyicu.research_agent.planning.population_compile": "planning/population_compile.py",
     "easyicu.research_agent.planning.population_requirements": "planning/population_requirements.py",
+    "easyicu.research_agent.planning.population_shadow": "planning/population_shadow.py",
     "easyicu.research_agent.planning.population_spec": "planning/population_spec.py",
     "easyicu.research_agent.planning.preplan_know_how": "planning/preplan_know_how.py",
     "easyicu.research_agent.planning.preplan_literature": "planning/preplan_literature.py",

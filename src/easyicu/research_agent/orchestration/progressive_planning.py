@@ -25,6 +25,7 @@ from ..planning.progressive_contract import (
     ProgressivePlanOutline,
     ProgressivePlannerCheckpoint,
 )
+from ..planning.population_shadow import write_population_shadow_audit
 from ..planning.preplan_know_how import PlannerKnowHowBinding
 from ..planning import literature_design_authority as _literature_design
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
@@ -306,6 +307,10 @@ def run_progressive_planner(
         evidence=evidence,
         prompt_metrics=prompt_metrics,
         prompt_pack_version=prompt_pack_version,
+    )
+    # Step 2a's shadow: the spec beside the cohort the plan applies; never raises.
+    write_population_shadow_audit(
+        run_dir, context=context, plan=generated, cohort=facts.skeleton.cohort
     )
     return ProgressivePlannerRunResult(
         plan=generated,

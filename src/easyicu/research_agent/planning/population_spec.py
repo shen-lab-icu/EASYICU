@@ -29,7 +29,7 @@ version 2's.
 from __future__ import annotations
 
 import json
-from typing import Annotated, Literal, Optional, Union
+from typing import Annotated, Literal, Mapping, Optional, Union, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -240,6 +240,17 @@ PopulationCriterion = Annotated[
 ]
 
 
+#: Each criterion kind and the model that states it.
+CRITERION_MODELS: Mapping[str, type[_Criterion]] = {
+    get_args(model.model_fields["kind"].annotation)[0]: model
+    for model in get_args(get_args(PopulationCriterion)[0])
+}
+#: The kinds that state the stays kept, so a criterion of one only includes.
+KEPT_KINDS = frozenset(
+    kind for kind, model in CRITERION_MODELS.items() if issubclass(model, _Kept)
+)
+
+
 class PopulationSpec(BaseModel):
     """Every restriction the study states on whom it includes; none for all rows."""
 
@@ -273,6 +284,8 @@ def diagnosis_code_token(code: str) -> str:
 
 
 __all__ = [
+    "CRITERION_MODELS",
+    "KEPT_KINDS",
     "MAX_CONDITION_CONCEPTS",
     "MAX_DIAGNOSIS_CODES",
     "MAX_POPULATION_CRITERIA",

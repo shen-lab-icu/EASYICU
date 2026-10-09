@@ -20,6 +20,7 @@ from ..planning.progressive_contract import (
 from ..contracts.trajectory_design import TRAJECTORY_OWNER_PLANNER_RULE
 from ..planning.outline_action_rules import replay_producer_rule_text
 from ..planning.literature_design_authority import LITERATURE_DESIGN_DIMENSIONS
+from .population_spec_transport import population_spec_contract, population_spec_shape
 
 
 # This is a review-copy consistency check, not execution authority. Only mask
@@ -413,6 +414,7 @@ def foundation_shape_contract(
             "inclusion": [predicate_shape],
             "exclusion": [],
             "population_criteria": [criterion_shape],
+            "population_spec": population_spec_shape(),
         }
     elif required_cohort_selection_mode == "all_input_rows":
         # A caller-bound mode keeps every input row; nothing is stated here.
@@ -430,6 +432,7 @@ def foundation_shape_contract(
             "inclusion": [],
             "exclusion": [],
             "population_criteria": [criterion_shape],
+            "population_spec": population_spec_shape(),
         }
     required_labels = [
         {"key": key, "value": "<reader-facing clinical variable label>"}
@@ -503,6 +506,7 @@ def foundation_shape_contract(
             + json.dumps(criterion_shape, ensure_ascii=False, separators=(",", ":"))
             + ", and a criterion with concepts is applied by at least one "
             "inclusion or exclusion predicate over one of them."
+            + population_spec_contract(cohort_concept_ids)
             if states_population
             else ""
         )

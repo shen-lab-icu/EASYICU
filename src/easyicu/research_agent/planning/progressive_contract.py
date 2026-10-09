@@ -12,10 +12,18 @@ into the shared schema or prompt.
 
 from __future__ import annotations
 
+import json
 import re
-from typing import Any, ClassVar, Literal, Mapping, Optional, Sequence
+from typing import Annotated, Any, ClassVar, Literal, Mapping, Optional, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    WithJsonSchema,
+    field_validator,
+    model_validator,
+)
 
 from ..canonical_json import canonical_sha256
 from ..contracts.primary_cohort import STUDY_POPULATION_PRODUCTS
@@ -245,6 +253,32 @@ class ProgressiveCohortIntent(BaseModel):
     population_criteria: list[ProgressivePopulationCriterion] = Field(
         default_factory=list, max_length=6, exclude_if=lambda value: not value
     )
+    #: The same population stated again as a typed spec
+    #: (``planning.population_spec``).  In this step it is a shadow: the host
+    #: compiles it beside the predicates above and records how the two compare
+    #: (``planning.population_shadow``), and the predicates still select the
+    #: rows.  It is kept as the Planner wrote it, any JSON value, and read
+    #: only by that audit, so a spec of any shape never stops planning.
+    #: Omitted from the digest when absent.  The model's own schema is a
+    #: closed null, so every strict request built from these models stays
+    #: closed; the foundation request alone offers the spec's schema
+    #: (``agents.population_spec_transport``).
+    population_spec: Annotated[Optional[Any], WithJsonSchema({"type": "null"})] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @field_validator("population_spec")
+    @classmethod
+    def _spec_is_plain_json(cls, value: Any) -> Any:
+        if value is None:
+            return value
+        try:
+            size = len(json.dumps(value, allow_nan=False))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"a population spec must be plain JSON: {exc}") from exc
+        if size > 32_000:
+            raise ValueError("a population spec is a few criteria, not 32 kB of JSON")
+        return value
 
     @model_validator(mode="after")
     def _selection_is_explicit(self) -> "ProgressiveCohortIntent":
