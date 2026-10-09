@@ -99,7 +99,8 @@ MANUSCRIPT_SECTION_SPECS = (
         instruction=(
             "Write:\n"
             "1. `# <title>` — 12-20 words, include study design + the analyzed "
-            "population as ANALYZED POPULATION states it + "
+            "population by the population name ANALYZED POPULATION gives (without "
+            "one, as it states the population) + "
             "primary scientific question, but no numeric result, effect direction, "
             "association claim, or verdict.\n"
             "2. On the next line: `**Keywords:** keyword1, keyword2, ...` "
@@ -417,7 +418,7 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "36"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "37"
 
 
 def manuscript_section_specs(analysis_plan: AnalysisPlan | None = None):
