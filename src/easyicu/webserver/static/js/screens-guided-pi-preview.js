@@ -462,7 +462,7 @@
     return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(title)}</strong><span>${esc(detail)}</span></div>`;
   }
   function demoProvenance() {
-    return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('Bounded reviewer projection · Standard Web renderer', '有界审稿投影 · 标准 Web 渲染器'))}</strong><span>${esc(tr('A read-only projection derived from the registered run and rendered with the live Web artifact views; it is not the live artifact transport or publication evidence.', '这是从登记运行派生并复用真实 Web 产物视图的只读投影；它不是 live artifact transport，也不是投稿证据。'))}</span></div>`;
+    return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('Demo file · Read-only', '演示文件 · 只读'))}</strong><span>${esc(tr('From one registered run, shown with the same views as your own results. It is not publication evidence.', '来自一次已登记的运行，用与你自己的结果相同的视图展示；不能作为投稿证据。'))}</span></div>`;
   }
   function demoDocumentProvenance() {
     return `<div class="gpi-preview-provenance is-research" role="note"><strong>${esc(tr('Reviewer demonstration complete · Engineering evidence', '审稿人演示完整完成 · 工程证据'))}</strong><span>${esc(tr('The workflow demonstration is complete; clinical manuscript and publication authority remain separate and were not granted.', '流程演示已完整完成；临床稿件与发表权限属于独立边界，本报告未授予这些权限。'))}</span></div>`;

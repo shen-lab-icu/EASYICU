@@ -18,3 +18,18 @@
   .gpi-demo-footer{align-items:stretch;flex-direction:column}
   .gpi-demo-footer .btn{justify-content:center}
 }
+/* The demo's answer block: the run's main figure, its table, the next
+   questions (shown, not sent), and the folded governance record. */
+.gpi-demo-result{max-width:var(--gpi-reading-width,820px);margin:4px auto 24px;padding:0 clamp(0px,1vw,8px)}
+.gpi-demo-result .gpi-run-answer-figure{max-width:680px}
+.gpi-demo-result .gpi-run-answer-figure img{display:block;width:100%;height:auto;padding:6px;border:1px solid var(--line);border-radius:8px;background:#fff;box-sizing:border-box}
+.gpi-demo-table{margin:14px 0 4px;overflow-x:auto}
+.gpi-demo-table table{width:100%;border-collapse:collapse;font-size:13px}
+.gpi-demo-table th,.gpi-demo-table td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+.gpi-demo-table thead th{color:var(--ink-3);font-weight:550}
+.gpi-demo-table td{font-variant-numeric:tabular-nums}
+.gpi-demo-followups .gpi-followup-prompt{cursor:default}
+.gpi-demo-governance-body{padding:4px 16px 12px;font-size:13px;line-height:1.65;color:var(--ink-2)}
+.gpi-demo-governance-body p{margin:6px 0}
+.gpi-demo-governance-links{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:8px}
+.gpi-demo-followups .gpi-followups-head{display:flex;justify-content:flex-start;text-align:left}

@@ -194,6 +194,7 @@ def test_native_webserver_static_assets_are_packaged() -> None:
         "src/easyicu/webserver/static/js/screens-viz-patient-features.js",
         "src/easyicu/webserver/static/css/app.css",
         "src/easyicu/webserver/static/assets/demo/e1-publication-figure.png",
+        "src/easyicu/webserver/static/assets/demo/sofa2-phenotype-mortality.png",
         "src/easyicu/webserver/static/assets/demo/system-validation-report.html",
         "src/easyicu/webserver/static/assets/demo/system-validation-report.pdf",
         "src/easyicu/webserver/static/vendor/echarts/echarts.common.min.js",
