@@ -1764,7 +1764,7 @@
     // Restore the project/session first. That path resets the composer draft;
     // seeding before it completed made Open from Skill Hub silently disappear.
     if (state.conv) state.conv.classList.add('pi-active');
-    wire(); document.addEventListener('click', dismissHeaderOverflow);
+    wire(); document.addEventListener('click', dismissHeaderOverflow, true);
     const capabilitiesReady = api().loadCapabilities
       ? Promise.resolve(api().loadCapabilities()).catch(() => null)
       : Promise.resolve(null);
@@ -1790,7 +1790,7 @@
   }
   function unmount() {
     RUN_FILES.reset();
-    document.removeEventListener('click', dismissHeaderOverflow);
+    document.removeEventListener('click', dismissHeaderOverflow, true);
     stopCodexPoll(); closeSource(); closeChildSource(); if (IDEA_SOURCE) IDEA_SOURCE.reset(); state.host = null; state.conv = null; state.busy = false; state.jobId = '';
   }
   window.addEventListener('easyicu:languagechange', handleLanguageChange);

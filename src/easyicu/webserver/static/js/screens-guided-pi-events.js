@@ -24,8 +24,10 @@
     } = options;
 
     // Outside presses, Escape, and opening another menu are handled for every
-    // floating menu by popover-menus.js; this only closes a menu after an
-    // action was chosen inside it.
+    // floating menu by popover-menus.js; this only closes a menu when an
+    // action is chosen inside it. The shell listens in the capture phase, so
+    // the menu is closed before the action repaints: a menu open at the
+    // repaint is reopened.
     function dismissHeaderOverflow(event) {
       const action = event.target && event.target.closest
         ? event.target.closest('.gpi-head-overflow-menu button, .gpi-idea-source-popover button') : null;
@@ -313,7 +315,11 @@
         const modeSwitch = event.target.closest('[data-gpi-mode-switch]');
         if (modeSwitch) { switchMode(modeSwitch.dataset.gpiModeSwitch); return; }
         const accessMode = event.target.closest('[data-gpi-access-mode]');
-        if (accessMode) { state.accessMode = accessMode.dataset.gpiAccessMode || 'assist'; render(); return; }
+        if (accessMode) {
+          const menu = accessMode.closest('details[data-popover-menu]');
+          if (menu) menu.removeAttribute('open');
+          state.accessMode = accessMode.dataset.gpiAccessMode || 'assist'; render(); return;
+        }
         const researchProvider = event.target.closest('[data-gpi-research-provider]');
         if (researchProvider) {
           state.researchProvider = researchProvider.dataset.gpiResearchProvider === 'codex' ? 'codex' : 'api';

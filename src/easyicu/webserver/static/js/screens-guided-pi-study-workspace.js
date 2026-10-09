@@ -368,6 +368,11 @@
           return;
         }
         if (locked) return;
+        // Rename and remove ask first and repaint after, so the ••• menu
+        // closes now; a menu open at the repaint is reopened.
+        const rowAction = event.target.closest('[data-gpi-rail-rename], [data-gpi-rail-remove]');
+        const rowMenu = rowAction && rowAction.closest('details[data-popover-menu]');
+        if (rowMenu) rowMenu.removeAttribute('open');
         const rename = event.target.closest('[data-gpi-rail-rename]');
         if (rename && typeof ctx.rename === 'function') {
           const row = ctx.sessions.find(item => item.session_id === rename.dataset.gpiRailRename);

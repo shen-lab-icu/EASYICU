@@ -85,6 +85,15 @@ CONTRACTS: dict[str, list[str]] = {
         "product-labels.js",
         "screens-guided-pi-run-files.js",
     ],
+    # Requires the popover owner, the module registry, and the events and
+    # study-workspace owners; reads the shell as text.
+    "guided_pi_menu_actions.test.js": [
+        "popover-menus.js",
+        "screens-guided-pi-modules.js",
+        "screens-guided-pi-events.js",
+        "screens-guided-pi-study-workspace.js",
+        "screens-guided-pi.js",
+    ],
     # Requires the module registry and the data-binding owner; reads the shell as text.
     "guided_pi_question_carry.test.js": [
         "screens-guided-pi-modules.js",
