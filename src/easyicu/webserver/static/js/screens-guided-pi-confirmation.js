@@ -365,11 +365,12 @@
       };
       // A reviewed plan whose cohort leaves out a stated inclusion cannot be
       // approved (population_compile.POPULATION_APPROVAL_STOPS). Nothing applies
-      // the criterion as written: a fresh candidate plan, which the host keeps
-      // metadata-only. An extraction of the study's own population applies it:
+      // the criterion as written: a fresh plan, whose kind routes/agent.py
+      // chooses for the study, so the card promises none. An extraction of the
+      // study's own population applies it:
       // the conversation asks for that extraction, and binding it supersedes
       // this plan, so the card offers no plan action.
-      const populationStopResources = reviewedPlanRunId ? [
+      const planStopResources = reviewedPlanRunId ? [
         { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'agent_plan.json', label: tr('Open the complete plan', '打开完整计划'), media_type: 'application/json' },
         { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'scientific_plan_review.json', label: tr('View review details', '查看审阅详情'), media_type: 'application/json' },
       ] : [];
@@ -381,12 +382,12 @@
         ),
         title: tr('A stated inclusion criterion cannot be applied as written', '研究写明的纳入条件按原文无法施加'),
         note: tr(
-          'This plan cannot be approved, and no analysis has started. Revise the criterion in the conversation, or generate a new candidate plan; it reads metadata only.',
-          '这份计划不能批准，分析尚未开始。可以在对话中修改这个条件，或重新生成候选计划；新计划只读元数据。',
+          'This plan cannot be approved, and no analysis has started. Revise the criterion in the conversation, or generate the plan again.',
+          '这份计划不能批准，分析尚未开始。可以在对话中修改这个条件，或重新生成计划。',
         ),
         approve: tr('Generate fresh plan', '重新生成计划'),
         reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
-        reviewResources: populationStopResources,
+        reviewResources: planStopResources,
       };
       if (code === 'population_inclusion_requires_extraction') return {
         code, grants: [], nonApprovable: true,
@@ -396,7 +397,65 @@
           '当前数据包无法施加这个条件，这份计划不能批准，分析尚未开始。请在对话中要求按本研究人群提取数据；研究绑定新数据包后，这份计划会失效，EasyICU 会按新数据重新生成计划。',
         ),
         reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
-        reviewResources: populationStopResources,
+        reviewResources: planStopResources,
+      };
+      // A reviewed plan that leaves an analysis the question asks for
+      // unanswered, or cannot answer it, cannot be approved; nor can one the
+      // host could not check, because the record of what the question asks for
+      // could not be read or did not validate when the plan was submitted
+      // (question_requirements.QUESTION_REQUIREMENT_APPROVAL_STOPS).
+      // Each card offers a fresh plan, whose kind routes/agent.py chooses for
+      // the study; the gap card says a plan may stop again unless the
+      // question changes. The first two link the judgment of the plan under
+      // review first: it says which analysis stopped the plan.
+      const questionStopResources = reviewedPlanRunId ? [
+        { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'question_requirements_review.json', label: tr('View the question requirements', '查看题面要求'), media_type: 'application/json' },
+        ...planStopResources,
+      ] : [];
+      if (code === 'question_requirement_not_covered') return {
+        code, grants: ['provider_run', 'literature'],
+        message: tr(
+          'Keep the current candidate plan as review evidence. Generate a fresh candidate plan from the current study configuration, and pause again for my review before analysis.',
+          '保留当前候选计划作为审阅记录。请按当前研究配置重新生成候选计划，并在分析前再次停下让我审核。',
+        ),
+        title: tr('This plan does not answer an analysis the question asks for', '题面要求的一项分析，这份计划没有回答'),
+        note: tr(
+          'This plan cannot be approved, and no analysis has started. Generate the plan again. To change what the question asks, say so in the conversation first.',
+          '这份计划不能批准，分析尚未开始。请重新生成计划。如果要改题面的要求，请先在对话中说明。',
+        ),
+        approve: tr('Generate fresh plan', '重新生成计划'),
+        reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
+        reviewResources: questionStopResources,
+      };
+      if (code === 'question_requirement_capability_gap') return {
+        code, grants: ['provider_run', 'literature'],
+        message: tr(
+          'Keep the current candidate plan as review evidence. Generate a fresh candidate plan from the current study configuration, and pause again for my review before analysis.',
+          '保留当前候选计划作为审阅记录。请按当前研究配置重新生成候选计划，并在分析前再次停下让我审核。',
+        ),
+        title: tr('Planning found an analysis the question asks for that this plan cannot do', '规划发现：题面要求的一项分析，这份计划做不到'),
+        note: tr(
+          'This plan cannot be approved, and no analysis has started. Revise or drop that requirement in the conversation, or generate the plan again; unless the question changes, a new plan may stop here again.',
+          '这份计划不能批准，分析尚未开始。可以在对话中修改或去掉这项要求，或重新生成计划；题面不改的话，新计划可能还会停在这里。',
+        ),
+        approve: tr('Generate fresh plan', '重新生成计划'),
+        reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
+        reviewResources: questionStopResources,
+      };
+      if (code === 'question_requirements_unreadable') return {
+        code, grants: ['provider_run', 'literature'],
+        message: tr(
+          'Keep the current candidate plan as review evidence. Generate a fresh candidate plan from the current study configuration, and pause again for my review before analysis.',
+          '保留当前候选计划作为审阅记录。请按当前研究配置重新生成候选计划，并在分析前再次停下让我审核。',
+        ),
+        title: tr('This plan was not checked against what the question asks for', '这份计划没有按题面要求核对'),
+        note: tr(
+          'This plan cannot be approved, and no analysis has started. When the plan was submitted for review, the record of what the question asks for could not be read or did not validate, so the plan was not checked against it. Generate the plan again; the new plan is checked.',
+          '这份计划不能批准，分析尚未开始。提交审阅时，题面要求的核对记录读取或校验失败，所以没有按题面要求核对这份计划。请重新生成计划，新计划会重新核对。',
+        ),
+        approve: tr('Generate fresh plan', '重新生成计划'),
+        reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
+        reviewResources: planStopResources,
       };
       if (code === 'plan_scientific_changes_required') return {
         code, grants: ['provider_run', 'literature'],
