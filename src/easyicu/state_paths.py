@@ -31,9 +31,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-__all__ = ["user_home", "state_root", "projects_root", "exports_root"]
+__all__ = ["user_home", "state_root", "projects_root", "exports_root", "config_root"]
 
 _ENV_VAR = "EASYICU_HOME"
+
+
+def _override() -> str:
+    return str(os.environ.get(_ENV_VAR) or "").strip()
 
 
 def user_home() -> Path:
@@ -45,7 +49,7 @@ def user_home() -> Path:
     shell profile cannot silently relocate a user's studies.
     """
 
-    override = str(os.environ.get(_ENV_VAR) or "").strip()
+    override = _override()
     if override:
         return Path(override).expanduser()
     return Path.home()
@@ -67,3 +71,21 @@ def exports_root() -> Path:
     """``~/easyicu/exports`` — the conventional export destination."""
 
     return user_home() / "easyicu" / "exports"
+
+
+def config_root() -> Path:
+    """The core package's saved settings (``easyicu.config``).
+
+    Under ``$EASYICU_HOME`` this is that home's ``.easyicu/config``. Otherwise
+    it is ``$XDG_CONFIG_HOME/easyicu`` when that is set, else
+    ``~/.easyicu/config``. The isolated home wins over ``XDG_CONFIG_HOME``
+    because a shell profile exports that to every process, where it names
+    the real home's settings.
+    """
+
+    if _override():
+        return state_root() / "config"
+    xdg_config = os.environ.get("XDG_CONFIG_HOME")
+    if xdg_config:
+        return Path(xdg_config) / "easyicu"
+    return state_root() / "config"

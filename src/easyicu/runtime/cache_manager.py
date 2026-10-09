@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, Any
 import logging
 
+from .. import state_paths
 from .project_config import AUTO_CLEAR_CACHE, CACHE_DIR
 
 logger = logging.getLogger(__name__)
@@ -40,8 +41,8 @@ class CacheManager:
         if CACHE_DIR.exists():
             self._cache_dirs.append(CACHE_DIR)
 
-        # 用户主目录下的easyicu缓存
-        home_cache = Path.home() / ".easyicu_cache"
+        # 用户主目录下的easyicu缓存；隔离的 $EASYICU_HOME 只清它自己的，不碰真实主目录
+        home_cache = state_paths.user_home() / ".easyicu_cache"
         if home_cache.exists():
             self._cache_dirs.append(home_cache)
 

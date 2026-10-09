@@ -17,6 +17,7 @@ import json
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
+from . import state_paths
 from .databases.profiles import (
     DATABASE_ID_CONFIG as DATABASE_ID_CONFIG,
     DatabaseProfileMetadata,
@@ -422,18 +423,13 @@ def get_config_dir() -> Path:
     """Get easyicu configuration directory (R ricu config_paths).
     
     Returns directory for storing persistent configuration.
-    Default: ~/.easyicu/config
+    Default: ~/.easyicu/config, or $XDG_CONFIG_HOME/easyicu when that is
+    set; an isolated $EASYICU_HOME keeps its own (state_paths.config_root).
     
     Returns:
         Path to config directory
     """
-    # Try XDG_CONFIG_HOME first (Linux standard)
-    xdg_config = os.environ.get('XDG_CONFIG_HOME')
-    if xdg_config:
-        config_dir = Path(xdg_config) / 'easyicu'
-    else:
-        # Fall back to home directory
-        config_dir = Path.home() / '.easyicu' / 'config'
+    config_dir = state_paths.config_root()
     
     # Create directory if it doesn't exist
     config_dir.mkdir(parents=True, exist_ok=True)
