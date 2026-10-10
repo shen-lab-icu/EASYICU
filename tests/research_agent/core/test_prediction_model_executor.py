@@ -634,3 +634,41 @@ def test_prediction_owner_executes_exact_complete_case_robustness_spec(
         ],
     )
     assert unexecuted_locked_spec_ids(blank) == ["complete_case_narrower"]
+
+
+@pytest.mark.parametrize("one_stay_each", [False, True])
+def test_the_primary_auroc_interval_follows_repeat_stays(
+    tmp_path: Path, one_stay_each: bool
+) -> None:
+    frame = _frame()
+    if one_stay_each:
+        frame = frame.loc[frame["patient_stay_id"].str.endswith(":s1")].reset_index(
+            drop=True
+        )
+    (tmp_path / "research_context.json").write_text(
+        _context(len(frame)).model_dump_json(indent=2), encoding="utf-8"
+    )
+    cohort_path = tmp_path / "cohort.csv"
+    frame.to_csv(cohort_path, index=False)
+    out_dir = tmp_path / "primary"
+    run_prediction_model(
+        frame=frame,
+        declared_columns=("age", "sex", "marker", "death"),
+        typed_cohort_input="artifact:analysis_cohort",
+        source_cohort=cohort_path,
+        out_dir=out_dir,
+        run_dir=tmp_path,
+        step_id="primary_model",
+    )
+    scores = pd.read_csv(out_dir / "prediction_scores.csv")
+    validation = scores.loc[scores["split"].eq("validation")]
+    performance = pd.read_csv(out_dir / "prediction_performance.csv").iloc[0]
+
+    assert bool(validation["subject_id"].duplicated().any()) is (not one_stay_each)
+    assert performance["auroc_ci_method"] == (
+        "delong_logit_normal_95pct"
+        if one_stay_each
+        else "patient_stratified_bootstrap_percentile_95pct"
+    )
+    assert performance["auroc_bootstrap_n"] == (0 if one_stay_each else 2000)
+    assert performance["auroc_ci_low"] <= performance["auroc"] <= performance["auroc_ci_high"]
