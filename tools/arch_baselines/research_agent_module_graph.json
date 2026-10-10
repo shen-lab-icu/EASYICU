@@ -11913,6 +11913,10 @@
     ],
     [
       "easyicu.research_agent.planning.target_trial_compile",
+      "easyicu.research_agent.planning.cohort_eligibility"
+    ],
+    [
+      "easyicu.research_agent.planning.target_trial_compile",
       "easyicu.research_agent.planning.dependence_authority"
     ],
     [
@@ -14912,7 +14916,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3720,
+    "edge_count": 3721,
     "largest_scc_size": 0,
     "module_count": 844,
     "package_count": 36,

@@ -439,6 +439,24 @@ _CONCEPT_HINTS: Dict[str, ConceptHint] = {
         kind=VariableKind.BINARY,
         aggregation_default=AggregationRule.MAX_LAST,
     ),
+    "adv_resp": ConceptHint(
+        role=VariableRole.INTERVENTION,
+        kind=VariableKind.BINARY,
+        aggregation_default=AggregationRule.MAX_LAST,
+        pitfalls=(
+            "Advanced respiratory support (invasive or non-invasive ventilation, high-flow oxygen) observed in the exposure window may be concurrent treatment or a mediator; do not auto-adjust without pre-time-zero authority.",
+        ),
+    ),
+    "fluid_balance_cumulative": ConceptHint(
+        role=VariableRole.INTERVENTION,
+        kind=VariableKind.CONTINUOUS,
+        unit="mL",
+        aggregation_default=AggregationRule.MAX_LAST,
+        pitfalls=(
+            "Cumulative fluid balance accumulates over the stay: a window mean understates the balance reached at the window's end.",
+            "Fluid balance reflects fluid given in response to illness; adjust for it only with pre-time-zero authority.",
+        ),
+    ),
     # --- ids / time
     "patient_id": ConceptHint(role=VariableRole.ID, kind=VariableKind.IDENTIFIER),
     "icustay_id": ConceptHint(role=VariableRole.ID, kind=VariableKind.IDENTIFIER),

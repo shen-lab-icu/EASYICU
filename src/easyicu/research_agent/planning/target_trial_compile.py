@@ -84,6 +84,7 @@ from ..research_context.materialization_window import (
 from ..research_context.stay_events import ICU_LENGTH_OF_STAY_CONCEPT
 from ..schema import EndpointSpec, ResearchContext
 from .adjustment_authority import host_proven_temporal_roles
+from .cohort_eligibility import predicate_context_column
 from .dependence_authority import (
     context_patient_group_authority,
     repeat_units_possible,
@@ -262,6 +263,12 @@ class CompiledConfounder:
     detail: str
     #: How the host proves it observed by time zero, when it is applied.
     temporal_role: Optional[str] = None
+    #: The input column the weights read, when it is applied: the stated name
+    #: itself, or the concept's summary over ``[0, T0)``.
+    column: Optional[str] = None
+    #: The summary the host chose for a confounder stated by its concept
+    #: (:data:`CONFOUNDER_SUMMARIES`).
+    summary: Optional[str] = None
 
     def __post_init__(self) -> None:
         allowed = {
@@ -272,6 +279,8 @@ class CompiledConfounder:
             raise ValueError(f"reason {self.reason!r} does not fit {self.disposition}")
         if (self.disposition == "applied") != (self.temporal_role is not None):
             raise ValueError("only an applied confounder has a proven temporal role")
+        if (self.disposition == "applied") != (self.column is not None):
+            raise ValueError("only an applied confounder names the column it is read from")
 
     def record(self) -> dict[str, Any]:
         return {
@@ -281,6 +290,8 @@ class CompiledConfounder:
             "reason": self.reason,
             "detail": self.detail,
             "temporal_role": self.temporal_role,
+            "column": self.column,
+            "summary": self.summary,
         }
 
 
@@ -1185,7 +1196,43 @@ def _is_design_concept(reading: _Reading, name: str) -> bool:
     )
 
 
+#: The summary over ``[0, T0)`` a confounder stated by its concept enters the
+#: weights as: an event status by whether it was recorded (its maximum), any
+#: other value by its mean, which unlike a maximum or minimum does not move
+#: with how often the value was measured.  The materializer writes no value
+#: last recorded before time zero.
+CONFOUNDER_SUMMARIES: Mapping[str, str] = MappingProxyType(
+    {"event_status": "max", "value": "mean"}
+)
+_SUMMARY_WORDS = {"max": "whether it was recorded", "mean": "mean"}
+
+
+def _confounder_column(reading: _Reading, name: str) -> tuple[Optional[str], Optional[str]]:
+    """The input column a stated confounder is read from, and the summary chosen.
+
+    A confounder stated by a column of the input is that column.  One stated
+    by its concept is the concept's summary over ``[0, T0)``
+    (:data:`CONFOUNDER_SUMMARIES`), named as the cohort builder names it; the
+    column is ``None`` when the input holds no such summary.
+    """
+
+    if reading.has_column(name):
+        return name, None
+    kind = "event_status" if concept_declares_event_status(name) else "value"
+    summary = CONFOUNDER_SUMMARIES[kind]
+    column = predicate_context_column(reading.variables, name, summary)
+    return (column if column in reading.variables else None), summary
+
+
 def _confounder(reading: _Reading, item: TrialConfounder) -> CompiledConfounder:
+    name = item.name
+    column, summary = (
+        (None, None) if _is_design_concept(reading, name) else _confounder_column(reading, name)
+    )
+    read_as = (
+        f" ({_SUMMARY_WORDS[summary]} over [0, {reading.time_zero}) h)" if summary else ""
+    )
+
     def compiled(
         disposition: ConfounderDisposition,
         reason: Optional[str],
@@ -1193,15 +1240,16 @@ def _confounder(reading: _Reading, item: TrialConfounder) -> CompiledConfounder:
         role: Optional[str] = None,
     ) -> CompiledConfounder:
         return CompiledConfounder(
-            name=item.name,
+            name=name,
             clinical_rationale=item.clinical_rationale,
             disposition=disposition,
             reason=reason,
             detail=detail,
             temporal_role=role,
+            column=column if disposition == "applied" else None,
+            summary=summary,
         )
 
-    name = item.name
     if _is_design_concept(reading, name):
         return compiled(
             "not_applied",
@@ -1209,13 +1257,13 @@ def _confounder(reading: _Reading, item: TrialConfounder) -> CompiledConfounder:
             f"{name!r} is the treatment, the outcome, a death or the ICU stay "
             "itself: the strategies, not the weights, account for it.",
         )
-    if not reading.has_column(name):
+    if column is None:
         if _extraction_defines(name, reading.database):
             return compiled(
                 "requires_extraction",
                 "tte_confounder_not_in_export",
-                f"This input holds no {name!r}; an extraction summarizing it over "
-                f"[0, {reading.time_zero}) h would.",
+                f"This input holds no column of {name!r}{read_as}; an extraction "
+                f"summarizing it over [0, {reading.time_zero}) h would.",
             )
         return compiled(
             "not_applied",
@@ -1226,25 +1274,28 @@ def _confounder(reading: _Reading, item: TrialConfounder) -> CompiledConfounder:
     roles = host_proven_temporal_roles(
         reading.context, reference_hours=float(reading.time_zero)
     )
-    if name in roles:
+    if column in roles:
         return compiled(
             "applied",
             None,
-            "The host proves it observed by time zero.",
-            roles[name],
+            "The host proves it observed by time zero"
+            + (f"; the weights read {column!r}{read_as}." if summary else "."),
+            roles[column],
         )
-    if _proven_over_covariate_window(reading, name):
+    if _proven_over_covariate_window(reading, column):
         return compiled(
             "requires_extraction",
             "tte_confounder_window_after_time_zero",
-            f"{name!r} is summarized past time zero here; summarized over "
+            f"{column!r} is summarized past time zero here; summarized over "
             f"[0, {reading.time_zero}) h it would be observed by then.",
         )
+    # Its summary over [0, T0) would not be proven either: the timing owner
+    # does not place a column of its role, so the weights do not read it.
     return compiled(
         "not_applied",
         "tte_confounder_after_time_zero",
-        f"The host cannot prove {name!r} observed by time zero, even summarized "
-        f"over [0, {reading.time_zero}) h.",
+        f"The host cannot prove {column!r} observed by time zero, so the weights "
+        "do not read it.",
     )
 
 
@@ -1352,7 +1403,11 @@ def _materialization(
         DEATH_STATUS,
         DEATH_TIME_COMPANION,
         ICU_LENGTH_OF_STAY_CONCEPT,
-        *(item.name for item in confounders if item.disposition != "not_applied"),
+        *(
+            item.column or item.name
+            for item in confounders
+            if item.disposition != "not_applied"
+        ),
     ]
     covariate_window, onset_window = _trial_windows(reading.spec)
     return {
@@ -1456,8 +1511,21 @@ def _confounder_set(
 ) -> Confirmation:
     """The adjustment set and the assumption it carries, confirmed for every trial."""
 
+    time_zero = spec.time_zero.hours_after_icu_admission
+
     def named(disposition: str) -> list[str]:
-        return [item.name for item in confounders if item.disposition == disposition]
+        # A confounder stated by its concept is read as the summary the host
+        # chose, which the researcher confirms here.
+        return [
+            item.name
+            + (
+                f" ({_SUMMARY_WORDS[item.summary]} over [0, {time_zero}) h)"
+                if item.summary
+                else ""
+            )
+            for item in confounders
+            if item.disposition == disposition
+        ]
 
     parts = [f"Adjusted for at time zero: {', '.join(named('applied')) or 'nothing'}."]
     if named("requires_extraction"):

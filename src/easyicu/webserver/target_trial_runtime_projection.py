@@ -458,11 +458,13 @@ def _authority_body(
         for item in record.get("confounders") or ()
         if item.get("disposition") == "applied"
     ]
+    # An applied confounder names the column the weights read: the stated
+    # column, or the stated concept's summary before time zero.
     covariates = [
         _covariate(
-            str(item["name"]),
+            str(item.get("column") or item["name"]),
             role=str(item.get("temporal_role") or ""),
-            column_type=columns[str(item["name"])],
+            column_type=columns[str(item.get("column") or item["name"])],
             bindings=bindings,
         )
         for item in confounders
