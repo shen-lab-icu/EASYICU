@@ -80,7 +80,11 @@ from easyicu.research_agent.planning.baseline_requirements import (
     AcceptedBaselineRequirements,
     candidate_baseline_requirements,
 )
+from easyicu.research_agent.orchestration.exposure_group_labels import (
+    recorded_exposure_group_labels,
+)
 from easyicu.research_agent.orchestration.exposure_grouping_phase import (
+    EXPOSURE_GROUPINGS_FILENAME,
     PlanningRunGroupings,
     planning_run_groupings,
 )
@@ -4684,6 +4688,12 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
         and current_review_approval_allowed,
         "scientific_plan_review": scientific_plan_review,
         **_pending_question_requirements(run_dir, pending),
+        # What each level code of a grouped exposure names; ``None`` when the
+        # run's grouping record cannot be read, which the card reports.
+        "exposure_group_labels": recorded_exposure_group_labels(run_dir),
+        "exposure_group_labels_recorded": (
+            run_dir / EXPOSURE_GROUPINGS_FILENAME
+        ).is_file(),
     }
 
 
