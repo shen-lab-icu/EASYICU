@@ -151,6 +151,11 @@ def test_legacy_catalog_marks_sofa2_sepsis_as_explicit_only(
         },
     )
 
+    # The faked package states no concept it holds no value of.
+    monkeypatch.setattr(
+        "easyicu.research_agent.acquisition.catalog.concepts_without_values",
+        lambda _root: (),
+    )
     catalog = build_available_catalog("unused")
     by_id = {concept.concept_id: concept for concept in catalog.concepts}
 
@@ -272,6 +277,11 @@ def test_typed_catalog_exposes_source_owner_not_physical_companions(monkeypatch)
         },
     )
 
+    # The faked package states no concept it holds no value of.
+    monkeypatch.setattr(
+        "easyicu.research_agent.acquisition.catalog.concepts_without_values",
+        lambda _root: (),
+    )
     catalog = build_available_catalog("unused")
 
     assert catalog.ids() == ["death", "lact"]
@@ -302,6 +312,11 @@ def test_typed_catalog_omits_ambiguous_primary_owner(monkeypatch):
         },
     )
 
+    # The faked package states no concept it holds no value of.
+    monkeypatch.setattr(
+        "easyicu.research_agent.acquisition.catalog.concepts_without_values",
+        lambda _root: (),
+    )
     catalog = build_available_catalog("unused")
 
     assert catalog.ids() == []
@@ -328,6 +343,11 @@ def test_typed_catalog_uses_sealed_metadata_not_mutable_dictionary(monkeypatch):
         lambda: {"lact": {"description": "MUTABLE DECOY", "category": "decoy"}},
     )
 
+    # The faked package states no concept it holds no value of.
+    monkeypatch.setattr(
+        "easyicu.research_agent.acquisition.catalog.concepts_without_values",
+        lambda _root: (),
+    )
     catalog = build_available_catalog("unused")
 
     assert catalog.concepts[0].description == (binding.metadata.description or "")

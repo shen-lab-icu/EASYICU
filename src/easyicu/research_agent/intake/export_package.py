@@ -1860,6 +1860,38 @@ def index_export_package(export_dir: Union[str, Path]) -> Dict[str, Dict[str, ob
         return package.index_dict()
 
 
+#: What a native manifest states of a concept whose column holds no value: its
+#: producer ran and wrote none, or the source cannot hold the concept and the
+#: export wrote a placeholder column.
+_WITHOUT_VALUES = frozenset({"produced_all_null", "structurally_unavailable_placeholder"})
+
+
+def concepts_without_values(export_dir: Union[str, Path]) -> Tuple[str, ...]:
+    """The concepts an export lists but holds no value of, sorted.
+
+    A native manifest states, file by file, each concept's availability
+    (``api.extraction`` writes it).  A concept is without values when every
+    file that states it states one of :data:`_WITHOUT_VALUES`: its column
+    exists, yet no row holds a value of it.  A legacy manifest states no
+    availability, so it names none.  Reads the manifest, never a data file.
+    """
+
+    manifest_path, kind = _select_manifest(Path(export_dir).expanduser())
+    if kind != "native":
+        return ()
+    manifest, _raw = _read_json(manifest_path, label="native manifest")
+    stated: dict[str, set[str]] = {}
+    files = manifest.get("files")
+    for entry in files if isinstance(files, list) else ():
+        statuses = entry.get("concept_status") if isinstance(entry, Mapping) else None
+        for concept, status in (statuses.items() if isinstance(statuses, Mapping) else ()):
+            availability = status.get("availability") if isinstance(status, Mapping) else None
+            stated.setdefault(str(concept), set()).add(str(availability))
+    return tuple(
+        sorted(concept for concept, values in stated.items() if values <= _WITHOUT_VALUES)
+    )
+
+
 def resolve_exported_concept(
     index: Mapping[str, Mapping[str, object]], concept: str
 ) -> Optional[str]:
@@ -2028,6 +2060,7 @@ def read_exported_concept(
 __all__ = [
     "ExportPackage",
     "ExportPackageError",
+    "concepts_without_values",
     "index_export_package",
     "inspect_export_layout",
     "is_export_package",

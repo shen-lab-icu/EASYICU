@@ -26,6 +26,7 @@ from easyicu.research_agent.cohort.materializer import (
     materialize_cohort,
     materialize_to_parquet,
 )
+from easyicu.research_agent.contracts.concept_values import CONCEPTS_WITHOUT_VALUES_KEY
 from easyicu.research_agent.intake.materialized_metadata import (
     FIRST_ICU_STAY_RESTRICTION_SCHEMA,
 )
@@ -387,6 +388,12 @@ _REASON_CASES: list[tuple[str, dict, Any, float | None]] = [
         None,
     ),
     ("population_concept_unavailable", _condition("made_up_flag"), None, None),
+    (
+        "population_concept_without_values",
+        _condition("sep3"),
+        lambda: _ctx(provenance={CONCEPTS_WITHOUT_VALUES_KEY: ["sep3"]}),
+        None,
+    ),
     ("population_identifier_column", _condition("stay_id"), None, None),
     ("population_column_unresolved", _measurement("map", "min", "<", 65), None, None),
     ("population_condition_column_not_status", _condition("map"), None, None),

@@ -1573,6 +1573,28 @@ def _metadata_only_planning_catalog(
     return catalog
 
 
+def _source_concepts_without_values(export_path: str | Path | None) -> tuple[str, ...]:
+    """The concepts the bound export lists but holds no value of; none without one."""
+
+    from easyicu.research_agent.intake.export_package import (
+        concepts_without_values,
+        is_export_package,
+    )
+
+    if export_path is None:
+        return ()
+    package_path = Path(export_path).expanduser()
+    if not is_export_package(package_path):
+        return ()
+    try:
+        return concepts_without_values(package_path)
+    except (OSError, ValueError):
+        # An unreadable manifest gives the planning catalog no source menu
+        # either (``_metadata_only_planning_catalog``); each runtime owner
+        # still refuses a column without a value.
+        return ()
+
+
 def _metadata_only_planning_acquisition(
     *,
     database: str,
@@ -1613,9 +1635,13 @@ def _metadata_only_planning_acquisition(
     )
     from easyicu.database_config import ID_COLUMNS
     from easyicu.research_agent.concept_availability import normalize_database_name
+    from easyicu.research_agent.contracts.concept_values import (
+        CONCEPTS_WITHOUT_VALUES_KEY,
+    )
     from easyicu.outcome_availability import structural_outcome_unavailability
 
     catalog = _metadata_only_planning_catalog(database=database, export_path=export_path)
+    without_values = _source_concepts_without_values(export_path)
     required_source_failures = [
         receipt
         for concept in dict.fromkeys((
@@ -1640,6 +1666,31 @@ def _metadata_only_planning_acquisition(
                 } for r in required_source_failures],
             },
         )
+    # A concept the bound export lists but holds no value of cannot be read by
+    # any step (``contracts.concept_values``): a required one stops here, as a
+    # structurally unavailable one does, and an optional one leaves the menu.
+    required_without_values = [
+        concept
+        for concept in dict.fromkeys((
+            *required_concepts, *explicit_outcome_concepts(question), target_outcome or "",
+        ))
+        if concept and concept in without_values
+    ]
+    if required_without_values:
+        raise ResearchPipelineRunError(
+            "research_pipeline_required_concept_without_values",
+            "A variable the study requires is listed by its data source, but the "
+            "source holds no value of it. Change the variable, or use a source "
+            "that records it, before planning.",
+            details={
+                "database": normalize_database_name(database),
+                "required_concepts": required_without_values,
+            },
+        )
+    if without_values:
+        catalog.concepts = [
+            item for item in catalog.concepts if item.concept_id not in without_values
+        ]
     if not catalog.concepts:
         raise ResearchPipelineRunError(
             "research_pipeline_planning_catalog_unavailable",
@@ -1900,6 +1951,11 @@ def _metadata_only_planning_acquisition(
         # What the source can provide, beside a context that binds no grouping
         # (run_patient_grouping.planning_patient_grouping_status); a status only.
         **stated_grouping,
+        **(
+            {CONCEPTS_WITHOUT_VALUES_KEY: list(without_values)}
+            if without_values
+            else {}
+        ),
     }
     planning_catalog.to_parquet(universe_path, index=False)
     provenance_path = output_dir / "planner_catalog_receipt.json"
@@ -1921,6 +1977,11 @@ def _metadata_only_planning_acquisition(
             **stated_grouping,
             "selected_concepts": selected,
             "unavailable_model_concepts": unavailable_model_concepts,
+            **(
+                {CONCEPTS_WITHOUT_VALUES_KEY: list(without_values)}
+                if without_values
+                else {}
+            ),
             "selected_concepts_sha256": hashlib.sha256(
                 json.dumps(
                     selected,

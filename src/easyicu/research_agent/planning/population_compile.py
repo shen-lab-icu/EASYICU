@@ -68,6 +68,7 @@ from ..research_context.stay_events import (
     whole_stay_event_columns,
 )
 from ..concept_availability import explain_concept_availability
+from ..contracts.concept_values import names_without_values
 from ..schema import ResearchContext
 from .cohort_contract import (
     CohortDefinition,
@@ -125,6 +126,7 @@ NOT_APPLIED_REASONS = (
     "population_event_time_not_hours",
     "population_threshold_outside_domain",
     "population_determined_after_time_zero",
+    "population_concept_without_values",
 )
 #: Why a criterion waits for an extraction that would hold what applies it.
 REQUIRES_EXTRACTION_REASONS = (
@@ -473,6 +475,8 @@ class _Input:
     outcomes: frozenset[str]
     sources: _Sources
     time_zero_hours: Optional[float]
+    #: The concepts and columns the input holds no value of.
+    without_values: frozenset[str] = frozenset()
 
 
 def _read_input(
@@ -490,6 +494,7 @@ def _read_input(
         outcomes=stay_outcome_columns(context),
         sources=_read_sources(context),
         time_zero_hours=time_zero_hours,
+        without_values=names_without_values(context),
     )
 
 
@@ -652,6 +657,13 @@ def _plan_predicates(
 def _resolve(reading: _Input, concept: str, aggregation: str) -> str:
     """The column the cohort builder would filter for ``concept``."""
 
+    if concept in reading.without_values:
+        raise _NotApplied(
+            "population_concept_without_values",
+            f"This input's source lists {concept!r} but holds no value of it, so "
+            "a predicate over it would read nothing: an exclusion would exclude "
+            "no stay.",
+        )
     if concept not in reading.roster:
         if _extraction_defines(concept, reading.context.cohort.database):
             raise _NotApplied(
@@ -670,6 +682,13 @@ def _resolve(reading: _Input, concept: str, aggregation: str) -> str:
             "population_column_unresolved",
             f"The cohort builder binds no column of this input to {concept!r} "
             f"({aggregation}).",
+        )
+    if column in reading.without_values:
+        raise _NotApplied(
+            "population_concept_without_values",
+            f"{column!r}, the column of {concept!r} the cohort builder would filter, "
+            "holds no value in any row of this input, so a predicate over it would "
+            "read nothing: an exclusion would exclude no stay.",
         )
     if column in reading.identity:
         raise _NotApplied(

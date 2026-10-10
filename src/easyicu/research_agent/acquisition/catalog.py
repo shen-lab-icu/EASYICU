@@ -31,7 +31,11 @@ from typing import Dict, List, Mapping, Optional, Sequence, Union
 
 from easyicu.concept.metadata_sidecar import ColumnMetadataBinding
 
-from ..intake.export_package import index_export_package, resolve_exported_concept
+from ..intake.export_package import (
+    concepts_without_values,
+    index_export_package,
+    resolve_exported_concept,
+)
 
 
 @dataclass
@@ -299,14 +303,18 @@ def _methodology_tag(concept_id: str, category: str) -> str:
 
 
 def build_available_catalog(export_dir: Union[str, Path]) -> AvailableCatalog:
-    """Enumerate the concepts present in an EasyICU export package.
+    """Enumerate the concepts an EasyICU export package provides.
 
     Reads which concepts are physically present (:func:`index_export_package`)
     and enriches each with a description/category from the concept dictionary
     when known. This is "what the user gave us" — the menu the agent selects
-    from.
+    from.  A concept the export lists but holds no value of
+    (:func:`concepts_without_values`) is not provided: its column exists, but a
+    materialized event status reads its missing rows as "did not occur", so
+    analysing it would report an absence the source never recorded.
     """
     index = index_export_package(export_dir)
+    without_values = set(concepts_without_values(export_dir))
     concepts: List[CatalogConcept] = []
     typed_index = any(info.get("column_metadata_v2") is True for info in index.values())
     # A typed package already sealed its prompt-facing semantics.  Re-reading
@@ -342,6 +350,8 @@ def build_available_catalog(export_dir: Union[str, Path]) -> AvailableCatalog:
         catalog_rows = [(cid, cid, info, False) for cid, info in index.items()]
 
     for cid, resolved_column, info, typed_metadata in catalog_rows:
+        if cid in without_values:
+            continue
         if typed_metadata:
             binding = info.get("column_metadata_binding")
             if not isinstance(binding, ColumnMetadataBinding):

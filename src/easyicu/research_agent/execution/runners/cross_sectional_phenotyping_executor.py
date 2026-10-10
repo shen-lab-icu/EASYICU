@@ -23,6 +23,7 @@ from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
 
 from ...contracts.capability_ids import PHENOTYPING_ANALYSIS_KIND
+from ...contracts.concept_values import columns_without_values
 from ...contracts.cross_sectional_phenotyping_policy import (
     CROSS_SECTIONAL_PHENOTYPING_POLICY as _POLICY,
 )
@@ -210,7 +211,16 @@ def _fit_locked_complete_case_sensitivities(
             )
         # The lock applies complete-case deletion only to its exact variable
         # list. Any remaining primary feature follows the unchanged primary
-        # median-imputation policy before scaling.
+        # median-imputation policy before scaling, which drops a feature that
+        # holds no value in these rows: refuse it (``contracts.concept_values``).
+        unobserved = columns_without_values(complete, features)
+        if unobserved:
+            raise RuntimeError(
+                f"phenotyping_feature_unobserved: complete-case spec {spec.spec_id!r} "
+                "keeps rows that hold no value of "
+                + ", ".join(repr(column) for column in unobserved)
+                + "; do not silently drop a declared feature"
+            )
         imputed = SimpleImputer(strategy=_POLICY.imputation).fit_transform(
             _feature_values(complete, features)
         )
