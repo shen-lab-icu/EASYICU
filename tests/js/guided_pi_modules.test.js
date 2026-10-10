@@ -122,6 +122,37 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
     assert.doesNotMatch(text, /EasyICU check of the study's template plan/);
   });
   assert.match(runFailureZh('research_pipeline_progressive_compile_failed', { code: 'progressive_family_spec_prediction_risk_set_unavailable' }), /声明为预测模型/);
+  // An exposure grouping stop names what the researcher changes, in both
+  // languages, not the generic compile sentence.
+  const groupingStops = {
+    exposure_group_requires_extraction: [/Prepare data that include this value/, /请准备包含该数值的数据/],
+    exposure_group_not_applied: [/the detail names the grouping and the reason/, /详情里写明了是哪一个分组以及原因/],
+    exposure_grouping_unanswered: [/state in the question how the exposure is grouped/, /请在问题里写明暴露如何分组/],
+    exposure_group_variable_unbound: [/This is an EasyICU fault/, /这是 EasyICU 的内部故障/],
+    exposure_group_candidate_drift: [/runs only the grouping that was approved/, /EasyICU 只运行已批准的分组/],
+    exposure_group_level_empty: [/does not drop or merge a group on its own/, /不会自行删除或合并分组/],
+    progressive_family_spec_exposure_group_contrast_unavailable: [/reference or comparison group/, /参照组或对比组不在模板能提供的水平里/],
+  };
+  Object.entries(groupingStops).forEach(([code, [en, zh]]) => {
+    const text = runFailure('research_pipeline_progressive_compile_failed', { code });
+    assert.match(text, en);
+    assert.match(text, /no analysis was run/);
+    assert.doesNotMatch(text, /EasyICU check of the (?:candidate|study's template) plan/);
+    assert.match(runFailureZh('research_pipeline_progressive_compile_failed', { code }), zh);
+  });
+  // A variable listed by the source with no value stops before planning; a
+  // prediction step whose predictor or comparator holds no value stops the run.
+  assert.match(runFailure('research_pipeline_required_concept_without_values'), /the source holds no value of it/);
+  assert.match(runFailureZh('research_pipeline_required_concept_without_values'), /一个值都没有/);
+  assert.match(runFailure('research_agent_pipeline_failed_closed', { code: 'prediction_predictor_unobserved' }), /revise the plan's predictors/);
+  assert.match(runFailureZh('research_agent_pipeline_failed_closed', { code: 'prediction_predictor_unobserved' }), /开发集里一个值都没有/);
+  assert.match(runFailure('research_agent_pipeline_failed_closed', { code: 'benchmark_comparator_unobserved' }), /nothing to compare/);
+  assert.match(runFailureZh('research_agent_pipeline_failed_closed', { code: 'benchmark_comparator_unobserved' }), /验证集里一个值都没有/);
+  // A static prediction planned without its family template names the template.
+  const template = { code: 'progressive_static_prediction_requires_family_template' };
+  assert.match(runFailure('research_pipeline_progressive_compile_failed', template), /planned from the prediction template/);
+  assert.doesNotMatch(runFailure('research_pipeline_progressive_compile_failed', template), /EasyICU check of the candidate plan/);
+  assert.match(runFailureZh('research_pipeline_progressive_compile_failed', template), /要用预测模板规划.*这份计划没有用模板/);
 
   // A failed-closed run says which check it did not pass. A stop its executor
   // named carries its own cause, and the remedy follows that cause.
