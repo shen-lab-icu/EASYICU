@@ -140,6 +140,12 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
     assert.doesNotMatch(text, /EasyICU check of the (?:candidate|study's template) plan/);
     assert.match(runFailureZh('research_pipeline_progressive_compile_failed', { code }), zh);
   });
+  // A plan that reads a substance in the other form than the question says
+  // stops with that cause, not the generic compile sentence.
+  const substance = { code: 'progressive_question_substance_form_substituted' };
+  assert.match(runFailure('research_pipeline_progressive_compile_failed', substance), /reads it in the other, so the plan would answer another question/);
+  assert.doesNotMatch(runFailure('research_pipeline_progressive_compile_failed', substance), /EasyICU check of the candidate plan/);
+  assert.match(runFailureZh('research_pipeline_progressive_compile_failed', substance), /主要暴露读成了另一种形式/);
   // A variable listed by the source with no value stops before planning; a
   // prediction step whose predictor or comparator holds no value stops the run.
   assert.match(runFailure('research_pipeline_required_concept_without_values'), /the source holds no value of it/);
