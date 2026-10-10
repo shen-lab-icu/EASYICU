@@ -34,6 +34,13 @@
     return number == null ? '' : `${number.toFixed(2)}%`;
   }
 
+  // A grouped exposure's levels are codes; the run's grouping record names
+  // them where the plan registers no label (screens-agent-exposure-levels.js).
+  function groupLevels(context) {
+    const owner = window.AGENT_EXPOSURE_LEVELS;
+    return owner ? owner.reader(context, window.t || (en => en)) : null;
+  }
+
   function claim(sourceField, value, displayValue, source) {
     if (value == null || displayValue === '') return null;
     const table = source && source.table;
@@ -70,7 +77,7 @@
   // One registered primary model's contrasts, primary contrast first.  Any
   // doubt -- no primary table, two of them, an unknown effect scale -- returns
   // nothing rather than a guessed headline.
-  function estimates(records, plan) {
+  function estimates(records, plan, levels) {
     const byTable = new Map();
     records.filter(item => ESTIMATE_COLUMNS.every(header => item.headers.includes(header))).forEach(item => {
       if (!byTable.has(item.table)) byTable.set(item.table, []);
@@ -91,7 +98,8 @@
     const levelLabel = (exposure, level) => {
       const key = `${exposure}=${JSON.stringify(level)}`;
       const numeric = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(level) ? `${exposure}=${JSON.stringify(Number(level))}` : '';
-      return typeof labels[key] === 'string' ? labels[key] : (numeric && typeof labels[numeric] === 'string' ? labels[numeric] : level);
+      return typeof labels[key] === 'string' ? labels[key] : (numeric && typeof labels[numeric] === 'string' ? labels[numeric]
+        : (levels && levels.levelName(exposure, level)) || level);
     };
     return fitted
       .sort((a, b) => Number(isTrue(b.record.is_primary_contrast)) - Number(isTrue(a.record.is_primary_contrast)))
@@ -103,7 +111,7 @@
         const contrast = String(record.contrast || '').trim() || (level && reference ? `${level} vs ${reference}` : level);
         const label = level && reference
           ? `${levelLabel(exposure, level)} vs ${levelLabel(exposure, reference)}`
-          : contrast || (typeof labels[exposure] === 'string' ? labels[exposure] : exposure);
+          : contrast || (typeof labels[exposure] === 'string' ? labels[exposure] : (levels && levels.variableName(exposure)) || exposure);
         const value = finite(record.estimate);
         const low = finite(record.ci_low);
         const high = finite(record.ci_high);
@@ -115,8 +123,9 @@
       });
   }
 
-  function summarize(payload, plan) {
+  function summarize(payload, plan, context) {
     const records = rows(payload);
+    const levels = groupLevels(context);
     const candidates = records.filter(item => [
       'row_role', 'n_rows', 'exposure_denominator', 'exposure_pct',
       'outcome_events', 'outcome_denominator', 'outcome_rate_pct',
@@ -140,7 +149,8 @@
         const key = matches.length === 1 ? `${spec.exposure}=${JSON.stringify(matches[0])}` : '';
         return {
         level: String(item.record.exposure_level == null ? '' : item.record.exposure_level),
-        label: key && typeof labels[key] === 'string' ? labels[key] : String(raw == null ? '' : raw),
+        label: key && typeof labels[key] === 'string' ? labels[key]
+          : (levels && spec && levels.levelName(spec.exposure, raw)) || String(raw == null ? '' : raw),
         n: finite(item.record.n_rows),
         sharePct: finite(item.record.exposure_pct),
         events: finite(item.record.outcome_events),
@@ -186,7 +196,9 @@
         )),
       ].filter(Boolean),
       exposureLevels,
-      estimates: estimates(records, plan),
+      estimates: estimates(records, plan, levels),
+      // The groups are shown by their codes because their record cannot be read.
+      groupsUnreadable: !!(levels && levels.unreadable),
       outcomeLabel: spec && typeof labels[spec.outcome] === 'string' ? labels[spec.outcome] : '',
     };
   }

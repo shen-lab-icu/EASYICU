@@ -207,13 +207,17 @@
       const provenance = payload('manuscript_provenance.json');
       const summarizer = window.EasyICU.guidedPi.optional('resultSummary');
       const summary = summarizer && typeof summarizer.summarize === 'function'
-        ? summarizer.summarize(payload('result_tables.json'), plan) : {};
+        ? summarizer.summarize(payload('result_tables.json'), plan, context) : {};
+      // A grouped exposure is named by its grouping record where the plan
+      // registers no label (screens-agent-exposure-levels.js).
+      const levels = window.AGENT_EXPOSURE_LEVELS ? window.AGENT_EXPOSURE_LEVELS.reader(context, tr) : null;
       const claims = (Array.isArray(provenance.claims) ? provenance.claims : [])
         .concat(Array.isArray(summary.claims) ? summary.claims : []);
       const claim = field => claims.find(row => row && row.source_field === field) || null;
       const spec = primarySpec(plan);
       const labels = plan.display_labels && typeof plan.display_labels === 'object' ? plan.display_labels : {};
-      const exposureLabel = spec ? shortLabel(readerLabel(labels, spec.exposure)) : '';
+      const exposureLabel = spec
+        ? shortLabel(readerLabel(labels, spec.exposure)) || (levels ? levels.variableName(spec.exposure) : '') : '';
       const outcomeLabel = shortLabel((spec && readerLabel(labels, spec.outcome)) || summary.outcomeLabel || '');
       const groups = (Array.isArray(summary.exposureLevels) ? summary.exposureLevels : [])
         .filter(row => row && row.label && finite(row.n) != null);
@@ -238,7 +242,8 @@
         covariates: baselineCovariates(plan, spec && spec.exposure),
         steps: (Array.isArray(plan.steps) ? plan.steps : [])
           .filter(step => step && step.method !== 'visualization' && String(step.intent || '').trim())
-          .map(step => String(step.intent).trim()).slice(0, 8),
+          .map(step => (levels ? levels.inText(String(step.intent).trim()) : String(step.intent).trim())).slice(0, 8),
+        groupsUnreadable: summary.groupsUnreadable === true,
         figure: figures.figure,
         figureTotal: figures.total,
         figureMain: figures.main,
@@ -353,6 +358,9 @@
           `${outcome} by ${view.exposureLabel || 'group'} in ${source}: ${rows.join('; ')}.`,
           `${source} 中按${view.exposureLabel || '分组'}的${outcome}：${rows.join('；')}。`,
         ));
+      }
+      if (view.groupsUnreadable && (groups.length || view.estimate) && window.AGENT_EXPOSURE_LEVELS) {
+        sentences.push(window.AGENT_EXPOSURE_LEVELS.unreadableText(tr));
       }
       if (view.estimate) {
         const interval = view.estimate.low && view.estimate.high

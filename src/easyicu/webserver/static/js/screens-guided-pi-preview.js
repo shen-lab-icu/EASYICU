@@ -16,6 +16,9 @@
     artifact: null,
     payload: null,
     studyContext: null,
+    // The run's context beside an artifact whose reader names the run's
+    // exposure groups (screens-agent-exposure-levels.js).
+    runContext: null,
     governance: null,
     mode: 'code',
     loading: false,
@@ -545,7 +548,7 @@
           runId: state.resource.run_id,
         })
         : renderer && typeof renderer.artifactStructuredView === 'function'
-          ? renderer.artifactStructuredView(state.resource.artifact, state.payload || {})
+          ? renderer.artifactStructuredView(state.resource.artifact, state.payload || {}, state.runContext)
         : `<pre class="gpi-preview-code" tabindex="0"><code>${esc(JSON.stringify(state.payload || {}, null, 2))}</code></pre>`;
     } else if (state.mode === 'evidence' && activeEvidenceTab()) {
       const item = activeEvidenceTab();
@@ -697,6 +700,7 @@
       const api = window.EU_API || {};
       let payload;
       let loadedStudyContext = null;
+      let runContext = null;
       if (isLiteratureSource()) {
         if (!state.resource.pmid || !api.loadPiCopilotLiteratureSource) {
           throw new Error(tr('The selected source cannot be enriched automatically.', '当前来源无法自动补充摘要或正文证据。'));
@@ -736,6 +740,12 @@
             state.projectId, state.resource.run_id, galleryRef.name, galleryRef.sha256,
           );
           reader.figure_gallery = gallery.payload;
+        }
+        if (window.AGENT_EXPOSURE_LEVELS && window.AGENT_EXPOSURE_LEVELS.namedIn(state.resource.artifact)) {
+          // Without it the groups keep their codes, as the record would not name them.
+          runContext = await api.loadPiCopilotResearchArtifact(state.projectId, state.resource.run_id, 'run_context.json')
+            .then(row => (row && row.payload) || null, () => null);
+          if (ticket !== state.request) return;
         }
       } else if (isIdeaPlan()) {
         if (!api.loadIdeaRun) throw new Error(tr('The Idea Mining run API is unavailable.', 'Idea Mining 运行接口不可用。'));
@@ -797,6 +807,7 @@
         return;
       }
       state.studyContext = isNativeWorkspace() ? loadedStudyContext : null;
+      state.runContext = runContext;
       state.artifact = payload && payload.artifact ? payload.artifact : null;
       state.payload = isNativeWorkspace() ? payload : (isStructuredArtifact() && payload ? (payload.payload || {}) : null);
       state.governance = isStructuredArtifact() && payload ? (payload.governance || null) : null;

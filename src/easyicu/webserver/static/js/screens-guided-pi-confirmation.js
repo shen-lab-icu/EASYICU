@@ -548,6 +548,10 @@
             : '',
         })
         : '';
+      // The plan's exposure groupings in the study's words
+      // (owner: screens-guided-pi-exposure-groups.js).
+      const groupOwner = window.EasyICU.guidedPi.optional('exposureGroups');
+      const groupNotes = groupOwner ? groupOwner.notesHtml(review, { tr, esc }) : '';
       const dataStatus = confirmation.dataStatus
         ? confirmation.compactApproval
           ? `<div class="gpi-confirmation-data-status is-compact"><strong>${esc(confirmation.dataStatus.title)}${confirmation.dataStatus.sourceLabel ? ` · ${esc(confirmation.dataStatus.sourceLabel)}` : ''}</strong><small>${esc(confirmation.dataStatus.detail)}</small></div>`
@@ -587,7 +591,7 @@
         : '';
       return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}" aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
         <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
-        <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}<small>${esc(displayedNote)}</small>${flowSteps}${dataStatus}${reviewStatus}${trialBody}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
+        <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}<small>${esc(displayedNote)}</small>${flowSteps}${dataStatus}${reviewStatus}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
         <div class="gpi-confirmation-actions${decisionActions ? ' has-decision-options' : ''}">
           ${confirmation.dataStatus && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-preview-data>${esc(tr('Preview analysis data', '先预览分析数据'))}</button>` : ''}
           ${decisionActions || (confirmation.hideEdit || (confirmation.code === 'plan_scientific_changes_required' && !decisionCount) ? '' : `<button class="btn ${confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.editLabel ? esc(confirmation.editLabel) : confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>`)}

@@ -105,10 +105,10 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-technical-report.js?v=20260904-empty-gallery1"
         in index
     )
-    assert "js/screens-guided-pi-analysis-report.js?v=20260922-estimates1" in index
+    assert "js/screens-guided-pi-analysis-report.js?v=20261010-exposure-labels1" in index
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
     assert "js/screens-guided-pi-source-view.js?v=20260922-run-answer1" in index
-    assert "js/screens-guided-pi-preview.js?v=20260922-demo-rewrite1" in index
+    assert "js/screens-guided-pi-preview.js?v=20261010-exposure-labels1" in index
     assert "js/screens-guided-pi-replay.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-resources.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20260922-run-answer1" in index
@@ -136,7 +136,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         < index.index("js/screens-guided-pi-target-trial.js")
         < index.index("js/screens-guided-pi-confirmation.js")
     )
-    assert "js/screens-guided-pi-confirmation.js?v=20261009-target-trial1" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20261010-exposure-labels1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261010-substance-form1" in index
