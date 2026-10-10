@@ -1326,6 +1326,8 @@
     }
     if (n === 'agent_plan.json') return agentPlanView(p);
     if (n === 'scientific_plan_review.json') return scientificPlanReviewView(p);
+    const questionRequirements = window.AGENT_QUESTION_REQUIREMENTS ? window.AGENT_QUESTION_REQUIREMENTS.view(n, p, { artifactTable, esc }) : '';
+    if (questionRequirements) return questionRequirements;
     if (String(p.schema_version || '') === 'easyicu.web-scientific-readiness/1') return scientificReadinessView(p);
     if (n.includes('result_tables')) return resultTablesView(p);
     const sections = [];
