@@ -78,3 +78,33 @@ def test_every_plan_review_finding_has_a_chinese_title_and_detail() -> None:
         if not CJK.search(title) or not CJK.search(detail)
     ]
     assert english == []
+
+
+#: The prediction-validity round's findings.  Their rows land before the
+#: round's review owner emits them; FINDINGS then covers them as well.
+PREDICTION_FINDINGS = {
+    "PREDICTION_PREDICTOR_TIMING_UNPROVEN": "预测变量的观测时间无法确认",
+    "PREDICTION_RISK_SET_NOT_KEPT": "队列没有限定预测时点仍在 ICU 的住院",
+    "PREDICTION_PATIENT_GROUPING_UNAVAILABLE": "数据来源无法按患者分组",
+    "PREDICTION_PATIENT_GROUPING_NOT_CARRIED_BY_TRAJECTORY": "轨迹或 landmark 设计不带患者分组",
+}
+
+
+def test_the_prediction_validity_findings_read_in_chinese() -> None:
+    html = _render_zh(
+        [
+            {
+                "code": code,
+                "severity": "major",
+                "remediation_route": "agent_plan_revision",
+                "requires_user_authorization": False,
+                "message": f"Host message for {code}.",
+                "remediation": f"Host remediation for {code}.",
+            }
+            for code in PREDICTION_FINDINGS
+        ]
+    )
+
+    rows = re.findall(r"<li><strong>(.*?)</strong><span>(.*?)</span></li>", html, re.S)
+    assert [title for title, _ in rows] == list(PREDICTION_FINDINGS.values())
+    assert all(CJK.search(detail) and "Host message" not in detail for _, detail in rows)
