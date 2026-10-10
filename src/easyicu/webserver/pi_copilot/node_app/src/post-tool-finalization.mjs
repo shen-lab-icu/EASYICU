@@ -374,6 +374,31 @@ function namedDatabaseText(language, catalog, text) {
       ? `研究问题已保存。你的问题指定了 ${label}，EasyICU 中已有可直接使用的 ${label} 数据${facts ? `（${facts}）` : ""}。确认数据源不等于批准分析。\n\n**下一步：**\n- 使用 EasyICU 中已准备好的 ${label} 数据导出（推荐）`
       : `The research question is saved. Your question names ${label}, and EasyICU already has ${label} data ready to use${facts ? ` (${facts})` : ""}. Confirming a source does not approve analysis.\n\n**Next step:**\n- Use the prepared ${label} EasyICU data export (recommended)`;
   }
+  // Registered exports EasyICU cannot choose between: the researcher picks
+  // one by its numbered, path-free facts.
+  const choices = Array.isArray(catalog?.registered_source_choices)
+    ? catalog.registered_source_choices.filter((row) => row && typeof row === "object").slice(0, 6)
+    : [];
+  if (choices.length) {
+    const lines = choices.map((row, index) => {
+      const choice = Number.isInteger(row.choice) ? row.choice : index + 1;
+      const stays = Number(row.stays);
+      const modules = Number(row.module_count);
+      const date = boundedLabel(row.generated_date);
+      const facts = [
+        zh ? `第 ${choice} 份` : `export ${choice}`,
+        date ? (zh ? `生成于 ${date}` : `generated ${date}`) : "",
+        Number.isFinite(stays) && stays > 0 ? (zh ? `${stays.toLocaleString("en-US")} 个 ICU 入住记录` : `${stays.toLocaleString("en-US")} ICU stays`) : "",
+        Number.isFinite(modules) && modules > 0 ? (zh ? `${modules} 个数据模块` : `${modules} data modules`) : "",
+      ].filter(Boolean).join(zh ? "，" : ", ");
+      return zh
+        ? `- 使用 EasyICU 中已准备好的 ${label} 数据导出（${facts}）`
+        : `- Use the prepared ${label} EasyICU data export (${facts})`;
+    });
+    return zh
+      ? `研究问题已保存。你的问题指定了 ${label}，EasyICU 中已登记 ${choices.length} 份 ${label} 数据导出，无法自动判断用哪一份。确认数据源不等于批准分析。\n\n**下一步：**选择其中一份：\n${lines.join("\n")}`
+      : `The research question is saved. Your question names ${label}, and EasyICU has ${choices.length} registered ${label} data exports it cannot choose between. Confirming a source does not approve analysis.\n\n**Next step:** choose one of them:\n${lines.join("\n")}`;
+  }
   return zh
     ? `研究问题已保存。你的问题指定了 ${label}，但 EasyICU 里还没有登记这份数据。\n\n**下一步：**在下方数据源卡片选择本机的 ${label} 数据目录；EasyICU 登记后会拟定研究计划。`
     : `The research question is saved. Your question names ${label}, but EasyICU has no registered copy of it yet.\n\n**Next step:** Choose your local ${label} folder in the data-source card below; EasyICU registers it and then proposes the research plan.`;
