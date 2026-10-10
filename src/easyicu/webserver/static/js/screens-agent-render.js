@@ -343,7 +343,7 @@
     if (!safeRows.length) {
       return `<div class="ag-artifact-section"><div class="ag-artifact-section-title">${esc(title)}</div><div class="ag-artifact-empty">${esc(emptyText || t('No table rows in this artifact.', '这个产物没有可展示的表格行。'))}</div></div>`;
     }
-    const labels = headers.map(artifactKeyLabel);
+    const labels = headers.map(header => (opts.headerLabel && opts.headerLabel(header)) || artifactKeyLabel(header));
     const body = `<div class="ag-artifact-table-wrap">
           <table class="ag-artifact-table${opts.compact ? ' is-compact' : ''}">
             <thead><tr>${labels.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead>
@@ -1040,9 +1040,11 @@
     return `<div class="ag-plan-glance">${chips
       .map(([value, label]) => `<span><b>${esc(String(value))}</b>${esc(label)}</span>`).join('')}</div>`;
   }
-  function agentPlanView(payload) {
+  function agentPlanView(payload, context) {
     const p = payload && typeof payload === 'object' ? payload : {};
-    const labels = p.display_labels && typeof p.display_labels === 'object' ? p.display_labels : {};
+    const levels = window.AGENT_EXPOSURE_LEVELS && window.AGENT_EXPOSURE_LEVELS.reader(context, t);
+    // A grouped variable the plan registers no label for reads by its group name.
+    const labels = Object.assign({}, levels ? levels.names() : {}, p.display_labels && typeof p.display_labels === 'object' ? p.display_labels : {});
     const designSelection = p.design_selection && typeof p.design_selection === 'object' ? p.design_selection : {};
     const candidates = Array.isArray(designSelection.candidates) ? designSelection.candidates : [];
     const selected = candidates.find(row => row && row.disposition === 'selected') || candidates[0] || {};
@@ -1066,11 +1068,12 @@
       .flatMap(step => Array.isArray(step && step.model_requirements) ? step.model_requirements : [])
       .find(row => row && Array.isArray(row.exposure_levels) && row.exposure_levels.length
         && String(row.analysis_role || 'primary') === 'primary');
-    const levelsNote = primaryRequirement ? `<p class="ag-plan-note"><strong>${esc(t('Exposure levels in the primary model: ', '主模型中的暴露水平：'))}</strong>${esc(primaryRequirement.exposure_levels.map(String).join(t(', ', '、')))}${
+    const level = value => (levels && primaryRequirement && levels.levelName(primaryRequirement.exposure_source, value)) || String(value);
+    const levelsNote = primaryRequirement ? `<p class="ag-plan-note"><strong>${esc(t('Exposure levels in the primary model: ', '主模型中的暴露水平：'))}</strong>${esc(primaryRequirement.exposure_levels.map(level).join(t(', ', '、')))}${
       primaryRequirement.exposure_reference_level != null && primaryRequirement.exposure_reference_level !== ''
-        ? esc(t(` (reference ${primaryRequirement.exposure_reference_level})`, `（参照 ${primaryRequirement.exposure_reference_level}）`)) : ''}${
+        ? esc(t(` (reference ${level(primaryRequirement.exposure_reference_level)})`, `（参照 ${level(primaryRequirement.exposure_reference_level)}）`)) : ''}${
       primaryRequirement.primary_contrast_level != null && primaryRequirement.primary_contrast_level !== ''
-        ? esc(t(`; primary comparison ${primaryRequirement.primary_contrast_level} vs ${primaryRequirement.exposure_reference_level}`, `；主要对比 ${primaryRequirement.primary_contrast_level} vs ${primaryRequirement.exposure_reference_level}`)) : ''}${
+        ? esc(t(`; primary comparison ${level(primaryRequirement.primary_contrast_level)} vs ${level(primaryRequirement.exposure_reference_level)}`, `；主要对比 ${level(primaryRequirement.primary_contrast_level)} vs ${level(primaryRequirement.exposure_reference_level)}`)) : ''}${
       esc(t('. Other values do not enter the primary model.', '。其他取值不进入主模型。'))}</p>` : '';
     const citations = Array.from(new Set([
       ...(Array.isArray(selected.literature_citation_keys) ? selected.literature_citation_keys : []),
@@ -1091,7 +1094,7 @@
       const outputs = Array.isArray(step && step.expected_outputs) ? step.expected_outputs : [];
       const shown = outputs.slice(0, 4);
       const hidden = outputs.length - shown.length;
-      const note = agentPlanStepIntent(step);
+      const note = levels ? levels.inText(agentPlanStepIntent(step)) : agentPlanStepIntent(step);
       const title = agentPlanStepTitle(step, labels);
       const source = agentPlanStepStatedSource(step);
       return `<li><span>${index + 1}</span><div><strong>${esc(title)}</strong>${note && note !== title ? `<p>${esc(note)}</p>` : ''}${source ? `<details class="ag-plan-step-source"><summary><small>${esc(t('Plan wording', '计划原文'))}</small></summary>${esc(source)}</details>` : ''}${outputs.length ? `<div class="ag-plan-step-outputs"><small>${esc(t('Planned output', '计划产物'))}</small>${shown.map(value => `<span>${esc(agentPlanOutputLabel(value))}</span>`).join('')}${hidden > 0 ? `<span class="is-more">+${hidden}</span>` : ''}</div>` : ''}</div></li>`;
@@ -1169,8 +1172,9 @@
     const rank = patterns.findIndex(pattern => pattern.test(token));
     return rank < 0 ? 50 : rank;
   }
-  function resultTablesView(payload) {
+  function resultTablesView(payload, context) {
     const p = payload && typeof payload === 'object' ? payload : {};
+    const levels = window.AGENT_EXPOSURE_LEVELS && window.AGENT_EXPOSURE_LEVELS.reader(context, t);
     const all = Array.isArray(p.tables) ? p.tables : [];
     const sourceCopies = all.filter(table => /source_data|copied beside a promoted publication figure/i.test(String(table && table.label || '')));
     const readable = all
@@ -1200,9 +1204,9 @@
       return artifactTable(
         resultTableTitle(table, entry.index),
         headers,
-        rows,
+        levels ? levels.tableRows(table, headers, rows) : rows,
         t('No aggregate rows are available.', '没有可展示的聚合行。'),
-        { disclosure: true, open, compact: rows.length <= 8, meta },
+        { disclosure: true, open, compact: rows.length <= 8, meta, headerLabel: levels ? levels.variableName : null },
       );
     };
     return `<div class="ag-artifact-readable ag-result-reader">
@@ -1215,7 +1219,7 @@
         <article><b>${supporting.length}</b><span>${esc(t('supporting tables', '张支持表'))}</span></article>
         <article><b>${sourceCopies.length}</b><span>${esc(t('source copies kept for audit', '份图件源数据留作审计'))}</span></article>
       </div>
-      ${contents}
+      ${contents}${levels && levels.unreadable ? `<p class="ag-result-reader-note">${esc(levels.unreadableText())}</p>` : ''}
       <section class="ag-result-group"><div><small>01</small><h3>${esc(t('Core results', '核心结果'))}</h3></div>${core.map((row, index) => tableCard(row, index === 0)).join('') || `<p>${esc(t('No core result table passed the preview policy.', '没有核心结果表通过预览策略。'))}</p>`}</section>
       <section class="ag-result-group is-supporting"><div><small>02</small><h3>${esc(t('Supporting and audit tables', '支持与审计结果'))}</h3></div>${supporting.map(row => tableCard(row, false)).join('') || `<p>${esc(t('No supporting table is present.', '没有支持性结果表。'))}</p>`}</section>
       <p class="ag-result-reader-note">${esc(t('Readable numbers are rounded only for display. The immutable JSON and registered source tables retain the original precision and lineage.', '可读视图只改变显示精度；不可变 JSON 与登记源表仍保留原始数值和完整溯源。'))}</p>
@@ -1316,7 +1320,7 @@
       ${summary}${domainTable}${findingTable}
     </div>`;
   }
-  function artifactStructuredView(name, payload) {
+  function artifactStructuredView(name, payload, context) {
     const n = String(name || '').toLowerCase();
     const p = payload && typeof payload === 'object' ? payload : {};
     const gate = p.gate && typeof p.gate === 'object' ? p.gate : p;
@@ -1326,12 +1330,12 @@
     if (String(p.schema_version || '') === 'easyicu.manuscript-provenance/1') {
       return manuscriptProvenanceView(p);
     }
-    if (n === 'agent_plan.json') return agentPlanView(p);
+    if (n === 'agent_plan.json') return agentPlanView(p, context);
     if (n === 'scientific_plan_review.json') return scientificPlanReviewView(p);
-    const questionRequirements = window.AGENT_QUESTION_REQUIREMENTS ? window.AGENT_QUESTION_REQUIREMENTS.view(n, p, { artifactTable, esc }) : '';
+    const questionRequirements = window.AGENT_QUESTION_REQUIREMENTS ? window.AGENT_QUESTION_REQUIREMENTS.view(n, p, { artifactTable, esc, context }) : '';
     if (questionRequirements) return questionRequirements;
     if (String(p.schema_version || '') === 'easyicu.web-scientific-readiness/1') return scientificReadinessView(p);
-    if (n.includes('result_tables')) return resultTablesView(p);
+    if (n.includes('result_tables')) return resultTablesView(p, context);
     const sections = [];
     const summary = artifactSummaryRows(
       p,

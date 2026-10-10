@@ -52,6 +52,7 @@ from .contracts import (
     plan_approval_allowed,
 )
 from .plan_projection import project_plan_conversation_preview
+from .exposure_group_notes import project_exposure_groups
 from .question_requirement_notes import project_question_requirement_notes
 from .projections import (
     StudySetupReceipt,
@@ -606,6 +607,16 @@ def build_research_workflow_snapshot(
         review_authority.get("question_requirements"),
         recorded=review_authority.get("question_requirements_recorded") or (),
     )
+    # The plan's exposure groupings; a run whose record cannot be read says so
+    # (``None`` beside ``exposure_group_labels_recorded``), one that made none
+    # adds nothing (exposure_group_notes).
+    recorded_groups = review_authority.get("exposure_group_labels")
+    exposure_groups = project_exposure_groups(
+        recorded_groups
+        if recorded_groups is not None
+        or review_authority.get("exposure_group_labels_recorded") is True
+        else ()
+    )
     plan_review_summary = (
         {
             "run_id": str(review_authority.get("run_id") or "")[:160],
@@ -653,6 +664,12 @@ def build_research_workflow_snapshot(
             **(
                 {"question_requirements": question_notes}
                 if question_notes is not None
+                else {}
+            ),
+            # The plan's exposure groupings, named in the study's words.
+            **(
+                {"exposure_groups": exposure_groups}
+                if exposure_groups is not None
                 else {}
             ),
         }

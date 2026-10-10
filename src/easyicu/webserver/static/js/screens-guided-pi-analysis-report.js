@@ -121,7 +121,7 @@
     const manuscriptReady = revisionReady || !!(sourceManifest.readiness && sourceManifest.readiness.manuscript_ready === true);
     const resultSummary = window.EasyICU.guidedPi.optional('resultSummary');
     const registeredSummary = resultSummary
-      ? resultSummary.summarize(p.result_tables || {}, p.plan)
+      ? resultSummary.summarize(p.result_tables || {}, p.plan, context)
       : { claims: [], exposureLevels: [] };
     const rows = claims(p).concat(registeredSummary.claims || []);
     const sourceN = findClaim(rows, [/^cohort\.n_stays$/]);
@@ -182,7 +182,8 @@
     ].filter(Boolean);
     return `<div class="gpi-analysis-report ag-artifact-readable">
       <header class="gpi-analysis-hero"><div><h2>${esc(tr('Research results and interpretation', '研究结果与解读'))}</h2><details class="gpi-analysis-question"><summary>${esc(tr('Research question and requested deliverables', '研究问题与交付要求'))}</summary><p>${esc(context.question || tr('Research question not recorded', '尚未记录研究问题'))}</p></details></div><em>ANALYSIS ONLY</em></header>
-      <section class="gpi-analysis-summary"><div><small>${esc(tr('Results at a glance', '先看结果'))}</small><h3>${esc(tr('What was observed', '实际观察到了什么'))}</h3></div><div>${primaryText ? `<p class="gpi-analysis-headline"><strong>${esc(tr('Primary estimate: ', '主要估计：'))}</strong>${esc(headline ? `${headline.label} · ` : '')}${esc(primaryText)}</p>` : ''}${estimateTable}${groupTable || (estimateTable ? '' : `<p>${esc(tr('Read the registered result tables and manuscript below; no compatible summary table is available.', '下方提供已登记的结果表与文章；当前没有可直接汇总的分组表。'))}</p>`)}<p>${esc(tr('These are analysis records, not necessarily independent patients. Percentages describe observed data; no significance test or causal conclusion is implied.', '这里统计的是分析记录，不一定是相互独立的患者。比例描述实际数据，不代表显著性检验或因果结论。'))}</p></div></section>
+      <section class="gpi-analysis-summary"><div><small>${esc(tr('Results at a glance', '先看结果'))}</small><h3>${esc(tr('What was observed', '实际观察到了什么'))}</h3></div><div>${primaryText ? `<p class="gpi-analysis-headline"><strong>${esc(tr('Primary estimate: ', '主要估计：'))}</strong>${esc(headline ? `${headline.label} · ` : '')}${esc(primaryText)}</p>` : ''}${estimateTable}${registeredSummary.groupsUnreadable && (groupTable || estimateTable) && window.AGENT_EXPOSURE_LEVELS
+        ? `<p>${esc(window.AGENT_EXPOSURE_LEVELS.unreadableText(tr))}</p>` : ''}${groupTable || (estimateTable ? '' : `<p>${esc(tr('Read the registered result tables and manuscript below; no compatible summary table is available.', '下方提供已登记的结果表与文章；当前没有可直接汇总的分组表。'))}</p>`)}<p>${esc(tr('These are analysis records, not necessarily independent patients. Percentages describe observed data; no significance test or causal conclusion is implied.', '这里统计的是分析记录，不一定是相互独立的患者。比例描述实际数据，不代表显著性检验或因果结论。'))}</p></div></section>
       <section class="gpi-analysis-metrics" aria-label="${esc(tr('Key registered results', '核心登记结果'))}">
         ${metric(tr('Source ICU stays', '来源 ICU stay'), display(sourceN), tr('Before eligibility filtering', '纳入条件筛选前'), sourceN)}
         ${metric(tr('Eligible stays', '符合条件 stay'), display(eligibleN), tr('Registered denominator', '已登记分母'), eligibleN)}

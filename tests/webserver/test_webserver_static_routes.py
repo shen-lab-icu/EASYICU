@@ -188,7 +188,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/screens-extraction-folder-picker.js?v=20260921-owner-split1" in index_html
     assert "js/screens-extraction.js?v=20260921-source-label1" in index_html
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-run-files.js?v=20260924-file-guide2" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20261010-exposure-labels1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
 
 
@@ -197,7 +197,7 @@ def test_project_monitor_run_history_has_a_dedicated_projection_owner() -> None:
     history_js = _static_js("screens-agent-run-history.js")
 
     owner_asset = "js/screens-agent-run-history.js?v=20260823-run-history-owner1"
-    monitor_asset = "js/screens-guided-pi-run-files.js?v=20260924-file-guide2"
+    monitor_asset = "js/screens-guided-pi-run-files.js?v=20261010-exposure-labels1"
     assert owner_asset in index_html
     assert index_html.index(owner_asset) < index_html.index(monitor_asset)
     assert "window.EU_AGENT_RUN_HISTORY_VIEW" in history_js
@@ -707,14 +707,14 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     index_html = _static_html("index.html")
 
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-run-files.js?v=20260924-file-guide2" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20261010-exposure-labels1" in index_html
     assert "css/agent.css?v=20260829-artifact-contents1" in index_html
     assert "css/agent-layout.css?v=20260817-project-monitor-states2" in index_html
     assert "css/agent-header.css?v=20260702-agent-compact-header" in index_html
     assert "css/agent-review.css?v=20260702-agent-review-compact" in index_html
     assert "css/agent-capabilities.css?v=20260627-agent-capabilities" in index_html
     # Artifact renderers live in the screens-agent-render.js owner file.
-    assert "function artifactStructuredView(name, payload)" in render_js
+    assert "function artifactStructuredView(name, payload, context)" in render_js
     assert "Readable artifact summary" in render_js
     assert "可读产物摘要" in render_js
     assert "row.step_id || row.id || row.step" in render_js
@@ -829,7 +829,7 @@ def test_project_monitor_excludes_copilot_setup_and_run_initiation() -> None:
     assert "data-gpi-provider-form" in provider_js
     assert "css/agent.css?v=20260829-artifact-contents1" in index_html
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-run-files.js?v=20260924-file-guide2" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20261010-exposure-labels1" in index_html
 
 
 def test_native_agent_render_layer_is_split_into_owner_file() -> None:
@@ -843,7 +843,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     assert "window.EU_AGENT_DEMO_STUDIES = Object.freeze([" in fixtures_js
     assert "const DEMO_STUDIES = window.EU_AGENT_DEMO_STUDIES || [];" in render_js
     assert "const BLOCK_LIBRARY = [" not in render_js
-    assert "function artifactStructuredView(name, payload)" in render_js
+    assert "function artifactStructuredView(name, payload, context)" in render_js
     assert "function runStatusLabel(status)" in render_js
     assert "function thumb(kind)" in render_js
     assert "window.AGENT_RENDER = {" in render_js
@@ -860,8 +860,8 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     # the renderer at call time, so it must be defined before it.
     vocab_pos = index_html.find("js/screens-agent-reader-vocab.js?v=20261010-prediction-vocab1")
     assert fixtures_pos < vocab_pos < render_pos
-    assert "js/screens-agent-render.js?v=20261010-prediction-vocab1" in index_html
-    assert "js/screens-agent-question-requirements.js?v=20261009-question-record1" in index_html
+    assert "js/screens-agent-render.js?v=20261010-exposure-labels1" in index_html
+    assert "js/screens-agent-question-requirements.js?v=20261010-exposure-labels1" in index_html
     assert "css/agent-plan.css?v=20260829-plan-flow1" in index_html
 
 
@@ -972,7 +972,7 @@ def test_native_agent_historical_evaluation_import_uses_normal_project_surface()
     assert "css/agent-question.css?v=20260629-ux-readability" in index_html
     assert "css/agent.css?v=20260829-artifact-contents1" in index_html
     assert "js/screens-agent.js?" not in index_html
-    assert "js/screens-guided-pi-run-files.js?v=20260924-file-guide2" in index_html
+    assert "js/screens-guided-pi-run-files.js?v=20261010-exposure-labels1" in index_html
 
     for name in (
         "benchmark_scorecard.json",

@@ -44,6 +44,10 @@
   function names(values) {
     return (Array.isArray(values) ? values : []).slice(0, MAX_ROWS).map(value => clip(value, 128)).filter(Boolean).join(', ');
   }
+  // A grouped column reads by its group name (screens-agent-exposure-levels.js).
+  function conceptNames(values, levels) {
+    return names((Array.isArray(values) ? values : []).map(value => (levels && levels.variableName(value)) || value));
+  }
   function quoted(text) {
     return tr(`“${text}”`, `「${text}」`);
   }
@@ -81,7 +85,7 @@
   }
 
   // Why, as the planning owner decides each disposition (question_requirements._judge).
-  function reasonCell(row) {
+  function reasonCell(row, levels) {
     const reading = names(row.reading_step_ids);
     const gap = row.gap && typeof row.gap === 'object' ? row.gap : null;
     if (row.disposition === 'covered') {
@@ -89,7 +93,7 @@
       return owners ? tr(`Answered by step ${owners}`, `由步骤 ${owners} 回答`) : '';
     }
     if (row.disposition === 'not_covered') {
-      const concepts = names(row.concepts);
+      const concepts = conceptNames(row.concepts, levels);
       const why = row.kind === 'benchmark'
         ? tr('No step compares the model with it on the same rows', '没有步骤在同一批行上把模型与它比较')
         : row.kind === 'subgroup'
@@ -131,14 +135,14 @@
     return tr('Stated by planning, not verified by EasyICU', '规划声明，EasyICU 未核实');
   }
 
-  function unstatedRow(row) {
+  function unstatedRow(row, levels) {
     const readers = [
       names(row.reading_step_ids),
       row.cohort_criterion === true ? tr('a cohort criterion', '人群条件') : '',
     ].filter(Boolean).join(', ');
     return [
       quoted(clip(row.evidence, EVIDENCE_LIMIT)),
-      names(row.concepts),
+      conceptNames(row.concepts, levels),
       readers || tr('No step reads it; check whether the plan leaves it out', '没有步骤读取，请核对计划是否遗漏了它'),
     ];
   }
@@ -161,7 +165,7 @@
   /* The readable view of one record, or '' when the artifact is neither
      record.  A record file whose content is not one of the owner's schemas
      says it cannot be read instead of showing an empty judgment. */
-  function view(name, payload, { artifactTable, esc }) {
+  function view(name, payload, { artifactTable, esc, context }) {
     const record = payload && typeof payload === 'object' ? payload : {};
     const schema = String(record.schema_version || '');
     const known = schema === PLANNING_SCHEMA || schema === REVIEW_SCHEMA;
@@ -176,6 +180,7 @@
     }
     const review = schema === REVIEW_SCHEMA;
     const outline = record.route === 'outline';
+    const levels = window.AGENT_EXPOSURE_LEVELS && window.AGENT_EXPOSURE_LEVELS.reader(context, tr);
     const judged = rows(record.judged);
     const unstated = rows(record.unstated);
     const sections = [];
@@ -183,7 +188,7 @@
       sections.push(artifactTable(
         tr('Each requirement and how the plan answers it', '每项要求与判定'),
         [tr('Requirement', '要求'), tr('Disposition', '判定'), tr('Why', '原因'), tr('Verified', '核实')],
-        judged.map(row => [requirementCell(row), dispositionCell(row, review), reasonCell(row), verificationCell(row)]),
+        judged.map(row => [requirementCell(row), dispositionCell(row, review), reasonCell(row, levels), verificationCell(row)]),
         tr('The question asks for nothing beyond the study design.', '题面没有在研究设计之外提出要求。'),
         { formattedCells: true },
       ));
@@ -192,7 +197,7 @@
       sections.push(artifactTable(
         tr('Concepts the question names (planning listed no requirements; check each one)', '题面提到的概念（规划没有逐项列出要求，请逐个核对）'),
         [tr('In the question', '题面原文'), tr('Columns it can denote', '可指的列'), tr('Read by', '读取它的')],
-        unstated.map(unstatedRow),
+        unstated.map(row => unstatedRow(row, levels)),
         tr('Every concept the question names is already in the study design.', '题面提到的概念都已在研究设计中。'),
         { formattedCells: true },
       ));

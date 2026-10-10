@@ -380,4 +380,4 @@ def test_the_reader_loads_before_the_renderer_that_asks_it() -> None:
     owner = index.index("js/screens-agent-question-requirements.js?v=")
     assert index.index("js/screens-agent-reader-vocab.js?v=") < owner
     assert owner < index.index("js/screens-agent-render.js?v=")
-    assert "window.AGENT_QUESTION_REQUIREMENTS.view(n, p, { artifactTable, esc })" in renderer
+    assert "window.AGENT_QUESTION_REQUIREMENTS.view(n, p, { artifactTable, esc, context })" in renderer

@@ -175,6 +175,7 @@ from easyicu.webserver.pi_copilot.contracts import (
     EXECUTION_RETRY_REPLAYABLE_GATE_REASONS,
 )
 from easyicu.webserver.pi_copilot.extraction_handoff import compile_study_cohort
+from easyicu.webserver.pi_copilot.exposure_group_notes import project_exposure_groups
 from easyicu.webserver.agent_review_recovery import (
     PendingReviewEntry as _PendingRun,
     PendingReviewRegistry,
@@ -3360,6 +3361,16 @@ def _table_projection(
             rank = 5
         return rank, int(record.get("_projection_order") or 0)
 
+    # A grouped Table 1 names each group by its level in a ``group`` column;
+    # the table carries the column it is grouped by, so a reader can name them.
+    table_one_group_by: Dict[str, str] = {}
+    for step in (plan or {}).get("steps") or ():
+        spec = step.get("table_one_spec") if isinstance(step, Mapping) else None
+        if isinstance(spec, Mapping) and str(spec.get("group_by") or "").strip():
+            table_one_group_by[str(step.get("step_id") or "").strip()] = _clean_text(
+                spec.get("group_by"), 160
+            )
+
     candidates = []
     for index, raw_record in enumerate(evidence if isinstance(evidence, list) else []):
         if not isinstance(raw_record, Mapping) or str(raw_record.get("kind")) != "table":
@@ -3390,6 +3401,9 @@ def _table_projection(
                 ]
         except (OSError, UnicodeDecodeError, csv.Error):
             continue
+        group_by = table_one_group_by.get(
+            str(record.get("produced_by_step") or "").strip(), ""
+        )
         tables.append(
             {
                 "evidence_id": _clean_text(record.get("evidence_id"), 160),
@@ -3399,6 +3413,7 @@ def _table_projection(
                 "rows": [[_clean_text(value, 500) for value in row] for row in rows],
                 "preview_truncated": len(rows) >= _MAX_TABLE_ROWS,
                 "preview_columns_truncated": len(source_headers) > len(headers),
+                **({"group_by": group_by} if group_by else {}),
             }
         )
         if len(tables) >= 12:
@@ -4114,6 +4129,15 @@ def _write_projection(
             plan_revision_source_run_id, 160
         ),
     }
+    # The run's exposure groupings, named in the study's words, for the readers
+    # that show its grouped values; a record that cannot be read says so.
+    exposure_groups = (
+        project_exposure_groups(recorded_exposure_group_labels(run_dir))
+        if run_dir is not None
+        else None
+    )
+    if exposure_groups is not None:
+        run_context["exposure_groups"] = exposure_groups
     cohort_summary = {
         "summary": run_context["summary"],
         "cohort": {

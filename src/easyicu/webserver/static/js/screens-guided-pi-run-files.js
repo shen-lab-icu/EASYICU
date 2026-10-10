@@ -122,7 +122,13 @@
       state.loading = true; state.error = ''; state.artifact = null; update();
       try {
         const data = checked(await api.loadAgentRunArtifact(review.project_dir, name));
-        if (ticket === revision) state.artifact = { name, payload: data.payload };
+        // A reader that names the run's exposure groups reads them from its
+        // context (screens-agent-exposure-levels.js); without it they keep their codes.
+        const context = window.AGENT_EXPOSURE_LEVELS && window.AGENT_EXPOSURE_LEVELS.namedIn(name)
+          && rows(review.artifacts).some(item => item.name === 'run_context.json')
+          ? await api.loadAgentRunArtifact(review.project_dir, 'run_context.json').then(checked).then(row => row.payload, () => null)
+          : null;
+        if (ticket === revision) state.artifact = { name, payload: data.payload, context };
       } catch (error) { if (ticket === revision) state.error = String(error.message || error); }
       finally { if (ticket === revision) { state.loading = false; update(); } }
     }
@@ -260,7 +266,7 @@
         <div class="gpi-run-file-list">${primary}</div>${other ? `<details class="gpi-run-extra" ${entry.extraOpen ? 'open' : ''}><summary>${tr('More files & provenance', '更多文件与溯源')}</summary><div class="gpi-run-file-list">${other}</div></details>` : ''}
         ${review.signoff_stale ? `<p class="gpi-run-files-error">${tr('Review is stale: files changed or are missing.', '审阅已失效：文件发生变化或缺失。')}</p>` : review.signed ? `<p role="status">${tr('Local review recorded.', '已记录本地审阅。')}</p>` : ''}
         ${signable ? `<details class="gpi-run-signoff" ${entry.reviewOpen ? 'open' : ''}><summary>${tr('Record my review', '记录我的审阅')}</summary><p>${tr('Local review does not grant publication authority.', '本地审阅不授予发表权限。')}</p><fieldset>${confirmations.map(([id, en, zh]) => `<label><input type="checkbox" data-run-files-confirm="${id}" ${entry.checks.has(id) ? 'checked' : ''} ${disabled ? 'disabled' : ''}>${tr(en, zh)}</label>`).join('')}<button type="button" data-run-files-sign ${disabled || entry.checks.size !== confirmations.length ? 'disabled' : ''}>${tr('Sign reviewed run', '签署本次审阅')}</button></fieldset></details>` : ''}
-        ${state.artifact ? `<article class="gpi-run-artifact"><h4>${esc(window.AGENT_RENDER.artifactTitle(state.artifact.name))}</h4>${window.AGENT_RENDER.artifactStructuredView(state.artifact.name, state.artifact.payload || {})}<details><summary>${tr('Source JSON', '来源 JSON')}</summary><pre>${esc(JSON.stringify(state.artifact.payload, null, 2))}</pre></details></article>` : ''}`;
+        ${state.artifact ? `<article class="gpi-run-artifact"><h4>${esc(window.AGENT_RENDER.artifactTitle(state.artifact.name))}</h4>${window.AGENT_RENDER.artifactStructuredView(state.artifact.name, state.artifact.payload || {}, state.artifact.context)}<details><summary>${tr('Source JSON', '来源 JSON')}</summary><pre>${esc(JSON.stringify(state.artifact.payload, null, 2))}</pre></details></article>` : ''}`;
     }
     // Lifecycle states the shared status labels do not cover read in the
     // conversation's language rather than as the raw state name.

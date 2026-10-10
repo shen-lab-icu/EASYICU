@@ -1,0 +1,11 @@
+/* Owner: the plan review card's exposure-grouping block
+   (js/screens-guided-pi-exposure-groups.js). Labels are the study's words,
+   so long ones wrap instead of widening the card. */
+.gpi-exposure-groups{margin-top:11px;padding:10px 12px;border:1px solid var(--hair-2);border-radius:10px;background:var(--paper)}
+.gpi-exposure-groups strong{display:block;font-size:13px;color:var(--ink-1)}
+.gpi-exposure-groups ul{margin:6px 0 0;padding-left:18px}
+.gpi-exposure-groups li{margin-top:3px;color:var(--ink-2);font-size:12.5px;line-height:1.5;overflow-wrap:anywhere}
+.gpi-exposure-groups details{margin-top:2px}
+.gpi-exposure-groups summary{cursor:pointer;color:var(--ink-3);font-size:12px;line-height:24px}
+.gpi-exposure-groups details ul{margin-top:3px;padding-left:14px}
+.gpi-exposure-groups p{margin:6px 0 0;color:var(--ink-2);font-size:12.5px;line-height:1.5}
