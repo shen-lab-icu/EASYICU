@@ -6496,6 +6496,26 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.execution.runners.patient_groups",
+      "easyicu.research_agent.contracts.dependence"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.patient_groups",
+      "easyicu.research_agent.execution.runners.typed_input_binding"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.patient_groups",
+      "easyicu.research_agent.intake.materialized_metadata"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.patient_groups",
+      "easyicu.research_agent.planning.dependence_authority"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.patient_groups",
+      "easyicu.research_agent.research_context.typed"
+    ],
+    [
       "easyicu.research_agent.execution.runners.phenotype_comparison_executor",
       "easyicu.research_agent.authority.prespecified_rule_outcomes"
     ],
@@ -6569,11 +6589,11 @@
     ],
     [
       "easyicu.research_agent.execution.runners.prediction_model_executor",
-      "easyicu.research_agent.execution.runners.typed_input_binding"
+      "easyicu.research_agent.execution.runners.patient_groups"
     ],
     [
       "easyicu.research_agent.execution.runners.prediction_model_executor",
-      "easyicu.research_agent.intake.materialized_metadata"
+      "easyicu.research_agent.execution.runners.typed_input_binding"
     ],
     [
       "easyicu.research_agent.execution.runners.prediction_model_executor",
@@ -6582,10 +6602,6 @@
     [
       "easyicu.research_agent.execution.runners.prediction_model_executor",
       "easyicu.research_agent.methods.delong_auc"
-    ],
-    [
-      "easyicu.research_agent.execution.runners.prediction_model_executor",
-      "easyicu.research_agent.planning.dependence_authority"
     ],
     [
       "easyicu.research_agent.execution.runners.prediction_model_executor",
@@ -14756,9 +14772,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3681,
+    "edge_count": 3685,
     "largest_scc_size": 0,
-    "module_count": 838,
+    "module_count": 839,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -15108,6 +15124,7 @@
     "easyicu.research_agent.execution.runners.missingness_measurement_figure_executor": "execution/runners/missingness_measurement_figure_executor.py",
     "easyicu.research_agent.execution.runners.nested_model_comparison": "execution/runners/nested_model_comparison.py",
     "easyicu.research_agent.execution.runners.ordered_stratified_executor": "execution/runners/ordered_stratified_executor.py",
+    "easyicu.research_agent.execution.runners.patient_groups": "execution/runners/patient_groups.py",
     "easyicu.research_agent.execution.runners.phenotype_comparison_executor": "execution/runners/phenotype_comparison_executor.py",
     "easyicu.research_agent.execution.runners.planner_display_labels": "execution/runners/planner_display_labels.py",
     "easyicu.research_agent.execution.runners.plausibility_receipt": "execution/runners/plausibility_receipt.py",

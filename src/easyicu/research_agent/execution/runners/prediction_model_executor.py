@@ -28,7 +28,7 @@ from sklearn.model_selection import GroupShuffleSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-from ...contracts.dependence import PlannedDependenceRequirement, resolve_patient_groups
+from ...contracts.dependence import resolve_patient_groups
 from ...contracts.prediction_execution import (
     PREDICTION_CALIBRATION_PRODUCT,
     PREDICTION_CLINICAL_UTILITY_PRODUCT,
@@ -46,23 +46,17 @@ from ...contracts.prediction_execution import (
 from ...contracts.prediction_validation import PredictionValidationSpec
 from ...methods.auc_interval import AUCInterval, auc_interval
 from ...methods.delong_auc import delong_auc_ci
-from ...planning.dependence_authority import context_patient_group_authority
 from ...prediction_validation_owner import (
     run_prediction_validation,
     run_prediction_validation_csv,
 )
 from ...robustness.panel import load_locked_robustness_specs
-from ...intake.materialized_metadata import (
-    MaterializedCohortAuthority,
-    MaterializedCohortAuthorityRef,
-    VerifiedMaterializedCohortAuthority,
-    load_verified_materialized_cohort_authority,
-)
 from ...research_context.typed import (
     ResearchContextAuthority,
     parse_research_context_json,
 )
 from ...schema import AnalysisStep
+from .patient_groups import step_patient_group_authority
 from .typed_input_binding import (
     load_typed_input,
     sha256_file,
@@ -171,81 +165,6 @@ def _binary_outcome(values: pd.Series, *, column: str) -> pd.Series:
     if numeric.isna().any() or not numeric.isin((0, 1)).all():
         raise RuntimeError(f"prediction outcome {column!r} must use exact numeric 0/1")
     return numeric.astype(int)
-
-
-def _patient_group_authority(
-    *,
-    context: ResearchContextAuthority,
-    source_cohort: Path,
-    run_dir: Path,
-) -> PlannedDependenceRequirement | None:
-    """Resolve only a context- or verified-ancestry-issued patient grouping."""
-
-    direct = context_patient_group_authority(context)
-    if direct is not None:
-        return direct
-
-    verified = load_verified_materialized_cohort_authority(Path(source_cohort))
-    authority_root = Path(source_cohort).parent
-    if verified is None:
-        materialized_inputs = getattr(context, "materialized_inputs", None)
-        context_cohort = getattr(materialized_inputs, "cohort", None)
-        if context_cohort is not None:
-            cohort_file = str(context_cohort.cohort_file)
-            if Path(cohort_file).name != cohort_file:
-                raise RuntimeError("typed context cohort file is not run-local")
-            expected = MaterializedCohortAuthorityRef.from_dict(
-                context_cohort.authority_ref
-            )
-            authority_root = Path(run_dir)
-            verified = load_verified_materialized_cohort_authority(
-                authority_root / cohort_file,
-                expected_authority=expected,
-            )
-    return _patient_group_from_verified(verified, authority_root=authority_root)
-
-
-def _patient_group_from_verified(
-    verified: VerifiedMaterializedCohortAuthority | None,
-    *,
-    authority_root: Path,
-) -> PlannedDependenceRequirement | None:
-    """Resolve an exact grouping rule from one verified authority ancestry."""
-
-    if verified is None or verified.authority.parent_authority_sha256 is None:
-        return None
-    parent_sha256 = verified.authority.parent_authority_sha256
-    parent_path = Path(authority_root) / (
-        f"cohort_authority.sha256-{parent_sha256}.json"
-    )
-    if not parent_path.is_file() or sha256_file(parent_path) != parent_sha256:
-        return None
-    payload = json.loads(parent_path.read_text("utf-8"))
-    if not isinstance(payload, Mapping):
-        return None
-    parent = MaterializedCohortAuthority.from_dict(payload)
-    if (
-        parent.cohort_sha256 != verified.authority.cohort_sha256
-        or parent.row_identity_sha256 != verified.authority.row_identity_sha256
-        or parent.identity_column != verified.authority.identity_column
-    ):
-        return None
-    replacement = parent.producer_parameters.get("replacement_row_identity")
-    if not isinstance(replacement, Mapping):
-        return None
-    derivation = replacement.get("patient_group_derivation")
-    if not (
-        replacement.get("output_identity_column") == parent.identity_column
-        and isinstance(derivation, Mapping)
-        and derivation.get("algorithm") == "prefix_before_:s"
-        and derivation.get("delimiter") == ":s"
-    ):
-        return None
-    return PlannedDependenceRequirement(
-        group_source=parent.identity_column,
-        group_derivation="prefix_before_delimiter",
-        delimiter=":s",
-    )
 
 
 def _unit_ids(frame: pd.DataFrame, source: str) -> pd.Series:
@@ -592,7 +511,7 @@ def run_prediction_model(
 
     context = _load_context(Path(run_dir))
     outcome_column = str(context.target_outcome or "").strip()
-    group_authority = _patient_group_authority(
+    group_authority = step_patient_group_authority(
         context=context,
         source_cohort=Path(source_cohort),
         run_dir=Path(run_dir),

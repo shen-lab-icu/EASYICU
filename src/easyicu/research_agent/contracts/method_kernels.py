@@ -386,8 +386,10 @@ CURATED_METHOD_KERNELS: Tuple[MethodKernel, ...] = (
         ),
         capability=(
             "L1-penalized linear variable selection at a pinned alpha with "
-            "fixed KFold splits (or LassoCV at a pinned seed). Holds a "
-            "checked-in verified_tool grant"
+            "fixed KFold splits (or LassoCV at a pinned seed). When rows may "
+            "repeat a patient, pass groups= (one patient id per row) so each "
+            "fold keeps a patient's stays together. Holds a checked-in "
+            "verified_tool grant"
         ),
         # Deliberately NOT "association": like temporal_features before it,
         # a broad family claim crowds statsmodels out of the ranked slots
