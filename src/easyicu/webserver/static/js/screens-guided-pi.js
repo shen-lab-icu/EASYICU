@@ -433,6 +433,7 @@
     refreshSession: (...args) => refreshSession(...args),
     loadWorkflow: (...args) => loadWorkflow(...args),
     setBusy: value => { state.busy = Boolean(value); },
+    setPlanStarting: value => { state.planStarting = value || null; }, planStarting: () => state.planStarting,
     setError: value => { state.error = String(value || ''); },
     // The host compiler may refuse the automatic configuration (for example
     // an all-stay analysis without source-owned patient grouping). The

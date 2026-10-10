@@ -268,8 +268,16 @@
           ? tr('One model connection for conversation and analysis', '对话与分析共用的一套模型连接')
           : tr('Legacy conversation and analysis bindings', '旧会话的对话与分析绑定'),
       };
-      const composerCardHtml = `<div class="gpi-compose-card${activeChild ? ' is-running' : ''}">
-        ${activeChild ? `<div class="gpi-compose-running" role="status" aria-live="polite" aria-busy="true">
+      // A plan start the host has not answered with a job yet: nothing to stop.
+      const starting = !activeChild && state.planStarting && state.planStarting.sessionId === session.session_id
+        ? state.planStarting : null;
+      const startingHtml = starting ? `<div class="gpi-compose-running" role="status" aria-live="polite" aria-busy="true" data-gpi-plan-starting>
+          <span class="gpi-running-spinner" aria-hidden="true"></span>
+          <span><strong>${tr('Starting the research plan', '正在启动研究计划生成')}</strong><small>${tr('EasyICU checks the selected data package first; a large one takes a minute or two.', 'EasyICU 先核对所选数据包，再开始生成；数据较大时需要一两分钟。')}</small></span>
+          <time data-gpi-live-elapsed="${Number(starting.startedAt || Date.now())}">${esc(ACTIVITY.durationText ? ACTIVITY.durationText(starting.startedAt) : '')}</time>
+        </div>` : '';
+      const composerCardHtml = `<div class="gpi-compose-card${activeChild || starting ? ' is-running' : ''}">
+        ${startingHtml || (activeChild ? `<div class="gpi-compose-running" role="status" aria-live="polite" aria-busy="true">
           <span class="gpi-running-spinner" aria-hidden="true"></span>
           <span><strong>${esc(activeChild.cancelRequested ? tr('Stopping the research task', '正在停止科研任务') : (activeChild.runningTitle || tr('EasyICU research task is running', 'EasyICU 科研任务正在运行')))}</strong><small>${activeChild.cancelRequested ? tr('The cancellation request was sent. Waiting for the current safe checkpoint.', '已发送停止请求，正在等待当前安全检查点结束。') : tr('New messages are paused until this task finishes or asks for confirmation.', '任务完成或需要你确认后，才可继续发送消息。')}</small></span>
           <time data-gpi-live-elapsed="${Number(activeChild.startedAt || Date.now())}">${esc(ACTIVITY.durationText ? ACTIVITY.durationText(activeChild.startedAt) : '')}</time>
@@ -279,7 +287,7 @@
             <div class="gpi-action-leading">${IDEA_SOURCE ? IDEA_SOURCE.controls({ tr, esc, icon: iconHtml, disabled: interactionLocked || stale, allowIdeaSources: !workspace, extensions: composerExtensions(session) }) : ''}${STUDY_WORKSPACE.renderMaterials(RUN_OUTCOME.collection(state.latestRun, state.workflow), projectId(), session.session_id, interactionLocked || stale || Boolean(state.workflowError))}${STUDY_WORKSPACE.renderSkillPicker(projectId(), session, interactionLocked || stale)}${STUDY_WORKSPACE.renderAccessMode(state.accessMode, accessModeLabel, iconHtml)}</div>
             <div class="gpi-action-trailing">${EFFORT_MENU ? EFFORT_MENU.render({ iconHtml, level: session.thinking_level, disabled: interactionLocked || stale }) : ''}${HEADER.renderModelControl(headerOptions)}
             ${state.busy ? `<button class="btn danger" type="button" data-gpi-stop>${tr('Stop', '停止')}</button>` : `<button class="btn primary" type="button" data-gpi-send aria-label="${tr('Send', '发送')}" title="${tr('Send', '发送')}" ${interactionLocked || stale ? 'disabled' : ''}>${iconHtml('arrow', 15)}</button>`}</div>
-          </div>`}
+          </div>`)}
       </div>`;
       const emptyResearchHtml = STARTERS && typeof STARTERS.render === 'function'
         ? STARTERS.render({ tr, disabled: interactionLocked || stale,

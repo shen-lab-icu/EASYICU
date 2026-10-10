@@ -876,7 +876,17 @@
     if (!host) return;
     state.host = host;
     host.addEventListener('click', event => {
-      if (event.target.closest('[data-gpi-preview-close]')) { close(); return; }
+      if (event.target.closest('[data-gpi-preview-close]')) {
+        // The researcher closed it: an owner whose panel this was may end
+        // what the panel left open (the data binding's folder selection).
+        const closed = state.resource;
+        const closedProjectId = state.projectId;
+        close();
+        document.dispatchEvent(new CustomEvent('easyicu:guided-preview-closed', {
+          detail: { resource: closed, projectId: closedProjectId },
+        }));
+        return;
+      }
       if (event.target.closest('[data-gpi-preview-reference]')) {
         if (state.projectId === state.studyProjectId && state.referenceResource) state.referenceResource(state.resource, state.projectId);
         return;
