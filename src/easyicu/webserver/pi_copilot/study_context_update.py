@@ -452,7 +452,7 @@ def _message_explicitly_selects_analysis_goal(
 
 
 def _message_requests_descriptive_plan_default(message: str) -> bool:
-    """Return whether a conservative counts-only plan follows from the question.
+    """Return whether a descriptive plan follows from the question.
 
     This deliberately recognizes only a narrow prevalence-plus-description
     construction and rejects wording that requests an inferential, predictive,
@@ -889,6 +889,61 @@ def _question_family_design(
     patch["analysis_design"] = dict(decision.design)
     patch[STUDY_FAMILY_READING_FIELD] = decision.reading.record()
     return {STUDY_FAMILY_READING_FIELD: decision.reading.record()}
+
+
+def _question_design_variance(
+    patch: Dict[str, Any],
+    current: Optional[Mapping[str, Any]],
+    message: Any,
+) -> Dict[str, Any]:
+    """Record why a descriptive design reports counts only, or does not.
+
+    Counts only the turn proposes on no request in the researcher's words are
+    replaced by the source's variance before the study is saved; counts only
+    the study already records stay, with the conflict on the study card
+    (``study_family_design.descriptive_variance``).  Returns the receipt
+    fields.
+    """
+
+    from easyicu.webserver.design_variance_basis import DESIGN_VARIANCE_BASIS_FIELD
+    from easyicu.webserver.study_family_design import descriptive_variance
+
+    saved = (current or {}).get("analysis_design")
+    design = patch["analysis_design"] if "analysis_design" in patch else saved
+    decision = descriptive_variance(
+        {**dict(current or {}), **patch}, design=design, saved=saved, message=message
+    )
+    if decision is None:
+        return {}
+    if "analysis_design" in patch and decision.design != dict(design):
+        patch["analysis_design"] = dict(decision.design)
+    if (current or {}).get(DESIGN_VARIANCE_BASIS_FIELD) != decision.basis:
+        patch[DESIGN_VARIANCE_BASIS_FIELD] = decision.basis
+    return {DESIGN_VARIANCE_BASIS_FIELD: decision.basis}
+
+
+def _variance_receipt_text(receipt: Mapping[str, Any]) -> str:
+    record = receipt.get("design_variance_basis")
+    if not record:
+        return ""
+    if record.get("conflict"):
+        return (
+            " The study's descriptive design reports counts only, with no "
+            "interval, and the researcher's words have not asked for that; the "
+            "design is kept and the study card shows it. Tell the researcher in "
+            "one line."
+        )
+    if record.get("replaced"):
+        return (
+            " Saved the descriptive design with "
+            f"{record['variance_estimator']} variance, chosen by the source's "
+            "patient grouping, instead of counts only: the researcher has not asked "
+            "for counts only, and proportions carry their intervals. Do not propose "
+            "counts only unless the researcher asks for it."
+        )
+    return (
+        f" Saved counts only, as the researcher asked (\"{record['evidence']}\")."
+    )
 
 
 _FAMILY_NAMES = {
@@ -1332,9 +1387,11 @@ def update_study_context(
         and _message_requests_descriptive_plan_default(context.user_message)
     ):
         # A question that explicitly asks for prevalence plus description has
-        # already chosen the conservative scientific ceiling. Persist that
-        # owner-interpreted default in the candidate setup so Planner does not
-        # manufacture an association study and then ask the user to undo it.
+        # chosen a descriptive study. Persist that owner-interpreted default
+        # in the candidate setup so Planner does not manufacture an
+        # association study and then ask the user to undo it.  It proposes
+        # counts only; the variance rule (``_question_design_variance``) keeps
+        # them only when the researcher's words ask for them.
         patch["analysis_design"] = {
             "analysis_family": "descriptive_epidemiology",
             "analysis_unit": "icu_stay",
@@ -1858,6 +1915,11 @@ def update_study_context(
     family_receipt = (
         {} if causal_receipt else _question_family_design(params, patch, current)
     )
+    variance_receipt = (
+        {}
+        if causal_receipt
+        else _question_design_variance(patch, current, context.user_message)
+    )
     if not patch:
         raise PiCopilotError(
             "pi_tool_arguments_required",
@@ -1876,6 +1938,7 @@ def update_study_context(
             _server_concept_selection_authority_write=True,
             _server_causal_trial_reading_write=True,
             _server_study_family_reading_write=True,
+            _server_design_variance_basis_write=True,
         )
     except study_contexts.StudyContextError as exc:
         return _result(
@@ -1938,6 +2001,7 @@ def update_study_context(
                     _server_concept_selection_authority_write=True,
                     _server_causal_trial_reading_write=True,
                     _server_study_family_reading_write=True,
+                    _server_design_variance_basis_write=True,
                 )
             except study_contexts.StudyContextError as rest_exc:
                 return _result(
@@ -1970,6 +2034,7 @@ def update_study_context(
             _server_concept_selection_authority_write=True,
             _server_causal_trial_reading_write=True,
             _server_study_family_reading_write=True,
+            _server_design_variance_basis_write=True,
         )
     except study_contexts.StudyContextError as exc:
         return _result(
@@ -2015,6 +2080,7 @@ def update_study_context(
         )
     summary += _causal_receipt_text(causal_receipt)
     summary += _family_receipt_text(family_receipt)
+    summary += _variance_receipt_text(variance_receipt)
     if omitted_unconfirmed_fields:
         # Preserve the omission and reason, but let the workflow decide when
         # a choice is needed. Execution requirements must not become an
@@ -2046,6 +2112,7 @@ def update_study_context(
             **({"unsaved_design": unsaved_design} if unsaved_design is not None else {}),
             **causal_receipt,
             **family_receipt,
+            **variance_receipt,
         },
     )
     context.invalidate_authority("study_context_updated")

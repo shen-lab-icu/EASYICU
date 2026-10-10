@@ -24,6 +24,14 @@ does: a source that groups stays by patient gets patient-clustered variance,
 one that cannot gets model-based variance, and the study's dependence rule
 (``study_contexts.analysis_dependence_finding``) still asks for a patient
 grouping or first stays when repeated stays are kept.
+
+The same rule sets a descriptive design's variance whenever counts only are
+on the table (:func:`descriptive_variance`): a descriptive study reports
+counts without any interval only when the researcher's words ask for it
+(``design_variance_basis.counts_only_request``).  Counts only the turn
+proposes on no such request are replaced by the source's variance before
+the study is saved; counts only the study already records stay, with the
+conflict recorded for the study card.  Nothing stops.
 """
 
 from __future__ import annotations
@@ -31,6 +39,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional
 
+from easyicu.webserver.design_variance_basis import (
+    COUNTS_ONLY,
+    COUNTS_ONLY_NOT_REQUESTED,
+    DESIGN_VARIANCE_BASIS_FIELD,
+    USER_WORDS,
+    counts_only_request,
+)
 from easyicu.webserver.study_family_reading import (
     StudyFamilyReading,
     study_family_reading,
@@ -39,6 +54,8 @@ from easyicu.webserver.study_family_reading import (
 __all__ = [
     "STUDY_FAMILY_READING_FIELD",
     "FamilyDesignDecision",
+    "VarianceDecision",
+    "descriptive_variance",
     "family_design_for",
     "family_reading_conflict",
     "question_family_design",
@@ -48,6 +65,7 @@ __all__ = [
 #: The study field and receipt field that carry the reading.
 STUDY_FAMILY_READING_FIELD = "study_family_reading"
 _CAUSAL_FAMILY = "causal_inference"
+_DESCRIPTIVE_FAMILY = "descriptive_epidemiology"
 
 
 def _design_family(design: Any) -> str:
@@ -84,6 +102,69 @@ class FamilyDesignDecision:
 
     reading: StudyFamilyReading
     design: Dict[str, str]
+
+
+@dataclass(frozen=True)
+class VarianceDecision:
+    """A descriptive design's variance, and the record of why."""
+
+    design: Dict[str, str]
+    basis: Dict[str, Any]
+
+
+def descriptive_variance(
+    study: Mapping[str, Any],
+    *,
+    design: Any,
+    saved: Any,
+    message: Any,
+) -> Optional[VarianceDecision]:
+    """The variance a descriptive ``design`` keeps, when counts only are on the table.
+
+    ``design`` is the design about to be saved, ``saved`` the one the study
+    records, ``message`` the researcher's turn.  ``None`` when the design is
+    not descriptive, reports intervals, or its counts only are already
+    explained by the researcher's words.
+    """
+
+    if not isinstance(design, Mapping) or _design_family(design) != _DESCRIPTIVE_FAMILY:
+        return None
+    if design.get("variance_estimator") != COUNTS_ONLY:
+        return None
+    current = dict(design)
+    words = counts_only_request(message)
+    if words is not None:
+        return VarianceDecision(
+            design=current,
+            basis={"variance_estimator": COUNTS_ONLY, "basis": USER_WORDS, "evidence": words},
+        )
+    recorded = study.get(DESIGN_VARIANCE_BASIS_FIELD)
+    if isinstance(saved, Mapping) and saved.get("variance_estimator") == COUNTS_ONLY:
+        # The study records counts only: they stay, and a record that does
+        # not rest on the researcher's words says so.
+        if isinstance(recorded, Mapping) and recorded.get("basis") == USER_WORDS:
+            return None
+        return VarianceDecision(
+            design=current,
+            basis={"variance_estimator": COUNTS_ONLY, "conflict": COUNTS_ONLY_NOT_REQUESTED},
+        )
+    chosen = family_design_for(study, _DESCRIPTIVE_FAMILY)
+    replaced = {key: value for key, value in current.items() if key != "cluster_unit"}
+    replaced["variance_estimator"] = chosen["variance_estimator"]
+    if "cluster_unit" in chosen:
+        replaced["cluster_unit"] = chosen["cluster_unit"]
+    return VarianceDecision(
+        design=replaced,
+        basis={
+            "variance_estimator": chosen["variance_estimator"],
+            "basis": (
+                "source_patient_grouping"
+                if "cluster_unit" in chosen
+                else "source_without_patient_grouping"
+            ),
+            "replaced": COUNTS_ONLY,
+        },
+    )
 
 
 def question_family_design(
