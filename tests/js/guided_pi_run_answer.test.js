@@ -180,6 +180,13 @@ const outcome = modules.require('runOutcome').create({
   assert.match(withBlock.html, /同库内部验证（验证集 200 个 ICU 入住记录，来自 190 名患者，30 个结局事件）：AUROC 0\.812（95% CI 0\.771–0\.848，DeLong），Brier 0\.103，校准斜率 0\.96。/);
   assert.match(withBlock.html, /这是同一数据库内部验证的模型表现，仅供分析，未获论文授权；用于其他数据库前需要外部验证/);
   assert.doesNotMatch(withBlock.html, /0\.555|未调整的描述性比较|在 MIMIC-IV 的/);
+  // A patient bootstrap names how its interval was drawn; a method the card
+  // has no words for is not named.
+  payloads['result_tables.json'] = tablesWith({ prediction_performance: { ...block,
+    auroc_ci_method: 'patient_stratified_bootstrap_percentile_95pct' } });
+  assert.match((await reread(predictionPlan)).html, /AUROC 0\.812（95% CI 0\.771–0\.848，按患者重抽样），Brier 0\.103/);
+  payloads['result_tables.json'] = tablesWith({ prediction_performance: { ...block, auroc_ci_method: 'other_interval_95pct' } });
+  assert.match((await reread(predictionPlan)).html, /AUROC 0\.812（95% CI 0\.771–0\.848），Brier 0\.103/);
   // With one ICU stay per patient the sentence does not repeat the count.
   payloads['result_tables.json'] = tablesWith({ prediction_performance: { ...block, validation_subject_n: 200 } });
   assert.match((await reread(predictionPlan)).html, /同库内部验证（验证集 200 个 ICU 入住记录，30 个结局事件）：AUROC 0\.812/);

@@ -1,8 +1,8 @@
 /* Owner: shared artifact reader vocabulary. */
 /* Reader-facing names for the host codes the shared artifact renderers show:
    plan-review findings and the questions their decisions ask, result-table
-   columns and titles, method cards and the design elements a method source
-   supports.  Text only -- nothing here
+   columns, their coded values and titles, method cards and the design
+   elements a method source supports.  Text only -- nothing here
    derives, rounds, or reinterprets a registered value. */
 (function () {
   'use strict';
@@ -251,6 +251,127 @@
     repeat_measured_n: ['Measured more than once', '多次测量数'],
     value_present_but_measured_zero_n: ['Value without measurement flag', '有值但测量标记为 0'],
     raw_value_missing_n: ['Raw value missing', '原始值缺失数'],
+    // A prediction model's performance on its validation set
+    // (prediction_performance.csv; rows are the cohort's units, here ICU stays).
+    model: ['Model', '模型'],
+    authority_scope: ['Evidence scope', '证据范围'],
+    paper_authorization_allowed: ['Paper authorization', '可用于论文'],
+    split_seed: ['Split seed', '切分种子'],
+    validation_fraction: ['Validation fraction', '验证集比例'],
+    predictor_n: ['Predictors', '预测变量数'],
+    predictors: ['Predictor roster', '预测变量'],
+    development_n: ['Development records', '开发集记录数'],
+    validation_n: ['Validation records', '验证集记录数'],
+    development_subject_n: ['Development patients', '开发集患者数'],
+    validation_subject_n: ['Validation patients', '验证集患者数'],
+    patient_overlap_n: ['Patients in both sets', '两集共有患者数'],
+    validation_event_n: ['Validation events', '验证集事件数'],
+    validation_event_rate: ['Validation event rate', '验证集事件率'],
+    auroc: ['AUROC', 'AUROC'],
+    auroc_se: ['AUROC SE', 'AUROC 标准误'],
+    auroc_ci_low: ['AUROC 95% CI low', 'AUROC 95% CI 下限'],
+    auroc_ci_high: ['AUROC 95% CI high', 'AUROC 95% CI 上限'],
+    auroc_ci_method: ['AUROC interval method', 'AUROC 区间方法'],
+    auroc_bootstrap_n: ['AUROC bootstrap resamples', 'AUROC bootstrap 重抽样次数'],
+    auroc_bootstrap_skipped_n: ['AUROC resamples skipped', 'AUROC 跳过的重抽样次数'],
+    average_precision: ['Average precision', '平均精确率'],
+    brier_score: ['Brier score', 'Brier 分数'],
+    calibration_status: ['Calibration', '校准'],
+    calibration_intercept: ['Calibration intercept', '校准截距'],
+    calibration_slope: ['Calibration slope', '校准斜率'],
+    preprocessing_fit_scope: ['Preprocessing fitted on', '预处理拟合范围'],
+    patient_group_source: ['Patient grouping column', '患者分组列'],
+    patient_group_derivation: ['Patient grouping rule', '患者分组规则'],
+    repeated_split_n: ['Repeated splits', '重复切分次数'],
+    repeated_split_seeds: ['Repeated-split seeds', '重复切分种子'],
+    repeated_split_auroc_mean: ['AUROC across splits (mean)', '各次切分 AUROC 均值'],
+    repeated_split_auroc_sd: ['AUROC across splits (SD)', '各次切分 AUROC 标准差'],
+    repeated_split_average_precision_mean: ['Average precision across splits (mean)', '各次切分平均精确率均值'],
+    repeated_split_average_precision_sd: ['Average precision across splits (SD)', '各次切分平均精确率标准差'],
+    repeated_split_brier_mean: ['Brier score across splits (mean)', '各次切分 Brier 分数均值'],
+    repeated_split_brier_sd: ['Brier score across splits (SD)', '各次切分 Brier 分数标准差'],
+    repeated_split_results: ['Per-split results', '各次切分结果'],
+    // The model against existing scores or models on the same validation
+    // rows (benchmark_comparison.csv; interval columns hold values only on
+    // the AUROC row).
+    comparator_column: ['Comparator column', '比较对象列'],
+    comparator_concept: ['Comparator', '比较对象'],
+    comparator_kind: ['Comparator kind', '比较对象类型'],
+    metric: ['Metric', '指标'],
+    model_value: ['Model value', '模型值'],
+    model_ci_low: ['Model 95% CI low', '模型 95% CI 下限'],
+    model_ci_high: ['Model 95% CI high', '模型 95% CI 上限'],
+    comparator_value: ['Comparator value', '比较对象值'],
+    comparator_ci_low: ['Comparator 95% CI low', '比较对象 95% CI 下限'],
+    comparator_ci_high: ['Comparator 95% CI high', '比较对象 95% CI 上限'],
+    difference: ['Difference (model − comparator)', '差值（模型 − 比较对象）'],
+    difference_se: ['Difference SE', '差值标准误'],
+    difference_ci_low: ['Difference 95% CI low', '差值 95% CI 下限'],
+    difference_ci_high: ['Difference 95% CI high', '差值 95% CI 上限'],
+    z: ['z', 'z 值'],
+    interval_method: ['Interval method', '区间方法'],
+    bootstrap_n: ['Bootstrap resamples', 'Bootstrap 重抽样次数'],
+    bootstrap_skipped_n: ['Resamples skipped', '跳过的重抽样次数'],
+    comparator_missing_n: ['Comparator missing', '比较对象缺失数'],
+    comparison_n: ['Compared records', '参与比较记录数'],
+    comparison_event_n: ['Compared events', '参与比较事件数'],
+    comparison_subject_n: ['Compared patients', '参与比较患者数'],
+    calibration_reason: ['Calibration not compared because', '未比较校准的原因'],
+    comparator_predicts: ['Comparator predicts', '比较对象预测的结局'],
+    outcome_concept: ['Study outcome', '研究结局'],
+    comparator_information_window: ['Comparator information window', '比较对象信息窗口'],
+    prediction_time_hours: ['Prediction time (h)', '预测时点（小时）'],
+    information_window_relation: ['Information window relation', '信息窗口关系'],
+    information_window_differs: ['Information window differs', '信息窗口不同'],
+  };
+
+  // Reader names for the closed value sets of result columns, by column.  A
+  // value outside its column's set is shown as written, so a new code reads
+  // raw rather than under a neighbour's name.
+  const VALUES = {
+    auroc_ci_method: {
+      delong_logit_normal_95pct: ['DeLong', 'DeLong'],
+      patient_stratified_bootstrap_percentile_95pct: ['resampled by patient', '按患者重抽样'],
+    },
+    interval_method: {
+      delong_paired_normal_95pct: ['paired DeLong', '配对 DeLong'],
+      patient_stratified_bootstrap_percentile_95pct: ['resampled by patient', '按患者重抽样'],
+    },
+    comparator_kind: {
+      probability: ['probability', '概率'],
+      score: ['score', '评分'],
+    },
+    metric: {
+      auroc: ['AUROC', 'AUROC'],
+      brier_score: ['Brier score', 'Brier 分数'],
+      calibration_intercept: ['Calibration intercept', '校准截距'],
+      calibration_slope: ['Calibration slope', '校准斜率'],
+    },
+    // The comparison table's two states, then the performance table's own.
+    calibration_status: {
+      compared: ['compared', '已比较'],
+      calibration_not_compared: ['not compared', '未比较'],
+      estimated: ['estimated', '已估计'],
+      not_estimable_constant_probability: ['not estimable: every predicted probability is the same', '无法估计：预测概率全部相同'],
+      not_estimable_perfect_separation: ['not estimable: the outcome is perfectly separated', '无法估计：结局被完全分离'],
+      not_estimable_nonconvergence: ['not estimable: the calibration model did not converge', '无法估计：校准模型未收敛'],
+    },
+    calibration_reason: {
+      score_scale: ['the score is not a probability', '评分刻度不是概率'],
+      predicts_another_outcome: ['it predicts another outcome', '预测的是另一结局'],
+      predicts_unstated: ['what it predicts is not stated', '未说明预测什么'],
+    },
+    information_window_relation: {
+      same: ['comparator window ends at the prediction time', '比较对象窗口在预测时点结束'],
+      comparator_ends_after_prediction_time: ['comparator window ends after the prediction time', '比较对象窗口晚于预测时点结束'],
+      comparator_ends_before_prediction_time: ['comparator window ends before the prediction time', '比较对象窗口早于预测时点结束'],
+      comparator_window_unstated: ['comparator window not stated', '比较对象窗口未说明'],
+    },
+    // A CSV cell carries the boolean as Python writes it.
+    information_window_differs: {
+      True: ['yes', '是'],
+      False: ['no', '否'],
+    },
   };
 
   // Tested before the renderer's own broader patterns, so a specific audit
@@ -270,6 +391,9 @@
     [/key_metrics/, 'Key metrics', '关键指标'],
     [/ordinal_trend|trend_tests?/, 'Ordered trend tests', '有序趋势检验'],
     [/cohort_analysis_flow|exact sequential attrition ledger/, 'Cohort flow (sequential exclusions)', '队列流程（逐步排除）'],
+    [/benchmark_comparison/, 'Comparison with existing scores and models', '与已有评分或模型的比较'],
+    [/prediction_performance|model_performance/, 'Prediction performance', '预测性能'],
+    [/prediction_scores/, 'Predicted probabilities', '预测概率'],
   ];
 
   const METHOD_CARDS = {
@@ -309,6 +433,11 @@
     const row = COLUMNS[String(key || '')];
     return row ? pick(row) : '';
   }
+  function value(key, raw) {
+    const names = VALUES[String(key || '')];
+    const text = String(raw);
+    return names && Object.prototype.hasOwnProperty.call(names, text) ? pick(names[text]) : '';
+  }
   function tableTitle(...tokens) {
     const text = tokens.map(value => String(value || '').toLowerCase()).join(' ');
     const row = TABLES.find(([pattern]) => pattern.test(text));
@@ -331,5 +460,5 @@
     return parts.join(chinese ? '；' : '; ');
   }
 
-  window.AGENT_READER_VOCAB = Object.freeze({ finding, question, column, tableTitle, citationUse });
+  window.AGENT_READER_VOCAB = Object.freeze({ finding, question, column, value, tableTitle, citationUse });
 })();

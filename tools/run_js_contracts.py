@@ -110,6 +110,7 @@ CONTRACTS: dict[str, list[str]] = {
         "screens-guided-pi.js",
     ],
     "guided_pi_run_answer.test.js": [
+        "screens-agent-reader-vocab.js",
         "screens-guided-pi-modules.js",
         "screens-guided-pi-resources.js",
         "screens-guided-pi-result-summary.js",

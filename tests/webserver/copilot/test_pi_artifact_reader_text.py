@@ -98,6 +98,78 @@ def test_result_tables_read_with_named_columns_and_display_precision():
     assert "row role" not in html and "outcome rate pct" not in html
 
 
+def test_prediction_and_comparison_tables_read_with_named_columns():
+    payload = {"tables": [
+        {"name": "table_step_artifact_p__prediction_performance.csv",
+         "label": "Table prediction_performance from step primary_performance.",
+         "headers": ["validation_n", "validation_subject_n", "auroc", "auroc_ci_low", "auroc_ci_high",
+                     "auroc_ci_method", "auroc_bootstrap_n", "auroc_bootstrap_skipped_n", "brier_score"],
+         "rows": [["200", "190", "0.8123", "0.7712", "0.8478",
+                   "patient_stratified_bootstrap_percentile_95pct", "2000", "3", "0.1034"]]},
+        {"name": "table_step_artifact_b__benchmark_comparison.csv",
+         "label": "Table benchmark_comparison from step benchmark_comparison.",
+         "headers": ["comparator_column", "metric", "model_value", "comparator_value", "difference",
+                     "difference_ci_low", "difference_ci_high", "interval_method", "comparison_n",
+                     "information_window_relation"],
+         "rows": [["apache_iv", "auroc", "0.81", "0.76", "0.05", "0.01", "0.09",
+                   "delong_paired_normal_95pct", "180", "same"]]},
+    ]}
+
+    html = render("result_tables.json", payload)
+
+    assert "预测性能" in html and "与已有评分或模型的比较" in html
+    assert "验证集患者数" in html and "AUROC 区间方法" in html
+    assert "AUROC bootstrap 重抽样次数" in html and "AUROC 跳过的重抽样次数" in html
+    assert "差值（模型 − 比较对象）" in html and "差值 95% CI 下限" in html
+    assert "参与比较记录数" in html and "信息窗口关系" in html
+    for raw in ("validation subject n", "auroc bootstrap skipped n", "difference ci low",
+                "information window relation", "comparison n"):
+        assert raw not in html
+    english = render("result_tables.json", payload, lang="en")
+    assert "Validation patients" in english and "AUROC resamples skipped" in english
+    assert "Difference (model − comparator)" in english and "Comparison with existing scores and models" in english
+
+
+
+def test_coded_values_in_prediction_tables_read_by_name():
+    headers = ["comparator_column", "comparator_kind", "metric", "interval_method", "calibration_status",
+               "calibration_reason", "information_window_relation", "information_window_differs"]
+    payload = {"tables": [
+        {"name": "table_step_artifact_p__prediction_performance.csv",
+         "label": "Table prediction_performance from step primary_performance.",
+         "headers": ["auroc", "auroc_ci_method", "calibration_status"],
+         "rows": [["0.8123", "patient_stratified_bootstrap_percentile_95pct", "not_estimable_perfect_separation"]]},
+        {"name": "table_step_artifact_b__benchmark_comparison.csv",
+         "label": "Table benchmark_comparison from step benchmark_comparison.",
+         "headers": headers,
+         "rows": [
+             ["apache_iv", "score", "auroc", "delong_paired_normal_95pct", "calibration_not_compared",
+              "score_scale", "comparator_ends_after_prediction_time", "True"],
+             ["saps_ii_prob", "probability", "calibration_slope", "", "compared", "", "same", "False"],
+             # A value outside its column's set reads as written.
+             ["new_score", "ordinal", "brier_score", "new_method_95pct", "pending",
+              "new_reason", "comparator_window_ahead", "maybe"],
+         ]},
+    ]}
+
+    html = render("result_tables.json", payload)
+
+    for name in ("按患者重抽样", "无法估计：结局被完全分离", "评分", "概率", "配对 DeLong", "未比较", "已比较",
+                 "评分刻度不是概率", "比较对象窗口晚于预测时点结束", "比较对象窗口在预测时点结束",
+                 "校准斜率", "Brier 分数", "<td>是</td>", "<td>否</td>"):
+        assert name in html, name
+    for code in ("patient_stratified_bootstrap_percentile_95pct", "not_estimable_perfect_separation",
+                 "delong_paired_normal_95pct", "calibration_not_compared", "score_scale",
+                 "comparator_ends_after_prediction_time", "<td>same</td>", "<td>True</td>"):
+        assert code not in html, code
+    for raw in ("<td>ordinal</td>", "<td>new_method_95pct</td>", "<td>pending</td>",
+                "<td>new_reason</td>", "<td>comparator_window_ahead</td>", "<td>maybe</td>"):
+        assert raw in html, raw
+    english = render("result_tables.json", payload, lang="en")
+    assert "resampled by patient" in english and "paired DeLong" in english
+    assert "the score is not a probability" in english
+    assert "comparator window ends after the prediction time" in english
+
 def test_plan_reader_hides_row_identity_and_states_the_modelled_levels():
     payload = {
         "research_question": "KDIGO stage and in-hospital mortality",
