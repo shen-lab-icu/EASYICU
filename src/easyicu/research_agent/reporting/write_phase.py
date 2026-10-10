@@ -133,6 +133,10 @@ from .manuscript_method_facts import (
     audit_bound_source_method_facts,
     project_source_method_facts,
 )
+from .benchmark_report_facts import (
+    benchmark_limitations_audit,
+    benchmark_window_limitations,
+)
 from .plan_review_limitations import (
     audit_bound_plan_review_limitations,
     writer_plan_review_limitations,
@@ -2089,14 +2093,19 @@ def _draft_manuscript(
                     detail=repair_result.finding_detail(),
                 )
             )
-    # The limitations the approved plan review left to the study follow the
-    # source facts at the top of Limitations.
+    # The limitations the approved plan review left to the study, then each
+    # benchmark comparator's information window, follow the source facts at
+    # the top of Limitations.
     review_limitations, review_finding = writer_plan_review_limitations(evidence)
     if review_finding is not None:
         findings.append(review_finding)
+    benchmark_limitations = benchmark_window_limitations(
+        per_step_records, evidence=evidence, context=context, manuscript_language=run_language,
+        reader_display_labels=dict(execute_result.plan.display_labels or {}),
+    )
     scaffold, method_finding = project_source_method_facts(
         scaffold, evidence=evidence, per_step_records=per_step_records,
-        extra_facts=review_limitations,
+        extra_facts=(*review_limitations, *benchmark_limitations),
     )
     if method_finding is not None:
         findings.append(method_finding)
@@ -2290,6 +2299,25 @@ def _result_claim_sufficiency_finding(
     )
 
 
+def _bound_host_fact_findings(
+    bound: Any,
+    evidence: Any,
+    per_step_records: Any,
+    reader_display_labels: Any,
+    context: Any,
+    manuscript_language: str,
+) -> list:
+    """What each host-fact owner finds missing from the bound manuscript."""
+
+    audits = (
+        audit_bound_source_method_facts,
+        audit_bound_plan_review_limitations,
+        benchmark_limitations_audit(reader_display_labels, context, manuscript_language),
+    )
+    found = (audit(bound, evidence=evidence, per_step_records=per_step_records) for audit in audits)
+    return [finding for finding in found if finding is not None]
+
+
 def _bind_and_review_manuscript(
     pipeline: Any,
     *,
@@ -2314,7 +2342,7 @@ def _bind_and_review_manuscript(
     claim_labels = reader_claim_labels(context, reader_display_labels)
     primary_result_facts = compile_primary_counts_only_report_facts(
         per_step_records, evidence=evidence, reader_display_labels=reader_display_labels,
-        context=context, manuscript_language=manuscript_language,
+        context=context, manuscript_language=manuscript_language, plan=plan,
     )
     scaffold, mistyped_literature_repairs = repair_evidence_ids_mistyped_as_literature(
         scaffold,
@@ -2461,10 +2489,8 @@ def _bind_and_review_manuscript(
         )
     # A Writer that failed wrote no sections for the host's sentences to survive in.
     if not writer_error_message:
-        for audit in (audit_bound_source_method_facts, audit_bound_plan_review_limitations):
-            host_finding = audit(bound, evidence=evidence, per_step_records=per_step_records)
-            if host_finding is not None:
-                findings.append(host_finding)
+        findings.extend(_bound_host_fact_findings(
+            bound, evidence, per_step_records, reader_display_labels, context, manuscript_language))
     bound = _repair_bound_display_language(
         bound,
         reader_display_labels=reader_display_labels,

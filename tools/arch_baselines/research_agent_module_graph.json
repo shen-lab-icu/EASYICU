@@ -12752,6 +12752,46 @@
       "easyicu.research_agent.figures.contracts"
     ],
     [
+      "easyicu.research_agent.reporting.benchmark_report_facts",
+      "easyicu.research_agent.authority.evidence_store"
+    ],
+    [
+      "easyicu.research_agent.reporting.benchmark_report_facts",
+      "easyicu.research_agent.authority.runtime_artifacts"
+    ],
+    [
+      "easyicu.research_agent.reporting.benchmark_report_facts",
+      "easyicu.research_agent.contracts.manuscript_result_structure"
+    ],
+    [
+      "easyicu.research_agent.reporting.benchmark_report_facts",
+      "easyicu.research_agent.contracts.prediction_execution"
+    ],
+    [
+      "easyicu.research_agent.reporting.benchmark_report_facts",
+      "easyicu.research_agent.planning.question_requirements"
+    ],
+    [
+      "easyicu.research_agent.reporting.benchmark_report_facts",
+      "easyicu.research_agent.reporting.manuscript_labels"
+    ],
+    [
+      "easyicu.research_agent.reporting.benchmark_report_facts",
+      "easyicu.research_agent.reporting.manuscript_method_facts"
+    ],
+    [
+      "easyicu.research_agent.reporting.benchmark_report_facts",
+      "easyicu.research_agent.reporting.report_fact"
+    ],
+    [
+      "easyicu.research_agent.reporting.benchmark_report_facts",
+      "easyicu.research_agent.research_context.materialization_window"
+    ],
+    [
+      "easyicu.research_agent.reporting.benchmark_report_facts",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.reporting.bibtex",
       "easyicu.research_agent.literature"
     ],
@@ -12801,11 +12841,19 @@
     ],
     [
       "easyicu.research_agent.reporting.descriptive_report_facts",
+      "easyicu.research_agent.reporting.benchmark_report_facts"
+    ],
+    [
+      "easyicu.research_agent.reporting.descriptive_report_facts",
       "easyicu.research_agent.reporting.manuscript_labels"
     ],
     [
       "easyicu.research_agent.reporting.descriptive_report_facts",
       "easyicu.research_agent.reporting.manuscript_surface"
+    ],
+    [
+      "easyicu.research_agent.reporting.descriptive_report_facts",
+      "easyicu.research_agent.reporting.report_fact"
     ],
     [
       "easyicu.research_agent.reporting.descriptive_report_facts",
@@ -13718,6 +13766,10 @@
     [
       "easyicu.research_agent.reporting.write_phase",
       "easyicu.research_agent.reporting.administrative_authority"
+    ],
+    [
+      "easyicu.research_agent.reporting.write_phase",
+      "easyicu.research_agent.reporting.benchmark_report_facts"
     ],
     [
       "easyicu.research_agent.reporting.write_phase",
@@ -14860,9 +14912,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3707,
+    "edge_count": 3720,
     "largest_scc_size": 0,
-    "module_count": 842,
+    "module_count": 844,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -15585,6 +15637,7 @@
     "easyicu.research_agent.reporting.article_display_package": "reporting/article_display_package.py",
     "easyicu.research_agent.reporting.article_display_policy": "reporting/article_display_policy.py",
     "easyicu.research_agent.reporting.article_population_alignment": "reporting/article_population_alignment.py",
+    "easyicu.research_agent.reporting.benchmark_report_facts": "reporting/benchmark_report_facts.py",
     "easyicu.research_agent.reporting.bibtex": "reporting/bibtex.py",
     "easyicu.research_agent.reporting.completion": "reporting/completion.py",
     "easyicu.research_agent.reporting.descriptive_report_facts": "reporting/descriptive_report_facts.py",
@@ -15622,6 +15675,7 @@
     "easyicu.research_agent.reporting.publication_filesystem": "reporting/publication_filesystem.py",
     "easyicu.research_agent.reporting.readiness": "reporting/readiness.py",
     "easyicu.research_agent.reporting.registered_report_inputs": "reporting/registered_report_inputs.py",
+    "easyicu.research_agent.reporting.report_fact": "reporting/report_fact.py",
     "easyicu.research_agent.reporting.reporting_checklist": "reporting/reporting_checklist.py",
     "easyicu.research_agent.reporting.result_card": "reporting/result_card.py",
     "easyicu.research_agent.reporting.result_integrity": "reporting/result_integrity.py",
