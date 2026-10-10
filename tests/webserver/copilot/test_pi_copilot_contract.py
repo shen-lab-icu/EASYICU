@@ -5084,6 +5084,10 @@ def test_conversational_setup_rejects_unrequested_explicit_only_feature_module(
 
 
 def test_data_source_recommendation_fails_closed_on_equally_complete_local_data() -> None:
+    from easyicu.webserver.pi_copilot.source_recommendation import (
+        recommend_registered_export,
+    )
+
     choices = [
         {
             "source_id": source_id,
@@ -5094,7 +5098,10 @@ def test_data_source_recommendation_fails_closed_on_equally_complete_local_data(
         for source_id in ("src_a", "src_b")
     ]
 
-    assert tool_module._dominant_local_source(choices) is None
+    # Neither is active nor dated: nothing is picked, both are offered.
+    recommendation = recommend_registered_export(choices)
+    assert recommendation.source is None
+    assert [row["source_id"] for row in recommendation.choices] == ["src_a", "src_b"]
 
 
 def test_source_concept_choices_are_exact_module_scoped_and_path_free(

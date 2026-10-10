@@ -71,6 +71,7 @@ from .run_authority import (
     list_bound_run_history,
     research_pipeline_project_root,
 )
+from .source_recommendation import generated_date, recommend_registered_export
 from .study_context_update import update_study_context
 from .turn_authority import infer_explicit_turn_actions
 from .tool_catalog import (
@@ -612,27 +613,6 @@ def _registered_source_projection(
     }
 
 
-def _dominant_local_source(
-    choices: Sequence[Mapping[str, Any]],
-) -> Optional[Dict[str, Any]]:
-    """Return one unambiguously most-complete local dataset, if present."""
-
-    local_choices = [
-        row for row in choices if row.get("source_scope") == "registered_export"
-    ]
-    dominant = []
-    for candidate in local_choices:
-        candidate_stays = int((candidate.get("aggregate") or {}).get("stays") or 0)
-        candidate_modules = int(candidate.get("module_count") or 0)
-        if all(
-            candidate_stays >= int((other.get("aggregate") or {}).get("stays") or 0)
-            and candidate_modules >= int(other.get("module_count") or 0)
-            for other in local_choices
-        ):
-            dominant.append(candidate)
-    return dict(dominant[0]) if len(dominant) == 1 else None
-
-
 def _database_named_in_message(message: str) -> Optional[str]:
     for database, pattern in (
         ("miiv", r"\bmimic[\s_-]*(?:iv|4)\b"),
@@ -728,7 +708,8 @@ def _list_data_sources(
             )
             if len(choices) >= 40:
                 break
-    recommended_source = _dominant_local_source(choices)
+    recommendation = recommend_registered_export(choices)
+    recommended_source = recommendation.source
     exact_database_named = bool(
         selected_profile is not None
         and explicit_database == selected_profile.key
@@ -759,7 +740,7 @@ def _list_data_sources(
         }
         recommended_source.update(
             {
-                "selection_reason": "most_complete_local_dataset",
+                "selection_reason": recommendation.reason,
                 "auto_select_for_exact_database_request": auto_select_recommended,
             }
         )
@@ -822,6 +803,19 @@ def _list_data_sources(
             "supported_databases": supported_databases,
             "official_demos": official_demos,
             "recommended_source": recommended_source,
+            # Registered exports EasyICU cannot choose between, numbered for
+            # the researcher; empty when one is recommended or none exists.
+            "registered_source_choices": [
+                {
+                    "choice": index,
+                    "source_id": row.get("source_id"),
+                    "label": row.get("label"),
+                    "generated_date": generated_date(row),
+                    "stays": (row.get("aggregate") or {}).get("stays"),
+                    "module_count": row.get("module_count"),
+                }
+                for index, row in enumerate(recommendation.choices, start=1)
+            ],
             "source_modes": (
                 []
                 if selected_profile is None
