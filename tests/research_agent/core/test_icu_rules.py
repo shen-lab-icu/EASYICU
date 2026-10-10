@@ -72,11 +72,28 @@ def test_classify_wide_export_aki_stage_is_kdigo_ordinal(ra):
 
 
 def test_concurrent_support_indicators_are_not_baseline_covariates(ra):
-    for name in ("mech_vent", "vaso_ind"):
+    for name in ("mech_vent", "vaso_ind", "adv_resp", "adv_resp_max"):
         hint = ra.ICU_RULES.classify_variable(name, "int64", [0, 1])
         assert hint.role.value == "intervention"
         assert hint.kind == ra.VariableKind.BINARY
         assert hint.aggregation_default.value == "max_or_last"
+    assert "pre-time-zero authority" in " ".join(
+        ra.ICU_RULES.classify_variable("adv_resp_max", "int64", [0, 1]).pitfalls
+    )
+
+
+def test_cumulative_fluid_balance_is_an_intervention_and_balance_alone_is_not(ra):
+    # Its window summary is support the stay received, as ventilation is; the
+    # non-cumulative balance and the observation companions keep their rules.
+    hint = ra.ICU_RULES.classify_variable("fluid_balance_cumulative_mean", "float64")
+    assert (hint.role.value, hint.kind, hint.unit) == (
+        "intervention", ra.VariableKind.CONTINUOUS, "mL",
+    )
+    assert "understates" in " ".join(hint.pitfalls)
+    assert ra.ICU_RULES.classify_variable("fluid_balance_mean", "float64").role.value == "other"
+    assert ra.ICU_RULES.classify_variable(
+        "fluid_balance_cumulative_n", "int64"
+    ).role.value == "meta"
 
 
 def test_longest_prefix_match(ra):

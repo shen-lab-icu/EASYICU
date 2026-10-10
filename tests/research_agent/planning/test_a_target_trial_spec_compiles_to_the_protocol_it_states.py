@@ -892,7 +892,8 @@ def test_the_adjustment_set_and_its_assumption_are_confirmed_for_every_trial() -
 
     assert line(trial) == (
         "confounders",
-        "Adjusted for at time zero: age, map_min. After an extraction, also: crea. "
+        "Adjusted for at time zero: age, map_min. After an extraction, also: crea "
+        "(mean over [0, 6) h). "
         "Not adjusted for: aki (not observed by time zero). Proposed by the setup, "
         "not stated by the study: map_min. The comparison assumes no confounding "
         "beyond the adjusted set.",
