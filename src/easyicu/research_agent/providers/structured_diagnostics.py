@@ -298,7 +298,13 @@ def _safe_validation_issue_type(value: Any) -> str:
     text = str(value or "").strip().casefold()
     if text in {"type_error", "constraint_error", "union_error", "other"}:
         return text
-    if text in {"missing", "extra_forbidden", "literal_error", "json_invalid"}:
+    if text in {
+        "missing",
+        "extra_forbidden",
+        "literal_error",
+        "json_invalid",
+        "json_truncated",
+    }:
         return text
     if text.startswith(
         ("string_", "list_", "dict_", "bool_", "int_", "float_", "model_")
@@ -381,8 +387,86 @@ def violation_sha256(rendered_failure: str) -> str:
     return hashlib.sha256(rendered_failure.encode("utf-8")).hexdigest()
 
 
+#: The deepest nesting a JSON end state reports; deeper counts as this.
+_MAX_EOF_DEPTH = 64
+_LITERALS = ("true", "false", "null")
+
+
+def json_eof_state(raw: str) -> Dict[str, Any]:
+    """Where a response's JSON stands at its last character, without its text.
+
+    ``open_depth`` counts the objects and arrays opened outside strings and
+    not closed; ``in_string`` says the text ends inside a string.  Brackets
+    are only counted, never matched, so a response that closes the wrong
+    kind still reports depth 0.
+    """
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for char in str(raw or "").strip():
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char in "{[":
+            depth += 1
+        elif char in "}]":
+            depth = max(0, depth - 1)
+    return {"open_depth": min(depth, _MAX_EOF_DEPTH), "in_string": in_string}
+
+
+def json_truncation_issues(exc: BaseException, raw: str) -> List[Dict[str, Any]]:
+    """A JSON decode failure because the response ended inside an open value.
+
+    The decoder stopped at the response's end with an object or array still
+    open, on a string the response never closed, or on the start of a
+    ``true``, ``false`` or ``null`` the response cut off.  That response
+    stopped before its JSON closed -- a truncated answer, not one of the
+    wrong shape -- and is the issue ``json_truncated``.
+    """
+
+    if not isinstance(exc, json.JSONDecodeError):
+        return []
+    text = str(raw or "").strip()
+    state = json_eof_state(text)
+    rest = text[exc.pos :]
+    ended_open = state["open_depth"] > 0 and (
+        exc.pos >= len(text)
+        or any(word != rest and word.startswith(rest) for word in _LITERALS)
+    )
+    string_open = state["in_string"] and exc.msg.startswith("Unterminated string")
+    if not (ended_open or string_open):
+        return []
+    return [{"location": ["<root>"], "issue_type": "json_truncated"}]
+
+
+def safe_json_eof_state(value: Any) -> Optional[Dict[str, Any]]:
+    """Revalidate a recorded JSON end state as untrusted input."""
+
+    if not isinstance(value, Mapping) or set(value) != {"open_depth", "in_string"}:
+        return None
+    depth, in_string = value["open_depth"], value["in_string"]
+    if (
+        isinstance(depth, bool)
+        or not isinstance(depth, int)
+        or not 0 <= depth <= _MAX_EOF_DEPTH
+        or not isinstance(in_string, bool)
+    ):
+        return None
+    return {"open_depth": depth, "in_string": in_string}
+
+
 __all__ = [
     "infer_validation_stage",
+    "json_eof_state",
+    "json_truncation_issues",
+    "safe_json_eof_state",
     "safe_projected_validation_issues",
     "safe_validation_issues",
     "safe_validation_stage",
