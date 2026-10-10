@@ -11669,6 +11669,10 @@
     ],
     [
       "easyicu.research_agent.planning.scientific_review",
+      "easyicu.research_agent.contracts.patient_grouping_need"
+    ],
+    [
+      "easyicu.research_agent.planning.scientific_review",
       "easyicu.research_agent.contracts.phenotype_comparison"
     ],
     [
@@ -13981,6 +13985,10 @@
     ],
     [
       "easyicu.research_agent.research_context.builder",
+      "easyicu.research_agent.contracts.patient_grouping_need"
+    ],
+    [
+      "easyicu.research_agent.research_context.builder",
       "easyicu.research_agent.icu_rules"
     ],
     [
@@ -14828,7 +14836,7 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3699,
+    "edge_count": 3701,
     "largest_scc_size": 0,
     "module_count": 841,
     "package_count": 36,

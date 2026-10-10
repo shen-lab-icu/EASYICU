@@ -51,6 +51,11 @@ from ..contracts.exposure_group_rules import EXPOSURE_GROUP_TRANSFORM_ID
 from ..contracts.ordered_stratified import is_ordered_stratified_analysis_step
 from ..contracts.primary_cohort import step_cohort_population
 from ..contracts.functional_form import functional_form_products
+from ..contracts.patient_grouping_need import (
+    PATIENT_GROUPING_AUTHORITY_ERROR_KEY,
+    PATIENT_GROUPING_STATUS_KEY,
+    steps_needing_patient_groups,
+)
 from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
 from ..contracts.prediction_execution import (
     PREDICTION_PRIMARY_ACTION,
@@ -2805,6 +2810,92 @@ def prediction_timing_findings(
     return findings
 
 
+#: Why a source cannot give the patient groups a plan needs, by the status
+#: planning states of it (``contracts.patient_grouping_need``).  ``bound`` and
+#: ``available_unbound`` give them: execution binds the source's grouping.  A
+#: source whose grouping the declared trajectory design does not carry has its
+#: own code: its remedy is the design, not the source.
+_PATIENT_GROUPING_UNAVAILABLE = {
+    "source_has_none": "the host knows no verified patient grouping for this source",
+    "not_carried_by_trajectory": (
+        "the source's patient grouping is not carried by the design read from each "
+        "stay's long trajectory that this study declares"
+    ),
+    "authority_invalid": "the source's patient grouping authority fails its checks",
+}
+
+
+def prediction_patient_grouping_findings(
+    context: ResearchContext, plan: AnalysisPlan
+) -> list[PlanScientificFinding]:
+    """Refuse a plan whose steps need patient groups its source cannot give.
+
+    A static prediction splits development and validation stays by patient,
+    and a model with within-patient dependence fits patient clusters
+    (``steps_needing_patient_groups``).  While a patient's repeated ICU stays
+    are possible, such a step cannot run without a patient grouping.  The
+    status the planning context states of its source decides; a context that
+    states none has only its own grouping authority.
+    """
+
+    step_ids = steps_needing_patient_groups(plan)
+    if not step_ids or not repeat_units_possible(context):
+        return []
+    provenance = context.cohort.provenance or {}
+    status = provenance.get(PATIENT_GROUPING_STATUS_KEY)
+    if status is None:
+        if context_patient_group_authority(context) is not None:
+            return []
+        reason = "the planning context binds no patient grouping"
+    elif status in _PATIENT_GROUPING_UNAVAILABLE:
+        reason = _PATIENT_GROUPING_UNAVAILABLE[str(status)]
+    else:
+        return []
+    error = str(provenance.get(PATIENT_GROUPING_AUTHORITY_ERROR_KEY) or "").strip()
+    if status == "authority_invalid" and error:
+        reason += f" ({error})"
+    first_stays = (
+        "keep each patient's first ICU stay, identified by the host from the bound "
+        "stay table, and plan again on that population"
+    )
+    remediation = {
+        "authority_invalid": (
+            f"Repair the source's patient identity authority, or {first_stays}."
+        ),
+        "not_carried_by_trajectory": (
+            "Plan the study without a design read from each stay's long trajectory, "
+            f"or {first_stays}."
+        ),
+    }.get(
+        str(status),
+        f"Register the source's patient identity so the host binds its grouping, or {first_stays}.",
+    )
+    named = ", ".join(repr(step_id) for step_id in step_ids)
+    return [
+        PlanScientificFinding(
+            code=(
+                "PREDICTION_PATIENT_GROUPING_NOT_CARRIED_BY_TRAJECTORY"
+                if status == "not_carried_by_trajectory"
+                else "PREDICTION_PATIENT_GROUPING_UNAVAILABLE"
+            ),
+            severity="blocker",
+            dimension="icu_clinical_design",
+            message=(
+                f"{'Steps' if len(step_ids) > 1 else 'Step'} {named} "
+                f"{'split or cluster' if len(step_ids) > 1 else 'splits or clusters'} "
+                "stays by patient and a patient's repeated ICU stays are possible, "
+                f"but {reason}."
+            ),
+            evidence_refs=[
+                *(f"analysis_plan.json.steps.{step_id}" for step_id in step_ids[:10]),
+                "research_context.json.cohort.provenance",
+            ],
+            remediation=remediation,
+            remediation_route="runtime_capability",
+        )
+    ]
+
+
 def _trajectory_window_end_hours(
     trajectory_representation: Optional[Mapping[str, Any]],
 ) -> Optional[float]:
@@ -3429,6 +3520,7 @@ def build_plan_scientific_review(
     findings.extend(unapplied_population_findings(plan))
     findings.extend(robustness_override_event_window_findings(context, plan))
     findings.extend(prediction_timing_findings(context, plan))
+    findings.extend(prediction_patient_grouping_findings(context, plan))
     required_source_columns = {
         context.primary_exposure, context.target_outcome,
         *context.cohort.outcome_columns,
@@ -4743,6 +4835,7 @@ __all__ = [
     "render_plan_scientific_guardrails",
     "render_agent_plan_revision_contract",
     "plan_revision_blocker_codes",
+    "prediction_patient_grouping_findings",
     "prediction_timing_findings",
     "primary_model_retention_findings",
     "remediation_route_for_finding",
