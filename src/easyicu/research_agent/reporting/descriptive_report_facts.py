@@ -5,7 +5,6 @@ This adapter copies recorded estimates; arithmetic below only checks agreement.
 It neither fits a model nor grants clinical, inferential or publication authority.
 """
 
-from dataclasses import dataclass
 import json
 import math
 import re
@@ -16,6 +15,7 @@ from ..contracts.primary_cohort import STUDY_POPULATION_PRODUCTS
 from ..contracts.descriptive_execution import exposure_outcome_distribution_result_receipt_valid
 from ..authority.manuscript_claim_policy import fact_sentence_visible
 from ..authority.scientific_claims import ScientificClaim
+from .report_fact import DescriptiveReportFact
 
 #: A host-issued unit a fact sentence may name after its count ("ICU stays",
 #: "first ICU stays"): letters, spaces and hyphens only, so no number,
@@ -27,25 +27,6 @@ def is_reader_noun_phrase(text: str) -> bool:
     """Whether ``text`` may follow a count in a host fact sentence."""
 
     return _READER_NOUN_PHRASE.fullmatch(" ".join(str(text).split())) is not None
-
-
-@dataclass(frozen=True)
-class DescriptiveReportFact:
-    subsection: str
-    text: str
-    evidence_id: str
-    source_sha256: str
-    source_fields: tuple[str, ...]
-    replaces_claim_ref: str | None = None
-    cohort_n: int | None = None
-    outcome_label: str | None = None
-    group_label: str | None = None
-    estimate_pct: float | None = None
-    required_result_sections: tuple[str, ...] = ("Abstract", "Results")
-
-    @property
-    def scaffold(self) -> str:
-        return f"{self.text} {{evidence:{self.evidence_id}}}."
 
 
 def _count(value: Any, *, positive: bool = False) -> int:
@@ -481,15 +462,17 @@ def _compile_study_population_occurrence_report_facts(projected, evidence, reade
 
 
 def compile_primary_counts_only_report_facts(records, *, evidence, reader_display_labels,
-                                           context=None, manuscript_language="en"):
+                                           context=None, manuscript_language="en", plan=None):
     """Shared full-run/report-only admission; loose wrapper counts are not facts.
 
     Admits the grouped Table 1 cohort count, a signed survival suite's
-    landmark cohort count, the primary counts-only distribution and the
-    study population's exposure occurrence.
+    landmark cohort count, the primary counts-only distribution, the study
+    population's exposure occurrence and a prediction's comparison with an
+    existing score (``benchmark_report_facts``), which reads ``plan``.
     """
     from ..audits.envelope_consumers import RegisteredOutputEnvelopeConsumer
     from ..authority.scientific_claim_registry import load_registered_scientific_claims
+    from .benchmark_report_facts import compile_benchmark_report_facts
     from .manuscript_labels import source_bound_manuscript_labels
 
     projected = RegisteredOutputEnvelopeConsumer().authoritative_writer_records(
@@ -510,6 +493,10 @@ def compile_primary_counts_only_report_facts(records, *, evidence, reader_displa
             source_bound_manuscript_labels(
                 context, reader_display_labels, language=manuscript_language,
             ),
+        ),
+        *compile_benchmark_report_facts(
+            projected, evidence=evidence, reader_display_labels=reader_display_labels,
+            context=context, manuscript_language=manuscript_language, plan=plan,
         ),
     )
 

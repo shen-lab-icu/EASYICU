@@ -232,7 +232,7 @@ def audit_manuscript_numeric_claims(
             ):
                 cited_step = footnote_steps.get(footnote_id or "")
                 if cited_step and cited_step in owned_pairs:
-                    comparison = [owned_pairs[cited_step]]
+                    comparison = owned_pairs[cited_step]
                 elif cited_step:
                     findings.append(
                         _cited_step_lacks_metric_finding(
@@ -458,6 +458,47 @@ def _extract_ci_claims(
     return claims
 
 
+def _recorded_ci_pairs(
+    summary: Dict[str, Any],
+    lower_keys: Sequence[str],
+    upper_keys: Sequence[str],
+) -> List[Tuple[float, float]]:
+    """The intervals one summary records, each with both bounds under one parent.
+
+    The summary's own interval when it states one.  A summary that records
+    several models' intervals in a list (a comparison of a model with an
+    existing score: ``comparisons[0].model.auroc_ci_low`` and
+    ``comparisons[0].comparator.auroc_ci_low``) states no single one, so each
+    lower bound is paired with the upper bound beside it.
+    """
+
+    from ..scalar_utils import _coerce_scalar, _first_present_scalar, _flatten_scalar_dict
+
+    def number(value: Any) -> Optional[float]:
+        value = _coerce_scalar(value)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value)
+
+    low = _first_present_scalar(summary, lower_keys)
+    high = _first_present_scalar(summary, upper_keys)
+    if low is not None and high is not None:
+        try:
+            return [(float(low), float(high))]
+        except (TypeError, ValueError):
+            return []
+    flat = _flatten_scalar_dict(summary)
+    pairs: List[Tuple[float, float]] = []
+    for lower, upper in zip(lower_keys, upper_keys):
+        for key, value in flat.items():
+            if key != lower and not key.endswith(f".{lower}"):
+                continue
+            bounds = (number(value), number(flat.get(key[: -len(lower)] + upper)))
+            if bounds[0] is not None and bounds[1] is not None:
+                pairs.append((bounds[0], bounds[1]))
+    return pairs
+
+
 def _summary_ci_pairs(
     summaries: Sequence[Dict[str, Any]],
     lower_keys: Sequence[str],
@@ -465,18 +506,9 @@ def _summary_ci_pairs(
 ) -> List[Tuple[float, float]]:
     """Intervals, each with both bounds taken from the same summary."""
 
-    from ..scalar_utils import _first_present_scalar
-
     pairs: List[Tuple[float, float]] = []
     for summary in summaries:
-        low = _first_present_scalar(summary, lower_keys)
-        high = _first_present_scalar(summary, upper_keys)
-        if low is None or high is None:
-            continue
-        try:
-            pairs.append((float(low), float(high)))
-        except (TypeError, ValueError):
-            continue
+        pairs.extend(_recorded_ci_pairs(summary, lower_keys, upper_keys))
     return pairs
 
 
@@ -485,23 +517,16 @@ def _summary_ci_pairs_by_owner(
     owners: Sequence[str],
     lower_keys: Sequence[str],
     upper_keys: Sequence[str],
-) -> Dict[str, Tuple[float, float]]:
-    """The interval each step registered, keyed by that step."""
+) -> Dict[str, List[Tuple[float, float]]]:
+    """The intervals each step registered, keyed by that step."""
 
-    from ..scalar_utils import _first_present_scalar
-
-    owned: Dict[str, Tuple[float, float]] = {}
+    owned: Dict[str, List[Tuple[float, float]]] = {}
     for summary, owner in zip(summaries, owners):
         if not owner or owner in owned:
             continue
-        low = _first_present_scalar(summary, lower_keys)
-        high = _first_present_scalar(summary, upper_keys)
-        if low is None or high is None:
-            continue
-        try:
-            owned[owner] = (float(low), float(high))
-        except (TypeError, ValueError):
-            continue
+        pairs = _recorded_ci_pairs(summary, lower_keys, upper_keys)
+        if pairs:
+            owned[owner] = pairs
     return owned
 
 

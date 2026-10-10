@@ -216,6 +216,7 @@ def prepare_registered_report_repair(run_dir: Path, *, migration_draft: Path | N
         host_result_facts=compile_primary_counts_only_report_facts(
             records, evidence=evidence,
             reader_display_labels=prepared.plan.display_labels, context=context,
+            plan=prepared.plan,
         ),
     )
     if migration_draft is not None:
@@ -254,7 +255,7 @@ def bind_registered_report_numbers(run_dir: Path, manuscript: str) -> tuple[str,
     plan, context = _registered_plan_and_context(evidence)
     facts = compile_primary_counts_only_report_facts(
         records, evidence=evidence, reader_display_labels=plan.display_labels,
-        context=context,
+        context=context, plan=plan,
     )
     manuscript = render_descriptive_report_claims(manuscript, facts)
     expanded = expand_scientific_claim_tokens(
