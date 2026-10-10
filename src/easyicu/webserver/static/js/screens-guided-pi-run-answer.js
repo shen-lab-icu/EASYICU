@@ -193,7 +193,7 @@
         auroc, low, high, brier, records, patients, events,
         slope: block.calibration_status === 'estimated' && typeof block.calibration_slope === 'number'
           ? finite(block.calibration_slope) : null,
-        delong: block.auroc_ci_method === 'delong_logit_normal_95pct',
+        intervalMethod: String(block.auroc_ci_method || ''),
         analysisOnly: block.authority_scope === 'analysis_only',
         paperAuthorized: block.paper_authorization_allowed === true,
       };
@@ -300,7 +300,11 @@
       if (PREDICTION_TYPES.has(view.analysisType)) {
         const model = view.prediction;
         if (!model) return sentences;
-        const method = model.delong ? tr(', DeLong', '，DeLong') : '';
+        // How the host drew the interval, in the reader vocabulary's words;
+        // a method it has no name for is not named.
+        const methodName = window.AGENT_READER_VOCAB
+          ? window.AGENT_READER_VOCAB.value('auroc_ci_method', model.intervalMethod) : '';
+        const method = methodName ? tr(`, ${methodName}`, `，${methodName}`) : '';
         const slope = model.slope != null
           ? tr(`, calibration slope ${model.slope.toFixed(2)}`, `，校准斜率 ${model.slope.toFixed(2)}`) : '';
         // The sample size and event count go with the performance (TRIPOD);

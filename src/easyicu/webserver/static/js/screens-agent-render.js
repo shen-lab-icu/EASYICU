@@ -308,6 +308,8 @@
     if (typeof value === 'number') return artifactNumber(value, key);
     if (Array.isArray(value)) return `${value.length.toLocaleString()} ${t('items', '项')}`;
     if (typeof value === 'object') return `${Object.keys(value).length.toLocaleString()} ${t('fields', '字段')}`;
+    const named = window.AGENT_READER_VOCAB && window.AGENT_READER_VOCAB.value(key, value);
+    if (named) return named;
     // Result tables arrive as CSV strings; a plain number is displayed at the
     // same reading precision as a JSON number.  Codes and identifiers stay text.
     if (/^-?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?$/i.test(String(value).trim())
