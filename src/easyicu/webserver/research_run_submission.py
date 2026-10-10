@@ -32,7 +32,10 @@ from easyicu.webserver.pi_copilot.run_authority import (
     resumable_planner_checkpoint_job_id,
 )
 from easyicu.webserver.pi_copilot.workflow import build_research_workflow_snapshot
-from easyicu.webserver.research_launch_resume import _development_resume_launch_scope
+from easyicu.webserver.research_launch_resume import (
+    DEVELOPMENT_RESUME_PHASE_NOT_REPLAYED,
+    _development_resume_launch_scope,
+)
 from easyicu.webserver.research_plan_revision import load_prepared_plan_revision
 from easyicu.webserver.target_trial_card import target_trial_plans_on_data
 from easyicu.webserver.target_trial_setup import latest_target_trial_compile
@@ -40,6 +43,10 @@ from easyicu.webserver.target_trial_setup import latest_target_trial_compile
 
 _DEVELOPMENT_REVIEWED_EXECUTION_ENV = "EASYICU_DEVELOPMENT_REVIEWED_EXECUTION"
 _RESUME_CHECKPOINT_INVALID = "research_pipeline_development_resume_checkpoint_invalid"
+#: The refusals an automatic checkpoint seed answers by planning anew.
+_DECLINED_SEED_REFUSALS = frozenset(
+    {_RESUME_CHECKPOINT_INVALID, DEVELOPMENT_RESUME_PHASE_NOT_REPLAYED}
+)
 
 _NEXT_STEP_SUMMARIES = {
     "research_pipeline_manifest_required": (
@@ -135,6 +142,8 @@ class ResearchRunSubmissionReceipt(BaseModel):
     budget_mode: Literal["planner_canary", "full_reviewed"]
     planner_start_mode: PlannerStartMode
     resume_source_job_id: Optional[str] = None
+    #: The automatic checkpoint seed this run declined, and why.
+    resume_seed_rejected: Optional[Mapping[str, Any]] = None
     run_id_status: Literal["pending_pipeline_start"] = "pending_pipeline_start"
     audit_warning: Optional[Mapping[str, Any]] = None
 
@@ -464,16 +473,23 @@ def submit_research_run(
             except agent_pipeline_runs.ResearchPipelineRunError as exc:
                 # A seed only saves Provider work; it carries no authority. An
                 # automatic seed whose checkpoint chain the current contract no
-                # longer accepts cannot continue, so this attempt plans anew.
-                # An explicit checkpoint resume still reports the refusal.
+                # longer accepts, or whose run performed a phase a
+                # continuation does not perform again, cannot continue, so
+                # this attempt plans anew and says why.  An explicit
+                # checkpoint resume still reports the refusal.
                 if (
                     planner_start_mode != "auto"
-                    or exc.code != _RESUME_CHECKPOINT_INVALID
+                    or exc.code not in _DECLINED_SEED_REFUSALS
                 ):
                     raise
                 rejected_resume_seed = {
                     "source_job_id": development_resume_source_job_id,
                     "reason_code": str(exc.details.get("reason_code") or exc.code),
+                    **(
+                        {"phases": list(exc.details["phases"])}
+                        if exc.details.get("phases")
+                        else {}
+                    ),
                 }
                 development_resume_source_job_id = ""
             else:
@@ -619,6 +635,7 @@ def submit_research_run(
         budget_mode=budget_mode,
         planner_start_mode=planner_start_mode,
         resume_source_job_id=development_resume_source_job_id or None,
+        resume_seed_rejected=rejected_resume_seed,
         audit_warning=audit_warning,
     )
 
