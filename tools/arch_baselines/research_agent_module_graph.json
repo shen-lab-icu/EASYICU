@@ -9225,6 +9225,10 @@
     ],
     [
       "easyicu.research_agent.orchestration.progressive_planning",
+      "easyicu.research_agent.planning.question_substance_forms"
+    ],
+    [
+      "easyicu.research_agent.orchestration.progressive_planning",
       "easyicu.research_agent.schema"
     ],
     [
@@ -11437,6 +11441,10 @@
     ],
     [
       "easyicu.research_agent.planning.question_requirements",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.planning.question_substance_forms",
       "easyicu.research_agent.schema"
     ],
     [
@@ -14740,9 +14748,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3677,
+    "edge_count": 3679,
     "largest_scc_size": 0,
-    "module_count": 836,
+    "module_count": 837,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -15355,6 +15363,7 @@
     "easyicu.research_agent.planning.prompt_projection": "planning/prompt_projection.py",
     "easyicu.research_agent.planning.publication_readiness": "planning/publication_readiness.py",
     "easyicu.research_agent.planning.question_requirements": "planning/question_requirements.py",
+    "easyicu.research_agent.planning.question_substance_forms": "planning/question_substance_forms.py",
     "easyicu.research_agent.planning.replan_gate": "planning/replan_gate.py",
     "easyicu.research_agent.planning.requirement_coverage": "planning/requirement_coverage.py",
     "easyicu.research_agent.planning.robustness_contract": "planning/robustness_contract.py",

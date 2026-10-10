@@ -1095,6 +1095,7 @@ def _metadata_only_planning_coordinates(
         deterministic_intent,
         explicit_exposure_aggregation,
         named_study_concepts,
+        substance_forms,
     )
 
     intent = deterministic_intent(question)
@@ -1176,6 +1177,18 @@ def _metadata_only_planning_coordinates(
         "target_outcome": source_column(target_outcome),
         "primary_exposure": source_column(primary_exposure),
         "question_named_concepts": named_concepts,
+        # A substance the question names as given or as measured: the plan
+        # reads it in that form (planning.question_substance_forms).
+        "question_substance_forms": [
+            {
+                **form,
+                "concepts": [source_column(item) for item in form["concepts"]],
+                "other": [source_column(item) for item in form["other"]],
+                "evidence": _clean_text(form["evidence"], 120),
+            }
+            for form in substance_forms(question)
+            if _clean_text(form["evidence"], 120)
+        ],
         "primary_exposure_aggregation": (
             exposure_operation.aggregation if exposure_operation is not None else None
         ),

@@ -52,6 +52,13 @@ from ..planning.question_requirements import (
     write_question_requirements,
 )
 from ..planning.preplan_know_how import PlannerKnowHowBinding
+from ..planning.question_substance_forms import (
+    QUESTION_SUBSTANCE_FORMS_KEY,
+    SUBSTITUTED_REASON,
+    QuestionSubstanceFormError,
+    question_substance_forms,
+    substance_form_substitutions,
+)
 from ..planning.progressive_compiler import stated_population
 from ..planning import literature_design_authority as _literature_design
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
@@ -338,6 +345,35 @@ def registered_stop(finding: ValidationFinding) -> ValidationFinding:
     return finding
 
 
+def refuse_substance_form_substitution(
+    *, context: ResearchContext, plan: AnalysisPlan
+) -> None:
+    """Stop a plan whose primary exposure reads a named substance in its other form.
+
+    The question named albumin given, and the plan studies the serum level
+    (``planning.question_substance_forms``): it answers another question, so
+    planning stops with a typed reason rather than analyse it.
+    """
+
+    try:
+        forms = question_substance_forms(context)
+    except QuestionSubstanceFormError as exc:
+        raise ProgressivePlanCompileError(
+            f"progressive_{exc.reason_code}",
+            str(exc),
+            path=QUESTION_SUBSTANCE_FORMS_KEY,
+        ) from exc
+    substituted = substance_form_substitutions(
+        forms, plan=plan, relatives=concept_relatives(context)
+    )
+    if substituted:
+        raise ProgressivePlanCompileError(
+            f"progressive_{SUBSTITUTED_REASON}",
+            " ".join(item.message() for item in substituted),
+            path=QUESTION_SUBSTANCE_FORMS_KEY,
+        )
+
+
 def question_requirement_outcome(
     *,
     context: ResearchContext,
@@ -563,6 +599,7 @@ def run_progressive_planner(
         proposals = population_proposals_finding(population)
         if proposals is not None:
             finding_sink(proposals)
+    refuse_substance_form_substitution(context=context, plan=generated)
     # What the question asks beyond the design: an analysis the plan does not
     # answer, or cannot, refuses approval, never planning.
     for finding in question_requirement_outcome(
