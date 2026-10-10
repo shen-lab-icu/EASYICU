@@ -20,9 +20,9 @@ from easyicu.webserver.pi_copilot import service as service_module
 from easyicu.webserver.pi_copilot.contracts import PiCopilotError
 from easyicu.webserver.pi_copilot.service import PiCopilotService
 from easyicu.webserver.routes.pi_copilot import PiDataSourceAuthorizationRequest
-from tests.webserver.copilot.pi_copilot_contract_fixtures import (  # noqa: F401 - fixture
+from tests.webserver.copilot.pi_copilot_contract_fixtures import (
     FakeGateway,
-    study_state,
+    study_state as study_state,
 )
 
 PROJECT = "project-abandoned-folder-selection"
