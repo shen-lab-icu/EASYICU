@@ -46,6 +46,7 @@ from ..analysis_types import (
 )
 from ..baseline_requirements import baseline_requirement_projection
 from ..cohort_contract import event_status_reading
+from ..exposure_group_compile import exposure_group_contrast
 from ..cohort_eligibility import (
     ICU_LENGTH_OF_STAY_CONCEPT,
     eligibility_after_time_zero,
@@ -787,6 +788,38 @@ def _levels(context: ResearchContext, name: str) -> list[str]:
         level_spelling(value)
         for value in closed_planning_levels_for(name=name, variables=variables)
     ]
+
+
+def _stated_contrast(
+    context: ResearchContext,
+    exposure: str,
+    levels: Sequence[str],
+    *,
+    reference: int,
+    contrast: int,
+) -> tuple[int, int]:
+    """The exposure's reference and primary contrast, as indices into ``levels``.
+
+    A study that groups its exposure states both
+    (``exposure_group_compile.exposure_group_contrast``); a template keeps its
+    own (``reference``, ``contrast``) for any other exposure.  A grouped
+    exposure whose stated levels the template does not offer fails closed:
+    choosing others would compare groups the study does not compare.
+    """
+
+    stated = exposure_group_contrast(context, exposure)
+    if stated is None:
+        return reference, contrast
+    spelled = (level_spelling(stated.reference), level_spelling(stated.contrast))
+    if not all(level in levels for level in spelled):
+        raise FamilySpecError(
+            "family_spec_exposure_group_contrast_unavailable",
+            f"{exposure!r} groups the study's exposure, comparing level "
+            f"{spelled[1]} with level {spelled[0]}, but this template reads it "
+            + (f"with levels {list(levels)}." if levels else "as a continuous value."),
+            path="primary_exposure",
+        )
+    return list(levels).index(spelled[0]), list(levels).index(spelled[1])
 
 
 _BINARY_OUTCOME_DOMAINS = (["0", "1"], ["false", "true"])
@@ -1848,8 +1881,13 @@ def _family_spec_request(
         if name in variables and name != context.cohort.id_columns[0]
     ]
     cohort_fields = _typed_cohort_fields(context, required_primary_cohort_selection_mode)
-    reference_index = 0
-    contrast_index = len(exposure_levels) - 1 if exposure_levels else 0
+    reference_index, contrast_index = _stated_contrast(
+        context,
+        exposure,
+        exposure_levels,
+        reference=0,
+        contrast=len(exposure_levels) - 1 if exposure_levels else 0,
+    )
     occurrence = (
         _study_population_occurrence(context, exposure=exposure, outcome=outcome)
         if family_id == LANDMARK_CATEGORICAL_FAMILY_ID
@@ -2004,6 +2042,13 @@ def _build_descriptive_request(
         if name in variables and name != context.cohort.id_columns[0]
     ]
     cohort_fields = _typed_cohort_fields(context, required_primary_cohort_selection_mode)
+    reference_index, contrast_index = _stated_contrast(
+        context,
+        exposure,
+        exposure_levels,
+        reference=0,
+        contrast=len(exposure_levels) - 1,
+    )
     return FamilySpecRequest(
         family_id=DESCRIPTIVE_FAMILY_ID,
         analysis_type="descriptive_epidemiology",
@@ -2015,8 +2060,8 @@ def _build_descriptive_request(
         primary_exposure=exposure,
         exposure_kind="categorical",
         exposure_levels=exposure_levels,
-        reference_level_index=0,
-        primary_contrast_level_index=len(exposure_levels) - 1,
+        reference_level_index=reference_index,
+        primary_contrast_level_index=contrast_index,
         exposure_is_ordered=bool(
             variables[exposure].is_ordinal
             or str(getattr(variables[exposure].role, "value", variables[exposure].role)) == "ordinal_score"
@@ -2371,6 +2416,9 @@ def _build_survival_proposal_request(
     ]
     dependence = context_dependence_authority(context)
     cohort_fields = _typed_cohort_fields(context, required_primary_cohort_selection_mode)
+    reference_index, contrast_index = _stated_contrast(
+        context, exposure, _levels(context, exposure), reference=0, contrast=1
+    )
     return FamilySpecRequest(
         family_id=LANDMARK_SURVIVAL_FAMILY_ID,
         analysis_type="survival",
@@ -2382,8 +2430,8 @@ def _build_survival_proposal_request(
         primary_exposure=exposure,
         exposure_kind="categorical",
         exposure_levels=_levels(context, exposure),
-        reference_level_index=0,
-        primary_contrast_level_index=1,
+        reference_level_index=reference_index,
+        primary_contrast_level_index=contrast_index,
         exposure_is_ordered=False,
         exposure_companion_columns=[],
         outcome=outcome,
@@ -2747,6 +2795,13 @@ def _build_phenotyping_request(
         and str(getattr(variables[name].role, "value", variables[name].role)) == "other"
     ]
     required_label_keys = [name for name in dict.fromkeys([exposure, outcome]) if name in variables]
+    reference_index, contrast_index = _stated_contrast(
+        context,
+        exposure,
+        exposure_levels,
+        reference=0,
+        contrast=max(len(exposure_levels) - 1, 0),
+    )
     cohort_fields = _typed_cohort_fields(context, required_primary_cohort_selection_mode)
     return FamilySpecRequest(
         family_id=PHENOTYPING_FAMILY_ID,
@@ -2759,8 +2814,8 @@ def _build_phenotyping_request(
         primary_exposure=exposure,
         exposure_kind="categorical" if exposure else "none",
         exposure_levels=exposure_levels,
-        reference_level_index=0,
-        primary_contrast_level_index=max(len(exposure_levels) - 1, 0),
+        reference_level_index=reference_index,
+        primary_contrast_level_index=contrast_index,
         exposure_is_ordered=False,
         outcome=outcome,
         outcome_levels=outcome_levels,

@@ -215,6 +215,13 @@ from .orchestration.instance_lifecycle import (
     PipelineInstanceLifecycleLease,
     pipeline_instance_lifecycle as _pipeline_instance_lifecycle,
 )
+from .orchestration.exposure_grouping_phase import (
+    bound_context_on,
+    register_exposure_groupings_record,
+    resumed_cohort_is_the_sources_copy,
+    run_exposure_grouping_phase,
+)
+from .orchestration.plan_provider_clients import plan_provider_clients
 from .orchestration.human_review_checkpoint import (
     HumanReviewCheckpoint,
     HumanReviewCheckpointError,
@@ -3149,6 +3156,22 @@ class ResearchAgentPipeline:
         context_path = run_dir / "research_context.json"
         from .orchestration.reviewed_requirements import bind_reviewed_requirements
 
+        # Built before the first Provider call the phase can make.
+        provider_clients = plan_provider_clients(
+            llm=llm,
+            run_id=run_id,
+            run_dir=run_dir,
+            reproducibility_envelope=self._enable_reproducibility_envelope,
+            llm_seed=self._llm_seed,
+            envelope_include_previews=self._envelope_include_previews,
+            provider_hard_stop=self._provider_hard_stop,
+            cost_tracking=self._enable_cost_tracking,
+            cost_price_table=self._cost_price_table,
+        )
+        role_resolver = provider_clients.role_resolver
+        cost_meter = provider_clients.cost_meter
+        repro_envelope = provider_clients.repro_envelope
+
         if resume_context_evidence_path is not None:
             # Resume context authority is the digest-verified evidence copy,
             # never a newly built context from the incoming call. Scientific
@@ -3204,6 +3227,33 @@ class ResearchAgentPipeline:
                 context_kwargs["trajectory_binding"] = trajectory_binding
             context = builder(**context_kwargs)
             context = bind_reviewed_requirements(context, self._config)
+            # A fixed skill plans without the Planner, so it is not asked.
+            if (
+                self._config.enable_exposure_grouping
+                and builder is build_research_context
+                and skill_obj is None
+            ):
+                grouping = run_exposure_grouping_phase(
+                    context=context,
+                    cohort_path=cohort_path,
+                    run_dir=run_dir,
+                    planner=budgeted_role_client(
+                        role_resolver,
+                        "planner",
+                        "planner_exposure_grouping",
+                        limit_tokens=self._max_prompt_tokens_per_call,
+                    ),
+                    rebuild_context=functools.partial(
+                        bound_context_on, builder, context_kwargs, self._config
+                    ),
+                    capability_review_pending=(
+                        self._capability_runtime.stops_before_provider_calls()
+                    ),
+                    trajectory_staged=trajectory_binding is not None,
+                    emit_progress=functools.partial(emit_progress, run_id=run_id),
+                    candidate=self._config.bound_exposure_groupings,
+                )
+                context = grouping.context
             context_path.write_text(
                 context.model_dump_json(indent=2),
                 encoding="utf-8",
@@ -3230,6 +3280,7 @@ class ResearchAgentPipeline:
                 producer="pipeline",
                 generation_mode="system",
             )
+        register_exposure_groupings_record(evidence, run_dir)
         register_context_numeric_claims(evidence, context=context)
         capability_finding = self._capability_runtime.prepare(
             run_dir=run_dir,
@@ -3617,75 +3668,6 @@ class ResearchAgentPipeline:
         prompt_version = PROMPT_PACK_VERSION
         prompt_files = prompt_pack_files()
 
-        cost_meter: Optional[CostMeter] = None
-        repro_envelope: Optional[ReproEnvelope] = None
-        if self._enable_reproducibility_envelope:
-            repro_envelope = ReproEnvelope(
-                run_id=run_id,
-                seed=self._llm_seed,
-                include_previews=self._envelope_include_previews,
-            )
-        if repro_envelope is not None:
-            base_role_resolver = envelope_role_resolver(
-                llm,
-                repro_envelope,
-                seed=self._llm_seed,
-            )
-        else:
-
-            def base_role_resolver(role: str):
-                return resolve_role_client(llm, role)
-
-        if self._provider_hard_stop is not None:
-
-            def stopped_role_resolver(role: str):
-                base = base_role_resolver(role)
-                if base is None or isinstance(base, HardStopClient):
-                    return base
-                return HardStopClient(
-                    base,
-                    role=role,
-                    task=self._provider_hard_stop,
-                )
-
-        else:
-            stopped_role_resolver = base_role_resolver
-
-        if self._enable_cost_tracking:
-            cost_meter = (
-                CostMeter(
-                    price_table=(
-                        dict(self._cost_price_table) if self._cost_price_table else None
-                    ),
-                    runtime_dir=run_dir / ".runtime",
-                )
-                if self._cost_price_table is not None
-                else CostMeter(runtime_dir=run_dir / ".runtime")
-            )
-
-            # Order: envelope -> hard stop -> meter. The hard-stop wrapper
-            # reserves every raw transport retry before delivery; the meter
-            # receives usage from that same call for the normal run manifest.
-            class _RoleResolverShim:
-                name = "role_resolver_shim"
-
-                def __init__(self, resolver):
-                    self._resolver = resolver
-
-                def for_role(self, role: str):
-                    return self._resolver(role)
-
-                def complete(self, *args, **kwargs):  # pragma: no cover
-                    raise RuntimeError(
-                        "RoleResolverShim is a dispatcher; call for_role() first."
-                    )
-
-            role_resolver = metered_role_resolver(
-                _RoleResolverShim(stopped_role_resolver),
-                cost_meter,
-            )
-        else:
-            role_resolver = stopped_role_resolver
         generation = self._generate_or_resume_plan(
             agent_context=agent_context,
             allowed_literature_citation_keys=allowed_literature_citation_keys,
@@ -4706,29 +4688,13 @@ class ResearchAgentPipeline:
                             raise MaterializedMetadataError(
                                 "declared source authority was not verified"
                             )
-                        staged_binding = staged_authority.sidecar.files[0]
-                        source_binding = source_authority.sidecar.files[0]
-                        if (
-                            staged_authority.authority.cohort_sha256
-                            != source_authority.authority.cohort_sha256
-                            or staged_authority.authority.cohort_size
-                            != source_authority.authority.cohort_size
-                            or staged_authority.authority.cohort_rows
-                            != source_authority.authority.cohort_rows
-                            or staged_authority.authority.cohort_columns
-                            != source_authority.authority.cohort_columns
-                            or staged_authority.authority.cohort_schema_sha256
-                            != source_authority.authority.cohort_schema_sha256
-                            or staged_authority.authority.row_identity_sha256
-                            != source_authority.authority.row_identity_sha256
-                            or staged_binding.identity_column
-                            != source_binding.identity_column
-                            or staged_binding.time_coordinates
-                            != source_binding.time_coordinates
-                            or staged_binding.columns != source_binding.columns
+                        # The source's exact copy, or that copy restaged with
+                        # the exposure groups its study formed.
+                        if not resumed_cohort_is_the_sources_copy(
+                            staged_authority, source_authority
                         ):
                             raise MaterializedMetadataError(
-                                "resume cohort is not an exact typed copy of the "
+                                "resume cohort is not a typed copy of the "
                                 "declared source authority"
                             )
                     # Dictionary identity is part of the interrupted run's

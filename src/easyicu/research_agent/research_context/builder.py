@@ -17,7 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 import logging
 import re
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -43,7 +43,17 @@ from ..schema import (
     UserPreferences,
     VariableRole,
 )
+from ..contracts.exposure_group_rules import (
+    EXPOSURE_GROUP_CONTRASTS_KEY,
+    EXPOSURE_GROUP_ORDINAL_TRANSFORM_ID,
+    EXPOSURE_GROUP_TRANSFORMS,
+    ExposureGroupRuleError,
+    read_group_contrast,
+    read_grouping_rules,
+    read_planned_group_columns,
+)
 from ..intake.materialized_metadata import (
+    EXPOSURE_GROUP_STAGE_PRODUCER,
     FIRST_ICU_STAY_RESTRICTION_SCHEMA,
     MaterializedMetadataError,
     VerifiedMaterializedCohortAuthority,
@@ -75,6 +85,7 @@ from .typed import (
     materialized_research_inputs_from_authority,
     project_research_context_variables,
 )
+from easyicu.concept.metadata_projection import CATEGORICAL_UNIT
 from easyicu.outcome_availability import (
     StatedHorizon,
     fixed_horizon_mortality_endpoint,
@@ -98,6 +109,68 @@ from ..trajectory.contract import infer_fixed_window_trajectory_metadata
 _observed_domain = observed_domain_for_series
 
 
+def _planned_exposure_groups(
+    authority: Mapping[str, Any], frame: pd.DataFrame
+) -> Dict[str, Any]:
+    """The exposure groupings a metadata-only input declares, read strictly.
+
+    The study's groupings are declared on the input before its data are
+    prepared (``orchestration.exposure_grouping_phase``); nothing when none
+    is.
+    """
+
+    planned_groups = authority.get("exposure_groups")
+    if planned_groups is None:
+        return {}
+    try:
+        columns = read_planned_group_columns(planned_groups)
+    except ExposureGroupRuleError as exc:
+        raise MaterializedMetadataError(
+            f"metadata-only exposure groups are invalid: {exc}"
+        ) from exc
+    if len(frame) or any(item.variable not in frame.columns for item in columns):
+        raise MaterializedMetadataError(
+            "metadata-only exposure groups name a column the planning input "
+            "does not hold empty"
+        )
+    return {"exposure_groups": [item.record() for item in columns]}
+
+
+def _exposure_group_contrasts(
+    verified: Optional[VerifiedMaterializedCohortAuthority],
+    planning_catalog_provenance: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Each grouped exposure's reference and contrast, from its sealed declaration.
+
+    A staged cohort's receipts, which its authority loader proved, or a
+    metadata-only input's planned columns, read strictly above.  Nothing for
+    a cohort that forms no exposure group.
+    """
+
+    contrasts: List[Dict[str, Any]] = []
+    if (
+        verified is not None
+        and verified.authority.producer == EXPOSURE_GROUP_STAGE_PRODUCER
+    ):
+        receipts = verified.authority.producer_parameters.get("groupings") or ()
+        for receipt in receipts:
+            try:
+                rules = read_grouping_rules(receipt["parameters"])
+                contrast = read_group_contrast(
+                    receipt["compared"],
+                    variable=str(receipt["variable"]),
+                    groups=len(rules.groups),
+                )
+            except (ExposureGroupRuleError, KeyError, TypeError) as exc:
+                raise MaterializedMetadataError(
+                    f"a staged exposure grouping states no comparison: {exc}"
+                ) from exc
+            contrasts.append(contrast.record())
+    for item in planning_catalog_provenance.get("exposure_groups") or ():
+        contrasts.append({"variable": item["variable"], **item["compared"]})
+    return {EXPOSURE_GROUP_CONTRASTS_KEY: contrasts} if contrasts else {}
+
+
 def _planning_catalog_provenance(frame: pd.DataFrame) -> Dict[str, Any]:
     authority = frame.attrs.get("easyicu_planning_authority")
     if not isinstance(authority, dict):
@@ -110,6 +183,7 @@ def _planning_catalog_provenance(frame: pd.DataFrame) -> Dict[str, Any]:
     projected = {
         "evidence_stage": "metadata_only_planning",
         "patient_rows_read": False,
+        **_planned_exposure_groups(authority, frame),
     }
     first_stay = authority.get("first_icu_stay_restriction")
     if first_stay is not None:
@@ -533,7 +607,95 @@ def _apply_materialized_column_metadata(
                     # expose allowed values without promoting nominal data.
                     "is_ordinal": descriptor.is_ordinal,
                     "ordinal_levels": descriptor.ordinal_levels,
+                    # A study's exposure grouping states its scale, which its
+                    # column's transform carries; a nominal one has none.
+                    **_exposure_group_semantics(binding),
                     "source_files": source_files,
+                }
+            )
+        )
+    return projected
+
+
+def _exposure_group_semantics(binding: Any) -> Dict[str, Any]:
+    """What a study's exposure grouping column is; nothing for another column."""
+
+    transform = binding.representation_transform
+    if transform not in EXPOSURE_GROUP_TRANSFORMS:
+        return {}
+    bounds = binding.metadata.analysis_plausibility_range
+    return _exposure_group_scale(
+        transform, int(bounds.maximum) if bounds is not None else None
+    )
+
+
+def _exposure_group_scale(transform: str, levels: Optional[int]) -> Dict[str, Any]:
+    """A grouping column's scale: codes ``1`` to ``levels``, along it or not.
+
+    Its levels are codes of the groups the study stated, so it is neither a
+    measurement nor a score: its scale is the one its transform carries, and
+    it is summarized as a category.
+    """
+
+    ordinal = transform == EXPOSURE_GROUP_ORDINAL_TRANSFORM_ID and levels is not None
+    aggregations = aggregation_rule_for(
+        VariableRole.OTHER,
+        VariableKind.ORDINAL if ordinal else VariableKind.CATEGORICAL,
+    )
+    return {
+        "role": VariableRole.OTHER,
+        "allowed_aggregations": aggregations,
+        "aggregation_default": aggregations[0],
+        "is_ordinal": ordinal,
+        "ordinal_levels": (
+            list(range(1, levels + 1)) if ordinal and levels is not None else None
+        ),
+    }
+
+
+def _apply_planned_exposure_groups(
+    *,
+    descriptors: Sequence[ConceptDescriptor],
+    planned: Sequence[Dict[str, Any]],
+) -> List[ConceptDescriptor]:
+    """Type each declared group column as the prepared data's authority will.
+
+    The same physical facts the typed stage's binding gives the column
+    (``intake.materialized_metadata``): level codes ``1`` to ``k`` in the
+    category unit, read over the grouped concept's window.
+    """
+
+    declared = {str(item["variable"]): item for item in planned}
+    projected: List[ConceptDescriptor] = []
+    for descriptor in descriptors:
+        item = declared.get(descriptor.name)
+        if item is None:
+            projected.append(descriptor)
+            continue
+        window = item["window"]
+        projected.append(
+            descriptor.model_copy(
+                update={
+                    "unit": CATEGORICAL_UNIT,
+                    "valid_range": [1.0, float(item["levels"])],
+                    "source_concept": descriptor.name,
+                    "derived_from_concepts": [item["concept"]],
+                    "source_tables": [],
+                    "item_ids": [],
+                    "unit_normalization": item["transform"],
+                    "description": item["description"],
+                    **(
+                        {
+                            "analysis_window": (
+                                f"icu_admission[{window['start_hours']:g},"
+                                f"{window['end_hours']:g}]h"
+                            ),
+                            "analysis_window_role": "outer_observation_window",
+                        }
+                        if window is not None
+                        else {}
+                    ),
+                    **_exposure_group_scale(item["transform"], int(item["levels"])),
                 }
             )
         )
@@ -789,6 +951,7 @@ def build_research_context(
             **episode.provenance,
             **granularity.provenance(),
             **planning_catalog_provenance,
+            **_exposure_group_contrasts(verified_cohort, planning_catalog_provenance),
             **(
                 {"replacement_row_identity": dict(typed_row_identity)}
                 if typed_row_identity is not None
@@ -871,6 +1034,11 @@ def build_research_context(
         descriptors = _apply_legacy_materialization_window(
             descriptors=descriptors,
             provenance=legacy_materialization_provenance,
+        )
+    elif planning_catalog_provenance.get("exposure_groups"):
+        descriptors = _apply_planned_exposure_groups(
+            descriptors=descriptors,
+            planned=planning_catalog_provenance["exposure_groups"],
         )
     descriptors = compile_wide_representation_semantics(descriptors)
     prefs_obj = (

@@ -455,8 +455,26 @@ def _is_positive_only_boolean(series: pd.Series) -> bool:
     )
 
 
+#: The summaries the host materializes a concept measured over time as, each
+#: over the study's window, in column order (:func:`summary_column_name`).
+EVENT_SUMMARIES = ("max", "min", "mean", "first")
+
+
+def summary_column_name(concept: str, summary: str) -> str:
+    """The column the host materializes ``summary`` of ``concept`` as.
+
+    The one naming of a concept's window summaries: the materializer writes
+    them under these names, and a plan made before the data are prepared
+    reads them under the same ones.
+    """
+
+    if summary not in EVENT_SUMMARIES:
+        raise ValueError(f"the host materializes no {summary!r} summary")
+    return f"{concept}_{summary}"
+
+
 # Summary suffixes emitted by `_summarize_timeseries` for a time-series concept.
-_EVENT_SUMMARY_SUFFIXES = ("_max", "_min", "_mean", "_first")
+_EVENT_SUMMARY_SUFFIXES = tuple(f"_{summary}" for summary in EVENT_SUMMARIES)
 _SEMANTIC_PROVENANCE_KEYS = (
     "schema_version",
     "source_mode",
@@ -1074,9 +1092,9 @@ def _summarize_timeseries_with_representation(
     out = grp.agg(["max", "min", "mean", "count"]).reset_index()
     out.columns = [
         ID_COL,
-        f"{concept}_max",
-        f"{concept}_min",
-        f"{concept}_mean",
+        summary_column_name(concept, "max"),
+        summary_column_name(concept, "min"),
+        summary_column_name(concept, "mean"),
         f"{concept}_n",
     ]
     first = (
@@ -1085,7 +1103,7 @@ def _summarize_timeseries_with_representation(
         .apply(_first_nonnull)
         .reset_index()
     )
-    first.columns = [ID_COL, f"{concept}_first"]
+    first.columns = [ID_COL, summary_column_name(concept, "first")]
     out = out.merge(first, on=ID_COL, how="left")
     out[f"{concept}_measured"] = (out[f"{concept}_n"].fillna(0) > 0).astype(int)
     if not timing.empty:

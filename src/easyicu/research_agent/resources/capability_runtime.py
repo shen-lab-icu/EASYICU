@@ -116,6 +116,15 @@ class CapabilityWorkflowRuntime:
         )
         return coordinate
 
+    def stops_before_provider_calls(self) -> bool:
+        """Whether :meth:`prepare` stops the run before any Provider call."""
+
+        return (
+            self.enabled
+            and self.request is not None
+            and (self.activation is None or self.approval is None)
+        )
+
     def prepare(
         self,
         *,

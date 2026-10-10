@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from ..contracts.ordered_stratified import ordered_stratified_script_findings
+from .nominal_groups import nominal_group_findings
 from ..schema import (
     AnalysisStep,
     ConceptDescriptor,
@@ -525,6 +526,15 @@ class AnalysisPatternAuditor:
             registered_missingness_percentage_findings(
                 step=step,
                 script_text=script_text,
+            )
+        )
+        findings.extend(
+            nominal_group_findings(
+                context=context,
+                step=step,
+                tree=tree,
+                alias_map=alias_map,
+                validator=self.name,
             )
         )
         if step is not None and step.planned_analysis_role == "primary":

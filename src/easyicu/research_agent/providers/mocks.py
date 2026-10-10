@@ -271,6 +271,11 @@ class PatternScriptedMockLLMClient:
         return str(response)
 
 
+#: The words that open the list of values an exposure grouping request shows
+#: (``agents.exposure_grouping_planner.exposure_grouping_messages``).
+_EXPOSURE_GROUPING_REQUEST = "Values the input holds that a grouping can read"
+
+
 def _contextual_mock_response(
     *,
     context: Optional[ResearchContext],
@@ -279,6 +284,9 @@ def _contextual_mock_response(
 ) -> str:
     """Return the built-in contextual mock response without a callback seam."""
 
+    if _EXPOSURE_GROUPING_REQUEST in "\n\n".join(user_messages):
+        # The offline graph forms no exposure grouping.
+        return '{"groupings": []}'
     if context is None:
         return _mock_generic_response(last_user)
 

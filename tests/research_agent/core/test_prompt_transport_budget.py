@@ -628,6 +628,7 @@ def test_the_live_planner_consumers_are_all_declared() -> None:
     assert set(declared_consumers_for_role("planner")) == {
         "cohort_extraction",
         "legacy_model_roster_migration",
+        "planner_exposure_grouping",
         "planner_plan_generation",
     }
 

@@ -131,6 +131,18 @@ def test_a_nominal_grouping_by_two_summaries_states_its_levels() -> None:
     assert grouping_labels(glucose)["gU"] == "no glucose on day one"
 
 
+def test_a_nominal_grouping_codes_its_groups_in_the_order_stated() -> None:
+    # Listing is the order of matching; a nominal grouping has no other.
+    stated = [
+        _group("g2", "hyperglycaemia only", _rule("max", ">", 180, "mg/dL")),
+        _group("g1", "hypoglycaemia", _rule("min", "<", 70, "mg/dL")),
+        _group("g3", "normoglycaemia", "otherwise"),
+    ]
+    (glucose,) = _read(_glucose(groups=stated)).groupings
+
+    assert grouping_levels(glucose) == ("g2", "g1", "g3", "gU")
+
+
 def test_a_study_states_a_coarse_and_a_fine_ordinal_grouping_of_one_value() -> None:
     coarse, fine = _read(_coarse_bmi(), _fine_bmi()).groupings
 
@@ -381,6 +393,18 @@ def test_the_host_reads_every_rule_and_declares_one_variable_per_grouping() -> N
     assert record["derivation"]["unmeasured"] == "exclude"
 
 
+def test_a_grouping_compares_two_of_its_groups_never_the_unmeasured_level() -> None:
+    context = _context(_lab("glu_min", "min"), _lab("glu_max", "max"), _BMI)
+
+    glucose, coarse = _compiled(context, _glucose(), _coarse_bmi())
+    (last_is_reference,) = _compiled(context, _glucose(reference="g3"))
+
+    # Unstated: the first and the last group in code order, not gU (code 4).
+    assert glucose.record()["compared"] == {"reference": 1, "contrast": 3}
+    assert coarse.record()["compared"] == {"reference": 2, "contrast": 4}
+    assert last_is_reference.record()["compared"] == {"reference": 3, "contrast": 2}
+
+
 def test_the_derivation_digest_follows_the_levels_not_the_wording() -> None:
     context = _context(_BMI)
     (stated,) = _compiled(context, _coarse_bmi())
@@ -472,6 +496,7 @@ def test_a_once_per_stay_rule_is_not_read_from_a_windowed_summary() -> None:
             _group("g1", "low", _rule("value", "<", 70, "mg/dL")),
             _group("g2", "rest", "otherwise"),
         ],
+        unmeasured={"handling": "exclude"},
     )
 
     (grouping,) = _compiled(_context(_lab("glu_first", "first")), windowless)

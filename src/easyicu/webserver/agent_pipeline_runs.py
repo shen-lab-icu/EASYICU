@@ -77,6 +77,10 @@ from easyicu.research_agent.planning.baseline_requirements import (
     AcceptedBaselineRequirements,
     candidate_baseline_requirements,
 )
+from easyicu.research_agent.orchestration.exposure_grouping_phase import (
+    PlanningRunGroupings,
+    planning_run_groupings,
+)
 from easyicu.research_agent.schema import TimeWindow
 from easyicu.research_agent.research_context.export_selection import SelectionBasis
 from easyicu.research_agent.reporting.system_validation_report import (
@@ -674,6 +678,52 @@ _PLANNING_STOP_SENTENCES = {
         "reads as neither days nor hours. Planning stopped before the Planner "
         "was called, and no analysis was run. Prepare the export again with the "
         "unit recorded."
+    ),
+    # A study's exposure groupings (orchestration.exposure_grouping_phase).
+    "exposure_group_requires_extraction": (
+        "The study groups its exposure by a value the prepared data do not "
+        "hold, so planning stopped before the plan's outline and no analysis "
+        "was run. Prepare data that hold the value, or change the grouping in "
+        "the question; then generate the plan again."
+    ),
+    "exposure_group_not_applied": (
+        "A grouping the study states cannot be formed as stated on this data; "
+        "the details name the grouping and why. Planning stopped before the "
+        "plan's outline, and no analysis was run. Change the grouping in the "
+        "question, then generate the plan again."
+    ),
+    "exposure_grouping_unanswered": (
+        "The model did not state the study's exposure grouping in a form "
+        "EasyICU can read within the allowed retries, so planning stopped and "
+        "no analysis was run. Generate the plan again; if it stops again, "
+        "state in the question how the exposure is grouped."
+    ),
+    "exposure_group_variable_unbound": (
+        "EasyICU formed the study's exposure groups, but the research context "
+        "built on them holds no grouping variable. This is a fault in EasyICU, "
+        "not in the study. Planning stopped, and no analysis was run. Generate "
+        "the plan again; if it stops again, report it with the run record."
+    ),
+    "exposure_group_candidate_drift": (
+        "EasyICU formed the approved plan's exposure groups again on this run's "
+        "data, and they read other values than at approval: the data may have "
+        "been prepared again, or EasyICU's rules may have changed. EasyICU runs "
+        "only the grouping that was approved, so planning stopped and no "
+        "analysis was run. Generate the plan again, then review and approve it."
+    ),
+    "exposure_group_level_empty": (
+        "A group the study states holds no ICU stay on this data, so the plan "
+        "would compare a group that does not exist; EasyICU never drops or "
+        "merges a group to compare the others. Planning stopped, and no "
+        "analysis was run. Change the grouping thresholds in the question, then "
+        "generate the plan again."
+    ),
+    "progressive_family_spec_exposure_group_contrast_unavailable": (
+        "The analysis template cannot compare the groups the study states: its "
+        "reference or contrast is not among the levels the template offers. "
+        "Planning stopped, and no analysis was run. Change the reference or "
+        "contrast in the question, or ask for an analysis that can compare "
+        "these groups; then generate the plan again."
     ),
 }
 
@@ -4702,9 +4752,62 @@ class _CandidatePlanMaterializationAuthority:
     baseline_requirements: Optional[AcceptedBaselineRequirements] = None
     population_requirements: Optional[PlanPopulationRequirements] = None
     analysis_inputs: Optional[AcceptedAnalysisInputs] = None
+    # The exposure groupings the candidate formed, when its run was asked.
+    exposure_groupings: Optional[PlanningRunGroupings] = None
     # The accepted steps that cannot run without patient groups
     # (``contracts.patient_grouping_need.steps_needing_patient_groups``).
     patient_grouping_steps: tuple[str, ...] = ()
+
+
+def _candidate_analysis_inputs(
+    authority: _CandidatePlanMaterializationAuthority,
+) -> tuple[str, ...]:
+    """The concepts a run following ``authority`` prepares for its analysis.
+
+    The accepted candidate's primary-analysis inputs, and the values its
+    exposure groups are formed from.
+    """
+
+    return (
+        *(
+            authority.analysis_inputs.concepts
+            if authority.analysis_inputs is not None
+            else ()
+        ),
+        *(
+            authority.exposure_groupings.concepts
+            if authority.exposure_groupings is not None
+            else ()
+        ),
+    )
+
+
+def _exposure_grouping_config(
+    *,
+    metadata_only_planning: bool,
+    development_continuation: bool,
+    candidate_groupings: Optional[PlanningRunGroupings],
+) -> Dict[str, Any]:
+    """Whether a run asks for the study's exposure groupings, and those it binds.
+
+    A planning run asks; the run that follows an accepted candidate forms the
+    candidate's groupings again without asking.  A development continuation
+    is not asked: its replayed outline is the source run's.
+    """
+
+    return {
+        "enable_exposure_grouping": (
+            True
+            if (metadata_only_planning and not development_continuation)
+            or candidate_groupings is not None
+            else None
+        ),
+        "bound_exposure_groupings": (
+            candidate_groupings.candidate.model_dump(mode="json")
+            if candidate_groupings is not None
+            else None
+        ),
+    }
 
 
 def _candidate_plan_contract(
@@ -4838,6 +4941,17 @@ def _load_candidate_plan_materialization_authority(
         raise ResearchPipelineRunError(
             "candidate_plan_materialization_authority_invalid",
             "The candidate plan input authority is not valid JSON.",
+        ) from exc
+    try:
+        # Its groups are declared on the input the capsule sealed.
+        exposure_groupings = planning_run_groupings(
+            inner_run, cohort_sha256=_clean_text(capsule.get("cohort_sha256"), 80)
+        )
+    except (OSError, ValueError) as exc:
+        raise ResearchPipelineRunError(
+            "candidate_plan_materialization_authority_invalid",
+            "The candidate plan's exposure groupings do not match its sealed input.",
+            details={"field": "exposure_groupings", "cause": str(exc)},
         ) from exc
     identity = capsule.get("scientific_identity")
     identity = identity if isinstance(identity, Mapping) else {}
@@ -4997,7 +5111,11 @@ def _load_candidate_plan_materialization_authority(
             plan=plan,
             source_plan_sha256=parsed_review.plan_sha256,
             selected_concepts=tuple(selected_concepts),
-            catalog_columns=tuple(catalog_columns),
+            # A table may be grouped by the study's exposure groups.
+            catalog_columns=(
+                *catalog_columns,
+                *(exposure_groupings.variables if exposure_groupings else ()),
+            ),
         )
     except (TypeError, ValueError) as exc:
         raise ResearchPipelineRunError(
@@ -5037,6 +5155,7 @@ def _load_candidate_plan_materialization_authority(
         baseline_requirements=baseline_requirements,
         population_requirements=population_requirements,
         analysis_inputs=analysis_inputs,
+        exposure_groupings=exposure_groupings,
         patient_grouping_steps=steps_needing_patient_groups(plan),
     )
 
@@ -5905,11 +6024,7 @@ def make_research_pipeline_run_runner(
                     covariates=covariates,
                     sensitivity_specs=sensitivity_specs,
                     additional_outcomes=candidate_outcome_concepts,
-                    analysis_inputs=(
-                        bound_analysis_inputs.concepts
-                        if bound_analysis_inputs is not None
-                        else ()
-                    ),
+                    analysis_inputs=_candidate_analysis_inputs(candidate_authority),
                 )
                 bound_plan_revision_contract = candidate_authority.contract
                 if patient_grouping is None:
@@ -6601,6 +6716,15 @@ def make_research_pipeline_run_runner(
                     runtime_projection.bound_target_trial
                     if runtime_projection is not None
                     else None
+                ),
+                **_exposure_grouping_config(
+                    metadata_only_planning=metadata_only_planning,
+                    development_continuation=development_resume_binding is not None,
+                    candidate_groupings=(
+                        candidate_authority.exposure_groupings
+                        if candidate_authority is not None
+                        else None
+                    ),
                 ),
                 # Live PubMed is frozen by the selected additive profile, not
                 # passed as an ad-hoc override. When an accepted Idea handoff

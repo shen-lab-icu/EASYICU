@@ -11,16 +11,19 @@ which column a summary is read from and derives the group column
 The groups are matched in the order they are listed: a stay belongs to the
 first group whose rule it meets, and ``otherwise`` takes every measured stay
 no earlier group took.  Listing order is a priority, not a scale.  An ordinal
-grouping numbers its groups along its scale, ``g1`` lowest, so the level codes
-sort in scale order wherever levels are sorted by name.  A stay with no
+grouping numbers its groups along its scale, ``g1`` lowest, and its level
+codes follow its scale; a nominal grouping's codes follow the order its
+groups are stated (:func:`grouping_levels`).  A stay with no
 measurement of the concept in the window meets no rule and is never
 ``otherwise``: ``unmeasured`` says whether such stays form their own group,
-which is not a level of the scale, or leave the study.
+which is not a level of any scale, or leave the study.  So an ordinal
+grouping's unmeasured stays leave it: its levels are its scale.
 
 Each group is a level the analysis models by name, so a reference is a group
-the study states, never whichever group comes first, and so is the group the
-primary estimate compares with it (``contrast``).  A nominal grouping has no
-order, so nothing may read it as a trend.
+the study states, and so is the group the primary estimate compares with it
+(``contrast``); unstated, they are the first and the last group in code
+order, never the unmeasured level.  A nominal grouping has no order, so
+nothing may read it as a trend.
 
 A window is hours after ICU admission, ``[start_hours, end_hours)``.  A value
 recorded once per stay, such as body mass index, has none, and its rules read
@@ -183,6 +186,12 @@ class ExposureGroupSpec(BaseModel):
         _reachable(self)
         if self.scale == "ordinal":
             _numbered_along_the_scale(self)
+            if isinstance(self.unmeasured, UnmeasuredOwnGroup):
+                raise ValueError(
+                    "exposure_group_ordinal_unmeasured_own_group: the unmeasured "
+                    "stays of an ordinal grouping are on no level of its scale; "
+                    "let them leave the study, or group them as nominal"
+                )
         return self
 
 
@@ -378,9 +387,15 @@ def unquoted_groupings(
 
 
 def grouping_levels(spec: ExposureGroupSpec) -> tuple[str, ...]:
-    """The level codes of the grouping's variable, the scale's first."""
+    """The grouping's level ids in the order of their codes, ``1`` first.
 
-    levels = tuple(sorted(group.id for group in spec.groups))
+    A nominal grouping's groups take their codes in the order the study
+    states them; an ordinal grouping's along its scale, which its ids are
+    numbered along.  The unmeasured level, when it is one, is last.
+    """
+
+    stated = tuple(group.id for group in spec.groups)
+    levels = tuple(sorted(stated)) if spec.scale == "ordinal" else stated
     if isinstance(spec.unmeasured, UnmeasuredOwnGroup):
         return (*levels, UNMEASURED_GROUP_ID)
     return levels

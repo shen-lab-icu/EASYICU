@@ -177,6 +177,14 @@ PROMPT_TRANSPORT_BUDGETS: Mapping[str, PromptConsumerBudget] = {
             ),
         ),
         PromptConsumerBudget(
+            consumer="planner_exposure_grouping",
+            role="planner",
+            rationale=(
+                "The Planner's exposure-grouping request before the outline: "
+                "the study's words and the values a grouping can read."
+            ),
+        ),
+        PromptConsumerBudget(
             consumer="coder_initial_generation",
             role="coder",
             rationale=(

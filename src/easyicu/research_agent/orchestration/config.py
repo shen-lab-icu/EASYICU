@@ -34,6 +34,19 @@ class PipelineConfigRecoveryError(ValueError):
     """A pipeline configuration cannot be persisted for exact recovery."""
 
 
+#: Fields added after configs were archived: absent (``None``), they leave
+#: an archived config's digest unchanged.
+_ADDITIVE_FIELDS = frozenset(
+    {
+        "bound_analysis_inputs",
+        "bound_baseline_requirements",
+        "bound_exposure_groupings",
+        "bound_population_requirements",
+        "bound_target_trial",
+        "enable_exposure_grouping",
+    }
+)
+
 _RECOVERY_BLOCKED_FIELDS = frozenset(
     {
         "pubmed_api_key",
@@ -318,6 +331,12 @@ class PipelineConfig:
     # A diagnostic Planner-only run may persist and expose the exact review
     # checkpoint, but no caller may resume it into Execute.
     planner_only: bool = False
+    # Opt-in: before the outline, ask the Planner whether the study forms its
+    # exposure by grouping one measured value, and stage the groupings the
+    # host applies (``orchestration.exposure_grouping_phase``).  ``None`` is
+    # off and leaves archived config digests unchanged; a host that plans
+    # groupings sets True, which is then part of the run identity.
+    enable_exposure_grouping: Optional[bool] = None
     # Formal interactive runs must not spend execution budget on a capability
     # whose registered scientific ceiling is analysis-only. Diagnostic callers
     # may leave this disabled and retain the honest lower claim ceiling.
@@ -457,6 +476,9 @@ class PipelineConfig:
     # The target trial the researcher approved on its card; the run compiles
     # it on its own context before planning (planning.target_trial_configuration).
     bound_target_trial: Optional[Dict[str, Any]] = None
+    # The exposure groupings the accepted candidate applied; the run forms
+    # them again without asking (orchestration.exposure_grouping_phase).
+    bound_exposure_groupings: Optional[Dict[str, Any]] = None
     enable_tavily: bool = False
     tavily_api_key: Optional[str] = None
     tavily_retmax: int = 5
@@ -703,6 +725,20 @@ class PipelineConfig:
             parsed = ConfirmedTargetTrial.model_validate(self.bound_target_trial)
             object.__setattr__(
                 self, "bound_target_trial", parsed.model_dump(mode="json")
+            )
+        if self.bound_exposure_groupings is not None:
+            from ..planning.exposure_group_compile import CandidateExposureGroupings
+
+            if not (self.require_human_plan_review and self.enable_exposure_grouping):
+                raise ValueError(
+                    "bound_exposure_groupings requires require_human_plan_review "
+                    "and enable_exposure_grouping"
+                )
+            parsed = CandidateExposureGroupings.model_validate(
+                self.bound_exposure_groupings
+            )
+            object.__setattr__(
+                self, "bound_exposure_groupings", parsed.model_dump(mode="json")
             )
         for field_def in fields(self):
             value = getattr(self, field_def.name)
@@ -1130,12 +1166,7 @@ class PipelineConfig:
             for key, value in sorted(self._field_values().items())
             # An absent additive contract must not invalidate archived config
             # digests; once present it is part of the immutable run identity.
-            if key not in {
-                "bound_analysis_inputs",
-                "bound_baseline_requirements",
-                "bound_population_requirements",
-                "bound_target_trial",
-            } or value is not None
+            if key not in _ADDITIVE_FIELDS or value is not None
         }
 
     def recovery_payload(self) -> Dict[str, Any]:
