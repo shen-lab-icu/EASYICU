@@ -34,6 +34,9 @@ from easyicu.research_agent.authority.run_input import (
     load_verified_run_input_capsule,
 )
 from easyicu.research_agent.contracts.executor_stop import registered_executor_stop
+from easyicu.research_agent.planning.question_substance_forms import (
+    QUESTION_SUBSTANCE_FORMS_KEY,
+)
 from easyicu.research_agent.contracts.patient_grouping_need import (
     PATIENT_GROUPING_AUTHORITY_ERROR_KEY,
     PATIENT_GROUPING_STATUS_KEY,
@@ -672,6 +675,13 @@ _PLANNING_STOP_SENTENCES = {
         "Planning found that the question needs something no executable "
         "EasyICU method can yet provide, so it stopped before the analysis "
         "steps were drafted. No analysis was run."
+    ),
+    "progressive_question_substance_form_substituted": (
+        "The question names a substance in one form -- given, or measured as a "
+        "level -- and the plan's primary exposure reads it in the other, so the "
+        "plan would answer another question. Planning stopped, and no analysis "
+        "was run. Generate the plan again; to study the other form, say so in "
+        "the question."
     ),
     "progressive_family_spec_icu_stay_unit_unread": (
         "The prepared data records the ICU length of stay in a unit EasyICU "
@@ -2333,6 +2343,7 @@ def _research_user_preferences(
     event_time_semantics: Optional[Mapping[str, str]] = None,
     source_selection_report: Optional[Mapping[str, Any]] = None,
     question_named_concepts: Sequence[Mapping[str, Any]] = (),
+    question_substance_forms: Sequence[Mapping[str, Any]] = (),
 ) -> Dict[str, Any]:
     """Compile StudyContext into the existing strict preference contract.
 
@@ -2505,6 +2516,18 @@ def _research_user_preferences(
         constraints["question_named_concepts"] = [
             {"concepts": list(item["concepts"]), "evidence": str(item["evidence"])}
             for item in question_named_concepts
+        ]
+    if question_substance_forms:
+        # A substance the question names as given or as measured: a plan that
+        # reads it in the other form stops (planning.question_substance_forms).
+        constraints[QUESTION_SUBSTANCE_FORMS_KEY] = [
+            {
+                "concepts": list(item["concepts"]),
+                "form": str(item["form"]),
+                "other": list(item["other"]),
+                "evidence": str(item["evidence"]),
+            }
+            for item in question_substance_forms
         ]
     if constraints:
         preferences["data_constraints"] = _compile_data_constraints(constraints)
@@ -2848,6 +2871,10 @@ def research_context_declarations(
             source_selection_report=bound_export_selection_report(export_path),
             question_named_concepts=(
                 scientific.metadata_planning_coordinates.get("question_named_concepts")
+                or ()
+            ),
+            question_substance_forms=(
+                scientific.metadata_planning_coordinates.get("question_substance_forms")
                 or ()
             ),
         ),

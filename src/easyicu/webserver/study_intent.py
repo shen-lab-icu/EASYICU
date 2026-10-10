@@ -55,6 +55,8 @@ __all__ = [
     "explicit_exposure_aggregation",
     "explicit_landmark_hours",
     "named_study_concepts",
+    "substance_forms",
+    "substance_reading",
     "SLOTS",
 ]
 
@@ -539,6 +541,184 @@ def _resolved_reading(
     return concept, start, end
 
 
+#: Substances the concept catalog holds both as a level measured and as what
+#: is given (a drug, a fluid or a blood product): each measured concept and
+#: the concepts of the substance given.  A test checks the table against the
+#: catalog.
+_MEASURED_OR_GIVEN: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("alb", ("albumin_iv",)),
+    ("bicar", ("bicarbonate",)),
+    ("ca", ("calcium_iv",)),
+    ("mg", ("magnesium_iv",)),
+    ("k", ("potassium_iv",)),
+    ("plt", ("platelets",)),
+    ("rbc", ("packed_rbc",)),
+    ("glu", ("dex", "dextrose50")),
+)
+_GIVEN_OF: Dict[str, Tuple[str, ...]] = dict(_MEASURED_OR_GIVEN)
+#: Words that say a substance is given, or a level of it measured.
+_GIVEN_WORDS = re.compile(
+    r"静脉|输注|输入|输血|给予|给药|补充|使用|剂量|替代|开始|启动"
+    r"|infus\w*|intravenous\w*|\biv\b|administ\w*|transfus\w*|supplement\w*"
+    r"|initiat\w*|\bstart(?:s|ed|ing)?\b"
+    r"|\bdoses?\b|\bdosing\b|\bgiven\b|\breplacement\b",
+    re.IGNORECASE,
+)
+_MEASURED_WORDS = re.compile(
+    r"血清|血浆|水平|浓度|计数|血症|减少|降低|升高"
+    r"|\bserum\b|\bplasma\b|\blevels?\b|\bconcentrations?\b|\bcounts?\b"
+    r"|hypo\w*|hyper\w*",
+    re.IGNORECASE,
+)
+#: A value in a unit of concentration ("<70 mg/dL", "3.5 mmol/L", "50×10^9/L")
+#: is a level measured.  A dose or a rate ("25 g", "20 mmol/h", "30 mL/kg") is
+#: none.
+_CONCENTRATION = re.compile(
+    r"\d[\d.]*\s*(?:[x×*]\s*10\s*(?:\^\s*\d+|[⁰¹²³⁴⁵⁶⁷⁸⁹]+)\s*)?"
+    r"(?:mg|g|mmol|[µμu]mol|meq|ng|pg|[µμu]g|iu|u)?\s*/\s*(?:dl|l|ml|[µμu]l)(?![a-z])",
+    re.IGNORECASE,
+)
+#: Where the words that say it of one substance end: a clause break or a
+#: conjunction joining another named thing.
+_SUBSTANCE_CLAUSE_EDGE = re.compile(
+    r"[,;:，。；：、!?！？\n]|与|和|及|或|\band\b|\bor\b|\bvs\.?|\bversus\b",
+    re.IGNORECASE,
+)
+_SUBSTANCE_REACH = 16
+#: How far a value's unit is read on each side, within the clause.
+_CONCENTRATION_REACH = 40
+
+
+class _Undecided(str):
+    """A substance named without saying whether it is measured or given.
+
+    Its value is the substance's measured concept, so a reading of the same
+    substance is one reading; ``denotes`` is every concept the words can
+    mean.  It is never a slot's value: the exposure it would be stays unread.
+    """
+
+    denotes: Tuple[str, ...]
+
+    def __new__(cls, measured: str, denotes: Tuple[str, ...]) -> "_Undecided":
+        reading = super().__new__(cls, measured)
+        reading.denotes = denotes
+        return reading
+
+
+def _clause_around(text: str, start: int, end: int, reach: int) -> Tuple[str, str]:
+    """The words of the clause within ``reach`` before and after ``start:end``."""
+
+    before = text[max(0, start - reach) : start]
+    edges = list(_SUBSTANCE_CLAUSE_EDGE.finditer(before))
+    if edges:
+        before = before[edges[-1].end() :]
+    after = text[end : end + reach]
+    edge = _SUBSTANCE_CLAUSE_EDGE.search(after)
+    if edge is not None:
+        after = after[: edge.start()]
+    return before, after
+
+
+def _measured_or_given(text: str, concept: str, start: int, end: int) -> str:
+    """What a reading of a substance both measured and given names.
+
+    The measured concept is read as itself when the nearest word of its
+    clause says a level (血清、水平、浓度、level, a value in a unit of
+    concentration), as what is given when it says administration (静脉、
+    输注、给予、补充、infusion、IV), and as undecided when it says neither or
+    both -- never as the measurement by default.  "血" joined to a substance
+    of the blood's chemistry names its level (血钾、血糖、血白蛋白); in a
+    blood cell's own name (血小板) it says nothing.  A substance given that
+    the catalog names on its own ("静脉白蛋白") is that concept.  Any other
+    concept is returned as it is.
+    """
+
+    given = _GIVEN_OF.get(concept)
+    if given is None:
+        return concept
+    before, after = _clause_around(text, start, end, _SUBSTANCE_REACH)
+    mention = text[start:end]
+    nearest: Dict[str, int] = {}
+    for kind, words in (("given", _GIVEN_WORDS), ("measured", _MEASURED_WORDS)):
+        distances = [0] if words.search(mention) else []
+        distances += [len(before) - found.end() for found in words.finditer(before)]
+        distances += [found.start() for found in words.finditer(after)]
+        if distances:
+            nearest[kind] = min(distances)
+    unit_before, unit_after = _clause_around(text, start, end, _CONCENTRATION_REACH)
+    units = [
+        len(unit_before) - found.end() for found in _CONCENTRATION.finditer(unit_before)
+    ]
+    units += [found.start() for found in _CONCENTRATION.finditer(unit_after)]
+    if units:
+        nearest["measured"] = min(units + [nearest.get("measured", min(units))])
+    # "补钾", "补镁": the verb is joined to the substance it supplies.
+    if before.endswith("补"):
+        nearest["given"] = 0
+    # "血钾", "血糖": blood joined to a substance of its chemistry, not a
+    # blood cell's own name ("血小板").
+    if before.endswith("血") or (
+        mention.startswith("血")
+        and concept not in _concept_groups().get("hematology", ())
+    ):
+        nearest["measured"] = 0
+    said = sorted(nearest, key=nearest.__getitem__)
+    if not said or (len(said) == 2 and nearest["given"] == nearest["measured"]):
+        return _Undecided(concept, (concept, *given))
+    if said[0] == "measured":
+        return concept
+    if len(given) == 1:
+        return given[0]
+    return _Undecided(concept, given)
+
+
+def substance_reading(
+    question: str, *, concept_id: str, start: int, end: int
+) -> Tuple[str, ...]:
+    """The concepts the words at ``start:end`` of ``question`` name, read as ``concept_id``.
+
+    One concept when the question says whether a substance both measured and
+    given is measured or given there (``_measured_or_given``); every concept
+    it can mean when it does not.  Any other concept is ``(concept_id,)``.
+    """
+
+    reading = _measured_or_given(question, concept_id, start, end)
+    if isinstance(reading, _Undecided):
+        return tuple(str(item) for item in reading.denotes)
+    return (str(reading),)
+
+
+def substance_forms(question: str) -> Tuple[Dict[str, Any], ...]:
+    """Each substance the question names as measured or as given, with its other form.
+
+    One record per decided reading of a substance both measured and given:
+    ``concepts`` it names, its ``form`` and the concepts of the ``other``
+    form, and the words that name it.  A substance named without saying
+    which form has no record: nothing it names can be the other form.
+    """
+
+    found: List[Dict[str, Any]] = []
+    for concept, phrase in _match_concept(_clean_question(question).lower()):
+        if isinstance(concept, _Undecided):
+            continue
+        if concept in _GIVEN_OF:
+            form, other = "measured", _GIVEN_OF[concept]
+        else:
+            measured = [item for item, given in _MEASURED_OR_GIVEN if concept in given]
+            if not measured:
+                continue
+            form, other = "given", tuple(measured)
+        found.append(
+            {
+                "concepts": [str(concept)],
+                "form": form,
+                "other": list(other),
+                "evidence": phrase,
+            }
+        )
+    return tuple(found)
+
+
 def _match_concept(text: str) -> List[Tuple[str, str]]:
     """Return concept/phrase pairs in dictionary-specificity order.
 
@@ -546,6 +726,9 @@ def _match_concept(text: str) -> List[Tuple[str, str]]:
     which leaves the slot unread rather than wrong.  So is a restriction on
     whom the study includes (``_population_restriction``).  A phrase inside
     another concept's longer name is that concept (``_resolved_reading``).
+    A substance both measured and given is read by what the sentence says of
+    it (``_measured_or_given``); a later mention that says it decides one
+    that did not.
     """
     found: List[Tuple[str, str]] = []
     seen = set()
@@ -556,11 +739,26 @@ def _match_concept(text: str) -> List[Tuple[str, str]]:
                 continue
             concept, start, end = resolved
             if (
-                concept in seen
-                or _negated(text, start)
+                _negated(text, start)
                 or _follow_up_handling(text, start, end)
                 or _population_restriction(text, concept, start, end)
             ):
+                continue
+            concept = _measured_or_given(text, concept, start, end)
+            undecided = next(
+                (
+                    index
+                    for index, (held, _phrase) in enumerate(found)
+                    if isinstance(held, _Undecided) and concept in held.denotes
+                ),
+                None,
+            )
+            if undecided is not None and not isinstance(concept, _Undecided):
+                # A mention that says the form decides the one that did not.
+                found[undecided] = (concept, text[start:end])
+                seen.add(concept)
+                continue
+            if concept in seen:
                 continue
             seen.add(concept)
             found.append((concept, text[start:end]))
@@ -875,15 +1073,21 @@ def named_study_concepts(question: str) -> Tuple[Tuple[Tuple[str, ...], str], ..
 
     Each comes with the concepts its name can denote (its clinical family:
     "APACHE IVa" names the score and the risk it predicts) and the words
-    that name it, in the order the sentence names them.  This is what the
-    sentence studies or asks about; which of them is an exposure, a
+    that name it, in the order the sentence names them.  A substance named
+    without saying whether it is measured or given denotes both.  This is
+    what the sentence studies or asks about; which of them is an exposure, a
     predictor or a benchmark is not read here.
     """
 
     text = _clean_question(question)
     _outcome, _phrase, named = _study_concept_readings(text, text.lower())
     return tuple(
-        (tuple(dict.fromkeys((concept, *sorted(_family_of(concept) or ())))), phrase)
+        (
+            tuple(str(item) for item in concept.denotes)
+            if isinstance(concept, _Undecided)
+            else tuple(dict.fromkeys((concept, *sorted(_family_of(concept) or ())))),
+            phrase,
+        )
         for concept, phrase in named
     )
 
@@ -950,7 +1154,9 @@ def deterministic_intent(question: str) -> Dict[str, Any]:
             kind = "binary"
         slots["outcome_type"] = _slot(kind, KEYWORD_PROVENANCE, outcome_phrase)
 
-    if exposures:
+    # A substance named without saying measured or given leaves the exposure
+    # unread rather than taking the next concept named.
+    if exposures and not isinstance(exposures[0][0], _Undecided):
         concept, phrase = exposures[0]
         slots["exposure"] = _slot(concept, KEYWORD_PROVENANCE, phrase)
 
