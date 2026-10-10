@@ -208,10 +208,18 @@ def test_explicit_descriptive_question_becomes_one_reviewable_candidate_setup(
     assert result["details"]["omitted_unconfirmed_fields"] == []
     assert writes[0]["outcome"] == "院内死亡"
     assert writes[0]["primary_exposure"] == "Sepsis-3 状态"
+    # Nobody asked for counts only: the descriptive default takes the
+    # variance the source supports (this source groups no stays by patient),
+    # and the record says what it replaced (``design_variance_basis``).
     assert writes[0]["analysis_design"] == {
         "analysis_family": "descriptive_epidemiology",
         "analysis_unit": "icu_stay",
-        "variance_estimator": "none_counts_only",
+        "variance_estimator": "model_based",
+    }
+    assert writes[0]["design_variance_basis"] == {
+        "variance_estimator": "model_based",
+        "basis": "source_without_patient_grouping",
+        "replaced": "none_counts_only",
     }
     assert writes[0]["confirmations"]["plan_timing_descriptive_only"] is True
 
