@@ -93,6 +93,11 @@ from easyicu.outcome_availability import (
 )
 
 from ..concept_availability import normalize_database_name
+from ..contracts.patient_grouping_need import (
+    PATIENT_GROUPING_AUTHORITY_ERROR_KEY,
+    PATIENT_GROUPING_STATUS_KEY,
+    PATIENT_GROUPING_STATUSES,
+)
 from .cohort_granularity import resolve_cohort_granularity
 from .observation_semantics import compile_observation_semantics
 from .representation_semantics import compile_wide_representation_semantics
@@ -171,6 +176,39 @@ def _exposure_group_contrasts(
     return {EXPOSURE_GROUP_CONTRASTS_KEY: contrasts} if contrasts else {}
 
 
+def _planning_grouping_status(authority: Dict[str, Any], *, bound: bool) -> Dict[str, Any]:
+    """What a metadata-only catalog states of its source's grouping, checked.
+
+    The host states it beside a context that binds no grouping
+    (``contracts.patient_grouping_need``): one closed status, ``bound``
+    exactly when the catalog binds a replacement row identity, and an invalid
+    authority's typed code beside ``authority_invalid`` and only there.  A
+    catalog that states neither projects neither.
+    """
+
+    status = authority.get(PATIENT_GROUPING_STATUS_KEY)
+    error = authority.get(PATIENT_GROUPING_AUTHORITY_ERROR_KEY)
+    if status is None and error is None:
+        return {}
+    if status not in PATIENT_GROUPING_STATUSES:
+        raise MaterializedMetadataError(
+            "metadata-only patient grouping status is not a known status"
+        )
+    if (status == "bound") != bound:
+        raise MaterializedMetadataError(
+            "metadata-only patient grouping status disagrees with its row identity"
+        )
+    named = isinstance(error, str) and bool(error.strip())
+    if (status == "authority_invalid") != named or (error is not None and not named):
+        raise MaterializedMetadataError(
+            "metadata-only patient grouping status disagrees with its authority error"
+        )
+    return {
+        PATIENT_GROUPING_STATUS_KEY: status,
+        **({PATIENT_GROUPING_AUTHORITY_ERROR_KEY: error} if named else {}),
+    }
+
+
 def _planning_catalog_provenance(frame: pd.DataFrame) -> Dict[str, Any]:
     authority = frame.attrs.get("easyicu_planning_authority")
     if not isinstance(authority, dict):
@@ -204,6 +242,7 @@ def _planning_catalog_provenance(frame: pd.DataFrame) -> Dict[str, Any]:
             "coordinate_sha256": first_stay["coordinate_sha256"],
         }
     replacement = authority.get("replacement_row_identity")
+    projected.update(_planning_grouping_status(authority, bound=replacement is not None))
     if replacement is None:
         return projected
     if not isinstance(replacement, dict):
