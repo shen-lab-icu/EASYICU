@@ -810,6 +810,78 @@ def _omission_reasons_text(omissions: Sequence[Mapping[str, str]]) -> str:
     )
 
 
+def _question_causal_design(
+    params: Mapping[str, Any],
+    patch: Dict[str, Any],
+    current: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Record the causal design a study's question states, when it records none.
+
+    The host reads the question (``causal_trial_design``), as it reads the
+    descriptive default above: a design the turn proposes, or one the study
+    already records, is never replaced.  The design follows the bound
+    source's patient grouping, so it is decided here, after the binding.  A
+    trial v1 cannot emulate (its database or its treatment) records nothing
+    and is stated as a capability gap.  Returns the receipt fields.
+    """
+
+    from easyicu.webserver.causal_trial_design import (
+        CAUSAL_TRIAL_GAP_FIELD,
+        CAUSAL_TRIAL_READING_FIELD,
+        question_causal_design,
+    )
+
+    design = patch["analysis_design"] if "analysis_design" in patch else (
+        (current or {}).get("analysis_design")
+    )
+    if "analysis_design" in params or (
+        isinstance(design, Mapping) and str(design.get("analysis_family") or "").strip()
+    ):
+        return {}
+    study = {**dict(current or {}), **patch}
+    decision = question_causal_design(study.get("question"), study)
+    if decision is None:
+        return {}
+    if decision.gap is not None:
+        return {CAUSAL_TRIAL_GAP_FIELD: decision.gap}
+    patch["analysis_design"] = dict(decision.design or {})
+    patch[CAUSAL_TRIAL_READING_FIELD] = decision.reading.record()
+    return {CAUSAL_TRIAL_READING_FIELD: decision.reading.record()}
+
+
+def _causal_receipt_text(receipt: Mapping[str, Any]) -> str:
+    from easyicu.webserver.target_trial_setup import TARGET_TRIAL_DATABASE_OUT_OF_SCOPE
+
+    gap = receipt.get("causal_trial_gap") or {}
+    if gap.get("code") == TARGET_TRIAL_DATABASE_OUT_OF_SCOPE:
+        return (
+            " The question has a target trial's shape, but this version emulates "
+            f"target trials in {', '.join(gap['supported_databases'])} only, not in "
+            f"{gap['database']}, so no causal design was saved and the study is not "
+            "planned as an association instead."
+        )
+    if gap:
+        treatments = ", ".join(item["label_en"] for item in gap["treatment_concepts"])
+        classes = "; ".join(
+            f"{item['label_en']}: " + ", ".join(agent["label_en"] for agent in item["agents"])
+            for item in gap["supported_classes"]
+        )
+        return (
+            " The question has a target trial's shape, but the treatment it starts "
+            f"({treatments}) is not one the v1 target trial emulation registers, so "
+            "no causal design was saved and the study is not planned as an "
+            f"association instead. Registered treatments: {classes}."
+        )
+    if "causal_trial_reading" in receipt:
+        return (
+            " Saved the causal design the question states (a target trial "
+            "emulation); the next step is to state the trial "
+            "(easyicu_state_target_trial). Do not ask the researcher to choose an "
+            "analysis family or plan it as an association."
+        )
+    return ""
+
+
 def update_study_context(
     context: ToolExecutionContext,
     params: Mapping[str, Any],
@@ -1714,6 +1786,7 @@ def update_study_context(
                 },
             )
         patch["covariate_selection"] = selection
+    causal_receipt = _question_causal_design(params, patch, current)
     if not patch:
         raise PiCopilotError(
             "pi_tool_arguments_required",
@@ -1730,6 +1803,7 @@ def update_study_context(
             current_context=current,
             lifecycle_write=False,
             _server_concept_selection_authority_write=True,
+            _server_causal_trial_reading_write=True,
         )
     except study_contexts.StudyContextError as exc:
         return _result(
@@ -1790,6 +1864,7 @@ def update_study_context(
                     current_context=current,
                     lifecycle_write=False,
                     _server_concept_selection_authority_write=True,
+                    _server_causal_trial_reading_write=True,
                 )
             except study_contexts.StudyContextError as rest_exc:
                 return _result(
@@ -1820,6 +1895,7 @@ def update_study_context(
             require_revision=bool(current),
             lifecycle_write=False,
             _server_concept_selection_authority_write=True,
+            _server_causal_trial_reading_write=True,
         )
     except study_contexts.StudyContextError as exc:
         return _result(
@@ -1863,6 +1939,7 @@ def update_study_context(
             "the setup is saved. Tell the researcher which design was not saved "
             "and why; the candidate plan proposes it for their review."
         )
+    summary += _causal_receipt_text(causal_receipt)
     if omitted_unconfirmed_fields:
         # Preserve the omission and reason, but let the workflow decide when
         # a choice is needed. Execution requirements must not become an
@@ -1892,6 +1969,7 @@ def update_study_context(
             **({"analysis_design_recovery": analysis_design_recovery}
                if analysis_design_recovery is not None else {}),
             **({"unsaved_design": unsaved_design} if unsaved_design is not None else {}),
+            **causal_receipt,
         },
     )
     context.invalidate_authority("study_context_updated")

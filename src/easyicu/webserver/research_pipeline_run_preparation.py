@@ -32,6 +32,7 @@ from easyicu.webserver import (
 from easyicu.webserver.landmark_survival_runtime_projection import (
     survival_exposure_onset_column,
 )
+from easyicu.webserver.causal_trial_design import stop_unset_causal_design
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
 from easyicu.webserver.plan_change_request import PlanChangeRequest
 from easyicu.webserver.research_plan_revision import (
@@ -237,6 +238,9 @@ def _prepare_scientific_launch(
         or request.development_resume_source_job_id
         or os.environ.get(_DEVELOPMENT_RESUME_JOB_ENV)
     ):
+        # A question read as causal is planned as its trial, never from the
+        # question's keywords (``causal_trial_design``).
+        stop_unset_causal_design(study, question=question, database=database)
         # A resumed run continues on the package its sealed plan bound; a new
         # plan or run analyzes the bound export's rows as the study's own.
         _require_export_holds_study_cohort(study, request.export_path)

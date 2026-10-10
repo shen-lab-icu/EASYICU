@@ -50,6 +50,7 @@ from typing import Any, Mapping, Optional
 
 from pydantic import BaseModel, ValidationError
 
+from easyicu.databases import normalize_database_key
 from easyicu.research_agent.planning.analysis_types import canonical_analysis_family
 from easyicu.research_agent.planning.population_spec import PopulationSpec
 from easyicu.research_agent.planning.target_trial_spec import TargetTrialSpec
@@ -85,6 +86,8 @@ TARGET_TRIAL_COMPILE_FAILED = "target_trial_compile_failed"
 TARGET_TRIAL_COMPILE_INTERRUPTED = "target_trial_compile_interrupted"
 #: The databases v1 emulates trials in.
 TARGET_TRIAL_DATABASES = frozenset({"miiv"})
+#: A study bound to a database v1 does not emulate trials in.  Stable.
+TARGET_TRIAL_DATABASE_OUT_OF_SCOPE = "target_trial_database_out_of_scope"
 _CAUSAL_FAMILY = "causal_inference"
 _OWNER = "easyicu.webserver.target_trial_setup"
 _MAX_JOB_RECORD_BYTES = 256 * 1024
@@ -313,11 +316,45 @@ def target_trial_family_declared(study: Mapping[str, Any]) -> bool:
     return canonical_analysis_family(design.get("analysis_family")) == _CAUSAL_FAMILY
 
 
-def _bound_export(study: Mapping[str, Any]) -> tuple[str, str]:
+def _bound_source(study: Mapping[str, Any]) -> Mapping[str, Any]:
     source = study.get("data_source")
-    source = source if isinstance(source, Mapping) else {}
-    path = str(source.get("path") or "").strip()
-    database = str(source.get("database") or "").strip().lower()
+    return source if isinstance(source, Mapping) else {}
+
+
+def _study_database(study: Mapping[str, Any]) -> str:
+    """The bound database's registry key, as the launch reads it."""
+
+    raw = str(_bound_source(study).get("database") or "").strip()
+    if not raw:
+        return ""
+    try:
+        return normalize_database_key(raw)
+    except KeyError:
+        # A database the registry does not know is no trial database either;
+        # the launch refuses it by its own code.
+        return raw.lower()
+
+
+def target_trial_database_gap(study: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """Why v1 emulates no trial in the study's bound database, or ``None``.
+
+    A study bound to no database has no gap yet: the compile refuses it when
+    it is bound.  The compile refuses a bound database with the same code.
+    """
+
+    database = _study_database(study)
+    if not database or database in TARGET_TRIAL_DATABASES:
+        return None
+    return {
+        "code": TARGET_TRIAL_DATABASE_OUT_OF_SCOPE,
+        "database": database,
+        "supported_databases": sorted(TARGET_TRIAL_DATABASES),
+    }
+
+
+def _bound_export(study: Mapping[str, Any]) -> tuple[str, str]:
+    path = str(_bound_source(study).get("path") or "").strip()
+    database = _study_database(study)
     if not path or dataio.read_prepared_export_manifest(path) is None:
         raise TargetTrialSetupError(
             "target_trial_export_required",
@@ -375,7 +412,7 @@ def _compile(
     study_id = str(study.get("id"))
     if database not in TARGET_TRIAL_DATABASES:
         return _stopped(
-            "target_trial_database_out_of_scope",
+            TARGET_TRIAL_DATABASE_OUT_OF_SCOPE,
             f"Target trials are emulated in {', '.join(sorted(TARGET_TRIAL_DATABASES))} "
             f"in this version, not in {database or 'this database'}.",
         )
@@ -741,6 +778,7 @@ __all__ = [
     "TARGET_TRIAL_COMPILE_STOPS",
     "TARGET_TRIAL_COMPILE_SUBMITTED",
     "TARGET_TRIAL_DATABASES",
+    "TARGET_TRIAL_DATABASE_OUT_OF_SCOPE",
     "TARGET_TRIAL_SETUP_REFUSALS",
     "TARGET_TRIAL_STATE_TOOL",
     "TargetTrialCompileFailure",
@@ -752,6 +790,7 @@ __all__ = [
     "read_target_trial_statement",
     "submit_target_trial_compile",
     "submitted_tool_result",
+    "target_trial_database_gap",
     "target_trial_family_declared",
     "target_trial_job_record",
     "target_trial_statement_schema",
