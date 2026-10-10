@@ -90,6 +90,7 @@ def test_each_replay_is_read_from_the_runtime_contracts():
         _K: {(_CLUSTERS,)},
         _STABILITY: {(_CLUSTERS,)},
         "prediction.calibration_metrics": {(_FITTED,)},
+        "prediction.benchmark_comparison": {(_FITTED,)},
         "prediction.decision_curve": {(_FITTED,)},
         _VALIDATION: {(_FITTED,)},
     }
@@ -326,8 +327,8 @@ def test_the_outline_prompt_names_each_pair_before_the_planner_chooses():
 
     assert f"{_K}, {_STABILITY} after {_CLUSTERS}" in trajectory
     assert (
-        "prediction.calibration_metrics, prediction.decision_curve, "
-        f"{_VALIDATION} after {_FITTED}"
+        "prediction.calibration_metrics, prediction.benchmark_comparison, "
+        f"prediction.decision_curve, {_VALIDATION} after {_FITTED}"
     ) in prediction
     # Analysis types that share a family name each pair once.
     shared = replay_producer_rule_text(["prediction_model", "validation"])

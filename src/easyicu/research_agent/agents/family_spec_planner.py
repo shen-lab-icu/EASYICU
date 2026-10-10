@@ -263,6 +263,23 @@ def family_spec_user_prompt(
                 ensure_ascii=False,
             )
         )
+        if request.benchmark_candidates:
+            sections.append(
+                "Benchmark comparators (an existing score or probability the host compares the "
+                "model with on the same validation stays; a benchmark requirement the plan "
+                "answers names its column, and neither it nor a related column is a predictor):\n"
+                + json.dumps(
+                    [
+                        {
+                            "name": item.name,
+                            "kind": item.kind,
+                            "related_columns": item.related_columns,
+                        }
+                        for item in request.benchmark_candidates
+                    ],
+                    ensure_ascii=False,
+                )
+            )
         if request.accepted_feature_groups:
             sections.append(
                 "Accepted primary inputs (the reviewed design keeps every one; choose at least "

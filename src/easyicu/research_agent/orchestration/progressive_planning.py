@@ -385,8 +385,8 @@ def question_requirement_outcome(
     """Judge the question's requirements on the compiled plan and record them.
 
     The family route (``facts.family_template``) states its requirements in
-    the spec, and its templates have no comparing or subgroup step, so the
-    host decides those gaps.  The outline route states none: each concept the
+    the spec; its templates have no subgroup step, and only the prediction
+    template draws a comparing step, so the host decides the other gaps.  The outline route states none: each concept the
     question names, other than a sealed coordinate, is a warning there.  A gap
     the Planner declared is checked against the study as the spec parser
     checked it (``planning.capability_gap``).  The record is a run fact beside

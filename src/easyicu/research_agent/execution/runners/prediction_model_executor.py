@@ -30,6 +30,8 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from ...contracts.dependence import resolve_patient_groups
 from ...contracts.prediction_execution import (
+    PREDICTION_BENCHMARK_ACTION,
+    PREDICTION_BENCHMARK_PRODUCT,
     PREDICTION_CALIBRATION_PRODUCT,
     PREDICTION_CLINICAL_UTILITY_PRODUCT,
     PREDICTION_INTERNAL_VALIDATION_PRODUCT,
@@ -38,19 +40,28 @@ from ...contracts.prediction_execution import (
     PREDICTION_PRIMARY_ACTION,
     PREDICTION_SCORES_PRODUCT,
     STATIC_PREDICTION_ACTION_OUTPUTS as _ACTION_OUTPUTS,
+    static_prediction_benchmark_cohort_input,
+    static_prediction_benchmark_columns,
     static_prediction_executes_robustness_spec,
     static_prediction_features,
     static_prediction_model_columns,
     static_prediction_owns_step,
 )
 from ...contracts.prediction_validation import PredictionValidationSpec
-from ...methods.auc_interval import AUCInterval, auc_interval
+from ...methods.auc_interval import AUCInterval, auc_interval, paired_auc_difference
 from ...methods.delong_auc import delong_auc_ci
+from ...planning.benchmark_comparator import (
+    benchmark_comparator_facts,
+    calibration_reason,
+    comparator_information_window,
+    information_window_relation,
+)
 from ...prediction_validation_owner import (
     run_prediction_validation,
     run_prediction_validation_csv,
 )
 from ...robustness.panel import load_locked_robustness_specs
+from ...research_context.materialization_window import bound_feature_window_end_hours
 from ...research_context.typed import (
     ResearchContextAuthority,
     parse_research_context_json,
@@ -84,6 +95,9 @@ def prediction_model_consumed_input_keys(step: AnalysisStep) -> tuple[str, ...]:
     if step.scientific_action_id == _PRIMARY_ACTION:
         cohort = sole_typed_cohort_input(step)
         return (cohort,) if cohort else ()
+    if step.scientific_action_id == PREDICTION_BENCHMARK_ACTION:
+        cohort = static_prediction_benchmark_cohort_input(step)
+        return (cohort, PREDICTION_SCORES_PRODUCT) if cohort else (PREDICTION_SCORES_PRODUCT,)
     return (PREDICTION_SCORES_PRODUCT,)
 
 
@@ -116,6 +130,37 @@ def prediction_model_executor_code(step: AnalysisStep) -> str:
                 source_cohort=cohort_path,
                 out_dir=Path(os.environ["STEP_OUT_DIR"]),
                 run_dir=Path(os.environ["EASYICU_RUN_DIR"]),
+                step_id={step.step_id!r},
+            )
+            print(json.dumps(summary, ensure_ascii=False, allow_nan=False))
+            """
+        ).strip()
+    if action == PREDICTION_BENCHMARK_ACTION:
+        cohort = static_prediction_benchmark_cohort_input(step)
+        return textwrap.dedent(
+            f"""
+            import json
+            import os
+            from pathlib import Path
+
+            from easyicu.research_agent.execution.runners.prediction_model_executor import (
+                run_prediction_benchmark_comparison,
+            )
+            from easyicu.research_agent.execution.runners.typed_input_binding import (
+                load_step_cohort_frame,
+            )
+
+            frame, cohort_path = load_step_cohort_frame(
+                typed_cohort_input={cohort!r},
+            )
+            summary = run_prediction_benchmark_comparison(
+                frame=frame,
+                comparator_columns={static_prediction_benchmark_columns(step)!r},
+                typed_cohort_input={cohort!r},
+                source_cohort=cohort_path,
+                out_dir=Path(os.environ["STEP_OUT_DIR"]),
+                run_dir=Path(os.environ["EASYICU_RUN_DIR"]),
+                resolved_inputs=Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"]),
                 step_id={step.step_id!r},
             )
             print(json.dumps(summary, ensure_ascii=False, allow_nan=False))
@@ -529,9 +574,6 @@ def run_prediction_model(
     )
     if not features or len(features) != len(set(features)):
         raise RuntimeError("prediction requires a unique non-empty predictor roster")
-    for column in features:
-        if frame[column].notna().sum() == 0:
-            raise RuntimeError(f"prediction feature {column!r} is entirely missing")
     outcome = _binary_outcome(frame[outcome_column], column=outcome_column)
     groups = pd.Series(
         resolve_patient_groups(
@@ -723,7 +765,10 @@ def run_prediction_score_analysis(
 ) -> dict[str, Any]:
     """Compute one exact downstream validation product from sealed scores."""
 
-    if action_id not in _ACTION_OUTPUTS or action_id == _PRIMARY_ACTION:
+    if action_id not in _ACTION_OUTPUTS or action_id in {
+        _PRIMARY_ACTION,
+        PREDICTION_BENCHMARK_ACTION,
+    }:
         raise RuntimeError("unsupported downstream prediction action")
     bound = load_typed_input(
         input_key=PREDICTION_SCORES_PRODUCT,
@@ -837,7 +882,342 @@ def run_prediction_score_analysis(
     return summary
 
 
+#: The benchmark comparison table's columns, in order (one row per comparator
+#: and metric; the interval, difference and method columns are the AUROC
+#: row's only).
+_BENCHMARK_COLUMNS = (
+    "comparator_column",
+    "comparator_concept",
+    "comparator_kind",
+    "metric",
+    "model_value",
+    "model_ci_low",
+    "model_ci_high",
+    "comparator_value",
+    "comparator_ci_low",
+    "comparator_ci_high",
+    "difference",
+    "difference_se",
+    "difference_ci_low",
+    "difference_ci_high",
+    "z",
+    "p_value",
+    "interval_method",
+    "bootstrap_n",
+    "bootstrap_skipped_n",
+    "validation_n",
+    "comparator_missing_n",
+    "comparison_n",
+    "comparison_event_n",
+    "comparison_subject_n",
+    "calibration_status",
+    "calibration_reason",
+    "comparator_predicts",
+    "outcome_concept",
+    "comparator_information_window",
+    "prediction_time_hours",
+    "information_window_relation",
+    "information_window_differs",
+)
+_CALIBRATION_METRICS = ("brier_score", "calibration_intercept", "calibration_slope")
+
+
+class BenchmarkComparisonError(RuntimeError):
+    """A benchmark comparison this owner refuses; ``code`` says why."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(f"{code}: {message}")
+        self.code = code
+
+
+def _finite_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    number = float(value)
+    return number if np.isfinite(number) else None
+
+
+def _calibration_summary(
+    *, unit_ids: np.ndarray, subjects: np.ndarray, outcome: np.ndarray, probability: np.ndarray
+):
+    frame = pd.DataFrame(
+        {
+            "unit_id": unit_ids,
+            "subject_id": subjects,
+            "split": "validation",
+            "outcome": outcome,
+            "probability": probability,
+        },
+        columns=_SCORE_COLUMNS,
+    )
+    return run_prediction_validation(frame, _prediction_validation_spec()).summary
+
+
+def run_prediction_benchmark_comparison(
+    *,
+    frame: pd.DataFrame,
+    comparator_columns: Sequence[str],
+    typed_cohort_input: str,
+    source_cohort: Path,
+    out_dir: Path,
+    run_dir: Path,
+    resolved_inputs: Path | Mapping[str, Any],
+    step_id: str,
+) -> dict[str, Any]:
+    """Compare the sealed model scores with existing scores on the same stays.
+
+    The comparison rows are the validation stays whose comparator is
+    recorded; the model's scores are the primary's, read from its sealed
+    table and aligned to the cohort by the primary's own row identity.  The
+    comparator's facts -- probability or oriented score, the outcome it
+    predicts, the window it was computed over -- are the dictionary's
+    (:mod:`...planning.benchmark_comparator`).  Every interval follows how the
+    comparison rows depend (:mod:`...methods.auc_interval`).  Calibration is
+    compared only for a probability of the study's own outcome, and never by
+    recalibrating the comparator.
+    """
+
+    context = _load_context(Path(run_dir))
+    outcome_column = str(context.target_outcome or "").strip()
+    group_authority = step_patient_group_authority(
+        context=context,
+        source_cohort=Path(source_cohort),
+        run_dir=Path(run_dir),
+    )
+    if not outcome_column or group_authority is None:
+        raise RuntimeError("prediction requires typed outcome and patient-group authority")
+    comparators = tuple(str(column) for column in comparator_columns)
+    missing = sorted({group_authority.group_source, *comparators} - set(frame.columns))
+    if missing:
+        raise RuntimeError(f"benchmark comparison cohort is missing declared columns: {missing!r}")
+    prediction_time = bound_feature_window_end_hours(context)
+    if prediction_time is None:
+        raise BenchmarkComparisonError(
+            "benchmark_prediction_time_unstated",
+            "the run binds no feature window, so the model's prediction time is unknown",
+        )
+    bound = load_typed_input(
+        input_key=PREDICTION_SCORES_PRODUCT,
+        run_dir=Path(run_dir),
+        resolved_inputs=resolved_inputs,
+        step_id=step_id,
+        expected_declared_kind="table",
+        expected_evidence_kind="table",
+        expected_columns=_SCORE_COLUMNS,
+        require_consumption_contract=True,
+        minimum_row_count=1,
+        text_columns=("unit_id", "subject_id"),
+    )
+    groups = resolve_patient_groups(
+        frame[group_authority.group_source], requirement=group_authority
+    ).groups
+    cohort_rows = pd.DataFrame(
+        {
+            "unit_id": _unit_ids(frame, group_authority.group_source).to_numpy(),
+            "cohort_subject_id": pd.Series(groups).astype(str).to_numpy(),
+            **{column: frame[column].to_numpy() for column in comparators},
+        }
+    )
+    scores = bound.frame
+    if len(scores) != len(cohort_rows) or set(scores["unit_id"]) != set(cohort_rows["unit_id"]):
+        raise BenchmarkComparisonError(
+            "benchmark_rows_do_not_align",
+            "the model's scores and the cohort hold different stays",
+        )
+    merged = scores.merge(cohort_rows, on="unit_id", how="left", validate="one_to_one")
+    if not merged["subject_id"].astype(str).eq(merged["cohort_subject_id"]).all():
+        raise BenchmarkComparisonError(
+            "benchmark_rows_do_not_align",
+            "a stay's patient differs between the model's scores and the cohort",
+        )
+    validation = merged.loc[merged["split"].eq("validation")].reset_index(drop=True)
+    outcome_variable = context.variable(outcome_column)
+    outcome_concept = str(
+        getattr(outcome_variable, "source_concept", None) or outcome_column
+    )
+    rows: list[dict[str, Any]] = []
+    reportable: list[dict[str, Any]] = []
+    for column in comparators:
+        variable = context.variable(column)
+        concept = str(getattr(variable, "source_concept", None) or column)
+        facts = benchmark_comparator_facts(concept)
+        if facts is None or facts.kind is None:
+            raise BenchmarkComparisonError(
+                "benchmark_comparator_unsupported",
+                f"{column!r} is neither a probability nor a score whose direction "
+                "is stated (planning.benchmark_comparator)",
+            )
+        # What the column is, the whole cohort's rows say: one value a
+        # probability cannot take, in any split, means it is not one.
+        raw = merged[column]
+        values = pd.to_numeric(raw, errors="coerce")
+        if (values.isna() & raw.notna()).any() or not np.isfinite(values.dropna()).all():
+            raise BenchmarkComparisonError(
+                "benchmark_comparator_not_numeric",
+                f"{column!r} holds values that are not finite numbers",
+            )
+        if facts.kind == "probability" and (
+            (values < 0.0) | (values > 1.0)
+        ).any():
+            raise BenchmarkComparisonError(
+                "benchmark_probability_out_of_range",
+                f"{column!r} is a probability but holds values outside [0, 1]",
+            )
+        validation_values = values.loc[merged["split"].eq("validation")].reset_index(drop=True)
+        present = validation_values.notna().to_numpy()
+        comparator_values = validation_values.to_numpy(dtype=float)[present]
+        compared = validation.loc[present]
+        outcome = compared["outcome"].to_numpy(dtype=int)
+        if np.unique(outcome).size != 2:
+            raise BenchmarkComparisonError(
+                "benchmark_comparison_one_class",
+                f"the validation stays with {column!r} recorded hold one outcome class",
+            )
+        subjects = compared["subject_id"].astype(str).to_numpy()
+        model_values = compared["probability"].to_numpy(dtype=float)
+        difference = paired_auc_difference(outcome, model_values, comparator_values, subjects)
+        model_auc = auc_interval(outcome, model_values, subjects)
+        comparator_auc = auc_interval(outcome, comparator_values, subjects)
+        reason = calibration_reason(facts, outcome_concept=outcome_concept)
+        window = comparator_information_window(
+            getattr(variable, "analysis_window", None), facts
+        )
+        relation = information_window_relation(
+            window, prediction_time_hours=float(prediction_time)
+        )
+        shared = {
+            "comparator_column": column,
+            "comparator_concept": concept,
+            "comparator_kind": facts.kind,
+            "validation_n": int(len(validation)),
+            "comparator_missing_n": int((~present).sum()),
+            "comparison_n": int(present.sum()),
+            "comparison_event_n": int(outcome.sum()),
+            "comparison_subject_n": int(np.unique(subjects).size),
+            "calibration_status": "compared" if reason is None else "calibration_not_compared",
+            "calibration_reason": reason or "",
+            "comparator_predicts": facts.predicts or "",
+            "outcome_concept": outcome_concept,
+            "comparator_information_window": window or "",
+            "prediction_time_hours": float(prediction_time),
+            "information_window_relation": relation,
+            "information_window_differs": relation != "same",
+        }
+        rows.append(
+            {
+                **shared,
+                "metric": "auroc",
+                "model_value": model_auc.auc,
+                "model_ci_low": model_auc.ci_low,
+                "model_ci_high": model_auc.ci_high,
+                "comparator_value": comparator_auc.auc,
+                "comparator_ci_low": comparator_auc.ci_low,
+                "comparator_ci_high": comparator_auc.ci_high,
+                "difference": difference.difference,
+                "difference_se": difference.se,
+                "difference_ci_low": difference.ci_low,
+                "difference_ci_high": difference.ci_high,
+                "z": difference.z,
+                "p_value": difference.p_value,
+                "interval_method": difference.method,
+                "bootstrap_n": difference.bootstrap_n,
+                "bootstrap_skipped_n": difference.bootstrap_skipped_n,
+            }
+        )
+        # The reportable block names each model's AUROC and calibration as the
+        # manuscript audit and the numeric binder read them (``*.auroc``,
+        # ``*.auroc_ci_low``, ``*.brier_score``); the table holds the same values.
+        model_block: dict[str, float | None] = {
+            "auroc": model_auc.auc,
+            "auroc_ci_low": model_auc.ci_low,
+            "auroc_ci_high": model_auc.ci_high,
+        }
+        comparator_block: dict[str, float | None] = {
+            "auroc": comparator_auc.auc,
+            "auroc_ci_low": comparator_auc.ci_low,
+            "auroc_ci_high": comparator_auc.ci_high,
+        }
+        if reason is None:
+            unit_ids = compared["unit_id"].to_numpy()
+            model_calibration = _calibration_summary(
+                unit_ids=unit_ids, subjects=subjects, outcome=outcome, probability=model_values
+            )
+            comparator_calibration = _calibration_summary(
+                unit_ids=unit_ids,
+                subjects=subjects,
+                outcome=outcome,
+                probability=comparator_values,
+            )
+            for metric in _CALIBRATION_METRICS:
+                model_value = _finite_or_none(getattr(model_calibration, metric))
+                comparator_value = _finite_or_none(getattr(comparator_calibration, metric))
+                model_block[metric] = model_value
+                comparator_block[metric] = comparator_value
+                rows.append(
+                    {
+                        **shared,
+                        "metric": metric,
+                        "model_value": model_value,
+                        "comparator_value": comparator_value,
+                    }
+                )
+        reportable.append(
+            {
+                **shared,
+                "model": model_block,
+                "comparator": comparator_block,
+                "auroc_difference": difference.difference,
+                "auroc_difference_ci_low": difference.ci_low,
+                "auroc_difference_ci_high": difference.ci_high,
+                "auroc_difference_p_value": difference.p_value,
+                "interval_method": difference.method,
+            }
+        )
+    table = pd.DataFrame(rows, columns=_BENCHMARK_COLUMNS)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    table.to_csv(out_dir / "benchmark_comparison.csv", index=False)
+    if sha256_file(bound.path) != bound.sha256:
+        raise RuntimeError("prediction scores changed during the benchmark comparison")
+    summary = {
+        "step_id": step_id,
+        "status": "ok",
+        "analysis_status": "ok",
+        "method": "deterministic_prediction_benchmark_comparison",
+        "analysis_family": "prediction",
+        "deterministic_standard_analysis": PREDICTION_MODEL_ANALYSIS_KIND,
+        "authority_scope": "analysis_only",
+        "paper_authorization_allowed": False,
+        "comparator_columns": list(comparators),
+        "reportable_benchmark_comparison": {
+            "prediction_time_hours": float(prediction_time),
+            "outcome_concept": outcome_concept,
+            "comparisons": reportable,
+        },
+        "source_cohort": str(Path(source_cohort).resolve()),
+        "source_cohort_sha256": sha256_file(Path(source_cohort)),
+        "source_inputs": [typed_cohort_input, PREDICTION_SCORES_PRODUCT],
+        "input_bindings": [
+            {"input_key": typed_cohort_input, "loaded": True},
+            {
+                "input_key": PREDICTION_SCORES_PRODUCT,
+                "evidence_id": bound.evidence_id,
+                "sha256": bound.sha256,
+                "loaded": True,
+                "row_count": bound.row_count,
+            },
+        ],
+        "output_files": {PREDICTION_BENCHMARK_PRODUCT: "benchmark_comparison.csv"},
+    }
+    (out_dir / "step_summary.json").write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    return summary
+
+
 __all__ = [
+    "BenchmarkComparisonError",
     "PREDICTION_CALIBRATION_PRODUCT",
     "PREDICTION_CLINICAL_UTILITY_PRODUCT",
     "PREDICTION_INTERNAL_VALIDATION_PRODUCT",
@@ -847,6 +1227,7 @@ __all__ = [
     "prediction_model_consumed_input_keys",
     "prediction_model_executor_code",
     "prediction_model_executor_owns_step",
+    "run_prediction_benchmark_comparison",
     "run_prediction_model",
     "run_prediction_robustness_specs",
     "run_prediction_score_analysis",

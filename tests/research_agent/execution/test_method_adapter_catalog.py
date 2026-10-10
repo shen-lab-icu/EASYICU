@@ -103,6 +103,8 @@ def test_adapter_contracts_project_into_the_planner_action_surface() -> None:
         "association.multiple_testing",
         "association.evalue",
         "prediction.subgroup_fairness",
+        # Computed by the prediction executor, with no method adapter of its own.
+        "prediction.benchmark_comparison",
         "causal_emulation.covariate_balance",
         "causal_emulation.evalue",
     }

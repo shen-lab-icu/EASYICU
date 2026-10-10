@@ -740,9 +740,14 @@
       "reason": "Prediction validity round, theme 2 of 8 (a prediction splits and folds a patient's stays together): lasso_selection's folds keep a patient's stays together, so its software resource digest moves every coder bundle, and M2's coder prompt grows from 1,909 to 2,026 bytes (lasso and SHAP swap rank). No summary maximum moves.",
       "source_digest_changes": [],
       "summary_changes": {}
+    },
+    {
+      "reason": "Prediction validity round, theme 4 of 8 (a prediction is compared with the score its question names): the prediction family contract states the benchmark comparator, so M2's planner context grows by 401 bytes (about 100 tokens). No summary maximum moves.",
+      "source_digest_changes": [],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Prediction validity round, theme 2 of 8 (a prediction splits and folds a patient's stays together): lasso_selection's folds keep a patient's stays together, so its software resource digest moves every coder bundle, and M2's coder prompt grows from 1,909 to 2,026 bytes (lasso and SHAP swap rank). No summary maximum moves.",
+  "baseline_reason": "Prediction validity round, theme 4 of 8 (a prediction is compared with the score its question names): the prediction family contract states the benchmark comparator, so M2's planner context grows by 401 bytes (about 100 tokens). No summary maximum moves.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -1265,15 +1270,15 @@
       "know_how_prompt_bytes": 4012,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 15292,
+        "approx_input_tokens": 15392,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 48082,
+            "bytes": 48483,
             "included": true,
             "required": true,
-            "sha256": "6720d0fbb4e2a19f1f32655da1467755dcd10ff5b63818704c5014ade0fd8dc7"
+            "sha256": "5d49bcb5ac2050f1923b96d779098b709b40415aa3e4eb86067eb4629e4db4d7"
           },
           "reviewed_protocol_resources": {
             "authority_bound": true,
@@ -1284,27 +1289,27 @@
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 61166,
+        "total_bytes": 61567,
         "truncated_strings": false,
-        "user_bytes": 52722
+        "user_bytes": 53123
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 14132,
+        "approx_input_tokens": 14232,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 48082,
+            "bytes": 48483,
             "included": true,
             "required": true,
-            "sha256": "6720d0fbb4e2a19f1f32655da1467755dcd10ff5b63818704c5014ade0fd8dc7"
+            "sha256": "5d49bcb5ac2050f1923b96d779098b709b40415aa3e4eb86067eb4629e4db4d7"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 56526,
+        "total_bytes": 56927,
         "truncated_strings": false,
-        "user_bytes": 48082
+        "user_bytes": 48483
       },
       "planning_contract_bytes": 7361,
       "planning_contract_sha256": "bfe258634fb7add9efb0ddfc113cde254a7772148b59c47af0f3f0182c0cc8bc",

@@ -16,7 +16,7 @@ from __future__ import annotations
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Optional
 
-from .cohort_product_keys import sole_typed_cohort_input
+from .cohort_product_keys import is_closed_cohort_product_key, sole_typed_cohort_input
 from .ownership_verdict import OwnershipVerdict
 
 PREDICTION_MODEL_ANALYSIS_KIND = "static_prediction_model"
@@ -26,6 +26,10 @@ PREDICTION_PERFORMANCE_PRODUCT = "table:model_performance"
 PREDICTION_INTERNAL_VALIDATION_PRODUCT = "table:validation"
 PREDICTION_CALIBRATION_PRODUCT = "table:calibration"
 PREDICTION_CLINICAL_UTILITY_PRODUCT = "table:clinical_utility"
+PREDICTION_BENCHMARK_ACTION = "prediction.benchmark_comparison"
+PREDICTION_BENCHMARK_PRODUCT = "table:benchmark_comparison"
+#: The comparator columns one benchmark comparison step may read.
+MAX_BENCHMARK_COMPARATORS = 3
 
 #: Action -> the exact ordered products the static prediction owner writes.
 STATIC_PREDICTION_ACTION_OUTPUTS: Mapping[str, tuple[str, ...]] = MappingProxyType(
@@ -37,6 +41,7 @@ STATIC_PREDICTION_ACTION_OUTPUTS: Mapping[str, tuple[str, ...]] = MappingProxyTy
         "prediction.internal_validation": (PREDICTION_INTERNAL_VALIDATION_PRODUCT,),
         "prediction.calibration_metrics": (PREDICTION_CALIBRATION_PRODUCT,),
         "prediction.decision_curve": (PREDICTION_CLINICAL_UTILITY_PRODUCT,),
+        PREDICTION_BENCHMARK_ACTION: (PREDICTION_BENCHMARK_PRODUCT,),
     }
 )
 _SECONDARY_ROLES = frozenset({"secondary", "auxiliary"})
@@ -144,10 +149,12 @@ def static_prediction_owns_step(step: object) -> bool:
     typed_inputs = tuple(
         value for value in getattr(step, "inputs", None) or () if ":" in value
     )
-    if (
-        getattr(step, "planned_analysis_role", None) not in _SECONDARY_ROLES
-        or typed_inputs != (PREDICTION_SCORES_PRODUCT,)
-    ):
+    if getattr(step, "planned_analysis_role", None) not in _SECONDARY_ROLES:
+        return False
+    if action == PREDICTION_BENCHMARK_ACTION:
+        if not static_prediction_benchmark_columns(step):
+            return False
+    elif typed_inputs != (PREDICTION_SCORES_PRODUCT,):
         return False
     return bool(
         getattr(step, "table_one_spec", None) is None
@@ -157,6 +164,41 @@ def static_prediction_owns_step(step: object) -> bool:
         and getattr(step, "trajectory_stability_spec", None) is None
         and not getattr(step, "model_requirements", None)
     )
+
+
+def _step_inputs(step: object) -> tuple[str, ...]:
+    return tuple(str(value or "").strip() for value in (getattr(step, "inputs", None) or ()))
+
+
+def static_prediction_benchmark_cohort_input(step: object) -> Optional[str]:
+    """The typed cohort input of a benchmark comparison step, or ``None``.
+
+    The step's only typed inputs are, last, the primary's typed cohort and
+    then its per-row scores: the comparison reads the comparator columns from
+    the primary's own rows.
+    """
+
+    inputs = _step_inputs(step)
+    typed = tuple(value for value in inputs if ":" in value)
+    if len(typed) != 2 or inputs[-2:] != typed or typed[1] != PREDICTION_SCORES_PRODUCT:
+        return None
+    return typed[0] if is_closed_cohort_product_key(typed[0]) else None
+
+
+def static_prediction_benchmark_columns(step: object) -> tuple[str, ...]:
+    """The comparator columns a benchmark comparison step declares, in order.
+
+    They precede its typed cohort input, as a primary's model columns do, and
+    are 1 to ``MAX_BENCHMARK_COMPARATORS`` unique raw columns; any other shape
+    declares none.
+    """
+
+    if static_prediction_benchmark_cohort_input(step) is None:
+        return ()
+    columns = _step_inputs(step)[:-2]
+    if not all(columns) or len(set(columns)) != len(columns):
+        return ()
+    return columns if 1 <= len(columns) <= MAX_BENCHMARK_COMPARATORS else ()
 
 
 def static_prediction_features(
@@ -199,6 +241,9 @@ def static_prediction_executes_robustness_spec(
 
 
 __all__ = [
+    "MAX_BENCHMARK_COMPARATORS",
+    "PREDICTION_BENCHMARK_ACTION",
+    "PREDICTION_BENCHMARK_PRODUCT",
     "PREDICTION_CALIBRATION_PRODUCT",
     "PREDICTION_CLINICAL_UTILITY_PRODUCT",
     "PREDICTION_INTERNAL_VALIDATION_PRODUCT",
@@ -207,6 +252,8 @@ __all__ = [
     "PREDICTION_PRIMARY_ACTION",
     "PREDICTION_SCORES_PRODUCT",
     "STATIC_PREDICTION_ACTION_OUTPUTS",
+    "static_prediction_benchmark_cohort_input",
+    "static_prediction_benchmark_columns",
     "static_prediction_execution_verdict",
     "static_prediction_executes_robustness_spec",
     "static_prediction_features",

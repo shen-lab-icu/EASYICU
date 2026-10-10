@@ -505,6 +505,7 @@ _COMPONENT_ZH = {
     "prediction.discrimination_calibration": ("区分度与校准", "联合评估 AUROC、校准曲线和预测概率的可用性。"),
     "prediction.calibration_metrics": ("校准斜率、截距与 Brier 分数", "定量评估总体校准、校准斜率和概率误差。"),
     "prediction.delong_ci": ("DeLong AUROC 区间与比较", "计算 AUROC 置信区间并比较同一病例上的相关模型。"),
+    "prediction.benchmark_comparison": ("与现有评分比较", "在同一批验证住院上比较模型与题目点名的现有评分：总比较区分度；评分是同一结局的概率时，也比较校准。"),
     "prediction.decision_curve": ("决策曲线与净获益", "在临床阈值范围内比较模型、全治和全不治策略。"),
     "prediction.threshold_metrics": ("临床阈值性能", "报告指定阈值下的敏感度、特异度、PPV 和 NPV。"),
     "prediction.feature_attribution": ("特征归因", "使用 SHAP、置换重要性或模型系数解释预测贡献。"),

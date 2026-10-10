@@ -69,6 +69,7 @@ from ..literature_design_authority import (
     LiteratureDesignEvidenceCard,
 )
 from ..ordinal_multi_outcome import resolve_ordinal_multi_outcome_contract
+from ..benchmark_comparator import benchmark_comparator_facts
 from ..question_requirements import (
     QuestionRequirementsError,
     bind_named_question_concepts,
@@ -94,6 +95,7 @@ from .contract import (
     AcceptedBaselineRow,
     AcceptedFeatureGroup,
     AdjustmentCandidate,
+    BenchmarkCandidate,
     ExposureKind,
     FamilySpecError,
     FamilySpecRequest,
@@ -2649,6 +2651,45 @@ def _feature_candidates(
     return candidates
 
 
+def _benchmark_candidates(
+    context: ResearchContext,
+    *,
+    variable_roster: Sequence[str],
+    excluded: frozenset[str],
+) -> list[BenchmarkCandidate]:
+    """Offer the numeric roster columns a prediction can be compared with.
+
+    A column whose source concept the concept dictionary states as a
+    probability or an oriented score (``benchmark_comparator_facts``), the
+    reading the static prediction owner applies when it compares, with the
+    roster columns the dictionary relates to it.
+    """
+
+    variables = {item.name: item for item in context.variables}
+    roster = set(variable_roster)
+    relatives = concept_relatives(context)
+    candidates: list[BenchmarkCandidate] = []
+    for name in variable_roster:
+        variable = variables.get(name)
+        if variable is None or name in excluded:
+            continue
+        if not any(token in str(variable.dtype or "").lower() for token in _NUMERIC_DTYPES):
+            continue
+        concept = str(getattr(variable, "source_concept", None) or "").strip() or name
+        facts = benchmark_comparator_facts(concept)
+        if facts is None or facts.kind is None:
+            continue
+        candidates.append(
+            BenchmarkCandidate(
+                name=name,
+                concept=concept,
+                kind=facts.kind,
+                related_columns=sorted((relatives(name) & roster) - {name}),
+            )
+        )
+    return candidates
+
+
 def _build_prediction_request(
     context: ResearchContext,
     *,
@@ -2685,6 +2726,9 @@ def _build_prediction_request(
         and str(getattr(variables[name].role, "value", variables[name].role)) == "other"
     ]
     prediction_time_hours = host_outer_feature_window_end_hours(context)
+    benchmark_candidates = _benchmark_candidates(
+        context, variable_roster=optional_roster, excluded=design_columns
+    )
     cohort_fields = _prediction_risk_set(
         context,
         _typed_cohort_fields(context, required_primary_cohort_selection_mode),
@@ -2712,6 +2756,7 @@ def _build_prediction_request(
         level_label_keys=[],
         counts_only=False,
         feature_candidates=feature_candidates,
+        benchmark_candidates=benchmark_candidates,
         membership_candidates=[],
         adjustment_selection="planner_selectable",
         adjustment_candidates=[],

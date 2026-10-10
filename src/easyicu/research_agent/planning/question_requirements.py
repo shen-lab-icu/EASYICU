@@ -17,9 +17,10 @@ What the host can verify, it verifies:
 * every concept is one the run offers;
 * a benchmark is answered only by a step whose action compares models on the
   same rows (``BENCHMARK_ACTIONS``) and reads the benchmark's concept.  A
-  concept read as a predictor answers no benchmark.  A family template has no
-  such step, so on that route a benchmark is a capability gap, whatever the
-  Planner claims;
+  concept read as a predictor answers no benchmark.  On the family route only
+  the prediction template drafts such a step, for an existing score or
+  probability the host offers; without one a benchmark is a capability gap
+  there, whatever the Planner claims;
 * a subgroup is answered only by a subgroup-capable step (``SUBGROUP_ACTIONS``)
   that reads its concept, with the same rule for a family template;
 * a requirement of any other kind (an estimand, another analysis) is
@@ -118,7 +119,13 @@ Disposition = Literal[
 ]
 
 #: Actions that compare the study's model with another model or score on the same rows.
-BENCHMARK_ACTIONS = frozenset({"prediction.delong_ci", "prediction.reclassification"})
+BENCHMARK_ACTIONS = frozenset(
+    {
+        "prediction.benchmark_comparison",
+        "prediction.delong_ci",
+        "prediction.reclassification",
+    }
+)
 #: Actions that analyse a named subgroup.
 SUBGROUP_ACTIONS = frozenset(
     {
@@ -525,8 +532,8 @@ _TEMPLATE_GAPS: Mapping[str, tuple[CapabilityGapElement, str]] = MappingProxyTyp
     {
         "benchmark": (
             "comparison",
-            "This plan's family template has no step that compares the model with "
-            "an existing score or model on the same rows.",
+            "This plan's family template drafted no step that compares the model with "
+            "this existing score or model on the same rows.",
         ),
         "subgroup": (
             "analysis",

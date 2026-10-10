@@ -204,6 +204,31 @@ _PREDICTION = MethodSuite(
             kernel_modules=("delong_auc",),
         ),
         AnalysisMethod(
+            key="benchmark_comparison",
+            name="Comparison with an existing score on the same stays",
+            purpose=(
+                "Compare the model with an existing score the question names on "
+                "the same validation stays: discrimination always, calibration "
+                "only when the score is a probability of the same outcome."
+            ),
+            tier="standard_supporting",
+            implementation="deterministic",
+            produces=(
+                "benchmark_comparison.csv (per comparator: both AUROCs, their "
+                "paired difference and interval; calibration side by side when "
+                "compared; the comparator's information window)"
+            ),
+            runner="static_prediction_model",
+            reporting_items=("TRIPOD+AI 15",),
+            notes=(
+                "Host-owned by the static prediction owner: it reads the "
+                "primary's sealed scores, never refits or recalibrates the "
+                "comparator, and reads what a comparator is from its one "
+                "owner (planning.benchmark_comparator)."
+            ),
+            kernel_modules=("delong_auc",),
+        ),
+        AnalysisMethod(
             key="decision_curve",
             name="Decision-curve analysis / net benefit (DCA)",
             purpose="Clinical utility across threshold probabilities vs treat-all / treat-none.",

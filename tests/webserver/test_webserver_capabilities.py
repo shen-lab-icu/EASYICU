@@ -75,11 +75,11 @@ def test_method_skill_catalog_projects_registered_method_contracts(monkeypatch) 
     components = {row["id"]: row for row in catalog["components"]}
 
     assert len(by_id) == 19
-    assert len(components) == 45
+    assert len(components) == 46
     assert catalog["workflow_count"] == 10
     assert catalog["analysis_module_count"] == 9
     assert catalog["builtin_skill_count"] == 19
-    assert catalog["available_method_count"] == 45
+    assert catalog["available_method_count"] == 46
     assert catalog["planned_method_count"] == 7
     assert by_id["survival-time-to-event"]["capability_id"] == (
         "survival_time_to_event_v1"
