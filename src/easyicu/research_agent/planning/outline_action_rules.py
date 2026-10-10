@@ -19,12 +19,19 @@ name its action's fixed products, so the outline is the last place the
 Planner can still choose differently.  The pairs are read from the actions'
 runtime contracts, never listed here: an action whose required product
 inputs another action of the same executor produces replays that action.
+
+One rule belongs to the route, not to an action's place: an outline the
+Progressive Planner composes cannot state a prediction time, so it stops at
+a static prediction primary (``static_prediction_outline_stop``).  The
+family template, whose outlines pass the same action rules, states that time
+and is not stopped.
 """
 
 from __future__ import annotations
 
-from typing import Iterable, Sequence
+from typing import Iterable, Optional, Sequence
 
+from ..contracts.prediction_execution import PREDICTION_PRIMARY_ACTION
 from .phenotype_outline_rules import (
     phenotype_comparison_excluded_by,
     phenotype_comparison_position,
@@ -36,10 +43,15 @@ from .scientific_action_catalog import (
     scientific_actions_for_analysis_type,
 )
 
+#: The stop of a composed outline that selects the static prediction primary.
+STATIC_PREDICTION_TEMPLATE_REQUIRED = "progressive_static_prediction_requires_family_template"
+
 __all__ = [
+    "STATIC_PREDICTION_TEMPLATE_REQUIRED",
     "outline_action_position",
     "replay_producer_rule_text",
     "replayed_producer_action_ids",
+    "static_prediction_outline_stop",
     "validate_outline_action_rules",
     "validate_outline_replay_producers",
 ]
@@ -214,3 +226,25 @@ def outline_action_position(analysis_type: str, action_id: str) -> str:
         f"{_series(unread)} read another primary's result, so they do not follow "
         "this one: see each one's outline_position."
     )
+
+
+def static_prediction_outline_stop(
+    outline: ProgressivePlanOutline,
+) -> Optional[ProgressivePlanCompileError]:
+    """The stop of a composed outline that selects the static prediction primary, or None."""
+
+    for index, step in enumerate(outline.steps):
+        if str(step.scientific_action_id or "") != PREDICTION_PRIMARY_ACTION:
+            continue
+        return ProgressivePlanCompileError(
+            STATIC_PREDICTION_TEMPLATE_REQUIRED,
+            f"the outline selected {PREDICTION_PRIMARY_ACTION} in step {step.step_id!r}; "
+            "a static prediction predicts at a prediction time, for the stays still in "
+            "the ICU then, from values observed by then, and only the prediction family "
+            "template states that time, its risk set and those predictors",
+            step_id=step.step_id,
+            step_index=index,
+            path="steps",
+            findings=({"step_id": step.step_id, "action_id": PREDICTION_PRIMARY_ACTION},),
+        )
+    return None

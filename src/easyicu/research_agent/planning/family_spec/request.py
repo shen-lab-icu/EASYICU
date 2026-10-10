@@ -55,6 +55,7 @@ from ..cohort_eligibility import (
 from ..adjustment_authority import (
     AdjustmentSetAuthority,
     adjusted_model_term_planning_authority,
+    WINDOW_DESCRIPTION_ROLES,
     host_outer_feature_window_end_hours,
     host_window_bound_roles,
     primary_landmark_hours,
@@ -496,9 +497,7 @@ _NUMERIC_DTYPES = ("float", "int", "double", "decimal")
 #: measurement sits inside the sealed observation window. ``other`` covers
 #: window-aggregated indices (a comorbidity score's first value, for example)
 #: that are legitimate baseline descriptors without being adjustment terms.
-_BASELINE_DESCRIPTION_ROLES = frozenset(
-    {"vital", "lab", "intervention", "ordinal_score", "composite_score", "other"}
-)
+_BASELINE_DESCRIPTION_ROLES = WINDOW_DESCRIPTION_ROLES
 
 
 

@@ -21,6 +21,11 @@ from typing import Any, Literal, Mapping, Optional, Sequence
 
 from ..authority.declared_levels import observed_levels_for
 from ..research_context.materialization_window import bound_feature_window_end_hours
+from ..research_context.stay_events import (
+    column_kind,
+    stay_outcome_columns,
+    whole_stay_event_columns,
+)
 from ..research_context.typed import declared_domain_for_variable
 
 
@@ -35,6 +40,10 @@ _MODEL_TERM_INELIGIBLE_ROLES = frozenset(
 _MODEL_TERM_DYNAMIC_ROLES = frozenset(
     {"vital", "lab", "intervention", "ordinal_score", "composite_score"}
 )
+#: The roles a descriptive baseline or a fitted feature (a prediction's
+#: predictor, a phenotype's input) may hold when its window is placed: the
+#: model-term roles and ``other``.
+WINDOW_DESCRIPTION_ROLES = frozenset({*_MODEL_TERM_DYNAMIC_ROLES, "other"})
 HostTemporalRole = Literal["baseline_static", "at_or_before_time_zero"]
 # ``first_24h``, ``0-24h``, ``0_24h``, ``24h``: the trailing hour bound of a
 # named window is the only fact this owner reads from a window label.
@@ -147,12 +156,18 @@ def host_window_bound_roles(
     only when its materialization window ends at or before it: its own
     ``analysis_window`` label, or -- only when it declares none, and only for
     the clinical roles listed in ``outer_window_fallback_roles`` -- the outer
-    host-bound feature window.
+    host-bound feature window.  Only a column that summarizes observations
+    over a window inherits that window (``stay_events.column_kind``, the
+    reading the materialization owner gives it): a stay-level value, an
+    outcome, an event's time or an event status recorded over the whole stay
+    does not, whatever its role.
     Every other variable is absent from the mapping. With no reference time
     only the demographics are provable.
     """
 
     outer_end = host_outer_feature_window_end_hours(context)
+    outcomes = stay_outcome_columns(context)
+    whole_stay = whole_stay_event_columns(context)
     roles: dict[str, HostTemporalRole] = {}
     for variable in getattr(context, "variables", ()) or ():
         name = str(getattr(variable, "name", "") or "").strip()
@@ -169,7 +184,18 @@ def host_window_bound_roles(
         # Only a variable without its own window inherits the outer one. A
         # declared window this owner cannot place before the reference time
         # proves nothing; the outer window is not a stand-in for it.
-        if not label and role in outer_window_fallback_roles:
+        if (
+            not label
+            and role in outer_window_fallback_roles
+            and name not in whole_stay
+            and column_kind(
+                variable,
+                column=name,
+                concept=str(getattr(variable, "source_concept", "") or "").strip() or name,
+                outcomes=outcomes,
+            )
+            == "window_summary"
+        ):
             window_end = outer_end
         if window_end is not None and window_end <= reference_hours:
             roles[name] = "at_or_before_time_zero"
@@ -450,6 +476,7 @@ __all__ = [
     "adjusted_model_term_planning_authority",
     "host_outer_feature_window_end_hours",
     "host_proven_temporal_roles",
+    "WINDOW_DESCRIPTION_ROLES",
     "host_window_bound_roles",
     "primary_landmark_hours",
     "validate_plan_against_adjustment_authority",

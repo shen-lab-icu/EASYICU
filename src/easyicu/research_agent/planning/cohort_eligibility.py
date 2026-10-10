@@ -346,6 +346,37 @@ def cohort_predicates_after_time_zero(
     return tuple(found)
 
 
+def icu_stay_kept_after_hours(
+    context: ResearchContext, *, inclusion: Iterable[Mapping[str, Any]]
+) -> float | None:
+    """The latest hour after ICU admission the inclusion keeps only stays still in the ICU after.
+
+    A ``>`` comparison of the stay's ICU length of stay keeps the stays still
+    in the ICU after its threshold, read in hours as the time-zero rule reads
+    it; ``>=`` also keeps a stay that left at it.  ``None`` when no inclusion
+    predicate keeps such stays.  A static prediction's risk set is this
+    predicate at its prediction time.
+    """
+
+    variables = {str(variable.name): variable for variable in context.variables}
+    outcomes = stay_outcome_columns(context)
+    kept: list[float] = []
+    for predicate in inclusion:
+        if str(predicate.get("op") or "").strip() != ">":
+            continue
+        concept = str(predicate.get("concept_id") or "")
+        column = predicate_context_column(variables, concept, predicate.get("aggregation"))
+        variable = variables.get(column)
+        if column_kind(variable, column=column, concept=concept, outcomes=outcomes) != (
+            "icu_stay_length"
+        ):
+            continue
+        hours = _icu_stay_threshold_hours(predicate, unit=getattr(variable, "unit", None))
+        if hours is not None:
+            kept.append(hours)
+    return max(kept) if kept else None
+
+
 def predicate_context_column(
     variables: Mapping[str, Any], concept: str, aggregation: Any
 ) -> str:
@@ -740,5 +771,6 @@ __all__ = [
     "cohort_predicates_after_time_zero",
     "eligibility_after_time_zero",
     "event_status_read_by_its_time",
+    "icu_stay_kept_after_hours",
     "predicate_context_column",
 ]
