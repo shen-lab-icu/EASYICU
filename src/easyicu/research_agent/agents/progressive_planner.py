@@ -130,7 +130,10 @@ from ..planning.robustness_contract import validate_planner_robustness_specs
 from ..planning.scientific_action_catalog import scientific_actions_for_analysis_type
 from ..planning.scientific_review import required_method_layers_for_context, requested_outcomes
 from ..planning.outline_action_menu import outline_action_catalog as _action_catalog
-from ..planning.outline_action_rules import validate_outline_action_rules
+from ..planning.outline_action_rules import (
+    static_prediction_outline_stop,
+    validate_outline_action_rules,
+)
 from ..planning.outline_design_selection import (
     question_anchor_rule_text,
     validate_outline_design_selection,
@@ -4486,6 +4489,15 @@ class ProgressivePlannerAgent:
                 sealed_families=sealed_families,
             )
 
+        def template_only_outline_stop(
+            candidate: ProgressivePlanOutline,
+        ) -> ProgressivePlanCompileError | None:
+            # A static prediction needs the prediction time and risk set only
+            # its family template states; a design canary is never compiled.
+            if stop_after_outline:
+                return None
+            return static_prediction_outline_stop(candidate)
+
         if resume_checkpoint is not None:
             self._attempt.prompt_metrics = restore_progressive_resume_prompt_metrics(
                 checkpoint=resume_checkpoint,
@@ -4504,10 +4516,14 @@ class ProgressivePlannerAgent:
 
             def parse_outline(raw: str) -> ProgressivePlanOutline:
                 parsed = bind_outline(_parse_model(raw, ProgressivePlanOutline))
-                if unwritable_outline_family(parsed):
-                    # The outline committed its family. A retry for any other
-                    # violation would only ask the question again; the stop
-                    # below needs no further validation.
+                if (
+                    unwritable_outline_family(parsed)
+                    or template_only_outline_stop(parsed) is not None
+                ):
+                    # The outline committed its family or its static
+                    # prediction. A retry for any other violation would only
+                    # ask the question again; the stop below needs no further
+                    # validation.
                     return parsed
                 if parsed.capability_gap is not None:
                     gap = capability_gap_check(parsed)
@@ -4602,6 +4618,9 @@ class ProgressivePlannerAgent:
                 planning_contract_context=planning_contract_context,
                 outline_selected=True,
             )
+        template_only = template_only_outline_stop(outline)
+        if template_only is not None:
+            raise template_only
         # A design element the question needs and no offered family expresses:
         # stop instead of compiling steps that answer another question.
         gap = outline.declared_capability_gap()

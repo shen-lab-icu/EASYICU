@@ -121,6 +121,7 @@ from .analysis_types import (
     requested_exposure_occurrence_cues,
 )
 from .population_requirements import context_population_requirements
+from .prediction_timing import static_prediction_timing_facts
 from .baseline_requirements import (
     baseline_requirement_coverage,
     baseline_requirement_projection,
@@ -2739,6 +2740,71 @@ def trajectory_representation_findings(
     ]
 
 
+def prediction_timing_findings(
+    context: ResearchContext, plan: AnalysisPlan
+) -> list[PlanScientificFinding]:
+    """Refuse a static prediction that may predict from what is known only after it predicts.
+
+    ``planning.prediction_timing`` states when each static prediction primary
+    predicts, whether its cohort keeps only the stays still in the ICU then,
+    and which predictors the host cannot place before then.  Each cause has
+    its own code, so a reader's sentence names only what is true.
+    """
+
+    findings: list[PlanScientificFinding] = []
+    for facts in static_prediction_timing_facts(context, plan):
+        hours = facts.prediction_time_hours
+        when = f"{hours:g} h after ICU admission" if hours is not None else "ICU admission"
+        refs = [
+            f"analysis_plan.json.steps.{facts.step_id}.inputs",
+            "analysis_plan.json.cohort.inclusion",
+            "research_context.json.variables",
+        ]
+        if not facts.risk_set_kept:
+            findings.append(
+                PlanScientificFinding(
+                    code="PREDICTION_RISK_SET_NOT_KEPT",
+                    severity="blocker",
+                    dimension="icu_clinical_design",
+                    message=(
+                        f"Step {facts.step_id!r} predicts at {when}, but its cohort does not "
+                        f"keep only the stays still in the ICU after {hours:g} h, so it also "
+                        "analyzes stays that died or left the ICU before the prediction, "
+                        "whose outcome may come before it."
+                    ),
+                    evidence_refs=refs,
+                    remediation=(
+                        "Plan the prediction again from the prediction family template: it "
+                        "keeps only the stays still in the ICU at its prediction time."
+                    ),
+                    remediation_route="agent_plan_revision",
+                )
+            )
+        if facts.unproven_predictors:
+            findings.append(
+                PlanScientificFinding(
+                    code="PREDICTION_PREDICTOR_TIMING_UNPROVEN",
+                    severity="blocker",
+                    dimension="icu_clinical_design",
+                    message=(
+                        f"Step {facts.step_id!r} predicts at {when}, but the host cannot show "
+                        "these predictors were observed by then: "
+                        + ", ".join(facts.unproven_predictors)
+                        + "; a value measured later, or recorded over the whole stay, "
+                        "carries what happened after the prediction into the model."
+                    ),
+                    evidence_refs=refs,
+                    remediation=(
+                        "Plan the prediction again from the prediction family template: it "
+                        "predicts at the end of the host-bound feature window and offers as "
+                        "predictors only values the host can place before it."
+                    ),
+                    remediation_route="agent_plan_revision",
+                )
+            )
+    return findings
+
+
 def _trajectory_window_end_hours(
     trajectory_representation: Optional[Mapping[str, Any]],
 ) -> Optional[float]:
@@ -3362,6 +3428,7 @@ def build_plan_scientific_review(
     )
     findings.extend(unapplied_population_findings(plan))
     findings.extend(robustness_override_event_window_findings(context, plan))
+    findings.extend(prediction_timing_findings(context, plan))
     required_source_columns = {
         context.primary_exposure, context.target_outcome,
         *context.cohort.outcome_columns,
@@ -4676,6 +4743,7 @@ __all__ = [
     "render_plan_scientific_guardrails",
     "render_agent_plan_revision_contract",
     "plan_revision_blocker_codes",
+    "prediction_timing_findings",
     "primary_model_retention_findings",
     "remediation_route_for_finding",
     "required_method_layers_for_context",

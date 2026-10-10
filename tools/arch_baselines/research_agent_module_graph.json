@@ -10101,6 +10101,10 @@
     ],
     [
       "easyicu.research_agent.planning.adjustment_authority",
+      "easyicu.research_agent.research_context.stay_events"
+    ],
+    [
+      "easyicu.research_agent.planning.adjustment_authority",
       "easyicu.research_agent.research_context.typed"
     ],
     [
@@ -10945,6 +10949,10 @@
     ],
     [
       "easyicu.research_agent.planning.outline_action_rules",
+      "easyicu.research_agent.contracts.prediction_execution"
+    ],
+    [
+      "easyicu.research_agent.planning.outline_action_rules",
       "easyicu.research_agent.planning.phenotype_outline_rules"
     ],
     [
@@ -11102,6 +11110,22 @@
     [
       "easyicu.research_agent.planning.population_shadow",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.planning.prediction_timing",
+      "easyicu.research_agent.contracts.prediction_execution"
+    ],
+    [
+      "easyicu.research_agent.planning.prediction_timing",
+      "easyicu.research_agent.planning.adjustment_authority"
+    ],
+    [
+      "easyicu.research_agent.planning.prediction_timing",
+      "easyicu.research_agent.planning.cohort_eligibility"
+    ],
+    [
+      "easyicu.research_agent.planning.prediction_timing",
+      "easyicu.research_agent.planning.dependence_authority"
     ],
     [
       "easyicu.research_agent.planning.preplan_know_how",
@@ -11706,6 +11730,10 @@
     [
       "easyicu.research_agent.planning.scientific_review",
       "easyicu.research_agent.planning.population_requirements"
+    ],
+    [
+      "easyicu.research_agent.planning.scientific_review",
+      "easyicu.research_agent.planning.prediction_timing"
     ],
     [
       "easyicu.research_agent.planning.scientific_review",
@@ -14772,9 +14800,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3685,
+    "edge_count": 3692,
     "largest_scc_size": 0,
-    "module_count": 839,
+    "module_count": 840,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -15377,6 +15405,7 @@
     "easyicu.research_agent.planning.population_requirements": "planning/population_requirements.py",
     "easyicu.research_agent.planning.population_shadow": "planning/population_shadow.py",
     "easyicu.research_agent.planning.population_spec": "planning/population_spec.py",
+    "easyicu.research_agent.planning.prediction_timing": "planning/prediction_timing.py",
     "easyicu.research_agent.planning.preplan_know_how": "planning/preplan_know_how.py",
     "easyicu.research_agent.planning.preplan_literature": "planning/preplan_literature.py",
     "easyicu.research_agent.planning.primary_result_contract": "planning/primary_result_contract.py",
