@@ -139,7 +139,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-confirmation.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261009-target-trial1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261010-stop-sentences1" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261010-substance-form1" in index
     assert "js/screens-guided-pi.js?v=20261009-target-trial1" in index
     assert "js/screens-guided.js?v=20260922-state-menus1" in index
     assert (
