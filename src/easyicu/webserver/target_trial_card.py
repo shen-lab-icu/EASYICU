@@ -204,6 +204,9 @@ def target_trial_card(
         ),
         "latest_compile": dict(latest) if latest is not None else None,
         "stale": stale,
+        # Why the host read the question as a trial, in its words, when it did
+        # (``causal_trial_design``); the researcher's own choice states none.
+        "causal_trial_reading": study.get("causal_trial_reading") or None,
     }
 
 

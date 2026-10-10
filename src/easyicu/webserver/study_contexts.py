@@ -18,6 +18,10 @@ from easyicu.research_agent.planning.sensitivity_authority import (
     normalize_prespecified_sensitivities,
 )
 from easyicu.webserver import primary_cohort, state_paths
+from easyicu.webserver.causal_trial_reading import (
+    normalize_causal_trial_reading,
+    reading_rests_on,
+)
 
 _CONFIG_PATH = state_paths.state_root() / "webserver_study_contexts.json"
 _LOCK = threading.RLock()
@@ -77,6 +81,7 @@ _CONTEXT_FIELDS = {
     "analysis_design",
     "trajectory_design",
     "target_trial_design",
+    "causal_trial_reading",
     "sensitivity_specs",
     "time_window",
     "comparator",
@@ -1272,6 +1277,7 @@ def validate_context_update(
     lifecycle_write: bool = True,
     _server_cohort_eligibility_authority_write: bool = False,
     _server_concept_selection_authority_write: bool = False,
+    _server_causal_trial_reading_write: bool = False,
 ) -> Dict[str, Any]:
     """Validate and normalize one proposed update without mutating the store.
 
@@ -1291,6 +1297,7 @@ def validate_context_update(
         allow_concept_selection_authority=(
             _server_concept_selection_authority_write
         ),
+        allow_causal_trial_reading=_server_causal_trial_reading_write,
     )
     current = dict(current_context or {})
     if current and not lifecycle_write:
@@ -1336,6 +1343,7 @@ def _default_context(context_id: str, timestamp: str) -> Dict[str, Any]:
         "analysis_design": {},
         "trajectory_design": {},
         "target_trial_design": {},
+        "causal_trial_reading": None,
         "sensitivity_specs": [],
         "time_window": {},
         "comparator": "",
@@ -1360,6 +1368,7 @@ def _sanitize_patch(
     allow_cohort_eligibility_authority: bool = False,
     allow_concept_selection_authority: bool = False,
     allow_target_trial_design: bool = False,
+    allow_causal_trial_reading: bool = False,
 ) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise StudyContextError({"error": "study_context_body_required"})
@@ -1457,6 +1466,27 @@ def _sanitize_patch(
         patch["target_trial_design"] = normalize_target_trial_design(
             raw.get("target_trial_design"), study_id=patch.get("id")
         )
+    if "causal_trial_reading" in raw:
+        # The host reads it from the question (``causal_trial_design``).
+        if not allow_causal_trial_reading:
+            raise StudyContextError(
+                {
+                    "error": "study_causal_trial_reading_server_owned",
+                    "field": "causal_trial_reading",
+                }
+            )
+        try:
+            patch["causal_trial_reading"] = normalize_causal_trial_reading(
+                raw.get("causal_trial_reading")
+            )
+        except ValueError as exc:
+            raise StudyContextError(
+                {
+                    "error": "study_causal_trial_reading_invalid",
+                    "field": "causal_trial_reading",
+                    "reason": str(exc),
+                }
+            ) from exc
     if "sensitivity_specs" in raw:
         patch["sensitivity_specs"] = normalize_sensitivity_specs(
             raw.get("sensitivity_specs")
@@ -1692,6 +1722,7 @@ def _contexts_from_raw(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
             allow_literature_authority=True,
             allow_cohort_eligibility_authority=True,
             allow_concept_selection_authority=True,
+            allow_causal_trial_reading=True,
         )
         if "analysis_design" in row:
             # Historical contradictions must stay inspectable, not break the
@@ -1755,6 +1786,25 @@ def _validate_covariate_decision_contract(context: Dict[str, Any]) -> None:
                 "field": "covariate_selection",
             }
         )
+
+
+def _stale_causal_trial_reading(context: Mapping[str, Any]) -> bool:
+    """Whether a stored reading no longer explains the study's causal design.
+
+    The reading says why the host recorded a causal design, in the question's
+    words.  Once the design is no longer causal, or the question no longer
+    holds those words, it explains nothing: it is cleared in the same write,
+    and the design stays as it is.
+    """
+
+    reading = context.get("causal_trial_reading")
+    if not reading:
+        return False
+    design = context.get("analysis_design")
+    family = design.get("analysis_family") if isinstance(design, Mapping) else None
+    return family != "causal_inference" or not reading_rests_on(
+        reading, context.get("question")
+    )
 
 
 def analysis_design_reads_patient_grouping(design: Mapping[str, Any]) -> bool:
@@ -2002,6 +2052,7 @@ def upsert_context(
     _server_cohort_eligibility_authority_write: bool = False,
     _server_concept_selection_authority_write: bool = False,
     _server_target_trial_design_write: bool = False,
+    _server_causal_trial_reading_write: bool = False,
 ) -> Dict[str, Any]:
     client_concept_selection_authority: Dict[str, Any] = {}
     if not _server_concept_selection_authority_write and isinstance(raw_context, dict):
@@ -2018,6 +2069,7 @@ def upsert_context(
             _server_concept_selection_authority_write
         ),
         allow_target_trial_design=_server_target_trial_design_write,
+        allow_causal_trial_reading=_server_causal_trial_reading_write,
     )
     if expected_revision is not None and (
         isinstance(expected_revision, bool)
@@ -2149,6 +2201,8 @@ def upsert_context(
                 patch["literature_authority"] = {}
         if patch or current is None:
             context.update(patch)
+            if _stale_causal_trial_reading(context):
+                context["causal_trial_reading"] = None
             _validate_covariate_decision_contract(context)
             _validate_analysis_dependence_contract(context)
             if "time_window" in patch:

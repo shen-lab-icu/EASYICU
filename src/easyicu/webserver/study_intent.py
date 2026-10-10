@@ -41,6 +41,7 @@ from easyicu.outcome_availability import (
 from easyicu.research_agent.research_context.temporal_semantics import (
     event_anchored_spans,
 )
+from easyicu.webserver.causal_trial_reading import time_zero_spans
 from easyicu.webserver import provider_adapter
 from easyicu.webserver.provider_gate import ProviderGateError, resolve_provider_gate
 
@@ -1177,7 +1178,12 @@ def deterministic_intent(question: str) -> Dict[str, Any]:
     # hours after suspected infection onset" count from that event, not from
     # ICU admission, whether or not the event is the study's time zero, so
     # they are not the study's ICU window either.
-    elsewhere = [*mortality_horizon_spans(lowered), *event_anchored_spans(lowered)]
+    # Nor are those of "以入 ICU 后第 6 小时为时间零点": a time zero is no window.
+    elsewhere = [
+        *mortality_horizon_spans(lowered),
+        *event_anchored_spans(lowered),
+        *time_zero_spans(lowered),
+    ]
     window = next(
         (
             match
