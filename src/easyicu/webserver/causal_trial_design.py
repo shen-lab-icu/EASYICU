@@ -47,6 +47,7 @@ __all__ = [
     "question_causal_design",
     "question_treatment_concepts",
     "registered_treatment_concepts",
+    "source_groups_patients",
     "stop_unset_causal_design",
     "supported_treatment_classes",
 ]
@@ -181,7 +182,9 @@ def _gap_reason(gap: Mapping[str, Any]) -> str:
     return f"in {gap['database']}, where v1 emulates no trial"
 
 
-def _source_groups_patients(study: Mapping[str, Any]) -> bool:
+def source_groups_patients(study: Mapping[str, Any]) -> bool:
+    """Whether the study's bound source groups its stays by patient, verified."""
+
     from easyicu.webserver.research_launch_scientific import verified_patient_grouping
     from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
 
@@ -201,7 +204,7 @@ def causal_design_for(study: Mapping[str, Any]) -> Dict[str, str]:
         "analysis_unit": "icu_stay",
         "variance_estimator": "bootstrap",
     }
-    if _source_groups_patients(study):
+    if source_groups_patients(study):
         design["cluster_unit"] = "patient"
     return design
 

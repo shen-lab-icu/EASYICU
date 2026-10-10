@@ -6048,6 +6048,7 @@ def test_study_setup_requires_one_turn_grant_and_uses_typed_owner(
         "lifecycle_write": False,
         "_server_concept_selection_authority_write": True,
         "_server_causal_trial_reading_write": True,
+        "_server_study_family_reading_write": True,
     }
 
     one_grant = ToolExecutionContext(

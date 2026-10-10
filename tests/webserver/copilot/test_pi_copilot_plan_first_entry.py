@@ -145,7 +145,12 @@ def test_opening_update_preserves_question_without_silently_confirming_design(mo
     assert writes[0]["outcome"] == "院内死亡"
     assert writes[0]["primary_exposure"] == "乳酸"
     assert not writes[0].get("analysis_goal")
-    assert not writes[0].get("analysis_design")
+    # The question states a relationship ("乳酸与院内死亡的关系"): the study
+    # setup records that family's design as a candidate beside its reading
+    # (``study_family_design``), and nothing confirms it.
+    assert writes[0]["analysis_design"]["analysis_family"] == "association_study"
+    assert writes[0]["study_family_reading"]["family"] == "association_study"
+    assert not (writes[0].get("confirmations") or {}).get("analysis_design")
     assert result["details"]["omitted_unconfirmed_fields"] == ["analysis_goal"]
     workflow = result["details"]["workflow"]
     assert workflow["next_action_code"] == "provider_ready_to_generate_plan"
