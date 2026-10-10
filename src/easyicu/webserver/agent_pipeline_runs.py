@@ -34,6 +34,11 @@ from easyicu.research_agent.authority.run_input import (
     load_verified_run_input_capsule,
 )
 from easyicu.research_agent.contracts.executor_stop import registered_executor_stop
+from easyicu.research_agent.contracts.patient_grouping_need import (
+    PATIENT_GROUPING_AUTHORITY_ERROR_KEY,
+    PATIENT_GROUPING_STATUS_KEY,
+    steps_needing_patient_groups,
+)
 from easyicu.research_agent.providers.structured_retry import (
     safe_provider_error_category,
     safe_structured_attempt_metadata,
@@ -95,6 +100,7 @@ from easyicu.webserver import (
     primary_cohort,
     provider_adapter,
     run_artifact_disclosure,
+    run_patient_grouping,
 )
 from easyicu.webserver import execution_retry as execution_retry_policy
 from easyicu.webserver import study_contexts as study_context_owner
@@ -1518,6 +1524,7 @@ def _metadata_only_planning_acquisition(
     endpoint: Any = None,
     required_concepts: Sequence[str] = (),
     patient_grouping: Optional[PatientGroupingBinding] = None,
+    patient_grouping_status: Optional[tuple[str, Optional[str]]] = None,
     operationalized_columns: Sequence[str] = (),
     plan_change_request: PlanChangeRequest | None = None,
     first_icu_stay: Any = None,
@@ -1805,6 +1812,18 @@ def _metadata_only_planning_acquisition(
         if first_icu_stay is not None
         else None
     )
+    stated_grouping: Dict[str, Any] = (
+        {
+            PATIENT_GROUPING_STATUS_KEY: patient_grouping_status[0],
+            **(
+                {PATIENT_GROUPING_AUTHORITY_ERROR_KEY: patient_grouping_status[1]}
+                if patient_grouping_status[1] is not None
+                else {}
+            ),
+        }
+        if patient_grouping_status is not None
+        else {}
+    )
     planning_catalog.attrs["easyicu_planning_authority"] = {
         "kind": "metadata_only_planning_catalog",
         "patient_rows_read": False,
@@ -1818,6 +1837,9 @@ def _metadata_only_planning_acquisition(
             if first_icu_stay_restriction is not None
             else {}
         ),
+        # What the source can provide, beside a context that binds no grouping
+        # (run_patient_grouping.planning_patient_grouping_status); a status only.
+        **stated_grouping,
     }
     planning_catalog.to_parquet(universe_path, index=False)
     provenance_path = output_dir / "planner_catalog_receipt.json"
@@ -1836,6 +1858,7 @@ def _metadata_only_planning_acquisition(
                 if first_icu_stay_restriction is not None
                 else {}
             ),
+            **stated_grouping,
             "selected_concepts": selected,
             "unavailable_model_concepts": unavailable_model_concepts,
             "selected_concepts_sha256": hashlib.sha256(
@@ -1880,6 +1903,7 @@ def _restore_metadata_only_planning_acquisition(
     output_dir: Path,
     endpoint: Any = None,
     patient_grouping: Optional[PatientGroupingBinding] = None,
+    patient_grouping_status: Optional[tuple[str, Optional[str]]] = None,
     operationalized_columns: Sequence[str] = (),
 ) -> Any:
     """Replay and restage one verified zero-row catalog without an LLM call.
@@ -1950,6 +1974,9 @@ def _restore_metadata_only_planning_acquisition(
     if (
         receipt.get("patient_identity_column") != expected_patient_identity
         or receipt.get("replacement_row_identity") != expected_replacement
+        # A catalog written before the status existed states none.
+        or receipt.get(PATIENT_GROUPING_STATUS_KEY)
+        not in (None, (patient_grouping_status or (None,))[0])
         or tuple(receipt.get("operationalized_columns") or ())
         != expected_operationalized
         or (
@@ -4675,6 +4702,9 @@ class _CandidatePlanMaterializationAuthority:
     baseline_requirements: Optional[AcceptedBaselineRequirements] = None
     population_requirements: Optional[PlanPopulationRequirements] = None
     analysis_inputs: Optional[AcceptedAnalysisInputs] = None
+    # The accepted steps that cannot run without patient groups
+    # (``contracts.patient_grouping_need.steps_needing_patient_groups``).
+    patient_grouping_steps: tuple[str, ...] = ()
 
 
 def _candidate_plan_contract(
@@ -5007,6 +5037,7 @@ def _load_candidate_plan_materialization_authority(
         baseline_requirements=baseline_requirements,
         population_requirements=population_requirements,
         analysis_inputs=analysis_inputs,
+        patient_grouping_steps=steps_needing_patient_groups(plan),
     )
 
 
@@ -5881,6 +5912,13 @@ def make_research_pipeline_run_runner(
                     ),
                 )
                 bound_plan_revision_contract = candidate_authority.contract
+                if patient_grouping is None:
+                    # An accepted step that cannot run without patient groups
+                    # binds the source's verified grouping, or stops here,
+                    # before anything is materialized.
+                    patient_grouping = run_patient_grouping.execution_patient_grouping(
+                        study, step_ids=candidate_authority.patient_grouping_steps
+                    )
             else:
                 source_review = _load_plan_revision_source_review(
                     study=study,
@@ -5985,6 +6023,15 @@ def make_research_pipeline_run_runner(
                     else "Selecting concepts and materializing a typed analysis universe"
                 ),
             )
+            # A metadata-only context binds no grouping unless its design reads
+            # one; it states what the source can provide, for the plan review.
+            planning_grouping_status = (
+                run_patient_grouping.planning_patient_grouping_status(
+                    study, bound=patient_grouping
+                )
+                if metadata_only_planning and execution_resume_inputs is None
+                else None
+            )
             if execution_resume_inputs is not None:
                 acquisition = _execution_resume_acquisition_projection(
                     execution_resume_inputs
@@ -6002,6 +6049,7 @@ def make_research_pipeline_run_runner(
                     output_dir=wrapper_dir / "pipeline_input",
                     endpoint=metadata_planning_coordinates.get("endpoint"),
                     patient_grouping=patient_grouping,
+                    patient_grouping_status=planning_grouping_status,
                     operationalized_columns=metadata_operationalized_columns,
                 )
             elif metadata_only_planning:
@@ -6052,6 +6100,7 @@ def make_research_pipeline_run_runner(
                         ),
                     ),
                     patient_grouping=patient_grouping,
+                    patient_grouping_status=planning_grouping_status,
                     operationalized_columns=metadata_operationalized_columns,
                     first_icu_stay=_verified_first_icu_stay_or_none(study),
                     required_coordinates=(primary_exposure, target),
@@ -6343,9 +6392,6 @@ def make_research_pipeline_run_runner(
                 WebScientificRuntimeProjectionError,
                 compile_web_scientific_runtime_projection,
             )
-            from easyicu.research_agent.contracts.dependence import (
-                PlannedDependenceRequirement,
-            )
             from easyicu.research_agent.literature import (
                 LiteratureBundle,
                 manuscript_citable_keys,
@@ -6407,14 +6453,9 @@ def make_research_pipeline_run_runner(
                             == "binary"
                         )
                     ),
-                    dependence=(
-                        PlannedDependenceRequirement(
-                            group_source=patient_grouping.output_identity_column,
-                            group_derivation="prefix_before_delimiter",
-                            delimiter=":s",
-                        )
-                        if patient_grouping is not None
-                        else None
+                    # Only a design whose inference reads the grouping states it.
+                    dependence=run_patient_grouping.runtime_patient_dependence(
+                        patient_grouping, validated_analysis_design
                     ),
                     universe_path=Path(acquisition.universe_path),
                     scientific_configuration_sha256=(
@@ -7085,6 +7126,10 @@ def resume_research_pipeline(
                 ),
                 "The prepared package changed after planning and cannot be approved.",
             ) from exc
+        run_patient_grouping.require_patient_groups_for_approval(
+            _pending_plan_authority(entry.pending),
+            context_path=Path(entry.pending.run_dir) / "research_context.json",
+        )
     stored_decisions: List[Dict[str, Any]] = []
     checkpoint_file = Path(entry.pending.run_dir) / "human_review_checkpoint.json"
     if checkpoint_file.is_file():

@@ -182,23 +182,15 @@ def _runtime_projection_sensitivity_specs(
     return (*sensitivity_specs, automatic)
 
 
-def _patient_grouping_for_analysis_design(
+def verified_patient_grouping(
     study: Mapping[str, Any],
 ) -> Optional[PatientGroupingBinding]:
-    raw = study.get("analysis_design")
-    design = raw if isinstance(raw, Mapping) else {}
-    if not study_context_owner.analysis_design_reads_patient_grouping(design):
-        return None
-    cluster_unit = _clean_text(design.get("cluster_unit"), 80)
-    if cluster_unit != "patient":
-        raise ResearchPipelineRunError(
-            "research_pipeline_cluster_unit_unsupported",
-            "The current Web runner supports clustered inference only for a verified patient grouping.",
-            details={
-                "cluster_unit": cluster_unit or None,
-                "supported_cluster_units": ["patient"],
-            },
-        )
+    """The bound source's verified patient grouping, whatever the study's design.
+
+    ``None`` when the study binds no source or the source has no grouping; an
+    authority that fails its checks refuses with its typed reason.
+    """
+
     source = study.get("data_source")
     source = source if isinstance(source, Mapping) else {}
     export_path = _clean_text(source.get("path"), 2_000)
@@ -216,6 +208,46 @@ def _patient_grouping_for_analysis_design(
             str(exc),
             details=exc.details,
         ) from exc
+
+
+def declared_longitudinal_design(study: Mapping[str, Any]) -> Optional[str]:
+    """The design a study declares that reads each stay's long trajectory, if any.
+
+    A trajectory design reads the trajectory itself, and a landmark design
+    cuts its at-risk set from it.  A grouped materialization emits no
+    trajectory (``acquisition.foundation``), except beside a time-varying
+    specification, whose owner applies the grouping to both row spaces.
+    """
+
+    if any(
+        spec.strategy == "time_varying" for spec in _configured_sensitivity_specs(study)
+    ):
+        return None
+    if _validate_trajectory_design(study) is not None:
+        return "trajectory_design"
+    if any(spec.strategy == "landmark" for spec in _configured_sensitivity_specs(study)):
+        return "landmark"
+    return None
+
+
+def _patient_grouping_for_analysis_design(
+    study: Mapping[str, Any],
+) -> Optional[PatientGroupingBinding]:
+    raw = study.get("analysis_design")
+    design = raw if isinstance(raw, Mapping) else {}
+    if not study_context_owner.analysis_design_reads_patient_grouping(design):
+        return None
+    cluster_unit = _clean_text(design.get("cluster_unit"), 80)
+    if cluster_unit != "patient":
+        raise ResearchPipelineRunError(
+            "research_pipeline_cluster_unit_unsupported",
+            "The current Web runner supports clustered inference only for a verified patient grouping.",
+            details={
+                "cluster_unit": cluster_unit or None,
+                "supported_cluster_units": ["patient"],
+            },
+        )
+    return verified_patient_grouping(study)
 
 
 def _first_icu_stay_for_cohort(
