@@ -310,10 +310,18 @@
           text: request.text,
         });
       }
+      // Until the host answers with a job the page has nothing to follow or
+      // stop; the composer says this plan is starting (session-view).
+      const starting = { sessionId: expectedSessionId, startedAt: Date.now() };
+      const endStarting = () => {
+        if (host.planStarting && host.planStarting() === starting) host.setPlanStarting(null);
+      };
+      if (host.setPlanStarting) host.setPlanStarting(starting);
       setPending(true);
       let jobStarted = false;
       const stillCurrent = () => {
         if (isCurrent()) return true;
+        endStarting();
         // A stale request that has not crossed the job-creation boundary did
         // not consume this transition. Let the same session retry if reopened.
         if (guardedTransition && !jobStarted) startedTransitions.delete(guardKey);
@@ -363,6 +371,7 @@
         });
         jobStarted = true;
         if (!stillCurrent()) return false;
+        endStarting();
         host.setBusy(false);
         host.watchChildJob(
           String(payload.job_id || ''),
@@ -374,6 +383,7 @@
       } catch (error) {
         if (!stillCurrent()) return false;
         if (guardedTransition) startedTransitions.delete(guardKey);
+        endStarting();
         host.setBusy(false);
         if (followHostDecisionRefusal(error)) return false;
         host.setError(host.errorText(error));

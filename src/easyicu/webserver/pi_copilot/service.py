@@ -1820,6 +1820,7 @@ class PiCopilotService:
             "begin_local_selection",
             "begin_full_data_selection",
             "confirm_selected_source",
+            "cancel_local_selection",
         }:
             raise PiCopilotError(
                 "pi_session_data_source_action_invalid",
@@ -1872,6 +1873,29 @@ class PiCopilotService:
                 "The project data source cannot be confirmed because its StudyContext is missing.",
                 status_code=404,
             )
+
+        if clean_action == "cancel_local_selection":
+            # Leaving the folder panel without a source ends the selection; the
+            # session returns to the gate a new session has for this study.  A
+            # data job the panel started still owns the selection it confirms.
+            if record.data_source_authorization.status != "selection_in_progress":
+                raise PiCopilotError(
+                    "pi_session_local_selection_not_started",
+                    "No local folder selection is open in this conversation.",
+                    status_code=409,
+                )
+            if str(context.get("active_job_id") or "").strip():
+                raise PiCopilotError(
+                    "pi_session_local_selection_job_active",
+                    "A data job for this study is still running; the folder selection stays open until it finishes.",
+                    status_code=409,
+                )
+            record.data_source_authorization = self._new_session_data_authorization(
+                context,
+                agent_mode=record.agent_mode,
+            )
+            self._save_record(record)
+            return {"ok": True, "session": self._public_session(record), "resource": None}
 
         if clean_action in {"begin_local_selection", "begin_full_data_selection"}:
             extraction_scope = (
@@ -1960,6 +1984,76 @@ class PiCopilotService:
             ),
         }
 
+    @staticmethod
+    def _bound_study_context(record: PiSessionRecord) -> Optional[Mapping[str, Any]]:
+        context_id = str(record.binding.study_context_id or "").strip()
+        if not context_id:
+            return None
+        try:
+            return study_contexts.get_context(context_id)
+        except study_contexts.StudyContextError:
+            return None
+
+    def _registered_source_reference(
+        self,
+        context: Mapping[str, Any],
+    ) -> Optional[PiSessionDataSourceReference]:
+        """The study's source when its path is exactly a validated registered export."""
+
+        source = context.get("data_source")
+        source = source if isinstance(source, Mapping) else {}
+        expected_path = str(source.get("path") or "").strip()
+        registry = sources.load_registry()
+        exact_registered_source = next(
+            (
+                row
+                for row in (registry.get("sources") or [])
+                if isinstance(row, Mapping)
+                and bool(row.get("ok"))
+                and str(row.get("path") or "").strip() == expected_path
+            ),
+            None,
+        )
+        if exact_registered_source is None:
+            return None
+        return self._session_source_reference(context)
+
+    def _registered_source_identity(self, record: PiSessionRecord) -> Optional[str]:
+        context = self._bound_study_context(record)
+        reference = self._registered_source_reference(context) if context else None
+        return reference.identity_sha256 if reference is not None else None
+
+    def _end_selection_superseded_in_turn(
+        self,
+        record: PiSessionRecord,
+        *,
+        source_before: Optional[str],
+    ) -> None:
+        """End a folder selection that the conversation's own binding replaced.
+
+        Opening the local folder panel holds the session in
+        ``selection_in_progress`` so the panel can confirm what it binds.  When
+        the researcher instead chooses a registered export in the conversation
+        and the turn binds the study to it, the abandoned selection would hide
+        that source's confirmation for good.  The session returns to the gate a
+        new session has for this study: pending and naming the source, so the
+        researcher's own confirmation still decides.
+        """
+
+        if (
+            record.agent_mode != "research"
+            or record.data_source_authorization.status != "selection_in_progress"
+        ):
+            return
+        context = self._bound_study_context(record)
+        reference = self._registered_source_reference(context) if context else None
+        if reference is None or reference.identity_sha256 == source_before:
+            return
+        record.data_source_authorization = self._new_session_data_authorization(
+            context,
+            agent_mode=record.agent_mode,
+        )
+
     def _confirm_registered_source_selected_in_turn(
         self,
         record: PiSessionRecord,
@@ -1980,38 +2074,16 @@ class PiCopilotService:
             or not explicitly_confirms_easyicu_registered_source(user_message)
         ):
             return
-        context_id = str(record.binding.study_context_id or "").strip()
-        if not context_id:
-            return
-        try:
-            context = study_contexts.get_context(context_id)
-        except study_contexts.StudyContextError:
-            return
+        context = self._bound_study_context(record)
         if not context:
             return
-        source = context.get("data_source")
-        source = source if isinstance(source, Mapping) else {}
-        expected_path = str(source.get("path") or "").strip()
-        registry = sources.load_registry()
-        exact_registered_source = next(
-            (
-                row
-                for row in (registry.get("sources") or [])
-                if isinstance(row, Mapping)
-                and bool(row.get("ok"))
-                and str(row.get("path") or "").strip() == expected_path
-            ),
-            None,
-        )
-        if exact_registered_source is None:
-            return
-        source_reference = self._session_source_reference(context)
+        source_reference = self._registered_source_reference(context)
         if source_reference is None:
             return
         record.binding = self._binding_for_context(
             context,
             run_id=self._latest_run_id(
-                context_id,
+                str(record.binding.study_context_id or "").strip(),
                 project_id=record.project_id,
             ),
         )
@@ -2160,6 +2232,9 @@ class PiCopilotService:
                 status_code=409,
                 details=stale,
             )
+        # The study's registered source as this turn found it: a turn that
+        # binds another one ends an abandoned folder selection.
+        source_before_turn = self._registered_source_identity(record)
         if prepared_input.registered_source is not None:
             record = self._bind_registered_source_from_message(
                 record,
@@ -2174,6 +2249,10 @@ class PiCopilotService:
         self._confirm_registered_source_selected_in_turn(
             record,
             user_message=provider_text,
+        )
+        self._end_selection_superseded_in_turn(
+            record,
+            source_before=source_before_turn,
         )
         if (
             record.data_source_authorization.model_dump(mode="json")
@@ -2402,6 +2481,10 @@ class PiCopilotService:
                 self._confirm_registered_source_selected_in_turn(
                     refreshed,
                     user_message=provider_text,
+                )
+                self._end_selection_superseded_in_turn(
+                    refreshed,
+                    source_before=source_before_turn,
                 )
                 refreshed.last_message_job_id = job.id
                 refreshed.active_message_job_id = job.id

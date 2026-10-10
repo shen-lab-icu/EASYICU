@@ -228,7 +228,42 @@
       }
     }
 
-    return { authorizeDataSource, notifyExtractionHandoff, confirmDataSourceBinding, carryQuestionIntoSetup };
+    /* The researcher closed the folder panel (the preview's
+       easyicu:guided-preview-closed). A selection that bound nothing ends, so
+       the conversation shows the source gate a new one would. The host keeps
+       a selection whose data task is still running; the card then stays and
+       offers it again, so a refusal here needs no banner. */
+    async function leaveAbandonedSelection(detail) {
+      const resource = detail && detail.resource;
+      if (!resource || resource.entry_mode !== 'source_binding' || !host.session()
+        || (detail.projectId && detail.projectId !== projectId())
+        || !DATA_CONSENT || !DATA_CONSENT.selectionInProgress(host.session())
+        || !api().authorizePiCopilotDataSource) return false;
+      const expectedSessionId = host.session().session_id;
+      const expectedProjectId = projectId();
+      try {
+        const payload = await api().authorizePiCopilotDataSource(
+          expectedSessionId,
+          { project_id: expectedProjectId, action: 'cancel_local_selection' },
+        );
+        if (!host.session() || host.session().session_id !== expectedSessionId
+          || projectId() !== expectedProjectId) return false;
+        host.setSession(payload.session || host.session());
+        rememberSession(host.session().session_id);
+        render();
+        return true;
+      } catch (error) {
+        return false;
+      }
+    }
+
+    if (typeof document !== 'undefined' && document.addEventListener) {
+      document.addEventListener('easyicu:guided-preview-closed', event => {
+        if (host.root()) leaveAbandonedSelection(event.detail);
+      });
+    }
+
+    return { authorizeDataSource, notifyExtractionHandoff, confirmDataSourceBinding, carryQuestionIntoSetup, leaveAbandonedSelection };
   }
 
   window.EasyICU.guidedPi.declare('dataBinding', { create });

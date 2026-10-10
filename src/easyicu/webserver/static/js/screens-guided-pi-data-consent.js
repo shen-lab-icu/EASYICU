@@ -151,6 +151,7 @@
         <p>${ctx.tr('Data tools remain locked until EasyICU validates and saves the selected source.', 'EasyICU 验证并保存所选来源之前，数据工具保持锁定。')}</p>
         <div class="gpi-data-consent-actions">
           <button class="btn primary" type="button" data-gpi-data-source-action="begin_local_selection">${ctx.tr('Return to local folder selection', '返回本地目录选择')}</button>
+          <button class="btn" type="button" data-gpi-data-source-action="cancel_local_selection">${ctx.tr('Leave local selection', '放弃本地选择')}</button>
         </div>
         <small>${ctx.tr('Paths remain in the EasyICU host UI and are never sent to the model.', '目录路径只保留在 EasyICU 本机界面，不会发送给模型。')}</small>
       </div>

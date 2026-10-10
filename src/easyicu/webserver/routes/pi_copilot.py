@@ -262,6 +262,7 @@ class PiDataSourceAuthorizationRequest(BaseModel):
         "begin_local_selection",
         "begin_full_data_selection",
         "confirm_selected_source",
+        "cancel_local_selection",
     ]
     database: Literal["miiv", "mimic", "eicu", "aumc", "hirid", "sic"] | None = None
 

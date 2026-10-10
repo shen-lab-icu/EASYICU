@@ -8,8 +8,10 @@ resume coordinates, workspace selection, and StudyContext job binding.
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Literal, Mapping, Optional
 
@@ -41,6 +43,7 @@ from easyicu.webserver.target_trial_card import target_trial_plans_on_data
 from easyicu.webserver.target_trial_setup import latest_target_trial_compile
 
 
+_LOG = logging.getLogger(__name__)
 _DEVELOPMENT_REVIEWED_EXECUTION_ENV = "EASYICU_DEVELOPMENT_REVIEWED_EXECUTION"
 _RESUME_CHECKPOINT_INVALID = "research_pipeline_development_resume_checkpoint_invalid"
 #: The refusals an automatic checkpoint seed answers by planning anew.
@@ -259,6 +262,19 @@ def provider_environment_for_agent_run(
         raise ResearchRunSubmissionError(exc.detail) from exc
 
 
+class _LaunchClock:
+    """Seconds each synchronous launch step took: logged with the job id only."""
+
+    def __init__(self) -> None:
+        self._last = time.monotonic()
+        self.steps: list[str] = []
+
+    def mark(self, step: str) -> None:
+        now = time.monotonic()
+        self.steps.append(f"{step}={now - self._last:.1f}s")
+        self._last = now
+
+
 def _submit_job(kind: str, runner: Any) -> Any:
     try:
         return job_store.MANAGER.submit(kind, runner)
@@ -286,6 +302,7 @@ def submit_research_run(
         raise TypeError("submit_research_run requires ResearchRunSubmissionRequest")
     engine = "research_agent_pipeline"
     run_type = "full"
+    clock = _LaunchClock()
     study_context_id = request.study_context_id.strip()
     if not study_context_id:
         _reject({"error": "research_pipeline_study_context_required"})
@@ -309,6 +326,7 @@ def submit_research_run(
     desc = dataio.describe_export_source(path)
     if not desc.get("ok"):
         _reject(desc)
+    clock.mark("describe_source")
     readiness = build_research_workflow_snapshot(
         study=study_context,
         active_export_present=True,
@@ -341,6 +359,7 @@ def submit_research_run(
             }
         )
 
+    clock.mark("readiness")
     database = source.get("database") if isinstance(source, Mapping) else None
     prepared_manifest = dataio.prepared_export_manifest_path(Path(path).expanduser())
     budget_mode = research_pipeline_budget_mode_for_source(
@@ -355,6 +374,7 @@ def submit_research_run(
         except dataio.ExportCohortError as exc:
             raise ResearchRunSubmissionError(exc.detail) from exc
 
+    clock.mark("verify_package")
     llm_provider = request.provider.strip() or "mock"
     external_llm_opt_in = request.external_llm_opt_in
     literature_search_authorized = request.literature_search_authorized
@@ -535,8 +555,10 @@ def submit_research_run(
             }
         ) from exc
 
+    clock.mark("prepare_runner")
     if authorize is not None:
         authorize()
+    clock.mark("authorize")
 
     start_gate = threading.Event()
     start_abort: Dict[str, Any] = {}
@@ -602,6 +624,8 @@ def submit_research_run(
             status_code=status_code,
         )
 
+    clock.mark("start_job")
+    _LOG.info("research run launch %s: %s", job.id, " ".join(clock.steps))
     audit_warning = None
     try:
         capabilities.record_tool_event(

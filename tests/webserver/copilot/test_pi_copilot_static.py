@@ -108,7 +108,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-analysis-report.js?v=20261010-exposure-labels1" in index
     assert "js/screens-guided-pi-article-report.js?v=20260830-e2-report1" in index
     assert "js/screens-guided-pi-source-view.js?v=20260922-run-answer1" in index
-    assert "js/screens-guided-pi-preview.js?v=20261010-exposure-labels1" in index
+    assert "js/screens-guided-pi-preview.js?v=20261010-source-gate1" in index
     assert "js/screens-guided-pi-replay.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-resources.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-run-outcome.js?v=20260922-run-answer1" in index
@@ -121,9 +121,9 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-study-workspace.js?v=20261009-language-rail1" in index
     assert "js/screens-guided-pi-events.js?v=20261009-review-fix1" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
-    assert "js/screens-guided-pi-data-consent.js?v=20260922-named-source1" in index
-    assert "js/screens-guided-pi-data-binding.js?v=20261009-study-switch1" in index
-    assert "js/screens-guided-pi-session-view.js?v=20261009-review-fix1" in index
+    assert "js/screens-guided-pi-data-consent.js?v=20261010-source-gate1" in index
+    assert "js/screens-guided-pi-data-binding.js?v=20261010-source-gate1" in index
+    assert "js/screens-guided-pi-session-view.js?v=20261010-source-gate1" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
@@ -137,10 +137,10 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         < index.index("js/screens-guided-pi-confirmation.js")
     )
     assert "js/screens-guided-pi-confirmation.js?v=20261010-exposure-labels1" in index
-    assert "js/screens-guided-pi-plan-actions.js?v=20261009-target-trial1" in index
+    assert "js/screens-guided-pi-plan-actions.js?v=20261010-source-gate1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261009-target-trial1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261010-substance-form1" in index
-    assert "js/screens-guided-pi.js?v=20261009-target-trial1" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261010-source-gate1" in index
+    assert "js/screens-guided-pi.js?v=20261010-source-gate1" in index
     assert "js/screens-guided.js?v=20260922-state-menus1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -517,7 +517,8 @@ def test_new_research_conversation_keeps_chat_open_until_data_is_needed() -> Non
         )
     ]
     assert '<div class="gpi-compose">' in session_panel
-    assert '<div class="gpi-compose-card${activeChild ? \' is-running\' : \'\'}">' in session_panel
+    # A running child job, or a plan start the host has not answered yet.
+    assert '<div class="gpi-compose-card${activeChild || starting ? \' is-running\' : \'\'}">' in session_panel
     assert "dataConsentRequired ? '' : `<div class=\"gpi-compose\">" not in session_panel
     assert "DATA_CONSENT.requiresConfirmation" not in send_text
     assert "Reviewer demo" in header
@@ -2899,7 +2900,7 @@ process.stdout.write(activity.render({
     assert "const activeChild = timeline.slice().reverse().find" in shell
     assert "const interactionLocked = state.busy || Boolean(activeChild)" in shell
     assert "busy: interactionLocked" in shell
-    assert "gpi-compose-card${activeChild ? ' is-running' : ''}" in shell
+    assert "gpi-compose-card${activeChild || starting ? ' is-running' : ''}" in shell
     assert "任务完成或需要你确认后，才可继续发送消息" in shell
     assert "state.busy || state.childJobId || sessionIsStale()" in shell
     assert "runningTitle: runningJobTitle(code)" in childjob
@@ -6514,7 +6515,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20261009-target-trial1" in index
-    assert "screens-guided-pi.js?v=20261009-target-trial1" in index
+    assert "screens-guided-pi.js?v=20261010-source-gate1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

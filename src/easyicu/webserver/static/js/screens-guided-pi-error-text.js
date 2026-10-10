@@ -55,6 +55,13 @@
       if (error.code === 'host_action_in_progress') {
         return tr('EasyICU is already preparing this step; this page follows it.', 'EasyICU 正在准备这一步，页面会自动更新。');
       }
+      // The folder selection a researcher leaves (pi_copilot/service.py).
+      if (error.code === 'pi_session_local_selection_job_active') {
+        return tr('A data task of this study is still running. The folder selection can be left once it finishes.', '本研究的数据任务还在运行，等它结束后才能放弃本地目录选择。');
+      }
+      if (error.code === 'pi_session_local_selection_not_started') {
+        return tr('The local folder selection has already ended. Refresh this conversation.', '本地目录选择已经结束，请刷新这段对话。');
+      }
       if (error.code === 'study_job_running') {
         return tr('Another task of this study is running or starting. Wait for it to finish, then choose again.', '本研究的另一个任务正在运行或准备中，请等它结束后再选择。');
       }
