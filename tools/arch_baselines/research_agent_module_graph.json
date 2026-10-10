@@ -8936,6 +8936,14 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.orchestration.exposure_group_labels",
+      "easyicu.research_agent.contracts.exposure_group_rules"
+    ],
+    [
+      "easyicu.research_agent.orchestration.exposure_group_labels",
+      "easyicu.research_agent.orchestration.exposure_grouping_phase"
+    ],
+    [
       "easyicu.research_agent.orchestration.exposure_grouping_phase",
       "easyicu.research_agent.agents.exposure_grouping_planner"
     ],
@@ -14916,9 +14924,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3721,
+    "edge_count": 3723,
     "largest_scc_size": 0,
-    "module_count": 844,
+    "module_count": 845,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -15444,6 +15452,7 @@
     "easyicu.research_agent.orchestration.config": "orchestration/config.py",
     "easyicu.research_agent.orchestration.development_locked_plan": "orchestration/development_locked_plan.py",
     "easyicu.research_agent.orchestration.experiment_spec": "orchestration/experiment_spec.py",
+    "easyicu.research_agent.orchestration.exposure_group_labels": "orchestration/exposure_group_labels.py",
     "easyicu.research_agent.orchestration.exposure_grouping_phase": "orchestration/exposure_grouping_phase.py",
     "easyicu.research_agent.orchestration.finalize": "orchestration/finalize.py",
     "easyicu.research_agent.orchestration.human_review_checkpoint": "orchestration/human_review_checkpoint.py",
