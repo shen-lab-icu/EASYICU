@@ -40,7 +40,7 @@ _KDIGO_QUESTION = (
 def test_admission_type_is_read_as_the_named_exposure(question: str) -> None:
     slots = deterministic_intent(question)["slots"]
     assert slots["exposure"]["value"] == "adm"
-    assert slots["exposure"]["provenance"] == "user_text"
+    assert slots["exposure"]["provenance"] == "keyword"
 
     coordinates = research_launch_scientific._metadata_only_planning_coordinates(
         question=question, database="eicu_demo"

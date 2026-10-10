@@ -1062,8 +1062,9 @@ def _metadata_only_planning_coordinates(
     """Project only concepts the researcher explicitly named into planning.
 
     This is proposal context, not executable StudyContext authority.  The
-    deterministic intent reader supplies the exact user-text provenance and
-    the database capability catalog proves that the named concepts exist.  A
+    deterministic intent reader's keyword reading names them, with the words
+    it matched, and the database capability catalog proves that the named
+    concepts exist.  A
     binary endpoint is emitted only when the concept owner declares
     ``event_status`` semantics; names and dtypes are never used to guess it.
     A named exposure is read through its concept owner's selection policy
@@ -1090,6 +1091,7 @@ def _metadata_only_planning_coordinates(
     )
     from easyicu.research_agent.contracts.endpoint import EndpointSpec
     from easyicu.webserver.study_intent import (
+        KEYWORD_PROVENANCE,
         deterministic_intent,
         explicit_exposure_aggregation,
         named_study_concepts,
@@ -1104,7 +1106,7 @@ def _metadata_only_planning_coordinates(
     def named_concept(slot_name: str) -> Optional[str]:
         raw = slots.get(slot_name)
         raw = raw if isinstance(raw, Mapping) else {}
-        if str(raw.get("provenance") or "") != "user_text":
+        if str(raw.get("provenance") or "") != KEYWORD_PROVENANCE:
             return None
         value = _clean_text(raw.get("value"), 160)
         return value if value in catalog_by_id else None
@@ -1114,7 +1116,7 @@ def _metadata_only_planning_coordinates(
     family = family if isinstance(family, Mapping) else {}
     prediction = (
         str(family.get("value") or "") == "prediction"
-        and str(family.get("provenance") or "") == "user_text"
+        and str(family.get("provenance") or "") == KEYWORD_PROVENANCE
     )
     named_exposure = None if prediction else named_concept("exposure")
     primary_exposure = _observability_preserving_exposure(named_exposure, export_path)
@@ -1140,7 +1142,7 @@ def _metadata_only_planning_coordinates(
             configured_catalog is not None
             or (
                 str(outcome_type.get("value") or "") == "binary"
-                and str(outcome_type.get("provenance") or "") == "user_text"
+                and str(outcome_type.get("provenance") or "") == KEYWORD_PROVENANCE
             )
         )
         and target_catalog is not None
@@ -1178,7 +1180,7 @@ def _metadata_only_planning_coordinates(
             exposure_operation.aggregation if exposure_operation is not None else None
         ),
         "endpoint": endpoint,
-        "source": "explicit_user_text_plus_database_capability",
+        "source": "question_keywords_plus_database_capability",
         "execution_authorized": False,
     }
 
