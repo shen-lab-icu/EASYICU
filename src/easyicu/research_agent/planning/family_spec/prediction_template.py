@@ -21,7 +21,10 @@ Step layout (mirrors the family's reference workflow):
 5. ``calibration_metrics``   calibration slope/intercept/Brier (secondary)
 6. ``internal_validation``   optimism-corrected internal validation (secondary)
 7. ``clinical_utility``      decision curve (secondary)
-8. ``visualization`` / ``report``
+8. ``benchmark_comparison``  the model against the existing scores the question
+   names, on the same validation stays (secondary; only when the question
+   asks for a comparison the host can draw)
+9. ``visualization`` / ``report``
 """
 
 from __future__ import annotations
@@ -29,6 +32,10 @@ from __future__ import annotations
 from typing import Callable
 
 from ...canonical_json import canonical_sha256
+from ...contracts.prediction_execution import (
+    PREDICTION_BENCHMARK_ACTION,
+    PREDICTION_BENCHMARK_PRODUCT,
+)
 from ..design_selection import ResearchDesignCandidate, ResearchDesignSelection
 from ..progressive_contract import (
     ProgressiveDisplayLabel,
@@ -50,6 +57,7 @@ from .contract import (
     FamilySpecError,
     FamilySpecRequest,
     accepted_baseline_additions,
+    benchmark_comparators,
     design_field_max_length,
     table_one_group_column,
 )
@@ -69,10 +77,12 @@ PRIMARY_ACTION = "prediction.discrimination_calibration"
 CALIBRATION_ACTION = "prediction.calibration_metrics"
 VALIDATION_ACTION = "prediction.internal_validation"
 UTILITY_ACTION = "prediction.decision_curve"
+BENCHMARK_ACTION = PREDICTION_BENCHMARK_ACTION
 PRIMARY_METHOD = "prespecified_prediction_model_discrimination_calibration"
 CALIBRATION_METHOD = "prespecified_calibration_metrics"
 VALIDATION_METHOD = "prespecified_internal_validation"
 UTILITY_METHOD = "prespecified_decision_curve_analysis"
+BENCHMARK_METHOD = "prespecified_benchmark_comparison"
 #: The one plan-locked robustness variant the static prediction owner executes.
 COMPLETE_CASE_SPEC_ID = "complete_case_model_roster"
 _AUDIT_OUTPUTS = (
@@ -508,6 +518,9 @@ def build_prediction_skeleton(
     identity = request.identity_column
     outcome = request.outcome
     predictors = [str(value).strip() for value in spec.feature_variables]
+    # The existing scores the question compares the model with, as its
+    # answered benchmark requirements name them.
+    comparators = [item.name for item in benchmark_comparators(request, spec)]
     # An accepted baseline roster keeps its rows beside the predictors.
     retained_baseline = accepted_baseline_additions(request, [outcome, *predictors])
     table_one_rows = [*predictors, *(row.columns[0] for row in retained_baseline)]
@@ -560,6 +573,12 @@ def build_prediction_skeleton(
         "clinical_utility": (
             "Report the decision curve of the held-out scores across prespecified thresholds."
         ),
+        "benchmark_comparison": (
+            "Compare the model's held-out discrimination with "
+            + listing([_label(spec, name) for name in comparators], "en")
+            + " on the same validation stays, and its calibration where a comparator is a "
+            "probability of the same outcome."
+        ),
         "visualization": (
             "Assemble the composite prediction display: calibration, discrimination, internal "
             "validation, and decision-curve utility from the host-owned tables."
@@ -603,6 +622,19 @@ def build_prediction_skeleton(
                 ("internal_validation", VALIDATION_ACTION),
                 ("clinical_utility", UTILITY_ACTION),
             )
+        ),
+        *(
+            [
+                _outline_step(
+                    step_id="benchmark_comparison", role="secondary", module_id="custom_analysis",
+                    objective=objectives["benchmark_comparison"],
+                    depends_on=["cohort_accounting", "primary_performance"],
+                    variable_names=[*comparators, outcome], citations=secondary_keys,
+                    action=BENCHMARK_ACTION,
+                )
+            ]
+            if comparators
+            else []
         ),
         _outline_step(
             step_id="visualization", role="auxiliary", module_id="visualization",
@@ -707,6 +739,34 @@ def build_prediction_skeleton(
                 ("clinical_utility", UTILITY_ACTION, UTILITY_METHOD, "table:clinical_utility"),
             )
         ),
+        *(
+            [
+                ProgressiveSkeletonStep(
+                    step_id="benchmark_comparison", planned_analysis_role="secondary",
+                    module_id="custom_analysis", objective=objectives["benchmark_comparison"],
+                    depends_on=["cohort_accounting", "primary_performance"],
+                    # Comparator columns, then the primary's cohort and its
+                    # scores: the static prediction owner's ordered shape.
+                    raw_inputs=list(comparators),
+                    product_inputs=[
+                        _ref("cohort_accounting", "artifact:analysis_cohort"),
+                        _ref("primary_performance", "table:prediction_scores"),
+                    ],
+                    outputs=[
+                        ProgressiveOutputIntent(
+                            product_id=PREDICTION_BENCHMARK_PRODUCT, semantic_role="custom"
+                        )
+                    ],
+                    scientific_action_id=BENCHMARK_ACTION, custom_method=BENCHMARK_METHOD,
+                    literature_bindings=_bindings(
+                        bound["benchmark_comparison"], module="secondary",
+                        comparator_applications=applications,
+                    ),
+                )
+            ]
+            if comparators
+            else []
+        ),
         ProgressiveSkeletonStep(
             step_id="visualization", planned_analysis_role="auxiliary", module_id="visualization",
             objective=objectives["visualization"],
@@ -731,6 +791,11 @@ def build_prediction_skeleton(
                 _ref("baseline_context", "table:table_one"),
                 *(_ref("measurement_audit", product) for product, _role in _AUDIT_OUTPUTS),
                 *(_ref(producer, product) for producer, product in _REPORT_RESULT_INPUTS),
+                *(
+                    [_ref("benchmark_comparison", PREDICTION_BENCHMARK_PRODUCT)]
+                    if comparators
+                    else []
+                ),
                 _ref("visualization", "figure:visualization"),
             ],
             outputs=[ProgressiveOutputIntent(product_id="report:report", semantic_role="report")],
@@ -788,6 +853,7 @@ def build_prediction_skeleton(
 
 
 __all__ = [
+    "BENCHMARK_ACTION",
     "CALIBRATION_ACTION",
     "PRIMARY_ACTION",
     "UTILITY_ACTION",

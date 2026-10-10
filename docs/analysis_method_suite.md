@@ -25,6 +25,7 @@ These exact coordinates are published to Planner through the scientific-action c
 | `causal_emulation.mediation` | `mediation` | — |
 | `association.rcs_spline` | `rcs_dose_response` | — |
 | `prediction.delong_ci` | `delong_auc` | — |
+| `prediction.benchmark_comparison` | `delong_auc` | — |
 | `prediction.decision_curve` | `decision_curve` | — |
 | `prediction.feature_attribution` | — | `shap` |
 | `prediction.conformal_intervals` | `conformal` | — |
@@ -79,6 +80,7 @@ These exact coordinates are published to Planner through the scientific-action c
 | Discrimination + calibration (AUROC + calibration curve) | primary | LLM-coded ⚠️ | AUROC + calibration curve + ROC panels (figure deterministic) | `prediction` |
 | Calibration slope/intercept + Brier score | standard_supporting | LLM-coded ⚠️ | calibration metrics row; Brier annotated on the calibration panel when present | — |
 | DeLong CI / test on AUROC | standard_supporting | LLM-coded ⚠️ | auroc_delong.csv (auroc, ci_low, ci_high [, comparison p]) | — |
+| Comparison with an existing score on the same stays | standard_supporting | deterministic ✅ | benchmark_comparison.csv (per comparator: both AUROCs, their paired difference and interval; calibration side by side when compared; the comparator's information window) | `static_prediction_model` |
 | Decision-curve analysis / net benefit (DCA) | standard_supporting | LLM-coded ⚠️ | decision_curve.csv (threshold, net_benefit, net_benefit_all) | — |
 | Sensitivity/specificity/PPV/NPV at clinical thresholds | standard_supporting | LLM-coded ⚠️ | threshold_metrics.csv; confusion matrix at chosen thresholds | — |
 | Feature attribution (SHAP / permutation importance) | standard_supporting | LLM-coded ⚠️ | feature_importance.csv; beeswarm/bar summary | — |
@@ -125,3 +127,4 @@ These exact coordinates are published to Planner through the scientific-action c
 | phenotyping | Mixed-effects / growth-mixture trajectory models | Random-effects longitudinal models with latent classes. |
 | phenotyping | DTW / time-series distance clustering | Cluster raw trajectories under a shape-aware (dynamic time warping) distance. |
 | phenotyping | Landmark trajectory prediction | Predict outcome from trajectory shape up to a landmark time. |
+

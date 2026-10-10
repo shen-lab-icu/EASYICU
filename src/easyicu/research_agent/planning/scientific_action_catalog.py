@@ -177,6 +177,11 @@ _RUNTIME_CONTRACTS: dict[str, ScientificActionRuntimeContract] = {
         article_roles=("clinical_utility",),
         standard_executor="prediction_model",
     ),
+    "prediction.benchmark_comparison": ScientificActionRuntimeContract(
+        outputs=(("table:benchmark_comparison", "custom"),),
+        required_product_inputs=("artifact:analysis_cohort", "table:prediction_scores"),
+        standard_executor="prediction_model",
+    ),
 }
 
 

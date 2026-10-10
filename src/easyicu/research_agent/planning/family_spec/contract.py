@@ -23,7 +23,9 @@ from ...contracts.primary_cohort import (
     STUDY_POPULATION_PRODUCTS,
     study_population_product_for,
 )
+from ...contracts.prediction_execution import MAX_BENCHMARK_COMPARATORS
 from ..adjustment_authority import HostTemporalRole
+from ..benchmark_comparator import ComparatorKind
 from ..design_selection import ResearchDesignCandidate
 from ..literature_design_authority import (
     LITERATURE_DESIGN_DIMENSIONS,
@@ -133,6 +135,23 @@ class AdjustmentCandidate(BaseModel):
     missing_share: Optional[float] = Field(
         default=None, ge=0.0, le=1.0, exclude_if=lambda value: value is None
     )
+
+
+class BenchmarkCandidate(BaseModel):
+    """A roster column the prediction template can compare the model with.
+
+    An existing score or probability the concept dictionary orients
+    (``planning.benchmark_comparator``): ``concept`` is the column's source
+    concept, and ``related_columns`` the other roster columns the dictionary
+    relates to it, none of which may also be a predictor.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(min_length=1, max_length=128)
+    concept: str = Field(min_length=1, max_length=128)
+    kind: ComparatorKind
+    related_columns: list[str] = Field(default_factory=list)
 
 
 class AcceptedFeatureGroup(BaseModel):
@@ -756,6 +775,11 @@ class FamilySpecRequest(BaseModel):
         max_length=MAX_NAMED_QUESTION_CONCEPTS,
         exclude_if=lambda value: not value,
     )
+    #: The columns a prediction can be compared with on the same stays
+    #: (prediction family only).  Omitted from the digest when empty.
+    benchmark_candidates: list[BenchmarkCandidate] = Field(
+        default_factory=list, exclude_if=lambda value: not value
+    )
 
     @field_validator(
         "exposure_levels",
@@ -1030,6 +1054,12 @@ class FamilySpecRequest(BaseModel):
                 raise ValueError("an absent exposure has no level indices")
         elif not self.primary_exposure:
             raise ValueError("a categorical or continuous exposure needs a column name")
+        if self.benchmark_candidates:
+            names = [item.name for item in self.benchmark_candidates]
+            if self.family_id != PREDICTION_FAMILY_ID:
+                raise ValueError("benchmark candidates belong to the prediction family")
+            if len(set(names)) != len(names) or not set(names) <= set(self.variable_roster):
+                raise ValueError("benchmark candidates are distinct roster columns")
         if self.sealed_suite is not None and self.family_id != LANDMARK_SURVIVAL_FAMILY_ID:
             raise ValueError("sealed suite coordinates belong to the landmark survival family")
         if self.exposure_kind == "categorical":
@@ -1628,6 +1658,52 @@ def validate_family_plan_spec(spec: FamilyPlanSpec, request: FamilySpecRequest) 
     _validate_literature_design_decisions(spec, request)
     _validate_population(spec, request)
     _validate_question_requirements(spec, request)
+    _validate_benchmark_predictors(spec, request)
+
+
+def benchmark_comparators(
+    request: FamilySpecRequest, spec: FamilyPlanSpec
+) -> list[BenchmarkCandidate]:
+    """The candidates the spec's answered benchmark requirements name, in order.
+
+    A benchmark requirement the plan answers (coverage ``plan``) names the
+    columns it compares the model with; each that the host offers as a
+    benchmark candidate is compared, at most ``MAX_BENCHMARK_COMPARATORS``.
+    """
+
+    offered = {item.name: item for item in request.benchmark_candidates}
+    named = [
+        concept
+        for item in spec.question_requirements
+        if item.kind == "benchmark" and item.coverage == "plan"
+        for concept in item.concepts
+        if concept in offered
+    ]
+    return [offered[name] for name in dict.fromkeys(named)][:MAX_BENCHMARK_COMPARATORS]
+
+
+def _validate_benchmark_predictors(spec: FamilyPlanSpec, request: FamilySpecRequest) -> None:
+    """A benchmark the model is compared with is never also one of its predictors."""
+
+    offered = {item.name: item for item in request.benchmark_candidates}
+    benchmarks = {
+        column
+        for item in spec.question_requirements
+        if item.kind == "benchmark"
+        for concept in item.concepts
+        for column in (
+            concept,
+            *(offered[concept].related_columns if concept in offered else ()),
+        )
+    }
+    for index, name in enumerate(spec.feature_variables):
+        if str(name).strip() in benchmarks:
+            raise FamilySpecError(
+                "family_spec_benchmark_used_as_predictor",
+                f"{name!r} is, or is related to, the benchmark the question compares the "
+                "model with; a benchmark is never also a predictor",
+                path=f"feature_variables[{index}]",
+            )
 
 
 def _validate_question_requirements(
@@ -1830,6 +1906,7 @@ __all__ = [
     "PREDICTION_FAMILY_ID",
     "SOURCE_FEASIBILITY_FAMILY_ID",
     "AdjustmentCandidate",
+    "BenchmarkCandidate",
     "ExposureKind",
     "FamilyId",
     "FamilyPlanSpec",
@@ -1844,6 +1921,7 @@ __all__ = [
     "SpecReaderLabel",
     "StudyPopulationOccurrence",
     "accepted_baseline_additions",
+    "benchmark_comparators",
     "literature_design_card_keys_by_dimension",
     "population_required",
     "PredictionDeathTime",
