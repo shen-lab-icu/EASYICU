@@ -849,6 +849,74 @@ def _question_causal_design(
     return {CAUSAL_TRIAL_READING_FIELD: decision.reading.record()}
 
 
+def _question_family_design(
+    params: Mapping[str, Any],
+    patch: Dict[str, Any],
+    current: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Record the analysis family a study's question states, beside a causal one.
+
+    The host reads the question (``study_family_design``) when it states no
+    causal design (:func:`_question_causal_design`): a study with no design
+    gets the family's design and the words it rests on.  A design the turn
+    proposes, or the study already records, is kept; when the question reads
+    another family, the reading is recorded with that conflict for the study
+    card, once.  Returns the receipt fields.
+    """
+
+    from easyicu.webserver.study_family_design import (
+        STUDY_FAMILY_READING_FIELD,
+        family_reading_conflict,
+        question_family_design,
+    )
+
+    design = patch["analysis_design"] if "analysis_design" in patch else (
+        (current or {}).get("analysis_design")
+    )
+    study = {**dict(current or {}), **patch}
+    if "analysis_design" in params or (
+        isinstance(design, Mapping) and str(design.get("analysis_family") or "").strip()
+    ):
+        conflict = family_reading_conflict(study.get("question"), design)
+        if conflict is None:
+            return {}
+        if (current or {}).get(STUDY_FAMILY_READING_FIELD) != conflict:
+            patch[STUDY_FAMILY_READING_FIELD] = conflict
+        return {STUDY_FAMILY_READING_FIELD: conflict}
+    decision = question_family_design(study.get("question"), study)
+    if decision is None:
+        return {}
+    patch["analysis_design"] = dict(decision.design)
+    patch[STUDY_FAMILY_READING_FIELD] = decision.reading.record()
+    return {STUDY_FAMILY_READING_FIELD: decision.reading.record()}
+
+
+_FAMILY_NAMES = {
+    "association_study": "an association study",
+    "descriptive_epidemiology": "a descriptive study",
+}
+
+
+def _family_receipt_text(receipt: Mapping[str, Any]) -> str:
+    reading = receipt.get("study_family_reading")
+    if not reading:
+        return ""
+    family = _FAMILY_NAMES.get(reading["family"], reading["family"])
+    words = "; ".join(f"\"{item['evidence']}\"" for item in reading["elements"])
+    conflict = reading.get("conflict")
+    if conflict:
+        return (
+            f" The question's words read as {family} ({words}), but the study's "
+            f"design states {conflict['design_family']}; the design is kept and the "
+            "study card shows the difference. Tell the researcher in one line."
+        )
+    return (
+        f" Saved the analysis family the question states: {family} ({words}). "
+        "Plan it as this family; do not ask the researcher to choose an analysis "
+        "family."
+    )
+
+
 def _causal_receipt_text(receipt: Mapping[str, Any]) -> str:
     from easyicu.webserver.target_trial_setup import TARGET_TRIAL_DATABASE_OUT_OF_SCOPE
 
@@ -1787,6 +1855,9 @@ def update_study_context(
             )
         patch["covariate_selection"] = selection
     causal_receipt = _question_causal_design(params, patch, current)
+    family_receipt = (
+        {} if causal_receipt else _question_family_design(params, patch, current)
+    )
     if not patch:
         raise PiCopilotError(
             "pi_tool_arguments_required",
@@ -1804,6 +1875,7 @@ def update_study_context(
             lifecycle_write=False,
             _server_concept_selection_authority_write=True,
             _server_causal_trial_reading_write=True,
+            _server_study_family_reading_write=True,
         )
     except study_contexts.StudyContextError as exc:
         return _result(
@@ -1865,6 +1937,7 @@ def update_study_context(
                     lifecycle_write=False,
                     _server_concept_selection_authority_write=True,
                     _server_causal_trial_reading_write=True,
+                    _server_study_family_reading_write=True,
                 )
             except study_contexts.StudyContextError as rest_exc:
                 return _result(
@@ -1896,6 +1969,7 @@ def update_study_context(
             lifecycle_write=False,
             _server_concept_selection_authority_write=True,
             _server_causal_trial_reading_write=True,
+            _server_study_family_reading_write=True,
         )
     except study_contexts.StudyContextError as exc:
         return _result(
@@ -1940,6 +2014,7 @@ def update_study_context(
             "and why; the candidate plan proposes it for their review."
         )
     summary += _causal_receipt_text(causal_receipt)
+    summary += _family_receipt_text(family_receipt)
     if omitted_unconfirmed_fields:
         # Preserve the omission and reason, but let the workflow decide when
         # a choice is needed. Execution requirements must not become an
@@ -1970,6 +2045,7 @@ def update_study_context(
                if analysis_design_recovery is not None else {}),
             **({"unsaved_design": unsaved_design} if unsaved_design is not None else {}),
             **causal_receipt,
+            **family_receipt,
         },
     )
     context.invalidate_authority("study_context_updated")

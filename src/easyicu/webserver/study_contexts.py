@@ -22,6 +22,10 @@ from easyicu.webserver.causal_trial_reading import (
     normalize_causal_trial_reading,
     reading_rests_on,
 )
+from easyicu.webserver.study_family_reading import (
+    family_reading_rests_on,
+    normalize_study_family_reading,
+)
 
 _CONFIG_PATH = state_paths.state_root() / "webserver_study_contexts.json"
 _LOCK = threading.RLock()
@@ -82,6 +86,7 @@ _CONTEXT_FIELDS = {
     "trajectory_design",
     "target_trial_design",
     "causal_trial_reading",
+    "study_family_reading",
     "sensitivity_specs",
     "time_window",
     "comparator",
@@ -1278,6 +1283,7 @@ def validate_context_update(
     _server_cohort_eligibility_authority_write: bool = False,
     _server_concept_selection_authority_write: bool = False,
     _server_causal_trial_reading_write: bool = False,
+    _server_study_family_reading_write: bool = False,
 ) -> Dict[str, Any]:
     """Validate and normalize one proposed update without mutating the store.
 
@@ -1298,6 +1304,7 @@ def validate_context_update(
             _server_concept_selection_authority_write
         ),
         allow_causal_trial_reading=_server_causal_trial_reading_write,
+        allow_study_family_reading=_server_study_family_reading_write,
     )
     current = dict(current_context or {})
     if current and not lifecycle_write:
@@ -1344,6 +1351,7 @@ def _default_context(context_id: str, timestamp: str) -> Dict[str, Any]:
         "trajectory_design": {},
         "target_trial_design": {},
         "causal_trial_reading": None,
+        "study_family_reading": None,
         "sensitivity_specs": [],
         "time_window": {},
         "comparator": "",
@@ -1369,6 +1377,7 @@ def _sanitize_patch(
     allow_concept_selection_authority: bool = False,
     allow_target_trial_design: bool = False,
     allow_causal_trial_reading: bool = False,
+    allow_study_family_reading: bool = False,
 ) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise StudyContextError({"error": "study_context_body_required"})
@@ -1484,6 +1493,27 @@ def _sanitize_patch(
                 {
                     "error": "study_causal_trial_reading_invalid",
                     "field": "causal_trial_reading",
+                    "reason": str(exc),
+                }
+            ) from exc
+    if "study_family_reading" in raw:
+        # The host reads it from the question (``study_family_design``).
+        if not allow_study_family_reading:
+            raise StudyContextError(
+                {
+                    "error": "study_family_reading_server_owned",
+                    "field": "study_family_reading",
+                }
+            )
+        try:
+            patch["study_family_reading"] = normalize_study_family_reading(
+                raw.get("study_family_reading")
+            )
+        except ValueError as exc:
+            raise StudyContextError(
+                {
+                    "error": "study_family_reading_invalid",
+                    "field": "study_family_reading",
                     "reason": str(exc),
                 }
             ) from exc
@@ -1723,6 +1753,7 @@ def _contexts_from_raw(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
             allow_cohort_eligibility_authority=True,
             allow_concept_selection_authority=True,
             allow_causal_trial_reading=True,
+            allow_study_family_reading=True,
         )
         if "analysis_design" in row:
             # Historical contradictions must stay inspectable, not break the
@@ -1805,6 +1836,29 @@ def _stale_causal_trial_reading(context: Mapping[str, Any]) -> bool:
     return family != "causal_inference" or not reading_rests_on(
         reading, context.get("question")
     )
+
+
+def _stale_study_family_reading(context: Mapping[str, Any]) -> bool:
+    """Whether a stored family reading no longer says anything of the design.
+
+    A reading the host recorded with a design explains that design while the
+    design states its family; one recorded with a conflict shows it while the
+    design states the other family.  Once that no longer holds, or the
+    question no longer holds the reading's words, it is cleared in the same
+    write, and the design stays as it is.
+    """
+
+    reading = context.get("study_family_reading")
+    if not reading:
+        return False
+    if not family_reading_rests_on(reading, context.get("question")):
+        return True
+    design = context.get("analysis_design")
+    family = design.get("analysis_family") if isinstance(design, Mapping) else None
+    conflict = reading.get("conflict")
+    if isinstance(conflict, Mapping):
+        return family != conflict.get("design_family")
+    return family != reading.get("family")
 
 
 def analysis_design_reads_patient_grouping(design: Mapping[str, Any]) -> bool:
@@ -2053,6 +2107,7 @@ def upsert_context(
     _server_concept_selection_authority_write: bool = False,
     _server_target_trial_design_write: bool = False,
     _server_causal_trial_reading_write: bool = False,
+    _server_study_family_reading_write: bool = False,
 ) -> Dict[str, Any]:
     client_concept_selection_authority: Dict[str, Any] = {}
     if not _server_concept_selection_authority_write and isinstance(raw_context, dict):
@@ -2070,6 +2125,7 @@ def upsert_context(
         ),
         allow_target_trial_design=_server_target_trial_design_write,
         allow_causal_trial_reading=_server_causal_trial_reading_write,
+        allow_study_family_reading=_server_study_family_reading_write,
     )
     if expected_revision is not None and (
         isinstance(expected_revision, bool)
@@ -2203,6 +2259,8 @@ def upsert_context(
             context.update(patch)
             if _stale_causal_trial_reading(context):
                 context["causal_trial_reading"] = None
+            if _stale_study_family_reading(context):
+                context["study_family_reading"] = None
             _validate_covariate_decision_contract(context)
             _validate_analysis_dependence_contract(context)
             if "time_window" in patch:
