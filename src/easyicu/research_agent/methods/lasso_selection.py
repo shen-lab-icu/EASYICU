@@ -26,9 +26,23 @@ Determinism contract
   the chosen alpha -- cross-seed byte stability must not be claimed for it
   (see the known-limitation note in the Tool Card test).
 
+Grouped rows
+------------
+Rows that share a patient are not independent: a random K-fold puts one
+patient's ICU stays on both sides of a fold, so the CV error is optimistic
+and ``lassocv`` may choose too small a penalty.  ``groups`` (one patient
+identifier per row) replaces the shuffled ``KFold`` with ``GroupKFold``,
+which keeps each patient's rows in one fold.  Its folds are assigned by
+group size, without a random number, so the determinism contract above
+holds unchanged.  A grouped result states ``cv_strategy`` and ``cv_group_n``
+in its JSON; an ungrouped result's JSON is unchanged, so its digest -- and
+the Tool Card's synthetic-origin digest -- reproduce as before.  A caller
+whose rows may repeat a patient must pass ``groups``.
+
 Fail-closed inputs: non-numeric dtypes, NaN/inf, empty frames, length
-mismatches, unusable CV splits, non-positive alphas, and ``selection`` other
-than ``"cyclic"`` are all refused with :class:`LassoSelectionError`.
+mismatches, unusable CV splits, non-positive alphas, ``selection`` other
+than ``"cyclic"``, and incomplete groups or fewer groups than folds are all
+refused with :class:`LassoSelectionError`.
 """
 
 from __future__ import annotations
@@ -39,7 +53,7 @@ from typing import Any, Dict, Sequence
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import Lasso, LassoCV
-from sklearn.model_selection import KFold
+from sklearn.model_selection import GroupKFold, KFold
 
 from ..canonical_json import canonical_sha256
 
@@ -47,6 +61,8 @@ TOOL_VERSION = "1.0.0"
 DEFAULT_RANDOM_STATE = 0
 DEFAULT_CV_SPLITS = 5
 DEFAULT_SELECTION_THRESHOLD = 1e-8
+UNGROUPED_CV_STRATEGY = "kfold_shuffled"
+GROUPED_CV_STRATEGY = "group_kfold"
 
 
 class LassoSelectionError(ValueError):
@@ -156,6 +172,26 @@ def _coerce_outcome(y: object, n_samples: int) -> np.ndarray:
     return raw
 
 
+def _coerce_groups(
+    groups: object, n_samples: int, n_splits: int
+) -> tuple[np.ndarray, int]:
+    """One integer code per row for ``GroupKFold``, and the number of groups."""
+
+    values = pd.Series(list(groups), dtype=object)
+    if values.shape[0] != n_samples:
+        raise LassoSelectionError(
+            f"groups has {values.shape[0]} entries for {n_samples} rows"
+        )
+    if values.isna().any() or values.map(lambda value: str(value).strip() == "").any():
+        raise LassoSelectionError("groups must name a group for every row")
+    codes, uniques = pd.factorize(values, sort=False)
+    if len(uniques) < n_splits:
+        raise LassoSelectionError(
+            f"need at least as many groups ({len(uniques)}) as cv splits ({n_splits})"
+        )
+    return np.asarray(codes, dtype=int), int(len(uniques))
+
+
 @dataclass(frozen=True)
 class LassoSelectionResult:
     """Typed Lasso selection output; JSON form is the digest input."""
@@ -173,9 +209,11 @@ class LassoSelectionResult:
     n_features: int
     cv_splits: int
     random_state: int
+    cv_strategy: str = UNGROUPED_CV_STRATEGY
+    cv_group_n: int | None = None
 
     def to_json(self) -> Dict[str, Any]:
-        return {
+        payload = {
             "method": self.method,
             "feature_names": list(self.feature_names),
             "coefs": [float(value) for value in self.coefs],
@@ -190,6 +228,10 @@ class LassoSelectionResult:
             "cv_splits": int(self.cv_splits),
             "random_state": int(self.random_state),
         }
+        if self.cv_strategy != UNGROUPED_CV_STRATEGY:
+            payload["cv_strategy"] = self.cv_strategy
+            payload["cv_group_n"] = int(self.cv_group_n or 0)
+        return payload
 
 
 def result_sha256(result: LassoSelectionResult) -> str:
@@ -204,10 +246,10 @@ def _fold_mse(
     estimator_factory: Any,
     x_values: np.ndarray,
     y_values: np.ndarray,
-    splitter: KFold,
+    folds: Sequence[tuple[np.ndarray, np.ndarray]],
 ) -> tuple[list[float], list[float]]:
     fold_mses: list[float] = []
-    for train_index, valid_index in splitter.split(x_values):
+    for train_index, valid_index in folds:
         estimator = estimator_factory()
         estimator.fit(x_values[train_index], y_values[train_index])
         predicted = np.asarray(
@@ -234,6 +276,7 @@ def lasso_select(
     selection_threshold: float = DEFAULT_SELECTION_THRESHOLD,
     max_iter: int = 5000,
     tol: float = 1e-4,
+    groups: Sequence[object] | None = None,
 ) -> LassoSelectionResult:
     """Fit a deterministic Lasso and report the selected variables.
 
@@ -242,7 +285,8 @@ def lasso_select(
     :class:`~sklearn.linear_model.LassoCV` over ``alphas`` (or the sklearn
     default grid) with ``KFold(shuffle=True, random_state=random_state)``
     splits.  In both cases a K-fold MSE summary under the same pinned
-    splits is reported.
+    splits is reported.  With ``groups`` both use ``GroupKFold`` folds that
+    keep each group's rows together (see the module docstring).
     """
 
     normalized = str(method or "").strip().lower()
@@ -275,7 +319,17 @@ def lasso_select(
             f"need more samples ({x_values.shape[0]}) than cv splits ({n_splits})"
         )
     names = _resolve_feature_names(x_frame, feature_names, x_values.shape[1])
-    splitter = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    if groups is None:
+        cv_strategy, group_n = UNGROUPED_CV_STRATEGY, None
+        folds = list(
+            KFold(n_splits=n_splits, shuffle=True, random_state=seed).split(x_values)
+        )
+    else:
+        codes, group_n = _coerce_groups(groups, x_values.shape[0], n_splits)
+        cv_strategy = GROUPED_CV_STRATEGY
+        folds = list(
+            GroupKFold(n_splits=n_splits).split(x_values, y_values, codes)
+        )
 
     if normalized == "lasso":
         fixed_alpha = _require_positive_float(alpha, field="alpha")
@@ -298,7 +352,7 @@ def lasso_select(
             ),
             x_values,
             y_values,
-            splitter,
+            folds,
         )
         grid = (fixed_alpha,)
         chosen = fixed_alpha
@@ -306,7 +360,7 @@ def lasso_select(
         if alphas is None:
             grid_values: tuple[float, ...] = ()
             estimator_cv = LassoCV(
-                cv=splitter,
+                cv=folds,
                 max_iter=max_iter_value,
                 tol=tol_value,
                 random_state=seed,
@@ -321,7 +375,7 @@ def lasso_select(
                 raise LassoSelectionError("alphas must be non-empty when provided")
             estimator_cv = LassoCV(
                 alphas=np.asarray(grid_values, dtype=float),
-                cv=splitter,
+                cv=folds,
                 max_iter=max_iter_value,
                 tol=tol_value,
                 random_state=seed,
@@ -352,6 +406,8 @@ def lasso_select(
         n_features=int(x_values.shape[1]),
         cv_splits=int(n_splits),
         random_state=int(seed),
+        cv_strategy=cv_strategy,
+        cv_group_n=group_n,
     )
 
 
@@ -359,7 +415,9 @@ __all__ = [
     "DEFAULT_CV_SPLITS",
     "DEFAULT_RANDOM_STATE",
     "DEFAULT_SELECTION_THRESHOLD",
+    "GROUPED_CV_STRATEGY",
     "TOOL_VERSION",
+    "UNGROUPED_CV_STRATEGY",
     "LassoSelectionError",
     "LassoSelectionResult",
     "lasso_select",
