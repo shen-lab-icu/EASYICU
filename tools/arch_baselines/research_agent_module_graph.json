@@ -3276,6 +3276,14 @@
       "easyicu.research_agent.contracts.closed_levels"
     ],
     [
+      "easyicu.research_agent.contracts.patient_grouping_need",
+      "easyicu.research_agent.contracts.prediction_execution"
+    ],
+    [
+      "easyicu.research_agent.contracts.patient_grouping_need",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.contracts.phenotype_comparison",
       "easyicu.research_agent.authority.declared_levels"
     ],
@@ -14560,9 +14568,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3632,
+    "edge_count": 3634,
     "largest_scc_size": 0,
-    "module_count": 830,
+    "module_count": 831,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -14766,6 +14774,7 @@
     "easyicu.research_agent.contracts.ordered_stratified": "contracts/ordered_stratified.py",
     "easyicu.research_agent.contracts.ordered_stratified_spec": "contracts/ordered_stratified_spec.py",
     "easyicu.research_agent.contracts.ownership_verdict": "contracts/ownership_verdict.py",
+    "easyicu.research_agent.contracts.patient_grouping_need": "contracts/patient_grouping_need.py",
     "easyicu.research_agent.contracts.phenotype_comparison": "contracts/phenotype_comparison.py",
     "easyicu.research_agent.contracts.phenotyping_execution": "contracts/phenotyping_execution.py",
     "easyicu.research_agent.contracts.phenotyping_features": "contracts/phenotyping_features.py",

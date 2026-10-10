@@ -2261,6 +2261,8 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
         "planning_authority": {
             "kind": "metadata_only_planning_catalog",
             "patient_rows_read": False,
+            # The context binds the grouping, so that is what it states.
+            "patient_grouping_status": "bound",
             "replacement_row_identity": {
                 "output_identity_column": "patient_stay_id",
                 "mapping_file_sha256": "a" * 64,

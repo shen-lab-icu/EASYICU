@@ -374,6 +374,15 @@
           'The plan analyses every ICU stay, which needs source-owned patient grouping (linking repeated stays of one patient); this data package does not provide it. Choose an admission rule below, or request a plan change.',
           '计划按全部 ICU 住院分析，这需要数据源提供患者分组（把同一患者的多次住院归并），当前数据包没有提供。请在下方选择入住规则，或提出修改。',
         ),
+        // A step that cannot run without patient groups (run_patient_grouping).
+        research_pipeline_patient_grouping_required: tr(
+          'A step of this plan needs to know which ICU stays belong to the same patient (for example, a prediction model keeps all of a patient\'s stays on one side of its development and validation split), and the data this run uses has no verified patient grouping, so analysis stopped before any step ran. If the selected data source cannot provide patient grouping, choose one that can, or ask a question that does not need it; otherwise generate the plan again.',
+          '这个计划有步骤需要知道哪些 ICU 住院属于同一位患者（例如预测模型要把同一患者的住院都放在开发集或验证集的同一边），而这次运行用的数据没有已核实的患者分组，分析在任何步骤运行前停止。如果所选数据源不能提供患者分组，请改用能提供的数据源，或改问不需要它的问题；否则请重新生成计划。',
+        ),
+        research_pipeline_patient_grouping_trajectory_conflict: tr(
+          'A step of the accepted plan needs patient grouping, and this study also declares a design read from each stay\'s measurements over time (a trajectory or landmark design). EasyICU cannot yet prepare both in one run, so it stopped before preparing the data. Keep one of them in the conversation, then generate the plan again.',
+          '已接受的计划里有步骤需要患者分组，而这项研究还声明了要读取每次住院随时间变化的测量（轨迹或 landmark 设计）。EasyICU 目前不能在一次运行里同时准备这两样，因此在准备数据之前停止。请在对话里只保留其中一项，再生成计划。',
+        ),
         agent_plan_configuration_failed: tr(
           'EasyICU could not configure the reviewed plan for execution automatically.',
           'EasyICU 无法自动为已审阅的计划完成执行配置。',
