@@ -7,9 +7,12 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Literal, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, Literal, Mapping, Optional, Sequence
 
 from easyicu.research_agent.literature import LiteratureBundle
+from easyicu.research_agent.orchestration.exposure_group_labels import (
+    recorded_exposure_group_labels,
+)
 from easyicu.research_agent.planning.progressive_artifacts import (
     ProgressivePlanningArtifactError,
     load_progressive_planner_checkpoint_chain,
@@ -20,6 +23,9 @@ from easyicu.webserver.research_launch_scientific import (
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
 
 _MAX_JSON_BYTES = 2 * 1024 * 1024
+DEVELOPMENT_RESUME_PHASE_NOT_REPLAYED = (
+    "research_pipeline_development_resume_phase_not_replayed"
+)
 
 
 @dataclass(frozen=True)
@@ -153,6 +159,38 @@ class _DevelopmentResumeLaunchScope:
     plan_contract: str | None
 
 
+def _formed_exposure_groupings(run_dir: Path) -> bool:
+    """Whether a planning run staged a grouped exposure into its input.
+
+    A grouping record that cannot be read counts as one: the context it
+    shaped cannot be shown to be the one a continuation rebuilds.
+    """
+
+    rows = recorded_exposure_group_labels(run_dir)
+    return rows is None or bool(rows)
+
+
+#: The phases a planning run performs before its Planner that a Planner
+#: continuation does not perform again, each with how the source pipeline
+#: run's directory shows it performed one.  A continuation rebuilds its
+#: context without them, so a checkpoint bound to the source's context
+#: cannot be resumed when the source performed one; a phase added here, or a
+#: new one a continuation does not replay, needs its row.
+_PHASES_A_CONTINUATION_DOES_NOT_REPLAY: tuple[
+    tuple[str, Callable[[Path], bool]], ...
+] = (("exposure_grouping", _formed_exposure_groupings),)
+
+
+def _development_resume_phases_not_replayed(run_dir: Path) -> tuple[str, ...]:
+    """The phases the source pipeline run performed that a continuation does not."""
+
+    return tuple(
+        phase
+        for phase, performed in _PHASES_A_CONTINUATION_DOES_NOT_REPLAY
+        if performed(run_dir)
+    )
+
+
 def _development_resume_launch_scope(
     *, project_root: str, study: Mapping[str, Any], source_job_id: str
 ) -> _DevelopmentResumeLaunchScope:
@@ -162,6 +200,9 @@ def _development_resume_launch_scope(
     catalog. Conversely, the presence of an older export never promotes a
     fresh candidate. Only the selected, integrity-checked source can supply
     this mode; source/package and plan-review gates still run at launch.
+    A source whose run performed a phase a continuation does not perform
+    again is refused (``DEVELOPMENT_RESUME_PHASE_NOT_REPLAYED``, naming the
+    phases).
     """
     from easyicu.webserver import agent_review_recovery, study_contexts
 
@@ -212,6 +253,18 @@ def _development_resume_launch_scope(
         raise ResearchPipelineRunError(
             "research_pipeline_development_resume_scope_invalid",
             "The prior Planner launch scope has an invalid plan contract.",
+        )
+    not_replayed = _development_resume_phases_not_replayed(checkpoint.parent)
+    if not_replayed:
+        raise ResearchPipelineRunError(
+            DEVELOPMENT_RESUME_PHASE_NOT_REPLAYED,
+            "The prior Planner's run performed "
+            + ", ".join(not_replayed)
+            + ", which a continuation does not perform again; plan anew.",
+            details={
+                "reason_code": "development_resume_source_phase_not_replayed",
+                "phases": list(not_replayed),
+            },
         )
     return _DevelopmentResumeLaunchScope(seed.budget_mode, contract)
 
