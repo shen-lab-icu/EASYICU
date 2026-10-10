@@ -62,6 +62,9 @@ from .llm import (
 )
 from .structured_diagnostics import (
     infer_validation_stage,
+    json_eof_state,
+    json_truncation_issues,
+    safe_json_eof_state,
     safe_projected_validation_issues,
     safe_validation_issues,
     safe_validation_stage,
@@ -273,6 +276,9 @@ class StructuredAttempt:
     validation_issues: Optional[List[Dict[str, Any]]] = None
     violation_sha256: Optional[str] = None
     reason_code: Optional[str] = None
+    #: Where a response that failed to decode as JSON stood at its end
+    #: (:func:`json_eof_state`); ``None`` for any other failure.
+    json_eof: Optional[Dict[str, Any]] = None
 
 
 def _safe_declared_reason_code(exc: BaseException) -> Optional[str]:
@@ -400,6 +406,7 @@ def safe_structured_attempt_metadata(
             raw_validation_issues = source.get("validation_issues")
             raw_violation_sha256 = source.get("violation_sha256")
             raw_reason_code = source.get("reason_code")
+            raw_json_eof = source.get("json_eof")
         else:
             attempt_index = _bounded_int(item.attempt, minimum=0, default=0) + 1
             raw_chars = item.raw_chars
@@ -411,6 +418,7 @@ def safe_structured_attempt_metadata(
             raw_validation_issues = item.validation_issues
             raw_violation_sha256 = item.violation_sha256
             raw_reason_code = item.reason_code
+            raw_json_eof = item.json_eof
         error_class = safe_provider_error_category(raw_error)
         finish_reason = safe_provider_finish_reason(raw_finish)
         usage = {
@@ -445,6 +453,9 @@ def safe_structured_attempt_metadata(
         reason_code = str(raw_reason_code or "").strip()
         if re.fullmatch(r"[a-z][a-z0-9_]{2,79}", reason_code):
             row["reason_code"] = reason_code
+        json_eof = safe_json_eof_state(raw_json_eof)
+        if json_eof is not None:
+            row["json_eof"] = json_eof
         projected.append(row)
     return projected
 
@@ -770,7 +781,9 @@ def call_llm_with_structured_retry(
             # that was recorded.
             rendered_failure = render_parse_failure(exc)
             validation_stage = infer_validation_stage(exc)
-            validation_issues = safe_validation_issues(exc)
+            validation_issues = safe_validation_issues(exc) or json_truncation_issues(
+                exc, raw
+            )
             reason_code = _safe_declared_reason_code(exc)
             attempts.append(
                 StructuredAttempt(
@@ -786,6 +799,11 @@ def call_llm_with_structured_retry(
                     validation_issues=validation_issues,
                     violation_sha256=violation_sha256(rendered_failure),
                     reason_code=reason_code,
+                    json_eof=(
+                        json_eof_state(raw)
+                        if isinstance(exc, json.JSONDecodeError)
+                        else None
+                    ),
                 )
             )
             _notify_progress(
