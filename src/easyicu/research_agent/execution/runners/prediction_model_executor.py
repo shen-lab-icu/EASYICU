@@ -44,6 +44,7 @@ from ...contracts.prediction_execution import (
     static_prediction_owns_step,
 )
 from ...contracts.prediction_validation import PredictionValidationSpec
+from ...methods.auc_interval import AUCInterval, auc_interval
 from ...methods.delong_auc import delong_auc_ci
 from ...planning.dependence_authority import context_patient_group_authority
 from ...prediction_validation_owner import (
@@ -454,6 +455,17 @@ def _prediction_validation_spec() -> PredictionValidationSpec:
     )
 
 
+def _interval_words(interval: AUCInterval) -> str:
+    """How an AUROC interval was computed, in the panel's words."""
+
+    if interval.bootstrap_n:
+        return (
+            f"percentile interval of {interval.bootstrap_n:,} patient resamples "
+            "(repeat ICU stays of a patient are resampled together)"
+        )
+    return "the deterministic DeLong logit interval"
+
+
 def run_prediction_robustness_specs(
     *,
     frame: pd.DataFrame,
@@ -514,7 +526,9 @@ def run_prediction_robustness_specs(
             variant_scores, _prediction_validation_spec()
         )
         evaluated = variant_scores.loc[variant_scores["split"].eq("validation")]
-        auc = delong_auc_ci(evaluated["outcome"], evaluated["probability"])
+        auc = auc_interval(
+            evaluated["outcome"], evaluated["probability"], evaluated["subject_id"]
+        )
         average_precision = float(
             average_precision_score(evaluated["outcome"], evaluated["probability"])
         )
@@ -532,7 +546,9 @@ def run_prediction_robustness_specs(
             "auroc_se": auc.se,
             "auroc_ci_low": auc.ci_low,
             "auroc_ci_high": auc.ci_high,
-            "auroc_ci_method": "delong_logit_normal_95pct",
+            "auroc_ci_method": auc.method,
+            "auroc_bootstrap_n": auc.bootstrap_n,
+            "auroc_bootstrap_skipped_n": auc.bootstrap_skipped_n,
             "average_precision": average_precision,
             "brier_score": summary.brier_score,
             "calibration_status": summary.calibration_status,
@@ -555,7 +571,7 @@ def run_prediction_robustness_specs(
                 "notes": (
                     "metric=AUROC; complete-case refit with the primary model, "
                     "outcome, predictor roster, and patient split unchanged; "
-                    "95% CI uses the deterministic DeLong logit interval"
+                    f"95% CI: {_interval_words(auc)}"
                 ),
             }
         )
@@ -629,7 +645,9 @@ def run_prediction_model(
     validation = scores.loc[scores["split"].eq("validation")]
     validation_result = run_prediction_validation(scores, _prediction_validation_spec())
     validation_summary = validation_result.summary
-    auc = delong_auc_ci(validation["outcome"], validation["probability"])
+    auc = auc_interval(
+        validation["outcome"], validation["probability"], validation["subject_id"]
+    )
     repeated_split_rows, repeated_split_summary = _repeated_group_split_validation(
         frame=frame,
         outcome=outcome,
@@ -658,7 +676,9 @@ def run_prediction_model(
                 "auroc_se": auc.se,
                 "auroc_ci_low": auc.ci_low,
                 "auroc_ci_high": auc.ci_high,
-                "auroc_ci_method": "delong_logit_normal_95pct",
+                "auroc_ci_method": auc.method,
+                "auroc_bootstrap_n": auc.bootstrap_n,
+                "auroc_bootstrap_skipped_n": auc.bootstrap_skipped_n,
                 "average_precision": float(
                     average_precision_score(
                         validation["outcome"], validation["probability"]

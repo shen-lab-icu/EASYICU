@@ -225,26 +225,18 @@ def delong_auc_ci(
     return AUCResult(auc=auc, se=se, ci_low=ci_low, ci_high=ci_high)
 
 
-def delong_test(
+def delong_difference(
     y_true: Sequence[int],
     score_a: Sequence[float],
     score_b: Sequence[float],
 ) -> Tuple[float, float, float, float]:
-    """Compare two correlated AUROCs measured on the SAME samples.
+    """Two correlated AUROCs on the SAME samples, their difference and its variance.
 
-    Both score vectors are aligned to the same ``y_true`` labels, so the two
-    AUROCs are correlated; DeLong (1988, Sec. 3) tests their difference with a
-    normal approximation whose variance uses the *covariance* of the two
-    structural-component vectors.
-
-    Returns
-    -------
-    ``(auc_a, auc_b, z, p_value)`` -- the two AUROCs, the z statistic for
-    ``auc_a - auc_b``, and the two-sided p-value. Comparing a model to itself
-    (identical scores) yields ``z == 0`` and ``p == 1``.
+    Returns ``(auc_a, auc_b, auc_a - auc_b, var)``: ``var`` is the DeLong
+    (1988, Sec. 3) variance of the difference, ``c^T S c`` with ``c = [1, -1]``
+    and ``S`` the 2x2 covariance of the two AUROCs from their structural
+    components.  :func:`delong_test` reads its z and p from the same numbers.
     """
-
-    from scipy.stats import norm
 
     y_true, (score_a, score_b) = _validated_inputs(y_true, score_a, score_b)
     positive = y_true > 0
@@ -269,7 +261,31 @@ def delong_test(
 
     # var(auc_a - auc_b) = c^T Sigma c with c = [1, -1].
     var_diff = float(cov[0, 0] + cov[1, 1] - 2.0 * cov[0, 1])
-    diff = auc_a - auc_b
+    return float(auc_a), float(auc_b), float(auc_a - auc_b), var_diff
+
+
+def delong_test(
+    y_true: Sequence[int],
+    score_a: Sequence[float],
+    score_b: Sequence[float],
+) -> Tuple[float, float, float, float]:
+    """Compare two correlated AUROCs measured on the SAME samples.
+
+    Both score vectors are aligned to the same ``y_true`` labels, so the two
+    AUROCs are correlated; DeLong (1988, Sec. 3) tests their difference with a
+    normal approximation whose variance uses the *covariance* of the two
+    structural-component vectors (:func:`delong_difference`).
+
+    Returns
+    -------
+    ``(auc_a, auc_b, z, p_value)`` -- the two AUROCs, the z statistic for
+    ``auc_a - auc_b``, and the two-sided p-value. Comparing a model to itself
+    (identical scores) yields ``z == 0`` and ``p == 1``.
+    """
+
+    from scipy.stats import norm
+
+    auc_a, auc_b, diff, var_diff = delong_difference(y_true, score_a, score_b)
     if var_diff <= 0.0:
         # Identical (or perfectly co-varying) models: no discernible difference.
         z = 0.0 if diff == 0.0 else float(np.sign(diff)) * np.inf
@@ -285,5 +301,6 @@ __all__ = [
     "AUCResult",
     "delong_auc_ci",
     "delong_auc_variance",
+    "delong_difference",
     "delong_test",
 ]

@@ -6577,6 +6577,10 @@
     ],
     [
       "easyicu.research_agent.execution.runners.prediction_model_executor",
+      "easyicu.research_agent.methods.auc_interval"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.prediction_model_executor",
       "easyicu.research_agent.methods.delong_auc"
     ],
     [
@@ -8734,6 +8738,10 @@
     [
       "easyicu.research_agent.method_skills",
       "easyicu.research_agent.planning.method_adapter_catalog"
+    ],
+    [
+      "easyicu.research_agent.methods.auc_interval",
+      "easyicu.research_agent.methods.delong_auc"
     ],
     [
       "easyicu.research_agent.methods.clone_censor_weight",
@@ -14748,9 +14756,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3679,
+    "edge_count": 3681,
     "largest_scc_size": 0,
-    "module_count": 837,
+    "module_count": 838,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -15228,6 +15236,7 @@
     "easyicu.research_agent.mcp_transport": "mcp_transport.py",
     "easyicu.research_agent.method_skills": "method_skills.py",
     "easyicu.research_agent.methods": "methods/__init__.py",
+    "easyicu.research_agent.methods.auc_interval": "methods/auc_interval.py",
     "easyicu.research_agent.methods.clone_censor_weight": "methods/clone_censor_weight.py",
     "easyicu.research_agent.methods.clone_censor_weight_diagnostics": "methods/clone_censor_weight_diagnostics.py",
     "easyicu.research_agent.methods.competing_risks": "methods/competing_risks.py",
