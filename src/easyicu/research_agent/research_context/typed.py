@@ -40,6 +40,7 @@ from ..intake.materialized_trajectory import (
     VerifiedMaterializedTrajectoryAuthority,
 )
 from ..contracts.cohort_receipt import COHORT_RECEIPT_COLUMN_FIELDS
+from ..contracts.exposure_group_rules import EXPOSURE_GROUP_TRANSFORMS
 from ..concept_availability import require_supported_variable_source
 from ..icu_rules import ICU_RULES
 from .implementation_identity import metadata_implementation_identity
@@ -1106,6 +1107,20 @@ def _transform_preserves_concept_values(transform: Any) -> bool:
     return str(transform or "") in _VALUE_PRESERVING_TRANSFORMS
 
 
+def _exposure_group_codes(valid_range: Sequence[Any]) -> Optional[List[int]]:
+    """The level codes a grouping's sealed range ``[1, k]`` declares."""
+
+    if len(valid_range) != 2 or any(
+        isinstance(bound, bool) or not isinstance(bound, (int, float))
+        for bound in valid_range
+    ):
+        return None
+    lower, upper = (float(bound) for bound in valid_range)
+    if lower != 1.0 or not upper.is_integer() or not 2 <= upper <= 7:
+        return None
+    return list(range(1, int(upper) + 1))
+
+
 def declared_domain_for_variable(
     variable: ConceptDescriptor,
 ) -> tuple[Optional[List[Any]], Optional[str]]:
@@ -1139,6 +1154,14 @@ def declared_domain_for_variable(
                     "declared_ordinal_integer_range",
                 )
     transform = getattr(variable, "unit_normalization", None)
+    if transform in EXPOSURE_GROUP_TRANSFORMS:
+        # A study's exposure grouping holds level codes 1..k, sealed as the
+        # column's range (``intake.materialized_metadata``): its levels are
+        # declared before any row exists, nominal or ordinal alike.
+        codes = _exposure_group_codes(valid_range)
+        if codes is None:
+            return None, None
+        return codes, "declared_exposure_group_levels"
     if transform and not _transform_preserves_concept_values(transform):
         # A source event's status domain is not the domain of its timestamp,
         # measurement count, or another derived quantity.

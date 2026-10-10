@@ -47,6 +47,7 @@ from ..contracts.descriptive_execution import (
     DESCRIPTIVE_EXPOSURE_OUTCOME_CAPABILITY_ID,
     exposure_outcome_distribution_execution_verdict,
 )
+from ..contracts.exposure_group_rules import EXPOSURE_GROUP_TRANSFORM_ID
 from ..contracts.ordered_stratified import is_ordered_stratified_analysis_step
 from ..contracts.primary_cohort import step_cohort_population
 from ..contracts.functional_form import functional_form_products
@@ -1688,7 +1689,16 @@ def _model_term_domain_conflicts(
         for requirement in step.model_requirements:
             for term in requirement.model_terms or ():
                 variable = context.variable(term.name)
-                if variable is None or term.coding != "continuous":
+                # A nominal exposure grouping's codes name groups in no order,
+                # so a trend over them is no more a scale than a measurement.
+                nominal_trend = (
+                    term.coding == "ordinal_linear"
+                    and variable is not None
+                    and variable.unit_normalization == EXPOSURE_GROUP_TRANSFORM_ID
+                )
+                if variable is None or (
+                    term.coding != "continuous" and not nominal_trend
+                ):
                     continue
                 declared_levels, declared_basis = declared_domain_for_variable(variable)
                 if not declared_levels:
@@ -4277,8 +4287,9 @@ def build_plan_scientific_review(
                 severity="blocker",
                 dimension="statistical_design",
                 message=(
-                    "Continuous model coding conflicts with an owner-declared "
-                    "closed variable domain: " + ", ".join(conflict_variables)
+                    "Continuous or ordered model coding conflicts with an "
+                    "owner-declared closed variable domain: "
+                    + ", ".join(conflict_variables)
                 ),
                 evidence_refs=[
                     "research_context.json.variables",

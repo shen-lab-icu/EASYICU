@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Mapping, Optional, Sequence
@@ -23,8 +24,11 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from easyicu.concept.metadata_projection import (
+    CATEGORICAL_UNIT,
     ColumnProjectionSpec,
+    ConceptColumnMetadata,
     ConceptColumnRole,
+    NumericBounds,
     derive_concept_column_metadata,
 )
 from easyicu.concept.metadata_sidecar import (
@@ -42,6 +46,15 @@ from easyicu.concept.metadata_sidecar import (
 )
 
 from ..authority.filesystem import AnchoredDirectory, AuthorityFilesystemError
+from ..contracts.exposure_group_rules import (
+    ExposureGroupRuleError,
+    GroupContrast,
+    GroupingRules,
+    evaluate_grouping,
+    grouping_level_description,
+    read_group_contrast,
+    read_grouping_rules,
+)
 from ..contracts.host_derivations import HostDerivation, host_derived_transform
 from .export_package import ExportPackage, resolve_exported_concept
 
@@ -81,6 +94,14 @@ _HOSPITAL_FOLLOWUP_INVALIDATED_COLUMNS = ("death_time",)
 _STAGE_PARENT_PRODUCERS = frozenset(
     {"cohort_materializer", HOSPITAL_FOLLOWUP_EXTENSION_PRODUCER}
 )
+# A run's staged cohort that also carries the level codes of each exposure
+# grouping its study formed (``contracts.exposure_group_rules``).  Its parent
+# is the source authority, as for an exact staged copy; every source column is
+# carried, and each grouping adds one column derived from the columns it reads.
+EXPOSURE_GROUP_STAGE_PRODUCER = "research_agent_run_stage_exposure_groups"
+_EXPOSURE_GROUP_STAGE_TRANSFORM = "exposure_group_stage"
+_GROUP_VARIABLE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,127}$")
+_MAX_GROUP_LABEL = 60
 
 
 class MaterializedMetadataError(MetadataSidecarError):
@@ -1967,6 +1988,55 @@ def _validate_derivation_contract(
                     f"staged transform receipt mismatch for {column!r}"
                 )
         return
+    if authority.producer == EXPOSURE_GROUP_STAGE_PRODUCER:
+        parent = authority.parent_authority_sha256
+        if parent is None:
+            raise MaterializedMetadataError("staged authority lacks an upstream anchor")
+        parameters = authority.producer_parameters
+        groupings = parameters.get("groupings")
+        if (
+            parameters.get("source_authority_sha256") != parent
+            or parameters.get("target_file") != authority.cohort_file
+            or parameters.get("transform") != _EXPOSURE_GROUP_STAGE_TRANSFORM
+            or not isinstance(groupings, Sequence)
+            or isinstance(groupings, (str, bytes))
+            or not groupings
+        ):
+            raise MaterializedMetadataError("exposure group stage receipt mismatch")
+        reads: dict[str, GroupingRules] = {}
+        for grouping in groupings:
+            if not isinstance(grouping, Mapping):
+                raise MaterializedMetadataError("exposure group stage receipt mismatch")
+            try:
+                rules = read_grouping_rules(grouping.get("parameters"))  # type: ignore[arg-type]
+            except ExposureGroupRuleError as exc:
+                raise MaterializedMetadataError(
+                    f"exposure group stage receipt is unreadable: {exc}"
+                ) from exc
+            reads[str(grouping.get("variable"))] = rules
+        for column, derivation in derivations.items():
+            read = reads.get(column)
+            if read is None:
+                if derivation.transform_id != "identity_stage_copy" or [
+                    (source.authority_sha256, source.column)
+                    for source in derivation.sources
+                ] != [(parent, column)]:
+                    raise MaterializedMetadataError(
+                        f"staged transform receipt mismatch for {column!r}"
+                    )
+                continue
+            if derivation.transform_id != read.transform_id or [
+                (source.authority_sha256, source.column)
+                for source in derivation.sources
+            ] != [(parent, item) for item in read.read_columns]:
+                raise MaterializedMetadataError(
+                    f"exposure group receipt mismatch for {column!r}"
+                )
+        if not set(reads) <= set(derivations):
+            raise MaterializedMetadataError(
+                "exposure group stage lacks a grouping column"
+            )
+        return
     if authority.producer == "analysis_cohort_ordered_subset":
         parent = authority.parent_authority_sha256
         if parent is None:
@@ -2935,71 +3005,17 @@ def load_verified_materialized_cohort_authority(
         source_sidecar=source_sidecar,
     )
     if authority.producer == "research_agent_run_stage":
-        parent_sha = authority.parent_authority_sha256
-        if parent_sha is None:  # pragma: no cover - checked by the contract above
-            raise MaterializedMetadataError("staged cohort lacks a parent authority")
-        parent_ref, parent_authority = _local_authority_reference(
-            cohort_path.parent,
-            authority_sha256=parent_sha,
-        )
-        try:
-            parent_sidecar = read_content_addressed_sidecar(
-                cohort_path.parent / parent_authority.column_metadata.file,
-                expected_sha256=parent_authority.column_metadata.sha256,
-                expected_size=parent_authority.column_metadata.size,
-            )
-        except MetadataSidecarError as exc:
-            raise MaterializedMetadataError(str(exc)) from exc
-        if (
-            parent_sidecar.scope != MATERIALIZED_COHORT_SCOPE
-            or parent_sidecar.record_count
-            != parent_authority.column_metadata.record_count
-            or len(parent_sidecar.files) != 1
-        ):
-            raise MaterializedMetadataError(
-                "staged parent metadata snapshot is invalid"
-            )
-        parent_binding = parent_sidecar.files[0]
-        if (
-            parent_authority.producer not in _STAGE_PARENT_PRODUCERS
-            or parent_binding.relative_path != parent_authority.cohort_file
-            or parent_binding.identity_column != parent_authority.identity_column
-            or parent_binding.metadata_payload_sha256
-            != parent_authority.file_metadata_payload_sha256
-            or set(parent_binding.columns)
-            != set(parent_authority.cohort_columns) - {parent_authority.identity_column}
-        ):
-            raise MaterializedMetadataError(
-                "staged parent authority snapshot is not an initial materialization"
-            )
-        parent_source_sidecar = _read_source_column_metadata(
-            cohort_path.parent,
-            authority=parent_authority,
-        )
-        _validate_derivation_contract(
-            parent_authority,
-            file_binding=parent_binding,
-            source_sidecar=parent_source_sidecar,
-        )
-        if parent_authority.producer == HOSPITAL_FOLLOWUP_EXTENSION_PRODUCER:
-            # The staged copy carries the extension's initial-materialization
-            # ancestor as a snapshot too; prove the extension is bound to it.
-            _validate_staged_hospital_followup_ancestry(
-                cohort_path.parent,
-                extension_reference=parent_ref,
-                extension_authority=parent_authority,
-                extension_sidecar=parent_sidecar,
-            )
         _validate_stage_parent_receipts(
             authority,
             sidecar=sidecar,
-            parent=VerifiedMaterializedCohortAuthority(
-                reference=parent_ref,
-                authority=parent_authority,
-                sidecar=parent_sidecar,
-                provenance=parent_authority.semantic_provenance,
-            ),
+            parent=_staged_parent_snapshot(cohort_path, authority),
         )
+    elif authority.producer == EXPOSURE_GROUP_STAGE_PRODUCER:
+        parent = _staged_parent_snapshot(cohort_path, authority)
+        groupings = _validate_exposure_group_stage_receipts(
+            authority, sidecar=sidecar, parent=parent
+        )
+        _verify_exposure_group_codes(cohort_path, groupings=groupings)
     elif authority.producer == "analysis_cohort_ordered_subset":
         if len(_ancestor_chain) >= _MAX_AUTHORITY_ANCESTRY:
             raise MaterializedMetadataError(
@@ -3072,6 +3088,78 @@ def load_verified_materialized_cohort_authority(
         authority=authority,
         sidecar=sidecar,
         provenance=authority.semantic_provenance,
+    )
+
+
+def _staged_parent_snapshot(
+    cohort_path: Path,
+    authority: MaterializedCohortAuthority,
+) -> VerifiedMaterializedCohortAuthority:
+    """The source authority a staged cohort names, from the snapshots beside it.
+
+    A run directory holds the source's authority and metadata snapshots, not
+    its parquet: the snapshots are verified here as an initial typed
+    materialization, and a staged producer proves its own receipts against
+    them.
+    """
+
+    parent_sha = authority.parent_authority_sha256
+    if parent_sha is None:  # pragma: no cover - checked by the contract above
+        raise MaterializedMetadataError("staged cohort lacks a parent authority")
+    parent_ref, parent_authority = _local_authority_reference(
+        cohort_path.parent,
+        authority_sha256=parent_sha,
+    )
+    try:
+        parent_sidecar = read_content_addressed_sidecar(
+            cohort_path.parent / parent_authority.column_metadata.file,
+            expected_sha256=parent_authority.column_metadata.sha256,
+            expected_size=parent_authority.column_metadata.size,
+        )
+    except MetadataSidecarError as exc:
+        raise MaterializedMetadataError(str(exc)) from exc
+    if (
+        parent_sidecar.scope != MATERIALIZED_COHORT_SCOPE
+        or parent_sidecar.record_count != parent_authority.column_metadata.record_count
+        or len(parent_sidecar.files) != 1
+    ):
+        raise MaterializedMetadataError("staged parent metadata snapshot is invalid")
+    parent_binding = parent_sidecar.files[0]
+    if (
+        parent_authority.producer not in _STAGE_PARENT_PRODUCERS
+        or parent_binding.relative_path != parent_authority.cohort_file
+        or parent_binding.identity_column != parent_authority.identity_column
+        or parent_binding.metadata_payload_sha256
+        != parent_authority.file_metadata_payload_sha256
+        or set(parent_binding.columns)
+        != set(parent_authority.cohort_columns) - {parent_authority.identity_column}
+    ):
+        raise MaterializedMetadataError(
+            "staged parent authority snapshot is not an initial materialization"
+        )
+    parent_source_sidecar = _read_source_column_metadata(
+        cohort_path.parent,
+        authority=parent_authority,
+    )
+    _validate_derivation_contract(
+        parent_authority,
+        file_binding=parent_binding,
+        source_sidecar=parent_source_sidecar,
+    )
+    if parent_authority.producer == HOSPITAL_FOLLOWUP_EXTENSION_PRODUCER:
+        # The staged copy carries the extension's initial-materialization
+        # ancestor as a snapshot too; prove the extension is bound to it.
+        _validate_staged_hospital_followup_ancestry(
+            cohort_path.parent,
+            extension_reference=parent_ref,
+            extension_authority=parent_authority,
+            extension_sidecar=parent_sidecar,
+        )
+    return VerifiedMaterializedCohortAuthority(
+        reference=parent_ref,
+        authority=parent_authority,
+        sidecar=parent_sidecar,
+        provenance=parent_authority.semantic_provenance,
     )
 
 
@@ -3335,6 +3423,594 @@ def _stage_materialized_cohort_authority_at(
     finally:
         if temporary_name:
             target_root.unlink(temporary_name, missing_ok=True)
+
+
+# -- a run's staged cohort with the exposure groups its study formed ---------
+
+
+@dataclass(frozen=True)
+class _StagedGrouping:
+    """One grouping a staged cohort carries, bound to the columns it reads."""
+
+    variable: str
+    rules: GroupingRules
+    parameters: Mapping[str, object]
+    labels: Mapping[str, str]
+    #: The groups the study's primary estimate compares, as level codes.
+    contrast: GroupContrast
+
+    def receipt(self) -> dict[str, object]:
+        return {
+            "variable": self.variable,
+            "parameters": _thaw_json(self.parameters),
+            "labels": dict(self.labels),
+            "compared": self.contrast.compared(),
+        }
+
+
+def _staged_groupings(
+    groupings: object,
+    *,
+    parent: VerifiedMaterializedCohortAuthority,
+) -> tuple[_StagedGrouping, ...]:
+    """Each grouping, read strictly and bound to the parent columns it reads."""
+
+    if (
+        not isinstance(groupings, Sequence)
+        or isinstance(groupings, (str, bytes))
+        or not groupings
+    ):
+        raise MaterializedMetadataError(
+            "an exposure group stage carries at least one grouping"
+        )
+    parent_binding = parent.sidecar.files[0]
+    taken = set(parent.authority.cohort_columns)
+    staged: list[_StagedGrouping] = []
+    for item in groupings:
+        if not isinstance(item, Mapping) or set(item) != {
+            "variable",
+            "parameters",
+            "labels",
+            "compared",
+        }:
+            raise MaterializedMetadataError(
+                "an exposure grouping holds its variable, parameters, labels and "
+                "the groups it compares"
+            )
+        variable = item["variable"]
+        if not isinstance(variable, str) or _GROUP_VARIABLE.fullmatch(variable) is None:
+            raise MaterializedMetadataError("an exposure grouping names its variable")
+        if variable in taken:
+            raise MaterializedMetadataError(
+                f"the cohort already holds a column named {variable!r}"
+            )
+        taken.add(variable)
+        parameters = _canonical_mapping(
+            _thaw_json(item["parameters"]), label="exposure grouping parameters"
+        )
+        try:
+            rules = read_grouping_rules(_thaw_json(parameters))  # type: ignore[arg-type]
+            contrast = read_group_contrast(
+                _thaw_json(item["compared"]),
+                variable=variable,
+                groups=len(rules.groups),
+            )
+        except ExposureGroupRuleError as exc:
+            raise MaterializedMetadataError(
+                f"exposure grouping {variable!r} is unreadable: {exc}"
+            ) from exc
+        window = parameters["window"]
+        for summary, column in rules.source_columns.items():
+            _require_grouping_source(
+                parent_binding,
+                column=column,
+                summary=summary,
+                concept=rules.concept,
+                window=window if isinstance(window, Mapping) else None,
+            )
+        staged.append(
+            _StagedGrouping(
+                variable=variable,
+                rules=rules,
+                parameters=parameters,
+                labels=_grouping_labels(item["labels"], rules=rules, variable=variable),
+                contrast=contrast,
+            )
+        )
+    return tuple(staged)
+
+
+def _grouping_labels(
+    raw: object, *, rules: GroupingRules, variable: str
+) -> Mapping[str, str]:
+    if not isinstance(raw, Mapping) or set(raw) != set(rules.levels):
+        raise MaterializedMetadataError(
+            f"exposure grouping {variable!r} labels exactly its levels"
+        )
+    labels: dict[str, str] = {}
+    for level in rules.levels:
+        label = raw[level]
+        if (
+            not isinstance(label, str)
+            or not label.strip()
+            or len(label) > _MAX_GROUP_LABEL
+        ):
+            raise MaterializedMetadataError(
+                f"exposure grouping {variable!r} labels {level} in words"
+            )
+        labels[level] = label
+    return MappingProxyType(labels)
+
+
+def _require_grouping_source(
+    parent_binding: ColumnMetadataFileBinding,
+    *,
+    column: str,
+    summary: str,
+    concept: str,
+    window: Optional[Mapping[str, object]],
+) -> None:
+    """The column is the stated summary of the concept over the stated window."""
+
+    binding = parent_binding.columns.get(column)
+    if binding is None:
+        raise MaterializedMetadataError(
+            f"an exposure grouping reads {column!r}, which the cohort lacks"
+        )
+    metadata = binding.metadata
+    span = binding.derivation_window
+    if summary == "value":
+        bound = (
+            metadata.role is ConceptColumnRole.VALUE
+            and metadata.aggregation is None
+            and span is None
+            and window is None
+        )
+    else:
+        bound = (
+            metadata.role is ConceptColumnRole.NUMERIC_AGGREGATE
+            and metadata.aggregation == summary
+            and span is not None
+            and window is not None
+            and span.origin == "icu_admission"
+            and float(span.start_hours) == float(window["start_hours"])  # type: ignore[arg-type]
+            and float(span.end_hours) == float(window["end_hours"])  # type: ignore[arg-type]
+        )
+    if metadata.source_concept != concept or not bound:
+        raise MaterializedMetadataError(
+            f"{column!r} is not the {summary} of {concept!r} an exposure grouping reads"
+        )
+
+
+def _grouping_binding(
+    parent_binding: ColumnMetadataFileBinding, grouping: _StagedGrouping
+) -> ColumnMetadataBinding:
+    """The group column's typed binding: integer level codes, labelled for readers.
+
+    Its concept is the grouping's own, so no reader of the grouped concept's
+    values takes it for one; the grouped concept is what it is derived from.
+    The codes are its declared range, so a plan reads its levels before any
+    row exists.
+    """
+
+    rules = grouping.rules
+    first = parent_binding.columns[rules.read_columns[0]]
+    source = first.metadata
+    metadata = ConceptColumnMetadata(
+        column_name=grouping.variable,
+        source_concept=grouping.variable,
+        role=ConceptColumnRole.VALUE,
+        aggregation=None,
+        canonical_unit=CATEGORICAL_UNIT,
+        accepted_units=(CATEGORICAL_UNIT,),
+        extraction_bounds=None,
+        analysis_plausibility_range=NumericBounds(
+            minimum=1.0, maximum=float(len(rules.levels))
+        ),
+        allowed_values=None,
+        time_origin=None,
+        time_unit=None,
+        source_database=source.source_database,
+        dictionary_source_database=source.dictionary_source_database,
+        source_resolution_chain=source.source_resolution_chain,
+        available_databases=source.available_databases,
+        source_declared_for_database=source.source_declared_for_database,
+        availability_basis=source.availability_basis,
+        source_lineage=source.source_lineage,
+        description=grouping_level_description(rules, grouping.labels),
+        category=source.category,
+        class_name=source.class_name,
+        derived_from_concepts=tuple(
+            sorted({*source.derived_from_concepts, rules.concept})
+        ),
+    )
+    return ColumnMetadataBinding(
+        metadata=ConceptColumnMetadata.from_dict(metadata.to_dict()),
+        derivation_window=first.derivation_window,
+        representation_transform=rules.transform_id,
+    )
+
+
+def _exposure_group_stage_sidecar(
+    parent: VerifiedMaterializedCohortAuthority,
+    *,
+    relative_path: str,
+    groupings: Sequence[_StagedGrouping],
+) -> tuple[ColumnMetadataSidecar, ColumnMetadataFileBinding]:
+    staged, staged_binding = _rebind_sidecar(
+        parent, relative_path=relative_path, module=EXPOSURE_GROUP_STAGE_PRODUCER
+    )
+    parent_binding = parent.sidecar.files[0]
+    file_binding = ColumnMetadataFileBinding(
+        relative_path=relative_path,
+        module=EXPOSURE_GROUP_STAGE_PRODUCER,
+        identity_column=staged_binding.identity_column,
+        time_coordinates=staged_binding.time_coordinates,
+        columns={
+            **staged_binding.columns,
+            **{
+                grouping.variable: _grouping_binding(parent_binding, grouping)
+                for grouping in groupings
+            },
+        },
+    )
+    sidecar = ColumnMetadataSidecar(
+        source_database=staged.source_database,
+        source_database_class_prefixes=staged.source_database_class_prefixes,
+        scope=MATERIALIZED_COHORT_SCOPE,
+        files=(file_binding,),
+    )
+    return sidecar, file_binding
+
+
+def _exposure_group_stage_derivations(
+    parent: VerifiedMaterializedCohortAuthority,
+    *,
+    groupings: Sequence[_StagedGrouping],
+) -> tuple[OutputDerivation, ...]:
+    parent_binding = parent.sidecar.files[0]
+
+    def source(column: str) -> SourceColumnRef:
+        return SourceColumnRef(
+            authority_sha256=parent.reference.sha256,
+            file=parent.authority.cohort_file,
+            column=column,
+            binding_sha256=binding_payload_sha256(
+                {column: parent_binding.columns[column]}
+            ),
+        )
+
+    carried = tuple(
+        OutputDerivation(
+            output_column=column,
+            sources=(source(column),),
+            transform_id="identity_stage_copy",
+        )
+        for column in parent_binding.columns
+    )
+    grouped = tuple(
+        OutputDerivation(
+            output_column=grouping.variable,
+            sources=tuple(source(column) for column in grouping.rules.read_columns),
+            transform_id=grouping.rules.transform_id,
+        )
+        for grouping in groupings
+    )
+    return tuple(sorted((*carried, *grouped), key=lambda item: item.output_column))
+
+
+def _exposure_group_stage_parameters(
+    parent: VerifiedMaterializedCohortAuthority,
+    *,
+    target_file: str,
+    groupings: Sequence[_StagedGrouping],
+    groupings_record_sha256: str,
+) -> dict[str, object]:
+    return {
+        "source_authority_sha256": parent.reference.sha256,
+        "source_cohort_sha256": parent.authority.cohort_sha256,
+        "source_cohort_rows": parent.authority.cohort_rows,
+        "source_cohort_schema_sha256": parent.authority.cohort_schema_sha256,
+        "source_row_identity_sha256": parent.authority.row_identity_sha256,
+        "target_file": target_file,
+        "transform": _EXPOSURE_GROUP_STAGE_TRANSFORM,
+        "groupings": [grouping.receipt() for grouping in groupings],
+        "groupings_record_sha256": _digest(
+            groupings_record_sha256, label="exposure groupings record sha256"
+        ),
+    }
+
+
+def _exposure_group_stage_provenance(
+    parent: VerifiedMaterializedCohortAuthority,
+    *,
+    groupings: Sequence[_StagedGrouping],
+) -> dict[str, object]:
+    return {
+        **dict(_thaw_json(parent.provenance)),  # type: ignore[arg-type]
+        "staged_from_authority_sha256": parent.reference.sha256,
+        "exposure_group_variables": [grouping.variable for grouping in groupings],
+    }
+
+
+def _validate_exposure_group_stage_receipts(
+    authority: MaterializedCohortAuthority,
+    *,
+    sidecar: ColumnMetadataSidecar,
+    parent: VerifiedMaterializedCohortAuthority,
+) -> tuple[_StagedGrouping, ...]:
+    """Prove a grouped stage is the parent's columns plus the stated groupings.
+
+    The run directory holds the parent's snapshots, not its rows, so this is
+    the JSON-level proof; the codes themselves are recomputed from the
+    staged rows (:func:`_verify_exposure_group_codes`).
+    """
+
+    if parent.authority.producer not in _STAGE_PARENT_PRODUCERS:
+        raise MaterializedMetadataError(
+            "an exposure group stage requires an initial typed materialization"
+        )
+    parameters = authority.producer_parameters
+    groupings = _staged_groupings(parameters.get("groupings"), parent=parent)
+    record_sha256 = parameters.get("groupings_record_sha256")
+    if not isinstance(record_sha256, str):
+        raise MaterializedMetadataError(
+            "exposure group stage names no groupings record"
+        )
+    expected_sidecar, _binding = _exposure_group_stage_sidecar(
+        parent, relative_path=authority.cohort_file, groupings=groupings
+    )
+    expected_parameters = _exposure_group_stage_parameters(
+        parent,
+        target_file=authority.cohort_file,
+        groupings=groupings,
+        groupings_record_sha256=record_sha256,
+    )
+    if (
+        authority.parent_authority_sha256 != parent.reference.sha256
+        or authority.cohort_columns
+        != (
+            *parent.authority.cohort_columns,
+            *(grouping.variable for grouping in groupings),
+        )
+        or authority.cohort_rows != parent.authority.cohort_rows
+        or authority.identity_column != parent.authority.identity_column
+        or authority.row_identity_sha256 != parent.authority.row_identity_sha256
+        or authority.source_export_authority_sha256
+        != parent.authority.source_export_authority_sha256
+        or authority.source_column_metadata != parent.authority.source_column_metadata
+        or authority.source_column_metadata_sha256
+        != parent.authority.source_column_metadata_sha256
+        or authority.producer_parameters
+        != _canonical_mapping(
+            expected_parameters, label="expected exposure group stage parameters"
+        )
+        or authority.semantic_provenance
+        != _canonical_mapping(
+            _exposure_group_stage_provenance(parent, groupings=groupings),
+            label="expected exposure group stage provenance",
+        )
+        or authority.output_derivations
+        != _exposure_group_stage_derivations(parent, groupings=groupings)
+        or sidecar != expected_sidecar
+    ):
+        raise MaterializedMetadataError(
+            "exposure group stage is not the parent's columns plus its groupings"
+        )
+    return groupings
+
+
+def _verify_exposure_group_codes(
+    cohort_path: Path, *, groupings: Sequence[_StagedGrouping]
+) -> None:
+    """Each group column holds exactly the codes its rules give the staged rows."""
+
+    read = sorted(
+        {
+            *(grouping.variable for grouping in groupings),
+            *(
+                column
+                for grouping in groupings
+                for column in grouping.rules.read_columns
+            ),
+        }
+    )
+    try:
+        table = pq.read_table(cohort_path, columns=read)
+    except (OSError, ValueError, pa.ArrowException) as exc:
+        raise MaterializedMetadataError(
+            "cannot read the staged exposure groups"
+        ) from exc
+    for grouping in groupings:
+        try:
+            expected = evaluate_grouping(grouping.rules, table)
+        except ExposureGroupRuleError as exc:
+            raise MaterializedMetadataError(
+                f"exposure grouping {grouping.variable!r} does not decide each "
+                f"staged row: {exc}"
+            ) from exc
+        if not table.column(grouping.variable).combine_chunks().equals(expected):
+            raise MaterializedMetadataError(
+                f"{grouping.variable!r} does not hold the codes its rules give"
+            )
+
+
+def stage_exposure_grouped_cohort_authority(
+    staged_path: Path,
+    *,
+    groupings: Sequence[Mapping[str, object]],
+    groupings_record_sha256: str,
+    producer_implementation_sha256: str,
+) -> VerifiedMaterializedCohortAuthority:
+    """Stage a run's cohort again, in place, with the exposure groups its study formed.
+
+    ``staged_path`` is the run's exact copy of its source
+    (:func:`stage_materialized_cohort_authority`); the grouped cohort replaces
+    it under the same name, where the run's input capsule seals its cohort.
+    Every column of the source is carried as it is, and each grouping adds one
+    column of level codes, derived from the source columns it names by the one
+    evaluation of grouping rules (``contracts.exposure_group_rules``).  The
+    grouped authority's parent is the source, whose snapshots the run directory
+    holds, and its rows are read from the copy, whose bytes are the source's.
+    The copy's selector is marked prepared before the copy is replaced, so an
+    interrupted restage leaves no cohort under that name that loads.
+    ``groupings`` are ``{"variable", "parameters", "labels", "compared"}``: the
+    variable's name, the compiled derivation, each level's label, and the
+    reference and primary contrast as level codes, which the context builder
+    states on the run's context.
+    """
+
+    staged_path = Path(staged_path)
+    if staged_path.name in {"", ".", ".."} or ".." in staged_path.parts:
+        raise MaterializedMetadataError("staged cohort path is not canonical")
+    copy = load_verified_materialized_cohort_authority(staged_path)
+    if copy is None or copy.authority.producer != "research_agent_run_stage":
+        raise MaterializedMetadataError(
+            "exposure groups are staged on the run's exact typed copy"
+        )
+    verified = _staged_parent_snapshot(staged_path, copy.authority)
+    if (copy.authority.cohort_sha256, copy.authority.cohort_size) != (
+        verified.authority.cohort_sha256,
+        verified.authority.cohort_size,
+    ):
+        raise MaterializedMetadataError(
+            "the run's copy does not hold its source's bytes"
+        )
+    staged = _staged_groupings(groupings, parent=verified)
+    try:
+        with AnchoredDirectory.open(staged_path.parent) as run_root:
+            authority_ref = _stage_exposure_grouped_at(
+                run_root,
+                name=staged_path.name,
+                verified=verified,
+                groupings=staged,
+                groupings_record_sha256=groupings_record_sha256,
+                producer_implementation_sha256=producer_implementation_sha256,
+            )
+            run_root.assert_still_selected()
+    except AuthorityFilesystemError as exc:
+        raise MaterializedMetadataError("cannot stage exposure groups") from exc
+    result = load_verified_materialized_cohort_authority(
+        staged_path,
+        expected_authority=authority_ref,
+    )
+    if result is None:  # pragma: no cover - selector was just written
+        raise MaterializedMetadataError("staged exposure groups lost authority")
+    return result
+
+
+def _stage_exposure_grouped_at(
+    root: AnchoredDirectory,
+    *,
+    name: str,
+    verified: VerifiedMaterializedCohortAuthority,
+    groupings: Sequence[_StagedGrouping],
+    groupings_record_sha256: str,
+    producer_implementation_sha256: str,
+) -> MaterializedCohortAuthorityRef:
+    selector_name = materialized_provenance_path(Path(name)).name
+    # The copy holds the source's bytes, so its rows are the parent's.
+    table = _read_verified_parent_table_at(root, name=name, verified=verified)
+    staged = table
+    for grouping in groupings:
+        try:
+            codes = evaluate_grouping(grouping.rules, table)
+        except ExposureGroupRuleError as exc:
+            raise MaterializedMetadataError(
+                f"exposure grouping {grouping.variable!r} does not decide each row: "
+                f"{exc}"
+            ) from exc
+        staged = staged.append_column(grouping.variable, codes)
+    # From here until the grouped selector is written, nothing under this
+    # name loads: the copy's binding ends before its bytes are replaced.
+    _atomic_write_json_at(
+        root,
+        name=selector_name,
+        payload={
+            "schema_version": "easyicu.materialized_cohort_transaction/1",
+            "materialized_authority_required": True,
+            "column_metadata": None,
+            "authority_transaction_state": "prepared",
+        },
+    )
+    sidecar, file_binding = _exposure_group_stage_sidecar(
+        verified, relative_path=name, groupings=groupings
+    )
+    sidecar_ref = _write_content_addressed_sidecar_at(
+        root, sidecar, stem="cohort_column_metadata"
+    )
+    temporary_name, descriptor = root.create_temporary(stem=name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
+            pq.write_table(staged, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        (
+            cohort_sha,
+            cohort_size,
+            cohort_rows,
+            cohort_columns,
+            cohort_schema_sha256,
+        ) = _parquet_envelope_at(root, temporary_name)
+        parameters = _exposure_group_stage_parameters(
+            verified,
+            target_file=name,
+            groupings=groupings,
+            groupings_record_sha256=groupings_record_sha256,
+        )
+        authority = MaterializedCohortAuthority(
+            cohort_file=name,
+            cohort_sha256=cohort_sha,
+            cohort_size=cohort_size,
+            cohort_rows=cohort_rows,
+            cohort_columns=cohort_columns,
+            cohort_schema_sha256=cohort_schema_sha256,
+            identity_column=verified.authority.identity_column,
+            row_identity_sha256=_row_identity_sha256_at(
+                root,
+                temporary_name,
+                identity_column=verified.authority.identity_column,
+            ),
+            column_metadata=sidecar_ref,
+            column_metadata_scope=MATERIALIZED_COHORT_SCOPE,
+            file_metadata_payload_sha256=file_binding.metadata_payload_sha256,
+            source_export_authority_sha256=(
+                verified.authority.source_export_authority_sha256
+            ),
+            source_column_metadata=verified.authority.source_column_metadata,
+            source_column_metadata_sha256=(
+                verified.authority.source_column_metadata_sha256
+            ),
+            producer=EXPOSURE_GROUP_STAGE_PRODUCER,
+            producer_implementation_sha256=producer_implementation_sha256,
+            producer_parameters=parameters,
+            producer_parameters_sha256=canonical_parameters_sha256(parameters),
+            semantic_provenance=_exposure_group_stage_provenance(
+                verified, groupings=groupings
+            ),
+            output_derivations=_exposure_group_stage_derivations(
+                verified, groupings=groupings
+            ),
+            parent_authority_sha256=verified.reference.sha256,
+        )
+        authority_ref = _write_authority_at(root, authority)
+        root.replace_temporary(temporary_name, name, require_absent=False)
+        temporary_name = ""
+        provenance = _exposure_group_stage_provenance(verified, groupings=groupings)
+        provenance["column_metadata"] = _descriptor(
+            authority=authority_ref,
+            sidecar=sidecar_ref,
+            file_binding=file_binding,
+        )
+        provenance["materialized_authority_required"] = True
+        _atomic_write_json_at(root, name=selector_name, payload=provenance)
+        return authority_ref
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if temporary_name:
+            root.unlink(temporary_name, missing_ok=True)
 
 
 def _ordered_positions_sha256(positions: Sequence[int]) -> str:

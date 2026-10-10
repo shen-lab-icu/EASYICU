@@ -1,7 +1,7 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/reporting/article_contract.py"
+      "src/easyicu/research_agent/resources/capability_runtime.py"
     ],
     "summary_changes": {}
   },
@@ -730,9 +730,16 @@
         "src/easyicu/research_agent/reporting/article_contract.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "ExposureGroupSpec step 2: the capability runtime states whether its review stops a run before any Provider call, so the exposure grouping phase asks nothing then; no resource or context measurement moves.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/resources/capability_runtime.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "2026-10-09 causal steps 2+3: reporting/article_contract.py registers the signed target trial suite's article roles; source digests only, resource selections and prompt sizes are unchanged",
+  "baseline_reason": "ExposureGroupSpec step 2: the capability runtime states whether its review stops a run before any Provider call, so the exposure grouping phase asks nothing then; no resource or context measurement moves.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -760,7 +767,7 @@
     "src/easyicu/research_agent/reporting/article_contract.py": "79253c08e4d959edcca599b59f758f9b650ea9829a477dd3a7c34ce4c7e57c5b",
     "src/easyicu/research_agent/research_context/outbound.py": "1019a35f2bf4ed055c4c274fbe29bf8b6cffcbe601fe3c0fa2096c54bb68efd6",
     "src/easyicu/research_agent/resources/capability.py": "3fc6dea8ffde23a358dfccd02b5f31620069fcccba8012807057a9913c70ca84",
-    "src/easyicu/research_agent/resources/capability_runtime.py": "5e707e8a4b3a5f375ae579951b07c3e1f07d635b8db093109c613936c8b3bc71",
+    "src/easyicu/research_agent/resources/capability_runtime.py": "037224b99bddde4ef37cf2119fc708ca33a932b274e932ba6cb902e689f8bd75",
     "src/easyicu/research_agent/resources/catalog.py": "d1df9901759c3a323ac6a9bb4998cefa7ca2deb978ddd8409851a68f2beeff2f",
     "src/easyicu/research_agent/resources/coder.py": "9cfa95df9338ecd9d7c158fe80d492a79b83fc99417bcf78e0b45af412418095",
     "src/easyicu/research_agent/resources/context.py": "8ce42accd83398ff9972b8e50f2f64f9ac926ad610d2c386f2b763adf77af2e1",
