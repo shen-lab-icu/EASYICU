@@ -45,6 +45,7 @@ from easyicu.webserver import provider_adapter
 from easyicu.webserver.provider_gate import ProviderGateError, resolve_provider_gate
 
 __all__ = [
+    "KEYWORD_PROVENANCE",
     "ANALYSIS_FAMILIES",
     "OUTCOME_TYPES",
     "StudyIntentError",
@@ -668,6 +669,12 @@ def _clean_question(value: Any) -> str:
     return text
 
 
+# A slot the deterministic reader fills is EasyICU's keyword reading of the
+# question, with the words it matched as evidence; the researcher has not
+# confirmed it.
+KEYWORD_PROVENANCE = "keyword"
+
+
 def _slot(value: Any, provenance: str, evidence: Optional[str] = None) -> Dict[str, Any]:
     return {
         "value": value,
@@ -932,7 +939,7 @@ def deterministic_intent(question: str) -> Dict[str, Any]:
 
     outcome_concept, outcome_phrase, exposures = _study_concept_readings(text, lowered)
     if outcome_concept:
-        slots["outcome"] = _slot(outcome_concept, "user_text", outcome_phrase)
+        slots["outcome"] = _slot(outcome_concept, KEYWORD_PROVENANCE, outcome_phrase)
         if outcome_concept in _TIME_TO_EVENT_CONCEPTS:
             kind = "time_to_event"
         elif outcome_concept in _ORDINAL_CONCEPTS:
@@ -941,11 +948,11 @@ def deterministic_intent(question: str) -> Dict[str, Any]:
             kind = "count"
         else:
             kind = "binary"
-        slots["outcome_type"] = _slot(kind, "user_text", outcome_phrase)
+        slots["outcome_type"] = _slot(kind, KEYWORD_PROVENANCE, outcome_phrase)
 
     if exposures:
         concept, phrase = exposures[0]
-        slots["exposure"] = _slot(concept, "user_text", phrase)
+        slots["exposure"] = _slot(concept, KEYWORD_PROVENANCE, phrase)
 
     if _POPULATION_NOUN.search(text):
         for pattern, label, family in _POPULATION_PATTERNS:
@@ -956,7 +963,7 @@ def deterministic_intent(question: str) -> Dict[str, Any]:
             # ("...与急性肾损伤的风险相关" is an outcome, not a population).
             if outcome_concept and outcome_concept in family:
                 continue
-            slots["population"] = _slot(label, "user_text", match.group(0))
+            slots["population"] = _slot(label, KEYWORD_PROVENANCE, match.group(0))
             break
 
     # The hours of "48-hour mortality" or "excluding deaths within 24 hours"
@@ -983,10 +990,10 @@ def deterministic_intent(question: str) -> Dict[str, Any]:
     )
     if window:
         slots["time_window_hours"] = _slot(
-            int(window.group(1)), "user_text", window.group(0)
+            int(window.group(1)), KEYWORD_PROVENANCE, window.group(0)
         )
     elif first_day:
-        slots["time_window_hours"] = _slot(24, "user_text", "first day")
+        slots["time_window_hours"] = _slot(24, KEYWORD_PROVENANCE, "first day")
 
     for pattern, family in _FAMILY_PATTERNS:
         for match in re.finditer(pattern, lowered, re.IGNORECASE):
@@ -994,7 +1001,7 @@ def deterministic_intent(question: str) -> Dict[str, Any]:
             # association study. The same negation rule applies here.
             if _negated(lowered, match.start()):
                 continue
-            slots["analysis_family"] = _slot(family, "user_text", match.group(0))
+            slots["analysis_family"] = _slot(family, KEYWORD_PROVENANCE, match.group(0))
             break
         if slots["analysis_family"]["value"]:
             break
