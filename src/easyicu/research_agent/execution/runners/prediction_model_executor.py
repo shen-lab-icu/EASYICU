@@ -28,7 +28,9 @@ from sklearn.model_selection import GroupShuffleSplit
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
+from ...contracts.concept_values import columns_without_values
 from ...contracts.dependence import resolve_patient_groups
+from ...contracts.executor_stop import ExecutorStop, write_executor_stop_record
 from ...contracts.prediction_execution import (
     PREDICTION_BENCHMARK_ACTION,
     PREDICTION_BENCHMARK_PRODUCT,
@@ -377,6 +379,21 @@ def _model_pipeline(frame: pd.DataFrame, features: tuple[str, ...]) -> Pipeline:
     )
 
 
+class _PredictorsWithoutValues(RuntimeError):
+    """Predictors no development row holds a value of.
+
+    The imputer would drop them with a warning, and the model fitted would
+    not be the one the plan states (``contracts.concept_values``).
+    """
+
+    def __init__(self, columns: tuple[str, ...], development_n: int) -> None:
+        super().__init__(
+            ", ".join(repr(column) for column in columns)
+            + f" hold no value in any of the {development_n} development stays"
+        )
+        self.columns = columns
+
+
 def _fit_probabilities(
     *,
     frame: pd.DataFrame,
@@ -391,6 +408,9 @@ def _fit_probabilities(
         raise RuntimeError("prediction fit requires non-empty development and scoring rows")
     if outcome.loc[development].nunique() != 2:
         raise RuntimeError("prediction development rows do not contain both outcome classes")
+    unobserved = columns_without_values(frame.loc[development], features)
+    if unobserved:
+        raise _PredictorsWithoutValues(unobserved, int(np.count_nonzero(development)))
     model = _model_pipeline(frame.loc[development], features)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", ConvergenceWarning)
@@ -584,13 +604,19 @@ def run_prediction_model(
     split = _split_labels(groups, outcome)
     development = split == "development"
     all_rows = np.ones(len(frame), dtype=bool)
-    probabilities = _fit_probabilities(
-        frame=frame,
-        outcome=outcome,
-        features=features,
-        development=development,
-        prediction_rows=all_rows,
-    )
+    try:
+        probabilities = _fit_probabilities(
+            frame=frame,
+            outcome=outcome,
+            features=features,
+            development=development,
+            prediction_rows=all_rows,
+        )
+    except _PredictorsWithoutValues as found:
+        stop = ExecutorStop("prediction_predictor_unobserved", detail=str(found))
+        Path(out_dir).mkdir(parents=True, exist_ok=True)
+        write_executor_stop_record(out_dir, stop)
+        raise stop from found
 
     unit_ids = _unit_ids(frame, group_authority.group_source)
     scores = pd.DataFrame(
@@ -1063,6 +1089,16 @@ def run_prediction_benchmark_comparison(
                 "benchmark_probability_out_of_range",
                 f"{column!r} is a probability but holds values outside [0, 1]",
             )
+        if columns_without_values(merged.loc[merged["split"].eq("validation")], [column]):
+            # Nothing to compare the model with (``contracts.concept_values``).
+            stop = ExecutorStop(
+                "benchmark_comparator_unobserved",
+                detail=f"{column!r} holds no value in any of the "
+                f"{len(validation)} validation stays",
+            )
+            Path(out_dir).mkdir(parents=True, exist_ok=True)
+            write_executor_stop_record(out_dir, stop)
+            raise stop
         validation_values = values.loc[merged["split"].eq("validation")].reset_index(drop=True)
         present = validation_values.notna().to_numpy()
         comparator_values = validation_values.to_numpy(dtype=float)[present]

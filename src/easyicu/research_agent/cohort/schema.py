@@ -31,6 +31,7 @@ from ..authority.lock_contract import (
     assert_lock_matches_evidence_anchor,
 )
 from ..authority.runtime_artifacts import verified_run_evidence_path
+from ..contracts.concept_values import columns_without_values
 from ..planning.cohort_contract import (
     ALLOWED_CTAS_AGGREGATIONS,
     Aggregation,
@@ -1656,6 +1657,18 @@ def _build_cohort_with_flow(
     ]
     for order, (kind, predicate) in enumerate(ordered, start=1):
         before = int(mask.sum())
+        column = _resolve_predicate_column(
+            data.columns,
+            predicate.concept_id,
+            predicate.aggregation,
+            column_bindings=column_bindings,
+        )
+        # A column no stay of the input holds a value of reads nothing; one
+        # the stays left at this criterion happen to miss is a missing value.
+        if before and column is not None and columns_without_values(data, [column]):
+            raise CohortPredicateColumnWithoutValuesError(
+                kind, predicate.concept_id, column, int(len(data))
+            )
         predicate_mask, event_time_window, unrecorded = _predicate_mask(
             data,
             predicate,
@@ -1670,12 +1683,7 @@ def _build_cohort_with_flow(
                 "step_order": order,
                 "predicate_kind": kind,
                 "concept_id": predicate.concept_id,
-                "resolved_column": _resolve_predicate_column(
-                    data.columns,
-                    predicate.concept_id,
-                    predicate.aggregation,
-                    column_bindings=column_bindings,
-                ),
+                "resolved_column": column,
                 "aggregation": predicate.aggregation,
                 "op": predicate.op,
                 "value": predicate.value,
@@ -1723,6 +1731,40 @@ class WholeStayEventWindow:
             "over the whole ICU stay and has no "
             f"{self.concept_id + '_time'!r} to place the event in that window"
         )
+
+
+#: Why a cohort predicate reads nothing on this input: its column holds no
+#: value in the stays it is applied to (``contracts.concept_values``).
+COHORT_PREDICATE_COLUMN_WITHOUT_VALUES = "cohort_predicate_column_without_values"
+
+
+class CohortPredicateColumnWithoutValuesError(CohortDataError):
+    """A cohort predicate's column holds no value in any stay of the input.
+
+    Applied, it would read nothing: an inclusion would keep no stay and an
+    exclusion would exclude none, while the plan and its ledger state a
+    criterion that was applied.
+    """
+
+    code = COHORT_PREDICATE_COLUMN_WITHOUT_VALUES
+
+    def __init__(self, kind: str, concept_id: str, column: str, stays: int) -> None:
+        self.kind = kind
+        self.concept_id = concept_id
+        self.column = column
+        self.stays = stays
+        super().__init__(
+            f"{COHORT_PREDICATE_COLUMN_WITHOUT_VALUES}: the {kind} over "
+            f"{concept_id!r} reads {column!r}, which holds no value in any of the "
+            f"input's {stays} stays"
+        )
+
+    def __str__(self) -> str:
+        # KeyError would quote the message.
+        return str(self.args[0])
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return type(self), (self.kind, self.concept_id, self.column, self.stays)
 
 
 class CohortEventWindowUnreadableError(CohortDataError):
@@ -2394,6 +2436,7 @@ __all__ = [
     "COHORT_EVENT_TIME_NOT_HOURS_FROM_ICU_ADMISSION",
     "COHORT_EVENT_WINDOW_UNREADABLE",
     "COHORT_LOCK_FILENAME",
+    "COHORT_PREDICATE_COLUMN_WITHOUT_VALUES",
     "CohortColumnWindowMismatchError",
     "CohortEventTimeNotHoursError",
     "ColumnWindowMismatch",
@@ -2402,6 +2445,7 @@ __all__ = [
     "CohortDefinition",
     "CohortDataError",
     "CohortEventWindowUnreadableError",
+    "CohortPredicateColumnWithoutValuesError",
     "CohortSchemaError",
     "ConceptPredicate",
     "MaterializedInputColumnAuthority",

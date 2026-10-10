@@ -93,6 +93,7 @@ from easyicu.outcome_availability import (
 )
 
 from ..concept_availability import normalize_database_name
+from ..contracts.concept_values import CONCEPTS_WITHOUT_VALUES_KEY
 from ..contracts.patient_grouping_need import (
     PATIENT_GROUPING_AUTHORITY_ERROR_KEY,
     PATIENT_GROUPING_STATUS_KEY,
@@ -209,6 +210,28 @@ def _planning_grouping_status(authority: Dict[str, Any], *, bound: bool) -> Dict
     }
 
 
+def _planning_concepts_without_values(authority: Dict[str, Any]) -> Dict[str, Any]:
+    """The concepts a metadata-only catalog states its source holds no value of, checked.
+
+    The host states them from the export's manifest (``contracts.concept_values``)
+    as a sorted list of concept ids; a catalog that states none projects none.
+    """
+
+    stated = authority.get(CONCEPTS_WITHOUT_VALUES_KEY)
+    if stated is None:
+        return {}
+    if (
+        not isinstance(stated, list)
+        or not stated
+        or not all(isinstance(name, str) and name and name == name.strip() for name in stated)
+        or stated != sorted(set(stated))
+    ):
+        raise MaterializedMetadataError(
+            "metadata-only concepts without values must be a sorted list of concept ids"
+        )
+    return {CONCEPTS_WITHOUT_VALUES_KEY: list(stated)}
+
+
 def _planning_catalog_provenance(frame: pd.DataFrame) -> Dict[str, Any]:
     authority = frame.attrs.get("easyicu_planning_authority")
     if not isinstance(authority, dict):
@@ -243,6 +266,7 @@ def _planning_catalog_provenance(frame: pd.DataFrame) -> Dict[str, Any]:
         }
     replacement = authority.get("replacement_row_identity")
     projected.update(_planning_grouping_status(authority, bound=replacement is not None))
+    projected.update(_planning_concepts_without_values(authority))
     if replacement is None:
         return projected
     if not isinstance(replacement, dict):

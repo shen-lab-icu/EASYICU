@@ -3097,6 +3097,10 @@
     ],
     [
       "easyicu.research_agent.cohort.schema",
+      "easyicu.research_agent.contracts.concept_values"
+    ],
+    [
+      "easyicu.research_agent.cohort.schema",
       "easyicu.research_agent.intake.materialized_metadata"
     ],
     [
@@ -5701,6 +5705,10 @@
     ],
     [
       "easyicu.research_agent.execution.runners.cross_sectional_phenotyping_executor",
+      "easyicu.research_agent.contracts.concept_values"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.cross_sectional_phenotyping_executor",
       "easyicu.research_agent.contracts.cross_sectional_phenotyping_policy"
     ],
     [
@@ -6577,7 +6585,15 @@
     ],
     [
       "easyicu.research_agent.execution.runners.prediction_model_executor",
+      "easyicu.research_agent.contracts.concept_values"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.prediction_model_executor",
       "easyicu.research_agent.contracts.dependence"
+    ],
+    [
+      "easyicu.research_agent.execution.runners.prediction_model_executor",
+      "easyicu.research_agent.contracts.executor_stop"
     ],
     [
       "easyicu.research_agent.execution.runners.prediction_model_executor",
@@ -11061,6 +11077,10 @@
     ],
     [
       "easyicu.research_agent.planning.population_compile",
+      "easyicu.research_agent.contracts.concept_values"
+    ],
+    [
+      "easyicu.research_agent.planning.population_compile",
       "easyicu.research_agent.intake.materialized_metadata"
     ],
     [
@@ -13981,6 +14001,10 @@
     ],
     [
       "easyicu.research_agent.research_context.builder",
+      "easyicu.research_agent.contracts.concept_values"
+    ],
+    [
+      "easyicu.research_agent.research_context.builder",
       "easyicu.research_agent.contracts.exposure_group_rules"
     ],
     [
@@ -14836,9 +14860,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3701,
+    "edge_count": 3707,
     "largest_scc_size": 0,
-    "module_count": 841,
+    "module_count": 842,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -15010,6 +15034,7 @@
     "easyicu.research_agent.contracts.cohort_product_keys": "contracts/cohort_product_keys.py",
     "easyicu.research_agent.contracts.cohort_receipt": "contracts/cohort_receipt.py",
     "easyicu.research_agent.contracts.cohort_summary": "contracts/cohort_summary.py",
+    "easyicu.research_agent.contracts.concept_values": "contracts/concept_values.py",
     "easyicu.research_agent.contracts.control_signals": "contracts/control_signals.py",
     "easyicu.research_agent.contracts.cross_sectional_phenotyping_policy": "contracts/cross_sectional_phenotyping_policy.py",
     "easyicu.research_agent.contracts.declared_product": "contracts/declared_product.py",

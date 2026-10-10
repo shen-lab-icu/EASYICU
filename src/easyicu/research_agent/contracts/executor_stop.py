@@ -119,6 +119,21 @@ EXECUTOR_STOP_REASONS: Mapping[str, ExecutorStopReason] = MappingProxyType(
             cause_codes=frozenset(),
             repeats_on_unchanged_retry=True,
         ),
+        # A predictor holds no value in any development row
+        # (``contracts.concept_values``): an imputer would drop it, and the
+        # model fitted would not be the one the plan states.
+        "prediction_predictor_unobserved": ExecutorStopReason(
+            owner="static_prediction_model",
+            cause_codes=frozenset(),
+            repeats_on_unchanged_retry=True,
+        ),
+        # The comparator holds no value in any validation row, so there is
+        # nothing to compare the model with.
+        "benchmark_comparator_unobserved": ExecutorStopReason(
+            owner="static_prediction_model",
+            cause_codes=frozenset(),
+            repeats_on_unchanged_retry=True,
+        ),
         **{
             code: ExecutorStopReason(
                 owner="signed_target_trial_suite",
