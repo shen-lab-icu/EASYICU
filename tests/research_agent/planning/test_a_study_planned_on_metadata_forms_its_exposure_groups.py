@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
@@ -26,6 +27,8 @@ import pytest
 
 from easyicu.research_agent.cohort import materializer as cohort_materializer
 from easyicu.research_agent.contracts.exposure_group_rules import (
+    EXPOSURE_GROUP_CONTRASTS_KEY,
+    EXPOSURE_GROUP_LABELS_KEY,
     ExposureGroupRuleError,
     read_planned_group_columns,
 )
@@ -55,7 +58,10 @@ from easyicu.research_agent.planning.progressive_contract import (
     ProgressivePlanCompileError,
 )
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
-from easyicu.research_agent.research_context.builder import build_research_context
+from easyicu.research_agent.research_context.builder import (
+    _exposure_group_projections,
+    build_research_context,
+)
 from easyicu.research_agent.research_context.typed import declared_domain_for_variable
 from tests.support.typed_export import typed_export
 
@@ -597,3 +603,115 @@ def test_a_template_that_cannot_offer_the_stated_groups_stops(tmp_path: Path) ->
         0,
         1,
     )
+
+
+def test_a_planning_context_states_each_grouped_level_and_its_parameters(
+    tmp_path: Path,
+) -> None:
+    phase, cohort = _planned(tmp_path)
+    (declared,) = pd.read_parquet(cohort).attrs[_PLANNING_AUTHORITY]["exposure_groups"]
+
+    provenance = _context(cohort).cohort.provenance
+
+    assert provenance[EXPOSURE_GROUP_CONTRASTS_KEY] == [
+        {"variable": "lact_group_x1", "reference": 1, "contrast": 2}
+    ]
+    assert provenance[EXPOSURE_GROUP_LABELS_KEY] == [
+        {
+            "variable": "lact_group_x1",
+            "concept": "lact",
+            "scale": "nominal",
+            "levels": [
+                {"code": 1, "group": "g1", "label": "lactate below 2.5"},
+                {"code": 2, "group": "g2", "label": "lactate 2.5 or above"},
+                {"code": 3, "group": "gU", "label": "not measured"},
+            ],
+            "parameters": declared["parameters"],
+        }
+    ]
+    assert declared["parameters"]["concept"] == "lact"
+
+
+def test_an_input_declared_before_columns_carried_their_levels_is_still_read(
+    tmp_path: Path,
+) -> None:
+    _planned_run, cohort = _planned(tmp_path)
+    (declared,) = pd.read_parquet(cohort).attrs[_PLANNING_AUTHORITY]["exposure_groups"]
+    legacy = {
+        key: value
+        for key, value in declared.items()
+        if key not in ("labels", "parameters")
+    }
+
+    sealed = _declare(cohort, [legacy])
+
+    held = planning_run_groupings(cohort.parent, cohort_sha256=sealed)
+    assert held is not None and held.variables == ("lact_group_x1",)
+    provenance = _context(cohort).cohort.provenance
+    assert provenance[EXPOSURE_GROUP_CONTRASTS_KEY] == [
+        {"variable": "lact_group_x1", "reference": 1, "contrast": 2}
+    ]
+    # It states no levels: no reader name or Methods rule is read from it.
+    assert EXPOSURE_GROUP_LABELS_KEY not in provenance
+    # Nor may it hold some of what a newer column holds.
+    with pytest.raises(ValueError, match="does not declare the group columns"):
+        planning_run_groupings(
+            cohort.parent,
+            cohort_sha256=_declare(cohort, [{**legacy, "labels": declared["labels"]}]),
+        )
+
+
+def _staged(receipt: dict[str, Any]) -> Any:
+    return SimpleNamespace(
+        authority=SimpleNamespace(
+            producer=EXPOSURE_GROUP_STAGE_PRODUCER,
+            producer_parameters={"groupings": [receipt]},
+            to_dict=lambda: {"producer_parameters": {"groupings": [receipt]}},
+        )
+    )
+
+
+def test_a_grouping_its_receipt_and_its_planned_column_declare_must_agree(
+    tmp_path: Path,
+) -> None:
+    _planned_run, cohort = _planned(tmp_path)
+    (declared,) = pd.read_parquet(cohort).attrs[_PLANNING_AUTHORITY]["exposure_groups"]
+    receipt = {
+        "variable": declared["variable"],
+        "parameters": declared["parameters"],
+        "labels": {level["group"]: level["label"] for level in declared["labels"]},
+        "compared": declared["compared"],
+    }
+
+    agreed = _exposure_group_projections(
+        _staged(receipt), {"exposure_groups": [declared]}
+    )
+    assert len(agreed[EXPOSURE_GROUP_LABELS_KEY]) == 1
+    assert len(agreed[EXPOSURE_GROUP_CONTRASTS_KEY]) == 1
+    # A legacy column agrees on what it states.
+    legacy = {
+        key: value
+        for key, value in declared.items()
+        if key not in ("labels", "parameters")
+    }
+    assert (
+        _exposure_group_projections(_staged(receipt), {"exposure_groups": [legacy]})
+        == agreed
+    )
+    for planned in (
+        {**declared, "compared": {"reference": 2, "contrast": 1}},
+        {
+            **declared,
+            "labels": [
+                {**level, "label": "other words"} for level in declared["labels"]
+            ],
+        },
+        {
+            **declared,
+            "parameters": {**declared["parameters"], "source_columns": {"max": "x"}},
+        },
+    ):
+        with pytest.raises(MaterializedMetadataError, match="declared otherwise"):
+            _exposure_group_projections(
+                _staged(receipt), {"exposure_groups": [planned]}
+            )

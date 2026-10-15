@@ -28,6 +28,8 @@ never had the same rule.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import ast
 import collections
 import hashlib
@@ -44,7 +46,7 @@ from easyicu.research_agent.repairs.coordination import (
     StepRepairBudget,
 )
 
-_CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 STEP_ID = "06_fit_and_evaluate_prediction_model"
 
 
@@ -294,6 +296,7 @@ def _blocked_records():
                 yield path.relative_to(_CORPUS).parts[1], record
 
 
+@pytest.mark.requires_corpus
 def test_the_recorded_starvation_is_broad_and_not_one_task():
     """A fix keyed to one task would not be a fix. This spans 7 of the 9."""
 

@@ -27,6 +27,8 @@ Two things had to be true for the citation to be usable, and neither was:
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import re
 from pathlib import Path
 
@@ -298,9 +300,10 @@ def test_citing_a_step_that_owns_none_of_the_candidates_still_blocks():
 # Reachability, on the recorded corpus
 # ---------------------------------------------------------------------------
 
-_CORPUS = Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 
+@pytest.mark.requires_corpus
 @pytest.mark.skipif(
     not _CORPUS.exists(), reason="recorded runs are not on this machine"
 )

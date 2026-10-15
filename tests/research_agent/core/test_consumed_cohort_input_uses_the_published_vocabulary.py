@@ -31,6 +31,8 @@ and owned steps that could not produce a receipt at all fall from 68 to 38.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import ast
 import json
 from pathlib import Path
@@ -167,9 +169,10 @@ def test_no_branch_spells_the_vocabulary_out_again() -> None:
 
 # --- the recorded corpus ------------------------------------------------------
 
-_CORPUS = Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 
+@pytest.mark.requires_corpus
 @pytest.mark.skipif(
     not _CORPUS.exists(), reason="recorded runs are not on this machine"
 )

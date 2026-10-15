@@ -30,6 +30,8 @@ recorded as a separate finding, not fixed here.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import ast
 import inspect
 import json
@@ -205,9 +207,10 @@ def test_a_replay_that_really_changed_the_cohort_is_still_caught() -> None:
 
 # --- the recorded corpus ------------------------------------------------------
 
-_CORPUS = Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 
+@pytest.mark.requires_corpus
 @pytest.mark.skipif(
     not _CORPUS.exists(), reason="recorded runs are not on this machine"
 )
@@ -250,6 +253,7 @@ def test_the_two_names_never_disagree_in_recorded_runs() -> None:
     )
 
 
+@pytest.mark.requires_corpus
 @pytest.mark.skipif(
     not _CORPUS.exists(), reason="recorded runs are not on this machine"
 )

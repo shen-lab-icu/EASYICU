@@ -87,7 +87,7 @@ PROBE_3_CALL = {
     "comparator": "不同器官功能障碍轨迹类别之间的描述性结局比较；不作因果比较。",
 }
 MESSAGE = "成年 ICU 入住中，condition-x 和 marker-y 与 outcome-z 有什么关系？"
-QUESTION = "How do condition-x and marker-y relate to outcome-z in adult ICU stays?"
+QUESTION = MESSAGE
 
 
 def _update(monkeypatch, params: dict[str, Any], *, current=None, message=MESSAGE, workflow="needs_source"):

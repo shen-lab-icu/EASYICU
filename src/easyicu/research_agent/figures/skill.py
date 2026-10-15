@@ -665,7 +665,8 @@ class PublicationFigureSkill:
         )
         plot_df = plot_df.reset_index(drop=True)
         plot_df["is_primary"] = False
-        if not plot_df.empty:
+        primary_match = typed_distribution or bool(plot_df.attrs.get("primary_row_identified", False))
+        if primary_match:
             plot_df.loc[0, "is_primary"] = True
         primary_step = next(
             (
@@ -926,7 +927,9 @@ class PublicationFigureSkill:
                 _draw_missingness_panel(side_ax, missingness_df, palette=palette)
             add_panel_label(side_ax, label, x=-0.12, y=1.04, fontsize=10.0)
 
-        predictor = source_exposure or str(plot_df["label"].iloc[0])
+        predictor = source_exposure or _display_label(
+            context.primary_exposure or "the declared exposure", plan.display_labels,
+        )
         outcome = source_outcome or context.target_outcome or "the target outcome"
         landmark_phrase = (
             f" at the {source_landmark_hours:g}-hour landmark"
@@ -941,8 +944,8 @@ class PublicationFigureSkill:
             )
             if typed_distribution
             else (
-                f"The primary EasyICU association estimate for {predictor} and "
-                f"{outcome}{landmark_phrase} is rendered from registered "
+                f"The registered EasyICU association estimates for {predictor} and "
+                f"{outcome}{landmark_phrase} are rendered from registered "
                 "analysis evidence."
             )
         )
@@ -3032,22 +3035,28 @@ def _normalise_association_frame(
     if lower_col is not None:
         out["lower"] = pd.to_numeric(frame[lower_col], errors="coerce")
     else:
-        out["lower"] = out["estimate"]
+        out["lower"] = float("nan")
     if upper_col is not None:
         out["upper"] = pd.to_numeric(frame[upper_col], errors="coerce")
     else:
-        out["upper"] = out["estimate"]
+        out["upper"] = float("nan")
     raw_label = labels.astype(str).str.strip().str.lower()
     out = out.loc[~raw_label.isin({"intercept", "const", "constant"})].copy()
     out = out.replace([float("inf"), float("-inf")], pd.NA).dropna(subset=["estimate"])
-    out["lower"] = out["lower"].fillna(out["estimate"])
-    out["upper"] = out["upper"].fillna(out["estimate"])
+    if out[["lower", "upper"]].isna().any().any():
+        raise ValueError("association figure requires confidence bounds for every estimate")
+    if (out["lower"] > out["upper"]).any():
+        raise ValueError("association figure confidence bounds are reversed")
     result = out[["label", "estimate", "lower", "upper"]].reset_index(drop=True)
     # Put the true primary-exposure coefficient at row 0 so the downstream forest
     # (which marks row 0 as the blue "primary" estimand named in the core claim)
     # highlights the exposure, not whatever coefficient a long per-coefficient
     # table happened to list first (false-pass audit #15/#16).
     result = _order_primary_first(result, primary_token)
+    result.attrs["primary_row_identified"] = bool(
+        not result.empty and primary_token
+        and _primary_match_rank(result["label"].iloc[0], primary_token)[0] < 2
+    )
     result.attrs.update(
         _association_axis_from_token(_effect_measure_token(frame, cols, estimate_col))
     )

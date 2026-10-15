@@ -25,6 +25,7 @@ from ..planning.family_spec import (
     build_family_spec_request,
     DESCRIPTIVE_FAMILY_ID,
     FIXED_WINDOW_TRAJECTORY_FAMILY_ID,
+    LANDMARK_CATEGORICAL_FAMILY_ID,
     LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID,
     LANDMARK_SURVIVAL_FAMILY_ID,
     PHENOTYPING_FAMILY_ID,
@@ -1169,15 +1170,26 @@ def family_spec_fallback_reason(
         return "development_resume_checkpoint_uses_progressive_v2"
     if stop_after_outline:
         return "design_canary_uses_progressive_v2"
-    if (
-        family_template_id_for_context(
-            context,
-            analysis_types=analysis_types,
-            planning_contract_context=planning_contract_context,
-        )
-        is None
-    ):
+    family_id = family_template_id_for_context(
+        context, analysis_types=analysis_types,
+        planning_contract_context=planning_contract_context,
+    )
+    if family_id is None:
         return "no_family_template_for_context"
+    if family_id == LANDMARK_CATEGORICAL_FAMILY_ID:
+        try:
+            request = build_family_spec_request(
+                context, analysis_types=analysis_types,
+                variable_roster=[variable.name for variable in context.variables],
+                allowed_literature_citation_keys=(),
+                planning_contract_context=planning_contract_context,
+            )
+        except FamilySpecError:
+            # Preserve the owner's typed refusal for an invalid request.
+            return None
+        covered = {request.outcome, request.secondary_continuous_outcome}
+        if set(context.cohort.requested_outcome_columns or ()) - covered:
+            return "family_template_requested_outcomes_not_supported"
     return None
 
 

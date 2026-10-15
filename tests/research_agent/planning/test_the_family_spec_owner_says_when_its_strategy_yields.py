@@ -45,6 +45,19 @@ def _untemplated():
     return context, types
 
 
+def test_extra_requested_outcome_yields_before_repeating_an_incomplete_template():
+    context = _context()
+    context = context.model_copy(update={
+        "cohort": context.cohort.model_copy(update={
+            "requested_outcome_columns": [*context.cohort.requested_outcome_columns, "creatinine_max"],
+        }),
+    })
+    assert family_spec_fallback_reason(
+        context, analysis_types=("association_study",), resume_checkpoint=None,
+        stop_after_outline=False,
+    ) == "family_template_requested_outcomes_not_supported"
+
+
 @pytest.mark.parametrize(
     ("checkpoint", "stop_after_outline", "reason"),
     [

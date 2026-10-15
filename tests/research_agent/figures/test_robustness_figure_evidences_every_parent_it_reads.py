@@ -22,6 +22,8 @@ the corpus is null.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import json
 from pathlib import Path
 
@@ -214,9 +216,10 @@ def test_the_contract_lists_every_file_written(tmp_path: Path) -> None:
 
 # --- the recorded corpus ------------------------------------------------------
 
-_CORPUS = Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 
+@pytest.mark.requires_corpus
 @pytest.mark.skipif(
     not _CORPUS.exists(), reason="recorded runs are not on this machine"
 )

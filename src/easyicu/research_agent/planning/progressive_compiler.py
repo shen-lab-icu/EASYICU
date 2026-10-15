@@ -81,6 +81,7 @@ from .cohort_contract import (
 )
 from .cohort_identity import cohort_identity_columns
 from .dependence_authority import descriptive_counts_only_required
+from .exposure_group_reader_names import exposure_group_display_labels
 from .distribution_authority import distribution_policy_issues
 from .literature_contract import LiteratureDesignBinding
 from .method_literature import METHOD_CARDS, method_binding_support
@@ -1482,6 +1483,12 @@ def _compile_distribution(
         step_index=step_index,
     )
     if counts_only:
+        if step.repeated_unit_interval_method is not None or step.patient_weighted_interval_assumptions is not None:
+            raise _fail(
+                "progressive_distribution_counts_only_interval_conflict",
+                "counts-only authority cannot accept a patient interval method",
+                step=step, step_index=step_index, path="repeated_unit_interval_method",
+            )
         # Study authority or the shared source-bound ceiling forbids uncertainty
         # and effect contrasts. Compile only the observed denominators, counts, and
         # proportions; model-supplied contrast indexes carry no authority.
@@ -1519,7 +1526,8 @@ def _compile_distribution(
         inference_options = {
             "schema_version": "easyicu.exposure_outcome_distribution/2",
             "interval_method": "wilson",
-            "repeated_unit_interval_method": "patient_cluster_robust_wald",
+            "repeated_unit_interval_method": step.repeated_unit_interval_method or "patient_cluster_robust_wald",
+            "patient_weighted_interval_assumptions": step.patient_weighted_interval_assumptions,
             # On the study population the exposure-level contrast would be a
             # crude comparison beside the plan's own primary estimate; the step
             # reports how often the exposure occurs and the outcome by level.
@@ -2739,6 +2747,12 @@ def _compile_one_step(
                     "post_baseline_exposure_opportunity_unresolved",
                 )
             )
+        elif step.planned_analysis_role == "primary" and descriptive_counts_only_required(
+            context, analysis_type=skeleton.analysis_type,
+        ):
+            kwargs["descriptive_claim"] = DescriptiveClaimContract(
+                unresolved_limitations=("counts_only_design",)
+            )
         kwargs["inputs"] = list(dict.fromkeys([*inputs, spec.exposure, spec.outcome]))
     elif step.module_id == "measurement_audit":
         kwargs["measurement_audit_spec"] = _compile_measurement_spec(
@@ -3222,9 +3236,9 @@ def compile_progressive_plan(
                         else None
                     ),
                     "robustness_specs": [item.to_dict() for item in robustness],
-                    "display_labels": {
-                        item.key: item.value for item in skeleton.display_labels
-                    },
+                    "display_labels": exposure_group_display_labels(
+                        context, skeleton.display_labels
+                    ),
                     "know_how_decisions": [
                         item.model_dump(mode="json") for item in know_how_decisions
                     ],

@@ -85,15 +85,19 @@ _DIRECT_EXTRACTION_AUTHORIZATION_MARKERS = (
 # an affirmative statement. Questions, hypotheticals, and denials in the same
 # clause keep the grant ungranted; a clause boundary (comma, sentence end)
 # ends the guard so "不要问了，我确认一次性 extraction 授权" still grants.
-_EXTRACTION_MARKER = r"(?:一次性\s*extraction\s*授权|one-time extraction authorization)"
+_EXTRACTION_MARKER = (
+    r"(?:一次性\s*extraction\s*授权|one-time extraction authorization|"
+    + "|".join(re.escape(marker) for marker in _CONFIRMATION_MARKERS)
+    + r")"
+)
 _NON_ACTION_EXTRACTION_PATTERNS = (
-    r"(?:什么是|请?解释|说明|如何|怎样|怎么|是否|能否|如果|假如|若|万一)"
+    r"(?:什么是|什么叫|何谓|请?解释|说明|如何|怎样|怎么|是否|能否|如果|假如|若|万一)"
     r"[^。.!！?？;；,，]{0,48}" + _EXTRACTION_MARKER,
     r"(?:不要|不想|不愿|不必|不能|不需要|无需|不用|暂不|先别|禁止|拒绝|不给|不授予|不同意|不批准|别)"
     r"[^。.!！?？;；,，]{0,24}" + _EXTRACTION_MARKER,
     _EXTRACTION_MARKER + r"[^。.!！?？;；,，]{0,20}(?:是什么|如何|怎么|是否|能否|吗|么)",
     _EXTRACTION_MARKER + r"[^。.!！?？;；]{0,40}[?？]",
-    r"\b(?:what is|explain|describe|how|whether|should i|if i|what if|do not|don't|never|won't|will not|refuse to|not)\b"
+    r"\b(?:what is|what does|explain|describe|how|whether|should i|if i|what if|do not|don't|never|won't|will not|refuse to|not)\b"
     r"[^.!?;,]{0,80}" + _EXTRACTION_MARKER,
 )
 
@@ -147,6 +151,8 @@ _PROVIDER_REPLAN_PATTERNS = (
 # D-P1-2: English advisory framing ("advice/suggestion/recommendation about
 # the plan") is also not authorization, in either order.
 _NON_ACTION_PLAN_PATTERNS = (
+    r"(?:生成|重做|修订|修正|修改|调整|完善)[^。.!！?？;；,，]{0,24}(?:计划|方案)[^。.!！?？;；,，]{0,16}(?:需要多久|要多久|多长时间|有什么风险|有哪些风险|有什么影响)",
+    r"\b(?:how long|what risks|what are the risks)\b[^.!?;,]{0,80}\b(?:generate|regenerate|revise|replan)\b",
     r"(?:不要|不必|无需|暂不|先别|禁止|如何|怎样|怎么|是否|能否)[^。.!！?？;；]{0,24}(?:生成|重做|修订|修正|修改|调整|完善)[^。.!！?？;；]{0,16}(?:计划|方案)",
     r"(?:讨论|探讨|解释|说明|介绍)(?:一下)?\s*(?:如何|怎样|怎么)?\s*(?:重新)?(?:生成|重做|修订|修正|修改|调整|完善)[^。.!！?？;；]{0,16}(?:计划|方案)",
     r"(?:生成|重做|修订|修正|修改|调整|完善)[^。.!！?？;；]{0,16}(?:计划|方案)\s*(?:是否|能否|可以吗|好吗|吗)",
@@ -217,7 +223,12 @@ def infer_explicit_turn_actions(message: str) -> frozenset[str]:
         return frozenset()
     report_action = r"(?:修订|修复|修正|修改|更新|重新生成)(?:当前|这份|现有|的|版本|研究|报告|\s){0,12}(?:报告|稿件|论文|pdf)|\b(?:repair|revise|update|regenerate)\s+(?:(?:the|current|existing|research)\s+)*(?:report|manuscript|pdf)\b"
     report_non_action = r"(?:不要|暂不|先别|无需|不必|如何|怎么|是否|能否)[^。.!！?？;；]{0,32}(?:修订|修复|修正|修改|更新|重新生成)[^。.!！?？;；]{0,24}(?:报告|稿件|论文|pdf)|\b(?:do not|don't|never|how|whether|should i)[^.!?;]{0,60}\b(?:repair|revise|update|regenerate)\b[^.!?;]{0,40}\b(?:report|manuscript|pdf)\b"
-    if re.search(report_action, text) and not re.search(report_non_action, text):
+    report_question = r"(?:修订|修复|修正|修改|更新|重新生成)[^。.!！?？;；,，]{0,24}(?:报告|稿件|论文|pdf)[^。.!！?？;；,，]{0,16}(?:需要多久|要多久|多长时间|有什么风险|有哪些风险|有什么影响)|\b(?:how long|what risks|what are the risks)\b[^.!?;,]{0,80}\b(?:repair|revise|update|regenerate)\b"
+    if (
+        re.search(report_action, text)
+        and not re.search(report_non_action, text)
+        and not re.search(report_question, text)
+    ):
         # Report-only authority cannot start a Planner or analysis run.
         return frozenset({"report_revision"})
     if (
@@ -237,7 +248,14 @@ def infer_explicit_turn_actions(message: str) -> frozenset[str]:
     extraction_scoped = any(
         marker in text for marker in _EXTRACTION_SCOPE_MARKERS
     )
-    return frozenset({"extract"}) if confirmed and extraction_scoped else frozenset()
+    extraction_non_action = any(
+        re.search(pattern, text) for pattern in _NON_ACTION_EXTRACTION_PATTERNS
+    )
+    return (
+        frozenset({"extract"})
+        if confirmed and extraction_scoped and not extraction_non_action
+        else frozenset()
+    )
 
 
 def infer_research_entry_intent(message: str) -> str:

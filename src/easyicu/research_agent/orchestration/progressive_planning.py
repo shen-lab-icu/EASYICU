@@ -52,6 +52,7 @@ from ..planning.question_requirements import (
     write_question_requirements,
 )
 from ..planning.preplan_know_how import PlannerKnowHowBinding
+from ..planning.exposure_group_reader_names import exposure_group_label_findings
 from ..planning.question_substance_forms import (
     QUESTION_SUBSTANCE_FORMS_KEY,
     SUBSTITUTED_REASON,
@@ -600,6 +601,10 @@ def run_progressive_planner(
         if proposals is not None:
             finding_sink(proposals)
     refuse_substance_form_substitution(context=context, plan=generated)
+    for finding in exposure_group_label_findings(
+        context, facts.skeleton.display_labels
+    ):
+        finding_sink(finding)
     # What the question asks beyond the design: an analysis the plan does not
     # answer, or cannot, refuses approval, never planning.
     for finding in question_requirement_outcome(

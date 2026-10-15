@@ -35,6 +35,8 @@ from .projections import (
     project_study_context,
     reject_sensitive_message,
 )
+from . import plan_decisions
+from easyicu.webserver.study_question_wording import resolve_question_wording
 from .workflow import build_project_workflow_projection
 
 
@@ -397,6 +399,43 @@ def _message_explicitly_changes_variance_estimator(message: str) -> bool:
             r"(?:区间|方差|标准误).*?(?:重抽样|重采样)",
         )
     )
+
+
+def _turn_chooses_repeated_stay_handling(
+    patch: Mapping[str, Any], message: str
+) -> bool:
+    """Whether this turn saves a repeated-stay handling the researcher named.
+
+    The first stay, or a variance policy (patient clustering among them),
+    named in the user's own words and kept in the saved setup, is the
+    researcher's choice and no longer the system's default.
+    """
+
+    cohort = patch.get("cohort")
+    design = patch.get("analysis_design")
+    for clause in re.split(r"(?<=[。.!！?？;；,，])", str(message or "")):
+        # A mention in a question, explanation request, or denial is not the
+        # researcher's selection. Keep this local to the clause so an unrelated
+        # "don't ask again" cannot hide the affirmative choice that follows.
+        if re.search(
+            r"[?？]|什么|为何|如何|怎么|怎样|是否|能否|如果|假如|吗|"
+            r"解释|说明|不要|不采用|不选择|不用|先别|暂不|拒绝|"
+            r"\b(?:what|why|how|whether|if|explain|describe|should|"
+            r"do not|don't|never|not use|not choose)\b",
+            clause, re.IGNORECASE,
+        ):
+            continue
+        if (
+            isinstance(cohort, Mapping)
+            and cohort.get("exclude_readmissions") is True
+            and _message_explicitly_selects_first_stay(clause)
+        ) or (
+            isinstance(design, Mapping)
+            and bool(str(design.get("variance_estimator") or "").strip())
+            and _message_explicitly_changes_variance_estimator(clause)
+        ):
+            return True
+    return False
 
 
 def _repairs_contradictory_prediction_ceiling(
@@ -1058,10 +1097,13 @@ def update_study_context(
             is_concept_selection_authority_key,
         )
 
+        # Host-owned keys: a model cannot write who chose the repeated-stay
+        # handling (plan_decisions.REPEATED_STAYS_SYSTEM_DEFAULT).
         patch["confirmations"] = {
             key: value
             for key, value in patch["confirmations"].items()
             if not is_concept_selection_authority_key(key)
+            and key != plan_decisions.REPEATED_STAYS_SYSTEM_DEFAULT
         }
     if isinstance(patch.get("sensitivity_specs"), list):
         patch["sensitivity_specs"] = [
@@ -1911,6 +1953,26 @@ def update_study_context(
                 },
             )
         patch["covariate_selection"] = selection
+    wording_receipt: Dict[str, Any] = {}
+    if "question" in patch and str(patch["question"]).strip() != str((current or {}).get("question") or "").strip():
+        if "configure" not in context.allowed_actions:
+            return _consume_action(context, "configure")
+        resolved = resolve_question_wording(
+            str(patch["question"]), user_turns=context.user_turns,
+            previous_reply=context.previous_reply,
+        )
+        if resolved is None:
+            return _result(
+                context, status="blocked", code="study_question_not_in_the_researchers_words",
+                summary=(
+                    "No setup was saved. Copy the research question verbatim from the "
+                    "researcher's messages. If reformulation is needed, show its wording "
+                    "in a reply and obtain explicit wording confirmation first."
+                ),
+                owner="easyicu.webserver.study_question_wording",
+            )
+        patch["question"], wording_receipt = resolved
+        patch["question_wording"] = wording_receipt
     causal_receipt = _question_causal_design(params, patch, current)
     family_receipt = (
         {} if causal_receipt else _question_family_design(params, patch, current)
@@ -1938,6 +2000,7 @@ def update_study_context(
             _server_concept_selection_authority_write=True,
             _server_causal_trial_reading_write=True,
             _server_study_family_reading_write=True,
+            _server_question_wording_write=True,
             _server_design_variance_basis_write=True,
         )
     except study_contexts.StudyContextError as exc:
@@ -2001,6 +2064,7 @@ def update_study_context(
                     _server_concept_selection_authority_write=True,
                     _server_causal_trial_reading_write=True,
                     _server_study_family_reading_write=True,
+                    _server_question_wording_write=True,
                     _server_design_variance_basis_write=True,
                 )
             except study_contexts.StudyContextError as rest_exc:
@@ -2020,6 +2084,12 @@ def update_study_context(
             }
             analysis_design_recovery = None
 
+    if _turn_chooses_repeated_stay_handling(patch, context.user_message):
+        confirmations = dict(((current or {}).get("confirmations") or {}))
+        confirmations.update(dict(patch.get("confirmations") or {}))
+        confirmations[plan_decisions.REPEATED_STAYS_SYSTEM_DEFAULT] = False
+        patch["confirmations"] = confirmations
+
     grant_block = _consume_action(context, "configure")
     if grant_block is not None:
         return grant_block
@@ -2034,6 +2104,7 @@ def update_study_context(
             _server_concept_selection_authority_write=True,
             _server_causal_trial_reading_write=True,
             _server_study_family_reading_write=True,
+            _server_question_wording_write=True,
             _server_design_variance_basis_write=True,
         )
     except study_contexts.StudyContextError as exc:
@@ -2113,6 +2184,7 @@ def update_study_context(
             **causal_receipt,
             **family_receipt,
             **variance_receipt,
+            **({"question_wording": wording_receipt} if wording_receipt else {}),
         },
     )
     context.invalidate_authority("study_context_updated")

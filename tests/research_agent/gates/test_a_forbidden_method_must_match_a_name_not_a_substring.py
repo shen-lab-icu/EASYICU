@@ -25,6 +25,8 @@ rather than callables and keep their substring test.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import ast
 import json
 import pathlib
@@ -36,7 +38,7 @@ from easyicu.research_agent.gates.method_compatibility import (
     _call_matches_forbidden_pattern,
 )
 
-_CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 
 def _matches(source: str, pattern: str) -> bool:
@@ -136,6 +138,7 @@ def test_the_binary_rule_still_forbids_least_squares():
     assert "logistic_regression" in rule["preferred"]
 
 
+@pytest.mark.requires_corpus
 def test_the_recorded_script_really_contains_no_least_squares_call():
     """The premise: the agent was asked to remove something that was not there."""
 
@@ -162,6 +165,7 @@ def test_the_recorded_script_really_contains_no_least_squares_call():
     assert "matched_controls" in source
 
 
+@pytest.mark.requires_corpus
 def test_the_recorded_corpus_carries_one_ols_finding_and_it_is_that_one():
     """The OLS rule had 0 true positives and 1 false positive in this corpus."""
 

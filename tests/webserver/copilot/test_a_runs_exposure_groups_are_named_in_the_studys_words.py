@@ -668,17 +668,16 @@ def test_the_card_and_page_load_the_readers() -> None:
 
     assert "${trialBody}${groupNotes}${questionNotes}" in confirmation
     assert "window.EasyICU.guidedPi.optional('exposureGroups')" in confirmation
-    token = "v=20261010-exposure-labels1"
+    # Every reader and the card are loaded with a version token.  Which token
+    # each carries is the page's cache-busting rule, bumped by every later
+    # change to that file, so it is not pinned here.
     for script in (
         "screens-agent-exposure-levels.js", "screens-agent-render.js", "screens-guided-pi-exposure-groups.js",
         "screens-guided-pi-confirmation.js", "screens-guided-pi-result-summary.js", "screens-guided-pi-run-answer.js",
-        "screens-guided-pi-run-files.js", "screens-guided-pi-analysis-report.js",
+        "screens-guided-pi-run-files.js", "screens-guided-pi-preview.js", "screens-guided-pi-analysis-report.js",
         "screens-agent-question-requirements.js",
     ):
-        assert f'src="js/{script}?{token}"' in index
-    # The preview moved on with the folder selection's close (source-gate1).
-    assert 'src="js/screens-guided-pi-preview.js?v=20261010-source-gate1"' in index
-    # The card's stylesheet moved on once: its rules toggle got a 24px hit height.
-    assert 'href="css/guided-pi-exposure-groups.css?v=20261010-exposure-labels2"' in index
+        assert index.count(f'src="js/{script}?v=') == 1, script
+    assert index.count('href="css/guided-pi-exposure-groups.css?v=') == 1
     # Every reader finds the owner when it renders.
     assert index.index("js/screens-agent-exposure-levels.js?") < index.index("js/screens-agent-render.js?")

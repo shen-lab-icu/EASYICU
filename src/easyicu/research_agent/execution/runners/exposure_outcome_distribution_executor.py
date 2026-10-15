@@ -39,6 +39,7 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 
+from ...methods.cluster_proportion import patient_weighted_hoeffding_interval
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...authority.declared_levels import execution_distribution_spec
 from ...contracts.dependence import (
@@ -99,6 +100,7 @@ EXPOSURE_OUTCOME_DISTRIBUTION_DESIGN_COLUMNS = (
     "missing_outcome_policy",
     "independent_interval_method",
     "repeated_unit_interval_method",
+    "patient_weighted_interval_assumptions",
     "interval_method",
     "confidence_level",
     "risk_difference_reference_index",
@@ -141,6 +143,7 @@ EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS = (
         "exposure_standard_error_pct",
         "exposure_interval_covariance",
         "exposure_interval_cluster_count",
+        "exposure_interval_cluster_size_square_sum",
         "outcome_observed_n",
         "outcome_missing_n",
         "outcome_events",
@@ -151,6 +154,7 @@ EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS = (
         "outcome_standard_error_pct",
         "outcome_interval_covariance",
         "outcome_interval_cluster_count",
+        "outcome_interval_cluster_size_square_sum",
         # How many rows the exposure could not place. Repeated on every row, the
         # way Table 1 carries ``group_missing_excluded_n``: a denominator that
         # silently shrank is a denominator a reader cannot check.
@@ -547,6 +551,10 @@ def _design_fields(spec: ExposureOutcomeDistributionSpec) -> Dict[str, Any]:
         "missing_outcome_policy": spec.missing_outcome_policy,
         "independent_interval_method": spec.interval_method,
         "repeated_unit_interval_method": spec.repeated_unit_interval_method,
+        "patient_weighted_interval_assumptions": (
+            json.dumps(spec.patient_weighted_interval_assumptions.model_dump(mode="json"), sort_keys=True)
+            if spec.patient_weighted_interval_assumptions is not None else None
+        ),
         # This is the EFFECTIVE method used in the published table.  The
         # Planner's Wilson declaration is appropriate for independent rows;
         # once the host binds repeated-patient authority, that authority
@@ -666,6 +674,28 @@ def _proportion_interval(
             "ci_high_pct": None,
             "covariance": STRUCTURAL_TOTAL_COVARIANCE,
             "cluster_count": None,
+        }
+    if spec.repeated_unit_interval_method == "patient_weighted_hoeffding":
+        if spec.dependence is None:
+            raise RuntimeError("patient_weighted_hoeffding lacks host-bound patient groups")
+        groups, cluster_count = _dependence_groups(
+            frame, spec=spec, analysis_mask=denominator_mask,
+        )
+        assert groups is not None and cluster_count is not None
+        sizes = pd.Series(groups).value_counts()
+        square_sum = sum(int(size)**2 for size in sizes)
+        assert spec.confidence_level is not None
+        low, high = patient_weighted_hoeffding_interval(
+            numerator, denominator, cluster_count=cluster_count,
+            cluster_size_square_sum=square_sum, confidence_level=spec.confidence_level,
+        )
+        return {
+            "estimate_pct": estimate_pct,
+            "standard_error_pct": None,
+            "ci_low_pct": low, "ci_high_pct": high,
+            "covariance": "bounded_independent_patient_clusters",
+            "cluster_count": cluster_count,
+            "cluster_size_square_sum": square_sum,
         }
     if spec.dependence is None:
         assert spec.confidence_level is not None
@@ -972,6 +1002,7 @@ def _distribution_rows(
                 "exposure_standard_error_pct": exposure_interval["standard_error_pct"],
                 "exposure_interval_covariance": exposure_interval["covariance"],
                 "exposure_interval_cluster_count": exposure_interval["cluster_count"],
+                "exposure_interval_cluster_size_square_sum": exposure_interval.get("cluster_size_square_sum"),
                 "outcome_observed_n": observed_n,
                 "outcome_missing_n": missing_n,
                 "outcome_events": events,
@@ -982,6 +1013,7 @@ def _distribution_rows(
                 "outcome_standard_error_pct": outcome_interval["standard_error_pct"],
                 "outcome_interval_covariance": outcome_interval["covariance"],
                 "outcome_interval_cluster_count": outcome_interval["cluster_count"],
+                "outcome_interval_cluster_size_square_sum": outcome_interval.get("cluster_size_square_sum"),
                 **contrast_result,
                 **design,
             }
@@ -1023,6 +1055,7 @@ def _distribution_rows(
             "exposure_standard_error_pct": exposure_interval["standard_error_pct"],
             "exposure_interval_covariance": exposure_interval["covariance"],
             "exposure_interval_cluster_count": exposure_interval["cluster_count"],
+            "exposure_interval_cluster_size_square_sum": exposure_interval.get("cluster_size_square_sum"),
             "outcome_observed_n": overall_observed,
             "outcome_missing_n": total_rows - overall_observed,
             "outcome_events": overall_events,
@@ -1033,6 +1066,7 @@ def _distribution_rows(
             "outcome_standard_error_pct": outcome_interval["standard_error_pct"],
             "outcome_interval_covariance": outcome_interval["covariance"],
             "outcome_interval_cluster_count": outcome_interval["cluster_count"],
+            "outcome_interval_cluster_size_square_sum": outcome_interval.get("cluster_size_square_sum"),
             **contrast_result,
             **design,
         }
@@ -1085,6 +1119,10 @@ def _verify_product(
         estimate = percentage(numerator, denominator)
         if row[estimate_key] != estimate:
             raise RuntimeError(f"{label} percentage is not its own counts")
+        square_sum = row[cluster_count_key.replace("_cluster_count", "_cluster_size_square_sum")]
+        if spec.repeated_unit_interval_method != "patient_weighted_hoeffding" or structural_total:
+            if square_sum is not None:
+                raise RuntimeError(f"{label} carries weights for an undeclared concentration bound")
         if spec.schema_version == "easyicu.exposure_outcome_distribution/3":
             if (
                 row[standard_error_key] is not None
@@ -1138,6 +1176,21 @@ def _verify_product(
                     f"{label} Wilson interval carries contradictory independent "
                     "uncertainty"
                 )
+            return
+        if spec.repeated_unit_interval_method == "patient_weighted_hoeffding":
+            if row[standard_error_key] is not None or row[covariance_key] != "bounded_independent_patient_clusters":
+                raise RuntimeError(f"{label} concentration bound cannot declare a standard error or covariance")
+            assert spec.confidence_level is not None
+            try:
+                expected = patient_weighted_hoeffding_interval(
+                    numerator, denominator, cluster_count=row[cluster_count_key],
+                    cluster_size_square_sum=row[cluster_count_key.replace("_cluster_count", "_cluster_size_square_sum")],
+                    confidence_level=spec.confidence_level,
+                )
+            except ValueError as exc:
+                raise RuntimeError(f"{label} patient-weight receipt is invalid: {exc}") from exc
+            if (row[low_key], row[high_key]) != expected:
+                raise RuntimeError(f"{label} interval is not its declared patient-weight bound")
             return
         standard_error = _finite(row[standard_error_key])
         if standard_error is None or standard_error <= 0.0:
@@ -1434,6 +1487,12 @@ def run_exposure_outcome_distribution_from_env(
         "outcome_absolute_risks": outcome_absolute_risks,
         "risk_difference": risk_difference,
     }
+    if spec.patient_weighted_interval_assumptions is not None:
+        assumptions = spec.patient_weighted_interval_assumptions.model_dump(mode="json")
+        descriptive_estimates["patient_weighted_interval_assumptions"] = assumptions
+        for row, prevalence, risk in zip(level_rows, exposure_prevalence, outcome_absolute_risks):
+            prevalence["cluster_size_square_sum"] = row["exposure_interval_cluster_size_square_sum"]
+            risk["cluster_size_square_sum"] = row["outcome_interval_cluster_size_square_sum"]
 
     summary = {
         "status": "ok",
@@ -1453,6 +1512,8 @@ def run_exposure_outcome_distribution_from_env(
         "repeated_unit_interval_method": spec.repeated_unit_interval_method,
         "confidence_level": spec.confidence_level,
         "effective_interval_method": effective_interval_method,
+        **({"patient_weighted_interval_assumptions": assumptions}
+           if spec.patient_weighted_interval_assumptions is not None else {}),
         "typed_cohort_input": typed_cohort_input,
         "source_cohort": cohort_path.name,
         "source_row_count_reconciliation": {

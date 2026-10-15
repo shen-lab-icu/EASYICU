@@ -35,6 +35,8 @@ producer/reader naming gap, recorded rather than absorbed here.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import ast
 import inspect
 import json
@@ -239,9 +241,10 @@ def test_the_analysis_facing_consumers_keep_the_frozen_view() -> None:
 
 # --- the recorded corpus ------------------------------------------------------
 
-_CORPUS = Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 
+@pytest.mark.requires_corpus
 @pytest.mark.skipif(
     not _CORPUS.exists(), reason="recorded runs are not on this machine"
 )

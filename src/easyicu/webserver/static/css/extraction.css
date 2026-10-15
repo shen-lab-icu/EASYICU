@@ -348,7 +348,7 @@
   border-bottom:0;
 }
 .mod-pick{
-  min-width:0; display:flex; align-items:flex-start; gap:9px; padding:2px 4px;
+  min-width:0; min-height:28px; display:flex; align-items:center; gap:9px; padding:2px 4px;
   border:0; background:transparent; color:inherit; font:inherit; text-align:left; cursor:pointer;
 }
 .mod-detail-btn{
@@ -396,7 +396,7 @@
 .mod-concept-toolbar{ display:flex; align-items:center; gap:10px; margin-bottom:9px; }
 .mod-concept-toolbar .hint{ font-size:11.5px; color:var(--ink-3); }
 .mod-concept-toolbar .spacer{ flex:1; }
-.linkbtn{ border:0; background:transparent; padding:2px 0; color:var(--accent-ink); font-size:11.5px; cursor:pointer; }
+.linkbtn{ min-height:24px; border:0; background:transparent; padding:2px 0; color:var(--accent-ink); font-size:11.5px; cursor:pointer; }
 .linkbtn:hover{ text-decoration:underline; }
 .concept-list{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
 .concept-toggle{

@@ -354,9 +354,15 @@ def planning_run_groupings(
     raw_declared = (
         authority.get("exposure_groups") if isinstance(authority, Mapping) else None
     )
-    declared = (
-        read_planned_group_columns(raw_declared) if raw_declared is not None else ()
-    )
+    try:
+        declared = (
+            read_planned_group_columns(raw_declared) if raw_declared is not None else ()
+        )
+    except ExposureGroupRuleError as exc:
+        raise ValueError(
+            "the planning run's input does not declare the group columns its "
+            f"record states: {exc}"
+        ) from exc
     if isinstance(record, Mapping) and record.get("not_asked") is not None:
         if declared:
             raise ValueError(
@@ -366,8 +372,9 @@ def planning_run_groupings(
     candidate = candidate_exposure_groupings(record, record_sha256=record_sha256)
     variables = {grouping_variable_name(item) for item in candidate.stated.groupings}
     held = sorted(json.dumps(item.record(), sort_keys=True) for item in declared)
+    legacy = any(item.labels is None for item in declared)
     if {item.variable for item in declared} != variables or held != _recorded_columns(
-        record, record_sha256=record_sha256
+        record, record_sha256=record_sha256, legacy=legacy
     ):
         raise ValueError(
             "the planning run's input does not declare the group columns its record states"
@@ -379,8 +386,12 @@ def planning_run_groupings(
     )
 
 
-def _recorded_columns(record: Mapping[str, Any], *, record_sha256: str) -> list[str]:
-    """Each applied grouping's column as the host declares it from ``record``."""
+def _recorded_columns(
+    record: Mapping[str, Any], *, record_sha256: str, legacy: bool = False
+) -> list[str]:
+    """Each applied grouping's column as the host declares it from ``record``;
+    ``legacy``, as it declared one before columns carried the study's words
+    for each level and their derivation parameters."""
 
     columns = []
     for item in record["compiled"]["groupings"]:
@@ -394,7 +405,14 @@ def _recorded_columns(record: Mapping[str, Any], *, record_sha256: str) -> list[
             )
         except (ExposureGroupRuleError, KeyError, TypeError) as exc:
             raise ValueError(f"the record's grouping is unreadable: {exc}") from exc
-        columns.append(json.dumps(column.record(), sort_keys=True))
+        declared = column.record()
+        if legacy:
+            declared = {
+                key: value
+                for key, value in declared.items()
+                if key not in ("labels", "parameters")
+            }
+        columns.append(json.dumps(declared, sort_keys=True))
     return sorted(columns)
 
 

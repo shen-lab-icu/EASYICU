@@ -70,6 +70,7 @@ from .projections import (
     project_job,
     project_pi_replay_event,
     project_transcript,
+    reject_sensitive_message,
 )
 from .user_visible_text import sanitize_user_visible_text
 from .replay_store import PiConversationReplayStore
@@ -2347,6 +2348,24 @@ class PiCopilotService:
                 record,
                 regenerate_target,
             )
+            unchanged_message = (
+                str(regenerate_target.get("message") or "").strip() == provider_text
+            )
+            if unchanged_message:
+                # Read the original host metadata, not the retry request's
+                # claim about who wrote the text. Legacy turns have no proof.
+                message_origin = (
+                    "typed" if regenerate_target.get("message_origin") == "typed"
+                    else MODEL_OPTION_MESSAGE_ORIGIN
+                )
+            elif message_origin is None:
+                message_origin = "typed"
+            inferred_actions = infer_explicit_turn_actions(provider_text)
+            if message_origin == MODEL_OPTION_MESSAGE_ORIGIN:
+                inferred_actions = inferred_actions - PRIVILEGED_ONE_SHOT_TURN_ACTIONS
+            requested_actions = (requested_actions - PRIVILEGED_ONE_SHOT_TURN_ACTIONS) | (
+                inferred_actions & PRIVILEGED_ONE_SHOT_TURN_ACTIONS
+            )
         with self._lock:
             if record.session_id in self._busy_sessions:
                 raise PiCopilotError(
@@ -2386,18 +2405,6 @@ class PiCopilotService:
             started.conversation_updated_at = utc_now()
             started.last_turn_allowed_actions = sorted(requested_actions)
             self._save_record(started)
-            if regenerate_target is not None:
-                self.replay_store.supersede_from_turn_index(
-                    session_id=record.session_id,
-                    project_id=str(record.project_id),
-                    turn_index=int(regenerate_target.get("turn_index") or 0),
-                )
-            self.replay_store.start_turn(
-                session_id=record.session_id,
-                project_id=str(record.project_id),
-                job_id=job.id,
-                allowed_actions=sorted(requested_actions),
-            )
 
             def emit(event: Dict[str, Any]) -> None:
                 if job.cancel_requested:
@@ -2445,6 +2452,36 @@ class PiCopilotService:
                     )
 
             try:
+                if regenerate_target is not None:
+                    self.replay_store.supersede_from_turn_index(
+                        session_id=record.session_id,
+                        project_id=str(record.project_id),
+                        turn_index=int(regenerate_target.get("turn_index") or 0),
+                    )
+                wording_history = self.replay_store.question_wording_context(
+                    session_id=record.session_id, project_id=str(record.project_id),
+                )
+                wording_origin = message_origin or "typed"
+                if regenerate_target is not None and unchanged_message:
+                    wording_origin = str(regenerate_target.get("message_origin") or "unknown")
+                if message_intent == "advance_after_data_source_confirmation":
+                    wording_origin = "host_transition"
+                wording_turn = {
+                    "text": provider_text if wording_origin != "host_transition" else "",
+                    "message_origin": wording_origin,
+                }
+                active_tool_context.bind_question_wording_context(
+                    [*wording_history["user_turns"], wording_turn],
+                    wording_history["previous_reply"],
+                )
+                self.replay_store.start_turn(
+                    session_id=record.session_id,
+                    project_id=str(record.project_id),
+                    job_id=job.id,
+                    allowed_actions=sorted(requested_actions),
+                    user_message=wording_turn["text"],
+                    message_origin=wording_origin,
+                )
                 job.emit(
                     {
                         "type": "pi_session",
@@ -2453,7 +2490,11 @@ class PiCopilotService:
                     }
                 )
                 method = "session.regenerate" if regenerate_target is not None else "session.prompt"
-                params = {"session_id": record.session_id, "message": provider_text}
+                params = {
+                    "session_id": record.session_id,
+                    "message": provider_text,
+                    "message_origin": message_origin or "typed",
+                }
                 if idea_source:
                     params["idea_source"] = dict(idea_source)
                 if message_intent:
@@ -2491,6 +2532,7 @@ class PiCopilotService:
                 refreshed.last_turn_status = "running"
                 self._save_record(refreshed)
                 transcript = state.get("transcript")
+                terminal_assistant = None
                 if isinstance(transcript, list):
                     terminal_assistant = next(
                         (
@@ -2515,11 +2557,22 @@ class PiCopilotService:
                     "cancelled" if job.cancel_requested else "done"
                 )
                 self._save_record(refreshed)
+                visible_reply = project_transcript([terminal_assistant]) if terminal_assistant else []
+                assistant_reply = "\n".join(
+                    str(part.get("text") or "")
+                    for row in visible_reply for part in row.get("content", [])
+                    if isinstance(part, Mapping) and part.get("type") == "text"
+                )[:8192]
+                try:
+                    reject_sensitive_message(assistant_reply)
+                except PiCopilotError:
+                    assistant_reply = ""
                 self.replay_store.finish_turn(
                     session_id=record.session_id,
                     project_id=str(record.project_id),
                     job_id=job.id,
                     status="cancelled" if job.cancel_requested else "done",
+                    assistant_reply=assistant_reply,
                 )
                 return {
                     "session": self._public_session(refreshed, gateway_state=state),
@@ -3347,12 +3400,25 @@ class PiCopilotService:
             current_cohort=context.get("cohort") or {},
             selection_event=event,
         )
+        # An option that keeps each patient's first stay is the researcher's
+        # own repeated-stay handling, no longer the system's default.
+        first_stay_chosen = (
+            {
+                "confirmations": {
+                    **dict(context.get("confirmations") or {}),
+                    plan_decisions.REPEATED_STAYS_SYSTEM_DEFAULT: False,
+                }
+            }
+            if primary_cohort.first_icu_stay_only(target_cohort)
+            else {}
+        )
         try:
             updated = study_contexts.upsert_context(
                 {
                     "id": context_id,
                     "cohort": target_cohort,
                     "cohort_eligibility_authority": authority,
+                    **first_stay_chosen,
                 },
                 expected_revision=current_revision,
                 require_revision=True,

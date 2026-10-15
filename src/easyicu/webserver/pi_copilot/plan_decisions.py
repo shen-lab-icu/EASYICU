@@ -554,6 +554,42 @@ def _first_stay_restriction_bound(study: Mapping[str, Any]) -> bool:
     return primary_cohort.first_icu_stay_only(study.get("cohort"))
 
 
+#: Whether the study's repeated-stay handling is the system's default rather
+#: than the researcher's choice (confirmations; written here).  True when the
+#: configuration of a reviewed plan compiles every stay with patient-clustered
+#: inference on its own; False once the researcher chooses the handling: the
+#: plan decision for repeated stays, a cohort option that keeps each patient's
+#: first stay, or a conversation turn that names clustering or the first stay.
+#: A study written before the key existed has none, and the card names no
+#: default for it.  Host-owned: a conversation patch cannot write it.
+REPEATED_STAYS_SYSTEM_DEFAULT = "plan_repeated_stays_system_default"
+
+
+def repeated_stays_system_default_route(study: Mapping[str, Any]) -> str | None:
+    """The system-default repeated-stay route the plan card names, if any.
+
+    ``"patient_clustered"`` while the study keeps every stay with
+    patient-clustered inference and the system chose it; a later design or
+    population names none.
+    """
+
+    confirmations = study.get("confirmations")
+    if (
+        not isinstance(confirmations, Mapping)
+        or confirmations.get(REPEATED_STAYS_SYSTEM_DEFAULT) is not True
+    ):
+        return None
+    design = study.get("analysis_design")
+    design = design if isinstance(design, Mapping) else {}
+    if (
+        design.get("variance_estimator") != "cluster_robust"
+        or design.get("cluster_unit") != "patient"
+        or _first_stay_restriction_bound(study)
+    ):
+        return None
+    return "patient_clustered"
+
+
 #: The design the repeated-stay route compiles: every stay, clustered by patient.
 _PATIENT_CLUSTERED_DESIGN = {
     "analysis_unit": "icu_stay",
@@ -1222,12 +1258,22 @@ def compile_agent_plan_configuration(
         patch["sensitivity_specs"] = ScientificConfiguration.inspect(
             {**dict(study), **patch}
         ).replace_sensitivity(axis="repeated_stays", replacement=None)
+        prior = study.get("confirmations")
+        prior = prior if isinstance(prior, Mapping) else {}
         confirmations.update(
             {
                 "plan_repeated_stays_clustered": True,
                 "plan_repeated_stays_first": False,
             }
         )
+        # The system chose this route, unless clustering was already
+        # confirmed by someone else: the researcher's choice keeps its False,
+        # and a study clustered before the key existed keeps none.
+        if (
+            prior.get("plan_repeated_stays_clustered") is not True
+            or prior.get(REPEATED_STAYS_SYSTEM_DEFAULT) is True
+        ):
+            confirmations[REPEATED_STAYS_SYSTEM_DEFAULT] = True
     patch["analysis_design"] = analysis_design
     patch["confirmations"] = confirmations
     return CompiledAgentPlanConfiguration(
@@ -1410,6 +1456,7 @@ def compile_plan_decision(
                 ),
                 "confirmations": configuration.merge_confirmations(
                     plan_repeated_stays_clustered=True,
+                    **{REPEATED_STAYS_SYSTEM_DEFAULT: False},
                 ),
             },
             display_label_en="Keep every ICU stay with patient-clustered uncertainty",
@@ -1700,6 +1747,7 @@ __all__ = [
     "CompiledAgentPlanConfiguration",
     "CompiledPlanDecision",
     "PlanDecisionError",
+    "REPEATED_STAYS_SYSTEM_DEFAULT",
     "agent_plan_configuration_available",
     "compile_agent_plan_configuration",
     "compile_plan_decision",
@@ -1710,4 +1758,5 @@ __all__ = [
     "proposed_adjustment_set",
     "landmark_timing_specification",
     "question_landmark_configuration",
+    "repeated_stays_system_default_route",
 ]

@@ -10,7 +10,7 @@ an overflow ancestor, not covered at its centre, closes on Escape, closes on an
 outside press, and toggles closed from its own opener. Inline disclosures are
 listed, not judged.
 
-Requires a running EasyICU web server and Playwright with a Chrome channel::
+Requires a running EasyICU web server and Playwright Chromium::
 
     python tools/audit_web_popovers.py --base http://127.0.0.1:8765 \
         --session "pi_project=<draft id>&pi_session=<session id>" \
@@ -208,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
     routes.update({name: (url, False) for name, url in ROUTES_WITHOUT_SESSION.items()})
     report: dict[str, list[dict]] = {}
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(channel="chrome", headless=True)
+        browser = playwright.chromium.launch(headless=True)
         for size in args.viewports.split(","):
             width, height = (int(part) for part in size.lower().split("x"))
             page = new_audit_page(browser, args.base, width, height)

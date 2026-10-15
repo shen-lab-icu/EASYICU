@@ -18,6 +18,7 @@ from ..authority.provider_budget import (
     ProviderCallBudgetReceiptError,
     StepProviderCallBudget,
 )
+from ..authority.provider_hard_stop import ProviderHardStopError
 from ..authority.step_attempt import CheckpointAuthority, StepAttemptState
 from ..authority.step_capsule import StepAuthorityCapsuleError
 from ..authority.step_runtime import (
@@ -421,6 +422,7 @@ class StepCandidateRecovery:
             )
             request.sync_provider_budget()
         except (
+            ProviderHardStopError,
             ProviderCallBudgetReceiptError,
             StepAuthorityRuntimeError,
             StepAuthorityCapsuleError,

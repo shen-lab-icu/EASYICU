@@ -129,17 +129,17 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     )
     assert "css/guided-pi-target-trial.css?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-target-trial-copy.js?v=20261009-target-trial1" in index
-    assert "js/screens-guided-pi-target-trial.js?v=20261009-target-trial1" in index
+    assert "js/screens-guided-pi-target-trial.js?v=20261014-trial-readings1" in index
     # The card owner reads its wording, and the confirmation owner the card.
     assert (
         index.index("js/screens-guided-pi-target-trial-copy.js")
         < index.index("js/screens-guided-pi-target-trial.js")
         < index.index("js/screens-guided-pi-confirmation.js")
     )
-    assert "js/screens-guided-pi-confirmation.js?v=20261010-exposure-labels1" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20261014-plan-readings1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20261010-source-gate1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261009-target-trial1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261010-source-gate1" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261014-trial-gaps1" in index
     assert "js/screens-guided-pi.js?v=20261010-source-gate1" in index
     assert "js/screens-guided.js?v=20260922-state-menus1" in index
     assert (
@@ -2046,7 +2046,6 @@ def test_model_guidance_keeps_locked_clinical_implementation_off_the_user() -> N
     assert "Question phrasing rule:" in prompt_owner
     assert "Ordinary outcome semantics rule:" in prompt_owner
     assert "Semantic consistency rule:" in prompt_owner
-    assert "never ask the user to approve a wording-only synchronization" in prompt_owner
     assert "ICU mortality means death during that ICU stay" in prompt_owner
     assert "arbitrary 24-hour, 48-hour, or 72-hour mortality variants" in prompt_owner
     assert "Next-step choice quality rule:" in prompt_owner

@@ -45,9 +45,11 @@ from ..schema import (
 )
 from ..contracts.exposure_group_rules import (
     EXPOSURE_GROUP_CONTRASTS_KEY,
+    EXPOSURE_GROUP_LABELS_KEY,
     EXPOSURE_GROUP_ORDINAL_TRANSFORM_ID,
     EXPOSURE_GROUP_TRANSFORMS,
     ExposureGroupRuleError,
+    grouping_level_labels,
     read_group_contrast,
     read_grouping_rules,
     read_planned_group_columns,
@@ -142,23 +144,26 @@ def _planned_exposure_groups(
     return {"exposure_groups": [item.record() for item in columns]}
 
 
-def _exposure_group_contrasts(
+def _exposure_group_projections(
     verified: Optional[VerifiedMaterializedCohortAuthority],
     planning_catalog_provenance: Mapping[str, Any],
 ) -> Dict[str, Any]:
-    """Each grouped exposure's reference and contrast, from its sealed declaration.
+    """Each grouped exposure's comparison, levels and derivation parameters.
 
-    A staged cohort's receipts, which its authority loader proved, or a
-    metadata-only input's planned columns, read strictly above.  Nothing for
-    a cohort that forms no exposure group.
+    Read from a verified staged receipt or a strictly read planned column.
+    A legacy planned column states only its comparison. When both declare
+    one variable they must agree; neither declaration overwrites the other.
     """
 
-    contrasts: List[Dict[str, Any]] = []
+    contrasts: Dict[str, Dict[str, Any]] = {}
+    labels: Dict[str, Dict[str, Any]] = {}
     if (
         verified is not None
         and verified.authority.producer == EXPOSURE_GROUP_STAGE_PRODUCER
     ):
-        receipts = verified.authority.producer_parameters.get("groupings") or ()
+        receipts = (
+            verified.authority.to_dict()["producer_parameters"].get("groupings") or ()
+        )
         for receipt in receipts:
             try:
                 rules = read_grouping_rules(receipt["parameters"])
@@ -167,14 +172,55 @@ def _exposure_group_contrasts(
                     variable=str(receipt["variable"]),
                     groups=len(rules.groups),
                 )
+                levels = grouping_level_labels(rules, receipt["labels"])
             except (ExposureGroupRuleError, KeyError, TypeError) as exc:
                 raise MaterializedMetadataError(
-                    f"a staged exposure grouping states no comparison: {exc}"
+                    f"a staged exposure grouping states no comparison or levels: {exc}"
                 ) from exc
-            contrasts.append(contrast.record())
+            contrasts[contrast.variable] = contrast.record()
+            labels[contrast.variable] = {
+                "variable": contrast.variable,
+                "concept": rules.concept,
+                "scale": rules.scale,
+                "levels": list(levels),
+                "parameters": dict(receipt["parameters"]),
+            }
     for item in planning_catalog_provenance.get("exposure_groups") or ():
-        contrasts.append({"variable": item["variable"], **item["compared"]})
-    return {EXPOSURE_GROUP_CONTRASTS_KEY: contrasts} if contrasts else {}
+        variable = item["variable"]
+        compared = {"variable": variable, **item["compared"]}
+        planned = (
+            None
+            if item.get("labels") is None
+            else {
+                "variable": variable,
+                "concept": item["concept"],
+                "scale": (
+                    "ordinal"
+                    if item["transform"] == EXPOSURE_GROUP_ORDINAL_TRANSFORM_ID
+                    else "nominal"
+                ),
+                "levels": [dict(level) for level in item["labels"]],
+                "parameters": dict(item["parameters"]),
+            }
+        )
+        if variable in contrasts:
+            if contrasts[variable] != compared or (
+                planned is not None and planned != labels[variable]
+            ):
+                raise MaterializedMetadataError(
+                    f"exposure grouping {variable!r} is declared otherwise by its "
+                    "staged receipt than by its planned column"
+                )
+            continue
+        contrasts[variable] = compared
+        if planned is not None:
+            labels[variable] = planned
+    if not contrasts:
+        return {}
+    return {
+        EXPOSURE_GROUP_CONTRASTS_KEY: list(contrasts.values()),
+        **({EXPOSURE_GROUP_LABELS_KEY: list(labels.values())} if labels else {}),
+    }
 
 
 def _planning_grouping_status(authority: Dict[str, Any], *, bound: bool) -> Dict[str, Any]:
@@ -1014,7 +1060,7 @@ def build_research_context(
             **episode.provenance,
             **granularity.provenance(),
             **planning_catalog_provenance,
-            **_exposure_group_contrasts(verified_cohort, planning_catalog_provenance),
+            **_exposure_group_projections(verified_cohort, planning_catalog_provenance),
             **(
                 {"replacement_row_identity": dict(typed_row_identity)}
                 if typed_row_identity is not None

@@ -185,6 +185,22 @@ def project_study_context(
     question = _bounded_text(context.get("question"), 1200)
     if question:
         reject_sensitive_message(question)
+    from easyicu.webserver.causal_trial_reading import normalize_causal_trial_reading
+    from easyicu.webserver.study_family_reading import normalize_study_family_reading
+    from easyicu.webserver.design_variance_basis import normalize_design_variance_basis
+
+    readings = {}
+    for field, normalize in (
+        ("causal_trial_reading", normalize_causal_trial_reading),
+        ("study_family_reading", normalize_study_family_reading),
+        ("design_variance_basis", normalize_design_variance_basis),
+    ):
+        try:
+            value = normalize(context.get(field))
+        except ValueError:
+            value = None
+        if value is not None:
+            readings[field] = value
     return ensure_safe_projection(
         {
             "present": True,
@@ -192,6 +208,7 @@ def project_study_context(
             "revision": context.get("revision"),
             "title": _bounded_text(context.get("title"), 160),
             "question": question,
+            **readings,
             "purpose": _bounded_text(context.get("purpose"), 800),
             "data_source": {
                 "source_id": source.get("source_id") or source.get("id"),
@@ -392,6 +409,9 @@ def project_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
             "covariate_operationalizations",
             "execution_concepts",
             "analysis_design",
+            "study_family_reading",
+            "causal_trial_reading",
+            "design_variance_basis",
             "sensitivity_specs",
             "time_window",
             "comparator",

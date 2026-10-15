@@ -4,6 +4,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 from easyicu.research_agent.repairs import source as code_repair
 from easyicu.research_agent.repair_registry import (
     InvariantStatus,
@@ -19,6 +21,52 @@ from easyicu.research_agent.repair_registry import (
     repair_metadata_for,
 )
 from easyicu.research_agent.repairs import coordination as repair_coordination
+
+
+def test_repair_ledger_reopen_keeps_history_and_appends(tmp_path: Path) -> None:
+    path = tmp_path / "repairs.json"
+    first = RepairLedger(path)
+    original = first.append_application(
+        repair_id="dedupe_required_cols_outcome_v1", step_id="model",
+        before_text="before", after_text="after",
+    )
+    reopened = RepairLedger(path)
+    assert reopened.records == (original,)
+    reopened.append_application(
+        repair_id="strip_python_prefix_v1", step_id="report",
+    )
+    assert len(RepairLedger(path).records) == 2
+
+
+def test_invalid_existing_repair_ledger_is_preserved(tmp_path: Path) -> None:
+    path = tmp_path / "repairs.json"
+    path.write_text('{"schema_version": "wrong", "repairs": []}')
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="invalid schema"):
+        RepairLedger(path)
+    assert path.read_bytes() == before
+
+
+def test_repair_ledger_failed_replace_keeps_committed_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent import repair_registry
+
+    path = tmp_path / "repairs.json"
+    ledger = RepairLedger(path)
+    ledger.append_application(repair_id="strip_python_prefix_v1", step_id="model")
+    before = path.read_bytes()
+    records = ledger.records
+
+    def fail_replace(*_args: object) -> None:
+        raise OSError("simulated interrupted commit")
+
+    monkeypatch.setattr(repair_registry.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="interrupted commit"):
+        ledger.append_application(repair_id="strip_python_prefix_v1", step_id="report")
+    assert path.read_bytes() == before
+    assert ledger.records == records
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_repair_registry_invariants_hold() -> None:

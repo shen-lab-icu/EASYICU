@@ -26,6 +26,8 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from pydantic import ValidationError
 
+from easyicu.webserver import planning_coordinate_readings
+
 from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
 from easyicu.research_agent.authority.run_input import (
     RunInputCapsuleV2,
@@ -4711,6 +4713,10 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
         and plan_recommendation_complete
         and current_review_approval_allowed,
         "scientific_plan_review": scientific_plan_review,
+        "planning_coordinate_readings": planning_coordinate_readings.load_planning_coordinate_readings(
+            wrapper_dir,
+            context_columns=planning_coordinate_readings.planned_context_columns(run_dir),
+        ),
         **_pending_question_requirements(run_dir, pending),
         # What each level code of a grouped exposure names; ``None`` when the
         # run's grouping record cannot be read, which the card reports.
@@ -6553,6 +6559,17 @@ def make_research_pipeline_run_runner(
                     resolved_primary_exposure = (
                         f"{resolved_primary_exposure}_{aggregation}"
                     )
+                planning_coordinate_readings.write_planning_coordinate_readings(
+                    wrapper_dir,
+                    planning_coordinate_readings.context_readings(
+                        metadata_planning_coordinates.get("coordinate_readings") or (),
+                        columns={"outcome": pipeline_target, "exposure": resolved_primary_exposure},
+                        configured={
+                            "outcome": bool(execution_concepts.get("outcome") or _target_outcome(study)),
+                            "exposure": bool(execution_concepts.get("primary_exposure") or configured_primary_exposure),
+                        },
+                    ),
+                )
             if candidate_outcome_concepts and execution_resume_inputs is None:
                 resolve_outcomes = (
                     _resolve_planning_outcome_columns

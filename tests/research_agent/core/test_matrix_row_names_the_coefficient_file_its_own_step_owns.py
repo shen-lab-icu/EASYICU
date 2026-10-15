@@ -22,6 +22,8 @@ right, so the branch is gone and one constant now serves the copy and the row.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import ast
 import csv
 import inspect
@@ -113,9 +115,10 @@ def test_the_name_is_a_bare_filename() -> None:
 
 # --- the recorded corpus ------------------------------------------------------
 
-_CORPUS = Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 
+@pytest.mark.requires_corpus
 @pytest.mark.skipif(
     not _CORPUS.exists(), reason="recorded runs are not on this machine"
 )
@@ -137,6 +140,7 @@ def test_the_name_this_step_writes_is_the_one_recorded_runs_hold() -> None:
     assert owned, "no recorded replay writes the coefficient file under this name"
 
 
+@pytest.mark.requires_corpus
 @pytest.mark.skipif(
     not _CORPUS.exists(), reason="recorded runs are not on this machine"
 )

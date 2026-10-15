@@ -314,7 +314,7 @@ Use either the Web UI **Validate Data Path** -> **Convert & Setup** flow or the 
 The web application can prepare the data for you automatically. You can also convert it in code:
 
 ```python
-from easyicu.data_converter import DataConverter
+from easyicu import DataConverter
 
 converter = DataConverter('/path/to/raw/data', database='miiv')
 converter.convert_all()
@@ -337,7 +337,7 @@ After conversion, use the prepared directory in all API examples below.
 The example below shows the full workflow for API users: start from raw data, convert it, then extract standardized features.
 
 ```python
-from easyicu.data_converter import DataConverter
+from easyicu import DataConverter
 from easyicu import load_concepts
 
 database = 'miiv'

@@ -44,6 +44,7 @@ from easyicu.webserver.target_trial_setup import (
     latest_target_trial_compile,
     target_trial_family_declared,
 )
+from easyicu.webserver.planning_coordinate_readings import project_coordinate_readings
 
 from . import cohort_eligibility, plan_decisions, plan_review_progress
 from .contracts import (
@@ -617,6 +618,9 @@ def build_research_workflow_snapshot(
         or review_authority.get("exposure_group_labels_recorded") is True
         else ()
     )
+    coordinate_readings = project_coordinate_readings(
+        review_authority.get("planning_coordinate_readings", [])
+    )
     plan_review_summary = (
         {
             "run_id": str(review_authority.get("run_id") or "")[:160],
@@ -672,6 +676,7 @@ def build_research_workflow_snapshot(
                 if exposure_groups is not None
                 else {}
             ),
+            **({"coordinate_readings": coordinate_readings} if coordinate_readings is not None else {}),
         }
         if raw_scientific_review
         else None
@@ -1357,6 +1362,19 @@ def _enrich_plan_review(
     if plan_preview:
         snapshot = snapshot.model_copy(
             update={"plan_conversation_preview": plan_preview}
+        )
+    # The repeated-stay route the system chose on its own, for the card to
+    # name; plan_decisions owns the rule and the card does not infer it.
+    summary = snapshot.plan_review_summary
+    route = plan_decisions.repeated_stays_system_default_route(study)
+    if isinstance(summary, Mapping) and route:
+        snapshot = snapshot.model_copy(
+            update={
+                "plan_review_summary": {
+                    **dict(summary),
+                    "repeated_stays_system_default": route,
+                }
+            }
         )
     return snapshot
 

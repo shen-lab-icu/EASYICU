@@ -421,6 +421,31 @@
     time_zero: ['time zero', '时间零点'],
   };
 
+  // The capability catalog's categories qualify an automatically read
+  // concept, particularly a measured level versus a medication given.
+  const CATEGORIES = {
+    'blood gas': ['blood gas test', '血气检验'],
+    cardiovascular: ['cardiovascular measure', '心血管指标'],
+    chemistry: ['laboratory test', '检验指标'],
+    demographics: ['demographic measure', '人口学指标'],
+    hematology: ['hematology test', '血液检验'],
+    medications: ['medication', '用药'],
+    microbiology: ['microbiology test', '微生物检验'],
+    neurological: ['neurological measure', '神经系统指标'],
+    neurology: ['neurological measure', '神经系统指标'],
+    outcome: ['outcome', '结局'],
+    output: ['recorded output', '排出量'],
+    renal: ['renal measure', '肾脏相关指标'],
+    respiratory: ['respiratory measure', '呼吸指标'],
+    severity: ['severity score', '严重程度评分'],
+    ventilator: ['ventilation measure', '通气指标'],
+    vitals: ['vital sign', '生命体征'],
+  };
+  function category(key) {
+    const row = Object.prototype.hasOwnProperty.call(CATEGORIES, key) ? CATEGORIES[key] : null;
+    return row ? pick(row) : '';
+  }
+
   function finding(code) {
     const row = FINDINGS[String(code || '')];
     return row && zh() ? { title: row[0], detail: row[1] } : null;
@@ -460,5 +485,5 @@
     return parts.join(chinese ? '；' : '; ');
   }
 
-  window.AGENT_READER_VOCAB = Object.freeze({ finding, question, column, value, tableTitle, citationUse });
+  window.AGENT_READER_VOCAB = Object.freeze({ finding, question, column, value, tableTitle, citationUse, category });
 })();

@@ -4081,7 +4081,7 @@ def test_opening_question_saves_without_inventing_an_analysis_unit(
     result = tool_module.execute_tool(
         "easyicu_update_study_context",
         {
-            "question": "Estimate Sepsis-3 prevalence and its association with ICU mortality.",
+            "question": "研究 MIMIC-IV 成人 ICU 人群中 Sepsis-3 的患病率，以及 Sepsis-3 与 ICU 死亡的关系。",
             "purpose": "Estimate prevalence and evaluate an observational association.",
             "cohort": {"preset": "adult_all", "label": "Adult ICU population"},
         },
@@ -4096,7 +4096,7 @@ def test_opening_question_saves_without_inventing_an_analysis_unit(
     )
 
     assert result["code"] == "study_context_updated"
-    assert writes[0]["question"].startswith("Estimate Sepsis-3 prevalence")
+    assert writes[0]["question"].startswith("研究 MIMIC-IV 成人 ICU 人群")
     assert writes[0]["cohort"] == {"preset": "all_icu"}  # its label is withheld with it
     assert result["details"]["omitted_unconfirmed_fields"] == ["cohort.preset", "cohort.label"]
 
@@ -4221,6 +4221,7 @@ def test_conversational_setup_requires_direct_outcome_and_exposure_choices(
             user_message=(
                 "当前导出没有可验证的 ICU 专用死亡结局。"
                 "请把主要结局改为院内死亡（本次住院期间死亡）。"
+                "研究 Sepsis-3 与院内死亡的关系。"
             ),
             allowed_actions={"configure"},
         ),
@@ -4507,7 +4508,7 @@ def test_dropped_scientific_slots_are_named_in_the_receipt(
     result = tool_module.execute_tool(
         "easyicu_update_study_context",
         {
-            "question": "Estimate Sepsis-3 prevalence and its ICU mortality association.",
+            "question": "我想研究 MIMIC-IV 成人 ICU 人群中 Sepsis-3 的患病率，以及 Sepsis-3 与 ICU 死亡的关系。",
             "outcome": "ICU mortality",
             "primary_exposure": "Sepsis-3",
         },
@@ -4523,7 +4524,7 @@ def test_dropped_scientific_slots_are_named_in_the_receipt(
 
     # The explicitly written question is a real confirmed change and lands.
     assert result["code"] == "study_context_updated"
-    assert writes[0]["question"].startswith("Estimate Sepsis-3 prevalence")
+    assert writes[0]["question"].startswith("我想研究 MIMIC-IV 成人 ICU 人群")
     # The exact exposure label does; the translated outcome label does not.
     assert writes[0].get("outcome", "") == ""
     assert writes[0]["primary_exposure"] == "Sepsis-3"
@@ -5675,6 +5676,7 @@ def test_conversational_setup_persists_host_verified_explicit_concept_authorizat
         ),
         user_message=(
             "I explicitly authorize the experimental sep3_sofa2 variant for this study."
+            " Do not filter the cohort using Sepsis-3; compare the sep3_sofa2 groups descriptively."
         ),
         allowed_actions={"configure"},
     )
@@ -5835,14 +5837,14 @@ def test_confirmed_conversation_source_is_not_silently_rebound(
     result = tool_module.execute_tool(
         "easyicu_update_study_context",
         {
-            "question": "成人 ICU 人群中的 Sepsis-3 患病率是多少？",
+            "question": "我想研究 MIMIC-IV 成人 ICU 人群中的 Sepsis-3 患病率。",
             "bind_source_id": "src_recommended",
         },
         context,
     )
 
     assert result["code"] == "study_context_updated"
-    assert writes[0]["question"] == "成人 ICU 人群中的 Sepsis-3 患病率是多少？"
+    assert writes[0]["question"] == "我想研究 MIMIC-IV 成人 ICU 人群中的 Sepsis-3 患病率。"
     assert "data_source" not in writes[0]
     assert result["details"]["study"]["data_source"]["database"] == "miiv"
 
@@ -6026,6 +6028,7 @@ def test_study_setup_requires_one_turn_grant_and_uses_typed_owner(
         proposal,
         ToolExecutionContext(
             session=session,
+            user_message=proposal["question"],
             allowed_actions=frozenset({"configure"}),
         ),
     )
@@ -6049,11 +6052,13 @@ def test_study_setup_requires_one_turn_grant_and_uses_typed_owner(
         "_server_concept_selection_authority_write": True,
         "_server_causal_trial_reading_write": True,
         "_server_study_family_reading_write": True,
+        "_server_question_wording_write": True,
         "_server_design_variance_basis_write": True,
     }
 
     one_grant = ToolExecutionContext(
         session=session,
+        user_message=proposal["question"],
         allowed_actions=frozenset({"configure"}),
     )
     first = tool_module.execute_tool(

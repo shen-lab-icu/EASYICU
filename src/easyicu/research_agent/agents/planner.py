@@ -1741,6 +1741,7 @@ class PlannerAgent:
         enforce_article_contract: bool = False,
         article_contract_context: Optional[ResearchContext] = None,
         require_scientific_actions: bool = False,
+        host_owned_plan: Optional[Mapping[str, Any]] = None,
     ) -> AnalysisPlan:
         text = raw.strip()
         # Strip a fenced block anywhere in the response (already
@@ -1774,7 +1775,7 @@ class PlannerAgent:
             data = json.loads(match)
         if not isinstance(data, dict):
             raise ValueError("Planner JSON root must be an object")
-        data = _payload.decode_planner_transport_payload(data)
+        data = _payload.decode_planner_transport_payload(data, host_owned_plan=host_owned_plan)
         for index, raw_step in enumerate(data.get("steps", []) or []):
             if not isinstance(raw_step, dict):
                 continue

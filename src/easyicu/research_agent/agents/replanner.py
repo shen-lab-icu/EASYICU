@@ -167,7 +167,7 @@ class ReplannerAgent(PlannerAgent):
                 allowed_know_how_decisions=decision_authority,
                 allowed_literature_citation_keys=allowed_citation_keys,
                 direct_comparator_literature_keys=direct_comparator_keys,
-                require_scientific_actions=True,
+                require_scientific_actions=True, host_owned_plan=current_plan.model_dump(mode="json"),
             )
             if candidate.know_how_decisions != current_plan.know_how_decisions:
                 raise ValueError(

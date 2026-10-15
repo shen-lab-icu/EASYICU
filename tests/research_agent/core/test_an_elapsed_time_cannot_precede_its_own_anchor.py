@@ -23,6 +23,8 @@ analysis, and which rows to censor is the analyst's call.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import inspect
 import pathlib
 from types import SimpleNamespace
@@ -33,7 +35,7 @@ import pytest
 from easyicu.research_agent.audits import validators as validators_module
 from easyicu.research_agent.audits.validators import cohort_hygiene_findings
 
-_CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 _SUBKIND = "elapsed_time_precedes_anchor"
 
 
@@ -192,6 +194,7 @@ def _a_real_cohort() -> pd.DataFrame | None:
     return None
 
 
+@pytest.mark.requires_corpus
 def test_the_convention_holds_on_the_real_export():
     """20 of 21 elapsed-time columns start at exactly 0. That is the premise."""
 
@@ -214,6 +217,7 @@ def test_the_convention_holds_on_the_real_export():
     assert len(negative) <= 1, negative
 
 
+@pytest.mark.requires_corpus
 def test_the_real_cohort_is_reported_and_not_blocked():
     frame = _a_real_cohort()
     if frame is None:
@@ -229,6 +233,7 @@ def test_the_real_cohort_is_reported_and_not_blocked():
     assert all(f.detail["n_rows"] == len(frame) for f in findings)
 
 
+@pytest.mark.requires_corpus
 def test_the_module_still_reports_the_two_checks_it_had():
     """The new check joins (A) and (B); it must not displace them."""
 

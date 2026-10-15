@@ -24,6 +24,8 @@ Replayed over every recorded blocked step whose script survives on disk:
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import ast
 import json
 import pathlib
@@ -39,7 +41,7 @@ from easyicu.research_agent.gates.plausibility_obligation import (
 )
 from easyicu.research_agent.schema import AnalysisStep
 
-_CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 _BODY = "import pandas as pd\n\nframe = pd.read_parquet('/cohort.parquet')\nprint(len(frame))\n"
 
 
@@ -199,6 +201,7 @@ def _gate(code: str, scope: FlagOnlyPlausibilityScope, step: AnalysisStep):
     )
 
 
+@pytest.mark.requires_corpus
 def test_the_recorded_failure_is_cleared():
     """h2's causal step: the one that burned both repairs and died."""
 

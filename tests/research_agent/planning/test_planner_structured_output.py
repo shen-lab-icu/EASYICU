@@ -8,10 +8,13 @@ import pytest
 
 from easyicu.research_agent.agents import plan_payload as payload_owner
 from easyicu.research_agent.agents.plan_payload import (
+    PlannerHostOwnedFieldError,
     PlannerStructuredOutputSchemaError,
     decode_planner_transport_payload,
     planner_structured_output_request,
 )
+
+
 from easyicu.research_agent.contracts.capability_ids import CAPABILITY_FAMILIES
 from easyicu.research_agent.contracts.product_identity import (
     CANONICAL_TYPED_PRODUCT_TOKEN_PATTERN,
@@ -288,6 +291,61 @@ def test_ten_source_run_bound_literature_schema_keeps_retry_headroom():
     assert len(schema["$defs"]["LiteratureDesignBinding"]["anyOf"]) == 6
 
 
+def test_single_version_tags_are_host_defaults_but_version_choices_remain():
+    definitions = json.loads(planner_structured_output_request().schema_json)["$defs"]
+
+    for name in (
+        "CohortDefinitionSpec", "DescriptiveClaimContract",
+        "ExposureOutcomeRiskDifferenceContrast", "FunctionalFormSpec",
+        "MeasurementAuditSpec", "PhenotypeComparisonSpec",
+        "PlannedDependenceRequirement", "PlannedFigurePanelSpec",
+        "RobustnessReplaySpec",
+    ):
+        assert "schema_version" not in definitions[name]["properties"]
+        assert "schema_version" not in definitions[name]["required"]
+
+    assert definitions["ExposureOutcomeDistributionSpec"]["properties"][
+        "schema_version"
+    ]["enum"] == [
+        "easyicu.exposure_outcome_distribution/2",
+        "easyicu.exposure_outcome_distribution/3",
+    ]
+    assert definitions["TableOneSpec"]["properties"]["schema_version"]["enum"] == [
+        "easyicu.table_one/1", "easyicu.table_one/2", "easyicu.table_one/3",
+    ]
+    # These literal declarations are scientific assumptions, not version tags.
+    assumptions = definitions["PatientWeightedIntervalAssumptions"]
+    assert set(assumptions["required"]) == {"target", "independence", "weights"}
+    assert assumptions["properties"]["weights"]["const"] == (
+        "fixed_observed_patient_stay_weights"
+    )
+
+
+@pytest.mark.parametrize(
+    ("model_name", "payload"),
+    [
+        ("ExposureOutcomeRiskDifferenceContrast", {
+            "reference_exposure_level": 0, "comparison_exposure_level": 1,
+        }),
+        ("FunctionalFormSpec", {
+            "target_column": "lactate", "knot_quantiles": [0.1, 0.5, 0.9],
+        }),
+    ],
+)
+def test_the_host_restores_a_projected_version_without_changing_the_design(
+    model_name, payload,
+):
+    from easyicu.research_agent import schema as authority
+
+    model = getattr(authority, model_name)
+    restored = model.model_validate(payload)
+    explicit = model.model_validate({**payload, "schema_version": restored.schema_version})
+    assert restored.model_dump(mode="json") == explicit.model_dump(mode="json")
+    assert restored.schema_version.startswith("easyicu.")
+    with pytest.raises(ValueError):
+        model.model_validate({**payload, "schema_version": "invented/99"})
+
+
 def test_trajectory_stability_transport_keeps_only_planner_decisions():
     request = planner_structured_output_request()
     schema = json.loads(request.schema_json)
@@ -521,3 +579,39 @@ def test_planner_schema_capability_and_request_survive_runtime_wrapper_chain(tmp
     assert usage["total_tokens"] == 12
     assert observed["structured_output"] is request
     assert len(envelope.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "payload,field",
+    [
+        ({"adjustment_proposal": {"covariates": ["age"]}}, "adjustment_proposal"),
+        ({"cohort": {"unapplied_population_criteria": ["adult"]}}, "unapplied_population_criteria"),
+        ({"steps": [{"figure_panels": [{"policy_alternative_chart_types": ["bar_chart"]}]}]}, "policy_alternative_chart_types"),
+    ],
+)
+def test_non_strict_transport_refuses_host_owned_plan_fields(payload: dict, field: str) -> None:
+    with pytest.raises(PlannerHostOwnedFieldError, match=field):
+        decode_planner_transport_payload(payload)
+
+
+def test_replan_inherits_host_roster_without_accepting_model_revisions() -> None:
+    prior = {"adjustment_proposal": {"source_step_id": "primary", "covariates": ["age", "sex"]}}
+    assert decode_planner_transport_payload({}, host_owned_plan=prior) == prior
+    assert decode_planner_transport_payload(prior, host_owned_plan=prior) == prior
+    with pytest.raises(PlannerHostOwnedFieldError, match="adjustment_proposal"):
+        decode_planner_transport_payload(
+            {"adjustment_proposal": {"source_step_id": "primary", "covariates": ["age"]}},
+            host_owned_plan=prior,
+        )
+    assert prior["adjustment_proposal"]["covariates"] == ["age", "sex"]
+
+
+def test_replan_chart_policy_requires_same_host_panel_binding() -> None:
+    panel = {"panel_id": "A", "figure_output": "figure:primary", "article_role": "primary_result",
+             "chart_type": "forest_plot", "source_products": ["table:effect"],
+             "policy_alternative_chart_types": ["bar_chart"]}
+    prior = {"steps": [{"step_id": "plot", "figure_panels": [panel]}]}
+    assert decode_planner_transport_payload(prior, host_owned_plan=prior) == prior
+    changed = {"steps": [{"step_id": "plot", "figure_panels": [{**panel, "source_products": ["table:other"]}]}]}
+    with pytest.raises(PlannerHostOwnedFieldError, match="policy_alternative_chart_types"):
+        decode_planner_transport_payload(changed, host_owned_plan=prior)

@@ -12,7 +12,7 @@ Usage:
     converter.ensure_parquet_ready()
 
     # Or use the CLI
-    # python -m easyicu.data_converter /path/to/eicu/2.0.1
+    # python -m easyicu.io.data_converter /path/to/eicu/2.0.1
 """
 
 from __future__ import annotations

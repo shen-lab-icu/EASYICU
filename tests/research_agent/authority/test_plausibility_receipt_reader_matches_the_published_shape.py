@@ -26,6 +26,8 @@ requiring what the contract does not publish is the defect itself.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import ast
 import json
 import os
@@ -207,7 +209,7 @@ def test_a_receipt_supplied_with_no_scope_is_still_refused() -> None:
 
 _CORPUS = Path(
     os.environ.get(
-        "EASYICU_CORPUS_ROOT", "/Volumes/外置硬盘/easyicu_data/canonical9_runs"
+        "EASYICU_CORPUS_ROOT", str(corpus_root())
     )
 )
 

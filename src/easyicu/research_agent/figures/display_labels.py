@@ -7,6 +7,8 @@ figure shows must be English too.  A Planner label written in another script
 
 from __future__ import annotations
 
+import math
+import numbers
 import re
 from typing import Any, Mapping, Optional
 
@@ -74,6 +76,21 @@ def label_lookup(
     return None
 
 
+def _integral_code(value: Any) -> Optional[str]:
+    """``"2"`` for a real number without a fraction (``2.0``, ``numpy.int64(2)``).
+
+    Text stays as written (``"2.0"`` is a label, not a number), a boolean is
+    no level code, and NaN or infinity names no level.
+    """
+
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        return None
+    number = float(value)
+    if not math.isfinite(number) or not number.is_integer():
+        return None
+    return str(int(number))
+
+
 def _binary_level(value: Any) -> Optional[int]:
     token = str("" if value is None else value).strip().casefold()
     if token in {"0", "0.0", "false", "no", "n", "absent", "negative"}:
@@ -104,6 +121,12 @@ def scoped_label_lookup(
     exact = _figure_text((display_labels or {}).get(f"{scope}={raw_value}"))
     if exact is not None:
         return exact
+    # A level code read back as a number (2.0) names the level "2".
+    code = _integral_code(value)
+    if code is not None and code != raw_value:
+        exact = _figure_text((display_labels or {}).get(f"{scope}={code}"))
+        if exact is not None:
+            return exact
     level = _binary_level(value)
     if not scope_key or level is None or not display_labels:
         return None

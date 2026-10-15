@@ -34,6 +34,8 @@ property the original tests lacked.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import ast
 import json
 from pathlib import Path
@@ -289,11 +291,11 @@ def test_the_robustness_path_really_sets_that_flag():
 
 _REAL_RUNS = (
     sorted(
-        Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs").glob(
+        corpus_root().glob(
             "batch_*/*/aware/run_*/steps/*/outputs/step_summary.json"
         )
     )
-    if Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs").exists()
+    if corpus_root().exists()
     else []
 )
 
@@ -310,6 +312,7 @@ def _real_primary_summaries() -> list[dict]:
     return found
 
 
+@pytest.mark.requires_corpus
 @pytest.mark.skipif(not _REAL_RUNS, reason="recorded runs are not on this machine")
 def test_a_real_primary_summary_is_readable():
     """The property the old test could not have: real bytes, not a fixture.
@@ -332,6 +335,7 @@ def test_a_real_primary_summary_is_readable():
     )
 
 
+@pytest.mark.requires_corpus
 @pytest.mark.skipif(not _REAL_RUNS, reason="recorded runs are not on this machine")
 def test_the_nested_key_is_effectively_absent_from_real_runs():
     """Why the flat spelling had to be published rather than demanded.

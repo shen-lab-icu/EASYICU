@@ -30,7 +30,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from easyicu import load_concepts
-from easyicu.data_converter import DataConverter
+from easyicu import DataConverter
 
 # --- Edit these three for your environment -------------------------------
 DATABASE = "miiv"

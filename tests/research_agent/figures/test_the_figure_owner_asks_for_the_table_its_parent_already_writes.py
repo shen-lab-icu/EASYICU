@@ -28,6 +28,8 @@ can fill in, which is the difference between a replan and a dead figure.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import collections
 import json
 import pathlib
@@ -46,7 +48,7 @@ from easyicu.research_agent.execution.owner_declaration import (
 )
 from easyicu.research_agent.schema import AnalysisPlan
 
-_CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 
 def _audit_step(*outputs: str) -> dict:
@@ -300,6 +302,7 @@ def test_the_gate_turns_the_verdict_into_a_repairable_finding():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.requires_corpus
 def test_the_corpus_fires_only_where_the_plan_can_close_the_gap():
     """Re-derives the 9/16/25 split rather than restating it.
 
@@ -353,6 +356,7 @@ def test_the_corpus_fires_only_where_the_plan_can_close_the_gap():
     assert silent["both"] > 0 and silent["one_no_sibling"] > 0, silent
 
 
+@pytest.mark.requires_corpus
 def test_the_recorded_m1_step_is_the_one_that_fires():
     """The blocker this was written for, read from its own run."""
 

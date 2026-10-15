@@ -447,6 +447,15 @@ def _bind_step_module_shape(
             "progressive skeleton step definition is unavailable"
         )
     properties = step["properties"]
+    # Offer this opt-in method only when materializing its distribution owner.
+    # Broad initial/suffix schemas keep the existing default and wire budget.
+    if locked_module_id != "exposure_outcome_distribution":
+        for field in ("repeated_unit_interval_method", "patient_weighted_interval_assumptions"):
+            properties.pop(field, None)
+        step["required"] = [field for field in step["required"] if field not in {
+            "repeated_unit_interval_method", "patient_weighted_interval_assumptions"
+        }]
+        definitions.pop("PatientWeightedIntervalAssumptions", None)
     form = definitions.get("FunctionalFormSpec")
     if isinstance(form, dict):
         # This closed comparison's version and method are host constants, not

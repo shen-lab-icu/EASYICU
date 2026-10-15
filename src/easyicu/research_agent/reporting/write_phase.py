@@ -131,6 +131,7 @@ from .manuscript_state import ManuscriptState, render_not_generated
 from .manuscript_repair_pass import ManuscriptRepairPass
 from .manuscript_method_facts import (
     audit_bound_source_method_facts,
+    method_fact_binding,
     project_source_method_facts,
 )
 from .benchmark_report_facts import (
@@ -2457,6 +2458,7 @@ def _bind_and_review_manuscript(
             evidence=evidence,
             per_step_records=per_step_records,
             literature=literature,
+            **method_fact_binding(evidence, per_step_records),
         )
     if removed_numeric_sentences:
         numeric_filtered_path = run_dir / "manuscript_scaffold_numeric_filtered.md"
@@ -2582,6 +2584,7 @@ def _bind_and_review_manuscript(
         enforcement_mode=pipeline._evidence_enforcement_mode,
         per_step_records=per_step_records,
         literature=literature,
+        **method_fact_binding(evidence, per_step_records),
     )
     numeric_binding_findings: List[ValidationFinding] = []
     if untraced_numerics:

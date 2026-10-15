@@ -12,6 +12,9 @@ on:
       - "src/easyicu/webserver/dataio.py"
       - "src/easyicu/webserver/primary_cohort.py"
       - "src/easyicu/webserver/study_contexts.py"
+      - "src/easyicu/webserver/study_question_wording.py"
+      - "src/easyicu/webserver/planning_coordinate_readings.py"
+      - "src/easyicu/webserver/research_launch_scientific.py"
       - "src/easyicu/webserver/static/css/guided-pi*.css"
       - "src/easyicu/webserver/static/js/api.js"
       - "src/easyicu/webserver/static/js/screens-guided-pi*.js"
@@ -39,6 +42,9 @@ on:
       - "src/easyicu/webserver/dataio.py"
       - "src/easyicu/webserver/primary_cohort.py"
       - "src/easyicu/webserver/study_contexts.py"
+      - "src/easyicu/webserver/study_question_wording.py"
+      - "src/easyicu/webserver/planning_coordinate_readings.py"
+      - "src/easyicu/webserver/research_launch_scientific.py"
       - "src/easyicu/webserver/static/css/guided-pi*.css"
       - "src/easyicu/webserver/static/js/api.js"
       - "src/easyicu/webserver/static/js/screens-guided-pi*.js"
@@ -84,6 +90,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,webapp]" playwright
           python -m playwright install --with-deps chromium
+
+      - name: Set up pinned Pi Node runtime
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: src/easyicu/webserver/pi_copilot/node_app/package-lock.json
+
+      - name: Install locked Pi sidecar dependencies
+        run: npm ci --prefix src/easyicu/webserver/pi_copilot/node_app
 
       - name: Compile Python source and tests
         run: python -m compileall -q src tests

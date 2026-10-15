@@ -556,6 +556,20 @@ def _planner_transport_schema(
             "AnalysisPlan schema shape changed; review the transport projection"
         ) from exc
 
+    # Optional single-version tags are supplied by the host model's defaults.
+    # Keep version choices and required declarations on the wire; neither is
+    # an implementation constant that the host may choose for the Planner.
+    for definition in definitions.values():
+        properties = definition.get("properties", {})
+        version = properties.get("schema_version", {})
+        if (
+            "const" in version
+            and "default" in version
+            and version["default"] == version["const"]
+            and "schema_version" not in definition.get("required", [])
+        ):
+            properties.pop("schema_version")
+
     _strictify_planner_transport_schema(schema)
     schema = _share_planner_transport_shapes(schema)
     _assert_closed_planner_transport_schema(schema)
@@ -734,10 +748,23 @@ def runtime_suffix_structured_output_request(
     )
 
 
-def decode_planner_transport_payload(data: Mapping[str, Any]) -> Dict[str, Any]:
+def decode_planner_transport_payload(
+    data: Mapping[str, Any], *, host_owned_plan: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
     """Compile the Planner wire representation before authority validation."""
 
     decoded: Dict[str, Any] = copy.deepcopy(dict(data))
+    trusted = host_owned_plan or {}
+    _restore_host_owned_transport_field(
+        decoded, "adjustment_proposal", trusted, path="plan",
+    )
+    cohort = decoded.get("cohort")
+    if isinstance(cohort, dict):
+        trusted_cohort = trusted.get("cohort")
+        _restore_host_owned_transport_field(
+            cohort, "unapplied_population_criteria",
+            trusted_cohort if isinstance(trusted_cohort, dict) else {}, path="cohort",
+        )
     raw_labels = decoded.get("display_labels")
     if isinstance(raw_labels, list):
         labels: Dict[str, Any] = {}
@@ -776,6 +803,25 @@ def decode_planner_transport_payload(data: Mapping[str, Any]) -> Dict[str, Any]:
         for step_index, raw_step in enumerate(raw_steps):
             if not isinstance(raw_step, dict):
                 continue
+            trusted_steps = trusted.get("steps") or []
+            trusted_step = next((
+                step for step in trusted_steps if isinstance(step, dict)
+                and step.get("step_id") == raw_step.get("step_id")
+            ), {})
+            for panel_index, panel in enumerate(raw_step.get("figure_panels") or []):
+                if not isinstance(panel, dict):
+                    continue
+                trusted_panel = next((
+                    old for old in trusted_step.get("figure_panels", [])
+                    if isinstance(old, dict) and all(
+                        old.get(key) == panel.get(key)
+                        for key in ("panel_id", "figure_output", "article_role", "chart_type", "source_products")
+                    )
+                ), {})
+                _restore_host_owned_transport_field(
+                    panel, "policy_alternative_chart_types", trusted_panel,
+                    path=f"steps[{step_index}].figure_panels[{panel_index}]",
+                )
             stability_spec = raw_step.get("trajectory_stability_spec")
             if isinstance(stability_spec, dict):
                 _decode_trajectory_stability_decisions(stability_spec)
@@ -804,6 +850,20 @@ def decode_planner_transport_payload(data: Mapping[str, Any]) -> Dict[str, Any]:
                     compiled.append(citation_key)
             raw_step["literature_citation_keys"] = compiled
     return decoded
+
+
+def _restore_host_owned_transport_field(
+    payload: Dict[str, Any], field: str, trusted: Mapping[str, Any], *, path: str,
+) -> None:
+    """Reject model decisions; a replan may only echo or omit prior host data."""
+
+    prior = trusted.get(field)
+    supplied = payload.get(field)
+    if supplied is not None and supplied != [] and supplied != prior:
+        raise PlannerHostOwnedFieldError(path=path, fields=(field,))
+    payload.pop(field, None)
+    if prior is not None and prior != []:
+        payload[field] = copy.deepcopy(prior)
 
 
 def parse_runtime_plan_suffix(raw: str) -> RuntimePlanSuffixRevision:
@@ -1288,7 +1348,16 @@ def interval_bearing_distribution_guide() -> str:
         "repeated_unit_interval_method='patient_cluster_robust_wald', and a "
         "non-null confidence_level. Keep the repeated-unit interval method "
         "declared even while dependence is null before host binding; it does "
-        "not invent or authorize a grouping source."
+        "not invent or authorize a grouping source. The optional "
+        "repeated_unit_interval_method='patient_weighted_hoeffding' instead "
+        "requires patient_weighted_interval_assumptions with exact fields "
+        "target='conditional_expected_stay_proportion', "
+        "independence='independent_patient_clusters_conditional_on_denominator', "
+        "weights='fixed_observed_patient_stay_weights'. Propose it only when "
+        "these assumptions and the conditional stay-level target are justified "
+        "for complete-plan review. It uses actual patient stay weights, may "
+        "yield 0–100% bounds, and computes no standard error; never treat the "
+        "patient count as binomial trials or change a reviewed interval at runtime."
     )
 
 

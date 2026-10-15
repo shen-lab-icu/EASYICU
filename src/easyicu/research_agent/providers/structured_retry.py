@@ -155,6 +155,12 @@ _FEEDBACK_MAX_CHARS = 4000
 _FEEDBACK_MAX_INPUT_ECHO = 80
 _EARLIER_FAILURE_MAX_CHARS = 1200
 
+# One bounded resend for JSON that ended inside an open value. It uses the
+# same authorized and metered call path; output-limit failures keep their
+# ordinary contract budget because the same request would cut again.
+TRUNCATED_RESPONSE_RESEND_REASON = "json_truncated_transport_retry"
+_MAX_TRUNCATED_RESPONSE_RESENDS = 1
+
 
 def _violation_lines(exc: BaseException) -> Optional[List[str]]:
     """One compact line per structured-validation violation, or ``None``.
@@ -667,9 +673,9 @@ def call_llm_with_structured_retry(
         Free-form label for the agent role using this retry. Recorded in
         ``StructuredResponseFailure.role`` and used in logs.
     max_retries:
-        Number of feedback retries after the initial call. ``max_retries=0``
-        is equivalent to the legacy "one shot, then raise" behaviour;
-        the default of ``2`` allows up to three total attempts.
+        Number of feedback retries after the initial call. The default of
+        ``2`` allows three contract attempts. A truncated JSON response below
+        the output limit may trigger one unchanged resend outside this budget.
     format_reminder:
         Optional role-specific format reminder appended to the feedback
         user message on every retry. Use this to remind the LLM of
@@ -703,14 +709,17 @@ def call_llm_with_structured_retry(
     base_messages: List[LLMMessage] = list(messages)
     current: List[LLMMessage] = list(base_messages)
     last_exc: Optional[BaseException] = None
-    for i in range(max_retries + 1):
-        total_attempts = max_retries + 1
+    resends = 0
+    i = 0
+    while i <= max_retries:
+        call_index = i + resends
+        total_attempts = max_retries + 1 + resends
         _notify_progress(
             progress_callback,
             StructuredRetryProgress(
                 role=role,
                 phase="started",
-                attempt=i + 1,
+                attempt=call_index + 1,
                 total_attempts=total_attempts,
             ),
         )
@@ -742,7 +751,7 @@ def call_llm_with_structured_retry(
             )
             terminal_reason_code = str(getattr(exc, "reason_code", "") or "").strip()
             terminal_attempt = StructuredAttempt(
-                attempt=i,
+                attempt=call_index,
                 raw_head="",
                 raw_chars=0,
                 error_class=type(exc).__name__,
@@ -785,9 +794,16 @@ def call_llm_with_structured_retry(
                 exc, raw
             )
             reason_code = _safe_declared_reason_code(exc)
+            resend = (
+                resends < _MAX_TRUNCATED_RESPONSE_RESENDS
+                and finish_reason != "length"
+                and bool(json_truncation_issues(exc, raw))
+            )
+            if resend:
+                reason_code = TRUNCATED_RESPONSE_RESEND_REASON
             attempts.append(
                 StructuredAttempt(
-                    attempt=i,
+                    attempt=call_index,
                     raw_head=head,
                     raw_chars=len(raw or ""),
                     error_class=exc.__class__.__name__,
@@ -811,7 +827,7 @@ def call_llm_with_structured_retry(
                 StructuredRetryProgress(
                     role=role,
                     phase="rejected",
-                    attempt=i + 1,
+                    attempt=call_index + 1,
                     total_attempts=total_attempts,
                     error_class=exc.__class__.__name__,
                     validation_stage=validation_stage,
@@ -821,6 +837,10 @@ def call_llm_with_structured_retry(
                 ),
             )
             last_exc = exc
+            if resend:
+                # Leave current unchanged: no cut response or feedback is sent.
+                resends += 1
+                continue
             if i >= max_retries:
                 break
             # When retained, keep only the latest failed response beside the
@@ -868,7 +888,10 @@ def call_llm_with_structured_retry(
             # way retaining every full response would.
             earlier = [
                 signature
-                for signature in distinct_failures(attempts[:-1])
+                for signature in distinct_failures([
+                    attempt for attempt in attempts[:-1]
+                    if attempt.reason_code != TRUNCATED_RESPONSE_RESEND_REASON
+                ])
                 if signature != (exc.__class__.__name__, rendered_failure)
             ]
             if earlier:
@@ -900,11 +923,12 @@ def call_llm_with_structured_retry(
                     )
             retry_messages.append(LLMMessage(role="user", content=feedback_message))
             current = base_messages + retry_messages
+            i += 1
             continue
         else:
             attempts.append(
                 StructuredAttempt(
-                    attempt=i,
+                    attempt=call_index,
                     raw_head=head,
                     raw_chars=len(raw or ""),
                     error_class=None,
@@ -919,7 +943,7 @@ def call_llm_with_structured_retry(
                 StructuredRetryProgress(
                     role=role,
                     phase="accepted",
-                    attempt=i + 1,
+                    attempt=call_index + 1,
                     total_attempts=total_attempts,
                 ),
             )
@@ -932,6 +956,7 @@ def call_llm_with_structured_retry(
 
 
 __all__ = [
+    "TRUNCATED_RESPONSE_RESEND_REASON",
     "StructuredAttempt",
     "StructuredRetryProgress",
     "StructuredResponseFailure",

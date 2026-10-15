@@ -58,11 +58,30 @@
 
   function notesHtml(summary, { tr, esc, recordLink = () => '' }) {
     const notes = summary && summary.question_requirements;
-    if (!notes || typeof notes !== 'object') return '';
     const lines = [];
-    if (notes.status === 'unavailable') {
+    const readings = summary && summary.coordinate_readings;
+    if (readings && readings.status === 'unavailable') lines.push(tr(
+      'The source record for the plan’s automatically selected outcome and exposure could not be verified. Check these coordinates in the complete plan.',
+      '计划自动选择暴露与结局的来源记录无法核验，请直接核对完整计划中的指标。',
+    ));
+    else if (readings && readings.status === 'shown') {
+      (Array.isArray(readings.items) ? readings.items : []).slice(0, 2)
+        .filter(row => row && row.basis === 'keyword' && ['exposure', 'outcome'].includes(row.role))
+        .forEach(row => {
+          const role = row.role === 'exposure' ? tr('Exposure', '暴露') : tr('Outcome', '结局');
+          const name = clip(tr(row.label_en, row.label_zh) || row.label_en || row.label_zh || tr('Unlabelled measure', '未命名指标'), 80);
+          const vocab = window.AGENT_READER_VOCAB;
+          const category = vocab && typeof vocab.category === 'function' ? vocab.category(row.category) : '';
+          const evidence = clip(row.evidence, QUOTE_LIMIT);
+          lines.push(tr(
+            `${role}: ${name}${category ? ` (${category})` : ''} — read by EasyICU from the question${evidence ? ` “${evidence}”` : ''}; not a separate choice you confirmed. Check it before approving the plan; request changes in the conversation if needed.`,
+            `${role}：${name}${category ? `（${category}）` : ''}——EasyICU 从题面${evidence ? `“${evidence}”` : ''}读到，未经你单独确认。批准计划前请核对；需要修改时在对话里说明。`,
+          ));
+        });
+    }
+    if (notes && notes.status === 'unavailable') {
       lines.push(tr('The question-requirements record could not be read, so it is not shown', '题面要求记录无法读取，未显示'));
-    } else if (notes.status === 'shown') {
+    } else if (notes && notes.status === 'shown') {
       (Array.isArray(notes.items) ? notes.items : [])
         .filter(item => item && typeof item === 'object')
         .forEach(item => lines.push(itemLine(item, tr)));
@@ -87,9 +106,10 @@
     // recordLink(file) returns the confirmation owner's own resource button
     // (trusted HTML) for the record the block read; an unreadable record has
     // nothing to open.
-    const linked = notes.status === 'shown' && RECORD_FILES.has(notes.record) ? recordLink(notes.record) : '';
+    const linked = notes && notes.status === 'shown' && RECORD_FILES.has(notes.record) ? recordLink(notes.record) : '';
     const link = linked ? `<div class="gpi-question-requirements-link">${linked}</div>` : '';
-    return `<div class="gpi-question-requirements"><strong>${esc(tr('Question requirements', '题面要求'))}</strong><ul>${lines.map(line => `<li>${esc(line)}</li>`).join('')}</ul>${link}</div>`;
+    const heading = readings ? tr('Question and plan', '题目与计划') : tr('Question requirements', '题面要求');
+    return `<div class="gpi-question-requirements"><strong>${esc(heading)}</strong><ul>${lines.map(line => `<li>${esc(line)}</li>`).join('')}</ul>${link}</div>`;
   }
 
   window.EasyICU.guidedPi.declare('questionRequirements', { notesHtml });

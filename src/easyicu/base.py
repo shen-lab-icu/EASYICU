@@ -317,7 +317,7 @@ class BaseICULoader:
                 # Log warning about missing parquet files
                 logger.warning(
                     f"⚠️ {len(missing)} CSV files need to be converted to Parquet for optimal performance.\n"
-                    f"   Run: python -m easyicu.data_converter {self.data_path}\n"
+                    f"   Run: python -m easyicu.io.data_converter {self.data_path}\n"
                     f"   Or use: DataConverter('{self.data_path}').ensure_parquet_ready()"
                 )
                 if self.verbose:

@@ -184,7 +184,7 @@ _PHRASE_TO_CONCEPT: Tuple[Tuple[str, str], ...] = (
     (_FIXED_HORIZON_MORTALITY, _FIXED_HORIZON_MORTALITY),
     (r"icu mortality|icu 死亡", "death"),
     (r"mortality|death|死亡|病死", "death"),
-    (r"length of stay|\blos\b|住院时长|住院时间|icu 时长", "los_icu"),
+    (r"icu\s*(?:住院)?(?:时长|时间)|重症监护(?:室)?住院(?:时长|时间)|length of stay|\blos\b|住院(?:总)?(?:时长|时间)", "los_icu"),
     (r"readmission|再入院", "icu_readmission"),
     (r"ventilator-?free|无呼吸机天数", "vent_free_days_28"),
 )
@@ -526,6 +526,13 @@ def _resolved_reading(
     """
 
     longest: Optional[Tuple[str, int, int]] = None
+    if concept == "los_icu":
+        prefix = text[max(0, start - 12):start]
+        if (
+            re.search(r"(?:医院|全院|总|hospital\s+)$", prefix, re.IGNORECASE)
+            or re.match(r"住院总(?:时长|时间)", text[start:end])
+        ):
+            return ("los_hosp", start, end)
     for other, begin, finish in _catalog_name_readings(text):
         if (
             other != concept

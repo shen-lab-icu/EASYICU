@@ -5,7 +5,8 @@ definitions and windows.  A deterministic owner's sealed step summary supplies
 the design it executed (``executed_method_design``): its time grid and
 eligibility minimum, its model and selection rule.  These facts quote a
 recorded or executed design; they do not validate a clinical definition,
-infer a result, or exempt any value from numeric provenance.  A fact sits in
+infer a result. Grouping facts carry their typed thresholds and window hours
+for numeric source binding; free-text metadata carries no typed values. A fact sits in
 Methods' Variables, except the assumptions an executed target trial emulation
 rests on, which open the Limitations.
 """
@@ -19,7 +20,7 @@ import json
 import math
 from pathlib import Path
 import re
-from typing import Literal, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
 from ..contracts.executed_method_design import (
     EXECUTED_METHOD_DESIGN_KEY,
@@ -33,6 +34,16 @@ from ..contracts.executed_method_design import (
     TargetTrialDesign,
     exposure_step_text,
     validate_executed_method_design,
+)
+from ..contracts.exposure_group_rules import (
+    EXPOSURE_GROUP_LABELS_KEY,
+    ExposureGroupRuleError,
+    grouping_reader_labels,
+    grouping_rule_texts,
+    grouping_rule_values,
+    read_grouping_rules,
+    read_level_labels,
+    reads_as_markup,
 )
 from ..research_context.typed import (
     RESEARCH_CONTEXT_V2_SCHEMA_VERSION,
@@ -61,7 +72,8 @@ def is_method_fact_candidate(text: str) -> bool:
 
     return bool(
         re.search(
-            r"\bRecorded [^:\n]{1,100} for the (?:selected exposure|primary outcome)\s*:",
+            r"\bRecorded [^:\n]{1,100} for the "
+            r"(?:selected exposure|primary outcome|grouped exposure)\s*:",
             text,
             re.I,
         )
@@ -85,6 +97,9 @@ class ManuscriptMethodFact:
     executed_hour_spans: tuple[tuple[float, float], ...] = ()
     #: The manuscript section the fact is placed in.
     section: Literal["variables", "limitations"] = "variables"
+    #: Numeric values reproduced from typed source fields, never parsed from text.
+    #: The binder may use them only on this exact fact line in its section.
+    typed_values: tuple[float, ...] = ()
 
     @property
     def scaffold(self) -> str:
@@ -657,4 +672,73 @@ def _context_facts(
                 "source-database conformance",
                 conformance.replace("_", " ") if conformance else None,
             )
+    facts.extend(_grouping_facts(context.cohort.provenance, source_sha256=source.sha256))
     return tuple(facts)
+
+
+def _grouping_facts(
+    provenance: Mapping[str, Any],
+    *,
+    source_sha256: str,
+) -> list[ManuscriptMethodFact]:
+    """Reproduce each grouping level's rule and numbers from verified parameters.
+
+    Legacy groupings without parameters give no facts. Markup-bearing rules
+    give no reader sentence; inconsistent parameters and levels fail closed.
+    """
+
+    raw = provenance.get(EXPOSURE_GROUP_LABELS_KEY)
+    if raw is None:
+        raw = []
+    if not isinstance(raw, list) or any(not isinstance(item, Mapping) for item in raw):
+        raise MethodFactAuthorityError(
+            "recorded exposure groupings are not a list of records"
+        )
+    stated = [
+        (index, item)
+        for index, item in enumerate(raw)
+        if item.get("parameters") is not None
+    ]
+    if any(
+        not isinstance(item.get("variable"), str) or not item["variable"].strip()
+        for _index, item in stated
+    ):
+        raise MethodFactAuthorityError("a recorded exposure grouping names no column")
+    names = grouping_reader_labels([item for _index, item in stated])
+    facts: list[ManuscriptMethodFact] = []
+    for index, item in stated:
+        try:
+            rules = read_grouping_rules(item["parameters"])
+            texts = grouping_rule_texts(item["parameters"])
+            values = grouping_rule_values(item["parameters"])
+            levels = read_level_labels(item.get("levels"), levels=len(rules.levels))
+        except ExposureGroupRuleError as exc:
+            raise MethodFactAuthorityError(
+                "a recorded exposure grouping cannot be reproduced"
+            ) from exc
+        if (
+            item.get("concept") != rules.concept
+            or item.get("scale") != rules.scale
+            or [(level["code"], level["group"]) for level in levels]
+            != [(rules.codes[level], level) for level in rules.levels]
+        ):
+            raise MethodFactAuthorityError(
+                "a recorded exposure grouping's levels are not the ones its parameters form"
+            )
+        written = [
+            "Recorded exposure grouping for the grouped exposure: "
+            f"{names[item['variable']]} level {rules.codes[level]}: {texts[level]}"
+            for level in rules.levels
+        ]
+        if any(reads_as_markup(text) for text in written):
+            continue
+        facts.extend(
+            ManuscriptMethodFact(
+                source_field=f"cohort.provenance.{EXPOSURE_GROUP_LABELS_KEY}[{index}].levels[{position}]",
+                text=text,
+                source_sha256=source_sha256,
+                typed_values=values[level],
+            )
+            for position, (level, text) in enumerate(zip(rules.levels, written))
+        )
+    return facts

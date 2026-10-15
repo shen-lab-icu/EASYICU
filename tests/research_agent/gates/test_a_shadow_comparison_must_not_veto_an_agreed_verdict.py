@@ -39,6 +39,8 @@ and the verdict mismatch itself -- still blocks.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import ast
 import collections
 import csv
@@ -61,7 +63,7 @@ from easyicu.research_agent.contracts.result_envelope import (
 )
 from easyicu.research_agent.schema import AnalysisStep
 
-_CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 _SHA = "a" * 64
 
 
@@ -352,6 +354,7 @@ def test_the_consumer_still_blocks_a_real_disagreement(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.requires_corpus
 def test_no_recorded_block_was_ever_a_real_disagreement():
     if not _CORPUS.exists():
         pytest.skip("recorded run corpus is not mounted")

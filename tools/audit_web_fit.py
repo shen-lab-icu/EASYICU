@@ -7,7 +7,7 @@ text drawn beneath a control it does not belong to, controls too small to hit,
 and page-level horizontal overflow. It complements
 ``audit_web_popovers.py``, which exercises the menus.
 
-Requires a running EasyICU web server and Playwright with a Chrome channel::
+Requires a running EasyICU web server and Playwright Chromium::
 
     python tools/audit_web_fit.py --base http://127.0.0.1:8765 \
         --session "pi_project=<draft id>&pi_session=<session id>" \
@@ -53,7 +53,10 @@ JS = r"""
     for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) { const acs = getComputedStyle(a); if (/(auto|scroll)/.test(acs.overflowY) && a.scrollHeight > a.clientHeight) { box = a; break; } }
     box = box || document.scrollingElement || document.documentElement;
     const below = box.scrollHeight - box.clientHeight - box.scrollTop, above = box.scrollTop;
-    return br.top >= r.top ? below >= r.bottom - br.top : above >= br.bottom - r.top;
+    if (br.height > innerHeight / 3) return false;
+    if (br.bottom >= innerHeight - 1) return below >= r.bottom - br.top;
+    if (br.top <= 1) return above >= br.bottom - r.top;
+    return false;
   };
   const vw = innerWidth, vh = innerHeight;
   const out = { pageOverflowX: document.documentElement.scrollWidth - document.documentElement.clientWidth, covered: [], floatingOutside: [], clippedText: [], tiny: [], textUnderControl: [] };
@@ -135,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     routes.update({name: (url, False) for name, url in ROUTES_WITHOUT_SESSION.items()})
     report: dict[str, dict] = {}
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(channel="chrome", headless=True)
+        browser = playwright.chromium.launch(headless=True)
         for size in args.viewports.split(","):
             width, height = (int(part) for part in size.lower().split("x"))
             page = new_audit_page(browser, args.base, width, height)
