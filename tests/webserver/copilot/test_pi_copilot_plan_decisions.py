@@ -3,11 +3,13 @@ from __future__ import annotations
 import pytest
 
 from easyicu.webserver.pi_copilot.plan_decisions import (
+    REPEATED_STAYS_SYSTEM_DEFAULT,
     PlanDecisionError,
     agent_plan_configuration_available,
     compile_agent_plan_configuration,
     compile_plan_decision,
     plan_decision_context,
+    repeated_stays_system_default_route,
 )
 
 
@@ -990,3 +992,94 @@ def test_the_first_stay_population_is_never_imposed_without_its_authority(
         )
 
     assert raised.value.code == refusal
+
+
+# --- who chose the repeated-stay handling (DESIGN_v2 F.7) -----------------------
+
+
+def _clustered_by_the_configuration(**prior: bool) -> dict:
+    study = _aki_study()
+    study["confirmations"] = {**study["confirmations"], **prior}
+    return compile_agent_plan_configuration(
+        study=study,
+        agent_plan=_repeated_stay_plan(),
+        runtime_finding_codes=("REPEATED_STAY_IDENTITY_UNAVAILABLE",),
+        patient_cluster_available=True,
+    ).patch["confirmations"]
+
+
+def test_a_configuration_that_clusters_on_its_own_states_the_system_chose_it() -> None:
+    assert _clustered_by_the_configuration()[REPEATED_STAYS_SYSTEM_DEFAULT] is True
+    # Compiled again, the system's choice stays its own.
+    again = _clustered_by_the_configuration(
+        plan_repeated_stays_clustered=True, **{REPEATED_STAYS_SYSTEM_DEFAULT: True}
+    )
+    assert again[REPEATED_STAYS_SYSTEM_DEFAULT] is True
+    # A researcher who had kept one stay and now keeps every stay chose the
+    # population; the clustering is the system's.
+    reopened = _clustered_by_the_configuration(
+        plan_repeated_stays_clustered=False, **{REPEATED_STAYS_SYSTEM_DEFAULT: False}
+    )
+    assert reopened[REPEATED_STAYS_SYSTEM_DEFAULT] is True
+
+
+def test_clustering_someone_else_confirmed_is_not_relabelled_the_systems() -> None:
+    chosen = _clustered_by_the_configuration(
+        plan_repeated_stays_clustered=True, **{REPEATED_STAYS_SYSTEM_DEFAULT: False}
+    )
+    assert chosen[REPEATED_STAYS_SYSTEM_DEFAULT] is False
+    # Clustered before the key existed: whoever chose it, no label.
+    legacy = _clustered_by_the_configuration(plan_repeated_stays_clustered=True)
+    assert REPEATED_STAYS_SYSTEM_DEFAULT not in legacy
+
+
+def test_the_researchers_repeated_stay_decision_is_their_own() -> None:
+    study = _study()
+    study["confirmations"] = {
+        **study["confirmations"],
+        REPEATED_STAYS_SYSTEM_DEFAULT: True,
+    }
+    compiled = compile_plan_decision(
+        decision_code="REPEATED_STAY_IDENTITY_UNAVAILABLE",
+        option_id="all_icu_stays_clustered",
+        study=study,
+        agent_plan=_plan(),
+    )
+
+    assert compiled.patch["confirmations"][REPEATED_STAYS_SYSTEM_DEFAULT] is False
+
+
+_PATIENT_CLUSTERED = {
+    "analysis_family": "association_study",
+    "analysis_unit": "icu_stay",
+    "variance_estimator": "cluster_robust",
+    "cluster_unit": "patient",
+}
+
+
+@pytest.mark.parametrize(
+    ("change", "route"),
+    [
+        ({}, "patient_clustered"),
+        ({"confirmations": {REPEATED_STAYS_SYSTEM_DEFAULT: False}}, None),
+        # A study written before the key existed.
+        ({"confirmations": {"plan_repeated_stays_clustered": True}}, None),
+        (
+            {"analysis_design": {**_PATIENT_CLUSTERED, "variance_estimator": "model_based"}},
+            None,
+        ),
+        ({"analysis_design": {**_PATIENT_CLUSTERED, "cluster_unit": "hospital"}}, None),
+        ({"cohort": {"exclude_readmissions": True}}, None),
+    ],
+)
+def test_the_card_names_the_systems_route_only_while_the_study_follows_it(
+    change: dict, route: str | None
+) -> None:
+    study = {
+        "confirmations": {REPEATED_STAYS_SYSTEM_DEFAULT: True},
+        "analysis_design": dict(_PATIENT_CLUSTERED),
+        "cohort": {"exclude_readmissions": False},
+        **change,
+    }
+
+    assert repeated_stays_system_default_route(study) == route

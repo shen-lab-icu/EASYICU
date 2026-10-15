@@ -128,22 +128,21 @@ def _load_effect(
         frame, ["ci_high", "upper", "ci_upper", "upper_95", "conf_upper", "ucl"]
     )
     scale_col = resolve_column(frame, ["scale", "measure", "estimand"])
-    try:
-        est = float(numeric_series(frame, est_col).dropna().iloc[0])
-    except (IndexError, ValueError):
+    if lo_col is None or hi_col is None:
         return None
-    lo = (
-        float(numeric_series(frame, lo_col).dropna().iloc[0])
-        if lo_col and numeric_series(frame, lo_col).notna().any()
-        else est
-    )
-    hi = (
-        float(numeric_series(frame, hi_col).dropna().iloc[0])
-        if hi_col and numeric_series(frame, hi_col).notna().any()
-        else est
-    )
+    values = pd.DataFrame({
+        "estimate": numeric_series(frame, est_col),
+        "lower": numeric_series(frame, lo_col),
+        "upper": numeric_series(frame, hi_col),
+    }).replace([float("inf"), float("-inf")], float("nan")).dropna()
+    if values.empty:
+        return None
+    row = values.iloc[0]
+    est, lo, hi = float(row["estimate"]), float(row["lower"]), float(row["upper"])
+    if lo > hi:
+        return None
     scale = (
-        str(frame.iloc[0][scale_col])
+        str(frame.loc[row.name, scale_col])
         if scale_col
         else (est_col.upper() if est_col.lower() in ("or", "hr", "rr") else "effect")
     )
@@ -290,17 +289,8 @@ def render_causal_figure(
     # C -- effect contrast
     ratio_scale, scale_label = _effect_scale_info(scale)
     null_value = 1.0 if ratio_scale else 0.0
-    ax_eff.errorbar(
-        est,
-        0,
-        xerr=np.array([[max(0.0, est - lo)], [max(0.0, hi - est)]], dtype=float),
-        fmt="o",
-        color=blue,
-        ecolor=blue,
-        elinewidth=1.2,
-        capsize=3.0,
-        markersize=5.0,
-    )
+    ax_eff.hlines(0, lo, hi, color=blue, linewidth=1.2)
+    ax_eff.plot([est], [0], "o", color=blue, markersize=5.0)
     ax_eff.axvline(null_value, color=neutral, linestyle="--", linewidth=0.8)
     ax_eff.set_yticks([0], [scale_label], fontsize=6.4)
     ax_eff.set_ylim(-0.6, 0.6)

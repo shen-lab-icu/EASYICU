@@ -248,6 +248,10 @@
   }
 }
 
+@media(max-width:700px){
+  .euh-settings-shell .euh-settings-actions{ margin-bottom:14px; }
+}
+
 /* Was injected from screens-settings.js alongside the shared picker CSS; it
    is not a picker rule and belongs to this route's own owner file. */
 .setting-input{height:34px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink-1);padding:0 10px;text-align:right;max-width:140px;}

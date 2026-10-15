@@ -21,6 +21,8 @@ horizon or aggregate.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import pathlib
 
 import numpy as np
@@ -36,7 +38,7 @@ from easyicu.research_agent.trajectory.panel import (
     fixed_window_panel,
 )
 
-_CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 
 def _long(rows) -> pd.DataFrame:
@@ -185,6 +187,7 @@ def test_a_missing_column_is_named_rather_than_guessed():
         )
 
 
+@pytest.mark.requires_corpus
 def test_the_real_sealed_trajectory_pivots_onto_the_declared_grid():
     """h3's own 19-million-row table, on the grid its protocol declares."""
 

@@ -21,6 +21,8 @@ obligation, so a runner that owes nothing still emits four lines.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import ast
 import json
 import pathlib
@@ -209,13 +211,11 @@ def test_the_dispatch_site_actually_hands_over_the_scope():
         assert "plausibility_scope" in keywords, ast.dump(call)
 
 
+@pytest.mark.requires_corpus
 def test_the_recorded_run_shows_the_owner_claiming_and_then_dying_here():
     """Anchors the file in the run that exposed it, not in a hypothesis."""
 
-    run = pathlib.Path(
-        "/Volumes/外置硬盘/easyicu_data/canonical9_runs"
-        "/batch_20260804_luna_miiv_FULL_2e7947f_verify18"
-    )
+    run = (corpus_root() / 'batch_20260804_luna_miiv_FULL_2e7947f_verify18')
     if not run.exists():
         pytest.skip("the verify18 run is not mounted")
 

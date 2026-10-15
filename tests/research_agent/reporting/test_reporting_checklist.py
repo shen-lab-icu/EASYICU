@@ -183,7 +183,7 @@ def test_internal_phenotype_core_marks_trajectory_items_applicable_by_run(ra):
         bound_manuscript="group-based trajectory model (GBTM) over time with BIC",
     )
     p9b = {i.item_id: i for i in longit.items}["P9"]
-    assert p9b.status == "addressed"
+    assert p9b.status == "partial"
 
 
 def test_internal_phenotype_kind_overrides_fragile_trajectory_wording(ra):
@@ -451,7 +451,7 @@ def test_phenotype_p3_credited_when_manuscript_describes_scaling(ra):
         ),
         task_kind="subphenotype_clustering",
     )
-    assert {i.item_id: i for i in report.items}["P3"].status == "addressed"
+    assert {i.item_id: i for i in report.items}["P3"].status == "partial"
 
 
 # ---------------------------------------------------------------------------
@@ -518,8 +518,8 @@ def test_tripod_internal_validation_and_imbalance_and_calibration_figure_credite
         evidence_records=recs, bound_manuscript=manuscript
     )
     by_id = {i.item_id: i for i in report.items}
-    assert by_id["9"].status == "addressed"   # class imbalance (bare stem)
-    assert by_id["11"].status == "addressed"  # internal validation (held-out split)
+    assert by_id["9"].status == "partial"    # prose without bound evidence
+    assert by_id["11"].status == "partial"   # prose without bound evidence
     assert by_id["17"].status == "addressed"  # calibration figure
     # External validation (16) stays honestly open for a single-database study.
     assert by_id["16"].status == "open"

@@ -157,6 +157,24 @@ def test_extraction_authorization_questions_do_not_grant(message: str) -> None:
 @pytest.mark.parametrize(
     "message",
     [
+        "请问什么叫确认并授权数据提取？",
+        "是否确认并授权数据提取？",
+        "what does confirmed and authorized mean for data extraction",
+        "修订报告有什么风险",
+        "修订论文需要多久？",
+        "生成研究计划需要多久",
+        "重新生成分析方案有哪些风险？",
+        "How long does it take to generate the analysis plan?",
+        "What are the risks of revising the report?",
+    ],
+)
+def test_action_questions_do_not_mint_privileged_grants(message: str) -> None:
+    assert infer_explicit_turn_actions(message) == frozenset()
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
         "不要一次性 extraction 授权",
         "我不想给一次性 extraction 授权",
         "先别一次性 extraction 授权",

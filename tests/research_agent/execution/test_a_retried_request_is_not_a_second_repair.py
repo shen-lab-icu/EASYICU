@@ -60,6 +60,8 @@ what the guard beside it exists to prevent.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import json
 import os
 import pathlib
@@ -80,7 +82,7 @@ from easyicu.research_agent.orchestration.config import (
 
 _CORPUS = pathlib.Path(
     os.environ.get(
-        "EASYICU_CORPUS_ROOT", "/Volumes/外置硬盘/easyicu_data/canonical9_runs"
+        "EASYICU_CORPUS_ROOT", str(corpus_root())
     )
 )
 

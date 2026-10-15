@@ -47,6 +47,8 @@ m1 is 8 of 9 steps green with this refusal as its only remaining failure.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import json
 import pathlib
 
@@ -68,7 +70,7 @@ from tests.research_agent.gates.test_declared_product_contract import (
     _resolved_render_bindings,
 )
 
-_CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 #: The exact nine spellings the replaced veto accepted.  Transcribed rather
 #: than imported, so that shrinking the production set cannot quietly shrink
@@ -281,6 +283,7 @@ def test_a_failed_parent_still_refuses_its_render_child():
     )
 
 
+@pytest.mark.requires_corpus
 def test_the_recorded_corpus_contains_the_vetoed_shape():
     """Re-measures rather than restating: the defect was real in real runs."""
 

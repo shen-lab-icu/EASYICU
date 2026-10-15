@@ -6,6 +6,7 @@ import re
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from ..authority.evidence_store import EvidenceStore
+from ..authority.manuscript_method_facts import ManuscriptMethodFact
 from ..schema import ValidationFinding
 
 
@@ -100,6 +101,49 @@ def missing_bound_method_facts(
         for fact in facts
         if bind(fact.scaffold) not in lines[fact.section]
     )
+
+
+def released_fact_lines(
+    text: str,
+    facts: Sequence[ManuscriptMethodFact],
+    bind: Callable[[str], str] | None = None,
+) -> tuple[tuple[int, int, ManuscriptMethodFact], ...]:
+    """Find exact host fact lines with typed numbers in their declared sections."""
+
+    found: list[tuple[int, int, ManuscriptMethodFact]] = []
+    for section, span_of in _SECTION_SPANS.items():
+        by_line = {
+            (bind(fact.scaffold) if bind is not None else fact.scaffold): fact
+            for fact in facts
+            if fact.section == section and fact.typed_values
+        }
+        span = span_of(text) if by_line else None
+        if span is None:
+            continue
+        position = span[0]
+        for line in text[span[0] : span[1]].splitlines(keepends=True):
+            bare = line.rstrip("\r\n")
+            fact = by_line.get(bare)
+            if fact is not None:
+                found.append((position, position + len(bare), fact))
+            position += len(line)
+    return tuple(found)
+
+
+def method_fact_binding(
+    evidence: EvidenceStore,
+    per_step_records: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """The verified facts and their evidence-bound lines for the numeric binder."""
+
+    return {
+        "method_facts": evidence.manuscript_method_facts(per_step_records),
+        "bind_fact": lambda text: evidence.bind_manuscript(
+            text,
+            per_step_records=per_step_records,
+            reader_labels=None,
+        ),
+    }
 
 
 def project_source_method_facts(

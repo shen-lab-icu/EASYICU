@@ -65,3 +65,22 @@ def test_live_ui_audit_finds_nothing(tool: str, tmp_path: Path) -> None:
         args += ["--session", session]
     completed = subprocess.run(args, capture_output=True, text=True, timeout=3600)
     assert completed.returncode == 0, completed.stdout[-6000:] + completed.stderr[-2000:]
+
+
+@pytest.mark.requires_web_server
+def test_fixed_bar_exception_requires_a_way_to_scroll_clear() -> None:
+    playwright = pytest.importorskip("playwright.sync_api")
+    with playwright.sync_playwright() as runtime:
+        browser = runtime.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        for height, expected in [(2000, 0), (844, 1)]:
+            page.set_content(f'''
+                <style>body {{ margin:0; height:{height}px; }}
+                #target {{ position:absolute; top:782px; width:120px; height:32px; }}
+                #nav {{ position:fixed; bottom:0; height:68px; width:100%; }}</style>
+                <button id="target">A page action</button>
+                <nav id="nav"><button style="width:100%;height:100%">Navigation</button></nav>
+            ''')
+            report = page.evaluate(audit_web_fit.JS, audit_web_fit.MIN_HIT)
+            assert len(report["covered"]) == expected
+        browser.close()

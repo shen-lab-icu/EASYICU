@@ -22,6 +22,7 @@ import pandas as pd
 from ...contracts.figure_plan import (
     GROUPED_DESCRIPTIVE_DISTRIBUTION_FIGURE_PANELS,
 )
+from ...figures.display_labels import scoped_label_lookup
 from ...figures.publication import (
     PALETTE_CLINICAL,
     apply_publication_style,
@@ -192,7 +193,9 @@ def descriptive_result_figure_executor_owns_step(
     return bool(mode == "scalar_statistic" and _typed_product(input_key, "statistic"))
 
 
-def descriptive_result_figure_executor_code(step: AnalysisStep) -> str:
+def descriptive_result_figure_executor_code(
+    step: AnalysisStep, *, display_labels: Mapping[str, str] | None = None
+) -> str:
     if len(step.inputs) != 1 or len(step.expected_outputs) != 1:
         raise ValueError("descriptive figure requires one input and one output")
     input_key = step.inputs[0]
@@ -215,6 +218,7 @@ def descriptive_result_figure_executor_code(step: AnalysisStep) -> str:
             step_id={step.step_id!r},
             input_key={input_key!r},
             figure_product={product!r},
+            display_labels={dict(display_labels or {})!r},
         )
         """
     ).strip()
@@ -370,8 +374,13 @@ def run_descriptive_result_figure(
     step_id: str,
     input_key: str,
     figure_product: str,
+    display_labels: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Verify one typed result and render it without changing its science."""
+    """Verify one typed result and render it without changing its science.
+
+    A group of a wide table, whose column names the variable it groups by, is
+    named by the plan's label for that variable's level when it has one.
+    """
 
     import matplotlib.pyplot as plt
 
@@ -403,6 +412,7 @@ def run_descriptive_result_figure(
             if shape is None:  # pragma: no cover - ownership and binding guard it
                 raise ValueError("wide distribution contract is ambiguous")
             group_column, stem = shape
+            group_scope = group_column
             group_n = pd.to_numeric(raw_frame["n"], errors="coerce")
             denominator = pd.to_numeric(raw_frame["denominator"], errors="coerce")
             percentage = pd.to_numeric(raw_frame["percentage"], errors="coerce")
@@ -438,6 +448,7 @@ def run_descriptive_result_figure(
             )
         else:
             frame = raw_frame
+            group_scope = None
         variables = frame["variable"].dropna().astype(str).str.strip().unique()
         groups = frame["group"].dropna().astype(str).str.strip()
         if len(variables) != 1 or groups.eq("").any() or groups.duplicated().any():
@@ -494,7 +505,13 @@ def run_descriptive_result_figure(
             markersize=5,
         )
         ax.set_yticks(positions)
-        ax.set_yticklabels(groups.tolist())
+        ax.set_yticklabels(
+            [
+                (group_scope and scoped_label_lookup(group_scope, value, display_labels))
+                or text
+                for value, text in zip(frame["group"].dropna(), groups)
+            ]
+        )
         ax.invert_yaxis()
         units = (
             frame["unit"].dropna().astype(str).str.strip().unique()

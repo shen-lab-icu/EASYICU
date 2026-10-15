@@ -34,6 +34,7 @@ from easyicu.webserver import (
     research_pipeline_run_preparation,
     research_run_submission,
 )
+from easyicu.webserver import jobs as job_store
 from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.pi_copilot.workflow import (
     active_export_matches_study,
@@ -209,16 +210,21 @@ def test_pipeline_route_rejects_raw_tabular_files_before_provider_resolution(
         ("auto", "prior-canary", "run-reviewed-candidate", False),
     ],
 )
+@pytest.mark.parametrize("capacity_available", [True, False])
 def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
     planner_start_mode: str,
     resume_source_job_id: str,
     plan_revision_source_run_id: str,
     requested_changes: bool,
+    capacity_available: bool,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from easyicu.webserver.pi_copilot.workspace import ProjectWorkspace
+    from easyicu.webserver.pi_copilot.contracts import HostTurnGrant
     from easyicu.webserver.routes import agent as agent_route
+
+    real_submit_job = research_run_submission._submit_job
 
     export = tmp_path / "raw-mimiciv"
     export.mkdir()
@@ -304,6 +310,25 @@ def test_pipeline_route_ignores_client_project_root_and_uses_pi_workspace(
     }
     if resume_source_job_id:
         payload["development_resume_source_job_id"] = "client-forged-checkpoint"
+    if not capacity_available:
+        def no_capacity(*_args: Any, **_kwargs: Any) -> Any:
+            raise job_store.JobCapacityError(max_running=1, running=1)
+
+        monkeypatch.setattr(research_run_submission, "_submit_job", real_submit_job)
+        monkeypatch.setattr(job_store.MANAGER, "submit", no_capacity)
+        grant = HostTurnGrant.from_actions(["provider_run"])
+        with pytest.raises(research_run_submission.ResearchRunSubmissionError) as raised:
+            research_run_submission.submit_research_run(
+                research_run_submission.ResearchRunSubmissionRequest(
+                    study_context_id=study["id"], provider="openai",
+                    credential_source="pi_verified", external_llm_opt_in=True,
+                    intent="candidate_plan", planner_start_mode="fresh",
+                ),
+                authorize=lambda: grant.consume_once("provider_run"),
+            )
+        assert raised.value.status_code == 429
+        assert "provider_run" in grant.available_actions
+        return
     if plan_revision_source_run_id:
         payload["plan_revision_source_run_id"] = plan_revision_source_run_id
     if requested_changes:

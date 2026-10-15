@@ -32,6 +32,11 @@ def _values(result):
         ("不是研究死亡；研究 ICU 住院时长", ("los_icu",)),
         ("脓毒症和非脓毒症患者的院内死亡", ("death",)),
         ("乳酸和急性肾损伤的关系", ()),
+        ("成人 ICU 患者的乳酸与医院住院时长是否相关？", ("los_hosp",)),
+        ("成人 ICU 患者的全院住院时长和死亡", ("death", "los_hosp")),
+        ("比较住院总时长。", ("los_hosp",)),
+        ("比较 ICU 住院时长和医院住院时长。", ("los_icu", "los_hosp")),
+        ("Compare ICU length of stay and hospital length of stay.", ("los_icu", "los_hosp")),
     ],
 )
 def test_explicit_outcome_roster_preserves_question_specificity(question, expected):

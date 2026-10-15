@@ -24,6 +24,8 @@ was written for.  Six are degenerate: m1's five, and one already declaring
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import pathlib
 
 import pandas as pd
@@ -98,11 +100,12 @@ def test_two_contributors_is_the_boundary():
     assert aggregate_row_candidates(one) == {}
 
 
+@pytest.mark.requires_corpus
 def test_the_five_recorded_tables_stop_being_refused(tmp_path):
     """Drives the finding function on m1's real emitted directory."""
 
     recorded = sorted(
-        pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs").glob(
+        corpus_root().glob(
             "batch_*_verify05/m1_*/aware/run_*/steps/"
             "03_missingness_measurement_audit/outputs"
         )
@@ -116,9 +119,10 @@ def test_the_five_recorded_tables_stop_being_refused(tmp_path):
     assert findings == [], [f.message[:90] for f in findings]
 
 
-_CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 
+@pytest.mark.requires_corpus
 def test_the_corpus_split_is_what_the_rule_was_read_off():
     """Re-measures rather than restating: the real totals must stay flagged.
 

@@ -179,17 +179,24 @@ def test_the_landmark_request_seals_the_occurrence_the_question_asks_for() -> No
     ) == ("all_declared_rows", "fail_closed", "fail_closed")
 
 
-def test_without_the_question_or_a_post_baseline_exposure_nothing_is_sealed() -> None:
+def test_without_an_occurrence_question_nothing_is_sealed() -> None:
     plain = _request(_post_baseline(_context()))
-    baseline_exposure = _request(
-        _question(_context(), _context().research_question + ASKS)
-    )
+    assert plain.study_population_occurrence is None
+    assert plain.level_label_keys == []
+    assert "study_population_occurrence" not in plain.model_dump(mode="json")
 
-    for request in (plain, baseline_exposure):
-        assert request.study_population_occurrence is None
-        assert request.level_label_keys == []
-        # The request keeps the identity it had before the field existed.
-        assert "study_population_occurrence" not in request.model_dump(mode="json")
+
+def test_baseline_exposure_occurrence_is_planned_and_passes_coverage() -> None:
+    context = _question(_context(), _context().research_question + ASKS)
+    request = _request(context)
+    assert request.study_population_occurrence is not None
+    _, result = _run(context, [json.dumps(_spec_payload(request))])
+    assert any(step.step_id == "exposure_occurrence" for step in result.output.steps)
+    review = build_plan_scientific_review(
+        context=context, plan=result.output, literature=None,
+        figure_strategy=build_article_figure_strategy(context), runtime_authority=None,
+    )
+    assert not any(finding.code == OCCURRENCE_CODE for finding in review.findings)
 
 
 def test_known_missing_values_leave_the_denominator_and_are_counted() -> None:

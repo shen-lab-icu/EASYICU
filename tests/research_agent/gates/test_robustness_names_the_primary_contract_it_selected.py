@@ -24,6 +24,8 @@ spelling by a producer that already knows it, read by someone stricter.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import ast
 import inspect
 import json
@@ -113,9 +115,10 @@ def test_nothing_to_name_stays_none_rather_than_an_empty_string() -> None:
 
 # --- the recorded corpus ------------------------------------------------------
 
-_CORPUS = Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 
+@pytest.mark.requires_corpus
 @pytest.mark.skipif(not _CORPUS.exists(), reason="recorded runs are not on this machine")
 def test_every_recorded_replay_could_have_named_its_primary_contract() -> None:
     """Real bytes: the fallback must actually resolve on recorded runs.

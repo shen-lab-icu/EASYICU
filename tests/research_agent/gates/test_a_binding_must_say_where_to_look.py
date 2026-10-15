@@ -44,6 +44,8 @@ whether the bytes can be read.  Whether a consumer needs coordinates does.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import hashlib
 import json
 import pathlib
@@ -55,7 +57,7 @@ from easyicu.research_agent.authority.typed_binding import (  # noqa: E402
     _binding_is_readable_without_a_schema_receipt as readable,
 )
 
-_CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 #: The exact run in which one unreadable binding cost five of thirteen steps.
 _M2_RUN = (
@@ -160,6 +162,7 @@ def _recorded_non_table_bindings():
             )
 
 
+@pytest.mark.requires_corpus
 def test_the_rule_keeps_parseable_bindings_and_refuses_recorded_opaque_failure() -> None:
     """Replay the serialization boundary over an append-only run corpus.
 
@@ -196,6 +199,7 @@ def test_the_rule_keeps_parseable_bindings_and_refuses_recorded_opaque_failure()
     assert ("trained_prediction_model", ".pkl") in set(refused)
 
 
+@pytest.mark.requires_corpus
 def test_the_production_binder_refuses_the_pickle_and_says_why() -> None:
     """Drives ``_resolved_typed_input_binding``, not the predicate behind it.
 
@@ -255,6 +259,7 @@ def test_the_production_binder_refuses_the_pickle_and_says_why() -> None:
     assert "table" in refusal["message"]
 
 
+@pytest.mark.requires_corpus
 def test_the_production_binder_still_publishes_a_readable_sibling() -> None:
     """The same run, the same call, the input that always worked.
 
@@ -369,6 +374,7 @@ def test_only_terminal_report_can_bind_opaque_figure_as_digest_reference(
     assert refusals[0]["reason"] == "typed_input_serialization_is_unreadable"
 
 
+@pytest.mark.requires_corpus
 def test_no_recorded_table_binding_is_touched_by_this_rule() -> None:
     """The 992 schema-receipt bindings never reach the predicate.
 

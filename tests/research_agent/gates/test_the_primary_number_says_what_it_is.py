@@ -27,6 +27,8 @@ recorded runs with a panel: 73 resolve end to end (all odds_ratio), 16 have no
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import json
 import os
 import pathlib
@@ -41,7 +43,7 @@ from easyicu.research_agent.reporting.writer_evidence import (  # noqa: E402
 
 _CORPUS = pathlib.Path(
     os.environ.get(
-        "EASYICU_CORPUS_ROOT", "/Volumes/外置硬盘/easyicu_data/canonical9_runs"
+        "EASYICU_CORPUS_ROOT", str(corpus_root())
     )
 )
 
@@ -191,6 +193,7 @@ def test_a_ph_violation_withholds_the_constant_cox_headline(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.requires_corpus
 def test_the_real_run_now_publishes_what_its_number_means() -> None:
     """Drives ``_render_robustness_panel_block``, the function production calls.
 

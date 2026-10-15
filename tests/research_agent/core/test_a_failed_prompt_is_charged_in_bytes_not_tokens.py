@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import json
 import pathlib
 
@@ -14,7 +16,7 @@ from easyicu.research_agent.authority.provider_hard_stop import (
     ProviderHardStopLimits,
 )
 
-_CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 
 class _Message:
@@ -196,6 +198,7 @@ def test_a_failed_call_still_costs_more_than_nothing(tmp_path):
     assert float(call["accounted_estimated_cost_usd"]) > 0.0
 
 
+@pytest.mark.requires_corpus
 def test_the_recorded_ledger_shows_a_failure_costing_more_than_an_answer():
     """Re-measures the run that motivated this, from its own ledger."""
 

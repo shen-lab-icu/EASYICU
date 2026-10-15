@@ -4,14 +4,20 @@ on:
   push:
     paths:
       - "src/easyicu/webserver/static/js/**"
+      - "src/easyicu/webserver/static/css/**"
       - "tests/js/**"
       - "tools/run_js_contracts.py"
+      - "tests/webserver/test_web_ui_audits.py"
+      - "tools/audit_web_*.py"
       - ".github/workflows/frontend_contracts_ci.yml"
   pull_request:
     paths:
       - "src/easyicu/webserver/static/js/**"
+      - "src/easyicu/webserver/static/css/**"
       - "tests/js/**"
       - "tools/run_js_contracts.py"
+      - "tests/webserver/test_web_ui_audits.py"
+      - "tools/audit_web_*.py"
       - ".github/workflows/frontend_contracts_ci.yml"
   workflow_dispatch:
 
@@ -39,3 +45,36 @@ jobs:
         run: |
           node --version
           python tools/run_js_contracts.py
+
+  browser-audits:
+    name: Native web UI browser audits
+    runs-on: ubuntu-latest
+    env:
+      EASYICU_HOME: ${{ runner.temp }}/easyicu-ui-audit
+      EASYICU_WEB_AUDIT_BASE: http://127.0.0.1:8765
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install browser audit dependencies
+        run: |
+          pip install -e ".[dev,webapp]" playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Run isolated server and browser audits
+        run: |
+          python -m uvicorn easyicu.webserver.app:app --host 127.0.0.1 --port 8765 > "$RUNNER_TEMP/easyicu-ui.log" 2>&1 &
+          audit_server_pid=$!
+          trap 'kill "$audit_server_pid"' EXIT
+          python -c 'import time, urllib.request; base="http://127.0.0.1:8765/"; ready=False
+          for attempt in range(60):
+              try:
+                  urllib.request.urlopen(base, timeout=1).close(); ready=True; break
+              except OSError: time.sleep(1)
+          assert ready, "UI audit server did not start"'
+          pytest -q -m "" tests/webserver/test_web_ui_audits.py

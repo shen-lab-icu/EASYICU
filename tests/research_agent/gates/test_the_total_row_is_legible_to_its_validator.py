@@ -39,6 +39,8 @@ simply label properly.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import pathlib
 
 import pandas as pd
@@ -113,6 +115,7 @@ def _flagged_total_rows(frame: pd.DataFrame) -> list[int]:
     return [i for i, n in agreeing.items() if n >= MIN_AGREEING_COUNT_COLUMNS]
 
 
+@pytest.mark.requires_corpus
 def test_the_real_table_that_failed_would_now_declare_its_total_row() -> None:
     """The exact recorded table, re-labelled the way the producer now labels it.
 
@@ -125,7 +128,7 @@ def test_the_real_table_that_failed_would_now_declare_its_total_row() -> None:
     # that actually carries the defect rather than the newest one.
     frame = None
     for path in sorted(
-        pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs").rglob(
+        corpus_root().rglob(
             "steps/*/outputs/exposure_component_completeness_audit.csv"
         )
     ):

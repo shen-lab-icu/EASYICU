@@ -944,7 +944,7 @@ def _autofill_item(
     item: ChecklistItem,
     available_aliases: set,
     manuscript_text: str,
-    keyword_only_is_addressed: bool = True,
+    keyword_only_is_addressed: bool = False,
 ) -> None:
     matched_evidence = [
         a

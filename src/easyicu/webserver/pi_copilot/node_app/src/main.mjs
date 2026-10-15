@@ -624,6 +624,25 @@ function modelPrompt(message, language, ownerContext = [], turnIntent = "", idea
   return `${message}${HOST_LANGUAGE_MARKER}${requirement}${currentContext}${sourceContext}${transition}`;
 }
 
+function appendPromptOrigin(record, origin) {
+  record.sessionManager.appendCustomEntry("easyicu_message_origin_v1", {
+    message_origin: origin === "typed" ? "typed" : "model_option",
+  });
+}
+
+function userEntryMessageOrigin(branch, entryId) {
+  const targetAt = branch.findIndex((entry) => entry.id === entryId);
+  for (let index = targetAt - 1; index >= 0; index -= 1) {
+    const entry = branch[index];
+    if (entry.type === "message" && entry.message?.role === "user") break;
+    if (entry.type === "custom" && entry.customType === "easyicu_message_origin_v1") {
+      const origin = entry.data?.message_origin;
+      return origin === "typed" || origin === "model_option" ? origin : undefined;
+    }
+  }
+  return undefined;
+}
+
 function userVisiblePromptText(value) {
   const text = String(value ?? "");
   const markerAt = text.lastIndexOf(HOST_LANGUAGE_MARKER);
@@ -697,7 +716,7 @@ function resourceLoader(agentMode, extensionSnapshot, language) {
       "A tool request to save study setup, run, cancel, or replan can be blocked unless the user granted that action for this turn. Do not claim an action happened unless the tool confirms it.",
       "Persistence wording rule: never say recorded, saved, bound, 已记录, 已保存, or 已绑定 for a study choice unless a successful EasyICU mutation receipt occurred in the same user turn or the current workflow receipt already contains that exact value. Without that evidence, say only that the user selected or stated the value, and keep it listed as unresolved until the owner persists it.",
       "User-decision integrity rule: a reply to one direct setup choice may persist only that choice plus fields strictly required to bind its exact executable concept. Permission to generate a formal plan does not authorize Copilot to invent or persist unresolved scientific choices; those choices belong in the Research Agent Planner's reviewable proposal. Do not fill, confirm, or announce completion of any independent unresolved slot merely because a runtime default, catalog result, or current value is available. In particular, set confirmations.feature_time_window=true only when the user explicitly selects an exact numeric outer feature window; never infer or confirm it from an outcome, phenotype, cohort, module, source-selection turn, or plan-generation permission.",
-      "Semantic consistency rule: when the user explicitly changes a previously saved population, exposure, or outcome, update every directly derived user-facing copy of that same decision in one atomic easyicu_update_study_context call, including question and analysis_goal when they still name the superseded value. This is one scientific decision, not a new confirmation. Preserve all unrelated choices and never ask the user to approve a wording-only synchronization.",
+      "Semantic consistency rule: when the user explicitly changes a previously saved population, exposure, or outcome, update directly derived setup fields for that same decision in one atomic easyicu_update_study_context call. Preserve unrelated choices and do not ask the user to confirm the same scientific choice again. The question has a separate wording rule: if the user has not stated the revised question, keep the saved question unchanged and show the proposed wording for explicit confirmation rather than silently rewriting it.",
       "Plan-intent rule: the opening research question establishes the question, purpose, and any explicitly named database family, but it does not authorize Copilot to invent or persist unresolved cohort, exposure, outcome, model, covariate, or export choices. Once the question and an owner-confirmed data source or package are present, do not generate a Research Brief, shadow plan, long candidate setup, or sequential setup questionnaire. Acknowledge the confirmed question and source in at most two short sentences; the host will show exactly two user actions: start candidate-plan generation, or add research requirements first. Do not add a third model-authored choice. In a Chinese response, call this first artifact 候选研究计划 and never quote Agent Plan, Research Agent, Research Brief, or Planner. Starting candidate-plan generation authorizes the Research Agent Planner to inspect the capability catalog and bounded feasibility metadata, search the literature, and propose the unresolved scientific design without reading patient rows. It must then pause so the user can review the candidate and choose data preparation. Only after the exact prepared package is bound may the host call the package-bound artifact 可执行研究计划 and ask for analysis approval. Never claim literature support when no literature receipt exists. Plan-display authority rule: before the current Research Agent run exposes agent_plan.json, never title or describe Copilot-authored text as a Plan, analysis plan, Preliminary Study Plan, or Agent Plan. The digest-bound agent_plan.json produced by easyicu.research_agent.planning is a candidate until exact prepared-package binding is present; only the bound version is executable.",
       "User decision burden rule: ask the researcher only for decisions that materially change the scientific question, estimand, population, exposure, primary outcome, analysis family, or an important tradeoff. EasyICU owns implementation details such as concept identifiers, source columns, required feature modules, field mappings, and the internal windows, thresholds, or component rules of one owner-locked canonical phenotype profile. Apply those implementation details through EasyICU receipts, summarize them in plain language, and offer advanced review without turning them into mandatory questions.",
       "A Copilot session is UX history only. EasyICU study revision, run id, plan receipts, and evidence artefacts remain authoritative.",
@@ -736,6 +755,7 @@ function resourceLoader(agentMode, extensionSnapshot, language) {
       "Clinical phenotype rule: when the StudyContext contains one owner-locked canonical clinical definition, accept it as an EasyICU implementation decision and do not ask the user to choose its internal windows, thresholds, components, or algorithm. State briefly that the standard EasyICU definition will be used and leave its technical contract for configuration review. Ask one plain-language clinical choice only when the workflow still reports a genuinely unresolved, clinically non-equivalent variant; explain the practical consequence, recommend the safer standard option, and hide internal identifiers. Never describe the outer feature window as defining, replacing, or moving the phenotype's clinical anchor; the phenotype contract remains owned by its exact executable concept.",
       "Ordinary outcome semantics rule: treat the persisted StudyContext question and purpose as user-authored candidate intent. When they name mortality within a care episode without a special horizon, recommend the ordinary episode-wide meaning (for example, ICU mortality means death during that ICU stay; hospital mortality means death during that hospitalization); do not ask the user to choose arbitrary 24-hour, 48-hour, or 72-hour mortality variants. Save it only after the user directly confirms that outcome. Fixed-horizon mortality is a distinct estimand and may be offered only when the user requested a fixed horizon or the wording is genuinely ambiguous. After raw-source confirmation, include this recommendation inside the consolidated pending setup; never turn it into the next standalone question.",
       "Question phrasing rule: never open with a list of internal missing fields, schema paths, module names, or implementation jargon. Start with the user's research intent or the choice just saved, then ask one short user-level question. For a time-window decision, explain the scientific tradeoff in ordinary language and recommend a default; do not expose canonical coordinate strings as code unless the user asks for technical details.",
+      "Question wording rule: save question verbatim from the researcher's messages, preserving their language, order, quantities, units and operators. The host accepts only original wording, an exact clicked proposal, or an explicit confirmation of wording shown in the previous reply. Do not translate, paraphrase, shorten or invent a question from setup fields. If study_question_not_in_the_researchers_words is returned, no setup was saved and Configure remains available: retry using the original words, or show a proposed question and wait for explicit wording confirmation. Generic assent or Continue does not confirm revised wording; wording provenance is host-owned and cannot be supplied in tool arguments.",
       "Next-step choice quality rule: offer two to four mutually exclusive, semantically distinct choices. If one choice is recommended, mark that same choice as recommended instead of adding a duplicate recommendation option. Choice labels must be concise plain text without Markdown markers, surrounding quotation marks, bullets, schema paths, or internal identifiers.",
       "Available-action rule: every Next step choice and follow-up question must be something an EasyICU tool or a control visible in this conversation can carry out. Never offer a screen, form, review interface, or submission that does not exist. When the researcher asks for something no tool supports, say so once in plain words and offer the closest action that does exist.",
       "Plain-status rule: describe a run, report, or gate state in plain words. Never show internal status or readiness codes (for example report_revision_quality_pass_analysis_only or blocked), SHA-256 digests, job ids, or file paths in the reply; the host shows files, receipts, and digests beside the conversation.",
@@ -1349,7 +1369,7 @@ async function createSession(params) {
 }
 
 async function promptSession(requestId, params) {
-  assertExactKeys(params, new Set(["session_id", "message", "streaming_behavior", "intent", "idea_source"]), "pi_prompt_invalid");
+  assertExactKeys(params, new Set(["session_id", "message", "streaming_behavior", "intent", "idea_source", "message_origin"]), "pi_prompt_invalid");
   const sessionId = boundedText(params.session_id, 160).trim();
   const message = boundedText(params.message, MAX_TEXT_CHARS).trim();
   const intent = boundedText(params.intent, 80).trim();
@@ -1389,6 +1409,7 @@ async function promptSession(requestId, params) {
         details: { intent },
       }, { triggerTurn: true });
     } else {
+      appendPromptOrigin(record, params.message_origin);
       await record.session.prompt(prompt);
     }
     return sessionState(record);
@@ -1424,11 +1445,12 @@ function regenerateTarget(record, userEntryId) {
     message: userVisiblePromptText(raw).trim(),
     turnIndex,
     studyContextSnapshot: userPromptStudySnapshot(raw),
+    messageOrigin: userEntryMessageOrigin(branch, entryId),
   };
 }
 
 async function regenerateSession(requestId, params) {
-  assertExactKeys(params, new Set(["session_id", "user_entry_id", "message", "intent", "turn_intent", "idea_source"]), "pi_regenerate_invalid");
+  assertExactKeys(params, new Set(["session_id", "user_entry_id", "message", "intent", "turn_intent", "idea_source", "message_origin"]), "pi_regenerate_invalid");
   const sessionId = boundedText(params.session_id, 160).trim();
   const record = sessions.get(sessionId);
   if (!record) throw Object.assign(new Error("Copilot session is not open"), { code: "pi_session_not_open" });
@@ -1483,6 +1505,7 @@ async function regenerateSession(requestId, params) {
       throw Object.assign(new Error("regenerate branch navigation was cancelled"), { code: "pi_regenerate_cancelled" });
     }
     const ownerContext = await currentTurnOwnerContext(sessionId);
+    appendPromptOrigin(record, editedTurn && supplied !== target.message ? params.message_origin : target.messageOrigin);
     await record.session.prompt(modelPrompt(
       editedTurn ? supplied : target.message,
       record.language,
@@ -1551,6 +1574,7 @@ async function handleRequest(request) {
         message: target.message,
         turn_index: target.turnIndex,
         study_context_snapshot: target.studyContextSnapshot,
+        message_origin: target.messageOrigin,
       };
     }
     case "session.regenerate":

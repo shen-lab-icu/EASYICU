@@ -27,6 +27,8 @@ companion's parent.  One passing candidate is what the validator needs.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import pathlib
 
 import pandas as pd
@@ -34,7 +36,7 @@ import pytest
 
 from easyicu.research_agent.audits.validators import FigureSourceDataValidator
 
-_CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 _COMPANION = "robustness_plot_specification_grid_source_data.csv"
 
 
@@ -63,6 +65,7 @@ def _compare(source: pathlib.Path, upstream: pathlib.Path) -> dict:
     )
 
 
+@pytest.mark.requires_corpus
 def test_the_companion_verifies_against_the_grid_that_produced_it():
     companion, grid, _matrix = _recorded_case()
 
@@ -72,6 +75,7 @@ def test_the_companion_verifies_against_the_grid_that_produced_it():
     assert result.get("reason") == "valueless_parent_reproduced"
 
 
+@pytest.mark.requires_corpus
 def test_the_estimates_table_is_not_this_companion_s_parent():
     """It must keep failing -- the matrix has values the grid never describes.
 
@@ -87,6 +91,7 @@ def test_the_estimates_table_is_not_this_companion_s_parent():
     assert result.get("reason") == "no_verifiable_values"
 
 
+@pytest.mark.requires_corpus
 def test_a_tampered_specification_is_still_refused():
     """The valueless branch compares every shared column exactly.
 

@@ -61,6 +61,16 @@ class ExposureOutcomeRiskDifferenceContrast(BaseModel):
         return self
 
 
+class PatientWeightedIntervalAssumptions(BaseModel):
+    """Reviewed target and assumptions for a fixed-weight concentration bound."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    target: Literal["conditional_expected_stay_proportion"]
+    independence: Literal["independent_patient_clusters_conditional_on_denominator"]
+    weights: Literal["fixed_observed_patient_stay_weights"]
+
+
 class ExposureOutcomeDistributionSpec(BaseModel):
     """Planner-owned exposure-by-outcome distribution design.
 
@@ -169,7 +179,7 @@ class ExposureOutcomeDistributionSpec(BaseModel):
         ),
     )
     repeated_unit_interval_method: Optional[
-        Literal["patient_cluster_robust_wald"]
+        Literal["patient_cluster_robust_wald", "patient_weighted_hoeffding"]
     ] = Field(
         default="patient_cluster_robust_wald",
         description=(
@@ -178,7 +188,20 @@ class ExposureOutcomeDistributionSpec(BaseModel):
             "interval_method this makes the runtime choice part of the "
             "digest-bound specification rather than a silent executor switch. "
             "The patient-cluster sandwich Wald projection is bounded to the "
-            "0-100% probability scale; risk-difference intervals are not."
+            "0-100% probability scale; risk-difference intervals are not. "
+            "The optional patient_weighted_hoeffding bound uses actual fixed "
+            "patient stay weights and requires explicit reviewed assumptions; "
+            "it constructs no covariance or standard error."
+        ),
+    )
+    patient_weighted_interval_assumptions: Optional[PatientWeightedIntervalAssumptions] = Field(
+        default=None, exclude_if=lambda value: value is None,
+        description=(
+            "Required only for patient_weighted_hoeffding: the conditional "
+            "expected stay proportion, fixed observed denominator weights, and "
+            "patient clusters independent conditional on that denominator. "
+            "This does not authorize inference for random cluster sizes or "
+            "equally weighted patient risks. No execution-time fallback."
         ),
     )
     risk_difference_contrast: Optional[ExposureOutcomeRiskDifferenceContrast] = Field(
@@ -266,6 +289,7 @@ class ExposureOutcomeDistributionSpec(BaseModel):
                 or self.confidence_level is not None
                 or self.risk_difference_contrast is not None
                 or self.dependence is not None
+                or self.patient_weighted_interval_assumptions is not None
             ):
                 raise ValueError(
                     "Exposure/outcome distribution /3 is counts-only and must not "
@@ -273,18 +297,28 @@ class ExposureOutcomeDistributionSpec(BaseModel):
                 )
         elif (
             self.interval_method != "wilson"
-            or self.repeated_unit_interval_method != "patient_cluster_robust_wald"
+            or self.repeated_unit_interval_method not in {
+                "patient_cluster_robust_wald", "patient_weighted_hoeffding"
+            }
             or self.confidence_level is None
         ):
             raise ValueError(
                 "Exposure/outcome distribution /2 requires "
                 "interval_method='wilson', "
-                "repeated_unit_interval_method='patient_cluster_robust_wald', "
+                "repeated_unit_interval_method='patient_cluster_robust_wald' "
+                "or 'patient_weighted_hoeffding' with explicit assumptions, "
                 "and a non-null confidence_level; received "
                 f"interval_method={self.interval_method!r}, "
                 "repeated_unit_interval_method="
                 f"{self.repeated_unit_interval_method!r}, and "
                 f"confidence_level={self.confidence_level!r}"
+            )
+        if (self.repeated_unit_interval_method == "patient_weighted_hoeffding") != (
+            self.patient_weighted_interval_assumptions is not None
+        ):
+            raise ValueError(
+                "patient_weighted_hoeffding requires its explicit fixed-weight "
+                "assumptions; other interval methods must not declare them"
             )
         declared = {typed_level_key(value) for value in self.outcome_levels}
         if typed_level_key(self.outcome_positive_value) not in declared:

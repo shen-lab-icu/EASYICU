@@ -3,9 +3,10 @@
 A grouping's column holds level codes.  Whoever shows them -- the plan a
 reviewer approves, a result table, a preview -- names each code by the
 study's own words for its group (the label the grouping record holds) and by
-the rule the host forms the group with, written here in English from the
-record's derivation, never by a model.  A level without a label is shown as
-its code alone: nothing here gives a code a meaning the record does not.
+the rule the host forms the group with, written in English from the record's
+derivation by the grouping contract (``grouping_rule_texts``), never by a
+model.  A level without a label is shown as its code alone: nothing here
+gives a code a meaning the record does not.
 
 The rows are read from the run's grouping record (``exposure_groupings.json``)
 each time, with its digest, so every reader shows the record the run sealed.
@@ -18,11 +19,10 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from easyicu.concept import catalog as concept_catalog
-
 from ..contracts.exposure_group_rules import (
     UNMEASURED_GROUP_ID,
     ExposureGroupRuleError,
+    grouping_rule_texts,
     read_grouping_rules,
 )
 from .exposure_grouping_phase import (
@@ -31,13 +31,6 @@ from .exposure_grouping_phase import (
 )
 
 _MAX_RECORD_BYTES = 2 * 1024 * 1024
-_SUMMARY_WORDS = {
-    "min": "minimum",
-    "max": "maximum",
-    "mean": "mean",
-    "first": "first value",
-}
-_OP_WORDS = {"<": "<", "<=": "≤", ">": ">", ">=": "≥"}
 
 
 class ExposureGroupLabelError(ValueError):
@@ -99,6 +92,7 @@ def _row(item: Mapping[str, Any], *, record_sha256: str) -> dict[str, Any]:
     derivation = item.get("derivation")
     try:
         rules = read_grouping_rules(derivation)
+        written = grouping_rule_texts(derivation)
     except ExposureGroupRuleError as exc:
         raise ExposureGroupLabelError(str(exc)) from exc
     labels = item.get("labels")
@@ -109,7 +103,6 @@ def _row(item: Mapping[str, Any], *, record_sha256: str) -> dict[str, Any]:
     variable = item.get("variable")
     if not isinstance(variable, str) or not variable:
         raise ExposureGroupLabelError("an applied grouping names its column")
-    written = _rule_texts(derivation, concept=rules.concept)
     levels = [
         {
             "code": rules.codes[level],
@@ -138,52 +131,6 @@ def _row(item: Mapping[str, Any], *, record_sha256: str) -> dict[str, Any]:
 
 def _label(raw: Any) -> Optional[str]:
     return raw.strip() if isinstance(raw, str) and raw.strip() else None
-
-
-def _rule_texts(derivation: Mapping[str, Any], *, concept: str) -> dict[str, str]:
-    """Each level's rule, as the host matches it: a group takes the stays its
-    rule meets that no group stated before it took."""
-
-    measure = _measure(concept, derivation.get("window"))
-    texts: dict[str, str] = {}
-    earlier: list[str] = []
-    for group in derivation["groups"]:
-        rule = group["rule"]
-        if rule == "otherwise":
-            text = (
-                f"{measure}: none of {'; '.join(earlier)}"
-                if earlier
-                else f"{measure}: any value"
-            )
-        else:
-            stated = _threshold(rule)
-            text = f"{measure}: {stated}"
-            if earlier:
-                text += f", and none of {'; '.join(earlier)}"
-            earlier.append(stated)
-        texts[group["id"]] = text
-    texts[UNMEASURED_GROUP_ID] = f"{measure}: no value recorded"
-    return texts
-
-
-def _measure(concept: str, window: Any) -> str:
-    entry = concept_catalog.CONCEPT_DICTIONARY.get(concept)
-    name = str(entry[0]) if entry else concept
-    if not isinstance(window, Mapping):
-        return f"{name}, recorded once per stay"
-    start, end = window["start_hours"], window["end_hours"]
-    return f"{name} over {_number(start)}-{_number(end)} h after ICU admission"
-
-
-def _threshold(rule: Mapping[str, Any]) -> str:
-    summary = _SUMMARY_WORDS.get(rule["summary"], "value")
-    unit = f" {rule['unit']}" if rule.get("unit") else ""
-    return f"{summary} {_OP_WORDS[rule['op']]} {_number(rule['value'])}{unit}"
-
-
-def _number(value: Any) -> str:
-    number = float(value)
-    return str(int(number)) if number.is_integer() else repr(number)
 
 
 __all__ = [

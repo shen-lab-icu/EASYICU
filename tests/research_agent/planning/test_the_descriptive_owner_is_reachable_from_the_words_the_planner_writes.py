@@ -26,6 +26,8 @@ before.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import collections
 import json
 import pathlib
@@ -37,7 +39,7 @@ from easyicu.research_agent.execution.phase import (
     _absolute_risk_context_runner_owns_step as owns_step,
 )
 
-_CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 _PRODUCT = "table:absolute_risk_context"
 
 #: The method heads the Planner actually wrote, with their recorded counts.
@@ -151,6 +153,7 @@ def test_a_step_promising_nothing_this_owner_emits_is_refused():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.requires_corpus
 def test_the_corpus_claims_the_product_and_nothing_else():
     """Re-derives the 77-of-89 and the zero, rather than restating them.
 
@@ -184,6 +187,7 @@ def test_the_corpus_claims_the_product_and_nothing_else():
     assert intruders == 0, f"{intruders} steps not promising the product were claimed"
 
 
+@pytest.mark.requires_corpus
 def test_the_recorded_methods_are_really_absent_from_any_allowlist():
     """Anchors the whole file: the mismatch was real, not hypothesised."""
 

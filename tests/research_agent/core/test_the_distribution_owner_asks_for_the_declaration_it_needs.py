@@ -53,6 +53,8 @@ would regress:
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import json
 from pathlib import Path
 
@@ -402,7 +404,7 @@ def test_asking_for_these_cannot_unforbid_a_scientific_choice() -> None:
 
 # --- the recorded corpus ------------------------------------------------------
 
-_CORPUS = Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 
 def _recorded_steps():
@@ -452,6 +454,7 @@ def _gaps_as_production_sees_them(raw: dict) -> tuple[str, ...]:
     )
 
 
+@pytest.mark.requires_corpus
 @pytest.mark.skipif(
     not _CORPUS.exists(), reason="recorded runs are not on this machine"
 )
@@ -483,6 +486,7 @@ def test_it_fires_on_the_steps_it_was_written_for() -> None:
     )
 
 
+@pytest.mark.requires_corpus
 @pytest.mark.skipif(
     not _CORPUS.exists(), reason="recorded runs are not on this machine"
 )

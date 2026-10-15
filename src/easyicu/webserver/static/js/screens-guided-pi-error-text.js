@@ -101,6 +101,23 @@
       if (error.code === 'research_pipeline_target_trial_plans_on_data') {
         return tr('This study’s target trial is approved, so its plan is generated on the study’s data, not as a metadata-only candidate. Generate the plan.', '这项研究的目标试验已批准，计划要按研究数据生成，不能只读元数据生成候选计划。请直接生成计划。');
       }
+      if (error.code === 'study_causal_trial_design_unset') {
+        return tr('This question needs a target-trial design. State the trial in this conversation before generating its plan; analysis has not started.', '这道题需要按目标试验规划。请先在当前对话中说明目标试验，再生成计划；分析尚未开始。');
+      }
+      if (error.code === 'target_trial_treatment_not_registered') {
+        const gap = error.details && error.details.causal_trial_gap || {};
+        const names = (Array.isArray(gap.treatment_concepts) ? gap.treatment_concepts : []).slice(0, 6)
+          .map(row => row && tr(row.label_en, row.label_zh)).filter(Boolean).map(text => String(text).slice(0, 80));
+        const classes = (Array.isArray(gap.supported_classes) ? gap.supported_classes : []).slice(0, 6)
+          .map(row => row && tr(row.label_en, row.label_zh)).filter(Boolean).map(text => String(text).slice(0, 80));
+        return tr(
+          `This target trial uses a treatment not registered for emulation${names.length ? `: ${names.join(', ')}` : ''}. No analysis started.${classes.length ? ` Registered treatment classes: ${classes.join(', ')}.` : ''} Revise the research design in the conversation if appropriate.`,
+          `这道目标试验题所用治疗尚未登记为可模拟治疗${names.length ? `：${names.join('、')}` : ''}，分析没有开始。${classes.length ? `当前登记的治疗类别：${classes.join('、')}。` : ''}如需修改研究设计，请在对话中说明。`,
+        );
+      }
+      if (error.code === 'target_trial_database_out_of_scope') {
+        return tr('Target-trial emulation is currently supported only for MIMIC-IV. This study’s source is outside that scope, so analysis did not start. Revise the study in the conversation if appropriate.', '当前目标试验模拟只支持 MIMIC-IV。本研究的数据源不在该范围内，分析没有开始；如需修改研究，请在对话中说明。');
+      }
       // D-P3-5: keep the URL as plain text (no <a>) — errorText() returns RAW
       // copy esc'd by callers per D-P2-2, so embedded HTML would be escaped and
       // never clickable. Copy the address into the browser manually. Terminology

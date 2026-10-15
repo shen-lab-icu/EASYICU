@@ -22,6 +22,8 @@ cannot rename the product into something this runner does not compute.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import json
 import pathlib
 
@@ -223,13 +225,11 @@ def test_the_registered_name_always_matches_the_file_written(tmp_path):
         assert declared == identity
 
 
+@pytest.mark.requires_corpus
 def test_the_recorded_failure_is_what_this_repairs():
     """Anchors the fix in the run that exposed it."""
 
-    run = pathlib.Path(
-        "/Volumes/外置硬盘/easyicu_data/canonical9_runs"
-        "/batch_20260804_luna_miiv_FULL_83a5e66_verify19"
-    )
+    run = (corpus_root() / 'batch_20260804_luna_miiv_FULL_83a5e66_verify19')
     if not run.exists():
         pytest.skip("the verify19 run is not mounted")
 

@@ -1418,7 +1418,28 @@
         if (!continued) render();
       }
     };
-    state.source.onerror = () => { if (!state.busy) closeSource(); };
+    const watchedSource = state.source;
+    let checkingConnection = false;
+    state.source.onerror = async () => {
+      if (state.source !== watchedSource) return;
+      if (!state.busy) { closeSource(); return; }
+      if (checkingConnection) return;
+      checkingConnection = true;
+      try {
+        await api().loadJobSnapshot(jobId);
+      } catch (error) {
+        if (state.source !== watchedSource || Number(error.status) !== 404) return;
+        closeSource();
+        state.busy = false;
+        state.regenerating = false;
+        state.regeneration = null;
+        finishActivity('error', null, 'failed');
+        state.error = tr('This task is no longer available. You can resend the message.', '当前任务已不可用，可以重新发送消息。');
+        render();
+      } finally {
+        checkingConnection = false;
+      }
+    };
   }
   async function sendText(text, grantsOverride, turnIntent, visibleUserMessage = true, messageOrigin = '', openingQuestion = '') {
     if (!state.session || state.projectLoading || state.busy || state.childJobId || sessionIsStale()) return;
@@ -1447,7 +1468,7 @@
     const grants = Array.isArray(grantsOverride) ? grantsOverride : turnGrants();
     const submittedAt = Date.now();
     state.currentTurnResources = [];
-    if (visibleUserMessage) state.messages.push({ id: 'user-' + submittedAt, role: 'user', text, complete: true });
+    if (visibleUserMessage) state.messages.push({ id: 'user-' + submittedAt, role: 'user', text, complete: true, messageOrigin: messageOrigin || 'typed' });
     if (visibleUserMessage && openingQuestion) state.openingQuestion = { sessionId: state.session.session_id, text: openingQuestion };
     const activity = ensureActivity(new Date(submittedAt).toISOString());
     upsertActivityStep(activity, { id: 'submitted', kind: 'submitted', status: 'complete', at: submittedAt });
@@ -1475,6 +1496,9 @@
     const entryId = String(userEntryId || '').trim();
     text = String(text || '').trim();
     if (!entryId || !text) return;
+    const original = state.messages.find(row => row && row.role === 'user' && String(row.entryId || '') === entryId);
+    const messageOrigin = regenerationIntent === 'user_edited_message' && original && original.text !== text
+      ? 'typed' : (original && original.messageOrigin || 'model_option');
     const expectedSessionId = state.session.session_id;
     const expectedProjectId = projectId();
     const selectionRevision = state.sessionSelectionRevision;
@@ -1501,6 +1525,7 @@
       const payload = await api().regeneratePiCopilotMessage(state.session.session_id, {
         project_id: projectId(), user_entry_id: entryId,
         message: text, allowed_actions: authority.grants,
+        message_origin: messageOrigin,
         ...(authority.intent ? { turn_intent: authority.intent } : {}),
         ...(regenerationIntent ? { regeneration_intent: regenerationIntent } : {}),
       });

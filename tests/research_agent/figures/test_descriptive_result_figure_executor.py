@@ -4,8 +4,11 @@ import hashlib
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
+
+from easyicu.research_agent.figures.display_labels import scoped_label_lookup
 
 from easyicu.research_agent.audits.validators import (
     FigureContractQualityValidator,
@@ -500,3 +503,92 @@ def test_owner_and_runner_fail_closed_on_widening_or_digest_drift(tmp_path: Path
             input_key=step.inputs[0],
             figure_product="descriptive_distribution",
         )
+
+
+def _rebound(run_dir: Path, binding: dict[str, object], frame: pd.DataFrame) -> None:
+    """``binding``'s parent table rewritten as ``frame``, its digests with it."""
+
+    source_path = run_dir / str(binding["relative_path"])
+    frame.to_csv(source_path, index=False)
+    digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    binding["sha256"] = digest
+    binding["identity_row"]["sha256"] = digest
+    binding["product_contract"] = {
+        "schema_version": "easyicu.host_typed_product.v4",
+        "tabular_format": "csv",
+        "columns": list(frame.columns),
+        "row_count": len(frame),
+    }
+    binding["consumption_contract"]["artifact_sha256"] = digest
+    binding["consumption_contract"]["verified_row_count"] = len(frame)
+
+
+def test_a_wide_tables_groups_go_by_the_plans_level_labels(tmp_path: Path) -> None:
+    """A grouped exposure's level codes, read back as numbers (1.0), are named
+    on the figure by the plan's labels for them."""
+
+    step = _distribution_step(
+        inputs=["table:distribution_prevalence"],
+        expected_outputs=["figure:age_distribution"],
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(
+                input_key="table:distribution_prevalence", mode="all_rows"
+            )
+        ],
+    )
+    run_dir, manifest, binding = _binding(tmp_path, step=step, kind="table")
+    frame = _wide_grouped_distribution_frame().rename(
+        columns={"sepsis3_status": "map_group_x1"}
+    )
+    frame["map_group_x1"] = [1.0, 2.0]
+    _rebound(run_dir, binding, frame)
+    labels = {
+        "map_group_x1=1": "Hypotension on day one",
+        "map_group_x1=2": "No hypotension",
+    }
+
+    selection = select_standard_executor(
+        step,
+        plan=AnalysisPlan(research_question="Test", steps=[step], display_labels=labels),
+        resolved_bindings={step.inputs[0]: binding},
+    )
+    assert selection is not None
+    assert "Hypotension on day one" in selection.code
+    out_dir = run_dir / "steps" / step.step_id / "outputs"
+    run_descriptive_result_figure(
+        out_dir=out_dir,
+        run_dir=run_dir,
+        resolved_inputs=manifest,
+        step_id=step.step_id,
+        input_key=step.inputs[0],
+        figure_product="age_distribution",
+        display_labels=labels,
+    )
+
+    svg = (out_dir / "age_distribution.svg").read_text(encoding="utf-8")
+    assert "Hypotension on day one" in svg
+    assert "No hypotension" in svg
+
+
+@pytest.mark.parametrize(
+    ("value", "label"),
+    [
+        (2, "Group two"),
+        ("2", "Group two"),
+        (2.0, "Group two"),
+        (np.int64(2), "Group two"),
+        (np.float64(2.0), "Group two"),
+        # Text stays as written; no fraction, NaN or boolean names a level.
+        ("2.0", None),
+        (2.5, None),
+        (float("nan"), None),
+        (True, None),
+    ],
+)
+def test_a_level_code_read_back_as_a_number_names_its_level(
+    value: object, label: str | None
+) -> None:
+    assert (
+        scoped_label_lookup("map_group_x1", value, {"map_group_x1=2": "Group two"})
+        == label
+    )

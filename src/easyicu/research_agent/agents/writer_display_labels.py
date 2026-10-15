@@ -30,6 +30,10 @@ def reader_display_label_instruction(labels: Mapping[str, str]) -> str:
         "language; do not invent or broaden its semantics.\n"
         "- Preserve raw identifiers only inside exact `{evidence:...}` and "
         "`{claim:...}` audit tokens.\n"
+        "- A key `<column>=<code>` names one level of that column. Name a "
+        "level of a grouped exposure by its label; when a sentence needs its "
+        "code, cite it as `level <code>`. Give a level no meaning, threshold "
+        "or order that its label does not state.\n"
         + json.dumps(dict(labels), ensure_ascii=False, sort_keys=True)
         + "\n\n"
     )

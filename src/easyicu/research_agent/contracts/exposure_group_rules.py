@@ -47,6 +47,8 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 
+from easyicu.concept import catalog as concept_catalog
+
 #: The transform of a nominal grouping's column of level codes.
 EXPOSURE_GROUP_TRANSFORM_ID = "exposure_group"
 #: The transform of an ordinal grouping's column: its codes lie along its scale.
@@ -70,14 +72,29 @@ PLANNED_GROUP_COLUMN_KEYS = frozenset(
         "window",
         "description",
         "compared",
+        "labels",
         "groupings_record_sha256",
+        "parameters",
     }
 )
+#: A planned group column declared before columns carried the study's words
+#: for each level and their derivation parameters: read as written, it names
+#: no level and no rule a reader can be shown.
+_LEGACY_PLANNED_GROUP_COLUMN_KEYS = PLANNED_GROUP_COLUMN_KEYS - {
+    "labels",
+    "parameters",
+}
 #: Where a research context states each grouped exposure's reference and
 #: primary contrast, as level codes.  The context builder projects them from
 #: the grouping's sealed declaration -- a staged cohort's receipt, or an
 #: input's planned column -- so no other owner states them.
 EXPOSURE_GROUP_CONTRASTS_KEY = "exposure_group_contrasts"
+#: Where a research context states each grouped exposure's levels: each code,
+#: its group and the study's words for it.  The context builder projects them
+#: from the same sealed declaration as the comparison.
+EXPOSURE_GROUP_LABELS_KEY = "exposure_group_labels"
+#: The longest words a study gives one group.
+_MAX_LABEL = 60
 #: The keys of a grouping's comparison, as level codes.
 GROUP_COMPARISON_KEYS = frozenset({"reference", "contrast"})
 
@@ -318,6 +335,209 @@ def _is_number(value: Any) -> bool:
     )
 
 
+def grouping_level_labels(
+    rules: GroupingRules, labels: Mapping[str, Any]
+) -> tuple[dict[str, Any], ...]:
+    """Each level in code order: its code, its group and the study's words.
+
+    ``labels`` holds the study's words for each level id, as the grouping
+    record states them; a level without them, or with others, is refused.
+    """
+
+    if not isinstance(labels, Mapping) or set(labels) != set(rules.levels):
+        raise ExposureGroupRuleError("a grouping states words for each of its levels")
+    levels = []
+    for level in rules.levels:
+        label = labels[level]
+        if not isinstance(label, str) or not label.strip() or len(label) > _MAX_LABEL:
+            raise ExposureGroupRuleError(f"level {level!r} has no words of the study")
+        levels.append({"code": rules.codes[level], "group": level, "label": label})
+    return tuple(levels)
+
+
+def read_level_labels(raw: Any, *, levels: int) -> tuple[dict[str, Any], ...]:
+    """A declaration's level labels, read strictly: codes ``1`` to ``levels``
+    in order, each a group or, last, the unmeasured level."""
+
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+        raise ExposureGroupRuleError("a grouping's level labels are a list")
+    if len(raw) != levels:
+        raise ExposureGroupRuleError("a grouping states words for each of its levels")
+    read: list[dict[str, Any]] = []
+    groups: set[str] = set()
+    for code, item in enumerate(raw, start=1):
+        if not isinstance(item, Mapping) or set(item) != {"code", "group", "label"}:
+            raise ExposureGroupRuleError("a level label holds its code, group and label")
+        group, label = item["group"], item["label"]
+        last = code == levels
+        if (
+            item["code"] != code
+            or not isinstance(item["code"], int)
+            or isinstance(item["code"], bool)
+            or not isinstance(group, str)
+            or group in groups
+            or not (
+                _GROUP_ID.fullmatch(group) or (last and group == UNMEASURED_GROUP_ID)
+            )
+            or not isinstance(label, str)
+            or not label.strip()
+            or len(label) > _MAX_LABEL
+        ):
+            raise ExposureGroupRuleError(f"level label {code} is not a level of its own")
+        groups.add(group)
+        read.append({"code": code, "group": group, "label": label})
+    return tuple(read)
+
+
+_SUMMARY_WORDS = {
+    "min": "minimum",
+    "max": "maximum",
+    "mean": "mean",
+    "first": "first value",
+    "value": "value",
+}
+_OP_WORDS = {"<": "<", "<=": "≤", ">": ">", ">=": "≥"}
+#: Characters a reader sentence would read as markup or a template.
+_MARKUP = re.compile(r"[{}`\\\[\]*_\n\r]")
+
+
+def reads_as_markup(text: str) -> bool:
+    """Whether a reader sentence would read ``text`` as markup or a template."""
+
+    return bool(_MARKUP.search(text))
+
+
+def concept_reader_name(concept: str) -> str:
+    """A concept's name in a reader sentence: its catalog name, or its id read
+    as words (``glu_min`` is "glu min") when the catalog names it otherwise."""
+
+    entry = concept_catalog.CONCEPT_DICTIONARY.get(concept)
+    name = " ".join(str(entry[0]).split()) if entry else ""
+    if name and re.fullmatch(r"[\x20-\x7e]+", name) and not reads_as_markup(name):
+        return name
+    return " ".join(concept.replace("_", " ").split())
+
+
+def grouping_reader_labels(groupings: Sequence[Mapping[str, Any]]) -> dict[str, str]:
+    """Each grouping's name for readers, keyed by its column (``variable``).
+
+    A grouping goes by its concept's name (:func:`concept_reader_name`).
+    Groupings that share it go by the name with their window ("Glucose 0-24
+    h"), read from their derivation ``parameters``; those that still share
+    one go by their column, read as words -- unique, as columns are.
+    """
+
+    first = {item["variable"]: concept_reader_name(item["concept"]) for item in groupings}
+    labels: dict[str, str] = {}
+    shared = [
+        item
+        for item in groupings
+        if list(first.values()).count(first[item["variable"]]) > 1
+    ]
+    windowed = {item["variable"]: _windowed(first[item["variable"]], item) for item in shared}
+    for item in groupings:
+        variable = item["variable"]
+        if item not in shared:
+            labels[variable] = first[variable]
+        elif windowed[variable] and list(windowed.values()).count(windowed[variable]) == 1:
+            labels[variable] = windowed[variable]
+        else:
+            labels[variable] = " ".join(variable.replace("_", " ").split())
+    return labels
+
+
+def _windowed(name: str, item: Mapping[str, Any]) -> Optional[str]:
+    parameters = item.get("parameters")
+    window = parameters.get("window") if isinstance(parameters, Mapping) else None
+    if not isinstance(window, Mapping):
+        return None
+    start, end = window.get("start_hours"), window.get("end_hours")
+    if not (_is_number(start) and _is_number(end)):
+        return None
+    return f"{name} {_number_text(start)}-{_number_text(end)} h"
+
+
+def grouping_rule_texts(parameters: Mapping[str, Any]) -> dict[str, str]:
+    """Each level's rule in plain English, keyed by level id, from the
+    derivation ``parameters`` -- the measure and its window, the threshold,
+    and the groups matched before it -- as the host matches them: a group
+    takes the stays its rule meets that no group stated before it took.
+
+    A unit is written as the rule states it; a reader sentence that carries
+    a text checks it first (:func:`reads_as_markup`).
+    """
+
+    return {
+        level: text for level, (text, _values) in _written_rules(parameters).items()
+    }
+
+
+def grouping_rule_values(parameters: Mapping[str, Any]) -> dict[str, tuple[float, ...]]:
+    """The window hours and thresholds each rule states, from typed parameters."""
+
+    return {
+        level: values for level, (_text, values) in _written_rules(parameters).items()
+    }
+
+
+def _written_rules(
+    parameters: Mapping[str, Any],
+) -> dict[str, tuple[str, tuple[float, ...]]]:
+    rules = read_grouping_rules(parameters)
+    window = parameters["window"]
+    measure = _measure_text(rules.concept, window)
+    hours = (
+        ()
+        if window is None
+        else (float(window["start_hours"]), float(window["end_hours"]))
+    )
+    written: dict[str, tuple[str, tuple[float, ...]]] = {}
+    earlier: list[str] = []
+    earlier_values: list[float] = []
+    for group in parameters["groups"]:
+        rule = group["rule"]
+        if rule == "otherwise":
+            text = (
+                f"{measure}: none of {'; '.join(earlier)}"
+                if earlier
+                else f"{measure}: any value"
+            )
+            values = (*hours, *earlier_values)
+        else:
+            stated = _threshold_text(rule)
+            text = f"{measure}: {stated}"
+            if earlier:
+                text += f", and none of {'; '.join(earlier)}"
+            values = (*hours, float(rule["value"]), *earlier_values)
+            earlier.append(stated)
+            earlier_values.append(float(rule["value"]))
+        written[group["id"]] = (text, values)
+    if rules.unmeasured == "own_group":
+        written[UNMEASURED_GROUP_ID] = (f"{measure}: no value recorded", hours)
+    return written
+
+
+def _measure_text(concept: str, window: Any) -> str:
+    name = concept_reader_name(concept)
+    if window is None:
+        return f"{name}, recorded once per stay"
+    start, end = window["start_hours"], window["end_hours"]
+    return f"{name} over {_number_text(start)}-{_number_text(end)} h after ICU admission"
+
+
+def _threshold_text(rule: Mapping[str, Any]) -> str:
+    unit = f" {rule['unit']}" if rule.get("unit") else ""
+    return (
+        f"{_SUMMARY_WORDS[rule['summary']]} {_OP_WORDS[rule['op']]} "
+        f"{_number_text(rule['value'])}{unit}"
+    )
+
+
+def _number_text(value: Any) -> str:
+    number = float(value)
+    return str(int(number)) if number.is_integer() else repr(number)
+
+
 def grouping_level_description(rules: GroupingRules, labels: Mapping[str, str]) -> str:
     """What a grouping's column holds, for its readers: each code and its label."""
 
@@ -349,9 +569,24 @@ class PlannedGroupColumn:
     window: Optional[tuple[float, float]]
     description: str
     contrast: GroupContrast
+    #: Each level in code order: its code, group and the study's words;
+    #: ``None`` on a column declared before columns carried them.
+    labels: Optional[tuple[dict[str, Any], ...]]
     groupings_record_sha256: str
+    #: The derivation parameters that form the column; ``None`` likewise.
+    parameters: Optional[Mapping[str, Any]] = None
 
     def record(self) -> dict[str, Any]:
+        stated = {
+            **(
+                {}
+                if self.labels is None
+                else {"labels": [dict(item) for item in self.labels]}
+            ),
+            **(
+                {} if self.parameters is None else {"parameters": dict(self.parameters)}
+            ),
+        }
         return {
             "variable": self.variable,
             "transform": self.transform,
@@ -365,6 +600,7 @@ class PlannedGroupColumn:
             "description": self.description,
             "compared": self.contrast.compared(),
             "groupings_record_sha256": self.groupings_record_sha256,
+            **stated,
         }
 
 
@@ -394,7 +630,9 @@ def planned_group_column(
             "window": window,
             "description": grouping_level_description(rules, labels),
             "compared": dict(compared),
+            "labels": list(grouping_level_labels(rules, labels)),
             "groupings_record_sha256": groupings_record_sha256,
+            "parameters": dict(parameters),
         }
     )
 
@@ -416,7 +654,10 @@ def read_planned_group_columns(raw: Any) -> tuple[PlannedGroupColumn, ...]:
 
 
 def _planned(raw: Any) -> PlannedGroupColumn:
-    if not isinstance(raw, Mapping) or set(raw) != PLANNED_GROUP_COLUMN_KEYS:
+    if not isinstance(raw, Mapping) or set(raw) not in (
+        PLANNED_GROUP_COLUMN_KEYS,
+        _LEGACY_PLANNED_GROUP_COLUMN_KEYS,
+    ):
         raise ExposureGroupRuleError(
             "a planned group column holds exactly "
             + ", ".join(sorted(PLANNED_GROUP_COLUMN_KEYS))
@@ -438,6 +679,11 @@ def _planned(raw: Any) -> PlannedGroupColumn:
         raise ExposureGroupRuleError("a planned group column names its record digest")
     window = raw["window"]
     _window(window)
+    labels = parameters = None
+    if "labels" in raw:
+        labels = read_level_labels(raw["labels"], levels=levels)
+        parameters = raw["parameters"]
+        _planned_parameters_agree(raw, parameters, labels=labels)
     return PlannedGroupColumn(
         variable=raw["variable"],
         transform=raw["transform"],
@@ -454,8 +700,36 @@ def _planned(raw: Any) -> PlannedGroupColumn:
         contrast=read_group_contrast(
             raw["compared"], variable=raw["variable"], groups=levels
         ),
+        labels=labels,
         groupings_record_sha256=digest,
+        parameters=(
+            None if parameters is None else MappingProxyType(dict(parameters))
+        ),
     )
+
+
+def _planned_parameters_agree(
+    raw: Mapping[str, Any],
+    parameters: Any,
+    *,
+    labels: Sequence[Mapping[str, Any]],
+) -> None:
+    """A planned column's parameters form exactly the column it declares."""
+
+    rules = read_grouping_rules(parameters)
+    read_group_contrast(
+        raw["compared"], variable=raw["variable"], groups=len(rules.groups)
+    )
+    if (
+        rules.transform_id != raw["transform"]
+        or len(rules.levels) != raw["levels"]
+        or rules.concept != raw["concept"]
+        or parameters["window"] != raw["window"]
+        or tuple(level["group"] for level in labels) != rules.levels
+    ):
+        raise ExposureGroupRuleError(
+            "a planned group column's parameters form another column than it declares"
+        )
 
 
 def evaluate_grouping(rules: GroupingRules, table: pa.Table) -> pa.Array:
@@ -510,6 +784,7 @@ def _numbers(table: pa.Table, column: str) -> np.ndarray:
 
 __all__ = [
     "EXPOSURE_GROUP_CONTRASTS_KEY",
+    "EXPOSURE_GROUP_LABELS_KEY",
     "EXPOSURE_GROUP_ORDINAL_TRANSFORM_ID",
     "EXPOSURE_GROUP_TRANSFORMS",
     "EXPOSURE_GROUP_TRANSFORM_ID",
@@ -522,10 +797,17 @@ __all__ = [
     "GroupThreshold",
     "GroupingRules",
     "PlannedGroupColumn",
+    "concept_reader_name",
     "evaluate_grouping",
     "grouping_level_description",
+    "grouping_level_labels",
+    "grouping_reader_labels",
+    "grouping_rule_texts",
+    "grouping_rule_values",
     "planned_group_column",
     "read_group_contrast",
     "read_grouping_rules",
+    "read_level_labels",
     "read_planned_group_columns",
+    "reads_as_markup",
 ]

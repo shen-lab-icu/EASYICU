@@ -28,6 +28,8 @@ from typing import Any, Mapping
 
 import pandas as pd
 
+from ...contracts.exposure_outcome_distribution import PatientWeightedIntervalAssumptions
+from ...methods.cluster_proportion import patient_weighted_hoeffding_interval
 from ...contracts.figure_plan import (
     EXPOSURE_OUTCOME_DISTRIBUTION_COUNTS_ONLY_FIGURE_PANELS,
     EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS,
@@ -447,6 +449,10 @@ def _validate_marginal_interval(
     structural_total: bool = False,
 ) -> None:
     expected_estimate = percentage(numerator, denominator)
+    square_sum_key = cluster_count_key.replace("_cluster_count", "_cluster_size_square_sum")
+    if interval_method != "patient_weighted_hoeffding" or structural_total:
+        if not _absent(row[square_sum_key]):
+            raise ValueError(f"a {label} carries weights for an undeclared concentration bound")
     if expected_estimate is None:
         raise ValueError(f"a {label} has no finite denominator")
     if not _close(row[estimate_key], expected_estimate):
@@ -507,6 +513,24 @@ def _validate_marginal_interval(
                 "uncertainty"
             )
         return
+    if interval_method == "patient_weighted_hoeffding":
+        cluster_count = _finite(row[cluster_count_key])
+        square_sum = _finite(row[square_sum_key])
+        if (
+            not _absent(row[standard_error_key])
+            or str(row[covariance_key]) != "bounded_independent_patient_clusters"
+            or cluster_count is None or not cluster_count.is_integer()
+            or square_sum is None or not square_sum.is_integer()
+            or confidence_level is None
+        ):
+            raise ValueError(f"a {label} concentration bound lacks its fixed patient-weight receipt")
+        expected_low, expected_high = patient_weighted_hoeffding_interval(
+            numerator, denominator, cluster_count=int(cluster_count),
+            cluster_size_square_sum=int(square_sum), confidence_level=confidence_level,
+        )
+        if not _close(row[low_key], expected_low) or not _close(row[high_key], expected_high):
+            raise ValueError(f"a {label} interval is not its declared patient-weight bound")
+        return
     standard_error = _finite(row[standard_error_key])
     cluster_count = _finite(row[cluster_count_key])
     if (
@@ -558,6 +582,7 @@ def _validate(
     if interval_method not in {
         "wilson",
         "patient_cluster_robust_wald",
+        "patient_weighted_hoeffding",
         "none_counts_only",
     }:
         raise ValueError(
@@ -576,12 +601,19 @@ def _validate(
     elif (
         str(design["independent_interval_method"]) != "wilson"
         or str(design["repeated_unit_interval_method"])
-        != "patient_cluster_robust_wald"
+        not in {"patient_cluster_robust_wald", "patient_weighted_hoeffding"}
     ):
         raise ValueError(
             "distribution table does not carry the closed marginal-interval projection"
         )
     has_dependence = _declared_patient_dependence(design)
+    assumptions = design["patient_weighted_interval_assumptions"]
+    if interval_method == "patient_weighted_hoeffding":
+        if not has_dependence or _absent(assumptions):
+            raise ValueError("patient-weight bound lacks declared assumptions or patient groups")
+        PatientWeightedIntervalAssumptions.model_validate_json(str(assumptions))
+    elif not _absent(assumptions):
+        raise ValueError("other interval methods cannot carry patient-weight bound assumptions")
     expected_effective_method = (
         str(design["repeated_unit_interval_method"])
         if has_dependence
@@ -797,6 +829,7 @@ def run_exposure_outcome_distribution_figure(
             "exposure_standard_error_pct",
             "exposure_interval_covariance",
             "exposure_interval_cluster_count",
+            "exposure_interval_cluster_size_square_sum",
         ]
     ].to_csv(prevalence_source, index=False)
     levels[
@@ -813,6 +846,7 @@ def run_exposure_outcome_distribution_figure(
             "outcome_standard_error_pct",
             "outcome_interval_covariance",
             "outcome_interval_cluster_count",
+            "outcome_interval_cluster_size_square_sum",
         ]
     ].to_csv(outcome_source, index=False)
     if contrast is not None:
@@ -1101,6 +1135,11 @@ def run_exposure_outcome_distribution_figure(
                 if counts_only else (
                     f"Error bars are {100 * float(design['confidence_level']):g}% "
                     + ("Wilson confidence intervals. " if design['interval_method'] == 'wilson'
+                       else "Fixed-weight patient-cluster Hoeffding confidence bounds. "
+                       "The target is the expected stay proportion conditional on "
+                       "the observed patient weights, with independent patient clusters; "
+                       "bounds may span 0–100%. "
+                       if design['interval_method'] == 'patient_weighted_hoeffding'
                        else "patient-cluster-robust Wald confidence intervals. ")
                 )
             )

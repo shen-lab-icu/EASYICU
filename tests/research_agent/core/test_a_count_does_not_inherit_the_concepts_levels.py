@@ -42,6 +42,8 @@ own ICU rules, and a max over ordinal stages is still a stage.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import json
 import os
 import pathlib
@@ -100,7 +102,7 @@ def test_the_value_preserving_set_is_not_silently_widened() -> None:
 
 _CORPUS = pathlib.Path(
     os.environ.get(
-        "EASYICU_CORPUS_ROOT", "/Volumes/外置硬盘/easyicu_data/canonical9_runs"
+        "EASYICU_CORPUS_ROOT", str(corpus_root())
     )
 )
 

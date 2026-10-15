@@ -21,9 +21,10 @@ pure functions with no pipeline state, so isolating them here cuts
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from ..authority.manuscript_method_facts import ManuscriptMethodFact
     from ..literature import LiteratureBundle
 
 from ..authority.evidence_store import (
@@ -40,6 +41,7 @@ from .writer_repair_decision import coerce_writer_repair_decisions
 from .manuscript_sentence_context import contextual_sentence_deletion
 from .manuscript_surface import claim_token_stands_in_block
 from .manuscript_bibliographic_years import bibliographic_year_spans
+from .manuscript_method_facts import released_fact_lines
 from .population_selection import (
     POPULATION_STATEMENT_NOT_HOST_CITED,
     AnalyzedPopulation,
@@ -2076,6 +2078,31 @@ def repair_miscited_numeric_citations(
     return repaired, repairs
 
 
+def _released_fact_claim(
+    released: Sequence[Tuple[int, int, ManuscriptMethodFact]],
+    *,
+    start: int,
+    value: str,
+    lookup_value: str,
+) -> Optional[Tuple[NumericClaim, str]]:
+    """Bind a number only to the typed values of its exact host fact line."""
+
+    for line_start, line_end, fact in released:
+        if not line_start <= start < line_end:
+            continue
+        parsed = _parsed_numeric_literal(lookup_value)
+        if parsed is None or parsed[1] or parsed[0] not in fact.typed_values:
+            return None
+        return NumericClaim(
+            value=value,
+            canonical=parsed[0],
+            evidence_id=fact.evidence_id,
+            step_id=fact.evidence_id,
+            source_field=fact.source_field,
+        ), fact.source_sha256
+    return None
+
+
 def bind_numeric_values(
     manuscript: str,
     *,
@@ -2084,6 +2111,8 @@ def bind_numeric_values(
     footnote_prefix: str = "claim",
     per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
     literature: LiteratureBundle | None = None,
+    method_facts: Sequence[ManuscriptMethodFact] = (),
+    bind_fact: Optional[Callable[[str], str]] = None,
 ) -> Tuple[str, Dict[str, NumericClaim], List[str]]:
     """Bind every numeric value in ``manuscript`` to a registered claim.
 
@@ -2110,6 +2139,10 @@ def bind_numeric_values(
     * STRICT mode → raise :class:`EvidenceEnforcementError` after
       scanning, with the offending values in ``detail['untraced']``.
 
+    Exact host method facts in their declared sections bind only the values
+    reproduced from typed parameters. Their footnotes include the source field,
+    evidence id and digest. Free-text metadata and edited lines gain no release.
+
     The implementation skips numbers that are already inside
     ``{evidence:<id>}`` placeholders, existing footnote markers
     ``[^xxx]``, and conventional Markdown outline ordinals. Numeric claims in
@@ -2130,6 +2163,8 @@ def bind_numeric_values(
 
     lineage = _evidence_lineage(evidence)
     skip_spans = sorted(_spans_to_skip(manuscript) + bibliographic_year_spans(manuscript, literature))
+    released = released_fact_lines(manuscript, method_facts, bind_fact)
+    fact_sources: Dict[str, str] = {}
     binding_map: Dict[str, NumericClaim] = {}
     untraced: List[str] = []
     miscited: List[Dict[str, Any]] = []
@@ -2137,8 +2172,14 @@ def bind_numeric_values(
     display_values: Dict[str, str] = {}
     previous_step_id: Optional[str] = None
 
-    def _footnote_id_for(claim: NumericClaim, *, display_value: str) -> str:
+    def _footnote_id_for(
+        claim: NumericClaim, *, display_value: str, typed_fact: bool = False,
+    ) -> str:
         claim_key = _claim_identity(claim)
+        if typed_fact:
+            # One rule states several typed values under the same source field.
+            # Keep each value's provenance distinct from ordinary result claims.
+            claim_key += f":method_value={claim.canonical}"
         existing = used_ids.get(claim_key)
         if existing is not None:
             display_values.setdefault(existing, display_value)
@@ -2170,6 +2211,16 @@ def bind_numeric_values(
         ):
             continue
         out_parts.append(manuscript[cursor:end])
+        fact_claim = _released_fact_claim(
+            released, start=start, value=value, lookup_value=lookup_value,
+        )
+        if fact_claim is not None:
+            claim, source_sha256 = fact_claim
+            fid = _footnote_id_for(claim, display_value=value, typed_fact=True)
+            fact_sources[fid] = source_sha256
+            out_parts.append(f"[^{fid}]")
+            cursor = end
+            continue
         context = _numeric_sentence_context(manuscript, start=start, end=end)
         candidates = _candidate_claims_for_value(
             evidence,
@@ -2232,6 +2283,8 @@ def bind_numeric_values(
                 f"field={claim.source_field}",
                 f"evidence={claim.evidence_id}",
             ]
+            if fid in fact_sources:
+                fields.append(f"sha256={fact_sources[fid]}")
             if claim.effect_scale is not None:
                 fields.append(f"effect_scale={claim.effect_scale.value}")
             if claim.estimand is not None:
@@ -2282,6 +2335,8 @@ def drop_untraceable_numeric_sentences(
     evidence: EvidenceStore,
     per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
     literature: LiteratureBundle | None = None,
+    method_facts: Sequence[ManuscriptMethodFact] = (),
+    bind_fact: Optional[Callable[[str], str]] = None,
 ) -> Tuple[str, List[Dict[str, Any]]]:
     """Remove only sentences that the unchanged STRICT numeric gate rejects.
 
@@ -2296,12 +2351,19 @@ def drop_untraceable_numeric_sentences(
     if not manuscript:
         return manuscript, []
     skip_spans = sorted(_spans_to_skip(manuscript) + bibliographic_year_spans(manuscript, literature))
+    # Section ownership is visible only in the whole document.
+    released = released_fact_lines(manuscript, method_facts, bind_fact)
     rejected_by_span: Dict[Tuple[int, int], Dict[str, Any]] = {}
     for match in _NUMERIC_IN_PROSE_RE.finditer(manuscript):
         start, end = match.start("value"), match.end("value")
         if _position_is_inside(start, skip_spans):
             continue
         value = match.group("value")
+        if _released_fact_claim(
+            released, start=start, value=value,
+            lookup_value=_lookup_literal_for_numeric_match(manuscript, match_end=end, value=value),
+        ) is not None:
+            continue
         if _is_bibliographic_year_context(
             manuscript,
             start=start,

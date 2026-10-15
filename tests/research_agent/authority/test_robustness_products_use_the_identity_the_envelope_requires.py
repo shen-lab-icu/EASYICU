@@ -27,6 +27,8 @@ disagreement is real but has no bearing here.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import json
 import os
 from pathlib import Path
@@ -159,7 +161,7 @@ def test_the_summary_registers_the_canonical_map_and_not_the_bare_one() -> None:
 
 _CORPUS = Path(
     os.environ.get(
-        "EASYICU_CORPUS_ROOT", "/Volumes/外置硬盘/easyicu_data/canonical9_runs"
+        "EASYICU_CORPUS_ROOT", str(corpus_root())
     )
 )
 

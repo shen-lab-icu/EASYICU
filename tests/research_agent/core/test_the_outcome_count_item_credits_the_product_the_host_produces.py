@@ -24,6 +24,8 @@ a module dependency from reporting into execution.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import json
 import subprocess
 from pathlib import Path
@@ -122,7 +124,7 @@ def test_an_unrelated_table_does_not_credit_it() -> None:
 
 # --- the recorded corpus ------------------------------------------------------
 
-_CORPUS = Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 
 #: The commit that added ``exposure_outcome_distribution`` to STROBE item 15.
@@ -162,6 +164,7 @@ def _ran_with_the_alias(run_dir: Path) -> bool:
         return False
 
 
+@pytest.mark.requires_corpus
 @pytest.mark.skipif(
     not _CORPUS.exists(), reason="recorded runs are not on this machine"
 )

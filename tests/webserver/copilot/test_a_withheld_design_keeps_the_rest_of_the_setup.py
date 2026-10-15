@@ -56,11 +56,12 @@ POPULATION = {
     "age_min": 18,
     "min_icu_los_hours": 48,
 }
+MESSAGE = (
+    "成年（≥18 岁）、ICU 住院至少 48 小时、有 condition-x 的入住，"
+    "做 marker-y 的轨迹聚类，描述轨迹类别与 outcome-z 的关联。"
+)
 SETUP = {
-    "question": (
-        "Among adult ICU stays of at least 48 hours with condition-x, which "
-        "trajectories of marker-y occur, and how do they relate to outcome-z?"
-    ),
+    "question": MESSAGE,
     "purpose": "Describe trajectory classes of marker-y and their association with outcome-z.",
     "cohort": POPULATION,
     "analysis_design": {
@@ -69,10 +70,6 @@ SETUP = {
         "variance_estimator": "model_based",
     },
 }
-MESSAGE = (
-    "成年（≥18 岁）、ICU 住院至少 48 小时、有 condition-x 的入住，"
-    "做 marker-y 的轨迹聚类，描述轨迹类别与 outcome-z 的关联。"
-)
 WORKFLOWS = {
     "needs_source": {
         "next_action_code": "study_setup_incomplete",

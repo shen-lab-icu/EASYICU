@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -933,7 +935,24 @@ class RepairLedger:
     def __init__(self, path: Path):
         self.path = Path(path)
         self._records: List[RepairProvenance] = []
-        self.write()
+        if self.path.exists():
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            if (
+                not isinstance(payload, dict)
+                or payload.get("schema_version") != self.schema_version
+                or not isinstance(payload.get("repairs"), list)
+            ):
+                raise ValueError("repair ledger has an invalid schema")
+            for entry in payload["repairs"]:
+                if not isinstance(entry, dict):
+                    raise ValueError("repair ledger contains an invalid record")
+                values = dict(entry)
+                for field in ("invariants_checked", "invariant_failures"):
+                    if field in values:
+                        values[field] = tuple(values[field])
+                self._records.append(RepairProvenance(**values))
+        else:
+            self.write()
 
     @property
     def records(self) -> Tuple[RepairProvenance, ...]:
@@ -941,7 +960,11 @@ class RepairLedger:
 
     def append(self, provenance: RepairProvenance) -> None:
         self._records.append(provenance)
-        self.write()
+        try:
+            self.write()
+        except Exception:
+            self._records.pop()
+            raise
 
     def append_application(
         self,
@@ -982,10 +1005,20 @@ class RepairLedger:
 
     def write(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            json.dumps(self.to_dict(), indent=2, ensure_ascii=False, default=str),
-            encoding="utf-8",
-        )
+        temporary_path: Optional[Path] = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=self.path.parent,
+                prefix=f".{self.path.name}.", suffix=".tmp", delete=False,
+            ) as stream:
+                temporary_path = Path(stream.name)
+                json.dump(self.to_dict(), stream, indent=2, ensure_ascii=False, default=str)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_path, self.path)
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
 
 
 __all__ = [

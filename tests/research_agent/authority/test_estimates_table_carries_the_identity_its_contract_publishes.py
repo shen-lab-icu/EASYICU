@@ -32,6 +32,8 @@ deliberately fail-closed here and is not touched.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import ast
 import csv
 import inspect
@@ -265,7 +267,7 @@ def test_a_secondary_contract_does_not_become_primary() -> None:
 
 # --- the recorded corpus ------------------------------------------------------
 
-_CORPUS = Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 
 def _recorded_estimates_tables() -> list[tuple[Path, dict]]:
@@ -288,6 +290,7 @@ def _recorded_estimates_tables() -> list[tuple[Path, dict]]:
     return found
 
 
+@pytest.mark.requires_corpus
 @pytest.mark.skipif(
     not _CORPUS.exists(), reason="recorded runs are not on this machine"
 )
@@ -328,6 +331,7 @@ def test_the_recorded_tables_that_lack_it_hold_the_value_under_the_other_name() 
     )
 
 
+@pytest.mark.requires_corpus
 @pytest.mark.skipif(
     not _CORPUS.exists(), reason="recorded runs are not on this machine"
 )

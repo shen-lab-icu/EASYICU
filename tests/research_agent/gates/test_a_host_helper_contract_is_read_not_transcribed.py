@@ -35,6 +35,8 @@ and ``dpi=`` on it stays legal.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import ast
 import inspect
 import pathlib
@@ -48,7 +50,7 @@ from easyicu.research_agent.gates.preflight import (
 )
 from easyicu.research_agent.schema import AnalysisStep
 
-_CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 
 def _step() -> AnalysisStep:
@@ -209,6 +211,7 @@ run_adjusted_association_figure(dpi=300, whatever=1)
     assert findings == [], findings
 
 
+@pytest.mark.requires_corpus
 def test_the_recorded_corpus_shows_this_failure_class():
     """Re-measures rather than restating: these were real deaths."""
 

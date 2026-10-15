@@ -77,7 +77,6 @@ from ..question_requirements import (
     named_question_concepts,
 )
 from ..progressive_compiler import cohort_identity_columns, compile_cohort_predicate
-from ..scientific_review import post_baseline_exposure
 from .contract import (
     DESCRIPTIVE_FAMILY_ID,
     FIXED_WINDOW_TRAJECTORY_FAMILY_ID,
@@ -1828,6 +1827,17 @@ def _family_spec_request(
     }
     ordinal = resolve_ordinal_multi_outcome_contract(context)
     secondary = ordinal.continuous_outcome if ordinal is not None else None
+    if secondary is None:
+        requested_continuous = [
+            name for name in context.cohort.requested_outcome_columns or ()
+            if name != outcome and name in variables and not _levels(context, name)
+            and str(variables[name].dtype).lower().startswith(("float", "int", "uint"))
+        ]
+        # The template already describes one secondary continuous endpoint.
+        # Multiple endpoints need the general planner rather than an arbitrary
+        # choice of which user requirement to keep.
+        if len(requested_continuous) == 1:
+            secondary = requested_continuous[0]
     dependence = context_dependence_authority(context)
     used = {
         exposure,
@@ -1963,7 +1973,7 @@ def _study_population_occurrence(
     """
 
     cues = requested_exposure_occurrence_cues(context)
-    if not cues or not post_baseline_exposure(context)[0]:
+    if not cues:
         return None
 
     def known_missing(name: str) -> bool:

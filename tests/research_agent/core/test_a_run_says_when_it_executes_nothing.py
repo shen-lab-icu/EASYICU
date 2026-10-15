@@ -25,6 +25,8 @@ how many steps were dropped, and which ones.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import ast
 import inspect
 import json
@@ -32,7 +34,7 @@ import pathlib
 
 import pytest
 
-_CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 _MESSAGE = "Plan blocked before execution"
 
@@ -146,6 +148,7 @@ def test_every_path_that_empties_the_step_list_sets_a_reason():
     raise AssertionError("steps_to_run is no longer emptied by a named reason")
 
 
+@pytest.mark.requires_corpus
 def test_the_recorded_run_is_the_case_this_describes():
     """The selected h3 run really did drop planned steps without an announcement."""
 

@@ -193,16 +193,32 @@
     ))}</p>`;
   }
 
+  function readingHtml(workflow, { tr, esc }) {
+    const card = cardOf(workflow);
+    const receipt = workflow && workflow.study_setup_receipt;
+    const reading = card && card.causal_trial_reading || receipt && receipt.configuration && receipt.configuration.causal_trial_reading;
+    if (!reading || !['question_trial_shape', 'question_causal_method'].includes(reading.source)) return '';
+    const labels = {
+      time_zero: ['Time zero', '时间零点'], initiate_strategy: ['Initiation strategy', '开始策略'],
+      defer_strategy: ['Deferral strategy', '不开始或推迟策略'],
+      fixed_horizon_outcome: ['Outcome horizon', '结局时点'], causal_method: ['Named causal method', '点名的因果方法'],
+    };
+    const items = rows(reading.elements).slice(0, 5).filter(row => Object.prototype.hasOwnProperty.call(labels, row.element) && row.evidence);
+    if (!items.length) return '';
+    return `<div class="gpi-question-requirements gpi-trial-reading"><strong>${esc(tr('Why EasyICU treats this as a target trial', 'EasyICU 为什么按目标试验处理这道题'))}</strong><ul>${items.map(row => `<li>${esc(tr(...labels[row.element]))}：${esc(String(row.evidence).slice(0, 300))}</li>`).join('')}</ul></div>`;
+  }
+
   // The card's body under the confirmation's title and note.
   function bodyHtml(workflow, helpers) {
     const card = cardOf(workflow);
-    if (!card) return '';
+    const reading = readingHtml(workflow, helpers);
+    if (!card) return reading;
     const { tr, esc } = helpers;
     const editable = approvable(card);
     const previous = card.stale === true && (card.protocol || []).length
       ? `<p class="gpi-trial-stale">${esc(tr('Below is the previous version of the trial; it cannot be approved until the new statement compiles.', '下面是上一版试验；新的陈述编好之前不能批准。'))}</p>`
       : '';
-    return `<div class="gpi-trial">${previous}${reasonHtml(card, helpers)}${blockingHtml(card, helpers)}${approvalHtml(card, helpers)}${protocolHtml(card, helpers, editable)}${confirmationsHtml(card, helpers, editable)}${limitationsHtml(card, helpers)}</div>`;
+    return `<div class="gpi-trial">${reading}${previous}${reasonHtml(card, helpers)}${blockingHtml(card, helpers)}${approvalHtml(card, helpers)}${protocolHtml(card, helpers, editable)}${confirmationsHtml(card, helpers, editable)}${limitationsHtml(card, helpers)}</div>`;
   }
 
   // The approval the card's click sends: the record it shows, every line ticked.

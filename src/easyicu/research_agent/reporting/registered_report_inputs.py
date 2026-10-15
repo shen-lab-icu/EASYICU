@@ -16,6 +16,7 @@ from ..authority.evidence_snapshot import load_current_evidence_snapshot
 from ..authority.evidence_store import EvidenceStore, EvidenceEnforcementMode
 from ..authority.numeric_claim_identity import NumericClaim
 from ..authority.manuscript_claim_policy import expand_scientific_claim_tokens
+from ..authority.manuscript_method_facts import load_manuscript_method_facts
 from ..authority.scientific_claim_registry import load_registered_scientific_claims
 from ..authority.runtime_artifacts import (
     verified_run_evidence_path,
@@ -279,6 +280,8 @@ def bind_registered_report_numbers(run_dir: Path, manuscript: str) -> tuple[str,
         literature=LiteratureBundle.model_validate_json(evidence.verify_input(
             "preplan_literature_bundle.json", "preplan_literature_bundle",
         )),
+        # Report-only repair carries source facts as unbound scaffolds.
+        method_facts=load_manuscript_method_facts(root=run_dir, records=evidence.records()),
     )
     findings = audit_manuscript_numeric_claims(bound, per_step_records=records)
     if untraced or any(row.severity == "error" for row in findings):

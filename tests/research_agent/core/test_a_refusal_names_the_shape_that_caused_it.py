@@ -22,6 +22,8 @@ verdict is unchanged; only the explanation is added.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import pathlib
 
 import pandas as pd
@@ -29,7 +31,7 @@ import pytest
 
 from easyicu.research_agent.audits.validators import FigureSourceDataValidator
 
-_CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 
 def _upstream(tmp_path: pathlib.Path) -> pathlib.Path:
@@ -149,6 +151,7 @@ def test_the_diagnostic_cannot_fail_the_audit_on_its_own(tmp_path):
     assert "try:" in guarded and "except Exception" in guarded
 
 
+@pytest.mark.requires_corpus
 def test_the_recorded_m1_artifacts_reproduce_it():
     """Replays the run that motivated this, from its own outputs."""
 

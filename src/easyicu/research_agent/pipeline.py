@@ -58,7 +58,6 @@ logger = logging.getLogger(__name__)
 
 from .agents.core import (
     AnalyzerAgent,
-    infer_analysis_type,
     ClinicalSemanticsAgent,
     CoderAgent,
     CriticAgent,
@@ -428,6 +427,7 @@ from .literature import (
 from .planning.preplan_literature import prepare_preplan_literature
 from .planning.literature_retrieval_contract import contract_for_plan_finalization
 from .planning import literature_design_authority as _literature_design
+from .planning.analysis_family_trace import traced_analysis_type_key
 from .planning.preplan_know_how import (
     PlannerKnowHowBinding,
     prepare_preplan_know_how,
@@ -3631,7 +3631,7 @@ class ResearchAgentPipeline:
         # the pipeline holds the flag, so it supplies the guide the prompt
         # could not build, and only when the prompt's own attempt came back
         # empty, so a wide-column run is never told twice.
-        analysis_type_key = infer_analysis_type(agent_context).key
+        analysis_type_key = traced_analysis_type_key(agent_context, emit_progress, run_id)
         trajectory_planning_guides = []
         if long_trajectory_bound and not trajectory_planner_contract_guide(
             context=agent_context,

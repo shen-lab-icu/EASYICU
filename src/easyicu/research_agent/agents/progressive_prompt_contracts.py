@@ -598,6 +598,19 @@ def selected_counts_only_inference_coordinate(
 
 
 _COORDINATE_OWNED_FIELD_GUIDANCE = {
+    "repeated_unit_interval_method": (
+        "For this distribution, null retains patient_cluster_robust_wald. "
+        "patient_weighted_hoeffding is an explicit option only when its "
+        "fixed-weight conditional target and patient independence are justified "
+        "for complete-plan review; it may produce 0–100% bounds."
+    ),
+    "patient_weighted_interval_assumptions": (
+        "For patient_weighted_hoeffding declare exact target="
+        "conditional_expected_stay_proportion, independence="
+        "independent_patient_clusters_conditional_on_denominator, weights="
+        "fixed_observed_patient_stay_weights. Otherwise null. These are "
+        "scientific assumptions, not facts established by counting patients."
+    ),
     "functional_form_spec": (
         "An RCS-versus-linear sensitivity must set functional_form_spec to "
         '{"target_column":"<exact continuous primary model term>","knot_quantiles":[0.1,0.5,0.9]}; '
@@ -689,6 +702,8 @@ def step_materialization_shape_contract(
         "primary_contrast_level_index": None, "denominator_policy": None,
         "missing_exposure_policy": None, "missing_outcome_policy": None,
         "confidence_level": None, "sensitivity_spec_ids": [], "functional_form_spec": None,
+        "repeated_unit_interval_method": None,
+        "patient_weighted_interval_assumptions": None,
         "phenotyping_feature_columns": None,
         "phenotyping_comparison_variables": None,
         "literature_bindings": [],

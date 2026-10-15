@@ -1,6 +1,9 @@
 {
   "baseline_change_summary": {
-    "source_digest_changes": [],
+    "source_digest_changes": [
+      "src/easyicu/research_agent/agents/planner.py",
+      "src/easyicu/research_agent/planning/analysis_types.py"
+    ],
     "summary_changes": {}
   },
   "baseline_history": [
@@ -745,9 +748,17 @@
       "reason": "Prediction validity round, theme 4 of 8 (a prediction is compared with the score its question names): the prediction family contract states the benchmark comparator, so M2's planner context grows by 401 bytes (about 100 tokens). No summary maximum moves.",
       "source_digest_changes": [],
       "summary_changes": {}
+    },
+    {
+      "reason": "Reviewed Dev9 aggregate: explicit designs remain authoritative; the minimal E3 fixture without a declared design or recognized family now uses the descriptive fallback instead of data-quality audit. Only its Planner context grows by 2242 bytes; resource selections, Coder prompts, all nine fixtures, maximum envelopes and byte limits remain unchanged. Planner and analysis_types source digests track the integrated host routing fixes. Review: outputs/easyicu_dev9_aggregate_20261015/resource-baseline-review.json; offline engineering evidence only.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/agents/planner.py",
+        "src/easyicu/research_agent/planning/analysis_types.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Prediction validity round, theme 4 of 8 (a prediction is compared with the score its question names): the prediction family contract states the benchmark comparator, so M2's planner context grows by 401 bytes (about 100 tokens). No summary maximum moves.",
+  "baseline_reason": "Reviewed Dev9 aggregate: explicit designs remain authoritative; the minimal E3 fixture without a declared design or recognized family now uses the descriptive fallback instead of data-quality audit. Only its Planner context grows by 2242 bytes; resource selections, Coder prompts, all nine fixtures, maximum envelopes and byte limits remain unchanged. Planner and analysis_types source digests track the integrated host routing fixes. Review: outputs/easyicu_dev9_aggregate_20261015/resource-baseline-review.json; offline engineering evidence only.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -760,13 +771,13 @@
     "src/easyicu/data/concept-dict.json": "ab4edb8a79388ccbd902001ad6b733d063042a423d7b6507ad0dd3dd3b04b720",
     "src/easyicu/data/sofa2-dict.json": "c53b7d1c5eda51c9e88727e75eebbd93f579d0a297a5fa6f49b646032dc4faa3",
     "src/easyicu/research_agent/agents/core.py": "354d40e7e5e9073c5cd19b9eabf2ccf2b0ffebfc33edb22957661ea865dc36cf",
-    "src/easyicu/research_agent/agents/planner.py": "1cbf6186176635d691e4144b181715d0e7a13832433ba3ec37d43d39f58514cd",
+    "src/easyicu/research_agent/agents/planner.py": "33af7996e99e3e10454af391a7631004c1390b95b42e18c59e25313444932a26",
     "src/easyicu/research_agent/graph.py": "7582775c2f126b72ef6b444edcbe35750c3c309c1e459b878e12bba9eb9933b5",
     "src/easyicu/research_agent/know_how/registry.py": "d0e0f233d8f22e76351da6057adde8ca6b87ebdc2ca7c703224716c18c6a72ee",
     "src/easyicu/research_agent/learning/runtime.py": "87743106defc0df92c826bcc5a16e9156c89877517ce1d29ce5be9654840925a",
     "src/easyicu/research_agent/learning/store.py": "2a951e221b413c6e0c251382224acd3bba7bde8e23cca25812def65df0ef26d0",
     "src/easyicu/research_agent/planning/analysis_blueprint.py": "5330a604f9894c879ba400bee3b3ac1b617de1ce24425506139a5a29bb4020b2",
-    "src/easyicu/research_agent/planning/analysis_types.py": "936b11fe41791a06369a20d930e6e1b3ec29a16c3bd71197f916e8fb9948bc4b",
+    "src/easyicu/research_agent/planning/analysis_types.py": "04c419596a4d62c7ae630e7869a19f006a92450244ac4f2b198a07b1205dd2e9",
     "src/easyicu/research_agent/planning/cohort_contract.py": "e043ca40d59f613031a1b41f9280152ac3c58cefcc86e877d466d5142496899a",
     "src/easyicu/research_agent/planning/figure_strategy.py": "42b617ad40d993c585df27598613731ceedc2e4645f197a2cb96c54645f7cec2",
     "src/easyicu/research_agent/planning/study_design.py": "84e7d9c0974ca3d1f9deadcc22de065586a9be20fcdf66f101f931469b64cad0",
@@ -1070,42 +1081,42 @@
       "know_how_prompt_bytes": 0,
       "planner_with_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 12962,
+        "approx_input_tokens": 13522,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 43401,
+            "bytes": 45643,
             "included": true,
             "required": true,
-            "sha256": "775f54574109a175955d4aa7e90245097cd62e0be4e60f907cfc9c5241d4d4ae"
+            "sha256": "fbd4912795962bfe8c272c1a45e0be7c2485d8783c2adf81ac6eb4a93badaaa3"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 51845,
+        "total_bytes": 54087,
         "truncated_strings": false,
-        "user_bytes": 43401
+        "user_bytes": 45643
       },
       "planner_without_resources": {
         "analysis_type_catalog_detail": "full",
-        "approx_input_tokens": 12962,
+        "approx_input_tokens": 13522,
         "limit_bytes": 120000,
         "segments": {
           "planner_contract_and_typed_context": {
             "authority_bound": true,
-            "bytes": 43401,
+            "bytes": 45643,
             "included": true,
             "required": true,
-            "sha256": "775f54574109a175955d4aa7e90245097cd62e0be4e60f907cfc9c5241d4d4ae"
+            "sha256": "fbd4912795962bfe8c272c1a45e0be7c2485d8783c2adf81ac6eb4a93badaaa3"
           }
         },
         "system_bytes": 8444,
-        "total_bytes": 51845,
+        "total_bytes": 54087,
         "truncated_strings": false,
-        "user_bytes": 43401
+        "user_bytes": 45643
       },
-      "planning_contract_bytes": 5239,
-      "planning_contract_sha256": "f8de06919f4548c497d699ae8ea732f6cd8ecd76030fb52c34ff13d1fe938662",
+      "planning_contract_bytes": 6048,
+      "planning_contract_sha256": "8033e8d0f4d28b9a1e0940c98d078b31f7454cbc1f598bce7fc797df77271c4d",
       "question": "Estimate the KDIGO AKI stage gradient for mortality and length of stay.",
       "resource_added_bytes": 0,
       "resource_allowlist_sha256": "72a487e695a508647cde784bdca0ad51f2135e64885bdeba1f91da1d89095e12",

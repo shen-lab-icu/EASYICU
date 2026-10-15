@@ -109,7 +109,7 @@
 .crossdb-demo-source-main span{ margin-top:3px; font-size:10.5px; color:var(--ink-3); }
 .crossdb-demo-source-action{ display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:10px; }
 .crossdb-demo-source details{ margin-top:9px; padding-top:8px; border-top:1px solid var(--hair); font-size:10.5px; color:var(--ink-4); }
-.crossdb-demo-source summary{ cursor:pointer; }
+.crossdb-demo-source summary{ min-height:24px; padding:4px 0; cursor:pointer; }
 .crossdb-demo-source p{ margin:5px 0 0; }
 
 /* ---------- Cross-DB module availability heatmap ---------- */

@@ -18,6 +18,8 @@ from ..contracts.claim_ceiling import (
     EXPOSURE_OBSERVED_ANALYSIS_SET,
 )
 from ..contracts.dependence import PlannedDependenceRequirement
+from ..contracts.exposure_outcome_distribution import PatientWeightedIntervalAssumptions
+from ..methods.cluster_proportion import patient_weighted_hoeffding_interval
 
 DESCRIPTIVE_CEILING = "descriptive_unadjusted_not_causal"
 _ANALYSIS_ROLES = {
@@ -82,7 +84,12 @@ def _interval(
     payload: Mapping[str, Any], *, owner: str, bounded: bool
 ) -> tuple[float, float, float, float, str, str, int | None]:
     estimate = _number(payload, "estimate_pct", owner=owner)
-    standard_error = _number(payload, "standard_error_pct", owner=owner)
+    if payload.get("interval_method") == "patient_weighted_hoeffding":
+        if payload.get("standard_error_pct") is not None:
+            raise ValueError(f"{owner} concentration bound must not invent a standard error")
+        standard_error = 0.0
+    else:
+        standard_error = _number(payload, "standard_error_pct", owner=owner)
     low = _number(payload, "ci_low_pct", owner=owner)
     high = _number(payload, "ci_high_pct", owner=owner)
     confidence = _number(payload, "confidence_level", owner=owner)
@@ -103,7 +110,7 @@ def _interval(
         clusters = _count(payload, "cluster_count", owner=owner)
         if clusters < 2:
             raise ValueError(f"{owner}.cluster_count must be at least two")
-    if (covariance == "cluster_robust") != (clusters is not None):
+    if (covariance in {"cluster_robust", "bounded_independent_patient_clusters"}) != (clusters is not None):
         raise ValueError(f"{owner} covariance and cluster_count are inconsistent")
     return estimate, low, high, confidence, method, covariance, clusters
 
@@ -138,10 +145,17 @@ def _estimand(
 ) -> str:
     estimate, low, high, confidence, method, covariance, clusters = interval
     cluster_text = f"; patient clusters: {clusters}" if clusters is not None else ""
+    uncertainty = (
+        "uncertainty: fixed-weight patient-cluster bound"
+        if method == "patient_weighted_hoeffding" else f"covariance: {covariance}"
+    )
     return (
         f"{name} was {_format(estimate)} {unit} "
         f"({_format(100.0 * confidence)}% CI, {_format(low)} to {_format(high)}; "
-        f"interval: {method}; covariance: {covariance}{cluster_text})"
+        f"interval: {method}; {uncertainty}{cluster_text})"
+        + ("; target: expected stay proportion conditional on fixed observed "
+           "patient weights, with independent patient clusters"
+           if method == "patient_weighted_hoeffding" else "")
     )
 
 
@@ -156,6 +170,18 @@ def _require_interval_arithmetic(
     """Recompute the declared interval rather than trusting its endpoints."""
 
     estimate, low, high, confidence, method, _, _ = interval
+    if method == "patient_weighted_hoeffding":
+        if events is None or denominator is None:
+            raise ValueError(f"{owner} concentration bound lacks events/denominator")
+        expected_low, expected_high = patient_weighted_hoeffding_interval(
+            events, denominator,
+            cluster_count=_count(payload, "cluster_count", owner=owner),
+            cluster_size_square_sum=_count(payload, "cluster_size_square_sum", owner=owner),
+            confidence_level=confidence,
+        )
+        if abs(low - expected_low) > 2e-6 or abs(high - expected_high) > 2e-6:
+            raise ValueError(f"{owner} patient-weight interval arithmetic is inconsistent")
+        return
     standard_error = _number(payload, "standard_error_pct", owner=owner)
     z = statistics.NormalDist().inv_cdf(1.0 - (1.0 - confidence) / 2.0)
     if method == "wilson":
@@ -234,6 +260,11 @@ def derive_descriptive_claim_payloads(
         if not isinstance(raw_dependence, Mapping):
             raise ValueError(f"{owner} descriptive_estimates.dependence must be an object")
         dependence = PlannedDependenceRequirement.model_validate(raw_dependence)
+    assumptions = estimates.get("patient_weighted_interval_assumptions")
+    if assumptions is not None:
+        assumptions = PatientWeightedIntervalAssumptions.model_validate(assumptions).model_dump(mode="json")
+        if summary.get("patient_weighted_interval_assumptions") != assumptions:
+            raise ValueError(f"{owner} fixed-weight assumptions differ from the execution envelope")
 
     absolute_risks = estimates.get("outcome_absolute_risks")
     if not isinstance(absolute_risks, list) or not absolute_risks:
@@ -303,10 +334,15 @@ def derive_descriptive_claim_payloads(
                 raise ValueError(
                     f"{item_owner} covariance contradicts the independent-row authority"
                 )
+        elif interval[4] == "patient_weighted_hoeffding":
+            if interval[5] != "bounded_independent_patient_clusters" or assumptions is None:
+                raise ValueError(f"{item_owner} concentration bound lacks its reviewed assumptions")
         elif interval[4] != "patient_cluster_robust_wald" or interval[5] != "cluster_robust":
             raise ValueError(
                 f"{item_owner} covariance contradicts the typed patient dependence authority"
             )
+        if assumptions is not None and interval[4] != "patient_weighted_hoeffding":
+            raise ValueError(f"{item_owner} interval method contradicts its fixed-weight assumptions")
         if interval[6] is not None and interval[6] > denominator:
             raise ValueError(f"{item_owner}.cluster_count cannot exceed its denominator")
         _require_interval_arithmetic(
@@ -343,6 +379,8 @@ def derive_descriptive_claim_payloads(
                     "confidence_level": interval[3],
                     "interval_method": interval[4],
                     "effect_scale": "percent",
+                    **({"patient_weighted_interval_assumptions": assumptions}
+                       if assumptions is not None else {}),
                 }),
             }
         )

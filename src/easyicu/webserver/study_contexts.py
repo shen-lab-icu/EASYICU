@@ -30,6 +30,10 @@ from easyicu.webserver.study_family_reading import (
     family_reading_rests_on,
     normalize_study_family_reading,
 )
+from easyicu.webserver.study_question_wording import (
+    normalize_question_wording,
+    question_sha256,
+)
 
 _CONFIG_PATH = state_paths.state_root() / "webserver_study_contexts.json"
 _LOCK = threading.RLock()
@@ -91,6 +95,7 @@ _CONTEXT_FIELDS = {
     "target_trial_design",
     "causal_trial_reading",
     "study_family_reading",
+    "question_wording",
     "design_variance_basis",
     "sensitivity_specs",
     "time_window",
@@ -1289,6 +1294,7 @@ def validate_context_update(
     _server_concept_selection_authority_write: bool = False,
     _server_causal_trial_reading_write: bool = False,
     _server_study_family_reading_write: bool = False,
+    _server_question_wording_write: bool = False,
     _server_design_variance_basis_write: bool = False,
 ) -> Dict[str, Any]:
     """Validate and normalize one proposed update without mutating the store.
@@ -1311,6 +1317,7 @@ def validate_context_update(
         ),
         allow_causal_trial_reading=_server_causal_trial_reading_write,
         allow_study_family_reading=_server_study_family_reading_write,
+        allow_question_wording=_server_question_wording_write,
         allow_design_variance_basis=_server_design_variance_basis_write,
     )
     current = dict(current_context or {})
@@ -1359,6 +1366,7 @@ def _default_context(context_id: str, timestamp: str) -> Dict[str, Any]:
         "target_trial_design": {},
         "causal_trial_reading": None,
         "study_family_reading": None,
+        "question_wording": None,
         "design_variance_basis": None,
         "sensitivity_specs": [],
         "time_window": {},
@@ -1386,6 +1394,7 @@ def _sanitize_patch(
     allow_target_trial_design: bool = False,
     allow_causal_trial_reading: bool = False,
     allow_study_family_reading: bool = False,
+    allow_question_wording: bool = False,
     allow_design_variance_basis: bool = False,
 ) -> Dict[str, Any]:
     if not isinstance(raw, dict):
@@ -1526,6 +1535,17 @@ def _sanitize_patch(
                     "reason": str(exc),
                 }
             ) from exc
+    if "question_wording" in raw:
+        if not allow_question_wording:
+            raise StudyContextError({
+                "error": "study_question_wording_server_owned", "field": "question_wording",
+            })
+        try:
+            patch["question_wording"] = normalize_question_wording(raw.get("question_wording"))
+        except ValueError as exc:
+            raise StudyContextError({
+                "error": "study_question_wording_invalid", "field": "question_wording",
+            }) from exc
     if "design_variance_basis" in raw:
         # The host records it with the design (``study_family_design``).
         if not allow_design_variance_basis:
@@ -1784,6 +1804,7 @@ def _contexts_from_raw(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
             allow_concept_selection_authority=True,
             allow_causal_trial_reading=True,
             allow_study_family_reading=True,
+            allow_question_wording=True,
             allow_design_variance_basis=True,
         )
         if "analysis_design" in row:
@@ -2139,6 +2160,7 @@ def upsert_context(
     _server_target_trial_design_write: bool = False,
     _server_causal_trial_reading_write: bool = False,
     _server_study_family_reading_write: bool = False,
+    _server_question_wording_write: bool = False,
     _server_design_variance_basis_write: bool = False,
 ) -> Dict[str, Any]:
     client_concept_selection_authority: Dict[str, Any] = {}
@@ -2158,6 +2180,7 @@ def upsert_context(
         allow_target_trial_design=_server_target_trial_design_write,
         allow_causal_trial_reading=_server_causal_trial_reading_write,
         allow_study_family_reading=_server_study_family_reading_write,
+        allow_question_wording=_server_question_wording_write,
         allow_design_variance_basis=_server_design_variance_basis_write,
     )
     if expected_revision is not None and (
@@ -2294,6 +2317,9 @@ def upsert_context(
                 context["causal_trial_reading"] = None
             if _stale_study_family_reading(context):
                 context["study_family_reading"] = None
+            wording = context.get("question_wording")
+            if wording and wording.get("question_sha256") != question_sha256(str(context.get("question") or "")):
+                context["question_wording"] = None
             if design_variance_basis_is_stale(context):
                 context["design_variance_basis"] = None
             _validate_covariate_decision_contract(context)

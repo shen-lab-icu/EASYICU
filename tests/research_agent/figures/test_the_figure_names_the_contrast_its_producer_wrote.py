@@ -29,6 +29,8 @@ than the row.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import csv
 import hashlib
 import os
@@ -240,7 +242,7 @@ def test_the_recorded_corpus_still_contains_multi_row_tables():
 
     corpus = Path(
         os.environ.get(
-            "EASYICU_CORPUS_ROOT", "/Volumes/外置硬盘/easyicu_data/canonical9_runs"
+            "EASYICU_CORPUS_ROOT", str(corpus_root())
         )
     )
     if not corpus.exists():

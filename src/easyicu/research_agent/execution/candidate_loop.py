@@ -74,6 +74,7 @@ from ..gates.step_repair import _step_contract_repair_guidance
 from ..orchestration.resume import store_quarantined_concept_draft
 from ..repair_registry import is_sealed_renderer_repair
 from ..authority.provider_budget import ProviderCallBudgetReceiptError
+from ..authority.provider_hard_stop import ProviderHardStopError
 from .step_attempt_bootstrap import RAW_UNIVERSE_EXECUTION_ROLE
 from .cohort_routing import (
     PreselectionUniverseOwnerCapability,
@@ -474,6 +475,7 @@ def _candidate_concept_audit_transition(
                     attempt.worker_progress.llm_repair_used = True
                     return _CandidateLoopAction.CONTINUE
                 except (
+                    ProviderHardStopError,
                     ProviderCallBudgetReceiptError,
                     StepAuthorityRuntimeError,
                     StepAuthorityCapsuleError,
@@ -1558,6 +1560,7 @@ def _candidate_visual_transition(
                     attempt.worker_progress.llm_repair_used = True
                     return _CandidateLoopAction.CONTINUE
                 except (
+                    ProviderHardStopError,
                     ProviderCallBudgetReceiptError,
                     StepAuthorityRuntimeError,
                     StepAuthorityCapsuleError,
@@ -2168,6 +2171,7 @@ def _candidate_contract_repair_transition(
             attempt.worker_progress.llm_repair_used = True
             return _CandidateLoopAction.CONTINUE
         except (
+            ProviderHardStopError,
             ProviderCallBudgetReceiptError,
             StepAuthorityRuntimeError,
             StepAuthorityCapsuleError,
@@ -2619,6 +2623,7 @@ def _candidate_failure_transition(
             _clear_output_dir(state.run_result.out_dir)
             break
         except (
+            ProviderHardStopError,
             ProviderCallBudgetReceiptError,
             StepAuthorityRuntimeError,
             StepAuthorityCapsuleError,

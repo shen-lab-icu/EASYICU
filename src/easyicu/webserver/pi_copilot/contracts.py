@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from types import MappingProxyType
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import (
@@ -14,6 +15,7 @@ from typing import (
     Literal,
     Mapping,
     Optional,
+    Sequence,
 )
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
@@ -453,6 +455,8 @@ class ToolExecutionContext:
         *,
         session: PiSessionRecord,
         user_message: str = "",
+        user_turns: Optional[Sequence[Mapping[str, Any]]] = None,
+        previous_reply: str = "",
         idea_source: Optional[Mapping[str, Any]] = None,
         allowed_actions: Iterable[str] = (),
         grant: Optional[HostTurnGrant] = None,
@@ -466,6 +470,12 @@ class ToolExecutionContext:
         # bounded, PHI-screened value as user-intent authority; the model
         # cannot supply or rewrite it through tool arguments.
         self.user_message = str(user_message or "")
+        self.bind_question_wording_context(
+            user_turns if user_turns is not None else (
+                [{"text": self.user_message, "message_origin": "typed"}] if self.user_message else []
+            ),
+            previous_reply,
+        )
         # Bounded metadata from the existing Idea source/PDF owner. The model
         # may read this receipt, but tools use this host-held copy instead of
         # trusting model-reconstructed provenance.
@@ -479,6 +489,21 @@ class ToolExecutionContext:
         self.extension_registry = extension_registry
         self._authority_invalidated_reason: Optional[str] = None
         self._lock = threading.Lock()
+
+    @property
+    def user_turns(self) -> tuple[Mapping[str, Any], ...]:
+        return self._user_turns
+
+    @property
+    def previous_reply(self) -> str:
+        return self._previous_reply
+
+    def bind_question_wording_context(
+        self, turns: Sequence[Mapping[str, Any]], previous_reply: str,
+    ) -> None:
+        """Capture active-branch wording from the host replay, never tool args."""
+        self._user_turns = tuple(MappingProxyType(dict(turn)) for turn in turns)
+        self._previous_reply = str(previous_reply or "")[:8192]
 
     @property
     def allowed_actions(self) -> frozenset[str]:

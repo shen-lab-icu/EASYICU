@@ -263,7 +263,7 @@ Pull request 运行 Linux / Python 3.11 检查；完整 Python / 操作系统矩
 Web 应用可以自动完成数据准备，也可以在代码里手动转换：
 
 ```python
-from easyicu.data_converter import DataConverter
+from easyicu import DataConverter
 
 converter = DataConverter('/path/to/raw/data', database='miiv')
 converter.convert_all()
@@ -286,7 +286,7 @@ converter.convert_all()
 下面这个示例演示了 API 用户的完整最小流程：从原始数据库目录开始，先转换，再提取标准化特征。
 
 ```python
-from easyicu.data_converter import DataConverter
+from easyicu import DataConverter
 from easyicu import load_concepts
 
 database = 'miiv'

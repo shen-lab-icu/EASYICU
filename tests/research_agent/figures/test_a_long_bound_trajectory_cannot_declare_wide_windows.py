@@ -19,6 +19,8 @@ the representation step actually runs.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import json
 import pathlib
 
@@ -29,7 +31,7 @@ from easyicu.research_agent.trajectory.plan_contract import (
     evaluate_trajectory_plan_dag,
 )
 
-_CORPUS = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 
 def _recorded_h3(*, declaring_the_manifest: bool = True):
@@ -76,6 +78,7 @@ def _reasons(plan, context, *, long_bound):
     ]
 
 
+@pytest.mark.requires_corpus
 def test_the_recorded_plan_is_no_longer_refused_for_windows_it_cannot_declare():
     recorded = _recorded_h3()
     if recorded is None:
@@ -99,6 +102,7 @@ def test_the_recorded_plan_is_no_longer_refused_for_windows_it_cannot_declare():
     assert not any("at least two fixed" in message for message in messages), messages
 
 
+@pytest.mark.requires_corpus
 def test_a_long_bound_plan_without_the_manifest_is_still_refused():
     """The waiver is not unconditional -- it defers to the manifest, not away."""
 
@@ -170,6 +174,7 @@ def test_the_waiver_is_conditioned_on_the_tier_not_granted_to_everyone():
         assert "long_trajectory_bound" in names, ast.dump(guard.value.values[0])
 
 
+@pytest.mark.requires_corpus
 def test_the_recorded_plan_now_clears_the_whole_trajectory_contract():
     """h3's real plan, end to end: every wide-topology assumption removed.
 
@@ -223,6 +228,7 @@ def test_a_wide_run_still_needs_its_manifest_lineage():
         assert "long_trajectory_bound" in names
 
 
+@pytest.mark.requires_corpus
 def test_the_guide_tells_a_long_bound_planner_what_it_can_actually_do():
     """The guide described work a long-bound run cannot perform.
 
@@ -270,6 +276,7 @@ def test_the_guide_tells_a_long_bound_planner_what_it_can_actually_do():
     assert "raw fixed-window columns" not in long_guide
 
 
+@pytest.mark.requires_corpus
 def test_a_wide_run_is_still_told_the_wide_contract():
     """The wide instructions must survive verbatim for the runs they fit."""
 

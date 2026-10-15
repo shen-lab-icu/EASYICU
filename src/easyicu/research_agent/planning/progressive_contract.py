@@ -29,6 +29,7 @@ from ..canonical_json import canonical_sha256
 from ..contracts.primary_cohort import STUDY_POPULATION_PRODUCTS
 from ..contracts.product_identity import is_canonical_typed_product_token
 from ..contracts.functional_form import FunctionalFormSpec
+from ..contracts.exposure_outcome_distribution import PatientWeightedIntervalAssumptions
 from ..contracts.phenotyping_features import PHENOTYPING_PRIMARY_ACTION, require_phenotyping_features
 from .design_selection import ResearchDesignSelection
 
@@ -682,6 +683,8 @@ COORDINATE_OWNED_STEP_FIELDS = (
     "functional_form_spec",
     "phenotyping_feature_columns",
     "phenotyping_comparison_variables",
+    "repeated_unit_interval_method",
+    "patient_weighted_interval_assumptions",
 )
 
 
@@ -694,6 +697,8 @@ def coordinate_owned_step_fields(
     """The coordinate-owned fields a step with this module, action and role may carry."""
 
     owned: set[str] = set()
+    if module_id == "exposure_outcome_distribution":
+        owned.update({"repeated_unit_interval_method", "patient_weighted_interval_assumptions"})
     if module_id == "custom_analysis" and planned_analysis_role == "sensitivity":
         owned.add("functional_form_spec")
     if scientific_action_id == PHENOTYPING_PRIMARY_ACTION and planned_analysis_role == "primary":
@@ -749,6 +754,12 @@ class ProgressiveSkeletonStep(BaseModel):
         ]
     ] = None
     confidence_level: Optional[float] = Field(default=None, gt=0.0, lt=1.0)
+    repeated_unit_interval_method: Optional[
+        Literal["patient_cluster_robust_wald", "patient_weighted_hoeffding"]
+    ] = Field(default=None, exclude_if=lambda value: value is None)
+    patient_weighted_interval_assumptions: Optional[PatientWeightedIntervalAssumptions] = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     population_scope: Optional[Literal["analysis_cohort", "primary_model", "study_cohort"]] = Field(
         default=None, exclude_if=lambda value: value is None,
         description="Explicit population for absolute-risk context; primary_model reuses the preceding primary model's exact eligibility and complete cases.",
@@ -843,6 +854,13 @@ class ProgressiveSkeletonStep(BaseModel):
                     "exposure_outcome_distribution requires variables, level "
                     "indices, denominator/missingness policies, and confidence"
                 )
+        if self.repeated_unit_interval_method is not None or self.patient_weighted_interval_assumptions is not None:
+            if self.module_id != "exposure_outcome_distribution":
+                raise ValueError("patient interval choices belong only to distribution modules")
+            if (self.repeated_unit_interval_method == "patient_weighted_hoeffding") != (
+                self.patient_weighted_interval_assumptions is not None
+            ):
+                raise ValueError("patient_weighted_hoeffding requires explicit fixed-weight assumptions")
         if self.module_id == "custom_analysis" and not self.custom_method:
             raise ValueError("custom_analysis requires custom_method")
         if self.module_id != "custom_analysis" and self.custom_method is not None:

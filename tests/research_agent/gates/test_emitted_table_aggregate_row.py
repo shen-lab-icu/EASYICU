@@ -24,6 +24,8 @@ the silent ones.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import ast
 from pathlib import Path
 
@@ -292,9 +294,10 @@ def test_the_shared_pre_registration_sequence_calls_it() -> None:
 
 # --- the recorded corpus ------------------------------------------------------
 
-_CORPUS = Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 
+@pytest.mark.requires_corpus
 @pytest.mark.skipif(
     not _CORPUS.exists(), reason="recorded runs are not on this machine"
 )

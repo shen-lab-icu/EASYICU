@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+from tests.conftest import corpus_root
+
 import ast
 from pathlib import Path
 
@@ -73,13 +76,9 @@ def test_receipt_source_guard_repair_rejects_custom_helper() -> None:
     assert patch_direct_host_receipt_source_guard(code, REAL_RUN_ERROR) == code
 
 
+@pytest.mark.requires_corpus
 def test_archived_real_e1_script_patches_when_available() -> None:
-    path = Path(
-        "/Volumes/外置硬盘/easyicu_data/canonical9_runs/"
-        "batch_20260723_luna_miiv_adaptive_1a063ca/"
-        "e1_sepsis3_prevalence_mortality/aware/"
-        "run_20260723T103131_8df069/steps/01_cohort_definition/analysis.py"
-    )
+    path = (corpus_root() / 'batch_20260723_luna_miiv_adaptive_1a063ca/e1_sepsis3_prevalence_mortality/aware/run_20260723T103131_8df069/steps/01_cohort_definition/analysis.py')
     if not path.is_file():
         return
     original = path.read_text(encoding="utf-8")

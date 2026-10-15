@@ -31,6 +31,8 @@ have put the product's own name in that position.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import json
 from pathlib import Path
 
@@ -219,9 +221,10 @@ def test_the_reason_still_explains_what_the_entries_are_for() -> None:
 
 # --- the recorded corpus ------------------------------------------------------
 
-_CORPUS = Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+_CORPUS = corpus_root()
 
 
+@pytest.mark.requires_corpus
 @pytest.mark.skipif(
     not _CORPUS.exists(), reason="recorded runs are not on this machine"
 )

@@ -143,6 +143,8 @@ class PiConversationReplayStore:
         project_id: str,
         job_id: str,
         allowed_actions: list[str],
+        user_message: str = "",
+        message_origin: str = "unknown",
     ) -> None:
         with self._lock:
             payload = self._read(session_id, project_id)
@@ -158,6 +160,8 @@ class PiConversationReplayStore:
                     "started_at": utc_now(),
                     "ended_at": None,
                     "allowed_actions": sorted(set(allowed_actions))[:16],
+                    "user_message": str(user_message)[:12_000],
+                    "message_origin": str(message_origin),
                     "events": [],
                 }
             )
@@ -322,6 +326,7 @@ class PiConversationReplayStore:
         project_id: str,
         job_id: str,
         status: str,
+        assistant_reply: Optional[str] = None,
     ) -> None:
         if status not in {"done", "failed", "cancelled", "interrupted"}:
             raise ValueError(f"invalid Pi replay status: {status}")
@@ -331,6 +336,8 @@ class PiConversationReplayStore:
                 if isinstance(turn, dict) and turn.get("job_id") == job_id:
                     turn["status"] = status
                     turn["ended_at"] = utc_now()
+                    if assistant_reply is not None:
+                        turn["assistant_reply"] = str(assistant_reply)[:8192]
                     self._write(payload)
                     return
 
@@ -367,6 +374,20 @@ class PiConversationReplayStore:
                 row["superseded"] = True
                 row["superseded_at"] = utc_now()
             self._write(payload)
+
+    def question_wording_context(self, *, session_id: str, project_id: str) -> Dict[str, Any]:
+        """Private active-branch text; the public replay never returns it."""
+        with self._lock:
+            payload = self._read(session_id, project_id)
+        active = [row for row in payload["turns"] if isinstance(row, dict) and not row.get("superseded")]
+        return {
+            "user_turns": [
+                {"text": str(row.get("user_message") or ""),
+                 "message_origin": row.get("message_origin", "unknown")}
+                for row in active
+            ],
+            "previous_reply": str(active[-1].get("assistant_reply") or "") if active else "",
+        }
 
     def archive_child_job(
         self,
@@ -455,7 +476,8 @@ class PiConversationReplayStore:
         with self._lock:
             payload = self._read(session_id, project_id)
         active_turns = [
-            row
+            {key: value for key, value in row.items()
+             if key not in {"user_message", "message_origin", "assistant_reply"}}
             for row in payload["turns"]
             if isinstance(row, dict) and not row.get("superseded")
         ]

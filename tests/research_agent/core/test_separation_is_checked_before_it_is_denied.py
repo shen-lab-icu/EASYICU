@@ -30,6 +30,8 @@ silently.
 
 from __future__ import annotations
 
+from tests.conftest import corpus_root
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -233,6 +235,7 @@ def test_the_only_constant_is_a_floating_point_tolerance():
     assert not hasattr(module, "_SEPARATED_COEFFICIENT_MAGNITUDE")
 
 
+@pytest.mark.requires_corpus
 def test_no_recorded_estimate_is_extreme_enough_to_worry_about():
     """Re-measures the corpus: nothing recorded is anywhere near separation.
 
@@ -245,7 +248,7 @@ def test_no_recorded_estimate_is_extreme_enough_to_worry_about():
     import os
     import pathlib
 
-    corpus = pathlib.Path("/Volumes/外置硬盘/easyicu_data/canonical9_runs")
+    corpus = corpus_root()
     if not corpus.exists():
         pytest.skip("recorded run corpus is not mounted")
 

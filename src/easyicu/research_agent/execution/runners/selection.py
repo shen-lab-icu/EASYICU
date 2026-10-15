@@ -942,7 +942,9 @@ def _build_registry() -> StepExecutorRegistry:
             owns=lambda c: descriptive_result_figure_executor_owns_step(
                 c.step, resolved_bindings=c.resolved_bindings
             ),
-            render=lambda c: descriptive_result_figure_executor_code(c.step),
+            render=lambda c: descriptive_result_figure_executor_code(
+                c.step, display_labels=c.plan.display_labels
+            ),
             analysis_kind="descriptive_result_figure",
             selection_reason="descriptive_result_figure_contract_preflight",
             progress_message="Using digest-bound descriptive result renderer",

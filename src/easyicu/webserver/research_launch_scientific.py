@@ -1173,9 +1173,29 @@ def _metadata_only_planning_coordinates(
         and _clean_text(phrase, 120)
         and named_exposure not in concepts
     ]
+    coordinate_readings = []
+    for role, concept, column, basis, slot_name in (
+        ("outcome", target_outcome, source_column(target_outcome),
+         "configured" if configured_catalog is not None else "keyword", "outcome"),
+        ("exposure", named_exposure, source_column(primary_exposure), "keyword", "exposure"),
+    ):
+        capability = catalog_by_id.get(str(concept or ""))
+        if capability is not None and column:
+            slot = slots.get(slot_name) or {}
+            fragment = _clean_text(slot.get("evidence"), 160)
+            match = (
+                re.search(r"\s+".join(re.escape(part) for part in fragment.split()), question, re.IGNORECASE)
+                if fragment and basis == "keyword" else None
+            )
+            coordinate_readings.append({
+                "role": role, "concept": concept, "column": column,
+                "category": capability.category, "basis": basis,
+                "evidence": match.group(0)[:160] if match is not None else None,
+            })
     return {
         "target_outcome": source_column(target_outcome),
         "primary_exposure": source_column(primary_exposure),
+        "coordinate_readings": coordinate_readings,
         "question_named_concepts": named_concepts,
         # A substance the question names as given or as measured: the plan
         # reads it in that form (planning.question_substance_forms).

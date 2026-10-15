@@ -16,6 +16,7 @@ import json
 import math
 import re
 from typing import Literal, Mapping, Sequence
+from ..contracts.exposure_outcome_distribution import PatientWeightedIntervalAssumptions
 
 from .claim_coordinates import contrast_exposure_coordinate
 from .reported_numbers import ReportedNumber
@@ -247,10 +248,14 @@ class ScientificClaimDraft(BaseModel):
     interval_method: Literal[
         "wilson",
         "patient_cluster_robust_wald",
+        "patient_weighted_hoeffding",
         "linear_probability_wald",
         "bootstrap_percentile",
     ] | None = None
     effect_scale: Literal["percent", "percentage_points", "ratio"] | None = None
+    patient_weighted_interval_assumptions: PatientWeightedIntervalAssumptions | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     rule_outcome: PrespecifiedRuleOutcome | None = None
     #: What a target trial estimate estimates; its words are the template's
     #: (``target_trial_claim_terms``), never this claim's free text.
@@ -376,13 +381,17 @@ class ScientificClaimDraft(BaseModel):
             absolute = self.claim_type == "descriptive_absolute_risk"
             expected_scale = "percent" if absolute else "percentage_points"
             allowed_methods = (
-                {"wilson", "patient_cluster_robust_wald"}
+                {"wilson", "patient_cluster_robust_wald", "patient_weighted_hoeffding"}
                 if absolute else {"linear_probability_wald"}
             )
             if self.effect_scale != expected_scale or self.interval_method not in allowed_methods:
                 raise ValueError("scientific claim interval method or effect scale contradicts its kind")
             if absolute and not 0 <= self.interval_lower <= self.interval_upper <= 100:
                 raise ValueError("absolute risk interval must remain within 0 to 100 percent")
+            if (self.interval_method == "patient_weighted_hoeffding") != (
+                self.patient_weighted_interval_assumptions is not None
+            ):
+                raise ValueError("patient-weight claim requires its explicit conditional target and assumptions")
         return self
 
     def _check_target_trial_estimate(self) -> None:
@@ -551,11 +560,18 @@ class ScientificClaim(ScientificClaimDraft):
         if self.claim_type == "descriptive_absolute_risk":
             group = _reader_coordinate(self.exposure, labels)
             outcome = _reader_coordinate(self.outcome, labels)
+            conditional_note = (
+                " The confidence interval targets the expected stay proportion "
+                "conditional on the observed patient weights and assumes "
+                "independent patient clusters."
+                if self.interval_method == "patient_weighted_hoeffding" else ""
+            )
             if not include_estimate:
                 return (
                     f"These findings describe {outcome} in the {group} group within "
                     f"{_reader_population(self.population)}; interpretation is "
                     "descriptive and unadjusted and does not establish a causal effect."
+                    + conditional_note
                 )
             counts = (
                 _COUNTS_ONLY_FREQUENCY_RE.fullmatch(self.estimand)
@@ -587,6 +603,7 @@ class ScientificClaim(ScientificClaimDraft):
                 f"{_reader_percent(lower)}% to "
                 f"{_reader_percent(upper)}%); this was a "
                 "descriptive, unadjusted, noncausal estimate."
+                + conditional_note
             )
         if self.claim_type == "descriptive_risk_difference":
             contrast = _reader_coordinate(self.exposure, labels)

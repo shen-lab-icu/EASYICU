@@ -2086,12 +2086,14 @@ def test_metadata_only_planning_ignores_unmapped_display_labels(
 @pytest.mark.parametrize("multiple_outcomes", [False, True])
 @pytest.mark.parametrize("requested_changes", [False, True])
 @pytest.mark.parametrize("named_operation", [False, True])
+@pytest.mark.parametrize("outcome_configured", [False, True])
 def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     multiple_outcomes: bool,
     requested_changes: bool,
     named_operation: bool,
+    outcome_configured: bool,
 ) -> None:
     import easyicu.research_agent as research_agent
     from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
@@ -2215,6 +2217,12 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
         study["question"] = "Is the first 24-hour peak lactate associated with hospital death?" + (
             " Also assess ICU length of stay." if multiple_outcomes else ""
         )
+    if outcome_configured:
+        study["execution_concepts"] = {"outcome": "death"}
+    else:
+        study.pop("outcome", None)
+        study.pop("primary_exposure", None)
+        study.pop("execution_concepts", None)
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
         export_path=str(prepared),
         study_context=study,
@@ -2300,6 +2308,17 @@ def test_planner_only_runner_reaches_pipeline_with_metadata_not_patient_rows(
         },
     }, result
     assert result["provider"]["model"] == "metadata-only-test"
+    from easyicu.webserver.planning_coordinate_readings import PLANNING_COORDINATE_READINGS_FILENAME
+    record = json.loads((Path(result["project_dir"]) / PLANNING_COORDINATE_READINGS_FILENAME).read_text())
+    assert {row["role"]: row["column"] for row in record["readings"]} == {
+        "outcome": captured["target_outcome"], "exposure": captured["primary_exposure"],
+    }
+    assert {row["role"]: row["basis"] for row in record["readings"]} == {
+        "outcome": "configured" if outcome_configured else "keyword", "exposure": "keyword",
+    }
+    assert {row["role"]: bool(row["evidence"]) for row in record["readings"]} == {
+        "outcome": not outcome_configured, "exposure": True,
+    }
 
 
 def test_planner_only_runner_plans_with_the_typed_cohort_duration(

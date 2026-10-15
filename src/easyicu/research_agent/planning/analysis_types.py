@@ -1399,13 +1399,58 @@ def _association_framing_text(text: str) -> str:
 
 
 def _ordinary_relationship_question(text: str) -> bool:
-    """Recognize a paired relationship question, not a required audit note."""
+    """Recognize a paired relationship question, not a required audit note.
+
+    "X 与 Y 的关系", "X 是否与 Y 相关" and "X 与 Y 是否有关" ask it; an
+    attributive "与本研究相关的变量" qualifies a noun and asks nothing.
+    """
 
     return re.search(
         r"[^，。；;!?？]{1,64}(?:与|和|同)[^，。；;!?？]{1,64}"
-        r"(?:关系|是否相关|是否有关)",
+        r"(?:关系|是否相关|是否有关)"
+        r"|是否(?:与|和|同|跟)[^，。；;!?？]{1,64}?(?:相关|有关|关联)"
+        r"|(?:与|和|同|跟)[^，。；;!?？]{1,64}?是否(?:相关|有关|关联|存在关联)",
         _association_framing_text(text),
     ) is not None
+
+
+#: Words by which a question asks how common something is.  Without an
+#: adjusted, causal or predictive estimate they are descriptive epidemiology's.
+_PROPORTION_QUESTION = re.compile(
+    r"\bwhat\s+(?:proportion|percentage|fraction|share)\b"
+    r"|\bproportion\s+of\b|\bhow\s+common\b"
+    r"|多大比例|比例(?:是|为)?多少|占比",
+    re.IGNORECASE,
+)
+_INFERENTIAL_ESTIMATE = re.compile(
+    r"\b(?:adjust(?:ed|ing|ment)?|regression|hazard|odds|causal(?:ly|ity)?|"
+    r"effects?|predict(?:s|ed|ing|ion|ive)?)\b"
+    r"|调整|校正|回归|风险比|优势比|比值比|因果|效应|预测",
+    re.IGNORECASE,
+)
+#: Cues a family's words also take beyond its catalog trigger terms, which
+#: the planner's catalog text lists: the plural an exact-token match misses,
+#: and the Chinese words by which a question asks about the data themselves.
+_EXTRA_TRIGGER_CUES = {
+    "association_study": ("risk factors",),
+    "data_quality_audit": ("缺失", "完整性", "数据质量", "可用性", "覆盖率"),
+}
+
+#: How :func:`infer_analysis_type_with_basis` chose a family: the study's
+#: typed design, the question's words, or the rule for a question no
+#: family's words read.
+FAMILY_BASIS_STUDY_DESIGN = "study_design"
+FAMILY_BASIS_KEYWORD = "keyword"
+FAMILY_BASIS_FALLBACK = "fallback"
+
+
+def _proportion_question(text: str) -> bool:
+    """Whether a question asks how common something is, and nothing inferential."""
+
+    return (
+        _PROPORTION_QUESTION.search(text) is not None
+        and _INFERENTIAL_ESTIMATE.search(text) is None
+    )
 
 
 def infer_analysis_type(
@@ -1414,9 +1459,30 @@ def infer_analysis_type(
     primary_predictor: Optional[str] = None,
     target_outcome: Optional[str] = None,
 ) -> AnalysisTypeSpec:
+    return infer_analysis_type_with_basis(
+        context, primary_predictor=primary_predictor, target_outcome=target_outcome
+    )[0]
+
+
+def infer_analysis_type_with_basis(
+    context: ResearchContext,
+    *,
+    primary_predictor: Optional[str] = None,
+    target_outcome: Optional[str] = None,
+) -> Tuple[AnalysisTypeSpec, str]:
+    """The family a study is planned on, and how it was chosen.
+
+    The study's typed design decides when it states one
+    (:data:`FAMILY_BASIS_STUDY_DESIGN`); otherwise the question's words
+    (:data:`FAMILY_BASIS_KEYWORD`), and for a question no family's words read,
+    the fallback rule (:data:`FAMILY_BASIS_FALLBACK`): a pair of outcome and
+    exposure is an association, any other question is described, and only an
+    empty question is a data-quality audit.
+    """
+
     preferred = _preferred_family_key(context)
     if preferred is not None:
-        return _REGISTRY[preferred]
+        return _REGISTRY[preferred], FAMILY_BASIS_STUDY_DESIGN
     text = _question_text(context)
     primary_question_text = (context.research_question or "").lower().strip()
     association_text = _association_framing_text(text)
@@ -1541,7 +1607,11 @@ def infer_analysis_type(
     )
 
     def _has_any(key: str, extras: Iterable[str] = ()) -> bool:
-        terms = list(_REGISTRY[key].trigger_terms) + list(extras)
+        terms = [
+            *_REGISTRY[key].trigger_terms,
+            *_EXTRA_TRIGGER_CUES.get(key, ()),
+            *extras,
+        ]
         selected_text = association_text if key == "association_study" else text
         return (
             key == "association_study" and relationship_question
@@ -1549,7 +1619,7 @@ def infer_analysis_type(
 
     # Strong, explicit task-family cues should win before softer scoring.
     if _has_any("reinforcement_learning"):
-        return _REGISTRY["reinforcement_learning"]
+        return _REGISTRY["reinforcement_learning"], FAMILY_BASIS_KEYWORD
     # A question explicitly framed as latent-class / trajectory clustering is a
     # descriptive discovery task even when it mentions "causal" in a disclaimer.
     # The bare "causal" cue must not hijack it into the causal-emulation family
@@ -1560,17 +1630,17 @@ def infer_analysis_type(
     # clustered-standard-error language.
     _strong_clustering_framing = strong_trajectory_clustering_framing(text)
     if strong_causal_framing and not _strong_clustering_framing:
-        return _REGISTRY["causal_inference"]
+        return _REGISTRY["causal_inference"], FAMILY_BASIS_KEYWORD
     if _strong_clustering_framing:
-        return _REGISTRY["trajectory_clustering"]
+        return _REGISTRY["trajectory_clustering"], FAMILY_BASIS_KEYWORD
     if strong_survival_framing:
-        return _REGISTRY["survival"]
+        return _REGISTRY["survival"], FAMILY_BASIS_KEYWORD
     if _has_any("dynamic_prediction"):
-        return _REGISTRY["dynamic_prediction"]
+        return _REGISTRY["dynamic_prediction"], FAMILY_BASIS_KEYWORD
     if _has_any("multimodal"):
-        return _REGISTRY["multimodal"]
+        return _REGISTRY["multimodal"], FAMILY_BASIS_KEYWORD
     if _has_any("validation"):
-        return _REGISTRY["validation"]
+        return _REGISTRY["validation"], FAMILY_BASIS_KEYWORD
     if _has_any(
         # NOTE: do NOT add the bare word "model" here. As a strong pre-scoring
         # cue it false-fires on association/descriptive questions that merely say
@@ -1579,13 +1649,13 @@ def infer_analysis_type(
         "prediction_model",
         extras=("evaluation metric", "evaluation metrics"),
     ):
-        return _REGISTRY["prediction_model"]
+        return _REGISTRY["prediction_model"], FAMILY_BASIS_KEYWORD
     if _has_any("measurement_bias_audit"):
-        return _REGISTRY["measurement_bias_audit"]
+        return _REGISTRY["measurement_bias_audit"], FAMILY_BASIS_KEYWORD
     if cohort_sensitivity_framed and _has_any("cohort_definition_sensitivity"):
-        return _REGISTRY["cohort_definition_sensitivity"]
+        return _REGISTRY["cohort_definition_sensitivity"], FAMILY_BASIS_KEYWORD
     if _has_any("score_policy_sensitivity"):
-        return _REGISTRY["score_policy_sensitivity"]
+        return _REGISTRY["score_policy_sensitivity"], FAMILY_BASIS_KEYWORD
     if (
         _has_any("data_quality_audit")
         and not cohort_sensitivity_framed
@@ -1602,18 +1672,20 @@ def infer_analysis_type(
             )
         )
     ):
-        return _REGISTRY["data_quality_audit"]
+        return _REGISTRY["data_quality_audit"], FAMILY_BASIS_KEYWORD
     if treatment_response_framed and _has_any("treatment_response"):
-        return _REGISTRY["treatment_response"]
+        return _REGISTRY["treatment_response"], FAMILY_BASIS_KEYWORD
 
     scores: Dict[str, int] = {key: 0 for key in _REGISTRY}
     for key, spec in _REGISTRY.items():
         selected_text = association_text if key == "association_study" else text
-        for term in spec.trigger_terms:
+        for term in (*spec.trigger_terms, *_EXTRA_TRIGGER_CUES.get(key, ())):
             if _keyword_present(selected_text, term):
                 scores[key] += 1
     if relationship_question:
         scores["association_study"] += 1
+    if _proportion_question(primary_question_text):
+        scores["descriptive_epidemiology"] += 1
     if not cohort_sensitivity_framed:
         scores["cohort_definition_sensitivity"] = 0
     if not treatment_response_framed:
@@ -1698,11 +1770,12 @@ def infer_analysis_type(
     if scores[best_key] == 0:
         if primary_predictor and target_outcome:
             best_key = "association_study"
-        elif target_outcome:
+        elif target_outcome or primary_question_text:
             best_key = "descriptive_epidemiology"
         else:
             best_key = "data_quality_audit"
-    return _REGISTRY[best_key]
+        return _REGISTRY[best_key], FAMILY_BASIS_FALLBACK
+    return _REGISTRY[best_key], FAMILY_BASIS_KEYWORD
 
 
 #: Detail levels for :func:`planner_analysis_type_guide`, most complete first.

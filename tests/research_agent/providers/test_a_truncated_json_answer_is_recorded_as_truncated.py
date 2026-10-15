@@ -10,7 +10,7 @@ Each attempt that fails to decode now records where its JSON stood at its
 end -- how many objects and arrays were still open, and whether it ended
 inside a string -- and a response that ended inside an open value carries
 the issue ``json_truncated``.  Neither says anything of what the response
-wrote, and neither changes the retry or what it is told.
+wrote. The first truncated response may trigger one unchanged resend.
 """
 
 from __future__ import annotations
@@ -150,19 +150,22 @@ def test_each_failed_attempt_records_its_end_state_and_no_text() -> None:
         [
             '{"steps": 1, "note": "' + secret + '", "cohort": {"rule": 1}',
             '{"steps": 1, "note": "' + secret,
+            '{"steps": 1, "cohort": [1',
         ]
     )
 
-    assert [row["attempt"] for row in rows] == [1, 2]
+    assert [row["attempt"] for row in rows] == [1, 2, 3]
     assert [row["json_eof"] for row in rows] == [
         {"open_depth": 1, "in_string": False},
         {"open_depth": 1, "in_string": True},
+        {"open_depth": 2, "in_string": False},
     ]
-    assert [row["validation_issues"] for row in rows] == [_TRUNCATED, _TRUNCATED]
+    assert [row["validation_issues"] for row in rows] == [_TRUNCATED] * 3
     assert all(row["validation_stage"] == "json_shape" for row in rows)
     assert secret not in json.dumps(rows)
     rejected = [event for event in events if event.phase == "rejected"]
     assert [list(event.validation_issues) for event in rejected] == [
+        _TRUNCATED,
         _TRUNCATED,
         _TRUNCATED,
     ]
