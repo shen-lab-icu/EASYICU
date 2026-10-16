@@ -280,6 +280,9 @@ def population_approval_findings(
                     "criteria": [_criterion_row(item) for item in blocking],
                     "time_zero_hours": population.time_zero_hours,
                     "population_compile_sha256": population.sha256(),
+                    # A host remedy must use the typed parameters, never
+                    # reconstruct a restriction from its display quote.
+                    "population_compile": population.record(),
                 },
             )
         )

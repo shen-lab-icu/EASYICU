@@ -392,6 +392,50 @@
       }
     }
 
+    async function applyPopulationPreparation() {
+      if (unavailable()) return false;
+      const workflow = host.workflow() || {};
+      const proposal = (workflow.plan_review_summary || {}).population_preparation;
+      const session = host.session() || {};
+      const binding = session.binding || {};
+      const api = host.api();
+      if (workflow.next_action_code !== 'population_inclusion_requires_extraction'
+        || !proposal || proposal.available !== true
+        || proposal.run_id !== binding.run_id
+        || proposal.study_revision !== binding.study_revision
+        || typeof api.applyPiCopilotPopulationPreparation !== 'function') return false;
+      const guardKey = proposal.proposal_sha256;
+      if (!guardKey || startedTransitions.has(guardKey)) return false;
+      const projectId = host.projectId();
+      const stillCurrent = () => host.projectId() === projectId
+        && (host.session() || {}).session_id === session.session_id
+        && ((host.session() || {}).binding || {}).run_id === binding.run_id;
+      startedTransitions.add(guardKey);
+      setPending(true);
+      try {
+        await api.applyPiCopilotPopulationPreparation(session.session_id, {
+          project_id: projectId, run_id: binding.run_id,
+          expected_revision: binding.study_revision, proposal_sha256: guardKey,
+        });
+        if (!stillCurrent()) return false;
+        await host.refreshSession(true);
+        if (!stillCurrent()) return false;
+        await host.loadWorkflow();
+        if (!stillCurrent()) return false;
+        // Applying settings grants no extraction, Provider call or analysis.
+        host.setBusy(false);
+        host.render();
+        return true;
+      } catch (error) {
+        startedTransitions.delete(guardKey);
+        if (!stillCurrent()) return false;
+        host.setBusy(false);
+        host.setError(host.errorText(error));
+        host.render();
+        return false;
+      }
+    }
+
     async function compileAgentPlanConfiguration() {
       if (unavailable()) return false;
       const actionCode = 'agent_plan_configuration_required';
@@ -703,6 +747,10 @@
 
     async function confirmWorkflow(confirmation) {
       if (!confirmation) return;
+      if (confirmation.code === 'population_inclusion_requires_extraction') {
+        await applyPopulationPreparation();
+        return;
+      }
       if (confirmation.code === 'agent_plan_revision_nonconvergent') {
         if (confirmation.retryPlanRevision) await startFormalPlanGeneration(confirmation.code);
         return;

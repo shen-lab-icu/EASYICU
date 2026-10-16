@@ -397,16 +397,28 @@
         reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
         reviewResources: planStopResources,
       };
-      if (code === 'population_inclusion_requires_extraction') return {
-        code, grants: [], nonApprovable: true,
-        title: tr('A stated inclusion criterion needs data extracted for this study’s population', '研究写明的纳入条件需要按本研究人群重新提取数据'),
-        note: tr(
-          'The bound data package cannot apply it, so this plan cannot be approved, and no analysis has started. Ask in the conversation to extract the data for this study’s population; once the study binds that package, this plan is superseded and EasyICU plans again from the new data.',
-          '当前数据包无法施加这个条件，这份计划不能批准，分析尚未开始。请在对话中要求按本研究人群提取数据；研究绑定新数据包后，这份计划会失效，EasyICU 会按新数据重新生成计划。',
-        ),
-        reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
-        reviewResources: planStopResources,
-      };
+      if (code === 'population_inclusion_requires_extraction') {
+        const preparation = (workflow.plan_review_summary || {}).population_preparation;
+        const available = Boolean(preparation && preparation.available === true);
+        return {
+          code, grants: [], nonApprovable: !available,
+          populationPreparation: preparation,
+          approve: tr('Apply these population settings', '应用这些人群条件'),
+          title: tr('A stated inclusion criterion needs data extracted for this study’s population', '研究写明的纳入条件需要按本研究人群重新提取数据'),
+          note: available ? tr(
+            'Review the criteria and settings below. Applying them saves this population for data preparation. Request extraction in the conversation next; analysis still requires a new plan and review.',
+            '请核对下方条件及设置变化。应用后，这组人群条件会写入数据准备设置；随后可在对话中请求提取。分析仍需重新生成计划并审核。',
+          ) : preparation && preparation.status === 'blocked' ? tr(
+            'Some criteria cannot be transferred exactly to extraction. Review each reason below before revising the population. This plan remains unapprovable.',
+            '部分条件无法完整转换为提取设置，请根据下方逐项原因修订人群。这份计划仍不能批准。',
+          ) : tr(
+            'The bound data package cannot apply it, so this plan cannot be approved, and no analysis has started. Ask in the conversation to extract the data for this study’s population; once the study binds that package, this plan is superseded and EasyICU plans again from the new data.',
+            '当前数据包无法施加这个条件，这份计划不能批准，分析尚未开始。请在对话中要求按本研究人群提取数据；研究绑定新数据包后，这份计划会失效，EasyICU 会按新数据重新生成计划。',
+          ),
+          reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
+          reviewResources: planStopResources,
+        };
+      }
       // A reviewed plan that leaves an analysis the question asks for
       // unanswered, or cannot answer it, cannot be approved; nor can one the
       // host could not check, because the record of what the question asks for
@@ -495,6 +507,35 @@
         ],
       };
       return null;
+    }
+
+    function populationPreparationHtml(preparation) {
+      if (!preparation) return '';
+      const reasons = {
+        population_preparation_all_stays_conflict: tr('Conflicts with your choice to retain all stays.', '与已选择的保留全部入住冲突。'),
+        population_preparation_bound_unrepresentable: tr('Extraction cannot preserve these exact bounds.', '提取无法保留这组精确界限。'),
+        population_preparation_empty_age_range: tr('Conflicts with the current age range.', '与当前年龄范围冲突。'),
+        population_determined_after_time_zero: tr('This condition is determined after time zero.', '该条件在研究起点之后才能确定。'),
+        population_preparation_kind_unsupported: tr('Extraction settings cannot express this complete condition.', '当前提取设置不能完整表达该条件。'),
+        population_inclusion_not_applied: tr('This inclusion remains unapplied.', '这条纳入条件仍无法施加。'),
+      };
+      const rows = (preparation.criteria || []).map(row => {
+        const source = row.proposed_by_system ? tr('System proposal', '系统建议') : tr('Stated by the study', '研究原文');
+        const state = reasons[row.reason] || (row.disposition === 'requires_extraction'
+          ? tr('Needs extraction with these settings.', '需按这些设置提取。')
+          : row.disposition === 'not_applied' ? tr('Not applied.', '未施加。')
+            : tr('Already applied by the source or plan.', '已由数据来源或计划施加。'));
+        return `<li>${esc(row.quote)} <small>${esc(source)} · ${esc(state)}</small></li>`;
+      }).join('');
+      const labels = {
+        age_min: tr('Minimum age', '最低年龄'), age_max: tr('Maximum age', '最高年龄'),
+        min_icu_los_hours: tr('Minimum ICU stay (hours)', '最短 ICU 时长（小时）'),
+        exclude_readmissions: tr('Keep first ICU stays only', '仅保留首次 ICU 入住'),
+      };
+      const value = item => typeof item === 'boolean' ? (item ? tr('Yes', '是') : tr('No', '否')) : String(item);
+      const changes = (preparation.changes || []).map(row =>
+        `<li>${esc(labels[row.field] || row.field)}：${esc(value(row.before))} → ${esc(value(row.after))}</li>`).join('');
+      return `<div class="gpi-population-preparation"><ul>${rows}</ul>${changes ? `<strong>${esc(tr('Settings to apply', '将应用的设置'))}</strong><ul>${changes}</ul>` : ''}</div>`;
     }
 
     function workflowConfirmationHtml() {
@@ -600,13 +641,14 @@
         : '';
       const displayedTitle = firstDecisionCopy ? firstDecisionCopy.cardTitle : confirmation.title;
       const displayedNote = firstDecisionCopy ? firstDecisionCopy.context : confirmation.note;
+      const populationPreparation = populationPreparationHtml(confirmation.populationPreparation);
       const failureNotice = latestAttemptFailureHtml();
       const decisionActions = firstDecisionCopy && Array.isArray(firstDecisionCopy.options)
         ? firstDecisionCopy.options.map(option => `<button class="gpi-decision-option" type="button" data-gpi-plan-decision-code="${esc(String(firstDecisionItem && firstDecisionItem.code || ''))}" data-gpi-plan-decision-option="${esc(option.optionId)}"><strong>${esc(option.label)}</strong><span>${esc(option.effect)}</span><small>${esc(option.requirement)}</small></button>`).join('')
         : '';
       return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}" aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
         <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
-        <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}<small>${esc(displayedNote)}</small>${flowSteps}${dataStatus}${repeatedStaysDefault}${reviewStatus}${studyReadings}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
+        <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}<small>${esc(displayedNote)}</small>${populationPreparation}${flowSteps}${dataStatus}${repeatedStaysDefault}${reviewStatus}${studyReadings}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
         <div class="gpi-confirmation-actions${decisionActions ? ' has-decision-options' : ''}">
           ${confirmation.dataStatus && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-preview-data>${esc(tr('Preview analysis data', '先预览分析数据'))}</button>` : ''}
           ${decisionActions || (confirmation.hideEdit || (confirmation.code === 'plan_scientific_changes_required' && !decisionCount) ? '' : `<button class="btn ${confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.editLabel ? esc(confirmation.editLabel) : confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>`)}

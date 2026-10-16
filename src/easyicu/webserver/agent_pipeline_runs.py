@@ -4601,6 +4601,8 @@ def _finish_web_provider_hard_stop(
 
 
 def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
+    from easyicu.webserver.pi_copilot.population_preparation import population_preparation_proposal
+
     key = _clean_text(run_id, 160)
     entry = _PENDING_REVIEWS.get(key)
     if entry is None:
@@ -4713,6 +4715,9 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
         and plan_recommendation_complete
         and current_review_approval_allowed,
         "scientific_plan_review": scientific_plan_review,
+        "population_preparation": population_preparation_proposal(
+            study=study, run_id=pending.run_id, requests=pending.requests,
+        ),
         "planning_coordinate_readings": planning_coordinate_readings.load_planning_coordinate_readings(
             wrapper_dir,
             context_columns=planning_coordinate_readings.planned_context_columns(run_dir),

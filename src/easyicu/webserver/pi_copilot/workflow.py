@@ -55,6 +55,7 @@ from .contracts import (
 from .plan_projection import project_plan_conversation_preview
 from .exposure_group_notes import project_exposure_groups
 from .question_requirement_notes import project_question_requirement_notes
+from .population_preparation import current_population_preparation
 from .projections import (
     StudySetupReceipt,
     ensure_safe_projection,
@@ -621,6 +622,7 @@ def build_research_workflow_snapshot(
     coordinate_readings = project_coordinate_readings(
         review_authority.get("planning_coordinate_readings", [])
     )
+    population_preparation = current_population_preparation(study_row, review_authority)
     plan_review_summary = (
         {
             "run_id": str(review_authority.get("run_id") or "")[:160],
@@ -677,6 +679,7 @@ def build_research_workflow_snapshot(
                 else {}
             ),
             **({"coordinate_readings": coordinate_readings} if coordinate_readings is not None else {}),
+            **({"population_preparation": population_preparation} if population_preparation is not None else {}),
         }
         if raw_scientific_review
         else None

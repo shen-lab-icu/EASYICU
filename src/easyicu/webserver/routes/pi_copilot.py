@@ -173,6 +173,10 @@ class PiAgentPlanConfigurationRequest(BaseModel):
     run_id: RunIdText
 
 
+class PiPopulationPreparationRequest(PiAgentPlanConfigurationRequest):
+    proposal_sha256: Sha256Text
+
+
 class PiIdeaSourceRequest(BaseModel):
     """One bounded source seed already parsed by the existing Idea owner."""
 
@@ -945,6 +949,19 @@ def post_pi_copilot_agent_plan_configuration(
             project_id=body.project_id,
             expected_revision=body.expected_revision,
             run_id=body.run_id,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/sessions/{session_id}/population-preparation")
+def post_pi_copilot_population_preparation(
+    session_id: ShortText, body: PiPopulationPreparationRequest,
+) -> dict:
+    try:
+        return get_pi_copilot_service().apply_population_preparation(
+            session_id, project_id=body.project_id, expected_revision=body.expected_revision,
+            run_id=body.run_id, proposal_sha256=body.proposal_sha256,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

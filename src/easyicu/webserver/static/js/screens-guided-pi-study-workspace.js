@@ -12,6 +12,32 @@
     let skillPicker = { context: '', open: false, query: '', catalog: 'skills', category: 'all', focused: false };
     const contextKey = (projectId, sessionId) => JSON.stringify([projectId, sessionId]);
     const materialKey = resource => JSON.stringify([resource.kind, resource.run_id, resource.artifact, resource.sha256]);
+    function sessionStatusLabel(row) {
+      if (row && (row.active_message_job_id || row.last_turn_status === 'running')) return tr('Running', '运行中');
+      if (row && ['failed', 'interrupted', 'cancelled'].includes(String(row.last_turn_status || ''))) return tr('Needs attention', '需处理');
+      if (row && row.last_turn_status === 'done') return tr('Completed', '已完成');
+      const count = Number(row && row.history_turn_count || 0);
+      if (count > 0) return tr(`${count} turns`, `${count} 轮`);
+      if (row && row.has_history) return tr('Has conversation', '已有对话');
+      return tr('Not started', '未开始');
+    }
+    function compactSessionTime(row) {
+      const raw = String(row && (row.last_activity_at || row.created_at) || '').trim();
+      const timestamp = Date.parse(raw);
+      if (!Number.isFinite(timestamp)) return '';
+      const elapsed = Math.max(0, Date.now() - timestamp);
+      const minute = 60000;
+      const hour = 60 * minute;
+      const day = 24 * hour;
+      if (elapsed < minute) return tr('now', '刚刚');
+      if (elapsed < hour) return tr(`${Math.floor(elapsed / minute)}m`, `${Math.floor(elapsed / minute)} 分钟前`);
+      if (elapsed < day) return tr(`${Math.floor(elapsed / hour)}h`, `${Math.floor(elapsed / hour)} 小时前`);
+      if (elapsed < 7 * day) return tr(`${Math.floor(elapsed / day)}d`, `${Math.floor(elapsed / day)} 天前`);
+      const date = new Date(timestamp);
+      return new Intl.DateTimeFormat(window.EU_LANG === 'zh' ? 'zh-CN' : 'en', {
+        month: 'numeric', day: 'numeric',
+      }).format(date);
+    }
     function capture(host) {
       const materials = host && host.querySelector('[data-gpi-material-picker]');
       const materialSearch = materials && materials.querySelector && materials.querySelector('[data-gpi-material-search]');
@@ -478,7 +504,7 @@
     }
     function consume(projectId, sessionId) { if (current(projectId, sessionId)) reference = null; }
     function removeReference() { reference = null; }
-    return { capture, syncNavigation, messageView, openMaterials, renderMaterials, filterMaterials, setMaterialCategory, restoreMaterials, selectedMaterial, closeMaterials,
+    return { sessionStatusLabel, compactSessionTime, capture, syncNavigation, messageView, openMaterials, renderMaterials, filterMaterials, setMaterialCategory, restoreMaterials, selectedMaterial, closeMaterials,
       openSkills, renderSkillPicker, filterSkills, setSkillCatalog, setSkillCategory, selectCatalog, selectSkill, selectFrozenSkill, selectMethodTemplate, applyHubIntent, hasHubIntent, closeSkills, renderSkillReference, decorateSkillMessage, consumeSkill, removeSkill, removeBuilder, removeMethod, renderAccessMode,
       hasReference: (projectId, sessionId) => Boolean(current(projectId, sessionId)), canReference, setReference, renderReference, decorateMessage, consume, removeReference,
       isEmptyConversation };
