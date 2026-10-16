@@ -3606,6 +3606,87 @@ class PiCopilotService:
             "remaining_decision_codes": sorted(remaining_decisions),
         }
 
+    def apply_population_preparation(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        expected_revision: int,
+        run_id: str,
+        proposal_sha256: str,
+    ) -> Dict[str, Any]:
+        """Apply the displayed population proposal; never approve or extract."""
+        from easyicu.webserver import agent_pipeline_runs
+        from .population_preparation import current_population_preparation
+
+        record = self._scoped_record(session_id, project_id=project_id)
+        if self._stale_details(record).get("stale"):
+            raise PiCopilotError(
+                "pi_session_authority_stale",
+                "Reload the current population proposal.",
+                status_code=409,
+            )
+        context_id = str(record.binding.study_context_id or "")
+        study = study_contexts.get_context(context_id) if context_id else None
+        if (
+            study is None
+            or study.get("revision") != expected_revision
+            or record.binding.study_revision != expected_revision
+            or record.binding.run_id != run_id
+            or study.get("active_job_id")
+        ):
+            raise PiCopilotError(
+                "population_preparation_binding_conflict",
+                "The study, run or active job changed before this population choice.",
+                status_code=409,
+            )
+        review = agent_pipeline_runs.pending_review(run_id) or {}
+        proposal = current_population_preparation(study, review)
+        if (
+            proposal is None
+            or proposal.get("available") is not True
+            or not hmac.compare_digest(
+                str(proposal.get("proposal_sha256") or ""), proposal_sha256
+            )
+        ):
+            raise PiCopilotError(
+                "population_preparation_proposal_unavailable",
+                "This exact reviewed population cannot be applied to the extraction settings.",
+                status_code=409,
+            )
+        try:
+            updated = study_contexts.upsert_context(
+                {"id": context_id, "cohort": proposal["cohort"]},
+                expected_revision=expected_revision,
+                require_revision=True,
+                lifecycle_write=False,
+            )
+            plan_review_progress.record_choice(
+                before=study,
+                after=updated,
+                run=review,
+                decision_code="population_preparation",
+                option_id=proposal_sha256,
+            )
+        except study_contexts.StudyContextError as exc:
+            raise PiCopilotError(
+                "population_preparation_revision_conflict",
+                "The study changed before saving the population.",
+                status_code=409,
+                details=exc.detail,
+            ) from exc
+        record.binding = self._binding_for_context(updated, run_id=run_id)
+        self._save_record(record)
+        return {
+            "ok": True,
+            "code": "population_preparation_applied",
+            "study_context_id": context_id,
+            "study_context_revision": updated["revision"],
+            "source_run_id": run_id,
+            "proposal_sha256": proposal_sha256,
+            "next_action": "request_extraction",
+        }
+
     def apply_agent_plan_configuration(
         self,
         session_id: str,

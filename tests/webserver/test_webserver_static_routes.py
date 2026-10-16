@@ -120,7 +120,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20260728-demo-mode1" in index_html
-    assert "js/api.js?v=20261009-target-trial1" in index_html
+    assert "js/api.js?v=20261016-population-preparation1" in index_html
 
 
 def test_floating_copilot_launcher_is_removed_but_shell_hooks_survive() -> None:
@@ -399,7 +399,7 @@ def test_native_page_guide_backend_is_retired_from_the_shell_entry() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "page-guide dock intentionally is not constructed" in dock_js
-    assert "js/api.js?v=20261009-target-trial1" in index_html
+    assert "js/api.js?v=20261016-population-preparation1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
 
 
@@ -555,7 +555,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided.css?v=20260829-readability2" in index_html
     assert "css/guided-projects.css?v=20260923-rail-fit1" in index_html
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
-    assert "js/api.js?v=20261009-target-trial1" in index_html
+    assert "js/api.js?v=20261016-population-preparation1" in index_html
     assert (
         "js/screens-guided-projects.js?v=20260922-state-menus1" in index_html
     )
@@ -858,7 +858,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     ), "agent fixtures and renderer must load before screens-guided-pi-run-files.js"
     # Reader vocabulary (review findings, column and table names) is read by
     # the renderer at call time, so it must be defined before it.
-    vocab_pos = index_html.find("js/screens-agent-reader-vocab.js?v=20261010-prediction-vocab1")
+    vocab_pos = index_html.find("js/screens-agent-reader-vocab.js?v=20261014-coordinate-vocab1")
     assert fixtures_pos < vocab_pos < render_pos
     assert "js/screens-agent-render.js?v=20261010-exposure-labels1" in index_html
     assert "js/screens-agent-question-requirements.js?v=20261010-exposure-labels1" in index_html
@@ -2342,7 +2342,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260727-patient-demo2" in index_html
-    assert "api.js?v=20261009-target-trial1" in index_html
+    assert "api.js?v=20261016-population-preparation1" in index_html
     assert "screens-dict.js?v=20260830-viz-final1" in index_html
     assert "deepdive.css?v=20260830-viz-final1" in index_html
 
@@ -2654,7 +2654,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20261009-target-trial1" in index_html
+    assert "api.js?v=20261016-population-preparation1" in index_html
     assert "screens-guided-projects.js?v=20260922-state-menus1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"

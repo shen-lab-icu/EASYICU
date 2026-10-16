@@ -163,32 +163,6 @@
     }
     return displaySessionTitle(row && row.title, tr('Research conversation', '研究对话'));
   }
-  function sessionStatusLabel(row) {
-    if (row && (row.active_message_job_id || row.last_turn_status === 'running')) return tr('Running', '运行中');
-    if (row && ['failed', 'interrupted', 'cancelled'].includes(String(row.last_turn_status || ''))) return tr('Needs attention', '需处理');
-    if (row && row.last_turn_status === 'done') return tr('Completed', '已完成');
-    const count = Number(row && row.history_turn_count || 0);
-    if (count > 0) return tr(`${count} turns`, `${count} 轮`);
-    if (row && row.has_history) return tr('Has conversation', '已有对话');
-    return tr('Not started', '未开始');
-  }
-  function compactSessionTime(row) {
-    const raw = String(row && (row.last_activity_at || row.created_at) || '').trim();
-    const timestamp = Date.parse(raw);
-    if (!Number.isFinite(timestamp)) return '';
-    const elapsed = Math.max(0, Date.now() - timestamp);
-    const minute = 60000;
-    const hour = 60 * minute;
-    const day = 24 * hour;
-    if (elapsed < minute) return tr('now', '刚刚');
-    if (elapsed < hour) return tr(`${Math.floor(elapsed / minute)}m`, `${Math.floor(elapsed / minute)} 分钟前`);
-    if (elapsed < day) return tr(`${Math.floor(elapsed / hour)}h`, `${Math.floor(elapsed / hour)} 小时前`);
-    if (elapsed < 7 * day) return tr(`${Math.floor(elapsed / day)}d`, `${Math.floor(elapsed / day)} 天前`);
-    const date = new Date(timestamp);
-    return new Intl.DateTimeFormat(window.EU_LANG === 'zh' ? 'zh-CN' : 'en', {
-      month: 'numeric', day: 'numeric',
-    }).format(date);
-  }
   function sessionTraceLabel(row) {
     const sessionId = String(row && row.session_id || '').trim();
     const shortId = sessionId ? sessionId.slice(-8) : '';
@@ -724,8 +698,8 @@
     syncProjectWorkflowAside();
     STUDY_WORKSPACE.syncNavigation({ projectId: projectId(), sessions: state.sessions.filter(sessionMatchesUiLanguage), otherLanguageSessions: state.sessions.filter(row => !sessionMatchesUiLanguage(row)).length, switchLanguage: () => window.setLang && window.setLang(uiLanguage() === 'zh' ? 'en' : 'zh'),
       selectedId: state.session && state.session.session_id, loading: restoring, disabled: state.busy || Boolean(state.childJobId) || state.projectLoading,
-      visible: state.shell !== 'legacy', title: navigationSessionTitle, status: sessionStatusLabel,
-      time: compactSessionTime, open: openSession, create: startEntry,
+      visible: state.shell !== 'legacy', title: navigationSessionTitle, status: STUDY_WORKSPACE.sessionStatusLabel,
+      time: STUDY_WORKSPACE.compactSessionTime, open: openSession, create: startEntry,
       resources: RUN_OUTCOME.collection(state.latestRun, state.workflow), openResource: EVENTS.openResource,
       materialsInteractive: !emptySessionFocused, rename: renameSession, remove: removeEmptySession });
     requestAnimationFrame(() => {

@@ -485,6 +485,15 @@ def human_review_requests_for_plan(
             "user_authorization_requests": list(
                 detail.get("user_authorization_requests") or ()
             ),
+            **(
+                {
+                    "population_compile": detail["population_compile"],
+                    "population_compile_sha256": detail.get("population_compile_sha256"),
+                }
+                if reason == "population_inclusion_requires_extraction"
+                and isinstance(detail.get("population_compile"), Mapping)
+                else {}
+            ),
             **plan_authority,
         }
         request = HumanReviewRequest.create(

@@ -27,7 +27,7 @@ NOT_APPLIED = POPULATION_APPROVAL_STOPS["not_applied"]
 REQUIRES_EXTRACTION = POPULATION_APPROVAL_STOPS["requires_extraction"]
 
 
-def _card(code: str, *, run_id: str = "run_population_1") -> dict:
+def _card(code: str, *, run_id: str = "run_population_1", preparation=None) -> dict:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js is unavailable")
@@ -40,15 +40,16 @@ global.window = {
 require(process.argv[1]);
 const code = process.argv[2];
 const runId = process.argv[3];
+const preparation = JSON.parse(process.argv[4]);
 const owner = declared.create({
   tr: (en, zh) => zh || en,
-  esc: value => String(value),
+  esc: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
   iconHtml: () => '',
   resourceButton: resource => `<a data-resource="${resource.artifact}"></a>`,
   sessionIsStale: () => false,
   busy: () => false,
   session: () => ({ binding: { run_id: runId } }),
-  workflow: () => ({ next_action_code: code, plan_review_summary: { run_id: runId } }),
+  workflow: () => ({ next_action_code: code, plan_review_summary: { run_id: runId, population_preparation: preparation } }),
 });
 const confirmation = owner.workflowConfirmation();
 const html = owner.workflowConfirmationHtml();
@@ -61,10 +62,11 @@ process.stdout.write(JSON.stringify({
   edit: html.includes('data-gpi-confirm-edit'),
   resources: (html.match(/data-resource="([^"]+)"/g) || []).map(row => row.slice(15, -1)),
   offeredResources: ((confirmation && confirmation.reviewResources) || []).length,
+  html,
 }));
 """
     owner = STATIC / "js" / "screens-guided-pi-confirmation.js"
-    result = run_node(node, script, str(owner.resolve()), code, run_id, check=False)
+    result = run_node(node, script, str(owner.resolve()), code, run_id, json.dumps(preparation), check=False)
     assert result.returncode == 0, result.stderr or result.stdout
     return json.loads(result.stdout)
 
@@ -86,6 +88,29 @@ def test_a_criterion_an_extraction_applies_offers_no_plan_action() -> None:
     assert card["title"] == "研究写明的纳入条件需要按本研究人群重新提取数据"
     assert (card["nonApprovable"], card["execute"], card["grants"]) == (True, False, [])
     assert card["resources"] == ["agent_plan.json", "scientific_plan_review.json"]
+
+
+def test_a_bound_supported_proposal_shows_its_exact_change_and_explicit_action():
+    card = _card(REQUIRES_EXTRACTION, preparation={
+        "available": True,
+        "criteria": [{"quote": "首次 ICU 入住 <script>alert(1)</script>", "proposed_by_system": True, "disposition": "requires_extraction"}],
+        "changes": [{"field": "exclude_readmissions", "before": False, "after": True}],
+    })
+    assert card["execute"] is True
+    assert card["grants"] == []
+    assert "系统建议" in card["html"] and "否 → 是" in card["html"]
+    assert "应用这些人群条件" in card["html"]
+    assert "<script>" not in card["html"] and "&lt;script&gt;" in card["html"]
+
+
+def test_an_unsupported_projection_explains_each_criterion_without_an_action():
+    card = _card(REQUIRES_EXTRACTION, preparation={
+        "available": False, "status": "blocked",
+        "criteria": [{"quote": "年龄至少 18.5 岁", "proposed_by_system": False, "disposition": "requires_extraction", "reason": "population_preparation_bound_unrepresentable"}],
+    })
+    assert card["execute"] is False
+    assert "研究原文" in card["html"] and "18.5" in card["html"]
+    assert "无法保留这组精确界限" in card["html"]
 
 
 def test_without_a_reviewed_plan_the_card_names_no_resource() -> None:
