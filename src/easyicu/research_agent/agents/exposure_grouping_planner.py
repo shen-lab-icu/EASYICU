@@ -76,8 +76,15 @@ rule it meets, and "otherwise" takes every measured stay no earlier group \
 took.  summary is min, max, mean or first over the window, or value when \
 there is no window.  unit is the unit the study writes the threshold in, \
 or null when it writes none.
-- scale: ordinal when the groups lie along the value's scale, numbered g1 \
-lowest; nominal otherwise.
+- scale: ordinal only when every threshold rule reads the same summary \
+and the groups lie along that summary's scale, numbered g1 lowest. A \
+grouping that mixes summaries (for example a minimum and a maximum) is \
+nominal, even when its labels sound ordered. Matching priority is not \
+ordinal rank. Preserve the study's measurement summaries and thresholds; \
+never change them just to make an ordinal scale pass validation. For an \
+ordinal grouping, assign ids by value range, including an otherwise group \
+whose range may lie between two earlier rules; list order is still the \
+priority in which rules are matched.
 - unmeasured: {"handling": "exclude"} when stays without a measurement leave \
 the study; {"handling": "own_group", "label": ...} when they form a group of \
 their own, which only a nominal grouping can have.

@@ -97,7 +97,7 @@
         run && run.authoritative && ['failed', 'blocked'].includes(String(run.run_status || ''))
         && /^research_pipeline_|^data_foundation_blocked$|^research_agent_pipeline_failed_closed$/.test(String(run.gate_reason_code || ''))
       ));
-      const failureReason = planContractExhausted || typeof host.runFailureText !== 'function'
+      const failureReason = typeof host.runFailureText !== 'function'
         ? ''
         : failedRun
           ? String(host.runFailureText(failedRun.gate_reason_code, { code: failedRun.gate_detail_code, missing: failedRun.gate_missing_concepts, cause: failedRun.gate_detail_cause_code }) || '')
@@ -219,12 +219,12 @@
           '保留失败的规划尝试和上一版候选计划作为历史。请按当前研究配置启动一次新的 Research Agent 规划，并在分析前停下让我审核。',
         ),
         title: planContractExhausted
-          ? tr('The revised plan did not pass the scientific contract', '修订版计划未通过科学合同')
+          ? tr('Research planning did not pass its contract checks', '研究规划未通过合同检查')
           : tr('The previous research task did not complete', '上次科研任务未完成'),
         note: planContractExhausted
           ? tr(
-            'Four draft attempts were rejected before analysis. The previous plan and its “0 direct matches” literature snapshot are historical evidence only. Generate a fresh plan; no patient analysis has run.',
-            '系统在分析前连续否决了 4 版草案。上一版计划及其“直接匹配 0 篇”的文献页仅为历史记录；需要重新生成计划，患者分析尚未开始。下方只读产物仍属未验证状态，不能签署或发表。',
+            'Planning exhausted its allowed attempts before producing a valid plan. No analysis started. The failed attempt remains in the run history; generate a fresh plan for review.',
+            '规划在允许的尝试次数内未能生成有效计划，分析尚未开始。失败尝试保留在运行记录中；需要重新生成计划并审阅。',
           )
           : tr(
             'The failed task remains immutable history. Generate a fresh plan before any analysis.',

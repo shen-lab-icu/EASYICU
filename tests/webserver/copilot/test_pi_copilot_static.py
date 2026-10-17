@@ -84,7 +84,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "css/guided-pi-source-view.css?v=20260921-workbench-rail1" in index
     assert "css/guided-pi-literature.css?v=20260902-type-scale2" in index
     assert "js/screens-guided-pi-modules.js?v=20260902-module-contract1" in index
-    assert "js/screens-guided-pi-literature.js?v=20260828-literature-search1" in index
+    assert "js/screens-guided-pi-literature.js?v=20261017-planning-evidence1" in index
     assert "js/screens-guided-pi-markdown.js?v=20260921-turn-traces3" in index
     assert "js/screens-guided-pi-next-actions.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-message-actions.js?v=20260921-fit1" in index
@@ -136,10 +136,10 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         < index.index("js/screens-guided-pi-target-trial.js")
         < index.index("js/screens-guided-pi-confirmation.js")
     )
-    assert "js/screens-guided-pi-confirmation.js?v=20261016-population-acceptance1" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20261017-planning-evidence1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20261016-population-acceptance1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261009-target-trial1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261014-trial-gaps1" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261017-planning-evidence1" in index
     assert "js/screens-guided-pi.js?v=20261016-session-labels1" in index
     assert "js/screens-guided.js?v=20260922-state-menus1" in index
     assert (
@@ -2229,7 +2229,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     run_outcome_owner = _read("js/screens-guided-pi-run-outcome.js")
     assert "manuscript_scaffold.pdf" in run_outcome_owner
     assert "查看 LaTeX 论文" in run_outcome_owner
-    assert "仍属未验证状态，不能签署或发表" in confirmation_owner
+    assert "失败尝试保留在运行记录中" in confirmation_owner
     assert "gpi-confirmation-resources" in confirmation_owner
     assert "数据准备检查" in confirmation_owner
     assert "重新生成新计划" in confirmation_owner
@@ -3145,7 +3145,7 @@ process.stdout.write(JSON.stringify({
     result = run_node(node, script, str(owner_path), check=False)
     assert result.returncode == 0, result.stderr or result.stdout
     payload = json.loads(result.stdout)
-    assert payload["title"] == "修订版计划未通过科学合同"
+    assert payload["title"] == "研究规划未通过合同检查"
     assert payload["grants"] == ["provider_run", "literature"]
     assert payload["runIds"] == ["run_reviewable"] * 9
     assert payload["artifacts"][:3] == [
@@ -6185,7 +6185,7 @@ def test_literature_reader_labels_old_evidence_when_plan_revision_failed() -> No
     completed = run_node(node, script, check=True)
     html = completed.stdout
     assert "上一版计划快照 · 修订版未生成成功" in html
-    assert "系统尝试了 4 版草案" in html
+    assert "4 版草案" not in html
     assert "只是历史记录，不是当前结论" in html
     assert "research_pipeline_plan_contract_exhausted" not in html
 
@@ -6307,8 +6307,8 @@ def test_literature_preview_receives_current_workflow_status_from_guided_owner()
     assert "setWorkflowContext" in preview
     assert "literature.renderArtifact(state.payload || {}, {" in preview
     assert "runId: state.resource.run_id" in preview
-    assert "修订版计划未通过科学合同" in confirmation
-    assert "患者分析尚未开始" in confirmation
+    assert "研究规划未通过合同检查" in confirmation
+    assert "分析尚未开始" in confirmation
 
 
 def test_guided_analysis_outcome_stays_visible_after_refresh() -> None:

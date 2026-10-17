@@ -127,7 +127,7 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   const groupingStops = {
     exposure_group_requires_extraction: [/Prepare data that include this value/, /请准备包含该数值的数据/],
     exposure_group_not_applied: [/the detail names the grouping and the reason/, /详情里写明了是哪一个分组以及原因/],
-    exposure_grouping_unanswered: [/state in the question how the exposure is grouped/, /请在问题里写明暴露如何分组/],
+    exposure_grouping_unanswered: [/keep the run record for diagnosis/, /请保留运行记录供排查/],
     exposure_group_variable_unbound: [/This is an EasyICU fault/, /这是 EasyICU 的内部故障/],
     exposure_group_candidate_drift: [/runs only the grouping that was approved/, /EasyICU 只运行已批准的分组/],
     exposure_group_level_empty: [/does not drop or merge a group on its own/, /不会自行删除或合并分组/],

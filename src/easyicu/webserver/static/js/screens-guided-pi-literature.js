@@ -193,18 +193,11 @@
         '这份快照仅供回看；系统正在分析前重新检索文献并生成新的候选计划。'
       );
     } else if (revisionFailed) {
-      const drafts = Math.max(0, ...((Array.isArray(failedJob.progress) ? failedJob.progress : [])
-        .filter(row => row && row.step === 'planning').map(row => Number(row.total || row.current || 0))));
       title = tr('Previous plan snapshot · revision did not complete', '上一版计划快照 · 修订版未生成成功');
-      detail = drafts
-        ? tr(
-          `${drafts} draft attempt(s) failed the scientific contract. The old “0 direct matches” remains historical evidence, not a current finding. Return to the conversation to generate a fresh plan.`,
-          `系统尝试了 ${drafts} 版草案，均未通过科学合同。旧页面的“直接匹配 0 篇”只是历史记录，不是当前结论；请返回对话重新生成计划。`
-        )
-        : tr(
-          'The replacement plan did not complete. The old counts remain historical evidence, not a current finding. Return to the conversation to generate a fresh plan.',
-          '替代计划未生成完成。旧页面数字只是历史记录，不是当前结论；请返回对话重新生成计划。'
-        );
+      detail = tr(
+        'The replacement plan did not complete. The old counts remain historical evidence, not a current finding. Return to the conversation to generate a fresh plan.',
+        '替代计划未生成完成。旧页面数字只是历史记录，不是当前结论；请返回对话重新生成计划。'
+      );
     } else if (code === 'plan_scientific_changes_required') {
       title = tr('Candidate plan awaiting revision', '待修订的上一版候选计划');
       detail = tr(
