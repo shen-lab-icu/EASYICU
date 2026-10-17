@@ -322,7 +322,7 @@
         // by its analysis template.
         exposure_group_requires_extraction: tr('The study forms its exposure groups from a value the prepared data do not hold, so EasyICU cannot form them on this input. Planning stopped before the plan was outlined and no analysis was run. Prepare data that include this value, or change how the question groups the exposure, then generate the plan again.', '研究要按一个数值分组，但准备好的数据里没有这个值，EasyICU 无法在这份数据上分组。规划在拟定计划大纲之前已停止，没有运行分析。请准备包含该数值的数据，或在对话里修改问题中的分组方式，再重新生成计划。'),
         exposure_group_not_applied: tr('EasyICU cannot apply the study\'s exposure grouping to this input as stated; the detail names the grouping and the reason. Planning stopped before the plan was outlined and no analysis was run. Change how the question groups the exposure, then generate the plan again.', '研究所述的暴露分组无法按原样用在这份数据上，详情里写明了是哪一个分组以及原因。规划在拟定计划大纲之前已停止，没有运行分析。请在对话里修改问题中的分组方式，再重新生成计划。'),
-        exposure_grouping_unanswered: tr('After the allowed retries, the model did not state the study\'s exposure groupings in a form EasyICU could read. Planning stopped and no analysis was run. Generate the plan again; if this recurs, state in the question how the exposure is grouped.', '模型在允许的重试次数内，没有以 EasyICU 能读取的形式说明研究的暴露分组。规划已停止，没有运行分析。请重新生成计划；如果再次出现，请在问题里写明暴露如何分组。'),
+        exposure_grouping_unanswered: tr('After the allowed retries, the model did not state the study\'s exposure groupings in a form EasyICU could read. Planning stopped and no analysis was run. Generate the plan again; if this recurs, keep the run record for diagnosis.', '模型在允许的重试次数内，没有以 EasyICU 能读取的形式说明研究的暴露分组。规划已停止，没有运行分析。可重新生成计划；若仍失败，请保留运行记录供排查。'),
         exposure_group_variable_unbound: tr('EasyICU staged the exposure groups, but the research context built on them does not hold the grouped variable. This is an EasyICU fault, not a problem with the study. Planning stopped and no analysis was run. Generate the plan again; if it recurs, report it with the run record.', 'EasyICU 已暂存暴露分组，但在其上构建的研究上下文里没有这个分组变量。这是 EasyICU 的内部故障，不是研究本身的问题。规划已停止，没有运行分析。请重新生成计划；如果再次出现，请连同运行记录一起反馈。'),
         exposure_group_candidate_drift: tr('EasyICU formed the approved plan\'s exposure groups again on this run\'s data, and they read other values than in the approved plan; the data may have been prepared again, or EasyICU\'s rules may have changed. EasyICU runs only the grouping that was approved, so planning stopped and no analysis was run. Generate the plan again, then review and approve it.', 'EasyICU 按这次运行的数据重新组成已批准计划里的暴露分组，读取的数值与批准时不同；数据可能重新准备过，EasyICU 的规则也可能有变化。EasyICU 只运行已批准的分组，所以规划已停止，没有运行分析。请重新生成计划，复核后再批准。'),
         exposure_group_level_empty: tr('A group the study stated holds no ICU stay on this data, so the plan would compare a group that is not there. EasyICU does not drop or merge a group on its own. Planning stopped and no analysis was run. Change the grouping\'s thresholds in the question, then generate the plan again.', '研究声明的某个分组在这份数据里一个 ICU 住院都没有，计划会去比较一个并不存在的组。EasyICU 不会自行删除或合并分组。规划已停止，没有运行分析。请在对话里修改问题中的分组阈值，再重新生成计划。'),
@@ -384,8 +384,8 @@
           '研究需要的某个变量，数据源里有这一列，但一个值都没有，所以在调用模型之前就停止了规划。请更换这个变量，或改用记录了它的数据源，再重新生成计划。',
         ),
         research_pipeline_plan_contract_exhausted: tr(
-          'Four plan drafts in a row did not pass the scientific checks, so analysis did not start.',
-          '连续 4 版计划草案都没有通过科学检查，分析没有开始。',
+          'Planning exhausted its allowed attempts without a valid plan. Analysis did not start.',
+          '规划在允许的尝试次数内未能生成有效计划，分析没有开始。',
         ),
         research_pipeline_planner_provider_unavailable: tr(
           'The model service was unavailable while planning. Check the connection and generate the plan again.',

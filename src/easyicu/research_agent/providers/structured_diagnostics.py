@@ -114,6 +114,24 @@ _SAFE_VALIDATION_FIELDS = frozenset(
         "reference_level",
         "comparison_level",
         "dependence",
+        "groupings",
+        "groups",
+        "concept",
+        "window",
+        "start_hours",
+        "end_hours",
+        "scale",
+        "summary",
+        "rule",
+        "unmeasured",
+        "handling",
+        "reference",
+        "contrast",
+        "quote",
+        "source",
+        "id",
+        "label",
+        "unit",
     }
 )
 
@@ -228,6 +246,31 @@ def safe_validation_stage(value: Any) -> Optional[str]:
     return text if text in _SAFE_VALIDATION_STAGES else None
 
 
+def _validation_records(exc: BaseException) -> List[Any]:
+    """Read a validator through explicit owner wrappers, with a bounded chain.
+
+    Owners may keep their own ``errors`` list and raise from the underlying
+    validator. Only the explicit cause supplies schema coordinates; ambient
+    exception context can describe an unrelated failure.
+    """
+
+    current: Optional[BaseException] = exc
+    seen: set[int] = set()
+    for _ in range(8):
+        if current is None or id(current) in seen:
+            break
+        seen.add(id(current))
+        try:
+            errors = getattr(current, "errors", None)
+            records = list(errors()) if callable(errors) else []
+        except Exception:  # noqa: BLE001 - diagnostics never own execution
+            records = []
+        if records:
+            return records
+        current = current.__cause__
+    return []
+
+
 def infer_validation_stage(exc: BaseException) -> Optional[str]:
     """Locate a contract owner from closed exception/traceback coordinates.
 
@@ -242,7 +285,7 @@ def infer_validation_stage(exc: BaseException) -> Optional[str]:
         return explicit
     if isinstance(exc, json.JSONDecodeError):
         return "json_shape"
-    if callable(getattr(exc, "errors", None)):
+    if callable(getattr(exc, "errors", None)) or _validation_records(exc):
         return "schema_validation"
     if type(exc).__name__ == "PlannerArticleContractError":
         return "article_contract"
@@ -322,13 +365,7 @@ def _safe_validation_issue_type(value: Any) -> str:
 def safe_validation_issues(exc: BaseException) -> List[Dict[str, Any]]:
     """Project schema coordinates and shape without prose or rejected values."""
 
-    errors = getattr(exc, "errors", None)
-    if not callable(errors):
-        return []
-    try:
-        records = list(errors())
-    except Exception:  # noqa: BLE001 - diagnostics must not affect execution
-        return []
+    records = _validation_records(exc)
     projected: List[Dict[str, Any]] = []
     for record in records[:40]:
         if not isinstance(record, Mapping):

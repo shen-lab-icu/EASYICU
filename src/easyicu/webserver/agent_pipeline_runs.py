@@ -719,7 +719,7 @@ _PLANNING_STOP_SENTENCES = {
         "The model did not state the study's exposure grouping in a form "
         "EasyICU can read within the allowed retries, so planning stopped and "
         "no analysis was run. Generate the plan again; if it stops again, "
-        "state in the question how the exposure is grouped."
+        "keep the run record for diagnosis."
     ),
     "exposure_group_variable_unbound": (
         "EasyICU formed the study's exposure groups, but the research context "
