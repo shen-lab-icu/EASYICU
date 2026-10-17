@@ -11200,6 +11200,10 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.planning.population_provenance",
+      "easyicu.research_agent.planning.population_spec"
+    ],
+    [
       "easyicu.research_agent.planning.population_requirements",
       "easyicu.research_agent.schema"
     ],
@@ -11442,6 +11446,10 @@
     [
       "easyicu.research_agent.planning.progressive_compiler",
       "easyicu.research_agent.planning.population_compile"
+    ],
+    [
+      "easyicu.research_agent.planning.progressive_compiler",
+      "easyicu.research_agent.planning.population_provenance"
     ],
     [
       "easyicu.research_agent.planning.progressive_compiler",
@@ -15052,9 +15060,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3755,
+    "edge_count": 3757,
     "largest_scc_size": 0,
-    "module_count": 850,
+    "module_count": 851,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -15660,6 +15668,7 @@
     "easyicu.research_agent.planning.plan_graph": "planning/plan_graph.py",
     "easyicu.research_agent.planning.planner_output_contract": "planning/planner_output_contract.py",
     "easyicu.research_agent.planning.population_compile": "planning/population_compile.py",
+    "easyicu.research_agent.planning.population_provenance": "planning/population_provenance.py",
     "easyicu.research_agent.planning.population_requirements": "planning/population_requirements.py",
     "easyicu.research_agent.planning.population_review": "planning/population_review.py",
     "easyicu.research_agent.planning.population_shadow": "planning/population_shadow.py",

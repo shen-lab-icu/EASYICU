@@ -153,10 +153,11 @@ def test_execution_resume_rejects_review_binding_drift(tmp_path: Path) -> None:
     assert exc_info.value.code == "scientific_plan_review_binding_drift"
 
 
-def test_old_review_is_readable_but_not_current_execution_authority(tmp_path: Path) -> None:
+@pytest.mark.parametrize("version", [10, 11, 12, 13, 14])
+def test_old_review_is_readable_but_not_current_execution_authority(tmp_path: Path, version) -> None:
     evidence = EvidenceStore(tmp_path)
     archived = _review(status="analysis_only", approval_allowed=True).model_copy(
-        update={"schema_version": "easyicu.plan_scientific_review/10"}
+        update={"schema_version": f"easyicu.plan_scientific_review/{version}"}
     )
     assert PlanScientificReview.model_validate(archived.model_dump()) == archived
     _, path = persist_or_validate_scientific_plan_review(

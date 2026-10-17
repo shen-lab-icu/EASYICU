@@ -157,21 +157,27 @@ def _requested_cluster_design(context: ResearchContext) -> _AnalysisDesign | Non
     return parsed
 
 
-def _counts_only_design(context: ResearchContext) -> bool:
+def context_variance_estimator(context: ResearchContext) -> str | None:
+    """Read the study's typed variance choice without inferring one from prose."""
+
     preferences = context.user_preferences
     raw = getattr(preferences, "data_constraints", None)
     if not isinstance(raw, str) or not raw.strip():
-        return False
+        return None
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
-        return False
+        return None
     if not isinstance(payload, Mapping) or not isinstance(
         payload.get("analysis_design"), Mapping
     ):
-        return False
+        return None
     parsed = _parse_analysis_design(payload["analysis_design"])
-    return parsed.variance_estimator == "none_counts_only"
+    return parsed.variance_estimator
+
+
+def _counts_only_design(context: ResearchContext) -> bool:
+    return context_variance_estimator(context) == "none_counts_only"
 
 
 def context_counts_only_authority(context: ResearchContext) -> bool:
