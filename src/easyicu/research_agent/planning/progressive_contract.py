@@ -45,6 +45,7 @@ ProgressiveOutputRole = Literal[
     "cohort_flow",
     "table_one",
     "exposure_outcome_distribution",
+    "continuous_outcome_summary",
     "measurement_missingness",
     "missingness_profile",
     "measurement_source",
@@ -78,6 +79,7 @@ PROGRESSIVE_HOST_COMPILED_OUTPUTS: Mapping[
     "exposure_outcome_distribution": (
         ("table:exposure_outcome_distribution", "exposure_outcome_distribution"),
     ),
+    "continuous_outcome_summary": (("table:continuous_outcome_summary", "continuous_outcome_summary"),),
     "adjusted_association": (
         ("table:adjusted_association_estimates", "adjusted_association_estimates"),
     ),
@@ -93,6 +95,7 @@ PROGRESSIVE_ARTICLE_ROLES: Mapping[str, frozenset[str]] = {
     "cohort_definition": frozenset({"cohort_accounting"}),
     "table_one": frozenset({"baseline_context"}),
     "exposure_outcome_distribution": frozenset({"descriptive_result"}),
+    "continuous_outcome_summary": frozenset({"descriptive_result"}),
     "measurement_audit": frozenset({"data_quality"}),
     "adjusted_association": frozenset({"primary_estimand"}),
     "absolute_risk_context": frozenset({"descriptive_result"}),
@@ -502,6 +505,10 @@ class ProgressiveOutlineStep(BaseModel):
 
     @model_validator(mode="after")
     def _population_owner(self):
+        if self.module_id == "continuous_outcome_summary" and (
+            self.planned_analysis_role != "secondary" or self.scientific_action_id is not None
+        ):
+            raise ValueError("continuous_outcome_summary is a secondary host summary, not an effect action")
         if self.population_scope == STUDY_COHORT_SCOPE:
             _require_study_cohort_owner(self.module_id, self.population_scope_change_reason)
             return self
@@ -820,6 +827,19 @@ class ProgressiveSkeletonStep(BaseModel):
             self.primary_exposure and self.outcome
         ):
             raise ValueError("absolute_risk_context requires exposure and outcome")
+        if self.module_id == "continuous_outcome_summary":
+            if (self.planned_analysis_role != "secondary" or not self.primary_exposure
+                    or self.primary_exposure not in self.raw_inputs or len(self.raw_inputs) < 2
+                    or self.outcome is not None or self.outcome_type is not None
+                    or self.model_terms or self.scientific_action_id is not None
+                    or self.sensitivity_spec_ids
+                    or any(value is not None for value in (
+                        self.event_level_index, self.reference_exposure_level_index,
+                        self.comparison_exposure_level_index, self.primary_contrast_level_index,
+                        self.denominator_policy, self.missing_exposure_policy,
+                        self.missing_outcome_policy, self.confidence_level,
+                    ))):
+                raise ValueError("continuous_outcome_summary requires a secondary grouping/outcome roster, without binary, effect or inference controls")
         if self.population_scope == STUDY_COHORT_SCOPE:
             _require_study_cohort_owner(self.module_id, self.population_scope_change_reason)
             if self.module_id == "cohort_definition" and (

@@ -7,6 +7,7 @@ must not be shown to it, in either transport.
 """
 
 import json
+import re
 
 import pytest
 
@@ -28,6 +29,7 @@ from easyicu.research_agent.planning.progressive_contract import (
 )
 
 from .scientific_review_fixtures import _context
+from tests.research_agent.core.patient_weighted_distribution_fixtures import ASSUMPTIONS
 
 _ROSTER = (
     "phenotyping.cluster_solution",
@@ -43,6 +45,8 @@ _VALUES = {
     "phenotyping_feature_columns": _FEATURES,
     "phenotyping_comparison_variables": _COMPARISONS,
     "functional_form_spec": _FORM,
+    "repeated_unit_interval_method": "patient_cluster_robust_wald",
+    "patient_weighted_interval_assumptions": ASSUMPTIONS,
 }
 _COORDINATES = {
     "trajectory_primary": ("phenotyping.trajectory_feature_clustering", "primary"),
@@ -187,6 +191,6 @@ def _accepts(action, role, field):
             **{field: _VALUES[field]},
         )
     except ValueError as exc:
-        assert "belongs only to" in str(exc), exc
+        assert re.search(r"belongs? only to", str(exc)), exc
         return False
     return True

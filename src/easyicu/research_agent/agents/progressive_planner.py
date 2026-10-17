@@ -1662,6 +1662,14 @@ class ProgressivePlannerAgent:
                 "this module merely to satisfy an article descriptive-result "
                 "role."
             ),
+            (
+                "Continuous secondary outcomes: use continuous_outcome_summary for the "
+                "explicitly requested numeric continuous outcomes grouped by a closed "
+                "scientific exposure. Declare one secondary step listing that grouping "
+                "and every selected continuous outcome. It reports per-outcome median, "
+                "quartiles, mean, SD, and missingness, without tests or effect estimates. "
+                "It does not replace a requested association model or uncertainty interval."
+            ),
         ]
         baseline = baseline_requirement_projection(contract_context)
         if baseline["tables"]:
@@ -3277,6 +3285,16 @@ class ProgressivePlannerAgent:
                 "effect. Keep contrast indexes, denominator/missingness policy "
                 "fields, model terms, Table 1 fields, custom_method, and "
                 "sensitivity_spec_ids null or empty."
+            )
+        if outline_step.module_id == "continuous_outcome_summary":
+            blocks.append(
+                "Continuous outcome summary: planned_analysis_role=secondary; set "
+                "primary_exposure to the declared categorical grouping and put it plus "
+                "all selected numeric continuous outcomes in raw_inputs. Keep outputs=[]; "
+                "the host owns table:continuous_outcome_summary. No binary outcome, "
+                "baseline descriptor, adjustment model or inferential comparison belongs "
+                "in this step. Leave outcome, outcome_type, binary level indexes, "
+                "confidence and missingness policies null; model_terms and sensitivity_spec_ids empty."
             )
         if outline_step.module_id == "exposure_outcome_distribution":
             blocks.append(

@@ -41,6 +41,7 @@ from .scientific_action_catalog import scientific_action_for_id
 _MODULE_DESIGN_ELEMENTS: Mapping[str, tuple[str, ...]] = {
     "cohort_definition": ("population", "time_zero", "reporting"),
     "table_one": ("population", "reporting"),
+    "continuous_outcome_summary": ("population", "outcome", "reporting"),
     "exposure_outcome_distribution": (
         "exposure",
         "outcome",

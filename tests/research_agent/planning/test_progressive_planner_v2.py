@@ -2617,7 +2617,7 @@ def test_current_host_compiled_module_forbids_model_named_outputs(
 ) -> None:
     outline_step = ProgressiveOutlineStep(
         step_id=f"02_{module_id}",
-        planned_analysis_role="auxiliary",
+        planned_analysis_role="secondary" if module_id == "continuous_outcome_summary" else "auxiliary",
         module_id=module_id,
         objective="Materialize the registered module with host-owned product names.",
         depends_on=["01_cohort"],
@@ -4754,7 +4754,7 @@ def test_descriptive_outline_prompt_separates_article_and_executable_ids() -> No
     assert "Allowed ProgressiveOutlineStep.module_id values" in prompt
     assert (
         '"descriptive_epidemiology":["cohort_definition","table_one",'
-        '"exposure_outcome_distribution","measurement_audit"]'
+        '"exposure_outcome_distribution","continuous_outcome_summary","measurement_audit"]'
     ) in prompt
     assert '"article_requirement_id":"cohort_denominator"' in prompt
     assert '"module_id":"cohort_denominator"' not in prompt

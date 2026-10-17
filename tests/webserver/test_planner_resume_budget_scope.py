@@ -224,7 +224,9 @@ def test_shared_submission_restores_scope_before_runner_and_authorization(submit
     runner = next(event[1] for event in events if isinstance(event, tuple))
     assert receipt.budget_mode == runner["budget_mode"] == mode
     assert receipt.resume_source_job_id == runner["development_resume_source_job_id"] == "prior"
-    assert events[-2:] == ["authorize", "job"]
+    # Reserve capacity before consuming a one-use grant; the worker's start
+    # gate still waits for authorization and context handoff.
+    assert events[-2:] == ["job", "authorize"]
     assert events.count("source") == (1 if mode == "full_reviewed" else 0)
     if mode == "full_reviewed":
         assert events[0] == "source"
@@ -296,7 +298,7 @@ def test_an_automatic_seed_the_current_contract_refuses_plans_anew(refused_chain
     assert receipt.resume_source_job_id is None
     assert "development_resume_source_job_id" not in runner
     assert receipt.budget_mode == runner["budget_mode"] == "planner_canary"
-    assert events[-2:] == ["authorize", "job"]
+    assert events[-2:] == ["job", "authorize"]
     [(kind, detail)] = audit
     assert kind == "agent_run_submitted"
     assert detail["development_resume_source_job_id"] is None

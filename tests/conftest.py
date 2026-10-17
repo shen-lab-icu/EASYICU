@@ -5,7 +5,6 @@ from functools import lru_cache
 from importlib.util import find_spec
 import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -46,12 +45,11 @@ _OPTIONAL_EXTRA_TEST_FILES = {
 # late to protect the user's real ~/.easyicu state.  Give the entire pytest
 # process one disposable EasyICU home before any test module can import those
 # owners; individual tests may still override the variable with monkeypatch.
-_PYTEST_EASYICU_HOME = tempfile.TemporaryDirectory(prefix="easyicu-pytest-state-")
-os.environ["EASYICU_HOME"] = _PYTEST_EASYICU_HOME.name
-
 for path in (REPO_ROOT, SRC_ROOT):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
+
+from tests.support.pytest_state import PYTEST_EASYICU_HOME as _PYTEST_EASYICU_HOME  # noqa: E402
 
 
 @lru_cache(maxsize=None)

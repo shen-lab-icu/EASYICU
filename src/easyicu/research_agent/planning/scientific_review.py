@@ -22,6 +22,8 @@ from typing import Any, Literal, Mapping, Optional, Sequence
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..canonical_json import canonical_sha256
+from ..contracts.continuous_outcome_summary import continuous_outcome_columns, continuous_outcome_summary_verdict
+from ..contracts.continuous_outcome_metadata import continuous_summary_columns
 from ..authority.declared_levels import closed_planning_levels_for
 from ..authority.current_case_scientific_runtime import (
     CurrentCaseScientificRuntimeAuthority,
@@ -307,6 +309,17 @@ def planned_model_outcomes(
                 and spec.outcome not in values
             ):
                 values.append(spec.outcome)
+        if (context is not None
+                and canonical_analysis_family(plan.analysis_type) == "descriptive_epidemiology"
+                and continuous_outcome_summary_verdict(step).claimed):
+            grouping, *outcomes = continuous_outcome_columns(step)
+            try:
+                continuous_summary_columns(grouping=grouping, raw_inputs=[grouping, *outcomes],
+                                           variables={v.name: v for v in context.variables})
+            except ValueError:
+                pass  # Invalid metadata cannot manufacture outcome coverage.
+            else:
+                values.extend(outcome for outcome in outcomes if outcome not in values)
         if context is not None and is_ordered_stratified_analysis_step(step):
             for input_key in step.inputs:
                 descriptor = context.variable(str(input_key or "").strip())
@@ -601,7 +614,7 @@ def descriptive_only_step(step: AnalysisStep) -> bool:
         if str(value).strip() and ":" not in str(value).strip()
     ]
     shape = (_method_head(step), tuple(step.expected_outputs))
-    closed_shape = bool(
+    closed_shape = continuous_outcome_summary_verdict(step).claimed or bool(
         shape in _DESCRIPTIVE_ONLY_STEP_SHAPES
         and (
             step.exposure_outcome_distribution_spec is not None

@@ -333,7 +333,7 @@ def test_a_retried_plan_whose_seed_formed_a_grouping_plans_anew_and_says_why(
     [(kind, detail)] = submit.audit
     assert kind == "agent_run_submitted"
     assert detail["development_resume_seed_rejected"] == declined
-    assert submit.events[-2:] == ["authorize", "job"]
+    assert submit.events[-2:] == ["job", "authorize"]
 
 
 def test_a_retried_plan_whose_seed_formed_no_grouping_still_resumes(

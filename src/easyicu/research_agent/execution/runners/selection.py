@@ -91,6 +91,10 @@ from .descriptive_distribution_executor import (
     descriptive_distribution_executor_code,
     descriptive_distribution_executor_owns_step,
 )
+from ...contracts.continuous_outcome_summary import (
+    CONTINUOUS_OUTCOME_SUMMARY, continuous_outcome_summary_verdict,
+)
+from .continuous_outcome_summary_executor import continuous_outcome_summary_executor_code
 from .descriptive_result_figure_executor import (
     descriptive_result_figure_executor_code,
     descriptive_result_figure_executor_owns_step,
@@ -1018,6 +1022,16 @@ def _build_registry() -> StepExecutorRegistry:
             analysis_kind=DESCRIPTIVE_DISTRIBUTION_ANALYSIS_KIND,
             selection_reason="grouped_descriptive_distribution_contract_preflight",
             progress_message="Using planner-scoped grouped descriptive distribution executor",
+            consumed_input_keys=lambda c: c.typed_cohort_inputs(),
+        ),
+        StepExecutor(
+            key=CONTINUOUS_OUTCOME_SUMMARY,
+            owns=lambda c: continuous_outcome_summary_verdict(c.step).claimed,
+            declaration_verdict=lambda c: continuous_outcome_summary_verdict(c.step),
+            render=lambda c: continuous_outcome_summary_executor_code(c.step, plausibility_scope=c.plausibility_scope),
+            analysis_kind=CONTINUOUS_OUTCOME_SUMMARY,
+            selection_reason="continuous_outcome_summary_contract_preflight",
+            progress_message="Summarizing the declared continuous outcomes by group",
             consumed_input_keys=lambda c: c.typed_cohort_inputs(),
         ),
         StepExecutor(

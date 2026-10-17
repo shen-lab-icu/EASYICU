@@ -12,11 +12,23 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import re
+import importlib.util
 
 from easyicu.webserver import state_paths, study_contexts
 
 
 WEBSERVER = Path(state_paths.__file__).resolve().parent
+
+
+def test_reimporting_conftest_does_not_move_an_already_bound_state_root():
+    before = os.environ["EASYICU_HOME"]
+    source = Path(__file__).resolve().parents[1] / "conftest.py"
+    spec = importlib.util.spec_from_file_location("_easyicu_conftest_alias_probe", source)
+    assert spec is not None and spec.loader is not None
+    alias = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(alias)
+    assert os.environ["EASYICU_HOME"] == before
+    assert study_contexts._CONFIG_PATH == Path(before) / ".easyicu/webserver_study_contexts.json"
 
 
 def test_pytest_collection_isolates_import_time_state_paths() -> None:
