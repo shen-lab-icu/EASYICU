@@ -536,6 +536,7 @@ def _pending_plan_approval_allowed(
     run_dir: Optional[Path],
     pending: Optional[Any],
     plan_recommendation_complete: bool,
+    population_acceptance: Mapping[str, Any] | None = None,
 ) -> bool:
     """Fail closed unless the exact bound review satisfies current policy."""
 
@@ -547,14 +548,11 @@ def _pending_plan_approval_allowed(
     review = _load_pending_scientific_review(run_dir, pending)
     if not review or review.get("approval_allowed") is not True:
         return False
-    return all(
-        (
-            request.payload.get("approval_allowed", True)
-            if isinstance(request.payload, Mapping)
-            else True
-        )
-        for request in pending.requests
-    )
+    from easyicu.research_agent.planning.population_review import request_allows_approval
+    from easyicu.webserver.pi_copilot.population_acceptance import accepted_ids_for_request
+
+    return all(request_allows_approval(request, accepted_ids_for_request(population_acceptance, request))
+               for request in pending.requests)
 
 
 def _pending_review_reason_code(
@@ -562,6 +560,7 @@ def _pending_review_reason_code(
     request: Any,
     plan_recommendation_complete: bool,
     scientific_plan_review: Mapping[str, Any],
+    population_acceptance: Mapping[str, Any] | None = None,
 ) -> str:
     """Project one precise current-policy reason for the paused plan."""
 
@@ -578,6 +577,13 @@ def _pending_review_reason_code(
         return "scientific_plan_review_policy_stale"
     if scientific_plan_review.get("approval_allowed") is not True:
         return "plan_scientific_changes_required"
+    from easyicu.research_agent.planning.population_review import NOT_APPLIED_STOP, request_allows_approval
+    from easyicu.webserver.pi_copilot.population_acceptance import accepted_ids_for_request
+
+    if explicit_reason == NOT_APPLIED_STOP and request_allows_approval(
+        request, accepted_ids_for_request(population_acceptance, request),
+    ):
+        return "operator_plan_approval_required"
     return _clean_text(payload.get("reason"), 160)
 
 
@@ -4181,10 +4187,15 @@ def _write_projection(
     )
     scientific_plan_review = _load_pending_scientific_review(run_dir, pending)
     question_requirements = _load_question_requirements(run_dir, plan)
+    from easyicu.webserver.pi_copilot.population_acceptance import current_review_study, population_acceptance_proposal
+
+    proposal_study = current_review_study(study) if pending is not None else None
+    population_acceptance = population_acceptance_proposal(study=proposal_study, pending=pending) if proposal_study is not None else None
     current_review_approval_allowed = _pending_plan_approval_allowed(
         run_dir=run_dir,
         pending=pending,
         plan_recommendation_complete=plan_recommendation_complete,
+        population_acceptance=population_acceptance,
     )
     scientific_readiness = build_scientific_readiness_projection(
         run_id=run_id,
@@ -4260,19 +4271,13 @@ def _write_projection(
                         request=request,
                         plan_recommendation_complete=plan_recommendation_complete,
                         scientific_plan_review=scientific_plan_review,
+                        population_acceptance=population_acceptance,
                     ),
                     160,
                 ),
                 "summary": request.summary,
                 "authority_sha256": request.authority_sha256,
-                "approval_allowed": (
-                    request.payload.get("approval_allowed", True)
-                    and plan_recommendation_complete
-                    and current_review_approval_allowed
-                    if isinstance(request.payload, Mapping)
-                    else plan_recommendation_complete
-                    and current_review_approval_allowed
-                ),
+                "approval_allowed": plan_recommendation_complete and current_review_approval_allowed,
                 "review_score": (
                     request.payload.get("review_score")
                     if isinstance(request.payload, Mapping)
@@ -4635,10 +4640,15 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
     )
     run_dir = Path(pending.run_dir)
     scientific_plan_review = _load_pending_scientific_review(run_dir, pending)
+    from easyicu.webserver.pi_copilot.population_acceptance import current_review_study, population_acceptance_proposal
+
+    proposal_study = current_review_study(study) if pending is not None else None
+    population_acceptance = population_acceptance_proposal(study=proposal_study, pending=pending) if proposal_study is not None else None
     current_review_approval_allowed = _pending_plan_approval_allowed(
         run_dir=run_dir,
         pending=pending,
         plan_recommendation_complete=plan_recommendation_complete,
+        population_acceptance=population_acceptance,
     )
     return {
         "run_id": pending.run_id,
@@ -4669,17 +4679,11 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
                         request=request,
                         plan_recommendation_complete=plan_recommendation_complete,
                         scientific_plan_review=scientific_plan_review,
+                        population_acceptance=population_acceptance,
                     ),
                     160,
                 ),
-                "approval_allowed": (
-                    request.payload.get("approval_allowed", True)
-                    and plan_recommendation_complete
-                    and current_review_approval_allowed
-                    if isinstance(request.payload, Mapping)
-                    else plan_recommendation_complete
-                    and current_review_approval_allowed
-                ),
+                "approval_allowed": plan_recommendation_complete and current_review_approval_allowed,
                 "review_score": (
                     request.payload.get("review_score")
                     if isinstance(request.payload, Mapping)
@@ -4704,20 +4708,12 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
             }
             for request in pending.requests
         ],
-        "plan_approval_allowed": all(
-            (
-                request.payload.get("approval_allowed", True)
-                if isinstance(request.payload, Mapping)
-                else True
-            )
-            for request in pending.requests
-        )
-        and plan_recommendation_complete
-        and current_review_approval_allowed,
+        "plan_approval_allowed": plan_recommendation_complete and current_review_approval_allowed,
         "scientific_plan_review": scientific_plan_review,
         "population_preparation": population_preparation_proposal(
-            study=study, run_id=pending.run_id, requests=pending.requests,
-        ),
+            study=proposal_study, run_id=pending.run_id, requests=pending.requests,
+        ) if proposal_study is not None else None,
+        "population_acceptance": population_acceptance,
         "planning_coordinate_readings": planning_coordinate_readings.load_planning_coordinate_readings(
             wrapper_dir,
             context_columns=planning_coordinate_readings.planned_context_columns(run_dir),
@@ -7426,8 +7422,16 @@ def resume_research_pipeline(
         decisions = stored_decisions
     else:
         decided_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        from easyicu.webserver.pi_copilot.population_acceptance import (
+            accepted_ids_for_request, current_review_study, population_acceptance_proposal,
+        )
+
+        choice_study = current_study_context or current_review_study(entry.study)
+        population_choice = population_acceptance_proposal(study=choice_study, pending=entry.pending) if resolved == "approved" and choice_study is not None else None
         decisions = [
             {
+                **({"population_criterion_acceptances": list(accepted_ids_for_request(population_choice, request))}
+                   if accepted_ids_for_request(population_choice, request) else {}),
                 "review_id": request.review_id,
                 "authority_sha256": request.authority_sha256,
                 "decision": resolved,

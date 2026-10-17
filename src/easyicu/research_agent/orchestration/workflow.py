@@ -43,7 +43,7 @@ from typing import (
     runtime_checkable,
 )
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from ..authority.plan_lifecycle import load_approved_executable_plan
 from ..authority.plan_review import PlanReviewAuthority, ReviewExecutionAuthority
@@ -184,6 +184,16 @@ class HumanReviewDecision(BaseModel):
     reviewer: str = Field(min_length=1, max_length=200)
     decided_at: str = Field(min_length=1, max_length=80)
     note: str = Field(default="", max_length=1_000)
+    population_criterion_acceptances: tuple[str, ...] = Field(
+        default=(), max_length=100,
+    )
+
+    @model_serializer(mode="wrap")
+    def _serialize_decision(self, handler):
+        result = handler(self)
+        if not self.population_criterion_acceptances:
+            result.pop("population_criterion_acceptances", None)
+        return result
 
 
 class HumanReviewPending(BaseModel):
@@ -490,7 +500,10 @@ def human_review_requests_for_plan(
                     "population_compile": detail["population_compile"],
                     "population_compile_sha256": detail.get("population_compile_sha256"),
                 }
-                if reason == "population_inclusion_requires_extraction"
+                if reason in {
+                    "population_inclusion_requires_extraction",
+                    "population_inclusion_not_applied",
+                }
                 and isinstance(detail.get("population_compile"), Mapping)
                 else {}
             ),
@@ -543,6 +556,12 @@ def _human_review_decision_record(
         "request_sha256": canonical_sha256(request_payload),
         "decision_sha256": canonical_sha256(decision_payload),
     }
+    if decision.population_criterion_acceptances:
+        from ..planning.population_review import acceptance_record
+
+        record["population_acceptance"] = acceptance_record(
+            request, decision.population_criterion_acceptances,
+        )
     return record
 
 
@@ -830,12 +849,16 @@ class PipelineWorkflow:
         # Request order is the host-owned order. Client map/list ordering must
         # not change evidence record order or downstream manifest digests.
         ordered = tuple(observed[request.review_id] for request in self._requests)
+        from ..planning.population_review import request_allows_approval
+
         for request, decision in zip(self._requests, ordered):
             if decision.authority_sha256 != request.authority_sha256:
                 raise ValueError("human review decision authority digest mismatch")
             if (
                 decision.decision == "approved"
-                and request.payload.get("approval_allowed") is False
+                and not request_allows_approval(
+                    request, decision.population_criterion_acceptances,
+                )
             ):
                 raise ValueError(
                     "this scientific-stop request cannot be approved; create "

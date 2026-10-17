@@ -392,18 +392,23 @@
       }
     }
 
-    async function applyPopulationPreparation() {
+    async function applyPopulationReviewChoice(kind) {
       if (unavailable()) return false;
       const workflow = host.workflow() || {};
-      const proposal = (workflow.plan_review_summary || {}).population_preparation;
+      const accepting = kind === 'acceptance';
+      const code = accepting ? 'population_inclusion_not_applied' : 'population_inclusion_requires_extraction';
+      const proposal = (workflow.plan_review_summary || {})[accepting ? 'population_acceptance' : 'population_preparation'];
+      const criterion = accepting && proposal && (proposal.criteria || []).find(row => !row.accepted);
       const session = host.session() || {};
       const binding = session.binding || {};
       const api = host.api();
-      if (workflow.next_action_code !== 'population_inclusion_requires_extraction'
+      const apply = accepting ? api.acceptPiCopilotPopulationInclusion : api.applyPiCopilotPopulationPreparation;
+      if (workflow.next_action_code !== code
+        || (accepting && !criterion)
         || !proposal || proposal.available !== true
         || proposal.run_id !== binding.run_id
         || proposal.study_revision !== binding.study_revision
-        || typeof api.applyPiCopilotPopulationPreparation !== 'function') return false;
+        || typeof apply !== 'function') return false;
       const guardKey = proposal.proposal_sha256;
       if (!guardKey || startedTransitions.has(guardKey)) return false;
       const projectId = host.projectId();
@@ -413,7 +418,8 @@
       startedTransitions.add(guardKey);
       setPending(true);
       try {
-        await api.applyPiCopilotPopulationPreparation(session.session_id, {
+        await apply.call(api, session.session_id, {
+          ...(accepting ? {criterion_id: criterion.id} : {}),
           project_id: projectId, run_id: binding.run_id,
           expected_revision: binding.study_revision, proposal_sha256: guardKey,
         });
@@ -422,7 +428,7 @@
         if (!stillCurrent()) return false;
         await host.loadWorkflow();
         if (!stillCurrent()) return false;
-        // Applying settings grants no extraction, Provider call or analysis.
+        // Saving a population choice grants no extraction, Provider call or analysis.
         host.setBusy(false);
         host.render();
         return true;
@@ -748,7 +754,12 @@
     async function confirmWorkflow(confirmation) {
       if (!confirmation) return;
       if (confirmation.code === 'population_inclusion_requires_extraction') {
-        await applyPopulationPreparation();
+        await applyPopulationReviewChoice('preparation');
+        return;
+      }
+      if (confirmation.code === 'population_inclusion_not_applied'
+        && ((host.workflow() || {}).plan_review_summary || {}).population_acceptance) {
+        await applyPopulationReviewChoice('acceptance');
         return;
       }
       if (confirmation.code === 'agent_plan_revision_nonconvergent') {

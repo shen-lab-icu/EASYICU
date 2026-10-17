@@ -27,7 +27,7 @@ NOT_APPLIED = POPULATION_APPROVAL_STOPS["not_applied"]
 REQUIRES_EXTRACTION = POPULATION_APPROVAL_STOPS["requires_extraction"]
 
 
-def _card(code: str, *, run_id: str = "run_population_1", preparation=None) -> dict:
+def _card(code: str, *, run_id: str = "run_population_1", preparation=None, acceptance=None) -> dict:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js is unavailable")
@@ -41,6 +41,7 @@ require(process.argv[1]);
 const code = process.argv[2];
 const runId = process.argv[3];
 const preparation = JSON.parse(process.argv[4]);
+const acceptance = JSON.parse(process.argv[5]);
 const owner = declared.create({
   tr: (en, zh) => zh || en,
   esc: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
@@ -49,7 +50,7 @@ const owner = declared.create({
   sessionIsStale: () => false,
   busy: () => false,
   session: () => ({ binding: { run_id: runId } }),
-  workflow: () => ({ next_action_code: code, plan_review_summary: { run_id: runId, population_preparation: preparation } }),
+  workflow: () => ({ next_action_code: code, plan_review_summary: { run_id: runId, population_preparation: preparation, population_acceptance: acceptance } }),
 });
 const confirmation = owner.workflowConfirmation();
 const html = owner.workflowConfirmationHtml();
@@ -66,7 +67,7 @@ process.stdout.write(JSON.stringify({
 }));
 """
     owner = STATIC / "js" / "screens-guided-pi-confirmation.js"
-    result = run_node(node, script, str(owner.resolve()), code, run_id, json.dumps(preparation), check=False)
+    result = run_node(node, script, str(owner.resolve()), code, run_id, json.dumps(preparation), json.dumps(acceptance), check=False)
     assert result.returncode == 0, result.stderr or result.stdout
     return json.loads(result.stdout)
 
@@ -145,3 +146,28 @@ def test_the_workflow_aside_names_each_stop(code: str, zh: str) -> None:
     (entry,) = [line for line in aside.splitlines() if line.strip().startswith(f"{code}: tr(")]
     assert zh in entry
     assert "cannot be approved" in entry
+
+
+def test_unapplied_criteria_show_scope_and_one_explicit_omission_choice():
+    card = _card(NOT_APPLIED, acceptance={
+        "available": True, "complete": False,
+        "applied_criteria": ["年龄至少 18 岁"],
+        "criteria": [
+            {"id": "c1", "quote": "特定会诊条件", "reason": "population_kind_not_typed", "disposition": "not_applied", "accepted": True},
+            {"id": "c2", "quote": "某种既往治疗 <script>", "reason": "population_concept_unavailable", "disposition": "not_applied", "proposed_by_system": True},
+        ],
+    })
+    assert card["grants"] == []
+    assert card["execute"] is True
+    assert "计划实际筛选的人群" in card["html"] and "年龄至少 18 岁" in card["html"]
+    assert "已接受此条局限" in card["html"] and "所需临床概念不可用" in card["html"]
+    assert "当前待确认" in card["html"] and "接受当前这条局限" in card["html"]
+    assert "仍须单独审阅并批准完整计划" in card["html"]
+    assert "<script>" not in card["html"]
+
+
+def test_an_invalid_omission_record_has_no_acceptance_action():
+    card = _card(NOT_APPLIED, acceptance={"available": False, "record_invalid": True, "criteria": []})
+    assert card["execute"] is False
+    assert card["grants"] == []
+    assert "已保存的选择无法核验" in card["html"]
