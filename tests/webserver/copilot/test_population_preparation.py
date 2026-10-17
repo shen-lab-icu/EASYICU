@@ -84,6 +84,36 @@ def test_review_keeps_the_complete_compilation_bound_to_its_plan(study):
     assert requests[0].payload["approval_allowed"] is False
 
 
+def test_a_lifecycle_handoff_refreshes_the_proposal_but_not_the_old_click(
+    study, service_fixture
+):
+    from easyicu.webserver import agent_pipeline_runs
+    from easyicu.webserver.pi_copilot.contracts import PiCopilotError
+
+    service, record, old_body, _, _ = service_fixture
+    current = study_contexts.handoff_context(study["id"], current_stage="agent_planned")
+    record.binding = record.binding.model_copy(
+        update={"study_revision": current["revision"]}
+    )
+    review = agent_pipeline_runs.pending_review(old_body["run_id"])
+    proposal = review["population_preparation"]
+    assert proposal["study_revision"] == current["revision"]
+    with pytest.raises(PiCopilotError):
+        service.apply_population_preparation(record.session_id, **old_body)
+    service.apply_population_preparation(
+        record.session_id,
+        **{
+            **old_body,
+            "expected_revision": current["revision"],
+            "proposal_sha256": proposal["proposal_sha256"],
+        },
+    )
+    assert (
+        study_contexts.get_context(study["id"])["cohort"]["exclude_readmissions"]
+        is True
+    )
+
+
 def test_an_explicit_projection_reaches_extraction_without_starting_it(study):
     _, requests = reviewed_population({"kind": "first_icu_stay", "source": "outline"})
     result = proposal(study, requests)
@@ -413,9 +443,9 @@ def test_the_workflow_projects_the_bound_proposal_and_drops_it_after_an_edit(
     review = {**review, "scientific_plan_review": {"status": "changes_required"}}
     run = {
         "run_id": body["run_id"],
-        "run_type": "full_pipeline",
+        "run_type": "full",
         "run_status": "human_review_pending",
-        "artifacts": [{"name": "agent_plan.json"}],
+        "artifact_names": ["agent_plan.json"],
         "scientific_configuration_sha256": review["scientific_configuration_sha256"],
     }
 
@@ -436,3 +466,269 @@ def test_the_workflow_projects_the_bound_proposal_and_drops_it_after_an_edit(
         "population_preparation"
         not in snapshot({**study, "question": "Edited question"}).plan_review_summary
     )
+
+
+@pytest.fixture
+def acceptance_fixture(study, service_fixture, monkeypatch):
+    from easyicu.webserver import agent_pipeline_runs
+
+    service, record, body, _, saved = service_fixture
+    _, requests = reviewed_population(
+        {"kind": "not_typed", "why": "No exact diagnosis-state representation"},
+        {"kind": "not_typed", "why": "No exact prior-treatment representation"},
+    )
+    entry = agent_pipeline_runs._PENDING_REVIEWS[body["run_id"]]
+    entry.pending.requests = requests
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_plan_has_complete_reviewable_recommendation",
+        lambda *_: True,
+    )
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_load_pending_scientific_review",
+        lambda *_: {
+            "schema_version": agent_pipeline_runs.CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION,
+            "approval_allowed": True,
+            "findings": [],
+        },
+    )
+    return service, record, body["run_id"], entry, saved
+
+
+def accept_current(service, record, run_id, criterion_id):
+    from easyicu.webserver import agent_pipeline_runs
+
+    proposal = agent_pipeline_runs.pending_review(run_id)["population_acceptance"]
+    return service.accept_population_inclusion(
+        record.session_id,
+        project_id=record.project_id,
+        expected_revision=record.binding.study_revision,
+        run_id=run_id,
+        proposal_sha256=proposal["proposal_sha256"],
+        criterion_id=criterion_id,
+    )
+
+
+def test_two_choices_enable_full_plan_review_without_starting_it(
+    study, acceptance_fixture
+):
+    from easyicu.webserver import agent_pipeline_runs
+
+    service, record, run_id, entry, saved = acceptance_fixture
+    assert agent_pipeline_runs.pending_review(run_id)["plan_approval_allowed"] is False
+    accept_current(service, record, run_id, "c1")
+    review = agent_pipeline_runs.pending_review(run_id)
+    assert review["plan_approval_allowed"] is False
+    assert review["population_acceptance"]["accepted_criterion_ids"] == ["c1"]
+    accept_current(service, record, run_id, "c2")
+    review = agent_pipeline_runs.pending_review(run_id)
+    assert review["plan_approval_allowed"] is True
+    assert review["requests"][0]["reason_code"] == "operator_plan_approval_required"
+    assert review["population_acceptance"]["complete"] is True
+    assert entry.pending.requests[0].payload["approval_allowed"] is False
+    assert study_contexts.get_context(study["id"]) == study
+    assert saved == []
+
+
+def test_copilot_keeps_accepted_omissions_visible_at_the_full_plan_review(
+    study, acceptance_fixture
+):
+    from easyicu.webserver import agent_pipeline_runs
+    from easyicu.webserver.pi_copilot.workflow import build_research_workflow_snapshot
+
+    service, record, run_id, _, _ = acceptance_fixture
+
+    def snapshot(current):
+        review = agent_pipeline_runs.pending_review(run_id)
+        return build_research_workflow_snapshot(
+            study=current,
+            active_export_present=True,
+            active_job=None,
+            latest_run={
+                "run_id": run_id,
+                "run_type": "full",
+                "run_status": "human_review_pending",
+                "artifact_names": ["agent_plan.json"],
+                "scientific_configuration_sha256": review[
+                    "scientific_configuration_sha256"
+                ],
+            },
+            plan_review_authority=review,
+        )
+
+    assert snapshot(study).next_action_code == "population_inclusion_not_applied"
+    accept_current(service, record, run_id, "c1")
+    assert snapshot(study).next_action_code == "population_inclusion_not_applied"
+    accept_current(service, record, run_id, "c2")
+    final = snapshot(study)
+    assert final.next_action_code == "operator_plan_approval_required"
+    assert final.plan_review_summary["population_acceptance"]["complete"] is True
+    assert (
+        "population_acceptance"
+        not in snapshot({**study, "revision": study["revision"] + 1}).plan_review_summary
+    )
+
+
+@pytest.mark.parametrize("identifier", [None, "", "../invalid"])
+def test_unbound_historical_study_has_no_current_population_proposal(identifier):
+    from easyicu.webserver.pi_copilot.population_acceptance import current_review_study
+
+    assert current_review_study({"id": identifier}) is None
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["revision", "run", "digest", "criterion", "study", "job", "concurrent_choice"],
+)
+def test_omission_choices_refuse_stale_or_wrong_coordinates(
+    study, acceptance_fixture, monkeypatch, change
+):
+    from easyicu.webserver import agent_pipeline_runs
+    from easyicu.webserver.pi_copilot.contracts import PiCopilotError
+
+    service, record, run_id, _, saved = acceptance_fixture
+    proposal = agent_pipeline_runs.pending_review(run_id)["population_acceptance"]
+    body = dict(
+        project_id=record.project_id,
+        expected_revision=record.binding.study_revision,
+        run_id=run_id,
+        proposal_sha256=proposal["proposal_sha256"],
+        criterion_id="c1",
+    )
+    if change == "revision":
+        body["expected_revision"] += 1
+    elif change == "run":
+        body["run_id"] = "other"
+    elif change == "digest":
+        body["proposal_sha256"] = "a" * 64
+    elif change == "criterion":
+        body["criterion_id"] = "c99"
+    elif change == "study":
+        study_contexts.upsert_context(
+            {"id": study["id"], "question": "Changed scientific scope"}
+        )
+    elif change == "job":
+        study_contexts.handoff_context(study["id"], active_job_id="running")
+    else:
+        accept_current(service, record, run_id, "c2")
+    with pytest.raises(PiCopilotError):
+        service.accept_population_inclusion(record.session_id, **body)
+    assert saved == []
+    assert study_contexts.get_context(study["id"])["cohort"] == study["cohort"]
+
+
+def test_accepted_omissions_do_not_remove_other_scientific_requirements(
+    acceptance_fixture, monkeypatch
+):
+    from easyicu.webserver import agent_pipeline_runs
+
+    service, record, run_id, entry, _ = acceptance_fixture
+    accept_current(service, record, run_id, "c1")
+    accept_current(service, record, run_id, "c2")
+    monkeypatch.setattr(
+        agent_pipeline_runs,
+        "_load_pending_scientific_review",
+        lambda *_: {
+            "schema_version": agent_pipeline_runs.CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION,
+            "approval_allowed": False,
+            "findings": [],
+        },
+    )
+    assert agent_pipeline_runs.pending_review(run_id)["plan_approval_allowed"] is False
+    # Changing the offered plan/request also changes the acceptance coordinates.
+    _, entry.pending.requests = reviewed_population({"kind": "first_icu_stay"})
+    review = agent_pipeline_runs.pending_review(run_id)
+    assert review["population_acceptance"] is None
+    assert review["plan_approval_allowed"] is False
+
+
+def test_corrupt_acceptance_receipt_is_not_silently_replaced(
+    acceptance_fixture, tmp_path
+):
+    from easyicu.webserver import agent_pipeline_runs
+    from easyicu.webserver.pi_copilot.contracts import PiCopilotError
+
+    service, record, run_id, _, _ = acceptance_fixture
+    accept_current(service, record, run_id, "c1")
+    (receipt,) = tmp_path.glob("**/population-acceptances/*.json")
+    receipt.write_text('{"choices":{"c1":{},"c2":{}}}')
+    review = agent_pipeline_runs.pending_review(run_id)
+    assert review["population_acceptance"]["record_invalid"] is True
+    assert review["plan_approval_allowed"] is False
+    with pytest.raises(PiCopilotError):
+        accept_current(service, record, run_id, "c2")
+    assert receipt.read_text() == '{"choices":{"c1":{},"c2":{}}}'
+
+
+def test_final_host_resume_carries_choices_from_before_job_handoff(
+    study, acceptance_fixture, monkeypatch
+):
+    from easyicu.webserver import agent_pipeline_runs
+
+    service, record, run_id, entry, _ = acceptance_fixture
+    accept_current(service, record, run_id, "c1")
+    accept_current(service, record, run_id, "c2")
+    captured = study_contexts.get_context(study["id"])
+    study_contexts.handoff_context(study["id"], active_job_id="approved-job")
+    entry.pipeline = SimpleNamespace()
+    entry.prepared_package_binding = {"synthetic": True}
+    monkeypatch.setattr(
+        agent_pipeline_runs.dataio,
+        "validate_research_pipeline_source",
+        lambda *a, **kw: None,
+    )
+    monkeypatch.setattr(
+        agent_pipeline_runs.run_patient_grouping,
+        "require_patient_groups_for_approval",
+        lambda *a, **kw: None,
+    )
+    monkeypatch.setattr(agent_pipeline_runs, "_progress", lambda *a, **kw: None)
+    decisions = []
+
+    class BoundaryReached(Exception):
+        pass
+
+    def capture(_registry, _entry, rows, **kwargs):
+        decisions.extend(rows)
+        raise BoundaryReached
+
+    monkeypatch.setattr(agent_pipeline_runs, "resume_pending_review", capture)
+    with pytest.raises(BoundaryReached):
+        agent_pipeline_runs.resume_research_pipeline(
+            run_id=run_id,
+            study_context_id=study["id"],
+            decision="approved",
+            reviewer="test",
+            note="",
+            job=SimpleNamespace(),
+            current_study_context=captured,
+        )
+    assert decisions[0]["population_criterion_acceptances"] == ["c1", "c2"]
+
+
+def test_acceptance_endpoint_rejects_arbitrary_approval_and_scope_fields(
+    acceptance_fixture, monkeypatch
+):
+    from fastapi.testclient import TestClient
+    from easyicu.webserver import agent_pipeline_runs
+    from easyicu.webserver.app import app
+    from easyicu.webserver.routes import pi_copilot
+
+    service, record, run_id, _, _ = acceptance_fixture
+    monkeypatch.setattr(pi_copilot, "get_pi_copilot_service", lambda: service)
+    proposal = agent_pipeline_runs.pending_review(run_id)["population_acceptance"]
+    body = dict(
+        project_id=record.project_id,
+        run_id=run_id,
+        expected_revision=record.binding.study_revision,
+        proposal_sha256=proposal["proposal_sha256"],
+        criterion_id="c1",
+    )
+    client = TestClient(app)
+    endpoint = f"/api/copilot/pi/sessions/{record.session_id}/population-acceptance"
+    for field in ["cohort", "approval_allowed", "grants", "accepted_criteria"]:
+        assert client.post(endpoint, json={**body, field: True}).status_code == 422
+    response = client.post(endpoint, json=body)
+    assert response.status_code == 200, response.text
+    assert response.json()["next_action"] == "review_complete_plan"

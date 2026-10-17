@@ -11,15 +11,10 @@ from __future__ import annotations
 import math
 from typing import Any, Mapping, Sequence
 
-from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
 from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.contracts.frozen_payload import thaw_payload
-from easyicu.research_agent.planning.cohort_contract import CohortDefinition
-from easyicu.research_agent.planning.population_compile import (
-    POPULATION_COMPILE_SCHEMA_VERSION,
-)
+from easyicu.research_agent.planning.population_review import sealed_population
 from easyicu.research_agent.planning.population_spec import (
-    POPULATION_SPEC_SCHEMA_VERSION,
     AgeYears,
     FirstIcuStay,
     IcuStayHours,
@@ -29,20 +24,6 @@ from easyicu.research_agent.planning.population_spec import (
 from easyicu.webserver import primary_cohort, study_contexts
 
 STOP = "population_inclusion_requires_extraction"
-
-
-def _same_cohort(left: Any, right: Any) -> bool:
-    if not isinstance(left, Mapping) or not isinstance(right, Mapping):
-        return False
-    # The cohort name is a display label. All row-selection coordinates,
-    # including the unapplied criteria, must still match the offered plan.
-    # The dataclass serializer emits selection_mode=predicate_filtered, while
-    # plan_dict omits that legacy default. Compare through its own parser.
-    left = CohortDefinition.from_dict(dict(left)).plan_dict()
-    right = CohortDefinition.from_dict(dict(right)).plan_dict()
-    return {k: v for k, v in left.items() if k != "name"} == {
-        k: v for k, v in right.items() if k != "name"
-    }
 
 
 def _admission_patch(criterion: Any, cohort: dict, time_zero: Any) -> str | None:
@@ -113,24 +94,10 @@ def population_preparation_proposal(
         return None
     request = selected[0]
     payload = thaw_payload(request.payload)
-    record = payload.get("population_compile")
+    record = sealed_population(request, reason=STOP)
+    if record is None:
+        return None
     try:
-        if (
-            payload.get("approval_allowed") is not False
-            or not isinstance(record, dict)
-            or record.get("schema_version") != POPULATION_COMPILE_SCHEMA_VERSION
-            or record.get("spec_schema_version") != POPULATION_SPEC_SCHEMA_VERSION
-            or canonical_sha256(record) != payload.get("population_compile_sha256")
-            or canonical_sha256(payload) != request.authority_sha256
-        ):
-            return None
-        authority = PlanReviewAuthority.model_validate(
-            payload.get("plan_review_authority")
-        )
-        if not _same_cohort(
-            record.get("cohort"), thaw_payload(authority.plan_payload).get("cohort")
-        ):
-            return None
         rows = record["criteria"]
         spec = PopulationSpec.model_validate(
             {"criteria": [row["criterion"] for row in rows]}
@@ -197,7 +164,7 @@ def population_preparation_proposal(
             ),
             "review_authority_sha256": request.authority_sha256,
             "population_compile_sha256": payload["population_compile_sha256"],
-            "plan_sha256": authority.plan_sha256,
+            "plan_sha256": payload["plan_review_authority"]["plan_sha256"],
             "available": not blockers and bool(changes),
             "criteria": notes,
             "status": "blocked"

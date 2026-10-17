@@ -382,6 +382,21 @@
         { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'agent_plan.json', label: tr('Open the complete plan', '打开完整计划'), media_type: 'application/json' },
         { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'scientific_plan_review.json', label: tr('View review details', '查看审阅详情'), media_type: 'application/json' },
       ] : [];
+      const populationAcceptance = (workflow.plan_review_summary || {}).population_acceptance;
+      if (code === 'population_inclusion_not_applied' && populationAcceptance) return {
+        code, grants: [], nonApprovable: !populationAcceptance.available,
+        title: tr('Review the population criteria this plan cannot apply', '逐条审阅本计划无法施加的人群条件'),
+        note: populationAcceptance.record_invalid ? tr(
+          'The saved choices could not be verified. This plan remains blocked; no analysis has started.',
+          '已保存的选择无法核验，当前计划继续阻断，分析尚未开始。',
+        ) : tr(
+          'Accept each omission only if you agree to analyse the actual population below. This records your choice; the complete plan still needs separate approval before analysis.',
+          '请核对下方实际分析人群，逐条决定是否接受不施加这些条件。此按钮只保存当前一条选择；开始分析前仍须单独审阅并批准完整计划。',
+        ),
+        approve: tr('Accept this omission', '接受当前这条局限'),
+        reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
+        reviewResources: planStopResources,
+      };
       if (code === 'population_inclusion_not_applied') return {
         code, grants: ['provider_run', 'literature'],
         message: tr(
@@ -518,6 +533,18 @@
         population_determined_after_time_zero: tr('This condition is determined after time zero.', '该条件在研究起点之后才能确定。'),
         population_preparation_kind_unsupported: tr('Extraction settings cannot express this complete condition.', '当前提取设置不能完整表达该条件。'),
         population_inclusion_not_applied: tr('This inclusion remains unapplied.', '这条纳入条件仍无法施加。'),
+        population_kind_not_typed: tr('No supported condition kind expresses it.', '目前没有可准确表达该条件的类型。'),
+        population_concept_unavailable: tr('The required concept is unavailable.', '所需临床概念不可用。'),
+        population_identifier_column: tr('An identifier cannot define this clinical condition.', '标识列不能判定该临床条件。'),
+        population_column_unresolved: tr('The required data column cannot be resolved.', '无法定位所需数据列。'),
+        population_condition_column_not_status: tr('This column does not establish whether the condition occurred.', '该列不能判定条件是否发生。'),
+        population_unit_mismatch: tr('The units do not match.', '单位不匹配。'),
+        population_unit_unrecorded: tr('The required unit is not recorded.', '所需单位没有记录。'),
+        population_window_unreadable: tr('The required time window is unavailable.', '无法读取所需时间窗。'),
+        population_whole_stay_in_finite_window: tr('A limited window cannot establish whole-stay status.', '有限时间窗不能判定整次住院的状态。'),
+        population_event_time_not_hours: tr('The event time cannot be read on the required hour scale.', '事件时间不能按所需小时尺度读取。'),
+        population_threshold_outside_domain: tr('The threshold cannot distinguish values in this column.', '该阈值无法区分该列的实际取值。'),
+        population_concept_without_values: tr('The concept has no measured values here.', '该概念在此处没有实际测量值。'),
       };
       const rows = (preparation.criteria || []).map(row => {
         const source = row.proposed_by_system ? tr('System proposal', '系统建议') : tr('Stated by the study', '研究原文');
@@ -525,7 +552,7 @@
           ? tr('Needs extraction with these settings.', '需按这些设置提取。')
           : row.disposition === 'not_applied' ? tr('Not applied.', '未施加。')
             : tr('Already applied by the source or plan.', '已由数据来源或计划施加。'));
-        return `<li>${esc(row.quote)} <small>${esc(source)} · ${esc(state)}</small></li>`;
+        return `<li>${esc(row.quote)} <small>${esc(source)} · ${esc(state)}${row.accepted ? ` · ${esc(tr('Omission accepted', '已接受此条局限'))}` : ''}</small></li>`;
       }).join('');
       const labels = {
         age_min: tr('Minimum age', '最低年龄'), age_max: tr('Maximum age', '最高年龄'),
@@ -536,6 +563,17 @@
       const changes = (preparation.changes || []).map(row =>
         `<li>${esc(labels[row.field] || row.field)}：${esc(value(row.before))} → ${esc(value(row.after))}</li>`).join('');
       return `<div class="gpi-population-preparation"><ul>${rows}</ul>${changes ? `<strong>${esc(tr('Settings to apply', '将应用的设置'))}</strong><ul>${changes}</ul>` : ''}</div>`;
+    }
+
+    function populationAcceptanceHtml(proposal) {
+      if (!proposal) return '';
+      const applied = (proposal.applied_criteria || []).map(quote => `<li>${esc(quote)}</li>`).join('');
+      const pending = (proposal.criteria || []).find(row => !row.accepted);
+      return `<div class="gpi-population-acceptance"><strong>${esc(tr('Population selected by the plan', '计划实际筛选的人群'))}</strong>
+        ${applied ? `<ul>${applied}</ul>` : `<p>${esc(tr('All input records in the bound data package; none of the omitted conditions below filter those records.', '绑定数据包的全部输入记录；下列未施加条件均不参与筛选。'))}</p>`}
+        <small>${esc(tr('Step-specific time-zero, outcome and missing-data rules still follow the complete plan.', '各步骤的研究起点、结局与缺失处理仍以完整计划为准。'))}</small>
+        ${populationPreparationHtml(proposal)}
+        ${pending ? `<p><strong>${esc(tr('Current decision', '当前待确认'))}：</strong>${esc(pending.quote)}</p>` : `<p>${esc(tr('All listed omissions are recorded. Review the complete plan before approving execution.', '所列局限已逐条记录，请继续审阅完整计划后再决定是否批准执行。'))}</p>`}</div>`;
     }
 
     function workflowConfirmationHtml() {
@@ -642,13 +680,14 @@
       const displayedTitle = firstDecisionCopy ? firstDecisionCopy.cardTitle : confirmation.title;
       const displayedNote = firstDecisionCopy ? firstDecisionCopy.context : confirmation.note;
       const populationPreparation = populationPreparationHtml(confirmation.populationPreparation);
+      const populationAcceptance = populationAcceptanceHtml(((host.workflow() || {}).plan_review_summary || {}).population_acceptance);
       const failureNotice = latestAttemptFailureHtml();
       const decisionActions = firstDecisionCopy && Array.isArray(firstDecisionCopy.options)
         ? firstDecisionCopy.options.map(option => `<button class="gpi-decision-option" type="button" data-gpi-plan-decision-code="${esc(String(firstDecisionItem && firstDecisionItem.code || ''))}" data-gpi-plan-decision-option="${esc(option.optionId)}"><strong>${esc(option.label)}</strong><span>${esc(option.effect)}</span><small>${esc(option.requirement)}</small></button>`).join('')
         : '';
       return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}" aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
         <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
-        <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}<small>${esc(displayedNote)}</small>${populationPreparation}${flowSteps}${dataStatus}${repeatedStaysDefault}${reviewStatus}${studyReadings}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
+        <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}<small>${esc(displayedNote)}</small>${populationPreparation}${populationAcceptance}${flowSteps}${dataStatus}${repeatedStaysDefault}${reviewStatus}${studyReadings}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
         <div class="gpi-confirmation-actions${decisionActions ? ' has-decision-options' : ''}">
           ${confirmation.dataStatus && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-preview-data>${esc(tr('Preview analysis data', '先预览分析数据'))}</button>` : ''}
           ${decisionActions || (confirmation.hideEdit || (confirmation.code === 'plan_scientific_changes_required' && !decisionCount) ? '' : `<button class="btn ${confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.editLabel ? esc(confirmation.editLabel) : confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>`)}

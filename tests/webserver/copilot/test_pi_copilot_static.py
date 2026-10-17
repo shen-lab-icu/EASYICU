@@ -136,8 +136,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         < index.index("js/screens-guided-pi-target-trial.js")
         < index.index("js/screens-guided-pi-confirmation.js")
     )
-    assert "js/screens-guided-pi-confirmation.js?v=20261016-population-preparation1" in index
-    assert "js/screens-guided-pi-plan-actions.js?v=20261016-population-preparation1" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20261016-population-acceptance1" in index
+    assert "js/screens-guided-pi-plan-actions.js?v=20261016-population-acceptance1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261014-trial-gaps1" in index
     assert "js/screens-guided-pi.js?v=20261016-session-labels1" in index
@@ -146,7 +146,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
     )
-    assert "js/api.js?v=20261016-population-preparation1" in index
+    assert "js/api.js?v=20261016-population-acceptance1" in index
     assert index.index("css/guided.css") < index.index("css/guided-pi.css")
     assert index.index("js/screens-guided-pi-literature.js") < index.index(
         "js/screens-guided-pi-markdown.js"

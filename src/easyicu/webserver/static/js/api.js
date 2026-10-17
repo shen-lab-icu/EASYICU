@@ -529,6 +529,9 @@
   function applyPiCopilotPopulationPreparation(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/population-preparation', body || {});
   }
+  function acceptPiCopilotPopulationInclusion(sessionId, body) {
+    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/population-acceptance', body || {});
+  }
   function regeneratePiCopilotMessage(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/regenerate', body || {});
   }
@@ -819,6 +822,7 @@
   window.EU_API.approvePiCopilotTargetTrial = approvePiCopilotTargetTrial;
   window.EU_API.applyPiCopilotAgentPlanConfiguration = applyPiCopilotAgentPlanConfiguration;
   window.EU_API.applyPiCopilotPopulationPreparation = applyPiCopilotPopulationPreparation;
+  window.EU_API.acceptPiCopilotPopulationInclusion = acceptPiCopilotPopulationInclusion;
   window.EU_API.regeneratePiCopilotMessage = regeneratePiCopilotMessage;
   window.EU_API.authorizePiCopilotDataSource = authorizePiCopilotDataSource;
   window.EU_API.rebindPiCopilotSession = rebindPiCopilotSession;

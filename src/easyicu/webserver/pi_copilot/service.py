@@ -3606,6 +3606,42 @@ class PiCopilotService:
             "remaining_decision_codes": sorted(remaining_decisions),
         }
 
+    def accept_population_inclusion(
+        self, session_id: str, *, project_id: str, expected_revision: int,
+        run_id: str, proposal_sha256: str, criterion_id: str,
+    ) -> Dict[str, Any]:
+        """Record one explicit omission choice, leaving full-plan review pending."""
+        from easyicu.webserver import agent_pipeline_runs
+        from .population_acceptance import current_population_acceptance, save_criterion
+
+        record = self._scoped_record(session_id, project_id=project_id)
+        study = study_contexts.get_context(str(record.binding.study_context_id or ""))
+        if self._stale_details(record).get("stale") or study is None or (
+            study.get("revision") != expected_revision
+            or record.binding.study_revision != expected_revision
+            or record.binding.run_id != run_id
+            or study.get("active_job_id")
+        ):
+            raise PiCopilotError(
+                "population_acceptance_binding_conflict",
+                "The study or run changed before this population choice.", status_code=409,
+            )
+        proposal = current_population_acceptance(study, agent_pipeline_runs.pending_review(run_id) or {})
+        if proposal is None or not hmac.compare_digest(
+            str(proposal.get("proposal_sha256") or ""), proposal_sha256,
+        ):
+            raise PiCopilotError(
+                "population_acceptance_proposal_unavailable",
+                "Reload the current population review before accepting this omission.", status_code=409,
+            )
+        try:
+            save_criterion(proposal, criterion_id=criterion_id, session_id=session_id)
+        except ValueError as exc:
+            raise PiCopilotError("population_acceptance_conflict", str(exc), status_code=409) from exc
+        return {"ok": True, "code": "population_inclusion_accepted", "criterion_id": criterion_id,
+                "run_id": run_id, "study_context_revision": expected_revision,
+                "next_action": "review_complete_plan"}
+
     def apply_population_preparation(
         self,
         session_id: str,

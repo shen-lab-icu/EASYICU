@@ -56,6 +56,7 @@ from .plan_projection import project_plan_conversation_preview
 from .exposure_group_notes import project_exposure_groups
 from .question_requirement_notes import project_question_requirement_notes
 from .population_preparation import current_population_preparation
+from .population_acceptance import current_population_acceptance
 from .projections import (
     StudySetupReceipt,
     ensure_safe_projection,
@@ -623,6 +624,7 @@ def build_research_workflow_snapshot(
         review_authority.get("planning_coordinate_readings", [])
     )
     population_preparation = current_population_preparation(study_row, review_authority)
+    population_acceptance = current_population_acceptance(study_row, review_authority)
     plan_review_summary = (
         {
             "run_id": str(review_authority.get("run_id") or "")[:160],
@@ -680,6 +682,7 @@ def build_research_workflow_snapshot(
             ),
             **({"coordinate_readings": coordinate_readings} if coordinate_readings is not None else {}),
             **({"population_preparation": population_preparation} if population_preparation is not None else {}),
+            **({"population_acceptance": population_acceptance} if population_acceptance is not None else {}),
         }
         if raw_scientific_review
         else None
@@ -738,8 +741,8 @@ def build_research_workflow_snapshot(
         else "plan_scientific_changes_required"
         if "plan_scientific_changes_required" in active_plan_review_codes
         # An extraction of the study's own population (BX) can lift the stop;
-        # an inclusion nothing can apply as stated, or an analysis the plan
-        # does not answer, leaves it to the study or a new plan.
+        # unapplied inclusions need explicit acceptance before full-plan review;
+        # analyses the plan does not answer still require a new plan.
         else next(
             (code for code in PLAN_APPROVAL_STOPS if code in active_plan_review_codes),
             None,
