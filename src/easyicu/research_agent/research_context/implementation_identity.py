@@ -1,9 +1,11 @@
 """Stable implementation identities for typed ResearchContext metadata.
 
 The typed metadata projector and sidecar schema live outside ``research_agent``
-while ICU analysis-plausibility rules live inside it.  All three influence the
-physical facts shown to Planner/Coder, so cache and resume authority must bind
-their exact implementation bytes rather than relying on package version labels.
+while ICU analysis-plausibility rules live inside it: the sealed ``icu_rules``
+and the curated hints read with them (``concept_hints``).  All of them
+influence the physical facts shown to Planner/Coder, so cache and resume
+authority must bind their exact implementation bytes rather than relying on
+package version labels.
 """
 
 from __future__ import annotations
@@ -29,6 +31,9 @@ def metadata_implementation_identity() -> Mapping[str, str]:
             easyicu_root / "concept" / "metadata_sidecar.py"
         ),
         "icu_rules_sha256": _sha256_file(research_agent_root / "icu_rules.py"),
+        "icu_concept_hints_sha256": _sha256_file(
+            research_agent_root / "research_context" / "concept_hints.py"
+        ),
     }
     payload = json.dumps(
         implementation,

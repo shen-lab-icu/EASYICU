@@ -2188,8 +2188,8 @@ def _resolve_planner_proposed_primary_exposure(
     for human review. The StudyContext is not mutated.
     """
 
-    from easyicu.research_agent.icu_rules import (
-        aggregation_rule_for,
+    from easyicu.research_agent.icu_rules import aggregation_rule_for
+    from easyicu.research_agent.research_context.concept_hints import (
         classify_variable,
     )
     from easyicu.research_agent.schema import AggregationRule

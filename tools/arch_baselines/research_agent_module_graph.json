@@ -6133,7 +6133,7 @@
     ],
     [
       "easyicu.research_agent.execution.runners.landmark_association_figure_executor",
-      "easyicu.research_agent.icu_rules"
+      "easyicu.research_agent.research_context.concept_hints"
     ],
     [
       "easyicu.research_agent.execution.runners.landmark_association_figure_executor",
@@ -9549,6 +9549,10 @@
     ],
     [
       "easyicu.research_agent.orchestration.workflow",
+      "easyicu.research_agent.planning.population_review"
+    ],
+    [
+      "easyicu.research_agent.orchestration.workflow",
       "easyicu.research_agent.schema"
     ],
     [
@@ -11198,6 +11202,30 @@
     [
       "easyicu.research_agent.planning.population_requirements",
       "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.planning.population_review",
+      "easyicu.research_agent.authority.plan_review"
+    ],
+    [
+      "easyicu.research_agent.planning.population_review",
+      "easyicu.research_agent.canonical_json"
+    ],
+    [
+      "easyicu.research_agent.planning.population_review",
+      "easyicu.research_agent.contracts.frozen_payload"
+    ],
+    [
+      "easyicu.research_agent.planning.population_review",
+      "easyicu.research_agent.planning.cohort_contract"
+    ],
+    [
+      "easyicu.research_agent.planning.population_review",
+      "easyicu.research_agent.planning.population_compile"
+    ],
+    [
+      "easyicu.research_agent.planning.population_review",
+      "easyicu.research_agent.planning.population_spec"
     ],
     [
       "easyicu.research_agent.planning.population_shadow",
@@ -14189,6 +14217,10 @@
     ],
     [
       "easyicu.research_agent.research_context.builder",
+      "easyicu.research_agent.research_context.concept_hints"
+    ],
+    [
+      "easyicu.research_agent.research_context.builder",
       "easyicu.research_agent.research_context.observation_semantics"
     ],
     [
@@ -14214,6 +14246,14 @@
     [
       "easyicu.research_agent.research_context.cohort_granularity",
       "easyicu.research_agent.contracts.dependence"
+    ],
+    [
+      "easyicu.research_agent.research_context.concept_hints",
+      "easyicu.research_agent.icu_rules"
+    ],
+    [
+      "easyicu.research_agent.research_context.concept_hints",
+      "easyicu.research_agent.schema"
     ],
     [
       "easyicu.research_agent.research_context.concept_population",
@@ -14373,15 +14413,15 @@
     ],
     [
       "easyicu.research_agent.research_context.typed",
-      "easyicu.research_agent.icu_rules"
-    ],
-    [
-      "easyicu.research_agent.research_context.typed",
       "easyicu.research_agent.intake.materialized_metadata"
     ],
     [
       "easyicu.research_agent.research_context.typed",
       "easyicu.research_agent.intake.materialized_trajectory"
+    ],
+    [
+      "easyicu.research_agent.research_context.typed",
+      "easyicu.research_agent.research_context.concept_hints"
     ],
     [
       "easyicu.research_agent.research_context.typed",
@@ -15012,9 +15052,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 3745,
+    "edge_count": 3755,
     "largest_scc_size": 0,
-    "module_count": 848,
+    "module_count": 850,
     "package_count": 36,
     "top_level_module_count": 37
   },
@@ -15621,6 +15661,7 @@
     "easyicu.research_agent.planning.planner_output_contract": "planning/planner_output_contract.py",
     "easyicu.research_agent.planning.population_compile": "planning/population_compile.py",
     "easyicu.research_agent.planning.population_requirements": "planning/population_requirements.py",
+    "easyicu.research_agent.planning.population_review": "planning/population_review.py",
     "easyicu.research_agent.planning.population_shadow": "planning/population_shadow.py",
     "easyicu.research_agent.planning.population_spec": "planning/population_spec.py",
     "easyicu.research_agent.planning.prediction_timing": "planning/prediction_timing.py",
@@ -15803,6 +15844,7 @@
     "easyicu.research_agent.research_context.builder": "research_context/builder.py",
     "easyicu.research_agent.research_context.clinical_definition": "research_context/clinical_definition.py",
     "easyicu.research_agent.research_context.cohort_granularity": "research_context/cohort_granularity.py",
+    "easyicu.research_agent.research_context.concept_hints": "research_context/concept_hints.py",
     "easyicu.research_agent.research_context.concept_population": "research_context/concept_population.py",
     "easyicu.research_agent.research_context.event_time_semantics": "research_context/event_time_semantics.py",
     "easyicu.research_agent.research_context.export_selection": "research_context/export_selection.py",
