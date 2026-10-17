@@ -16,7 +16,7 @@ from easyicu.research_agent.contracts.trajectory_design import (
     executable_trajectory_coordinates,
     normalize_trajectory_design,
 )
-from easyicu.research_agent.icu_rules import classify_variable
+from easyicu.research_agent.research_context.concept_hints import classify_variable
 from easyicu.research_agent.schema import AggregationRule
 from easyicu.webserver import primary_cohort
 from easyicu.webserver.study_scientific_configuration import ScientificConfiguration

@@ -19,6 +19,7 @@ _METADATA_IDENTITY_KEYS = (
     "metadata_projection_sha256",
     "metadata_sidecar_sha256",
     "icu_rules_sha256",
+    "icu_concept_hints_sha256",
     "metadata_implementation_bundle_sha256",
 )
 
@@ -66,10 +67,14 @@ def test_metadata_identity_hashes_sidecar_schema_bytes() -> None:
 
 def test_v2_context_binds_complete_metadata_implementation(tmp_path: Path) -> None:
     context = _build_v2_context(tmp_path)
-
-    assert _selected_metadata_identity(
-        context.materialized_inputs.cohort.model_dump(mode="python")
-    ) == dict(metadata_implementation_identity())
+    expected = dict(metadata_implementation_identity())
+    # The existing cohort wire schema binds supplementary owners through the
+    # complete bundle digest. Individual file digests are in the environment
+    # and cache identities, checked above; adding a cohort field would change
+    # the sealed input/resume contract.
+    expected.pop("icu_concept_hints_sha256")
+    cohort = context.materialized_inputs.cohort.model_dump(mode="python")
+    assert {key: cohort[key] for key in expected} == expected
 
 
 def test_scientific_identity_excludes_metadata_implementation() -> None:

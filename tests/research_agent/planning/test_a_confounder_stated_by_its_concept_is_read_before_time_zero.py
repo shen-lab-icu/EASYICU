@@ -9,7 +9,7 @@ whether it was recorded, any other value by its mean -- states the choice on
 the card, and records the column the weights read.  Only a confounder the
 input holds no such column of waits for an extraction.  Whether a summary is
 observed by time zero stays the timing owner's to prove: each synthetic column
-carries the role the ICU rules give it, and a column of a role whose timing
+carries the role the context builder gives it (``concept_hints``), and a column of a role whose timing
 that owner does not prove is not adjusted for, and says so.  Synthetic
 contexts only.
 """
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from easyicu.research_agent.icu_rules import classify_variable
+from easyicu.research_agent.research_context.concept_hints import classify_variable
 from easyicu.research_agent.planning.target_trial_compile import CONFOUNDER_SUMMARIES
 from easyicu.research_agent.schema import ConceptDescriptor
 from tests.support.target_trial import (

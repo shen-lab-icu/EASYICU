@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Callable
 
 import pandas as pd
@@ -299,7 +298,7 @@ def test_resume_preserves_sealed_fallback_range_across_icu_rule_drift(
     _run_dir, _cohort_path, context, _identity, cohort, trajectory = _prepare_typed_run(
         tmp_path
     )
-    classify = research_context_v2_module.ICU_RULES.classify_variable
+    classify = research_context_v2_module.classify_variable
 
     def drifted_classify(name: str, dtype: str, sample: Any):
         hint = classify(name, dtype, sample)
@@ -307,11 +306,7 @@ def test_resume_preserves_sealed_fallback_range_across_icu_rule_drift(
             return replace(hint, valid_range=(-10.0, 200.0))
         return hint
 
-    monkeypatch.setattr(
-        research_context_v2_module,
-        "ICU_RULES",
-        SimpleNamespace(classify_variable=drifted_classify),
-    )
+    monkeypatch.setattr(research_context_v2_module, "classify_variable", drifted_classify)
 
     _validate_v2_context_input_authority(
         context,

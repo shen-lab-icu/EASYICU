@@ -42,7 +42,7 @@ from ..intake.materialized_trajectory import (
 from ..contracts.cohort_receipt import COHORT_RECEIPT_COLUMN_FIELDS
 from ..contracts.exposure_group_rules import EXPOSURE_GROUP_TRANSFORMS
 from ..concept_availability import require_supported_variable_source
-from ..icu_rules import ICU_RULES
+from .concept_hints import classify_variable
 from .implementation_identity import metadata_implementation_identity
 from ..schema import ConceptDescriptor, ResearchContext
 
@@ -87,7 +87,7 @@ def effective_analysis_plausibility_range(
 
     The physical column name is not scientific authority.  When the sidecar
     does not declare an analysis range, the independently versioned ICU rules
-    are therefore queried with the sealed ``source_concept``.  Non-range-
+    (``concept_hints``) are therefore queried with the sealed ``source_concept``.  Non-range-
     preserving projections never inherit the single-measurement fallback.
     """
 
@@ -96,7 +96,7 @@ def effective_analysis_plausibility_range(
     metadata = binding.metadata
     if metadata.analysis_plausibility_range is not None:
         return metadata.analysis_plausibility_range.to_dict()
-    hint = ICU_RULES.classify_variable(metadata.source_concept, "", None)
+    hint = classify_variable(metadata.source_concept, "", None)
     if hint.valid_range is None:
         return None
     return {

@@ -28,9 +28,9 @@ from ..icu_rules import (
     ICU_RULES,
     VariableKind,
     aggregation_rule_for,
-    classify_variable,
     default_time_windows,
 )
+from .concept_hints import classify_variable
 from ..schema import (
     AggregationRule,
     ClinicalDefinitionReference,

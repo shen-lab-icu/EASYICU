@@ -26,7 +26,7 @@ from ...figures.robustness import (
     draw_robustness_coverage,
     prepare_robustness_coverage,
 )
-from ...icu_rules import classify_variable
+from ...research_context.concept_hints import classify_variable
 from ...schema import AnalysisStep
 from .figure_input_capability import TypedInputCapability
 from .typed_input_binding import BoundTypedInput, load_typed_input, sha256_file

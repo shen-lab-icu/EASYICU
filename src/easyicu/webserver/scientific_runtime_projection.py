@@ -37,7 +37,8 @@ from easyicu.research_agent.authority.current_case_scientific_runtime import (
 )
 from easyicu.research_agent.contracts.dependence import PlannedDependenceRequirement
 from easyicu.research_agent.contracts.model_terms import level_spelling
-from easyicu.research_agent.icu_rules import VariableKind, classify_variable
+from easyicu.research_agent.icu_rules import VariableKind
+from easyicu.research_agent.research_context.concept_hints import classify_variable
 from easyicu.research_agent.intake.materialized_metadata import (
     MaterializedMetadataError,
     load_verified_materialized_cohort_authority,
