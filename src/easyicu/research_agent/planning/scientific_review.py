@@ -133,6 +133,7 @@ from .baseline_requirements import (
     context_baseline_requirements,
 )
 from .dependence_authority import (
+    context_variance_estimator,
     context_patient_group_authority,
     descriptive_counts_only_required,
     dependence_matches_context,
@@ -184,7 +185,7 @@ class PlanScientificFinding(BaseModel):
     authorization_question: Optional[str] = None
 
 
-CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/14"
+CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/15"
 
 
 class PlanScientificReview(BaseModel):
@@ -192,14 +193,15 @@ class PlanScientificReview(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    # Archived reviews remain readable, but cannot substitute for a /14
-    # execution review (the resume gate also binds the review version).  /14
-    # measures the primary model's retention on the cohort execution reads.
+    # Archived reviews remain readable, but cannot substitute for a /15
+    # execution review (the resume gate also binds the review version). /15
+    # refuses counts-only primary results that replace the study's intervals.
     schema_version: Literal[
         "easyicu.plan_scientific_review/10", "easyicu.plan_scientific_review/11",
         "easyicu.plan_scientific_review/12",
         "easyicu.plan_scientific_review/13",
         "easyicu.plan_scientific_review/14",
+        "easyicu.plan_scientific_review/15",
     ] = (
         CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION
     )
@@ -4164,6 +4166,34 @@ def build_plan_scientific_review(
                     ),
                 )
             )
+    requested_variance = context_variance_estimator(context)
+    counts_only_steps = [
+        step.step_id for step in plan.steps
+        if step.exposure_outcome_distribution_spec is not None
+        and step.planned_analysis_role in {"primary", "secondary"}
+        and step.exposure_outcome_distribution_spec.interval_method == "none_counts_only"
+    ]
+    if (canonical_analysis_family(plan.analysis_type) == "descriptive_epidemiology"
+            and requested_variance not in {None, "none_counts_only"} and counts_only_steps):
+        findings.append(PlanScientificFinding(
+            code="DESCRIPTIVE_VARIANCE_DESIGN_CONFLICT",
+            severity="blocker", dimension="statistical_design",
+            message=(
+                f"The study declares {requested_variance} uncertainty, but these "
+                "distribution steps report counts only: " + ", ".join(counts_only_steps)
+            ),
+            evidence_refs=[
+                "research_context.json.user_preferences.data_constraints",
+                "research_context.json.cohort.provenance", "analysis_plan.json",
+            ],
+            remediation=(
+                "Restore the study's uncertainty design using verified independent-unit "
+                "or patient-grouping authority. A source limitation cannot silently "
+                "replace it with counts only. If that authority cannot be supplied, "
+                "a change of study design needs a revised complete-plan review."
+            ),
+            remediation_route="runtime_capability",
+        ))
     if descriptive_counts_only_required(context, analysis_type=plan.analysis_type):
         unresolved_intervals = [
             step.step_id for step in plan.steps

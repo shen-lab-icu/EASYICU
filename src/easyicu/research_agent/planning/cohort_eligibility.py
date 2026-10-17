@@ -598,11 +598,21 @@ def cohort_criteria_on_outcome(
             concept_population=None,
         )
         if ICU_LENGTH_OF_STAY_CONCEPT in studied:
-            found.append(
-                _on_outcome(stay, selection="landmark_stay_length")
-                if _at_time_zero(minimum_icu_hours, time_zero_hours)
-                else stay
+            landmark = _at_time_zero(minimum_icu_hours, time_zero_hours)
+            # The plan may spell out the same study-owned minimum as a
+            # predicate, in hours or days. Keep that more specific evidence
+            # once; this is review deduplication, not removal of either filter.
+            already_named = landmark and any(
+                item.selection == "landmark_stay_length"
+                and item.outcome == ICU_LENGTH_OF_STAY_CONCEPT
+                and _at_time_zero(item.decided_by_hours, minimum_icu_hours)
+                for item in found
             )
+            if not already_named:
+                found.append(
+                    _on_outcome(stay, selection="landmark_stay_length")
+                    if landmark else stay
+                )
         elif late:
             for outcome in studied:
                 if ICU_LENGTH_OF_STAY_CONCEPT in defined_from[outcome]:

@@ -271,6 +271,30 @@ def test_the_studys_minimum_icu_stay_is_read_like_a_criterion(
     assert f"of a minimum ICU stay of {minimum_stay:g} h (the study's)" in finding.message
 
 
+@pytest.mark.parametrize("unit, threshold", [("hours", 72), ("days", 3)])
+def test_a_study_minimum_and_its_plan_predicate_share_one_landmark_finding(unit, threshold):
+    context = _study(_los(unit), minimum_stay=72)
+    plan = _with_cohort(_predicate("los_icu", ">=", threshold))
+    original_cohort = plan.cohort.to_dict()
+
+    (finding,) = outcome_selection_findings(context, plan, None, None)
+
+    assert finding.code == _LANDMARK
+    assert "inclusion criterion los_icu" in finding.message
+    assert "research_context.json.user_preferences.data_constraints" in finding.evidence_refs
+    assert plan.cohort.to_dict() == original_cohort
+
+
+@pytest.mark.parametrize("minimum_stay, threshold", [(48, 72), (72, 48), (72, 96)])
+def test_different_stay_restrictions_keep_their_distinct_review_findings(minimum_stay, threshold):
+    findings = outcome_selection_findings(
+        _study(_los(), minimum_stay=minimum_stay),
+        _with_cohort(_predicate("los_icu", ">=", threshold)), None, None,
+    )
+    assert len(findings) == 2
+    assert {item.code for item in findings} == {_SELECTS, _LANDMARK}
+
+
 def test_an_outcome_only_the_plan_models_is_an_outcome_too() -> None:
     context = _study(_VENTILATION, outcomes=())
     plan = _with_cohort(_predicate("vent_ind", "==", 1))

@@ -19,7 +19,10 @@ from ..contracts.claim_ceiling import (
 )
 from ..contracts.dependence import PlannedDependenceRequirement
 from ..contracts.exposure_outcome_distribution import PatientWeightedIntervalAssumptions
-from ..methods.cluster_proportion import patient_weighted_hoeffding_interval
+from ..methods.cluster_proportion import (
+    patient_weighted_hoeffding_interval,
+    require_wald_group_variation,
+)
 
 DESCRIPTIVE_CEILING = "descriptive_unadjusted_not_causal"
 _ANALYSIS_ROLES = {
@@ -280,6 +283,7 @@ def derive_descriptive_claim_payloads(
             tuple[float, float, float, float, str, str, int | None] | None,
         ],
     ] = {}
+    events_by_level: dict[int, int] = {}
     seen_level_keys: set[str] = set()
     confidence_levels: set[float] = set()
     counts_only_levels = 0
@@ -299,6 +303,7 @@ def derive_descriptive_claim_payloads(
         denominator = _count(raw, "denominator", owner=item_owner)
         if denominator <= 0 or events > denominator:
             raise ValueError(f"{item_owner} events/denominator are inconsistent")
+        events_by_level[index] = events
         if raw.get("interval_method") == "none_counts_only":
             if dependence is not None:
                 raise ValueError(
@@ -432,6 +437,8 @@ def derive_descriptive_claim_payloads(
         ) from exc
     if reference_interval is None or comparison_interval is None:
         raise ValueError(f"{contrast_owner} lacks interval authority")
+    require_wald_group_variation(events_by_level[reference_index], reference_n)
+    require_wald_group_variation(events_by_level[comparison_index], comparison_n)
     if _level_key(contrast.get("reference_level")) != reference_key or _level_key(
         contrast.get("comparison_level")
     ) != comparison_key:

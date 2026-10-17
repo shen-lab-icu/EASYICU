@@ -18,6 +18,33 @@ import math
 from numbers import Integral, Real
 
 
+def require_wald_group_variation(events: int, denominator: int) -> None:
+    """Refuse a Wald contrast when either group's variance is unsupported.
+
+    A positive standard error for the difference can come entirely from its
+    other group. Conservative marginal bounds do not repair that covariance
+    estimate. Check exact counts, not a rounded percentage, at every consumer.
+    This does not choose a replacement contrast or change its declared method.
+    """
+
+    if any(isinstance(value, bool) or not isinstance(value, Integral)
+           for value in (events, denominator)):
+        raise ValueError("risk_difference_contrast requires integer group counts")
+    if denominator <= 0 or not 0 <= events <= denominator:
+        raise ValueError("risk_difference_contrast has inconsistent group counts")
+    if events in {0, denominator}:
+        raise ValueError(
+            "risk_difference_contrast refuses zero-width uncertainty in either "
+            "group: a boundary proportion needs a prespecified supported "
+            "contrast method, even when its marginal interval is conservative"
+        )
+    if denominator <= 2:
+        raise ValueError(
+            "risk_difference_contrast needs more than two analysed rows in "
+            "each group for Wald uncertainty"
+        )
+
+
 def patient_weighted_hoeffding_interval(
     events: int,
     denominator: int,

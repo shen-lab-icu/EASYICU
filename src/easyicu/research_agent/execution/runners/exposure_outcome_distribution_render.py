@@ -29,7 +29,10 @@ from typing import Any, Mapping
 import pandas as pd
 
 from ...contracts.exposure_outcome_distribution import PatientWeightedIntervalAssumptions
-from ...methods.cluster_proportion import patient_weighted_hoeffding_interval
+from ...methods.cluster_proportion import (
+    patient_weighted_hoeffding_interval,
+    require_wald_group_variation,
+)
 from ...contracts.figure_plan import (
     EXPOSURE_OUTCOME_DISTRIBUTION_COUNTS_ONLY_FIGURE_PANELS,
     EXPOSURE_OUTCOME_DISTRIBUTION_FIGURE_PANELS,
@@ -350,6 +353,10 @@ def _declared_risk_difference(
 
     reference = levels.iloc[reference_index]
     comparison = levels.iloc[comparison_index]
+    for row in (reference, comparison):
+        require_wald_group_variation(
+            int(row["outcome_events"]), int(row["outcome_denominator"]),
+        )
     expected_n = int(reference["outcome_denominator"]) + int(
         comparison["outcome_denominator"]
     )

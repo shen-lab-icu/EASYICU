@@ -39,7 +39,10 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 
-from ...methods.cluster_proportion import patient_weighted_hoeffding_interval
+from ...methods.cluster_proportion import (
+    patient_weighted_hoeffding_interval,
+    require_wald_group_variation,
+)
 from ...authority.plausibility import FlagOnlyPlausibilityScope
 from ...authority.declared_levels import execution_distribution_spec
 from ...contracts.dependence import (
@@ -809,6 +812,11 @@ def _risk_difference_result(
             "risk_difference_contrast requires at least one analysed row in "
             "both the declared reference and comparison levels"
         )
+    try:
+        require_wald_group_variation(int(event.loc[reference_mask].sum()), reference_n)
+        require_wald_group_variation(int(event.loc[comparison_mask].sum()), comparison_n)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
 
     x = comparison.loc[analysis_mask].astype(float).to_numpy()
     y = event.loc[analysis_mask].astype(float).to_numpy()
@@ -1302,6 +1310,13 @@ def _verify_product(
     )
     reference_row = level_rows[reference_index]
     comparison_row = level_rows[comparison_index]
+    try:
+        for row in (reference_row, comparison_row):
+            require_wald_group_variation(
+                row["outcome_events"], row["outcome_denominator"],
+            )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
     expected_difference = round(
         float(comparison_row["outcome_rate_pct"])
         - float(reference_row["outcome_rate_pct"]),
