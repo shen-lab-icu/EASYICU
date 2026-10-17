@@ -34,6 +34,7 @@
     CONCEPT_POPULATION_RECORD_UNREADABLE: ['概念人群记录无法读取', '源导出的概念人群记录读不出，审阅无法确认导出何时确定了谁入组；需要重新准备导出。'],
     CONTINUOUS_COVARIATE_FUNCTIONAL_FORM_UNCHECKED: ['连续协变量的函数形式未检查', '连续协变量以线性形式进入模型，但没有可执行的非线性检查（如样条）。'],
     DESCRIPTIVE_INTERVAL_DEPENDENCE_UNRESOLVED: ['描述性区间的独立性未解决', '描述性区间缺少独立单位或患者分组依据；应只报告计数与比例。'],
+    DESCRIPTIVE_VARIANCE_DESIGN_CONFLICT: ['区间方法与研究设计不一致', '研究设计要求报告不确定性，但分布步骤只提供计数与比例。方案需要按研究设计补全区间方法，并验证所需的数据条件后再执行。'],
     DESCRIPTIVE_POPULATION_SCOPE_UNRESOLVED: ['描述性步骤的人群未确定', '描述性风险步骤没有可执行的人群选择，分母无法确定。'],
     DESIGN_ANALOGUE_NOT_BOUND_TO_PRIMARY_PLAN: ['可参照研究没有约束主分析', '已筛到可参照的研究，但它没有约束任何主分析步骤；需写明借鉴或有意不同的设计要素。'],
     DIRECT_COMPARATOR_NOT_BOUND_TO_PRIMARY_PLAN: ['可比研究没有约束主分析', '已筛到直接可比的研究，但它没有约束任何主分析步骤；需写明借鉴或有意不同的设计要素。'],
