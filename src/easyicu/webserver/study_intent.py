@@ -249,7 +249,7 @@ _FAMILY_PATTERNS: Tuple[Tuple[str, str], ...] = (
 # "I am NOT studying death, my outcome is AKI" must not read `death`. Without
 # this, a user's correction becomes the very thing they corrected.
 _NEGATION = re.compile(
-    r"(?:\bnot\b|\bno\b|\bnever\b|\bisn't\b|\baren't\b|\bdon't\b|\bdoesn't\b|\brather than\b|\binstead of\b|不是|不要|不想|不(?:研究|分析|考虑|比较)|并非|而非|非|无关|别)"
+    r"(?:\bnot\b|\bno\b|\bnever\b|\bisn't\b|\baren't\b|\bdon't\b|\bdoesn't\b|\brather than\b|\binstead of\b|不是|不要|不想|不(?:研究|分析|考虑|比较)|并非|而非|非|无关|(?<![\u3400-\u9fff])(?:请)?别(?:研究|分析|考虑|比较|描述|把|将|选|用))"
     r"[\s\S]{0,16}$",
     re.IGNORECASE,
 )
@@ -268,6 +268,9 @@ def _negated(text: str, start: int) -> bool:
     for sep in (". ", "; ", "。", "；", "?", "？"):
         if sep in window:
             window = window.rsplit(sep, 1)[1]
+    # An explicit affirmative contrast starts a new scope; a plain comma in
+    # a list of excluded endpoints does not. "分别" is never a negation.
+    window = re.split(r"[,，]\s*(?:仅|只|而是|instead\b|but\b)", window, flags=re.IGNORECASE)[-1]
     # "非 X 患者的死亡" names a negative-exposure population, not a negated
     # outcome. Close that noun phrase's scope while retaining any subsequent
     # explicit negation such as "非 X 患者中，不研究死亡".
@@ -530,7 +533,7 @@ def _resolved_reading(
         prefix = text[max(0, start - 12):start]
         if (
             re.search(r"(?:医院|全院|总|hospital\s+)$", prefix, re.IGNORECASE)
-            or re.match(r"住院总(?:时长|时间)", text[start:end])
+            or re.fullmatch(r"住院(?:总)?(?:时长|时间)", text[start:end])
         ):
             return ("los_hosp", start, end)
     for other, begin, finish in _catalog_name_readings(text):

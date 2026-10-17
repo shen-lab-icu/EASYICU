@@ -505,6 +505,17 @@ def _bind_step_module_shape(
                 "outcome",
                 "population_scope",
             )
+        elif locked_module_id == "continuous_outcome_summary":
+            required_non_null = ("primary_exposure",)
+            properties["scientific_action_id"] = {"type": "null"}
+            properties["raw_inputs"]["minItems"] = 2
+            properties["planned_analysis_role"] = {"type": "string", "const": "secondary"}
+            for field in ("outcome", "outcome_type", "event_level_index", "reference_exposure_level_index",
+                          "comparison_exposure_level_index", "primary_contrast_level_index",
+                          "denominator_policy", "missing_exposure_policy", "missing_outcome_policy", "confidence_level"):
+                properties[field] = {"type": "null"}
+            for field in ("model_terms", "sensitivity_spec_ids"):
+                properties[field]["maxItems"] = 0
         elif locked_module_id == "exposure_outcome_distribution":
             required_non_null = (
                 "primary_exposure",
@@ -1435,6 +1446,7 @@ def progressive_step_materialization_request(
         if outline_step.module_id in {
             "adjusted_association",
             "exposure_outcome_distribution",
+            "continuous_outcome_summary",
             "table_one",
         }:
             raise ProgressiveTransportSchemaError(

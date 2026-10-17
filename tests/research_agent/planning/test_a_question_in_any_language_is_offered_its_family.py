@@ -74,9 +74,12 @@ def test_a_question_and_its_translation_are_offered_its_family(family, zh, en):
             assert _ALWAYS_OFFERED <= set(offered)
 
 
-def test_a_question_the_scorer_misreads_is_still_offered_its_family():
-    # The scorer reads no association cue here and ranks description first.
-    context = _asked("成人 ICU 患者入科时的血乳酸水平是否与院内死亡相关？").model_copy(
+def test_a_question_the_scorer_misreads_is_still_offered_its_family(monkeypatch):
+    # Force a misreading without requiring the real scorer to retain an old bug.
+    from types import SimpleNamespace
+    from easyicu.research_agent.agents import progressive_planner
+    monkeypatch.setattr(progressive_planner, "infer_analysis_type", lambda _: SimpleNamespace(key="descriptive_epidemiology"))
+    context = _asked("Is a synthetic marker linked to the recorded binary endpoint?").model_copy(
         update={"primary_exposure": None}
     )
     offered = candidate_analysis_types(context)

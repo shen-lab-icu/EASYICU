@@ -224,17 +224,14 @@ def _summary_row(
     }
 
 
-def run_descriptive_distribution_summary(
+def grouped_distribution_table(
     *,
     frame: pd.DataFrame,
     grouping_variable: str,
     value_variable: str,
-    typed_cohort_input: str,
-    source_cohort: Path,
-    out_dir: Path,
     run_dir: Path,
-) -> dict[str, Any]:
-    """Compute exact overall and closed-level summaries from one bound cohort."""
+) -> tuple[pd.DataFrame, tuple[Any, ...]]:
+    """Compute partitioned aggregate rows without writing or filtering inputs."""
 
     if grouping_variable == value_variable:
         raise RuntimeError("Grouping and value variables must differ")
@@ -295,7 +292,24 @@ def run_descriptive_distribution_summary(
     if partition_total != len(frame):
         raise RuntimeError("Closed grouping levels do not partition the cohort")
 
-    table = pd.DataFrame(rows, columns=_OUTPUT_COLUMNS)
+    return pd.DataFrame(rows, columns=_OUTPUT_COLUMNS), levels
+
+
+def run_descriptive_distribution_summary(
+    *,
+    frame: pd.DataFrame,
+    grouping_variable: str,
+    value_variable: str,
+    typed_cohort_input: str,
+    source_cohort: Path,
+    out_dir: Path,
+    run_dir: Path,
+) -> dict[str, Any]:
+    """Compute exact overall and closed-level summaries from one bound cohort."""
+    table, levels = grouped_distribution_table(
+        frame=frame, grouping_variable=grouping_variable,
+        value_variable=value_variable, run_dir=run_dir,
+    )
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     table_path = out_dir / "distribution_prevalence.csv"

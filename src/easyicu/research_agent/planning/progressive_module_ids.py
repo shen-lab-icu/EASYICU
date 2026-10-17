@@ -13,6 +13,7 @@ ProgressiveModuleId = Literal[
     "cohort_definition",
     "table_one",
     "exposure_outcome_distribution",
+    "continuous_outcome_summary",
     "measurement_audit",
     "adjusted_association",
     "absolute_risk_context",

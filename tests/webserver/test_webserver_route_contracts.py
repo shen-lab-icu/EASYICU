@@ -250,6 +250,16 @@ EXPECTED_PI_COPILOT_ROUTES = [
     ),
     (
         "POST",
+        "/api/copilot/pi/sessions/{session_id}/population-acceptance",
+        "post_pi_copilot_population_acceptance",
+    ),
+    (
+        "POST",
+        "/api/copilot/pi/sessions/{session_id}/population-preparation",
+        "post_pi_copilot_population_preparation",
+    ),
+    (
+        "POST",
         "/api/copilot/pi/sessions/{session_id}/regenerate",
         "post_pi_copilot_regenerate",
     ),

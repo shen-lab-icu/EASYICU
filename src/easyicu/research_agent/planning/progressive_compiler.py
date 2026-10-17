@@ -82,6 +82,7 @@ from .cohort_contract import (
 from .cohort_identity import cohort_identity_columns
 from .dependence_authority import descriptive_counts_only_required
 from .population_provenance import bind_population_provenance, typed_study_criterion_quote
+from ..contracts.continuous_outcome_metadata import continuous_summary_columns
 from .exposure_group_reader_names import exposure_group_display_labels
 from .distribution_authority import distribution_policy_issues
 from .literature_contract import LiteratureDesignBinding
@@ -132,6 +133,7 @@ _MODULE_OUTPUT_ROLES: Mapping[str, frozenset[str]] = {
     "cohort_definition": frozenset({"analysis_cohort", "cohort_flow"}),
     "table_one": frozenset({"table_one"}),
     "exposure_outcome_distribution": frozenset({"exposure_outcome_distribution"}),
+    "continuous_outcome_summary": frozenset({"continuous_outcome_summary"}),
     "measurement_audit": frozenset(
         {
             "measurement_missingness",
@@ -167,6 +169,7 @@ _METHOD_BY_MODULE: Mapping[str, str] = {
     "cohort_definition": "cohort_definition_and_attrition",
     "table_one": "table_one",
     "exposure_outcome_distribution": "descriptive",
+    "continuous_outcome_summary": "continuous_outcome_summary",
     "measurement_audit": "missing_data",
     "adjusted_association": "adjusted_association_models",
     "absolute_risk_context": "absolute_risk_context",
@@ -188,6 +191,7 @@ _COHORT_FRAME_ONLY_MODULES = frozenset(
         "table_one",
         "absolute_risk_context",
         "exposure_outcome_distribution",
+        "continuous_outcome_summary",
         "measurement_audit",
         "adjusted_association",
     }
@@ -2763,6 +2767,20 @@ def _compile_one_step(
                 unresolved_limitations=("counts_only_design",)
             )
         kwargs["inputs"] = list(dict.fromkeys([*inputs, spec.exposure, spec.outcome]))
+    elif step.module_id == "continuous_outcome_summary":
+        try:
+            columns = continuous_summary_columns(
+                grouping=str(step.primary_exposure or ""), raw_inputs=step.raw_inputs,
+                variables=variables,
+            )
+        except ValueError as exc:
+            raise _fail("progressive_continuous_outcome_invalid", str(exc),
+                        step=step, step_index=step_index, path="raw_inputs") from exc
+        kwargs["inputs"] = [value for value in inputs if ":" in value] + list(columns)
+        if post_baseline_exposure(context)[0]:
+            kwargs["descriptive_claim"] = DescriptiveClaimContract(
+                unresolved_limitations=("post_baseline_exposure_opportunity_unresolved",),
+            )
     elif step.module_id == "measurement_audit":
         kwargs["measurement_audit_spec"] = _compile_measurement_spec(
             output_pairs,
