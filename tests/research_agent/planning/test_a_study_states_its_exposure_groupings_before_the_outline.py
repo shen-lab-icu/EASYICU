@@ -87,12 +87,13 @@ def _answer(*groupings: dict[str, Any]) -> str:
     return json.dumps({"groupings": list(groupings)})
 
 
-def _context(cohort: Path):
+def _context(cohort: Path, *, primary_exposure: str | None = None):
     return build_research_context(
         research_question=_QUESTION,
         cohort=cohort,
         cohort_name="synthetic",
         database="miiv",
+        primary_exposure=primary_exposure,
         target_outcome="death",
         id_columns=("stay_id",),
         outcome_columns=("death",),

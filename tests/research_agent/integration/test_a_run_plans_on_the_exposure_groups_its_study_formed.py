@@ -143,8 +143,10 @@ def test_a_run_plans_and_resumes_on_the_groups_its_study_formed(
     assert staged is not None
     assert staged.authority.producer == EXPOSURE_GROUP_STAGE_PRODUCER
     capsule = json.loads((run_dir / "run_input_capsule.json").read_text())
+    assert capsule["scientific_identity"]["primary_exposure"] is None
     assert capsule["cohort_sha256"] == hashlib.sha256(cohort.read_bytes()).hexdigest()
     handoff = load_checkpoint(run_dir / "human_review_checkpoint.json").plan_handoff
+    assert handoff["context"]["primary_exposure"] == "lact_group_x1"
     assert "lact_group_x1" in [item["name"] for item in handoff["context"]["variables"]]
     # The plan compares the groups the study stated, as their level codes.
     compared = [{"variable": "lact_group_x1", "reference": 1, "contrast": 2}]
@@ -171,6 +173,7 @@ def test_a_run_plans_and_resumes_on_the_groups_its_study_formed(
     assert result.run_id == pending.run_id
     assert _asked(again) == 0
     resumed = json.loads((run_dir / "research_context.json").read_text())
+    assert resumed["primary_exposure"] == "lact_group_x1"
     assert resumed["cohort"]["provenance"][_CONTRASTS] == compared
     assert load_verified_materialized_cohort_authority(cohort).reference == (
         staged.reference

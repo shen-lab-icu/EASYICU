@@ -147,7 +147,7 @@ def run_exposure_grouping_phase(
     cohort_path: Path,
     run_dir: Path,
     planner: Any,
-    rebuild_context: Callable[[Path], ResearchContext],
+    rebuild_context: Callable[..., ResearchContext],
     capability_review_pending: bool,
     trajectory_staged: bool,
     emit_progress: Callable[..., None],
@@ -158,7 +158,9 @@ def run_exposure_grouping_phase(
     ``cohort_path`` is the run's exact copy of its source, which a grouping
     restages in place; ``planner`` is the Planner's client, wrapped as every
     Planner call is; ``rebuild_context`` builds the context on the restaged
-    cohort, bound as the first one was.  ``capability_review_pending`` says
+    cohort, bound as the first one was, with a ``primary_exposure`` builder
+    keyword when a sole grouping fills an undeclared exposure.
+    ``capability_review_pending`` says
     the run stops for a capability review before any Provider call.
     ``candidate`` is the accepted candidate plan's groupings
     (:class:`CandidateExposureGroupings`); with it, nothing is asked.
@@ -206,6 +208,19 @@ def run_exposure_grouping_phase(
             },
         }
     compiled = compile_exposure_groupings(stated, context)
+    primary_exposure_binding = None
+    context_overrides = {}
+    if not context.primary_exposure:
+        if len(compiled.applied) == 1:
+            variable = str(compiled.applied[0].variable)
+            context_overrides["primary_exposure"] = variable
+            primary_exposure_binding = {
+                "variable": variable, "basis": "sole_applied_grouping",
+            }
+        elif len(compiled.applied) > 1:
+            primary_exposure_binding = {
+                "variable": None, "basis": "ambiguous_multiple_groupings",
+            }
     record_path = write_json_artifact(
         Path(run_dir) / EXPOSURE_GROUPINGS_FILENAME,
         {
@@ -214,6 +229,7 @@ def run_exposure_grouping_phase(
             **stated_by,
             "compiled": compiled.record(),
             "compiled_sha256": compiled.sha256(),
+            "primary_exposure_binding": primary_exposure_binding,
         },
     )
     blocking = [item for item in compiled.groupings if not item.applied]
@@ -261,7 +277,7 @@ def run_exposure_grouping_phase(
                 )
             ),
         )
-    grouped = rebuild_context(Path(cohort_path))
+    grouped = rebuild_context(Path(cohort_path), **context_overrides)
     unbound = [
         str(item.variable)
         for item in compiled.applied
@@ -473,12 +489,15 @@ def bound_context_on(
     context_kwargs: Mapping[str, Any],
     config: PipelineConfig,
     cohort_path: Path,
+    *,
+    primary_exposure: Optional[str] = None,
 ) -> ResearchContext:
     """The plan phase's context on ``cohort_path``, built and bound as it was first."""
 
-    return bind_reviewed_requirements(
-        builder(**{**context_kwargs, "cohort": cohort_path}), config
-    )
+    kwargs = {**context_kwargs, "cohort": cohort_path}
+    if primary_exposure is not None:
+        kwargs["primary_exposure"] = primary_exposure
+    return bind_reviewed_requirements(builder(**kwargs), config)
 
 
 def register_exposure_groupings_record(evidence: Any, run_dir: Path) -> None:
