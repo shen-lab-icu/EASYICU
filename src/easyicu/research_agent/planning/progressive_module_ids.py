@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Literal, Sequence, get_args
 
+from ..contracts.cohort_summary import DESCRIPTIVE_SUMMARY_ACTION as DESCRIPTIVE_SUMMARY_ACTION
+
 ProgressiveModuleId = Literal[
     "cohort_definition",
     "table_one",
@@ -22,9 +24,6 @@ ProgressiveModuleId = Literal[
     "visualization",
     "report",
 ]
-
-DESCRIPTIVE_SUMMARY_ACTION = "descriptive.descriptive_summary"
-
 
 def descriptive_custom_module_allowed(role: str, action: str | None) -> bool:
     """The registered primary summary or the existing provisional baseline."""

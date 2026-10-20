@@ -28,6 +28,53 @@ from easyicu.research_agent.gates.preflight import audit_mechanical_code_contrac
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
+def test_primary_summary_emits_exact_empirical_counts_and_validated_statistics(tmp_path, monkeypatch):
+    import easyicu.research_agent.execution.runners.cohort_summary_executor as owner
+    from easyicu.research_agent.contracts.cohort_summary import descriptive_summary_result_receipt_valid
+
+    run_dir = tmp_path / "synthetic"
+    run_dir.mkdir()
+    context = {"variables": [
+        {"name": "temperature", "role": "vital", "dtype": "float64", "unit": "C"},
+        {"name": "stay_id", "role": "id", "dtype": "int64"},
+    ]}
+    (run_dir / "research_context.json").write_text(json.dumps(context))
+    frame = pd.DataFrame({"temperature": [35.0, 37.0, 37.0, None], "stay_id": [1, 2, 3, 4]})
+    source = run_dir / "synthetic.parquet"
+    frame.to_parquet(source, index=False)
+    out = run_dir / "outputs"
+    monkeypatch.setenv("EASYICU_RUN_DIR", str(run_dir))
+    monkeypatch.setenv("STEP_OUT_DIR", str(out))
+    result = owner.run_cohort_summary_from_env(
+        declared_columns=["temperature", "stay_id"], typed_cohort_input="artifact:analysis_cohort",
+        frame=frame, cohort_path=source, primary_summary=True,
+    )
+    assert descriptive_summary_result_receipt_valid(result)
+    assert result["declared_columns"] == ["temperature"]
+    distribution = pd.read_csv(out / "distribution_summary.csv")
+    assert distribution["value"].tolist() == [35.0, 37.0]
+    assert distribution["count"].tolist() == [1, 2]
+    assert distribution["cumulative_proportion"].tolist() == pytest.approx([1 / 3, 1])
+    summary = pd.read_csv(out / "cohort_summary.csv")
+    values = summary.loc[summary["variable"] == "temperature"].set_index("statistic")["value"]
+    assert values["mean"] == pytest.approx(109 / 3)
+    assert values["median"] == 37
+    assert values["missing_n"] == 1
+    assert "stay_id" not in summary["variable"].tolist()
+    assert result["paper_authorization_allowed"] is False
+    owner.validate_primary_descriptive_tables(frame[["temperature"]], summary, distribution)
+    for column in ("count", "cumulative_proportion", "denominator", "value"):
+        corrupt = distribution.copy()
+        corrupt.loc[0, column] += 1
+        with pytest.raises(ValueError, match="descriptive"):
+            owner.validate_primary_descriptive_tables(frame[["temperature"]], summary, corrupt)
+    corrupt = summary.copy()
+    corrupt.loc[corrupt["statistic"] == "median", "value"] = 99
+    with pytest.raises(ValueError, match="descriptive"):
+        owner.validate_primary_descriptive_tables(frame[["temperature"]], corrupt, distribution)
+    assert not descriptive_summary_result_receipt_valid({**result, "descriptive_summary_validation": {}})
+
+
 def _step() -> AnalysisStep:
     return AnalysisStep(
         step_id="02_cohort_summary",

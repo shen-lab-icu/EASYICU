@@ -28,7 +28,7 @@ Two design points this registry makes explicit:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import re
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
@@ -70,6 +70,11 @@ from ..contracts.time_varying_exposure import (
     TIME_VARYING_EXPOSURE_CAPABILITY, TIME_VARYING_EXPOSURE_METHOD, TIME_VARYING_ANALYSIS_KIND,
 )
 from ..contracts.prediction_execution import static_prediction_execution_verdict
+from ..contracts.cohort_summary import (
+    DESCRIPTIVE_SUMMARY_ANALYSIS_KIND,
+    declared_summary_columns,
+    is_primary_descriptive_summary_step,
+)
 from .study_design_playbook import StudyDesignFamily
 
 if TYPE_CHECKING:
@@ -724,21 +729,25 @@ CAPABILITY_REGISTRY: Tuple[ScientificCapability, ...] = (
     ),
     ScientificCapability(
         family="descriptive",
-        label="Descriptive / measurement audit",
-        primary_analysis="llm_coded",
-        primary_estimand="LLM-coded descriptive summaries / Table One / measurement-process audits",
-        primary_runner=None,
-        primary_runner_module=None,
+        label="Descriptive / empirical measurement summary",
+        primary_analysis="deterministic",
+        primary_estimand="Observed numeric measurement summaries and empirical stay frequencies, without inference",
+        primary_runner=DESCRIPTIVE_SUMMARY_ANALYSIS_KIND,
+        primary_runner_module="execution.runners.cohort_summary_executor",
         figure="deterministic",
         figure_renderer="base_association_skill",
-        data_contract=("cohort", "variables of interest"),
+        data_contract=("one typed cohort", "primary descriptive summary action", "numeric measured variables"),
         fail_closed=(
-            "Evidence STRICT mode blocks unbound sentences; the plausibility gate "
-            "flags implausible descriptives before they reach the manuscript."
+            "Only the exact primary summary contract selects this validator. "
+            "Every emitted statistic and frequency must reconcile with the bound "
+            "cohort; untyped summaries and measurement audits remain analysis-only."
         ),
         capability_id="descriptive_measurement_v1",
-        result_contract="registered summary/source-data products",
-        required_diagnostics=("denominators", "measurement availability"),
+        result_contract="cohort_summary + distribution_summary with source-bound numerical validation receipt",
+        required_diagnostics=("denominators", "measurement availability", "empirical frequency reconciliation"),
+        scientific_validation="reportable",
+        scientific_validator_owner="execution.runners.cohort_summary_executor",
+        scientific_validator_contract="validate_primary_descriptive_tables + descriptive_summary_result_receipt_valid",
     ),
     ScientificCapability(
         family="descriptive",
@@ -1352,6 +1361,15 @@ def _verdict_for(
     failure_reason: Optional[str] = None,
     detail: str = "",
 ) -> PrimaryCapabilityVerdict:
+    if capability is not None and capability.capability_id == "descriptive_measurement_v1" and owner_claimed is not True:
+        # The broad family still permits provisional generated summaries.
+        # Only an exact primary contract receives the registered validation
+        # ceiling; a catalog label alone never promotes arbitrary code.
+        capability = replace(
+            capability, primary_analysis="llm_coded", primary_runner=None,
+            primary_runner_module=None, scientific_validation="analysis_only",
+            scientific_validator_owner=None, scientific_validator_contract=None,
+        )
     if capability is None:
         return PrimaryCapabilityVerdict(
             capability_id=None,
@@ -1526,6 +1544,11 @@ def resolve_primary_capability(
 
     primary = primary_steps[0]
     if canonical == "descriptive_epidemiology":
+        if len(primary_steps) == 1 and is_primary_descriptive_summary_step(primary):
+            return _verdict_for(
+                capability, analysis_family=canonical, owner_claimed=True,
+                owner_reason="exact empirical measurement summary contract",
+            )
         descriptive_verdict = exposure_outcome_distribution_execution_verdict(primary)
         if descriptive_verdict.claimed:
             capability = get_capability_by_id(
@@ -1904,7 +1927,17 @@ def assess_scientific_capability(
     # Input readiness follows the capability's own declared contract. A
     # phenotyping run has a feature matrix and no exposure/outcome by design;
     # requiring those association coordinates would silently misclassify it.
-    if capability.capability_id == SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID:
+    if capability.capability_id == "descriptive_measurement_v1" and verdict.owner_claimed:
+        primary = next(step for step in plan.steps if step.planned_analysis_role == "primary")
+        descriptors = [context.variable(name) for name in declared_summary_columns(primary)]
+        measured = [item for item in descriptors if item is not None and item.role.value not in {"id", "index"}]
+        input_contract_resolved = bool(
+            all(item is not None for item in descriptors)
+            and len(measured) == 1
+            and any(token in str(measured[0].dtype).lower() for token in ("float", "int", "double", "numeric"))
+            and not getattr(measured[0].observed_domain, "levels", None)
+        )
+    elif capability.capability_id == SOURCE_FEASIBILITY_NON_USE_CAPABILITY_ID:
         input_contract_resolved = not source_feasibility_plan_contract_errors(plan)
     elif capability.capability_id == SIGNED_TRAJECTORY_PHENOTYPING_CAPABILITY_ID:
         input_contract_resolved = not signed_trajectory_plan_contract_errors(plan)

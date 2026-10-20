@@ -22,6 +22,7 @@ from typing import Any, Literal, Mapping, Optional, Sequence
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..canonical_json import canonical_sha256
+from ..contracts.cohort_summary import is_primary_descriptive_summary_step
 from ..contracts.continuous_outcome_summary import continuous_outcome_columns, continuous_outcome_summary_verdict
 from ..contracts.continuous_outcome_metadata import continuous_summary_columns
 from ..authority.declared_levels import closed_planning_levels_for
@@ -314,6 +315,11 @@ def planned_model_outcomes(
                 and spec.outcome not in values
             ):
                 values.append(spec.outcome)
+        if context is not None and is_primary_descriptive_summary_step(step):
+            for name in step.inputs:
+                descriptor = context.variable(name)
+                if descriptor is not None and descriptor.role.value == "outcome" and name not in values:
+                    values.append(name)
         if (context is not None
                 and canonical_analysis_family(plan.analysis_type) == "descriptive_epidemiology"
                 and continuous_outcome_summary_verdict(step).claimed):
@@ -817,6 +823,8 @@ _FIRST_STAY_RULE_METHODS = frozenset(
 def _repeated_stay_step_declared(step: Any, context: Any) -> bool:
     """Whether one step explicitly declares its repeat-stay rule."""
 
+    if is_primary_descriptive_summary_step(step):
+        return True  # Empirical stay frequencies have no independent-patient inference.
     if _method_head(step) in _FIRST_STAY_RULE_METHODS:
         return True
     for requirement in step.model_requirements or ():
@@ -893,7 +901,8 @@ def _repeated_unit_consumer(step: AnalysisStep, context: ResearchContext) -> boo
 
     method = _method_head(step)
     return bool(
-        step.model_requirements
+        is_primary_descriptive_summary_step(step)
+        or step.model_requirements
         or step.exposure_outcome_distribution_spec is not None
         or method in _EXECUTABLE_DEPENDENCE_METHODS
         or method in {
@@ -954,6 +963,8 @@ def repeated_unit_design_closed(
             == "easyicu.exposure_outcome_distribution/3"
         )
         applicable = True
+        if is_primary_descriptive_summary_step(step):
+            continue
         has_patient_authority = patient_identity_available(context)
         if model_requirements and not (
             has_patient_authority
@@ -1762,18 +1773,32 @@ def _endpoint_conflict_recorded(context: ResearchContext) -> bool:
 #: Families whose plans report a result on the study endpoint.
 _ENDPOINT_RESULT_FAMILIES = frozenset(
     {
-        "descriptive_epidemiology", "prediction_model", "dynamic_prediction",
+        "prediction_model", "dynamic_prediction",
         "ordinal_dose_response", "survival",
     }
 )
 
 
-def plan_reports_endpoint_result(plan: Optional[AnalysisPlan]) -> bool:
-    """Whether the plan reports a result on the study endpoint."""
+def plan_reports_endpoint_result(
+    plan: Optional[AnalysisPlan], context: Optional[ResearchContext] = None,
+) -> bool:
+    """Read endpoint families and typed result declarations, never step names."""
 
     return association_study(plan) or (
         plan is not None
-        and canonical_analysis_family(plan.analysis_type) in _ENDPOINT_RESULT_FAMILIES
+        and (
+            canonical_analysis_family(plan.analysis_type) in _ENDPOINT_RESULT_FAMILIES
+            or plan.endpoint is not None
+            or bool(planned_model_outcomes(plan, context))
+            or any(
+                step.exposure_outcome_distribution_spec is not None
+                for step in scientific_steps(plan)
+            )
+            or (
+                canonical_analysis_family(plan.analysis_type) == "descriptive_epidemiology"
+                and context is not None and bool(requested_outcomes(context))
+            )
+        )
     )
 
 
@@ -1787,8 +1812,8 @@ def study_endpoint_required(
     outcome, such as trajectory clustering, has no endpoint to resolve.
     """
 
-    return bool(str(context.target_outcome or "").strip()) or plan_reports_endpoint_result(
-        plan
+    return bool(requested_outcomes(context)) or plan_reports_endpoint_result(
+        plan, context
     )
 
 
@@ -3914,7 +3939,7 @@ def build_plan_scientific_review(
                 authorization_question="Please confirm the intended clinical endpoint and time horizon in a new study version.",
             )
         )
-    endpoint_result_required = plan_reports_endpoint_result(plan)
+    endpoint_result_required = plan_reports_endpoint_result(plan, context)
     if endpoint_result_required and missing_model_outcomes:
         findings.append(
             PlanScientificFinding(

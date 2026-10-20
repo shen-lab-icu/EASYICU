@@ -275,7 +275,10 @@ def test_an_endpoint_is_required_by_a_declared_outcome_or_an_endpoint_result() -
 
     assert not study_endpoint_required(no_outcome, plan)
     assert study_endpoint_required(_context(outcome="death"), plan)
-    for family in ("descriptive_epidemiology", "survival", "prediction_model"):
+    assert not study_endpoint_required(
+        no_outcome, plan.model_copy(update={"analysis_type": "descriptive_epidemiology"})
+    )
+    for family in ("survival", "prediction_model"):
         assert study_endpoint_required(
             no_outcome, plan.model_copy(update={"analysis_type": family})
         ), family
@@ -292,4 +295,4 @@ def test_the_maturity_audit_asks_no_endpoint_of_an_outcome_free_study(tmp_path) 
         return {finding.code for finding in audit.findings}
 
     assert _ENDPOINT not in codes(plan)
-    assert _ENDPOINT in codes(plan.model_copy(update={"analysis_type": "descriptive_epidemiology"}))
+    assert _ENDPOINT not in codes(plan.model_copy(update={"analysis_type": "descriptive_epidemiology"}))

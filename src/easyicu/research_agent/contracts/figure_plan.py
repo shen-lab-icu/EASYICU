@@ -175,6 +175,13 @@ class DeterministicFigurePanelTemplate(BaseModel):
 
 
 EXPOSURE_OUTCOME_DISTRIBUTION_INPUT = "table:exposure_outcome_distribution"
+EMPIRICAL_DISTRIBUTION_INPUT = "table:distribution_summary"
+EMPIRICAL_DISTRIBUTION_FIGURE_PANELS = (
+    DeterministicFigurePanelTemplate(
+        panel_id="empirical_distribution", article_role="distribution",
+        chart_type="distribution_plot", source_products=(EMPIRICAL_DISTRIBUTION_INPUT,),
+    ),
+)
 CROSS_SECTIONAL_PHENOTYPING_FIGURE_INPUTS = (
     "table:phenotype_profiles",
     "table:phenotype_assignments",

@@ -28,6 +28,42 @@ from easyicu.research_agent.schema import (
 )
 
 
+def test_empirical_summary_renderer_preserves_frequencies_and_distribution_role(tmp_path, monkeypatch):
+    import sys
+
+    frame = pd.DataFrame({
+        "variable": ["temperature", "temperature"], "value": [35., 37.],
+        "count": [1, 2], "denominator": [3, 3], "cohort_n": [4, 4],
+        "proportion": [1 / 3, 2 / 3], "cumulative_proportion": [1 / 3, 1.],
+    })
+    monkeypatch.setattr(sys.modules[__name__], "_distribution_frame", lambda: frame)
+    source = "table:distribution_summary"
+    step = _distribution_step(inputs=[source], input_consumption_contracts=[
+        ArtifactConsumptionContract(input_key=source, mode="all_rows"),
+    ])
+    run_dir, manifest, binding = _binding(tmp_path, step=step, kind="table")
+    assert descriptive_result_figure_executor_owns_step(step, resolved_bindings={source: binding})
+    out = tmp_path / "rendered"
+    result = run_descriptive_result_figure(
+        out_dir=out, run_dir=run_dir, resolved_inputs=manifest,
+        step_id=step.step_id, input_key=source, figure_product="empirical",
+        display_labels={"temperature": "Recorded temperature"},
+    )
+    pd.testing.assert_frame_equal(pd.read_csv(out / "empirical_source_data.csv"), frame)
+    contract = json.loads((out / result["figure_contract"]).read_text())
+    assert contract["panels"][0]["metadata"]["article_role"] == "distribution"
+    assert contract["panels"][0]["metadata"]["chart_type"] == "distribution_plot"
+    assert result["source_rows_consumed"] == 2
+    # Even correctly digest-bound tables with inconsistent frequencies fail.
+    frame.loc[0, "cumulative_proportion"] = .9
+    run_dir, manifest, _ = _binding(tmp_path / "corrupt", step=step, kind="table")
+    with pytest.raises(ValueError, match="frequencies"):
+        run_descriptive_result_figure(
+            out_dir=tmp_path / "bad", run_dir=run_dir, resolved_inputs=manifest,
+            step_id=step.step_id, input_key=source, figure_product="bad",
+        )
+
+
 def _distribution_step(**updates: object) -> AnalysisStep:
     payload: dict[str, object] = {
         "step_id": "06_distribution_figure",
