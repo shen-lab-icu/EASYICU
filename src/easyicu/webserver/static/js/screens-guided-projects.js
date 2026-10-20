@@ -400,6 +400,16 @@
       </div>`;
   }
 
+  function updateFolderPreview(ctx) {
+    const box = document.getElementById('gdFolderDialogHost')?.querySelector('[data-draft-setup]');
+    const preview = box?.querySelector('[data-draft-folder-preview]');
+    if (!preview) return;
+    const slug = box.querySelector('[data-draft-slug]')?.value || '';
+    const parentDir = box.querySelector('[data-draft-parent-dir]')?.value.trim() || '';
+    const parentDisplay = (parentDir ? ctx.compactPath(parentDir) : preview.dataset.parentDisplay).replace(/\/$/, '');
+    preview.textContent = `${parentDisplay}/guided-${slug ? ctx.slugifyDraftFolder(slug) : 'study'}-...`;
+  }
+
   function renderFolderDialog(ctx) {
     const { t, icon, esc, attr, slugifyDraftFolder } = helpers(ctx);
     const host = document.getElementById('gdFolderDialogHost');
@@ -459,7 +469,7 @@
               <label class="gds-field"><span>${t('Create inside folder', '创建到本地文件夹')}</span><input data-draft-parent-dir value="${attr(parentDir)}" placeholder="${t('Choose or paste a local parent folder', '选择或粘贴本地父目录')}" autocomplete="off" /></label>
               <button class="btn sm" type="button" data-browsedraftparent>${icon('folder', 13)} ${t('Browse...', '浏览...')}</button>
             </div>
-            <div class="gds-path"><span>${t('Will create', '将创建')}</span><code>${esc(projectPreview)}</code><small>${t('The selected folder is the parent. The actual project folder gets a guided-* name so existing folders are not overwritten.', '所选文件夹是父目录。实际项目会使用 guided-* 子文件夹名称，避免覆盖已有文件夹。')}</small></div>
+            <div class="gds-path"><span>${t('Will create', '将创建')}</span><code data-draft-folder-preview data-parent-display="${attr(parentDisplay)}">${esc(projectPreview)}</code><small>${t('The selected folder is the parent. The actual project folder gets a guided-* name so existing folders are not overwritten.', '所选文件夹是父目录。实际项目会使用 guided-* 子文件夹名称，避免覆盖已有文件夹。')}</small></div>
             ${renderFolderBrowser(ctx)}
             ${error ? `<div class="gds-status error" data-folder-create-error role="alert"><span>${esc(error.message)}${error.detail ? `<small class="gds-status-detail">${esc(error.detail)}</small>` : ''}</span></div>` : ''}
             <div class="row gap-8"><button class="btn primary sm" data-createdraft ${busy ? 'disabled' : ''} aria-busy="${busy}">${icon(busy ? 'refresh' : 'folder', 13)} ${busy ? t('Creating study folder…', '正在创建研究文件夹…') : t('Create study folder', '创建研究文件夹')}</button><button class="btn sm" data-folder-dialog-close>${t('Cancel', '取消')}</button></div>
@@ -525,6 +535,7 @@
     renderKnownProjectPicker,
     renderFolderBrowser,
     renderFolderDialog,
+    updateFolderPreview,
     renderDraftRemovalDialog,
     setProjectManagement,
     isProjectManagementActive,

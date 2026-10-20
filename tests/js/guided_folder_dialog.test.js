@@ -63,6 +63,104 @@ function harness({ root = serverRoot, language = 'en', create, seed = 'Synthetic
     render: () => sandbox.EU_GUIDED_PROJECTS.renderFolderDialog(ctx) };
 }
 
+function previewHarness(options) {
+  const h = harness(options);
+  const slugStart = shell.indexOf('  function slugifyDraftFolder(');
+  const slugEnd = shell.indexOf('  function guidedProjectContext()', slugStart);
+  const rendererStart = shell.indexOf('  function guidedProjectRenderer(');
+  const rendererEnd = shell.indexOf('  function guidedProjectRailClass()', rendererStart);
+  assert.ok(slugStart >= 0 && slugEnd > slugStart);
+  assert.ok(rendererStart >= 0 && rendererEnd > rendererStart);
+  vm.runInContext(shell.slice(slugStart, slugEnd) + shell.slice(rendererStart, rendererEnd), h.sandbox);
+  h.ctx.slugifyDraftFolder = h.sandbox.slugifyDraftFolder;
+  h.render();
+  const decode = value => value.replaceAll('&quot;', '"').replaceAll('&lt;', '<').replaceAll('&amp;', '&');
+  const code = h.host.innerHTML.match(/<code\b([^>]*)>([^<]*)<\/code>/);
+  assert.ok(code, 'the new-study dialog renders a path preview');
+  const preview = {
+    textContent: decode(code[2]),
+    dataset: { parentDisplay: decode(code[1].match(/data-parent-display="([^"]*)"/)?.[1] || '') },
+    set innerHTML(_) { assert.fail('the preview must be written through textContent'); },
+  };
+  const field = attribute => ({
+    value: decode(h.host.innerHTML.match(new RegExp(`${attribute} value="([^"]*)"`))[1]),
+    dataset: {},
+    closest(selector) {
+      if (selector === `[${attribute}]`) return this;
+      return selector === '[data-draft-setup]' ? box : null;
+    },
+  });
+  const title = field('data-draft-title');
+  const slug = field('data-draft-slug');
+  const parent = field('data-draft-parent-dir');
+  const fields = {
+    '[data-draft-title]': title, '[data-draft-slug]': slug, '[data-draft-parent-dir]': parent,
+    '[data-draft-folder-preview]': code[1].includes('data-draft-folder-preview') ? preview : null,
+  };
+  const box = { querySelector: selector => fields[selector] || null };
+  h.host.querySelector = selector => selector === '[data-draft-setup]' ? box : null;
+  const listeners = {};
+  Object.assign(h.sandbox, {
+    shell: { addEventListener: (name, handler) => { listeners[name] = handler; } },
+    EXTRACT: { handleInput: () => false }, IDEA: { state: () => null },
+  });
+  const start = shell.indexOf("      shell.addEventListener('input', (e) => {");
+  const end = shell.indexOf('\n\n      // composer', start);
+  assert.ok(start >= 0 && end > start);
+  vm.runInContext(shell.slice(start, end), h.sandbox);
+  return { ...h, title, slug, parent, preview,
+    dispatch(name, target, value) { target.value = value; listeners[name]({ target }); } };
+}
+
+test('typing a study title refreshes the preview and keeps Chinese folder names', () => {
+  const h = previewHarness({ language: 'zh', seed: '' });
+  h.dispatch('input', h.title, '合成队列 甲号');
+  assert.equal(h.slug.value, '合成队列-甲号');
+  assert.equal(h.preview.textContent, `${serverRoot}/guided-合成队列-甲号-...`);
+});
+
+test('editing a folder name refreshes the preview and survives later title typing', () => {
+  const h = previewHarness();
+  h.dispatch('change', h.slug, '手动 文件夹');
+  assert.equal(h.slug.value, '手动-文件夹');
+  assert.equal(h.slug.dataset.edited, 'true');
+  assert.equal(h.preview.textContent, `${serverRoot}/guided-手动-文件夹-...`);
+  h.dispatch('input', h.title, '另一个合成标题');
+  assert.equal(h.slug.value, '手动-文件夹');
+  assert.equal(h.preview.textContent, `${serverRoot}/guided-手动-文件夹-...`);
+});
+
+test('parent input refreshes the preview and clearing it restores the rendered parent', () => {
+  const h = previewHarness();
+  assert.equal(h.preview.dataset.parentDisplay, serverRoot);
+  h.dispatch('input', h.parent, ' /synthetic/另一个父目录/ ');
+  assert.equal(h.preview.textContent, '/synthetic/另一个父目录/guided-synthetic-study-...');
+  h.dispatch('input', h.parent, '');
+  assert.equal(h.preview.textContent, `${serverRoot}/guided-synthetic-study-...`);
+});
+
+test('an empty folder-name preview uses the study fallback', () => {
+  const h = previewHarness();
+  h.slug.value = '';
+  h.sandbox.EU_GUIDED_PROJECTS.updateFolderPreview(h.ctx);
+  assert.equal(h.preview.textContent, `${serverRoot}/guided-study-...`);
+});
+
+test('the preview owner applies the same Unicode slug policy as rendering', () => {
+  const h = previewHarness();
+  h.slug.value = ' 自定义 ＡＢ ';
+  h.sandbox.EU_GUIDED_PROJECTS.updateFolderPreview(h.ctx);
+  assert.equal(h.preview.textContent, `${serverRoot}/guided-自定义-ab-...`);
+});
+
+test('title and parent markup are handled as preview text', () => {
+  const h = previewHarness();
+  h.dispatch('input', h.title, '<b>合成 标题</b>');
+  assert.equal(h.preview.textContent, `${serverRoot}/guided-b-合成-标题-b-...`);
+  h.dispatch('input', h.parent, '/synthetic/<b>父目录</b>');
+  assert.equal(h.preview.textContent, '/synthetic/<b>父目录</b>/guided-b-合成-标题-b-...');
+});
+
 test('server root supplies dialog, starter, Browse and path labels', async () => {
   const h = harness();
   h.render();
