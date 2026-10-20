@@ -10,6 +10,7 @@ model, or report an effect estimate.
 from __future__ import annotations
 
 import json
+import math
 import os
 import textwrap
 from pathlib import Path
@@ -18,6 +19,7 @@ from typing import Any, Dict, Optional, Sequence
 import pandas as pd
 
 from ...authority.plausibility import FlagOnlyPlausibilityScope
+from ...canonical_json import sha256_file as _file_sha256
 from ...gates.plausibility_receipt import (
     RECEIPT_ABOVE_FIELD,
     RECEIPT_BELOW_FIELD,
@@ -28,6 +30,7 @@ from ...schema import AnalysisStep
 from ...contracts.cohort_summary import (
     declared_summary_columns as _declared_columns,
     is_descriptive_cohort_summary_step as cohort_summary_executor_owns_step,
+    is_primary_descriptive_summary_step,
 )
 from ...numeric_scalars import coerce_optional_finite_float as _finite_number
 from .plausibility_receipt import render_standard_plausibility_receipt_code
@@ -89,6 +92,7 @@ def cohort_summary_executor_code(
             run_cohort_summary_from_env(
                 declared_columns={_declared_columns(step)!r},
                 typed_cohort_input={_typed_cohort_input(step)!r},
+                primary_summary={is_primary_descriptive_summary_step(step)!r},
             )
             """
         ).strip()
@@ -124,6 +128,7 @@ def cohort_summary_executor_code(
             plausibility_expected_columns=plausibility_expected_columns,
             plausibility_audit=plausibility_audit,
             emit_step_summary=False,
+            primary_summary={is_primary_descriptive_summary_step(step)!r},
         )
         summary["plausibility_audit"] = plausibility_audit
         out_dir = Path(os.environ["STEP_OUT_DIR"])
@@ -276,6 +281,50 @@ def _row(
     }
 
 
+def validate_primary_descriptive_tables(
+    frame: pd.DataFrame, summary: pd.DataFrame, distribution: pd.DataFrame,
+) -> None:
+    """Reconcile every empirical statistic and frequency against the bound rows."""
+
+    def require(condition: bool) -> None:
+        if not condition:
+            raise ValueError("descriptive summary does not reconcile with its source")
+
+    n = len(frame)
+    require(set(summary["variable"]) == {"__cohort__", *frame.columns})
+    cohort = summary[summary["variable"] == "__cohort__"]
+    require(len(cohort) == 1 and cohort.iloc[0]["value"] == n)
+    require(set(distribution["variable"]) <= set(frame.columns))
+    for column in frame:
+        values = pd.to_numeric(frame[column], errors="raise").dropna()
+        require(all(math.isfinite(float(value)) for value in values))
+        expected = {
+            "nonmissing_n": len(values), "missing_n": n - len(values),
+            "mean": values.mean(), "std": values.std(ddof=1),
+            "median": values.median(), "q1": values.quantile(.25),
+            "q3": values.quantile(.75), "minimum": values.min(), "maximum": values.max(),
+        }
+        rows = summary[summary["variable"] == column]
+        require(len(rows) == len(expected) and set(rows["statistic"]) == set(expected))
+        for row in rows.to_dict("records"):
+            value = expected[row["statistic"]]
+            require(
+                pd.isna(row["value"]) if pd.isna(value)
+                else pd.notna(row["value"]) and math.isclose(float(row["value"]), float(value), rel_tol=1e-12, abs_tol=1e-12)
+            )
+            require(row["denominator"] == (n if row["statistic"] in {"nonmissing_n", "missing_n"} else len(values)))
+        frequencies = distribution[distribution["variable"] == column]
+        expected_counts = values.value_counts().sort_index()
+        require(len(frequencies) == len(expected_counts))
+        cumulative = 0
+        for row, (value, count) in zip(frequencies.to_dict("records"), expected_counts.items()):
+            cumulative += count
+            require(row["value"] == value and row["count"] == count)
+            require(row["denominator"] == len(values) and row["cohort_n"] == n)
+            require(math.isclose(row["proportion"], count / len(values), rel_tol=1e-12))
+            require(math.isclose(row["cumulative_proportion"], cumulative / len(values), rel_tol=1e-12))
+
+
 def run_cohort_summary_from_env(
     *,
     declared_columns: Sequence[str],
@@ -285,6 +334,7 @@ def run_cohort_summary_from_env(
     plausibility_expected_columns: Sequence[str] = (),
     plausibility_audit: Optional[Dict[str, Any]] = None,
     emit_step_summary: bool = True,
+    primary_summary: bool = False,
 ) -> Dict[str, Any]:
     """Execute exact descriptive summaries from the standard runner environment.
 
@@ -337,8 +387,18 @@ def run_cohort_summary_from_env(
         )
 
     identifiers = [column for column in columns if metadata_by_name[column].get("role") in {"id", "index"}]
-    if identifiers:
+    if identifiers and not primary_summary:
         raise RuntimeError("Identifiers cannot be described as clinical characteristics: " + ", ".join(identifiers))
+    if primary_summary:
+        columns = tuple(column for column in columns if column not in identifiers)
+        if len(columns) != 1:
+            raise RuntimeError("Primary descriptive summary needs exactly one measured variable")
+        for column in columns:
+            if (metadata_by_name[column].get("observed_domain") or {}).get("levels"):
+                raise RuntimeError("Primary empirical summary requires numeric measurements")
+            numeric = pd.to_numeric(frame[column], errors="raise").dropna()
+            if not all(math.isfinite(float(value)) for value in numeric):
+                raise RuntimeError("Primary descriptive summary requires finite observed values")
     cohort_n = int(len(frame))
     rows = [
         _row(
@@ -434,7 +494,8 @@ def run_cohort_summary_from_env(
             )
 
     table_path = out_dir / "cohort_summary.csv"
-    pd.DataFrame(rows).to_csv(table_path, index=False)
+    summary_table = pd.DataFrame(rows)
+    summary_table.to_csv(table_path, index=False)
     summary = {
         "status": "ok",
         "analysis_family": "descriptive",
@@ -451,6 +512,45 @@ def run_cohort_summary_from_env(
         "adjusted_effect": None,
         "output_files": {"table:cohort_summary": table_path.name},
     }
+    if primary_summary:
+        frequencies = []
+        for column in columns:
+            values = pd.to_numeric(frame[column], errors="raise").dropna()
+            cumulative = 0
+            for value, count in values.value_counts().sort_index().items():
+                cumulative += int(count)
+                frequencies.append({
+                    "variable": column, "value": float(value), "count": int(count),
+                    "denominator": len(values), "cohort_n": cohort_n,
+                    "proportion": int(count) / len(values),
+                    "cumulative_proportion": cumulative / len(values),
+                })
+        distribution = pd.DataFrame(frequencies, columns=[
+            "variable", "value", "count", "denominator", "cohort_n",
+            "proportion", "cumulative_proportion",
+        ])
+        distribution_path = out_dir / "distribution_summary.csv"
+        distribution.to_csv(distribution_path, index=False)
+        # Validate the serialized products that will be registered, not just
+        # their in-memory precursors. The input binding has already verified
+        # the exact cohort bytes and preserves every stay.
+        validate_primary_descriptive_tables(
+            frame[list(columns)], pd.read_csv(table_path), pd.read_csv(distribution_path),
+        )
+        summary.update(
+            analysis_role="primary",
+            interpretation_ceiling="empirical_stay_distribution",
+            paper_authorization_allowed=False,
+            repeated_stays="all_stays_retained_no_independence_assumption",
+            descriptive_summary_validation={
+                "schema_version": "easyicu.descriptive_summary_validation/1",
+                "validated": True, "source_rows": cohort_n, "columns": list(columns),
+                "source_sha256": _file_sha256(cohort_path),
+                "cohort_summary_sha256": _file_sha256(table_path),
+                "distribution_summary_sha256": _file_sha256(distribution_path),
+            },
+        )
+        summary["output_files"]["table:distribution_summary"] = distribution_path.name
     if verified_audit is not None:
         summary["plausibility_audit"] = verified_audit
     if not emit_step_summary:

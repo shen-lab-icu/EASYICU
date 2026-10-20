@@ -1455,7 +1455,10 @@ def build_scientific_maturity_audit(
                 ),
             )
         )
-    if repeat_units_possible and not patient_identity:
+    if (
+        repeat_units_possible and not patient_identity
+        and not _repeated_unit_design_closed(context, plan)
+    ):
         findings.append(
             ScientificMaturityFinding(
                 code="REPEATED_STAY_DEPENDENCE_UNRESOLVED",

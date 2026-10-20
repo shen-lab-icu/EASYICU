@@ -10,4 +10,4 @@ _Generated from the shipped dictionaries, data-source registry, clinical contrac
 | Supported public ICU databases | 6: `eicu`, `mimic`, `miiv`, `hirid`, `aumc`, `sic` |
 | Clinical definition contracts | 10 |
 | Scientific capabilities | 16 |
-| Capabilities with an explicit reportable validator owner | 10 |
+| Capabilities with an explicit reportable validator owner | 11 |

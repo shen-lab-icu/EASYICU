@@ -171,3 +171,41 @@ def test_llm_coded_step_no_runner_leaves_contract_errors_intact():
         step_record, summary, [_contract_error()]
     )
     assert out[0].severity == "error"
+
+
+# --- the empirical measurement summary -----------------------------------------
+
+
+def _empirical_summary(**changes):
+    summary = {
+        "status": "ok", "analysis_role": "primary", "cohort_n": 12,
+        "declared_columns": ["temperature"], "adjusted_effect": None,
+        "interpretation_ceiling": "empirical_stay_distribution",
+        "paper_authorization_allowed": False,
+        "descriptive_summary_validation": {
+            "schema_version": "easyicu.descriptive_summary_validation/1",
+            "validated": True, "source_rows": 12, "columns": ["temperature"],
+            "source_sha256": "a" * 64, "cohort_summary_sha256": "b" * 64,
+            "distribution_summary_sha256": "c" * 64,
+        },
+    }
+    summary.update(changes)
+    return summary
+
+
+def test_the_empirical_summary_binds_only_its_validated_receipt():
+    from easyicu.research_agent.contracts.cohort_summary import (
+        DESCRIPTIVE_SUMMARY_ANALYSIS_KIND,
+    )
+
+    kind = DESCRIPTIVE_SUMMARY_ANALYSIS_KIND
+    assert _primary_runner_core_estimate_present(kind, _empirical_summary())
+    assert not _primary_runner_core_estimate_present(kind, {"status": "ok"})
+    # A summary that claims paper authority is not this owner's result.
+    assert not _primary_runner_core_estimate_present(
+        kind, _empirical_summary(paper_authorization_allowed=True),
+    )
+    receipt = dict(_empirical_summary()["descriptive_summary_validation"], source_rows=11)
+    assert not _primary_runner_core_estimate_present(
+        kind, _empirical_summary(descriptive_summary_validation=receipt),
+    )

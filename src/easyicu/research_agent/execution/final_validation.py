@@ -39,6 +39,10 @@ from ..audits.validators import (
 )
 from ..authority.plausibility import FlagOnlyPlausibilityScope
 from ..contracts.model_tokens import ADJUSTED_ASSOCIATION_ANALYSIS_KIND
+from ..contracts.cohort_summary import (
+    DESCRIPTIVE_SUMMARY_ANALYSIS_KIND,
+    descriptive_summary_result_receipt_valid,
+)
 from ..contracts.descriptive_execution import (
     EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
     exposure_outcome_distribution_result_receipt_valid,
@@ -71,6 +75,7 @@ from .figure_plan_binding import validate_step_planned_figure_contract_binding
 
 
 _PRIMARY_DETERMINISTIC_RUNNERS: set[str] = {
+    DESCRIPTIVE_SUMMARY_ANALYSIS_KIND,
     ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
     EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
     PREDICTION_MODEL_ANALYSIS_KIND,
@@ -140,6 +145,8 @@ def _primary_runner_core_estimate_present(
         return phenotyping_runtime_receipt_valid(step_summary)
     if kind == EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND:
         return exposure_outcome_distribution_result_receipt_valid(step_summary)
+    if kind == DESCRIPTIVE_SUMMARY_ANALYSIS_KIND:
+        return descriptive_summary_result_receipt_valid(step_summary)
     if kind in ("causal_primary_iptw", "ordinal_dose_response"):
         return step_summary.get("adjusted_effect") is not None
     if step_summary.get("hazard_ratio") is not None:

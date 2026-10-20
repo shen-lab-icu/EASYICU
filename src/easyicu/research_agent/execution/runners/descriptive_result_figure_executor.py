@@ -20,6 +20,7 @@ from typing import Any, Mapping
 import pandas as pd
 
 from ...contracts.figure_plan import (
+    EMPIRICAL_DISTRIBUTION_FIGURE_PANELS,
     GROUPED_DESCRIPTIVE_DISTRIBUTION_FIGURE_PANELS,
 )
 from ...figures.display_labels import scoped_label_lookup
@@ -128,6 +129,15 @@ def _binding_mode(binding: Any) -> str | None:
         column_names = set(columns) if isinstance(columns, list) else set()
         count_columns = column_names & DESCRIPTIVE_DISTRIBUTION_COUNT_COLUMNS
         if (
+            column_names == {
+                "variable", "value", "count", "denominator", "cohort_n",
+                "proportion", "cumulative_proportion",
+            }
+            and isinstance(consumption, Mapping)
+            and consumption.get("mode") == "all_rows"
+        ):
+            return "distribution_table_empirical"
+        if (
             isinstance(columns, list)
             and set(_DESCRIPTIVE_DISTRIBUTION_REQUIRED_COLUMNS) <= column_names
             and len(count_columns) == 1
@@ -182,7 +192,7 @@ def descriptive_result_figure_executor_owns_step(
         return False
     input_key = step.inputs[0]
     mode = _binding_mode(resolved_bindings.get(input_key))
-    if mode in {"distribution_table", "distribution_table_wide"}:
+    if mode in {"distribution_table", "distribution_table_wide", "distribution_table_empirical"}:
         contracts = list(step.input_consumption_contracts or [])
         return bool(
             _typed_product(input_key, "table")
@@ -395,7 +405,52 @@ def run_descriptive_result_figure(
     apply_publication_style()
     fig, ax = plt.subplots(figsize=(7.2, 3.6))
 
-    if mode.startswith("distribution_table"):
+    if mode == "distribution_table_empirical":
+        frame = pd.read_csv(path)
+        if len(frame.columns) != 7 or frame["variable"].nunique() > 1:
+            raise ValueError("empirical distribution must describe one measurement")
+        if not frame.empty:
+            numeric = frame.drop(columns="variable").apply(pd.to_numeric, errors="raise")
+            if not all(math.isfinite(float(value)) for value in numeric.to_numpy().flat):
+                raise ValueError("empirical distribution contains nonfinite values")
+            count = numeric["count"]
+            denominator = numeric["denominator"]
+            if not (
+                count.gt(0).all() and count.eq(count.round()).all()
+                and denominator.eq(count.sum()).all()
+                and numeric["cohort_n"].ge(denominator).all()
+                and numeric["value"].diff().dropna().gt(0).all()
+                and all(math.isclose(a, b, rel_tol=1e-12) for a, b in zip(
+                    numeric["proportion"], count / denominator,
+                ))
+                and all(math.isclose(a, b, rel_tol=1e-12) for a, b in zip(
+                    numeric["cumulative_proportion"], count.cumsum() / denominator,
+                ))
+            ):
+                raise ValueError("empirical distribution frequencies do not reconcile")
+            ax.step(numeric["value"], numeric["cumulative_proportion"], where="post")
+            variable = str(frame["variable"].iloc[0])
+            ax.set_xlabel((display_labels or {}).get(variable, variable))
+        else:
+            ax.text(.5, .5, "No observed measurements", ha="center", va="center",
+                    transform=ax.transAxes)
+        ax.set_ylabel("Empirical cumulative proportion")
+        ax.set_ylim(0, 1.05)
+        ax.set_title("Recorded measurement distribution", loc="left")
+        fig.tight_layout()
+        source_path = out_dir / f"{figure_product}_source_data.csv"
+        frame.to_csv(source_path, index=False)
+        template = EMPIRICAL_DISTRIBUTION_FIGURE_PANELS[0]
+        summary = _write_contract_and_summary(
+            fig=fig, out_dir=out_dir, figure_product=figure_product, input_key=input_key,
+            binding=binding, source_path=source_path,
+            core_claim="The figure reproduces the empirical distribution of observed stay-level measurements.",
+            panel_title="Empirical distribution", panel_id=template.panel_id,
+            panel_role=template.article_role, chart_type=template.chart_type,
+            statistics_note="All stays retained; missing measurements excluded from the observed-value denominator. No patient independence or inferential intervals assumed.",
+            source_rows=len(frame),
+        )
+    elif mode.startswith("distribution_table"):
         raw_frame = pd.read_csv(path)
         contract = binding["product_contract"]
         expected_rows = contract.get("row_count")

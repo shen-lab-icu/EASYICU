@@ -101,6 +101,10 @@ from ..authority.source_fingerprints import (
     registered_source_fingerprints_match as _source_fingerprints_match,
 )
 from ..authority.step_recovery import StepRecoverySignature
+from ..contracts.cohort_summary import (
+    DESCRIPTIVE_SUMMARY_ANALYSIS_KIND,
+    descriptive_summary_result_receipt_valid,
+)
 from ..contracts.descriptive_execution import (
     EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
     exposure_outcome_distribution_result_receipt_valid,
@@ -1460,6 +1464,7 @@ def _partition_findings_by_supersession(
 # Exact primary owners that may bind a deterministic headline result.
 _PRIMARY_DETERMINISTIC_RUNNERS: frozenset[str] = frozenset(
     {
+        DESCRIPTIVE_SUMMARY_ANALYSIS_KIND,
         ADJUSTED_ASSOCIATION_ANALYSIS_KIND,
         EXPOSURE_OUTCOME_DISTRIBUTION_ANALYSIS_KIND,
         PREDICTION_MODEL_ANALYSIS_KIND,
@@ -1481,6 +1486,14 @@ def _deterministic_primary_estimate_bound(
     # C-F9: fallback steps are downgraded (not counted as primary) unless the
     # plan explicitly allows fallback as primary on that exact step.
     records = primary_records_for_readiness(per_step_records, plan)
+
+    if any(
+        isinstance(record, dict)
+        and record.get("deterministic_standard_analysis") == DESCRIPTIVE_SUMMARY_ANALYSIS_KIND
+        and descriptive_summary_result_receipt_valid(record.get("step_summary"))
+        for record in records
+    ):
+        return True
 
     for record in records:
         if (

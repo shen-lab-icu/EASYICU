@@ -45,6 +45,9 @@ from easyicu.research_agent.contracts.capability_ids import (
 )
 
 _RUNNER_ENTRYPOINTS: dict[str, tuple[str, str]] = {
+    "descriptive_cohort_summary": (
+        "execution.runners.cohort_summary_executor", "cohort_summary_executor_code",
+    ),
     "signed_time_varying_exposure_cox": (
         "execution.runners.time_varying_executor", "time_varying_executor_code",
     ),
@@ -175,6 +178,7 @@ def test_only_typed_host_validated_primary_capabilities_default_to_reportable():
     }
 
     assert reportable == {
+        "descriptive_measurement_v1",
         "survival_time_to_event_v1",
         "association_adjusted_v1",
         LANDMARK_CATEGORICAL_ASSOCIATION_CAPABILITY_ID,
@@ -216,6 +220,7 @@ def test_partition_helpers_are_consistent():
     det = set(cr.deterministic_primary_families())
     llm = set(cr.llm_coded_primary_families())
     assert det == {
+        "Descriptive / empirical measurement summary",
         "Association — source-bound time-updated Cox",
         "Association — exact single-model adjusted",
         "Association — digest-bound categorical landmark",
