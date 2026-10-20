@@ -36,6 +36,44 @@ def test_prediction_does_not_invent_an_exposure_reading():
     assert not any(row["role"] == "exposure" for row in result["coordinate_readings"])
 
 
+@pytest.mark.parametrize("database,concept,question", [
+    ("eicu", "age", "描述一个合成 ICU 队列中年龄的分布。"),
+    ("miiv", "lact", "描述一个合成 MIMIC-IV 队列中首日血乳酸的分布。"),
+    ("eicu", "age", "Describe the age distribution in a synthetic ICU cohort."),
+    ("miiv", "lact", "Describe first-day blood lactate in a synthetic MIMIC-IV cohort."),
+    ("miiv", "lact", "What proportion of synthetic ICU stays have high blood lactate?"),
+])
+def test_described_measurement_is_a_keyword_hint_without_an_exposure(database, concept, question):
+    result = research_launch_scientific._metadata_only_planning_coordinates(
+        question=question, database=database,
+    )
+    assert result["primary_exposure"] is None
+    assert result["target_outcome"] is None
+    assert result["primary_exposure_aggregation"] is None
+    assert not any(row["role"] == "exposure" for row in result["coordinate_readings"])
+    hint = next(row for row in result["coordinate_readings"] if row["role"] == "measurement")
+    assert hint["concept"] == concept and hint["basis"] == "keyword"
+    assert hint["evidence"].casefold() in question.casefold()
+    assert any(concept in row["concepts"] and row["evidence"]
+               for row in result["question_named_concepts"])
+    assert result["source"] == "question_keywords_plus_database_capability"
+    assert result["execution_authorized"] is False
+
+
+@pytest.mark.parametrize("question", [
+    "评估合成 ICU 队列中年龄与住院死亡的关系。",
+    "Study the association between age and hospital mortality in a synthetic ICU cohort.",
+    "Describe the cohort and estimate the association between age and hospital mortality.",
+])
+def test_association_keeps_its_keyword_exposure(question):
+    result = research_launch_scientific._metadata_only_planning_coordinates(
+        question=question, database="eicu",
+    )
+    assert result["primary_exposure"] == "age"
+    assert any(row["role"] == "exposure" and row["basis"] == "keyword"
+               for row in result["coordinate_readings"])
+
+
 def test_keyword_receipt_quotes_the_original_case_and_spacing():
     question = "Is LACTATE associated with HOSPITAL   DEATH?"
     rows = research_launch_scientific._metadata_only_planning_coordinates(
@@ -50,6 +88,55 @@ def test_keyword_receipt_quotes_the_original_case_and_spacing():
 def _proposed():
     return [{"role": "exposure", "concept": "lact", "column": "lact",
              "category": "blood gas", "basis": "keyword", "evidence": "lactate"}]
+
+
+def test_measurement_hint_is_recorded_without_becoming_a_coordinate(tmp_path):
+    import json
+    from easyicu.webserver import planning_coordinate_readings as owner
+
+    hint = {**_proposed()[0], "role": "measurement"}
+    rows = owner.context_readings([hint], columns={}, configured={})
+    assert rows == []
+    owner.write_planning_coordinate_readings(tmp_path, rows, hints=[hint])
+    payload = json.loads((tmp_path / owner.PLANNING_COORDINATE_READINGS_FILENAME).read_text())
+    assert payload["hints"] == [hint]
+    assert payload["readings"] == []
+    assert owner.load_planning_coordinate_readings(tmp_path, context_columns={}) == []
+
+
+def test_launch_receipt_wiring_preserves_the_measurement_hint(tmp_path):
+    """Exercise the launch's receipt call without starting a pipeline or reading data."""
+    import ast
+    import json
+    from pathlib import Path
+    from easyicu.webserver import agent_pipeline_runs, planning_coordinate_readings
+
+    tree = ast.parse(Path(agent_pipeline_runs.__file__).read_text())
+    calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "write_planning_coordinate_readings"
+    ]
+    assert len(calls) == 1
+    coordinates = research_launch_scientific._metadata_only_planning_coordinates(
+        question="Describe the age distribution of a synthetic ICU cohort.", database="eicu",
+    )
+    namespace = {
+        "planning_coordinate_readings": planning_coordinate_readings,
+        "wrapper_dir": tmp_path, "metadata_planning_coordinates": coordinates,
+        "pipeline_target": None, "resolved_primary_exposure": None,
+        "execution_concepts": {}, "configured_primary_exposure": None,
+        "_target_outcome": lambda study: None, "study": {},
+    }
+    # Execute only the repository-owned call with the synthetic namespace above.
+    eval(compile(ast.Expression(calls[0]), "<launch-receipt>", "eval"), namespace)  # noqa: S307
+    payload = json.loads((tmp_path / "planning_coordinate_readings.json").read_text())
+    assert payload["readings"] == []
+    assert payload["hints"] == [{
+        "role": "measurement", "concept": "age", "column": "age",
+        "basis": "keyword", "evidence": "age", "category": "demographics",
+    }]
 
 
 def test_readings_bind_only_the_actual_context_coordinate(tmp_path):

@@ -62,13 +62,20 @@ def context_readings(
     return rows
 
 
-def write_planning_coordinate_readings(run_dir: Path, rows: Iterable[Mapping[str, Any]]) -> None:
-    """Atomically write the launch receipt, including a known empty reading."""
+def write_planning_coordinate_readings(
+    run_dir: Path, rows: Iterable[Mapping[str, Any]], *,
+    hints: Iterable[Mapping[str, Any]] = (),
+) -> None:
+    """Write coordinate receipts and separate, non-authoritative measurement hints."""
     run_dir.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps({
+    record = {
         "schema_version": PLANNING_COORDINATE_READINGS_SCHEMA,
         "readings": list(rows),
-    }, ensure_ascii=False, sort_keys=True)
+    }
+    hint_rows = list(hints)
+    if hint_rows:
+        record["hints"] = hint_rows
+    payload = json.dumps(record, ensure_ascii=False, sort_keys=True)
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=run_dir,

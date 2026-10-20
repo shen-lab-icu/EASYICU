@@ -53,7 +53,8 @@ def _robustness_readiness(
             (canonical_analysis_family(plan.analysis_type),)
         )
     )
-    planner_revision_supported = bool(
+    # Descriptive custom steps are reserved for registered summaries.
+    planner_revision_supported = family != "descriptive" and bool(
         available_modules & {"robustness_replay", "custom_analysis"}
     )
     if required_axis_count == 0:

@@ -23,6 +23,17 @@ ProgressiveModuleId = Literal[
     "report",
 ]
 
+DESCRIPTIVE_SUMMARY_ACTION = "descriptive.descriptive_summary"
+
+
+def descriptive_custom_module_allowed(role: str, action: str | None) -> bool:
+    """The registered primary summary or the existing provisional baseline."""
+
+    return (
+        role == "primary" and action == DESCRIPTIVE_SUMMARY_ACTION
+        or role == "auxiliary" and action is None
+    )
+
 
 def progressive_module_ids_for_analysis_types(
     analysis_types: Sequence[str],
@@ -37,7 +48,9 @@ def progressive_module_ids_for_analysis_types(
     the evidence-bound Writer runs after execution. The registered measurement
     audit already owns observation-process and timing diagnostics, so an
     arbitrary custom-analysis fallback would duplicate that owner and bypass
-    its typed outputs. Asking the Planner to add any of those parallel steps
+    its typed outputs. The custom module is reserved for the registered primary
+    descriptive summary and the provisional ungrouped baseline; the outline
+    and compiler check those roles and actions. Asking for other parallel steps
     would widen source-lineage obligations without adding a scientific decision.
     """
 
@@ -56,7 +69,6 @@ def progressive_module_ids_for_analysis_types(
                 "adjusted_association",
                 "absolute_risk_context",
                 "robustness_replay",
-                "custom_analysis",
                 "visualization",
                 "report",
             }

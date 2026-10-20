@@ -2190,7 +2190,7 @@ def test_descriptive_outline_schema_advertises_only_scientific_step_owners() -> 
 
     assert "adjusted_association" not in modules
     assert "robustness_replay" not in modules
-    assert "custom_analysis" not in modules
+    assert "custom_analysis" in modules  # Registered ungrouped descriptive summary.
     assert "visualization" not in modules
     assert "report" not in modules
     assert "measurement_audit" in modules
@@ -4754,7 +4754,7 @@ def test_descriptive_outline_prompt_separates_article_and_executable_ids() -> No
     assert "Allowed ProgressiveOutlineStep.module_id values" in prompt
     assert (
         '"descriptive_epidemiology":["cohort_definition","table_one",'
-        '"exposure_outcome_distribution","continuous_outcome_summary","measurement_audit"]'
+        '"exposure_outcome_distribution","continuous_outcome_summary","measurement_audit","custom_analysis"]'
     ) in prompt
     assert '"article_requirement_id":"cohort_denominator"' in prompt
     assert '"module_id":"cohort_denominator"' not in prompt

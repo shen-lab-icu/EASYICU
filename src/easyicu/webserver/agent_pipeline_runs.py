@@ -6569,6 +6569,11 @@ def make_research_pipeline_run_runner(
                             "exposure": bool(execution_concepts.get("primary_exposure") or configured_primary_exposure),
                         },
                     ),
+                    hints=(
+                        reading
+                        for reading in metadata_planning_coordinates.get("coordinate_readings") or ()
+                        if reading.get("role") == "measurement"
+                    ),
                 )
             if candidate_outcome_concepts and execution_resume_inputs is None:
                 resolve_outcomes = (

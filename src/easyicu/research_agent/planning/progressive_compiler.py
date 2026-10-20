@@ -88,6 +88,7 @@ from .dependence_authority import (
 from ..contracts.continuous_outcome_metadata import continuous_summary_columns
 from .exposure_group_reader_names import exposure_group_display_labels
 from .distribution_authority import distribution_policy_issues
+from .progressive_module_ids import descriptive_custom_module_allowed
 from .literature_contract import LiteratureDesignBinding
 from .method_literature import METHOD_CARDS, method_binding_support
 from .ordinal_multi_outcome import resolve_ordinal_multi_outcome_contract
@@ -3055,10 +3056,18 @@ def compile_progressive_plan(
     )
     allowed_modules = set(progressive_module_ids_for_analysis_types((canonical_type,)))
     for index, step in enumerate(skeleton.steps):
-        if step.module_id not in allowed_modules and not (
+        unsupported_descriptive_custom = (
             canonical_type == "descriptive_epidemiology"
-            and _is_ungrouped_baseline_summary(step)
-        ):
+            and step.module_id == "custom_analysis"
+            and not (
+                _is_ungrouped_baseline_summary(step)
+                or step.planned_analysis_role == "primary"
+                and descriptive_custom_module_allowed(
+                    step.planned_analysis_role, step.scientific_action_id,
+                )
+            )
+        )
+        if step.module_id not in allowed_modules or unsupported_descriptive_custom:
             raise _fail(
                 "progressive_analysis_module_unavailable",
                 f"module {step.module_id!r} is unavailable for analysis type "
