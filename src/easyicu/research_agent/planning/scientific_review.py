@@ -137,10 +137,11 @@ from .baseline_requirements import (
 from .dependence_authority import (
     context_variance_estimator,
     context_patient_group_authority,
-    descriptive_counts_only_required,
+    descriptive_interval_decision,
     dependence_matches_context,
     repeat_units_possible,
 )
+from ..contracts.exposure_outcome_distribution import DescriptiveIntervalLimitation
 from .distribution_authority import (
     DISTRIBUTION_MISSINGNESS_GUIDANCE,
     distribution_policy_issues,
@@ -185,9 +186,12 @@ class PlanScientificFinding(BaseModel):
     remediation_route: ScientificRemediationRoute = "unclassified"
     requires_user_authorization: bool = False
     authorization_question: Optional[str] = None
+    descriptive_interval_limitation: DescriptiveIntervalLimitation | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
 
 
-CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/15"
+CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION = "easyicu.plan_scientific_review/16"
 
 
 class PlanScientificReview(BaseModel):
@@ -195,15 +199,16 @@ class PlanScientificReview(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    # Archived reviews remain readable, but cannot substitute for a /15
-    # execution review (the resume gate also binds the review version). /15
-    # refuses counts-only primary results that replace the study's intervals.
+    # Archived reviews remain readable, but cannot substitute for a /16
+    # execution review. /16 shares the host's descriptive interval decision
+    # and binds a disclosed source ceiling into the approved review.
     schema_version: Literal[
         "easyicu.plan_scientific_review/10", "easyicu.plan_scientific_review/11",
         "easyicu.plan_scientific_review/12",
         "easyicu.plan_scientific_review/13",
         "easyicu.plan_scientific_review/14",
         "easyicu.plan_scientific_review/15",
+        "easyicu.plan_scientific_review/16",
     ] = (
         CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION
     )
@@ -961,6 +966,7 @@ def repeated_unit_design_closed(
             and dependence_matches_context(
                 context=context,
                 dependence=distribution.dependence,
+                analysis_type=plan.analysis_type,
             )
         ):
             return False
@@ -4179,20 +4185,21 @@ def build_plan_scientific_review(
                     ),
                 )
             )
+    interval_decision = descriptive_interval_decision(context, analysis_type=plan.analysis_type)
     requested_variance = context_variance_estimator(context)
     counts_only_steps = [
         step.step_id for step in plan.steps
         if step.exposure_outcome_distribution_spec is not None
-        and step.planned_analysis_role in {"primary", "secondary"}
         and step.exposure_outcome_distribution_spec.interval_method == "none_counts_only"
     ]
     if (canonical_analysis_family(plan.analysis_type) == "descriptive_epidemiology"
-            and requested_variance not in {None, "none_counts_only"} and counts_only_steps):
+            and not interval_decision.counts_only and counts_only_steps):
         findings.append(PlanScientificFinding(
             code="DESCRIPTIVE_VARIANCE_DESIGN_CONFLICT",
             severity="blocker", dimension="statistical_design",
             message=(
-                f"The study declares {requested_variance} uncertainty, but these "
+                f"The host-compiled design requires {requested_variance or 'source-authorized'} "
+                "uncertainty, but these "
                 "distribution steps report counts only: " + ", ".join(counts_only_steps)
             ),
             evidence_refs=[
@@ -4200,14 +4207,48 @@ def build_plan_scientific_review(
                 "research_context.json.cohort.provenance", "analysis_plan.json",
             ],
             remediation=(
-                "Restore the study's uncertainty design using verified independent-unit "
-                "or patient-grouping authority. A source limitation cannot silently "
-                "replace it with counts only. If that authority cannot be supplied, "
-                "a change of study design needs a revised complete-plan review."
+                "Revise the distribution declarations to match the host-compiled "
+                "interval method and supply the intended confidence level. The "
+                "source already has verified independent-unit or patient-grouping "
+                "authority; use that bound authority in the revised plan."
+            ),
+            remediation_route="agent_plan_revision",
+        ))
+    if interval_decision.limitation is not None and any(
+        step.exposure_outcome_distribution_spec is not None for step in plan.steps
+    ):
+        findings.append(PlanScientificFinding(
+            code="DESCRIPTIVE_INTERVALS_WITHHELD_WITHOUT_PATIENT_GROUPING",
+            severity="major", dimension="statistical_design",
+            message=interval_decision.limitation.text,
+            descriptive_interval_limitation=interval_decision.limitation,
+            evidence_refs=[
+                "research_context.json.user_preferences.data_constraints",
+                "research_context.json.cohort.provenance", "analysis_plan.json",
+            ],
+            remediation=(
+                "Carry this disclosed source ceiling into complete-plan review "
+                "and report limitations. Retain all stays and report counts and "
+                "proportions without uncertainty intervals."
             ),
             remediation_route="runtime_capability",
         ))
-    if descriptive_counts_only_required(context, analysis_type=plan.analysis_type):
+        undisclosed_steps = [
+            step.step_id for step in plan.steps
+            if step.exposure_outcome_distribution_spec is not None
+            and step.exposure_outcome_distribution_spec.interval_limitation
+            != interval_decision.limitation
+        ]
+        if undisclosed_steps:
+            findings.append(PlanScientificFinding(
+                code="DESCRIPTIVE_INTERVAL_LIMITATION_MISSING",
+                severity="blocker", dimension="statistical_design",
+                message="The compiled descriptive source ceiling is not disclosed: " + ", ".join(undisclosed_steps),
+                evidence_refs=["analysis_plan.json"],
+                remediation="Compile every distribution through the shared descriptive interval authority.",
+                remediation_route="agent_plan_revision",
+            ))
+    if interval_decision.counts_only:
         unresolved_intervals = [
             step.step_id for step in plan.steps
             if step.exposure_outcome_distribution_spec is not None

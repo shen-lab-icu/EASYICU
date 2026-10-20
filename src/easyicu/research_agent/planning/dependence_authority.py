@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -26,6 +27,10 @@ from ..contracts.descriptive_execution import (
     exposure_outcome_distribution_execution_verdict,
 )
 from ..contracts.dependence import PlannedDependenceRequirement
+from ..contracts.exposure_outcome_distribution import (
+    DescriptiveIntervalLimitation,
+    ExposureOutcomeDistributionSpec,
+)
 from ..intake.materialized_metadata import FIRST_ICU_STAY_RESTRICTION_SCHEMA
 from ..schema import AnalysisPlan, ResearchContext
 from .analysis_types import canonical_analysis_family
@@ -355,22 +360,77 @@ def repeat_units_possible(context: ResearchContext) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class DescriptiveIntervalDecision:
+    """The host's interval choice, including any disclosed source ceiling."""
+
+    interval_method: Literal["wilson", "none_counts_only"]
+    dependence: PlannedDependenceRequirement | None = None
+    limitation: DescriptiveIntervalLimitation | None = None
+
+    @property
+    def counts_only(self) -> bool:
+        return self.interval_method == "none_counts_only"
+
+    def compile(self, spec: ExposureOutcomeDistributionSpec) -> ExposureOutcomeDistributionSpec:
+        # A counts-only Planner declaration has no coverage to preserve. Leave
+        # that incomplete declaration to scientific review's Agent revision
+        # lane rather than inventing the researcher's confidence level.
+        if not self.counts_only and spec.confidence_level is None:
+            return spec
+        payload = spec.model_dump(mode="python")
+        payload.update(
+            interval_method=self.interval_method,
+            interval_limitation=self.limitation,
+            dependence=self.dependence,
+        )
+        if self.counts_only:
+            payload.update(
+                schema_version="easyicu.exposure_outcome_distribution/3",
+                repeated_unit_interval_method=None,
+                patient_weighted_interval_assumptions=None,
+                risk_difference_contrast=None,
+                confidence_level=None,
+            )
+        else:
+            payload.update(schema_version="easyicu.exposure_outcome_distribution/2")
+        return ExposureOutcomeDistributionSpec.model_validate(payload)
+
+
+def descriptive_interval_decision(
+    context: ResearchContext, *, analysis_type: str
+) -> DescriptiveIntervalDecision:
+    """Choose descriptive uncertainty from typed design and source authority.
+
+    The source ceiling retains the cohort and discloses a declared estimator
+    that cannot be supported. Planner interval fields confer no authority.
+    """
+
+    requested = context_variance_estimator(context)
+    grouping = context_patient_group_authority(context)
+    source_ceiling = (
+        canonical_analysis_family(analysis_type) == "descriptive_epidemiology"
+        and repeat_units_possible(context)
+        and grouping is None
+    )
+    counts_only = requested == "none_counts_only" or source_ceiling
+    return DescriptiveIntervalDecision(
+        interval_method="none_counts_only" if counts_only else "wilson",
+        dependence=None if counts_only else grouping,
+        limitation=(
+            DescriptiveIntervalLimitation(declared_variance_estimator=requested)
+            if source_ceiling and requested not in {None, "none_counts_only"}
+            else None
+        ),
+    )
+
+
 def descriptive_counts_only_required(
     context: ResearchContext, *, analysis_type: str
 ) -> bool:
-    """Restrict descriptive uncertainty without inventing a user decision.
+    """Expose the shared interval decision to existing planning consumers."""
 
-    The existing typed ceiling still governs every family. The source-derived
-    ceiling applies only to a declared descriptive family: absence of patient
-    grouping is not permission to compile independent-row intervals. It does
-    not change the question, filter stays, or downgrade another study family.
-    """
-
-    return context_counts_only_authority(context) or (
-        canonical_analysis_family(analysis_type) == "descriptive_epidemiology"
-        and repeat_units_possible(context)
-        and context_patient_group_authority(context) is None
-    )
+    return descriptive_interval_decision(context, analysis_type=analysis_type).counts_only
 
 
 def context_dependence_authority(
@@ -387,8 +447,13 @@ def dependence_matches_context(
     *,
     context: ResearchContext,
     dependence: PlannedDependenceRequirement | None,
+    analysis_type: str | None = None,
 ) -> bool:
-    authority = context_dependence_authority(context)
+    authority = (
+        descriptive_interval_decision(context, analysis_type=analysis_type).dependence
+        if canonical_analysis_family(analysis_type) == "descriptive_epidemiology"
+        else context_dependence_authority(context)
+    )
     return bool(authority is not None and dependence == authority)
 
 
@@ -405,6 +470,13 @@ def bind_context_dependence_authority(
     """
 
     authority = context_dependence_authority(context)
+    descriptive_decision = (
+        descriptive_interval_decision(context, analysis_type=plan.analysis_type)
+        if canonical_analysis_family(plan.analysis_type) == "descriptive_epidemiology"
+        else None
+    )
+    if descriptive_decision is not None:
+        authority = descriptive_decision.dependence
     counts_only = _counts_only_design(context)
     existing = [
         requirement.dependence
@@ -424,7 +496,7 @@ def bind_context_dependence_authority(
                 "analysis dependence was declared without a matching "
                 "StudyContext authority"
             )
-        if not counts_only:
+        if not counts_only and descriptive_decision is None:
             return plan
     if any(item != authority for item in existing):
         raise DependenceAuthorityError(
@@ -485,6 +557,12 @@ def bind_context_dependence_authority(
                 raise DependenceAuthorityError(
                     "counts-only analysis_design forbids risk-difference contrasts"
                 )
+        if descriptive_decision is not None and distribution is not None:
+            compiled_distribution = descriptive_decision.compile(distribution)
+            if compiled_distribution != distribution:
+                update["exposure_outcome_distribution_spec"] = compiled_distribution
+                changed = True
+        elif counts_only and distribution is not None:
             distribution_payload = distribution.model_dump(mode="python")
             distribution_payload.update(
                 schema_version="easyicu.exposure_outcome_distribution/3",
@@ -499,6 +577,7 @@ def bind_context_dependence_authority(
             changed = True
         if (
             not counts_only
+            and descriptive_decision is None
             and distribution is not None
             and distribution.dependence is None
         ):
@@ -507,7 +586,7 @@ def bind_context_dependence_authority(
             )
             changed = True
         table_one = step.table_one_spec
-        if table_one is not None and table_one.p_values_required:
+        if (authority is not None or counts_only) and table_one is not None and table_one.p_values_required:
             table_payload = table_one.model_dump(mode="python")
             table_payload.update(
                 schema_version="easyicu.table_one/2",
@@ -524,11 +603,13 @@ def bind_context_dependence_authority(
 
 __all__ = [
     "DependenceAuthorityError",
+    "DescriptiveIntervalDecision",
     "bind_context_dependence_authority",
     "context_counts_only_authority",
     "context_dependence_authority",
     "context_patient_group_authority",
     "descriptive_counts_only_required",
+    "descriptive_interval_decision",
     "dependence_matches_context",
     "repeat_units_possible",
 ]
