@@ -58,6 +58,7 @@ CONTRACTS: dict[str, list[str]] = {
     "extraction_study_roundtrip.test.js": ["screens-extraction-study-context.js"],
     "guided_gate_state.test.js": ["screens-guided-contracts.js"],
     "guided_classic_exit.test.js": [],
+    "guided_folder_dialog.test.js": [],
     # Loads both dedicated Copilot data-view owners itself; takes no arguments.
     "guided_pi_data_workbench.test.js": [],
     "guided_pi_conversation_timeline.test.js": ["screens-guided-pi-activity.js"],

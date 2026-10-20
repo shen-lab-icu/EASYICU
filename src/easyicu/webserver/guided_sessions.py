@@ -1471,6 +1471,7 @@ def list_guided_drafts(limit: int = 20) -> Dict[str, Any]:
         "ok": True,
         "drafts": projected_drafts,
         "count": len(drafts),
+        "default_parent_dir": str(_PROJECTS_ROOT.expanduser().resolve()),
         "config_path": str(_CONFIG_PATH),
         "storage": "metadata_only",
     }

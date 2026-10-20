@@ -1,12 +1,63 @@
 /* Owner: Guided project picker widget. */
 /* Guided Copilot project/folder picker rendering.
-   Owns HTML for local study-folder selection; screens-guided.js owns state
-   and event handlers, passing a small context object into this module. */
+   Owns local study-folder rendering, server defaults and creation feedback;
+   screens-guided.js wires conversation state and events through a context. */
 (function () {
   const PROJECT_RAIL_COLLAPSED_KEY = 'easyicu.guided.projectRailCollapsed.v1';
   let projectManagementActive = false;
   let projectRailCollapsed = readProjectRailCollapsed();
   const selectedProjectIds = new Set();
+  let folderCreation = { busy: false, error: null };
+
+  function defaultParentDir(ctx) {
+    return String(ctx.guidedDrafts?.data?.default_parent_dir || '').trim();
+  }
+
+  function draftParentDir(ctx) {
+    return String(ctx.guidedDraftParentDir || defaultParentDir(ctx)).trim();
+  }
+
+  function parentPathLabel(ctx) {
+    return ctx.compactPath(draftParentDir(ctx)) || ctx.t('Default study folder', '默认研究目录');
+  }
+
+  // A known code reads in the interface language alone; the server's own
+  // reason (an OS error, an unknown code) is kept as a secondary detail line.
+  function folderCreateError(ctx) {
+    const error = folderCreation.error;
+    if (!error) return null;
+    const { t } = ctx;
+    if (error.error === 'invalid_guided_parent_dir') {
+      return { message: t('The parent must be an existing folder. Choose another, or clear the field to use the default study folder.', '父目录必须是已存在的文件夹。请换一个，或清空此项改用默认研究目录。'), detail: '' };
+    }
+    const message = error.error === 'guided_project_folder_create_failed'
+      ? t('Could not create the study folder. Check that this folder can be written to.', '无法创建研究文件夹，请检查该目录能否写入。')
+      : t('Could not create the study folder.', '无法创建研究文件夹。');
+    return { message, detail: String(error.reason || error.error || '') };
+  }
+
+  async function createDraft(payload, getContext, onCreated) {
+    if (folderCreation.busy) return;
+    folderCreation = { busy: true, error: null };
+    if (!getContext().guidedFolderDialogMode) getContext().openFolderDialog('new', payload.title);
+    renderFolderDialog(getContext());
+    try {
+      if (!window.EU_API?.createGuidedDraft) {
+        throw new Error(getContext().t('Local folder creation API is unavailable.', '本地文件夹创建 API 不可用。'));
+      }
+      const result = await window.EU_API.createGuidedDraft(payload);
+      if (!result || result.ok === false || !result.draft) {
+        folderCreation.error = result || { error: 'guided_draft_create_failed' };
+        return;
+      }
+      return await onCreated(result);
+    } catch (err) {
+      folderCreation.error = { reason: String(err.message || err) };
+    } finally {
+      folderCreation.busy = false;
+      renderFolderDialog(getContext());
+    }
+  }
 
   function readProjectRailCollapsed() {
     try {
@@ -314,7 +365,10 @@
     const shortcuts = Array.isArray(data.shortcuts) ? data.shortcuts : [];
     const currentPath = data.path || browser.path || '';
     const parent = data.parent || '';
-    const failed = browser.error || (data && data.ok === false ? data.error : '');
+    const creatableDefault = ctx.guidedFolderDialogMode === 'new'
+      && !!defaultParentDir(ctx) && currentPath === defaultParentDir(ctx)
+      && data.ok === false && data.error === 'not_a_directory';
+    const failed = creatableDefault ? '' : browser.error || (data && data.ok === false ? data.error : '');
     return `
       <div class="gds-browser" data-guided-folder-browser>
         <div class="gds-browser-head">
@@ -330,7 +384,7 @@
         ${failed ? `<div class="gds-browser-message warn">${icon('info', 12)} <span>${esc(String(failed))}</span></div>` : ''}
         <div class="gds-browser-list">
           ${browser.loading ? `<div class="gds-browser-empty">${icon('refresh', 13)} ${t('Loading folders...', '正在加载文件夹...')}</div>` : ''}
-          ${!browser.loading && !entries.length ? `<div class="gds-browser-empty">${t('No child folders here. You can still choose the current folder if it is the project folder.', '这里没有下级文件夹。如果当前目录就是项目文件夹，也可以直接选择当前文件夹。')}</div>` : ''}
+          ${!browser.loading && !entries.length ? `<div class="gds-browser-empty">${creatableDefault ? t('This default folder will be created with your study. Choose it to continue.', '创建研究时会自动创建此默认目录，选择它即可继续。') : t('No child folders here. You can still choose the current folder if it is the project folder.', '这里没有下级文件夹。如果当前目录就是项目文件夹，也可以直接选择当前文件夹。')}</div>` : ''}
           ${!browser.loading && entries.map((entry, i) => `
             <button class="gds-browser-row" type="button" data-folder-browser-entry="${i}">
               <span class="gds-ico">${icon('folder', 13)}</span>
@@ -347,7 +401,7 @@
   }
 
   function renderFolderDialog(ctx) {
-    const { t, icon, esc, attr, compactPath, slugifyDraftFolder } = helpers(ctx);
+    const { t, icon, esc, attr, slugifyDraftFolder } = helpers(ctx);
     const host = document.getElementById('gdFolderDialogHost');
     if (!host) return;
     if (!ctx.guidedFolderDialogMode) {
@@ -357,9 +411,11 @@
     const branchCfg = ctx.BRANCH && ctx.BRANCH[ctx.branch];
     const title = ctx.guidedFolderSeedTitle || (branchCfg && branchCfg.chip) || 'New local study';
     const slug = ctx.guidedDraftFolderSlug || slugifyDraftFolder(title);
-    const parentDir = ctx.guidedDraftParentDir || '~/easyicu/projects';
-    const parentDisplay = compactPath(parentDir).replace(/\/$/, '');
+    const parentDir = draftParentDir(ctx);
+    const parentDisplay = parentPathLabel(ctx).replace(/\/$/, '');
     const projectPreview = `${parentDisplay}/guided-${slug || 'study'}-...`;
+    const busy = folderCreation.busy;
+    const error = folderCreateError(ctx);
     const mode = ctx.guidedFolderDialogMode === 'open' ? 'open' : 'new';
     const openForReview = ctx.pendingGuidedGoal && ctx.pendingGuidedGoal.goal === 'review_data';
     const openActions = openForReview ? `
@@ -405,7 +461,8 @@
             </div>
             <div class="gds-path"><span>${t('Will create', '将创建')}</span><code>${esc(projectPreview)}</code><small>${t('The selected folder is the parent. The actual project folder gets a guided-* name so existing folders are not overwritten.', '所选文件夹是父目录。实际项目会使用 guided-* 子文件夹名称，避免覆盖已有文件夹。')}</small></div>
             ${renderFolderBrowser(ctx)}
-            <div class="row gap-8"><button class="btn primary sm" data-createdraft>${icon('folder', 13)} ${t('Create study folder', '创建研究文件夹')}</button><button class="btn sm" data-folder-dialog-close>${t('Cancel', '取消')}</button></div>
+            ${error ? `<div class="gds-status error" data-folder-create-error role="alert"><span>${esc(error.message)}${error.detail ? `<small class="gds-status-detail">${esc(error.detail)}</small>` : ''}</span></div>` : ''}
+            <div class="row gap-8"><button class="btn primary sm" data-createdraft ${busy ? 'disabled' : ''} aria-busy="${busy}">${icon(busy ? 'refresh' : 'folder', 13)} ${busy ? t('Creating study folder…', '正在创建研究文件夹…') : t('Create study folder', '创建研究文件夹')}</button><button class="btn sm" data-folder-dialog-close>${t('Cancel', '取消')}</button></div>
           </div>`}
       </section>`;
   }
@@ -452,6 +509,10 @@
   }
 
   window.EU_GUIDED_PROJECTS = {
+    defaultParentDir,
+    draftParentDir,
+    parentPathLabel,
+    createDraft,
     renderShellRail,
     renderProjectRail,
     renderFolderControls,
