@@ -246,6 +246,8 @@
     startCodexLogin, openAuthorizationPopup, cancelCodexLogin, logoutCodex,
     configureProvider, finishProviderSetup,
   } = PROVIDER_CONTROL;
+  const CONNECT = MODULES.require('connect').create({ state, tr, esc, render, connectionReady, connectionConfigured, finishProviderSetup,
+    body: () => MODULES.require('provider').renderConnectionBody(setupOptions()) });
   const RUN_OUTCOME = MODULES.require('runOutcome').create({
     tr, esc, iconHtml, resourceButton, api, projectId, host: () => state.host,
     canPreview: () => Boolean(state.session) && !state.busy && !state.childJobId && !sessionIsStale(),
@@ -452,7 +454,7 @@
     authorizeDataSource, sendText, continueAfterDataSourceConfirmation,
     governedNextChoiceGrants, sendMessage, stopMessage, stopChildJob, rebind,
     togglePresentationPin, configureProvider, rememberSession, recordHostAction,
-    HOST_JOBS, EFFORT_MENU, api,
+    HOST_JOBS, EFFORT_MENU, api, CONNECT,
   });
   const dismissHeaderOverflow = EVENTS.dismissHeaderOverflow;
   const wire = EVENTS.wire;
@@ -519,7 +521,7 @@
     return '';
   }
 
-  function setupPanel() {
+  function setupOptions() {
     const runtime = state.runtime || {};
     const config = runtime.configuration || {};
     const blockers = runtime.blockers || [];
@@ -529,14 +531,16 @@
     const runtimeMissing = window.EU_PI_BLOCKERS
       ? window.EU_PI_BLOCKERS.describe(blockers, runtime)
       : [];
-    const owner = MODULES.require('provider');
-    if (!owner || typeof owner.renderSetup !== 'function') return '';
-    return owner.renderSetup({
+    return {
       state, runtime, config, blockers, runtimeMissing, tr, esc, option,
       providerPreset, runtimeReady: runtimeReady(), apiResearchReady: apiResearchReady(),
       connectionConfigured: connectionConfigured(), connectionReady: connectionReady(),
       staticPreview: isStaticPreview(),
-    });
+    };
+  }
+  function setupPanel() {
+    const owner = MODULES.require('provider');
+    return owner && typeof owner.renderSetup === 'function' ? owner.renderSetup(setupOptions()) : '';
   }
 
   function providerBindingSummary() {
@@ -653,7 +657,7 @@
     const restoring = !state.session && (state.loading || state.projectLoading || state.projectDiscoveryLoading);
     const setupFocused = !restoring && state.shell !== 'legacy'
       && !state.demoMode
-      && (state.showSetup || !connectionReady() || state.projectIssue === 'pi_project_study_context_missing');
+      && (CONNECT.pageRequired() || state.projectIssue === 'pi_project_study_context_missing');
     const emptySessionFocused = !restoring && !setupFocused && state.shell !== 'legacy'
       && !state.demoMode && Boolean(state.session) && agentMode() !== 'workspace'
       && state.messages.length === 0 && state.workflowReceipts.length === 0;
@@ -679,7 +683,7 @@
       ? statusBanner()
       : (state.demoMode ? demoPanel() : (state.projectIssue === 'pi_project_study_context_missing'
         ? activatePanel()
-        : ((state.showSetup || !connectionReady()) ? setupPanel() : (!projectId() ? projectRequiredPanel() : (state.session ? sessionPanel() : activatePanel())))));
+        : (CONNECT.pageRequired() ? setupPanel() : (!projectId() ? projectRequiredPanel() : (state.session ? sessionPanel() : activatePanel()))))) + (setupFocused ? '' : CONNECT.dialogHtml());
     // A menu the researcher has open (layout, more, composer) survives the
     // repaint that every progress event of a running job triggers.
     const menus = window.EU_POPOVER_MENUS;
@@ -703,7 +707,7 @@
       resources: RUN_OUTCOME.collection(state.latestRun, state.workflow), openResource: EVENTS.openResource,
       materialsInteractive: !emptySessionFocused, rename: renameSession, remove: removeEmptySession });
     requestAnimationFrame(() => {
-      STUDY_WORKSPACE.restoreMaterials(state.host);
+      STUDY_WORKSPACE.restoreMaterials(state.host); CONNECT.focusDialog(state.host);
       // Opening a deep-linked artifact while the project/session is still
       // restoring lets openSession() immediately close it and erase the URL.
       // Wait until the selected conversation is authoritative, then restore
@@ -737,9 +741,7 @@
         try { await prepareProject(); }
         catch (error) { state.error = errorText(error); }
       }
-      if (!connectionReady()) {
-        state.showSetup = true;
-      }
+      if (!connectionReady() && !state.connectionDeferred) state.showSetup = true;
     } catch (error) {
       state.runtime = { status: 'unavailable', blockers: ['status_request_failed'] };
       state.error = errorText(error);
@@ -755,21 +757,8 @@
     closeSourceView();
     const expectedProjectId = projectId();
     const selectionRevision = ++state.sessionSelectionRevision;
-    if (!connectionReady()) {
-      state.showSetup = true;
-      state.error = tr('Finish the one model connection before starting a conversation.', '请先完成这一套模型连接，再开始对话。');
-      render(); return;
-    }
-    if (state.researchProvider === 'codex' && (!state.codexAuth || !state.codexAuth.authentication_verified || !state.researchModel)) {
-      state.showSetup = true;
-      state.error = tr('Connect your ChatGPT account and select an account model first.', '请先连接 ChatGPT 账户并选择账户模型。');
-      render(); return;
-    }
-    if (state.researchProvider === 'api' && !apiResearchReady()) {
-      state.showSetup = true;
-      state.error = tr('Research Agent currently requires an OpenAI Chat Completions-compatible API connection.', 'Research Agent 当前需要 OpenAI Chat Completions 兼容 API 连接。');
-      render(); return;
-    }
+    // connectionReady() covers the account model and the Chat Completions API.
+    if (!CONNECT.ask('start_conversation', createSession)) return;
     state.creating = true; state.error = ''; state.pendingAuthorityRebind = false; state.editingMessageId = ''; render();
     try {
       if (state.projectInitialization && state.projectInitialization.required) {
@@ -1417,6 +1406,7 @@
   }
   async function sendText(text, grantsOverride, turnIntent, visibleUserMessage = true, messageOrigin = 'host_prompt', openingQuestion = '') {
     if (!state.session || state.projectLoading || state.busy || state.childJobId || sessionIsStale()) return;
+    if (!CONNECT.ask('send_message', () => sendText(text, grantsOverride, turnIntent, visibleUserMessage, messageOrigin, openingQuestion))) return;
     if (!sessionMatchesUiLanguage(state.session)) {
       handleLanguageChange();
       return;

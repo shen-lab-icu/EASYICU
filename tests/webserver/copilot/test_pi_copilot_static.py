@@ -70,7 +70,9 @@ process.stdout.write(JSON.stringify({candidate, executable, requiredDecision}));
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20261009-header-owner1" in index
+    assert "css/guided-pi.css?v=20261020-connect-later1" in index
+    # The connection dialog sheet reads the provider tokens the base sheet defines.
+    assert index.index("css/guided-pi.css?v=") < index.index("css/guided-pi-connect.css?v=20261020-connect-later1") < index.index("css/guided-pi-header.css?v=")
     # The header's narrow-width layout is its own owner, loaded right after the base sheet.
     assert index.index("css/guided-pi.css?v=") < index.index("css/guided-pi-header.css?v=20261009-header-owner1") < index.index("css/guided-pi-composer-menus.css?v=")
     assert _read("css/guided-pi-header.css").startswith("/* Owner: Guided Copilot conversation header")
@@ -114,12 +116,16 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-run-outcome.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-activity.js?v=20261009-target-trial1" in index
     assert (
-        "js/screens-guided-pi-provider.js?v=20260922-demo-entry2"
+        "js/screens-guided-pi-provider.js?v=20261020-connect-later1"
         in index
     )
     assert "js/screens-guided-pi-provider-control.js?v=20260830-owner-split1" in index
+    assert "js/screens-guided-pi-connect.js?v=20261020-connect-later1" in index
+    assert index.index("js/screens-guided-pi-provider-control.js") < index.index(
+        "js/screens-guided-pi-connect.js"
+    ) < index.index("js/screens-guided-pi.js")
     assert "js/screens-guided-pi-study-workspace.js?v=20261016-session-labels1" in index
-    assert "js/screens-guided-pi-events.js?v=20261019-wording-origin1" in index
+    assert "js/screens-guided-pi-events.js?v=20261020-connect-later1" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261010-source-gate1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261010-source-gate1" in index
@@ -140,7 +146,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-plan-actions.js?v=20261019-wording-origin1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261017-planning-evidence1" in index
-    assert "js/screens-guided-pi.js?v=20261019-wording-origin1" in index
+    assert "js/screens-guided-pi.js?v=20261020-connect-later1" in index
     assert "js/screens-guided.js?v=20261020-project-root1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -2129,7 +2135,7 @@ def test_activation_initializes_first_use_projects_and_surfaces_failures() -> No
     panel_selection = render.split("const markup = restoring", 1)[1]
     assert panel_selection.index(
         "state.projectIssue === 'pi_project_study_context_missing'"
-    ) < (panel_selection.index("state.showSetup || !connectionReady()"))
+    ) < (panel_selection.index("CONNECT.pageRequired() ? setupPanel()"))
 
 
 def test_get_requests_preserve_typed_backend_error_codes() -> None:
@@ -3937,7 +3943,8 @@ def test_model_connection_setup_owns_the_temporary_focus_layout() -> None:
     projects_css = _read("css/guided-projects.css")
 
     assert "main.classList.toggle('gpi-setup-focus', setupFocused)" in owner
-    assert "state.showSetup || !connectionReady()" in owner
+    assert "CONNECT.pageRequired() || state.projectIssue" in owner
+    assert "CONNECT.pageRequired() ? setupPanel()" in owner
     assert "Enter research workspace" in provider
     assert "进入研究工作区" in provider
     assert "data-gpi-connection-page" in provider
@@ -6514,7 +6521,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20261009-target-trial1" in index
-    assert "screens-guided-pi.js?v=20261019-wording-origin1" in index
+    assert "screens-guided-pi.js?v=20261020-connect-later1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

@@ -481,10 +481,12 @@
 .gpi-access-popover small{margin-top:2px;color:var(--ink-4);font-size:var(--type-meta);line-height:1.45}
 
 /* Owner: screens-guided-pi-provider.js — Copilot model/account setup only. */
-.gpi-provider-setup{
+.gpi-provider-setup,.gpi-connect-backdrop{
   --provider-bg:#f5f4ed;--provider-surface:#faf9f3;--provider-line:#cbc8bb;
   --provider-line-strong:#76756d;--provider-accent:#20211f;--provider-accent-soft:#ecebe5;
-  --provider-accent-border:#4c4d48;--provider-ink:#20211f;
+  --provider-accent-border:#4c4d48;--provider-ink:#20211f
+}
+.gpi-provider-setup{
   position:relative;isolation:isolate;display:flex;flex-direction:column;padding:0;overflow-x:hidden;overflow-y:auto;
   background:var(--provider-bg);color:var(--provider-ink)
 }
