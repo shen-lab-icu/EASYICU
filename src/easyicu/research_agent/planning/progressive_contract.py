@@ -473,21 +473,52 @@ class ProgressiveKnowHowDecision(BaseModel):
         return values
 
 
+class _OutlineContractError(ValueError):
+    """Owner-authored rule code, retained in Pydantic's error context."""
+
+    def __init__(self, reason_code: str, message: str) -> None:
+        self.easyicu_safe_diagnostic = {
+            "owner": "easyicu.planning.progressive_outline_v1",
+            "reason_code": reason_code,
+        }
+        super().__init__(message)
+
+
+def _outline_step_values(step: "ProgressiveOutlineStep") -> str:
+    """Echo only validated enum/pattern coordinates, never narrative or rosters."""
+
+    return ", ".join(
+        f"{field}={value!r}" if value is not None else f"{field}=null"
+        for field, value in (
+            ("module_id", step.module_id),
+            ("planned_analysis_role", step.planned_analysis_role),
+            ("scientific_action_id", step.scientific_action_id),
+            ("population_scope", step.population_scope),
+        )
+    )
+
+
 class ProgressiveOutlineStep(BaseModel):
     """One concise scientific step before any executable detail is requested."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     step_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_]{0,79}$")
-    planned_analysis_role: Literal["primary", "secondary", "sensitivity", "auxiliary"]
+    planned_analysis_role: Literal["primary", "secondary", "sensitivity", "auxiliary"] = Field(
+        description="For continuous_outcome_summary, set planned_analysis_role='secondary'.",
+    )
     module_id: ProgressiveModuleId
     objective: str = Field(min_length=8, max_length=600)
     depends_on: list[str] = Field(default_factory=list)
-    variable_names: list[str] = Field(min_length=1, max_length=24)
+    variable_names: list[str] = Field(
+        min_length=1, max_length=24,
+        description="For continuous_outcome_summary, list the grouping and every selected continuous outcome.",
+    )
     literature_citation_keys: list[str] = Field(default_factory=list, max_length=12)
     scientific_action_id: Optional[str] = Field(
         default=None,
         pattern=r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$",
+        description="For continuous_outcome_summary, set scientific_action_id=null.",
     )
     population_scope: Optional[Literal["analysis_cohort", "primary_model", "study_cohort"]] = Field(
         default=None, exclude_if=lambda value: value is None,
@@ -508,16 +539,43 @@ class ProgressiveOutlineStep(BaseModel):
         if self.module_id == "continuous_outcome_summary" and (
             self.planned_analysis_role != "secondary" or self.scientific_action_id is not None
         ):
-            raise ValueError("continuous_outcome_summary is a secondary host summary, not an effect action")
+            raise self._contract_error(
+                "outline_continuous_summary_role_action",
+                "continuous_outcome_summary is a secondary host summary: set "
+                "planned_analysis_role='secondary' and scientific_action_id=null",
+            )
         if self.population_scope == STUDY_COHORT_SCOPE:
-            _require_study_cohort_owner(self.module_id, self.population_scope_change_reason)
+            if self.module_id not in _STUDY_COHORT_MODULES:
+                raise self._contract_error(
+                    "outline_study_population_owner",
+                    "set population_scope=null and population_scope_change_reason=null; "
+                    "the study-cohort population (population_scope='study_cohort') belongs only to host "
+                    "module_id='cohort_definition' or 'exposure_outcome_distribution'",
+                )
+            if self.population_scope_change_reason is not None:
+                raise self._contract_error(
+                    "outline_study_population_amendment",
+                    "set population_scope_change_reason=null; population_scope='study_cohort' "
+                    "is not an amendment of another population",
+                )
             return self
         if self.population_scope is not None or self.population_scope_change_reason is not None:
             if self.module_id != "absolute_risk_context":
-                raise ValueError("population_scope belongs only to absolute_risk_context")
+                raise self._contract_error(
+                    "outline_population_scope_owner",
+                    "population_scope belongs only to absolute_risk_context: set "
+                    "population_scope=null and population_scope_change_reason=null for this module_id",
+                )
             if self.population_scope is None:
-                raise ValueError("population_scope_change_reason requires a population_scope")
+                raise self._contract_error(
+                    "outline_population_scope_required",
+                    "population_scope_change_reason requires a population_scope: set "
+                    "population_scope='analysis_cohort' or 'primary_model' to match the intended population",
+                )
         return self
+
+    def _contract_error(self, code: str, fix: str) -> _OutlineContractError:
+        return _OutlineContractError(code, f"{fix} (received {_outline_step_values(self)})")
 
     @field_validator("depends_on", "variable_names", "literature_citation_keys")
     @classmethod
@@ -621,40 +679,67 @@ class ProgressivePlanOutline(BaseModel):
     @model_validator(mode="after")
     def _closed_dag(self) -> "ProgressivePlanOutline":
         if (self.capability_gap is None) != bool(self.steps):
-            raise ValueError(
-                "a progressive outline drafts steps, or declares a "
-                "capability_gap and drafts none"
+            raise self._contract_error(
+                "outline_steps_or_capability_gap",
+                "set capability_gap=null and provide non-empty steps for an executable outline; "
+                "for an unsupported design, set capability_gap to the applicable offered "
+                "requirement and steps=[]",
             )
         if not _names_its_concept(self.capability_gap, self.capability_gap_concept):
-            raise ValueError(_CONCEPT_RULE)
+            raise self._contract_error(
+                "outline_capability_gap_concept",
+                "set capability_gap_concept to the non-empty variable name when "
+                "capability_gap='levels_from_thresholds_unavailable'; otherwise set "
+                "capability_gap_concept=null",
+            )
         step_ids = [step.step_id for step in self.steps]
-        if len(step_ids) != len(set(step_ids)):
-            raise ValueError("progressive outline step ids must be unique")
+        for index, step_id in enumerate(step_ids):
+            if step_id in step_ids[:index]:
+                raise self._contract_error(
+                    "outline_step_ids_unique",
+                    f"set steps[{index}].step_id to a unique id and update depends_on "
+                    "references to the intended producer",
+                    indices=(index,),
+                )
         positions = {step_id: index for index, step_id in enumerate(step_ids)}
         for index, step in enumerate(self.steps):
             for dependency in step.depends_on:
                 if dependency not in positions:
-                    raise ValueError(
-                        f"step {step.step_id!r} depends on unknown step {dependency!r}"
+                    raise self._contract_error(
+                        "outline_dependency_unknown",
+                        f"set each steps[{index}].depends_on entry to an existing preceding "
+                        "step_id; add the intended producer before this step or remove the "
+                        "entry if no dependency is intended",
+                        indices=(index,),
                     )
                 if positions[dependency] >= index:
-                    raise ValueError(
-                        f"step {step.step_id!r} dependency {dependency!r} must precede it"
+                    raise self._contract_error(
+                        "outline_dependency_order",
+                        f"fix steps[{index}].depends_on: move its producer "
+                        f"steps[{positions[dependency]}] before steps[{index}], or remove "
+                        "the dependency if unintended; remove self-dependencies",
+                        indices=(index,),
                     )
         primary = [
-            step.step_id
-            for step in self.steps
+            index
+            for index, step in enumerate(self.steps)
             if step.planned_analysis_role == "primary"
         ]
         if len(primary) > 1:
-            raise ValueError("progressive outline may declare at most one primary step")
+            raise self._contract_error(
+                "outline_primary_step_unique",
+                "keep planned_analysis_role='primary' on at most one step; set the other "
+                "steps' planned_analysis_role to 'secondary', 'sensitivity', or 'auxiliary' "
+                "according to their scientific purpose",
+                indices=primary,
+            )
         primary_adjusted = [
             step.step_id
             for step in self.steps
             if step.planned_analysis_role == "primary"
             and step.module_id == "adjusted_association"
         ]
-        for step in self.steps:
+        for index, step in enumerate(self.steps):
             if not (
                 step.planned_analysis_role == "sensitivity"
                 and step.module_id == "custom_analysis"
@@ -663,9 +748,14 @@ class ProgressivePlanOutline(BaseModel):
             if len(primary_adjusted) == 1 and primary_adjusted[0] in set(step.depends_on):
                 continue
             if self.analysis_type == "association_study":
-                raise ValueError(
+                raise self._contract_error(
+                    "outline_association_sensitivity_parent",
                     "association custom sensitivity steps must follow and "
-                    "depend directly on the primary adjusted_association step"
+                    "depend directly on the primary adjusted_association step: "
+                    f"set steps[{index}].depends_on to include the step_id of a preceding "
+                    "step with module_id='adjusted_association' and planned_analysis_role='primary'; "
+                    "declare that primary step if missing",
+                    indices=(index,),
                 )
             # Without an action, a custom sensitivity is materialized in the
             # scientific-sensitivity shape, which the compiler binds only to the
@@ -674,14 +764,28 @@ class ProgressivePlanOutline(BaseModel):
             # execution boundary, and step materialization cannot add the
             # action later.
             if step.scientific_action_id is None:
-                raise ValueError(
-                    f"custom sensitivity step {step.step_id!r} names no "
-                    "scientific_action_id, so it can only be an adjusted-association "
-                    "sensitivity, but it does not depend directly on a primary "
-                    "adjusted_association step; bind the retrieved action that "
-                    "owns this sensitivity in the selected family"
+                raise self._contract_error(
+                    "outline_custom_sensitivity_action",
+                    f"set steps[{index}].scientific_action_id to the retrieved action "
+                    "that owns this sensitivity in the selected family; "
+                    "scientific_action_id=null is allowed only with depends_on containing "
+                    "the step_id of a preceding module_id='adjusted_association' step "
+                    "with planned_analysis_role='primary'",
+                    indices=(index,),
                 )
         return self
+
+    def _contract_error(
+        self, code: str, fix: str, *, indices: Sequence[int] | None = None,
+    ) -> _OutlineContractError:
+        coordinates = "; ".join(
+            f"steps[{index}]: {_outline_step_values(self.steps[index])}"
+            for index in (range(len(self.steps)) if indices is None else indices)
+        )
+        # capability_gap is a closed enum; its concept and rationale are private.
+        gap = repr(self.capability_gap) if self.capability_gap is not None else "null"
+        received = coordinates or f"steps=[], capability_gap={gap}"
+        return _OutlineContractError(code, f"{fix} (received {received})")
 
 
 #: Step fields that only one outline coordinate may carry.  The step contract

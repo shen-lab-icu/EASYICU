@@ -71,13 +71,13 @@ def _run(responses: list[dict], checkpoints: list | None = None):
 def test_an_outline_drafts_steps_or_declares_a_gap_never_both() -> None:
     outline = _outline_payload()
 
-    with pytest.raises(ValueError, match="declares a capability_gap and drafts none"):
+    with pytest.raises(ValueError, match=r"set capability_gap=null.*steps=\[\]"):
         ProgressivePlanOutline.model_validate(
             {**outline, "capability_gap": "estimand_unsupported"}
         )
-    with pytest.raises(ValueError, match="drafts steps, or declares"):
+    with pytest.raises(ValueError, match="provide non-empty steps"):
         ProgressivePlanOutline.model_validate({**outline, "steps": []})
-    with pytest.raises(ValueError, match="only that requirement names one"):
+    with pytest.raises(ValueError, match="otherwise set capability_gap_concept=null"):
         ProgressivePlanOutline.model_validate(
             {**outline, "capability_gap_concept": "age_years"}
         )
@@ -86,7 +86,7 @@ def test_an_outline_drafts_steps_or_declares_a_gap_never_both() -> None:
         ("estimand_unsupported", "age_years"),
         ("levels_from_thresholds_unavailable", None),
     ):
-        with pytest.raises(ValueError, match="only that requirement names one"):
+        with pytest.raises(ValueError, match="set capability_gap_concept to the non-empty variable name"):
             ProgressivePlanOutline.model_validate(_gap_outline(requirement, concept))
         with pytest.raises(ValueError, match="only that requirement names one"):
             _claim(requirement, concept)
