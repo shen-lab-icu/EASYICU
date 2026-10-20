@@ -50,7 +50,6 @@ jobs:
     name: Native web UI browser audits
     runs-on: ubuntu-latest
     env:
-      EASYICU_HOME: ${{ runner.temp }}/easyicu-ui-audit
       EASYICU_WEB_AUDIT_BASE: http://127.0.0.1:8765
     steps:
       - name: Check out repository
@@ -68,6 +67,10 @@ jobs:
 
       - name: Run isolated server and browser audits
         run: |
+          # The runner context is unavailable in job-level env; set the
+          # isolated home here, where both the server and the audits read it.
+          export EASYICU_HOME="$RUNNER_TEMP/easyicu-ui-audit"
+          mkdir -p "$EASYICU_HOME"
           python -m uvicorn easyicu.webserver.app:app --host 127.0.0.1 --port 8765 > "$RUNNER_TEMP/easyicu-ui.log" 2>&1 &
           audit_server_pid=$!
           trap 'kill "$audit_server_pid"' EXIT
