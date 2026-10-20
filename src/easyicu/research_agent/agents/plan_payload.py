@@ -512,6 +512,10 @@ def _planner_transport_schema(
             "items"
         ] = _json_scalar_schema()
         distribution = definitions["ExposureOutcomeDistributionSpec"]["properties"]
+        # The host compiles this disclosure from verified source authority;
+        # the Planner neither chooses it nor carries its schema on the wire.
+        distribution.pop("interval_limitation", None)
+        definitions.pop("DescriptiveIntervalLimitation", None)
         distribution["outcome_positive_value"] = _json_scalar_schema()
         distribution["exposure_levels"]["items"] = _json_scalar_schema()
         distribution["outcome_levels"]["items"] = _json_scalar_schema()
@@ -808,6 +812,14 @@ def decode_planner_transport_payload(
                 step for step in trusted_steps if isinstance(step, dict)
                 and step.get("step_id") == raw_step.get("step_id")
             ), {})
+            distribution = raw_step.get("exposure_outcome_distribution_spec")
+            if isinstance(distribution, dict):
+                if distribution.get("interval_limitation") is not None:
+                    raise PlannerHostOwnedFieldError(
+                        path=f"steps[{step_index}].exposure_outcome_distribution_spec",
+                        fields=("interval_limitation",),
+                    )
+                distribution.pop("interval_limitation", None)
             for panel_index, panel in enumerate(raw_step.get("figure_panels") or []):
                 if not isinstance(panel, dict):
                     continue
