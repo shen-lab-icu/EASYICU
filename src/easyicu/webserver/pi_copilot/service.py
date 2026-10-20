@@ -64,7 +64,11 @@ from .project_authority import (
     ProjectAuthorityStore,
     ProjectStudyContextMigrationReceipt,
 )
-from .provider_config import PiProviderConfigStore
+from .provider_config import (
+    PROVIDER_DEFAULT_MODELS,
+    PiProviderConfigStore,
+    discover_provider_models,
+)
 from .resource_lifecycle import WebMemoryAdmission
 from .projections import (
     project_job,
@@ -785,6 +789,69 @@ class PiCopilotService:
             "ok": True,
             "runtime": payload["runtime"],
             "configuration": configuration,
+            "secrets_returned": False,
+        }
+
+    def discover_provider_models(
+        self,
+        *,
+        provider: str,
+        api_key: str,
+        base_url: str,
+        api_transport: str,
+        enable_ai: bool,
+    ) -> Dict[str, Any]:
+        """Read an unsaved connection's catalog without selecting a model."""
+
+        if not enable_ai:
+            raise PiCopilotError(
+                "external_llm_opt_in_required",
+                "Confirm external AI use before verifying the model service.",
+                status_code=403,
+            )
+        # The explicit request records the same canonical opt-in as a save,
+        # before any credential can leave the host.
+        settings.update_settings({"ai_enabled": True})
+        stored = self.provider_store.resolved_config()
+        reuse_credential = not api_key.strip()
+        if reuse_credential and stored is None:
+            raise PiCopilotError(
+                "pi_provider_credential_required",
+                "Enter an API credential for this model-service connection.",
+                status_code=422,
+            )
+        config = self.provider_store.make_config(
+            provider=provider,
+            api_key=stored.api_key if reuse_credential else api_key,
+            base_url=base_url,
+            # Required by make_config; never used as a model selection or probe.
+            model="catalog-discovery",
+            api_transport=api_transport,
+        )
+        if reuse_credential and (
+            config.provider != stored.provider
+            or config.base_url != stored.base_url
+            or config.api_transport != stored.api_transport
+        ):
+            raise PiCopilotError(
+                "pi_provider_credential_required",
+                "Enter an API credential for this model-service connection.",
+                status_code=422,
+            )
+        models = discover_provider_models(config)
+        default_model = PROVIDER_DEFAULT_MODELS.get(config.provider)
+        recommended = (
+            stored.model
+            if stored and stored.model in models
+            else next((model for model in models if model == default_model), None)
+        )
+        return {
+            "ok": True,
+            "schema_version": "easyicu.provider-model-catalog/1",
+            "catalog_status": "endpoint_reported",
+            "models": models,
+            "models_reported": len(models),
+            "recommended": recommended,
             "secrets_returned": False,
         }
 

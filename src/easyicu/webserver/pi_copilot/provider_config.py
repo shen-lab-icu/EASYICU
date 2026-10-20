@@ -38,6 +38,15 @@ DEFAULT_PROVIDER = "easyicu-local"
 DEFAULT_BASE_URL = "http://127.0.0.1:8317/v1"
 DEFAULT_MODEL = "gpt-5.6-luna"
 DEFAULT_API_TRANSPORT = "openai-completions"
+# Recommendation defaults from the connection form's provider presets. A model
+# is recommended only when the endpoint actually reports this identifier.
+PROVIDER_DEFAULT_MODELS = {
+    DEFAULT_PROVIDER: DEFAULT_MODEL,
+    "openai": DEFAULT_MODEL,
+    "deepseek": "deepseek-chat",
+    "anthropic": "claude-sonnet-4-6",
+    "google": "gemini-3.5-flash",
+}
 SUPPORTED_API_TRANSPORTS = frozenset(
     {
         "anthropic-messages",
