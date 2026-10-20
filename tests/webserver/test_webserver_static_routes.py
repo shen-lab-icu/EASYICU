@@ -186,7 +186,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/app.js?v=20260921-route-sub1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20260921-owner-split1" in index_html
-    assert "js/screens-extraction.js?v=20260921-source-label1" in index_html
+    assert "js/screens-extraction.js?v=20261020-folder-hint1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261010-exposure-labels1" in index_html
     assert "js/screens-help.js?v=20260817-copilot-boundary1" in index_html
@@ -1168,6 +1168,21 @@ def test_native_extraction_omits_unbound_registered_source_metadata() -> None:
     assert "data-ex-filter-coverage" not in extraction_js
     assert "data-ex-filter-quality" not in extraction_js
     assert "Use matched modules" not in extraction_js
+
+
+def test_the_folder_hint_names_the_database_the_study_needs() -> None:
+    """A study that names eICU is never told to choose a MIMIC folder."""
+
+    extraction_js = _static_js("screens-extraction.js")
+    assert "Choose the MIMIC folder" not in extraction_js
+    assert "选择 MIMIC 数据文件夹" not in extraction_js
+    hint = extraction_js.split("function connectFolderHint() {", 1)[1].split("\n  }\n", 1)[0]
+    assert "EXPECTED_DATABASE_LABELS[exExpectedDatabase]" in hint
+    assert "选择 ${name} 数据文件夹后" in hint
+    assert "选择 ICU 数据文件夹后" in hint
+    assert '<div class="ex-connect-copy-desc">${connectFolderHint()}</div>' in extraction_js
+    labels = extraction_js.split("const EXPECTED_DATABASE_LABELS = Object.freeze({", 1)[1].split("});", 1)[0]
+    assert "eicu: 'eICU 2.0'" in labels and "miiv: 'MIMIC-IV 3.1'" in labels
 
 
 def test_native_extraction_folder_connect_defaults_to_auto_detection() -> None:
