@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import threading
+from concurrent.futures import Future
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from fastapi import HTTPException
@@ -259,3 +264,190 @@ def test_submission_receipt_is_frozen_and_path_free() -> None:
     assert "path" not in receipt.model_dump(mode="json")
     with pytest.raises(ValidationError):
         receipt.job_id = "job-2"
+
+
+class _StartInterrupted(BaseException):
+    """A non-Exception interruption unrelated to interpreter shutdown."""
+
+
+@pytest.fixture
+def start_gate_launch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    study = {
+        "id": "study-start-gate",
+        "revision": 3,
+        "question": "Describe the synthetic measurements.",
+        "data_source": {"path": str(tmp_path / "synthetic-source"), "database": "eicu"},
+    }
+    monkeypatch.delenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", raising=False)
+    monkeypatch.setattr(research_run_submission.context_store, "get_context", lambda _: study)
+    monkeypatch.setattr(research_run_submission.dataio, "describe_export_source", lambda _: {"ok": True})
+    monkeypatch.setattr(research_run_submission.dataio, "prepared_export_manifest_path", lambda _: None)
+    monkeypatch.setattr(
+        research_run_submission, "build_research_workflow_snapshot",
+        lambda **_: SimpleNamespace(planning_prerequisites_missing=[]),
+    )
+    monkeypatch.setattr(research_run_submission, "provider_environment_for_agent_run", lambda **_: {})
+    monkeypatch.setattr(research_run_submission.settings_store, "load_settings", lambda: {"ai_enabled": True})
+    monkeypatch.setattr(research_run_submission.capabilities, "validate_compute_target", lambda _: {"ok": True})
+    monkeypatch.setattr(research_run_submission.agent_runs, "resolve_agent_provider_config", lambda **_: {})
+    monkeypatch.setattr(research_run_submission.context_store, "build_agent_context_binding", lambda *_, **__: {})
+    monkeypatch.setattr(
+        research_run_submission, "research_pipeline_workspace",
+        lambda: SimpleNamespace(project_root=lambda _: tmp_path),
+    )
+    callbacks = Mock()
+    callbacks.handoff.return_value = {"revision": 4}
+    callbacks.base_runner.return_value = {"gate": {"status": "passed"}}
+    callbacks.cleanup.return_value = {"context": {"revision": 5}}
+    monkeypatch.setattr(research_run_submission.context_store, "handoff_context", callbacks.handoff)
+    monkeypatch.setattr(research_run_submission.context_store, "clear_active_job_if", callbacks.cleanup)
+    monkeypatch.setattr(research_run_submission.capabilities, "record_tool_event", callbacks.audit)
+    monkeypatch.setattr(
+        research_run_submission.agent_pipeline_runs, "make_research_pipeline_run_runner",
+        lambda **_: callbacks.base_runner,
+    )
+    job = SimpleNamespace(id="job-start-gate", kind="agent-run", status="queued", cancel_requested=False)
+    runner_result: Future[dict] = Future()
+    threads: list[threading.Thread] = []
+
+    def enqueue(_kind, runner):
+        def run():
+            try:
+                runner_result.set_result(runner(job))
+            except BaseException as exc:
+                runner_result.set_exception(exc)
+
+        thread = threading.Thread(target=run, daemon=True)
+        threads.append(thread)
+        thread.start()
+        return job
+
+    monkeypatch.setattr(research_run_submission, "_submit_job", enqueue)
+
+    def submit(*, with_authorize=True):
+        return research_run_submission.submit_research_run(
+            research_run_submission.ResearchRunSubmissionRequest(
+                study_context_id=study["id"],
+                provider="mock",
+                credential_source="pi_verified",
+                external_llm_opt_in=False,
+                planner_start_mode="fresh",
+            ),
+            authorize=callbacks.authorize if with_authorize else None,
+        )
+
+    yield SimpleNamespace(
+        submit=submit, callbacks=callbacks, runner_result=runner_result, job=job,
+    )
+    for thread in threads:
+        thread.join(timeout=2)
+        assert not thread.is_alive(), "the start gate left a runner waiting"
+
+
+def _assert_start_blocked(launch, code: str) -> None:
+    with pytest.raises(RuntimeError, match=f"^agent_run_start_blocked:{code}$"):
+        launch.runner_result.result(timeout=2)
+    launch.callbacks.base_runner.assert_not_called()
+    launch.callbacks.cleanup.assert_not_called()
+    launch.callbacks.audit.assert_not_called()
+
+
+@pytest.mark.parametrize("stage", ["authorize", "handoff"])
+@pytest.mark.parametrize(
+    "error_type",
+    [KeyboardInterrupt, _StartInterrupted, SystemExit, asyncio.CancelledError, GeneratorExit],
+)
+def test_start_gate_blocks_base_exceptions_and_propagates_them(
+    start_gate_launch, stage, error_type,
+) -> None:
+    launch = start_gate_launch
+    error = error_type("synthetic interruption")
+    getattr(launch.callbacks, stage).side_effect = error
+
+    with pytest.raises(error_type) as raised:
+        launch.submit()
+
+    assert raised.value is error
+    _assert_start_blocked(launch, "agent_run_start_unconfirmed")
+    if stage == "authorize":
+        launch.callbacks.handoff.assert_not_called()
+    else:
+        launch.callbacks.authorize.assert_called_once_with()
+
+
+@pytest.mark.parametrize("stage", ["authorize", "handoff"])
+def test_start_gate_preserves_typed_submission_failure(start_gate_launch, stage) -> None:
+    launch = start_gate_launch
+    error = research_run_submission.ResearchRunSubmissionError(
+        {"error": "synthetic_authorization_denied", "message": "Synthetic grant refused."},
+        status_code=403,
+    )
+    getattr(launch.callbacks, stage).side_effect = error
+
+    with pytest.raises(research_run_submission.ResearchRunSubmissionError) as raised:
+        launch.submit()
+
+    assert raised.value is error
+    assert raised.value.status_code == 403
+    assert raised.value.detail == error.detail
+    _assert_start_blocked(launch, "synthetic_authorization_denied")
+
+
+@pytest.mark.parametrize("stage", ["authorize", "handoff"])
+@pytest.mark.parametrize(
+    ("code", "status_code"),
+    [("study_context_revision_conflict", 409), ("study_context_not_found", 500)],
+)
+def test_start_gate_preserves_context_failure_mapping(
+    start_gate_launch, stage, code, status_code,
+) -> None:
+    launch = start_gate_launch
+    detail = {"error": code, "message": "Synthetic context refused."}
+    getattr(launch.callbacks, stage).side_effect = (
+        research_run_submission.context_store.StudyContextError(detail)
+    )
+
+    with pytest.raises(research_run_submission.ResearchRunSubmissionError) as raised:
+        launch.submit()
+
+    assert raised.value.status_code == status_code
+    assert raised.value.detail == {**detail, "job_id": launch.job.id, "job_started": False}
+    _assert_start_blocked(launch, code)
+
+
+@pytest.mark.parametrize(
+    ("stage", "code"),
+    [("authorize", "agent_run_authorization_failed"), ("handoff", "study_context_active_job_sync_failed")],
+)
+def test_start_gate_identifies_untyped_failure_stage(start_gate_launch, stage, code) -> None:
+    launch = start_gate_launch
+    getattr(launch.callbacks, stage).side_effect = RuntimeError("synthetic failure")
+
+    with pytest.raises(research_run_submission.ResearchRunSubmissionError) as raised:
+        launch.submit()
+
+    assert raised.value.status_code == 500
+    assert raised.value.detail == {
+        "error": code, "reason": "RuntimeError", "job_id": launch.job.id, "job_started": False,
+    }
+    _assert_start_blocked(launch, code)
+
+
+@pytest.mark.parametrize("with_authorize", [True, False])
+def test_start_gate_runs_after_authorization_and_handoff(start_gate_launch, with_authorize) -> None:
+    launch = start_gate_launch
+
+    receipt = launch.submit(with_authorize=with_authorize)
+    result = launch.runner_result.result(timeout=2)
+
+    assert receipt.job_id == launch.job.id
+    assert receipt.study_context_revision == 4
+    assert result == {"gate": {"status": "passed"}, "study_context_revision": 5}
+    launch.callbacks.base_runner.assert_called_once_with(launch.job)
+    names = [call[0] for call in launch.callbacks.mock_calls]
+    assert names.index("handoff") < names.index("base_runner") < names.index("cleanup")
+    if with_authorize:
+        launch.callbacks.authorize.assert_called_once_with()
+        assert names.index("authorize") < names.index("handoff")
+    else:
+        launch.callbacks.authorize.assert_not_called()
