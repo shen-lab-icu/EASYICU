@@ -80,6 +80,37 @@ def test_every_plan_review_finding_has_a_chinese_title_and_detail() -> None:
     assert english == []
 
 
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "repeated_stays_possible_without_verified_patient_grouping",
+        "repeated_stays_possible_with_invalid_patient_grouping_authority",
+    ],
+)
+def test_withheld_intervals_do_not_claim_patient_grouping_is_absent(reason) -> None:
+    html = _render_zh([
+        {
+            "code": "DESCRIPTIVE_INTERVALS_WITHHELD_WITHOUT_PATIENT_GROUPING",
+            "severity": "major",
+            "remediation_route": "runtime_capability",
+            "requires_user_authorization": False,
+            "message": "The host withheld uncertainty intervals.",
+            "descriptive_interval_limitation": {
+                "declared_variance_estimator": "model_based",
+                "reason": reason,
+            },
+        },
+    ])
+
+    (title, detail), = re.findall(
+        r"<li><strong>(.*?)</strong><span>(.*?)</span></li>", html, re.S,
+    )
+    assert CJK.search(title) and CJK.search(detail)
+    assert "患者分组依据未经核实或未通过校验" in detail
+    assert "保留全部住院" in detail
+    assert "计数与比例" in detail
+
+
 #: The prediction-validity round's findings.  Their rows land before the
 #: round's review owner emits them; FINDINGS then covers them as well.
 PREDICTION_FINDINGS = {

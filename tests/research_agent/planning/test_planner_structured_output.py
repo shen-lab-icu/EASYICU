@@ -21,6 +21,7 @@ from easyicu.research_agent.contracts.product_identity import (
 )
 from easyicu.research_agent.agents.core import PlannerAgent
 from easyicu.research_agent.schema import (
+    AnalysisStep,
     CohortDescriptor,
     PlannedModelRequirement,
     ResearchContext,
@@ -289,6 +290,89 @@ def test_ten_source_run_bound_literature_schema_keeps_retry_headroom():
     assert request.payload_bytes < 30_100
     assert "CandidateLiteratureDesignDecision" not in request.schema_json
     assert len(schema["$defs"]["LiteratureDesignBinding"]["anyOf"]) == 6
+
+
+@pytest.mark.parametrize("runtime_suffix", [False, True])
+def test_descriptive_interval_limitations_are_not_planner_transport_fields(runtime_suffix):
+    request = (
+        payload_owner.runtime_suffix_structured_output_request(
+            allowed_literature_citation_keys=[],
+            replace_from_step_id="distribution",
+            planned_analysis_role="secondary",
+            allowed_inputs=["dataset:cohort"],
+            expected_outputs=["table:distribution"],
+            scientific_action_ids=[],
+        )
+        if runtime_suffix else planner_structured_output_request()
+    )
+    definitions = json.loads(request.schema_json)["$defs"]
+    distribution = definitions["ExposureOutcomeDistributionSpec"]
+
+    assert "interval_limitation" not in distribution["properties"]
+    assert "interval_limitation" not in distribution["required"]
+    assert "DescriptiveIntervalLimitation" not in definitions
+
+
+@pytest.mark.parametrize("transport", ["plan", "replan", "runtime_suffix"])
+def test_planner_cannot_write_a_host_compiled_interval_limitation(transport):
+    limitation = {
+        "declared_variance_estimator": "model_based",
+        "reason": "repeated_stays_possible_without_verified_patient_grouping",
+    }
+    step = {
+        "step_id": "distribution",
+        "intent": "Report the declared exposure and outcome distribution.",
+        "inputs": ["exposure", "outcome"],
+        "expected_outputs": ["table:exposure_outcome_distribution"],
+        "exposure_outcome_distribution_spec": {
+            "schema_version": "easyicu.exposure_outcome_distribution/3",
+            "exposure": "exposure",
+            "exposure_levels": [0, 1],
+            "outcome": "outcome",
+            "outcome_levels": [0, 1],
+            "outcome_positive_value": 1,
+            "level_match_policy": "exact_typed",
+            "denominator_policy": "observed_outcome_rows",
+            "missing_outcome_policy": "exclude_from_denominator",
+            "interval_method": "none_counts_only",
+            "repeated_unit_interval_method": None,
+            "confidence_level": None,
+            "interval_limitation": limitation,
+        },
+    }
+    payload = {"steps": [step]}
+    assert AnalysisStep.model_validate(
+        step,
+    ).exposure_outcome_distribution_spec.interval_limitation is not None
+
+    with pytest.raises(PlannerHostOwnedFieldError) as caught:
+        if transport == "runtime_suffix":
+            payload_owner.parse_runtime_plan_suffix(json.dumps({
+                "replace_from_step_id": "distribution",
+                "replacement_step": step,
+                "rationale": "Keep the declared distribution population.",
+            }))
+        else:
+            decode_planner_transport_payload(
+                payload, host_owned_plan=payload if transport == "replan" else None,
+            )
+
+    assert caught.value.issue_code == "planner_host_owned_field_written"
+    assert caught.value.path == "steps[0].exposure_outcome_distribution_spec"
+    assert caught.value.fields == ("interval_limitation",)
+    assert step["exposure_outcome_distribution_spec"]["interval_limitation"] == limitation
+
+
+def test_planner_null_interval_limitation_leaves_the_host_to_compile_it():
+    spec = {"interval_limitation": None, "interval_method": "wilson"}
+    payload = {"steps": [{"exposure_outcome_distribution_spec": spec}]}
+
+    decoded = decode_planner_transport_payload(payload)
+
+    assert decoded["steps"][0]["exposure_outcome_distribution_spec"] == {
+        "interval_method": "wilson",
+    }
+    assert spec == {"interval_limitation": None, "interval_method": "wilson"}
 
 
 def test_single_version_tags_are_host_defaults_but_version_choices_remain():
