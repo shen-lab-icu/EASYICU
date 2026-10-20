@@ -1,12 +1,14 @@
 """Reviewed population criteria reach the existing extraction contract exactly."""
 
 from copy import deepcopy
+import json
 from types import SimpleNamespace
 
 import pytest
 
 from easyicu.research_agent.orchestration.progressive_planning import (
     population_approval_findings,
+    population_proposals_finding,
 )
 from easyicu.research_agent.orchestration.workflow import human_review_requests_for_plan
 from easyicu.research_agent.planning.population_compile import compile_population
@@ -15,12 +17,13 @@ from easyicu.research_agent.schema import (
     AnalysisPlan,
     CohortDescriptor,
     ResearchContext,
+    UserPreferences,
 )
 from easyicu.webserver import study_contexts
 from easyicu.webserver.pi_copilot import extraction_handoff
 
 
-def reviewed_population(*criteria, time_zero=None, variables=()):
+def reviewed_population(*criteria, time_zero=None, variables=(), question=None, settings=None):
     spec = PopulationSpec.model_validate(
         {
             "criteria": [
@@ -36,9 +39,10 @@ def reviewed_population(*criteria, time_zero=None, variables=()):
         }
     )
     context = ResearchContext(
-        research_question="Describe the stated population",
+        research_question=question or "Describe the stated population",
         cohort=CohortDescriptor(cohort_name="synthetic", database="miiv", n_stays=0),
         variables=list(variables),
+        user_preferences=UserPreferences(data_constraints=json.dumps({"cohort": settings or {}})),
     )
     population = compile_population(spec, context, time_zero_hours=time_zero)
     plan = AnalysisPlan(
@@ -136,6 +140,57 @@ def test_an_explicit_projection_reaches_extraction_without_starting_it(study):
     assert calls[0]["cohort"]["max_patients"] == 57
     assert calls[0]["study_context_revision"] == updated["revision"]
     assert calls[0]["path"] == "/synthetic/prepared"
+
+
+@pytest.mark.parametrize("source", ["outline", "preset"])
+@pytest.mark.parametrize("criterion,question,settings", [
+    (
+        {"kind": "icu_stay_hours", "min_hours": 24, "quote": "first 24 hours"},
+        "Describe maximum lactate during the first 24 hours of the ICU stay.",
+        {"min_icu_los_hours": 24, "label": "Adults with sepsis"},
+    ),
+    (
+        {"kind": "age_years", "min_years": 18, "max_years": 89, "quote": "adults"},
+        "Describe outcomes in adults.",
+        {"age_min": 18, "age_max": 89, "label": "Adults with sepsis"},
+    ),
+])
+def test_preparation_and_system_proposals_keep_the_compilers_attribution(
+    study, source, criterion, question, settings,
+):
+    population, requests = reviewed_population(
+        {**criterion, "source": source}, question=question, settings=settings,
+    )
+    result = proposal(study, requests)
+    proposed = population_proposals_finding(population).detail["criteria"][0]
+    row = result["criteria"][0]
+    assert row["source"] == source
+    assert row["proposed_by_system"] is True
+    assert row["stated_by_study"] is False
+    assert row["quote"] == criterion["quote"]
+    assert row["quote_found_in_question"] is True
+    assert row["attribution"] == "typed_study_setting"
+    assert row["typed_study_setting"]
+    for field in ("source", "stated_by_study", "quote_found_in_question", "attribution", "typed_study_setting"):
+        assert row[field] == proposed[field]
+
+
+def test_omission_card_keeps_system_interpretation_separate_from_the_question(study):
+    from easyicu.webserver.pi_copilot.population_acceptance import population_acceptance_proposal
+
+    population, requests = reviewed_population(
+        {"kind": "not_typed", "why": "No supported restriction kind", "source": "outline", "quote": "adults"},
+        question="Describe outcomes in adults.",
+    )
+    result = population_acceptance_proposal(
+        study=study, pending=SimpleNamespace(requests=requests, run_id="run_population"),
+    )
+    row = result["criteria"][0]
+    assert row["proposed_by_system"] is True
+    assert row["stated_by_study"] is False
+    assert row["quote_found_in_question"] is True
+    assert row["attribution"] == "outline"
+    assert population.criteria[0].disposition == "not_applied"
 
 
 @pytest.mark.parametrize(

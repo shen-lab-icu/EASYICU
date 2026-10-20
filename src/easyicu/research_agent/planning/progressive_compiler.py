@@ -81,7 +81,6 @@ from .cohort_contract import (
 )
 from .cohort_identity import cohort_identity_columns
 from .dependence_authority import descriptive_counts_only_required
-from .population_provenance import bind_population_provenance, typed_study_criterion_quote
 from ..contracts.continuous_outcome_metadata import continuous_summary_columns
 from .exposure_group_reader_names import exposure_group_display_labels
 from .distribution_authority import distribution_policy_issues
@@ -564,10 +563,6 @@ def _stated_population_spec(
         *(str(item) for item in context.cohort.exclusion_criteria),
     )
     for criterion in unquoted_criteria(spec, study_texts):
-        if (criterion.source == "study_wording" and criterion.quote == typed_study_criterion_quote(
-            criterion, getattr(context.user_preferences, "data_constraints", None),
-        )):
-            continue
         index = next(i for i, item in enumerate(spec.criteria) if item is criterion)
         raise _fail(
             "progressive_population_quote_not_verbatim",
@@ -577,11 +572,7 @@ def _stated_population_spec(
             "never paraphrase or translate them",
             path=f"cohort.population_spec.criteria[{index}].quote",
         )
-    return bind_population_provenance(
-        spec, question=str(context.research_question or ""),
-        study_texts=study_texts,
-        data_constraints=getattr(context.user_preferences, "data_constraints", None),
-    )
+    return spec
 
 
 def stated_population(

@@ -547,7 +547,14 @@
         population_concept_without_values: tr('The concept has no measured values here.', '该概念在此处没有实际测量值。'),
       };
       const rows = (preparation.criteria || []).map(row => {
-        const source = row.proposed_by_system ? tr('System proposal', '系统建议') : tr('Stated by the study', '研究原文');
+        let source = row.proposed_by_system ? tr('System proposal', '系统建议') : tr('Stated by the study', '研究原文');
+        if (row.proposed_by_system && row.quote_found_in_question) {
+          source += ` · ${tr('Words from the question, system interpretation', '题目用语，系统解读')}`;
+        }
+        if (row.attribution === 'typed_study_setting' && row.typed_study_setting) {
+          const fields = Object.entries(row.typed_study_setting).map(([field, value]) => `${field} = ${value}`).join(', ');
+          source += ` · ${tr('Study setting', '研究设置')}: ${fields}`;
+        }
         const state = reasons[row.reason] || (row.disposition === 'requires_extraction'
           ? tr('Needs extraction with these settings.', '需按这些设置提取。')
           : row.disposition === 'not_applied' ? tr('Not applied.', '未施加。')

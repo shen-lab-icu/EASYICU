@@ -38,7 +38,6 @@ from ..planning.population_shadow import (
 )
 from ..planning.approval_stops import PLAN_APPROVAL_STOPS
 from ..planning.capability_gap import check_capability_gap
-from ..planning.population_spec import STUDY_WORDING_SOURCES
 from ..planning.question_requirements import (
     QuestionRequirementsError,
     bind_named_question_concepts,
@@ -231,7 +230,7 @@ def _criterion_row(item: CompiledCriterion) -> dict[str, Any]:
         "kind": criterion.kind,
         "role": criterion.role,
         "source": criterion.source,
-        "stated_by_study": criterion.source in STUDY_WORDING_SOURCES,
+        **item.provenance_record(),
         "quote": criterion.quote,
         "disposition": item.disposition,
         "reason": item.reason,
@@ -302,7 +301,7 @@ def population_proposals_finding(
     proposed = [
         item
         for item in population.criteria
-        if item.criterion.source not in STUDY_WORDING_SOURCES
+        if not item.stated_by_study
     ]
     if not proposed:
         return None

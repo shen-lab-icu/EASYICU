@@ -27,14 +27,14 @@ NOT_APPLIED = POPULATION_APPROVAL_STOPS["not_applied"]
 REQUIRES_EXTRACTION = POPULATION_APPROVAL_STOPS["requires_extraction"]
 
 
-def _card(code: str, *, run_id: str = "run_population_1", preparation=None, acceptance=None) -> dict:
+def _card(code: str, *, run_id: str = "run_population_1", preparation=None, acceptance=None, language="zh") -> dict:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js is unavailable")
     script = r"""
 let declared = null;
 global.window = {
-  EU_LANG: 'zh',
+  EU_LANG: process.argv[6],
   EasyICU: { guidedPi: { declare: (_name, api) => { declared = api; }, optional: () => null } },
 };
 require(process.argv[1]);
@@ -43,7 +43,7 @@ const runId = process.argv[3];
 const preparation = JSON.parse(process.argv[4]);
 const acceptance = JSON.parse(process.argv[5]);
 const owner = declared.create({
-  tr: (en, zh) => zh || en,
+  tr: (en, zh) => process.argv[6] === 'en' ? en : zh || en,
   esc: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
   iconHtml: () => '',
   resourceButton: resource => `<a data-resource="${resource.artifact}"></a>`,
@@ -67,7 +67,7 @@ process.stdout.write(JSON.stringify({
 }));
 """
     owner = STATIC / "js" / "screens-guided-pi-confirmation.js"
-    result = run_node(node, script, str(owner.resolve()), code, run_id, json.dumps(preparation), json.dumps(acceptance), check=False)
+    result = run_node(node, script, str(owner.resolve()), code, run_id, json.dumps(preparation), json.dumps(acceptance), language, check=False)
     assert result.returncode == 0, result.stderr or result.stdout
     return json.loads(result.stdout)
 
@@ -112,6 +112,32 @@ def test_an_unsupported_projection_explains_each_criterion_without_an_action():
     assert card["execute"] is False
     assert "研究原文" in card["html"] and "18.5" in card["html"]
     assert "无法保留这组精确界限" in card["html"]
+
+
+@pytest.mark.parametrize("kind,code", [("preparation", REQUIRES_EXTRACTION), ("acceptance", NOT_APPLIED)])
+@pytest.mark.parametrize("language,system,interpretation,setting", [
+    ("en", "System proposal", "Words from the question, system interpretation", "Study setting"),
+    ("zh", "系统建议", "题目用语，系统解读", "研究设置"),
+])
+def test_population_cards_show_system_interpretations_and_exact_settings(
+    kind, code, language, system, interpretation, setting,
+):
+    proposal = {
+        "available": False,
+        "criteria": [{
+            "quote": "first 24 hours", "source": "outline", "proposed_by_system": True,
+            "stated_by_study": False, "quote_found_in_question": True,
+            "attribution": "typed_study_setting", "typed_study_setting": {"cohort.min_icu_los_hours": 24},
+            "disposition": "requires_extraction" if kind == "preparation" else "not_applied",
+        }],
+    }
+    card = _card(code, language=language, **{kind: proposal})
+    assert system in card["html"]
+    assert interpretation in card["html"]
+    assert setting in card["html"]
+    assert "cohort.min_icu_los_hours = 24" in card["html"]
+    assert "研究原文" not in card["html"] and "Stated by the study" not in card["html"]
+    assert card["execute"] is False
 
 
 def test_without_a_reviewed_plan_the_card_names_no_resource() -> None:

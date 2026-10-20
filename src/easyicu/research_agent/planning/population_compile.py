@@ -34,7 +34,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from types import MappingProxyType
 from typing import Any, Literal, Mapping, Optional, Sequence
@@ -85,8 +85,10 @@ from .cohort_eligibility import (
 )
 from .cohort_identity import cohort_identity_columns
 from .cohort_predicate_domain import cohort_predicates_outside_column_domain
+from .population_provenance import PopulationProvenance, bind_population_provenance
 from .population_spec import (
     POPULATION_SPEC_SCHEMA_VERSION,
+    STUDY_WORDING_SOURCES,
     AgeYears,
     AliveAt,
     ConditionPresent,
@@ -203,6 +205,7 @@ class CompiledCriterion:
     predicates: tuple[ConceptPredicate, ...] = ()
     side: Optional[Side] = None
     proof: Optional[SourceProof] = None
+    provenance: PopulationProvenance = PopulationProvenance()
 
     def __post_init__(self) -> None:
         applied_by_plan = self.disposition == "applied_by_plan"
@@ -227,9 +230,23 @@ class CompiledCriterion:
     def applied(self) -> bool:
         return self.disposition in {"applied_by_source", "applied_by_plan"}
 
+    @property
+    def stated_by_study(self) -> bool:
+        return self.criterion.source in STUDY_WORDING_SOURCES
+
+    def provenance_record(self) -> dict[str, Any]:
+        setting = self.provenance.typed_study_setting
+        return {
+            "attribution": "typed_study_setting" if setting is not None else self.criterion.source,
+            "stated_by_study": self.stated_by_study,
+            "quote_found_in_question": self.provenance.quote_found_in_question,
+            "typed_study_setting": dict(setting) if setting is not None else None,
+        }
+
     def record(self) -> dict[str, Any]:
         return {
             "criterion": self.criterion.model_dump(mode="json"),
+            "provenance": self.provenance_record(),
             "disposition": self.disposition,
             "reason": self.reason,
             "detail": self.detail,
@@ -351,7 +368,16 @@ def compile_population(
     )
     with cohort_concept_id_scope(sealed_cohort_concept_ids(context)):
         population = CompiledPopulation(
-            criteria=tuple(_compile(item, reading) for item in spec.criteria),
+            criteria=tuple(
+                replace(
+                    _compile(item, reading),
+                    provenance=bind_population_provenance(
+                        item, question=str(context.research_question or ""),
+                        data_constraints=getattr(context.user_preferences, "data_constraints", None),
+                    ),
+                )
+                for item in spec.criteria
+            ),
             time_zero_hours=reading.time_zero_hours,
         )
         validate_cohort_definition(population.cohort_definition())

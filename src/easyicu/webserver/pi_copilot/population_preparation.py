@@ -140,6 +140,7 @@ def population_preparation_proposal(
                     "quote": criterion.quote,
                     "source": criterion.source,
                     "proposed_by_system": criterion.source not in STUDY_WORDING_SOURCES,
+                    **row.get("provenance", {}),
                     "disposition": disposition,
                     "reason": refusal or row.get("reason"),
                 }

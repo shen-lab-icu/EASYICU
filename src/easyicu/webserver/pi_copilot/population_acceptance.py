@@ -121,6 +121,7 @@ def population_acceptance_proposal(
                 "source": row["criterion"]["source"],
                 "proposed_by_system": row["criterion"]["source"]
                 not in STUDY_WORDING_SOURCES,
+                **row.get("provenance", {}),
                 "disposition": row["disposition"],
                 "reason": row["reason"],
                 "accepted": row["criterion"]["id"] in accepted,
