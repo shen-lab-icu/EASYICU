@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from typing import Literal, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from .literature_design_authority import CandidateLiteratureDesignDecision
 
@@ -45,7 +45,7 @@ class ResearchDesignCandidate(BaseModel):
     time_zero: str = Field(min_length=8, max_length=400)
     observation_window: str = Field(min_length=8, max_length=400)
     primary_method: str = Field(min_length=3, max_length=300)
-    required_variables: list[str] = Field(min_length=2, max_length=24)
+    required_variables: list[str] = Field(min_length=1, max_length=24)
     assumptions: list[str] = Field(min_length=1, max_length=8)
     literature_citation_keys: list[str] = Field(default_factory=list, max_length=8)
     literature_design_decisions: list[CandidateLiteratureDesignDecision] = Field(
@@ -59,6 +59,13 @@ class ResearchDesignCandidate(BaseModel):
     reviewable_plan: list[str] | None = None
     disposition: Literal["selected", "rejected"]
     decision_reason: str = Field(min_length=12, max_length=600)
+
+    @field_validator("required_variables")
+    @classmethod
+    def _sufficient_variable_roster(cls, values: list[str], info: ValidationInfo) -> list[str]:
+        if info.data.get("analysis_type") != "descriptive_epidemiology" and len(values) < 2:
+            raise ValueError("non-descriptive design candidates require at least two variables")
+        return values
 
     @field_validator(
         "required_variables",

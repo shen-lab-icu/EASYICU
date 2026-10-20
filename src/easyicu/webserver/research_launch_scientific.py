@@ -1077,10 +1077,10 @@ def _metadata_only_planning_coordinates(
     the researcher confirmed; it takes precedence over a question-named one,
     and its binary endpoint follows the same concept-owner rule.
 
-    A question the reader reads as a prediction study names no exposure: a
-    prediction model has predictors and may be compared with an existing
-    score, and which a named concept is, the plan states as the question's
-    requirements.  Every concept the question names besides its outcome and
+    A prediction study names predictors, and a descriptive study names
+    measurements, without assigning either a primary exposure. The existing
+    host family reading takes precedence over the keyword family hint.
+    Every concept the question names besides its outcome and
     the exposure projected here is returned as ``question_named_concepts``:
     the source columns its name can denote and the words that name it, which
     the plan must account for.
@@ -1097,6 +1097,7 @@ def _metadata_only_planning_coordinates(
         named_study_concepts,
         substance_forms,
     )
+    from easyicu.webserver.study_family_reading import study_family_reading
 
     intent = deterministic_intent(question)
     raw_slots = intent.get("slots")
@@ -1119,7 +1120,15 @@ def _metadata_only_planning_coordinates(
         str(family.get("value") or "") == "prediction"
         and str(family.get("provenance") or "") == KEYWORD_PROVENANCE
     )
-    named_exposure = None if prediction else named_concept("exposure")
+    host_family = study_family_reading(question)
+    descriptive = (
+        host_family.family == "descriptive_epidemiology"
+        if host_family is not None
+        else family.get("value") == "description"
+        and family.get("provenance") == KEYWORD_PROVENANCE
+    )
+    named_exposure = None if prediction or descriptive else named_concept("exposure")
+    named_measurement = named_concept("exposure") if descriptive else None
     primary_exposure = _observability_preserving_exposure(named_exposure, export_path)
     source_column = _bound_source_column(export_path)
     # A host-derived window reading is already one value per stay; an
@@ -1178,6 +1187,7 @@ def _metadata_only_planning_coordinates(
         ("outcome", target_outcome, source_column(target_outcome),
          "configured" if configured_catalog is not None else "keyword", "outcome"),
         ("exposure", named_exposure, source_column(primary_exposure), "keyword", "exposure"),
+        ("measurement", named_measurement, source_column(named_measurement), "keyword", "exposure"),
     ):
         capability = catalog_by_id.get(str(concept or ""))
         if capability is not None and column:

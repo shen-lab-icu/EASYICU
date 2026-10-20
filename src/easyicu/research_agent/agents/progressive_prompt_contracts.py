@@ -23,6 +23,50 @@ from ..planning.literature_design_authority import LITERATURE_DESIGN_DIMENSIONS
 from .population_spec_transport import population_spec_contract, population_spec_shape
 
 
+DESIGN_SELECTION_CONTRACT = (
+    "Pre-result design selection contract:\nCompare 2-4 scientifically "
+    "distinct candidate designs for this exact question, mark exactly "
+    "one selected, and reject every alternative with a scientific "
+    "reason. Bind only retrieved variables and sealed citation keys. "
+    "Record the estimand, time zero, observation window, method, "
+    "assumptions, novelty positioning, figure role, what each design "
+    "supports, and what it cannot prove. Never select using observed "
+    "results, significance, AIC/BIC, or predictive performance. "
+    "When reviewed comparator design cards are present in the sealed "
+    "context, add literature_design_decisions for every candidate. "
+    "The selected design must explicitly resolve all seven card "
+    "dimensions as adopt, adapt, diverge, or not_applicable, with "
+    "source keys and a question-specific rationale. Also give the "
+    "selected design a reviewable_plan of exactly six strings, each "
+    "at least 8 characters, in the research question's language: "
+    "recommend the population/unit, exposure "
+    "definition with timing and aggregation, outcome/follow-up, "
+    "adjustment/model, missing-data handling, and sensitivity plus "
+    "pre-analysis feasibility checks. Propose the preferred choices "
+    "before asking the researcher; label them recommended, never "
+    "user-confirmed, and state what data checks could trigger revision. "
+    "For a descriptive study, item 2 describes the measured variable "
+    "and timing; items 3 and 4 explain why an outcome/follow-up and "
+    "adjusted model are inapplicable. Keep all six items; a bare N/A "
+    "does not explain the design."
+)
+
+DESCRIPTIVE_SUMMARY_CONTRACT = (
+    "Ungrouped descriptive result: a measured variable is not a "
+    "primary exposure. A single-variable design may list just that "
+    "measurement in required_variables. Use one primary custom_analysis "
+    "step bound to descriptive.descriptive_summary for its empirical "
+    "distribution and summary table, with population_scope=null. "
+    "This existing coder-generated action owns baseline_context and "
+    "descriptive_result, without an exposure, outcome or grouping. "
+    "During materialization declare table:cohort_summary for the "
+    "summary statistics and table:distribution_summary for the "
+    "empirical distribution; keep denominator and measurement_audit steps. "
+    "Do not use continuous_outcome_summary as a primary ungrouped "
+    "summary: that module requires a secondary grouped outcome."
+)
+
+
 # This is a review-copy consistency check, not execution authority. Only mask
 # an explicit, locally scoped refusal of a known output. A negative elsewhere
 # in the sentence must not license that output (or a later affirmative clause).
@@ -128,9 +172,9 @@ def outline_shape_contract(
                     "cannot_prove": "<8-500 characters>",
                     "reviewable_plan": [
                         "<population and analysis unit>",
-                        "<exposure definition, timing, and aggregation>",
-                        "<outcome definition and follow-up>",
-                        "<adjustment set and model>",
+                        "<exposure or described measurement, timing, and aggregation>",
+                        "<outcome/follow-up or why these are inapplicable>",
+                        "<adjustment/model or why these are inapplicable>",
                         "<missing-data handling>",
                         "<sensitivity and pre-analysis feasibility checks>",
                     ],

@@ -138,6 +138,10 @@ from ..planning.outline_design_selection import (
     question_anchor_rule_text,
     validate_outline_design_selection,
 )
+from ..planning.progressive_module_ids import (
+    DESCRIPTIVE_SUMMARY_ACTION,
+    descriptive_custom_module_allowed,
+)
 from ..providers.capabilities import llm_supports_strict_json_schema
 from ..providers.llm import llm_is_mockish
 from ..planning.prompt_projection import (
@@ -177,6 +181,8 @@ from .family_spec_planner import (
     run_family_spec_attempt,
 )
 from .progressive_prompt_contracts import (
+    DESIGN_SELECTION_CONTRACT,
+    DESCRIPTIVE_SUMMARY_CONTRACT,
     custom_analysis_step_shape as _custom_analysis_step_shape,
     foundation_shape_contract as _foundation_shape_contract,
     declared_cohort_concept_domains,
@@ -359,6 +365,12 @@ def _outline_step_article_roles(step: ProgressiveOutlineStep) -> set[str]:
         and step.planned_analysis_role == "auxiliary"
     ):
         roles.add("baseline_context")
+    if (
+        step.module_id == "custom_analysis"
+        and step.planned_analysis_role == "primary"
+        and step.scientific_action_id == DESCRIPTIVE_SUMMARY_ACTION
+    ):
+        roles.update({"baseline_context", "descriptive_result"})
     return roles
 
 
@@ -1521,28 +1533,7 @@ class ProgressivePlannerAgent:
             "design-card decisions. If adjusted_association uses any continuous "
             "variable, its step citations must cover both interpretation and "
             "functional_form method layers.",
-            (
-                "Pre-result design selection contract:\nCompare 2-4 scientifically "
-                "distinct candidate designs for this exact question, mark exactly "
-                "one selected, and reject every alternative with a scientific "
-                "reason. Bind only retrieved variables and sealed citation keys. "
-                "Record the estimand, time zero, observation window, method, "
-                "assumptions, novelty positioning, figure role, what each design "
-                "supports, and what it cannot prove. Never select using observed "
-                "results, significance, AIC/BIC, or predictive performance. "
-                "When reviewed comparator design cards are present in the sealed "
-                "context, add literature_design_decisions for every candidate. "
-                "The selected design must explicitly resolve all seven card "
-                "dimensions as adopt, adapt, diverge, or not_applicable, with "
-                "source keys and a question-specific rationale. Also give the "
-                "selected design a complete reviewable_plan in the research "
-                "question's language: recommend the population/unit, exposure "
-                "definition with timing and aggregation, outcome/follow-up, "
-                "adjustment/model, missing-data handling, and sensitivity plus "
-                "pre-analysis feasibility checks. Propose the preferred choices "
-                "before asking the researcher; label them recommended, never "
-                "user-confirmed, and state what data checks could trigger revision."
-            ),
+            DESIGN_SELECTION_CONTRACT,
             "Candidate-specific host article role contracts:\n"
             + json.dumps(article_contracts, ensure_ascii=False, separators=(",", ":"))
             + "\nThese requirements apply only after selecting a family that "
@@ -1662,6 +1653,7 @@ class ProgressivePlannerAgent:
                 "this module merely to satisfy an article descriptive-result "
                 "role."
             ),
+            DESCRIPTIVE_SUMMARY_CONTRACT,
             (
                 "Continuous secondary outcomes: use continuous_outcome_summary for the "
                 "explicitly requested numeric continuous outcomes grouped by a closed "
@@ -2462,13 +2454,14 @@ class ProgressivePlannerAgent:
                 findings=({"step_ids": detached_secondary_custom},),
             )
         for index, step in enumerate(outline.steps):
-            provisional_baseline = (
+            unsupported_descriptive_custom = (
                 outline.analysis_type == "descriptive_epidemiology"
                 and step.module_id == "custom_analysis"
-                and step.planned_analysis_role == "auxiliary"
-                and step.scientific_action_id is None
+                and not descriptive_custom_module_allowed(
+                    step.planned_analysis_role, step.scientific_action_id,
+                )
             )
-            if step.module_id not in allowed_modules and not provisional_baseline:
+            if step.module_id not in allowed_modules or unsupported_descriptive_custom:
                 raise ProgressivePlanCompileError(
                     "progressive_outline_module_unavailable",
                     f"outline module {step.module_id!r} is unavailable for "
@@ -3285,6 +3278,16 @@ class ProgressivePlannerAgent:
                 "effect. Keep contrast indexes, denominator/missingness policy "
                 "fields, model terms, Table 1 fields, custom_method, and "
                 "sensitivity_spec_ids null or empty."
+            )
+        if outline_step.scientific_action_id == DESCRIPTIVE_SUMMARY_ACTION:
+            blocks.append(
+                "Ungrouped summary detail: bind the measured variables in raw_inputs "
+                "and the preceding artifact:analysis_cohort in product_inputs. "
+                "Declare table:cohort_summary for summary statistics and "
+                "table:distribution_summary for the empirical distribution, both "
+                "with semantic_role=custom. Specify the summary method in "
+                "custom_method. Keep primary_exposure, outcome, population_scope, "
+                "grouping, model and contrast fields null or empty."
             )
         if outline_step.module_id == "continuous_outcome_summary":
             blocks.append(
