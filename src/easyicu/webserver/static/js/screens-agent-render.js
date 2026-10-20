@@ -567,6 +567,14 @@
   }
   function scientificFindingCopy(row) {
     const code = String(row && row.code || '');
+    if (code === 'DESCRIPTIVE_INTERVALS_WITHHELD_WITHOUT_PATIENT_GROUPING'
+        && row.descriptive_interval_limitation?.reason === 'verified_patient_grouping_not_carried_by_prepared_package') {
+      return {
+        title: t('Prepared data did not retain patient grouping', '准备后的数据未保留患者分组'),
+        detail: t('The source has verified patient grouping, but the prepared package does not carry a verified grouping receipt for its rows. Retain all stays and report counts and proportions only until this binding is restored.',
+          '来源已有经核实的患者分组，但准备后的数据包未携带与其住院行对应的分组凭证。恢复这一绑定前，保留全部住院，只报告计数与比例，不报告区间。'),
+      };
+    }
     const known = {
       SCIENTIFIC_CAPABILITY_NOT_REPORTABLE: [
         'Upgrade the analysis method', '升级分析方法',

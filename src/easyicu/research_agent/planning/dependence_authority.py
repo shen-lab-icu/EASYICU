@@ -398,6 +398,31 @@ class DescriptiveIntervalDecision:
         return ExposureOutcomeDistributionSpec.model_validate(payload)
 
 
+def _prepared_grouping_was_declared(context: ResearchContext) -> bool:
+    """Recognize a host source declaration only to explain missing authority.
+
+    This cannot authorize grouping: only the prepared row-space receipt does.
+    Metadata-only planning has not prepared rows yet.
+    """
+
+    if (context.cohort.provenance or {}).get("evidence_stage") == "metadata_only_planning":
+        return False
+    raw = getattr(context.user_preferences, "data_constraints", None)
+    try:
+        constraints = json.loads(raw) if isinstance(raw, str) else None
+    except ValueError:
+        return False
+    declared = constraints.get("verified_patient_grouping") if isinstance(constraints, Mapping) else None
+    return bool(
+        isinstance(declared, Mapping)
+        and declared.get("coordinate")
+        and declared.get("authority_ref")
+        and declared.get("group_derivation") == "prefix_before_:s"
+        and declared.get("provider_visible_values") is False
+        and re.fullmatch(r"[0-9a-f]{64}", str(declared.get("mapping_sha256") or ""))
+    )
+
+
 def descriptive_interval_decision(
     context: ResearchContext, *, analysis_type: str
 ) -> DescriptiveIntervalDecision:
@@ -425,6 +450,8 @@ def descriptive_interval_decision(
                     "repeated_stays_possible_with_invalid_patient_grouping_authority"
                     if (context.cohort.provenance or {}).get(PATIENT_GROUPING_STATUS_KEY)
                     == "authority_invalid"
+                    else "verified_patient_grouping_not_carried_by_prepared_package"
+                    if _prepared_grouping_was_declared(context)
                     else "repeated_stays_possible_without_verified_patient_grouping"
                 ),
             )

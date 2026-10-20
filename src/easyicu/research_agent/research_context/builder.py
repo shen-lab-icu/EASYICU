@@ -980,7 +980,7 @@ def build_research_context(
             # authority in its sealed receipts, not in a sidecar file; without
             # it the Planner would plan as if the source had no patient identity.
             typed_row_identity = verified_cohort_replacement_row_identity(
-                verified_cohort
+                verified_cohort, cohort_path=cohort_path_obj
             )
         else:
             df = pd.read_parquet(cohort_path)
@@ -1062,7 +1062,10 @@ def build_research_context(
             **planning_catalog_provenance,
             **_exposure_group_projections(verified_cohort, planning_catalog_provenance),
             **(
-                {"replacement_row_identity": dict(typed_row_identity)}
+                {
+                    "replacement_row_identity": dict(typed_row_identity),
+                    PATIENT_GROUPING_STATUS_KEY: "bound",
+                }
                 if typed_row_identity is not None
                 else {}
             ),
