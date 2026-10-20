@@ -243,3 +243,50 @@ def test_the_card_action_forwards_its_source_id() -> None:
     # The host-jobs owner reads the offer for the shell's current project.
     assert "projectId: () => projectId()," in shell
     assert ".gpi-data-consent-choices{" in _read("css/guided-pi.css")
+
+
+@pytest.mark.requires_node
+@pytest.mark.usefixtures("_load_guided_pi_module_harness")
+def test_a_generic_database_list_beside_the_card_is_collapsed() -> None:
+    """The model may still answer 「请先选择数据库」 with every database it knows.
+
+    While the source is unsettled and the question names a database, the card
+    below is the one place to choose it; the list would offer the choice twice,
+    and its database buttons open folder selection instead of the export the
+    card offers. Other steps, an unnamed question, and a settled source keep
+    their own rendering.
+    """
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is not installed")
+    script = f"""
+      global.window = global;
+      window.EU_LANG = 'zh';
+      eval({_ESCAPE_OWNER!r});
+      eval({_read("js/screens-guided-pi-next-actions.js")!r});
+      const next = window.EasyICU.guidedPi.require('nextActions');
+      const databases = {{ explicit: true, asking: false, prompt: '请选择一个选项。',
+        choices: ['使用 MIMIC-IV v3.1', '使用 eICU v2.0', '使用 HiRID v1.1.1'] }};
+      const intent = {{ explicit: true, asking: false, prompt: '请选择一个选项。',
+        choices: ['先发掘或评估可能方向', '按当前问题进入研究方案'] }};
+      const pending = {{ status: 'pending' }};
+      const named = {{ key: 'eicu', label: 'eICU' }};
+      const render = (step, extra) => next.render(step, {{ language: 'zh', dataSourceAuthorization: pending, ...extra }});
+      const collapsed = render(databases, {{ namedDatabase: named }});
+      const unnamed = render(databases, {{ namedDatabase: null }});
+      const otherStep = render(intent, {{ namedDatabase: named }});
+      const settled = render(databases, {{ namedDatabase: named, dataSourceAuthorization: {{ status: 'confirmed', source: {{ label: 'eICU' }} }} }});
+      process.stdout.write(JSON.stringify({{
+        collapsed: collapsed.includes('data-gpi-next-named-source')
+          && collapsed.includes('你的问题已指定 eICU，请在下方卡片中选择这项研究使用的数据。')
+          && !collapsed.includes('data-gpi-next-choice') && !collapsed.includes('HiRID'),
+        unnamed: unnamed.includes('data-gpi-next-choice') && unnamed.includes('使用 eICU v2.0'),
+        otherStep: otherStep.includes('按当前问题进入研究方案') && !otherStep.includes('data-gpi-next-named-source'),
+        settled: settled.includes('data-gpi-next-resolved-source') && !settled.includes('data-gpi-next-named-source'),
+      }}));
+    """
+    out = json.loads(run_node(node, script, check=True).stdout)
+    assert out == {"collapsed": True, "unnamed": True, "otherStep": True, "settled": True}
+    view = _read("js/screens-guided-pi-session-view.js")
+    assert "namedDatabase: HOST_JOBS && typeof HOST_JOBS.namedDatabase === 'function' ? HOST_JOBS.namedDatabase() : null," in view
