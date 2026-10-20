@@ -48,34 +48,93 @@
       </section>`;
   }
 
+  // Service presets. A proxy or gateway shows its address in the form; an
+  // official service keeps it under Advanced. Models are never preset: the
+  // service lists them after connecting, and the host recommends one.
+  const PRESETS = Object.freeze({
+    cliproxyapi: { label: 'CLIProxyAPI / Local proxy', provider: 'easyicu-local', base_url: 'http://127.0.0.1:8317/v1', api_transport: 'openai-completions',
+      hint: ['CLIProxyAPI listens on http://127.0.0.1:8317/v1 by default. Change the port if yours differs.', 'CLIProxyAPI 默认地址为 http://127.0.0.1:8317/v1，端口不同请修改。'] },
+    // D-P2-4: the custom gateway ships an EMPTY address on purpose. The
+    // example domain is placeholder text only and must never be a
+    // submittable value: the credential would reach a stand-in host. The
+    // control refuses empty and example.* addresses, and so does the backend.
+    'custom-openai': { label: 'OpenAI-compatible gateway', provider: 'custom-openai', base_url: '', api_transport: 'openai-completions',
+      hint: ['The gateway’s OpenAI-compatible address, usually ending in /v1.', '填写网关的 OpenAI 兼容地址，通常以 /v1 结尾。'] },
+    openai: { label: 'OpenAI API', provider: 'openai', base_url: 'https://api.openai.com/v1', api_transport: 'openai-responses' },
+    openrouter: { label: 'OpenRouter API', provider: 'openrouter', base_url: 'https://openrouter.ai/api/v1', api_transport: 'openai-completions' },
+    deepseek: { label: 'DeepSeek API', provider: 'deepseek', base_url: 'https://api.deepseek.com/v1', api_transport: 'openai-completions' },
+    anthropic: { label: 'Anthropic / Claude API', provider: 'anthropic', base_url: 'https://api.anthropic.com/v1', api_transport: 'anthropic-messages' },
+    google: { label: 'Google Gemini API', provider: 'google', base_url: 'https://generativelanguage.googleapis.com/v1beta', api_transport: 'google-generative-ai' },
+  });
+
+  function connectionSignature(values) {
+    return ['provider', 'base_url', 'api_transport'].map(name => String((values && values[name]) || '').trim()).join('\n');
+  }
+
+  // What the form shows: the researcher's unsaved draft first, then the
+  // saved connection. The credential is never part of this.
+  function apiFormValues(options) {
+    const { state, runtime, config, providerPreset } = options;
+    const draft = state.apiDraft || {};
+    const preset = PRESETS[draft.preset] ? draft.preset : providerPreset(config, runtime);
+    const pick = (name, fallback) => (Object.prototype.hasOwnProperty.call(draft, name) ? String(draft[name] || '') : fallback);
+    return {
+      preset,
+      provider: pick('provider', config.provider || runtime.provider || PRESETS[preset].provider),
+      base_url: pick('base_url', config.base_url || PRESETS[preset].base_url),
+      api_transport: pick('api_transport', config.api_transport || runtime.api_transport || PRESETS[preset].api_transport),
+      model: pick('model', config.model || ''),
+    };
+  }
+
+  function modelStep(options, values, catalog) {
+    const { tr, option } = options;
+    if (!catalog.models.length) {
+      return `<div class="gpi-config-note warn"><span class="gpi-dot"></span>${tr('This service reported no models. Check the address and credential, then connect again.', '该服务没有返回任何模型。请检查地址和凭据后重新连接。')}</div>`;
+    }
+    const selected = catalog.models.includes(values.model) ? values.model : catalog.recommended;
+    return `
+        <div class="gpi-setup-grid gpi-api-model-step">
+          <label class="wide"><span>${tr('Model', '模型')}</span><select name="model" required>${selected ? '' : `<option value="" selected disabled>${tr('Choose a model', '选择模型')}</option>`}${catalog.models.map(model => option(model, selected, model === catalog.recommended ? model + tr(' · recommended', ' · 推荐') : model)).join('')}</select><small class="gpi-field-hint">${tr(`${catalog.models.length} models reported by this service`, `该服务返回了 ${catalog.models.length} 个模型`)}</small></label>
+        </div>`;
+  }
+
   function apiConnectionForm(options) {
-    const { state, runtime, config, runtimeMissing, tr, esc, option, providerPreset } = options;
+    const { state, config, runtimeMissing, tr, esc, option } = options;
     const savedCredential = !!config.credential_present;
-    const preset = providerPreset(config, runtime);
-    const transport = config.api_transport || runtime.api_transport || 'openai-completions';
-    const discovered = state.availableModels.map(model => `<option value="${esc(model)}"></option>`).join('');
+    const values = apiFormValues(options);
+    const preset = PRESETS[values.preset];
+    const catalog = state.modelCatalog && state.modelCatalog.signature === connectionSignature(values) ? state.modelCatalog : null;
+    const busy = state.setupSaving || state.modelDiscovering;
+    const addressField = `<label class="wide"><span>${tr('Service address', '服务地址')}</span><input name="base_url" maxlength="2048" value="${esc(values.base_url)}" inputmode="url" spellcheck="false" required placeholder="https://llm-gateway.example/v1">${preset.hint ? `<small class="gpi-field-hint">${tr(preset.hint[0], preset.hint[1])}</small>` : ''}</label>`;
+    const savedModel = !catalog && config.connection_verified === true && config.model
+      ? `<div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Current model:', '当前模型：')} ${esc(config.model)}</div>` : '';
+    const submitLabel = state.modelDiscovering ? tr('Connecting…', '正在连接…')
+      : state.setupSaving ? tr('Verifying…', '正在验证…')
+      : catalog && catalog.models.length ? tr('Verify and save', '验证并保存') : tr('Connect and list models', '连接并读取模型');
     return `
       <form class="gpi-provider-section gpi-api-form" data-gpi-provider-form autocomplete="off">
         <div class="gpi-provider-heading"><h3>${tr('Connect an API service', '连接 API 服务')}</h3></div>
         ${options.staticPreview ? `<div class="gpi-preview-note"><span aria-hidden="true">i</span><span>${tr('Open EasyICU from the local service to configure this connection.', '请从 EasyICU 本地服务打开后配置连接。')}</span></div>` : ''}
         <div class="gpi-setup-grid">
-          <label class="wide"><span>${tr('Service', '服务')}</span><select data-gpi-provider-preset>${option('cliproxyapi', preset, 'CLIProxyAPI / Local proxy')}${option('custom-openai', preset, 'OpenAI-compatible gateway')}${option('openai', preset, 'OpenAI API')}${option('openrouter', preset, 'OpenRouter API')}${option('deepseek', preset, 'DeepSeek API')}${option('anthropic', preset, 'Anthropic / Claude API')}${option('google', preset, 'Google Gemini API')}</select></label>
-          <label><span>${tr('Model', '模型')}</span><input name="model" list="gpi-model-options" maxlength="256" value="${esc(config.model || runtime.model || 'gpt-5.6-luna')}" spellcheck="false" required><datalist id="gpi-model-options">${discovered}</datalist></label>
-          <label><span>${tr('API credential', 'API 凭据')}</span><input name="api_key" type="password" maxlength="8192" autocomplete="new-password" placeholder="${savedCredential ? tr('Re-enter only to replace or re-verify', '仅在更换或重新验证时输入') : tr('Paste once; it will not be shown again', '仅粘贴一次，之后不再显示')}" ${options.runtimeReady ? '' : 'required'}></label>
+          <label class="wide"><span>${tr('Service', '服务')}</span><select data-gpi-provider-preset>${Object.keys(PRESETS).map(key => option(key, values.preset, PRESETS[key].label)).join('')}</select></label>
+          ${preset.hint ? addressField : ''}
+          <label class="wide"><span>${tr('API credential', 'API 凭据')}</span><input name="api_key" type="password" maxlength="8192" autocomplete="new-password" placeholder="${savedCredential ? tr('Leave blank to use the saved credential', '留空则沿用已保存的凭据') : tr('Paste once; it will not be shown again', '仅粘贴一次，之后不再显示')}"></label>
         </div>
         <details class="gpi-api-advanced">
           <summary>${tr('Advanced settings', '高级设置')}</summary>
           <div class="gpi-setup-grid">
-            <label><span>${tr('Provider ID', '提供方标识')}</span><input name="provider" maxlength="80" value="${esc(config.provider || runtime.provider || 'easyicu-local')}" required></label>
-            <label><span>${tr('Compatibility protocol', '兼容协议')}</span><select name="api_transport">${option('openai-completions', transport, 'OpenAI Chat Completions')}${option('openai-responses', transport, 'OpenAI Responses')}${option('anthropic-messages', transport, 'Anthropic Messages')}${option('google-generative-ai', transport, 'Google Generative AI')}</select></label>
-            <label class="wide"><span>${tr('Service address', '服务地址')}</span><input name="base_url" maxlength="2048" value="${esc(config.base_url || 'http://127.0.0.1:8317/v1')}" inputmode="url" spellcheck="false" required placeholder="https://llm-gateway.example/v1"></label>
+            <label><span>${tr('Provider ID', '提供方标识')}</span><input name="provider" maxlength="80" value="${esc(values.provider)}" required></label>
+            <label><span>${tr('Compatibility protocol', '兼容协议')}</span><select name="api_transport">${option('openai-completions', values.api_transport, 'OpenAI Chat Completions')}${option('openai-responses', values.api_transport, 'OpenAI Responses')}${option('anthropic-messages', values.api_transport, 'Anthropic Messages')}${option('google-generative-ai', values.api_transport, 'Google Generative AI')}</select></label>
+            ${preset.hint ? '' : addressField}
           </div>
         </details>
-        ${state.availableModels.length ? `<div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Models reported by this service:', '该服务返回的可用模型：')} ${esc(state.availableModels.slice(0, 12).join(', '))}</div>` : ''}
+        ${catalog ? modelStep(options, values, catalog) : savedModel}
         ${!options.staticPreview && runtimeMissing.length ? `<div class="gpi-config-note warn gpi-blockers"><div class="gpi-blocker-lead">${tr('Before connecting:', '连接前请处理：')}</div><ol class="gpi-blocker-list">${runtimeMissing.map(b => `<li><span class="gpi-blocker-title">${esc(b.title)}</span>${b.fix ? `<span class="gpi-blocker-fix">${esc(b.fix)}</span>` : ''}<details class="gpi-blocker-diagnostic"><summary>${tr('Diagnostic details', '诊断详情')}</summary><code>${esc(b.code)}</code></details></li>`).join('')}</ol></div>` : ''}
-        <div class="gpi-connection-notice">${tr('After saving, conversation text and files you choose may be sent to this service.', '保存后，对话内容和你选择的文件可能发送至该服务。')}</div>
-        <button class="btn ${options.connectionConfigured ? '' : 'primary'} gpi-provider-submit" type="submit" ${state.setupSaving || options.staticPreview ? 'disabled' : ''}>${state.setupSaving ? tr('Verifying…', '正在验证…') : tr('Verify and save', '验证并保存')}</button>
-        ${!options.staticPreview && config.connection_verified === true && transport !== 'openai-completions' ? `<div class="gpi-config-note warn"><span class="gpi-dot"></span>${tr('Use the OpenAI Chat Completions protocol for full research assistance.', '完整研究协助需要 OpenAI Chat Completions 兼容协议。')}</div>` : ''}
+        <div class="gpi-connection-notice">${tr('Connecting uses this credential to read the service’s model list. After saving, conversation text and files you choose may be sent to this service.', '连接时会用这个凭据读取该服务的模型列表。保存后，对话内容和你选择的文件可能发送至该服务。')}</div>
+        <button class="btn ${options.connectionConfigured ? '' : 'primary'} gpi-provider-submit" type="submit" ${busy || options.staticPreview ? 'disabled' : ''}>${submitLabel}</button>
+        ${catalog && !busy ? `<button class="gpi-link gpi-provider-rediscover" type="button" data-gpi-provider-rediscover>${tr('List models again', '重新读取模型')}</button>` : ''}
+        ${!options.staticPreview && config.connection_verified === true && values.api_transport !== 'openai-completions' ? `<div class="gpi-config-note warn"><span class="gpi-dot"></span>${tr('Use the OpenAI Chat Completions protocol for full research assistance.', '完整研究协助需要 OpenAI Chat Completions 兼容协议。')}</div>` : ''}
       </form>`;
   }
 
@@ -132,5 +191,5 @@
     return `<div class="gpi-provider-summary ${ready ? 'ready' : 'warn'}"><span class="gpi-dot"></span><div><strong>${tr('Copilot + Research Agent', 'Copilot + Research Agent')}</strong><small>${esc(label)}</small></div><button class="gpi-link" type="button" data-gpi-config>${tr('Change', '更改')}</button></div>`;
   }
 
-  window.EasyICU.guidedPi.declare('provider', { renderSetup, renderConnectionBody, renderBindingSummary });
+  window.EasyICU.guidedPi.declare('provider', { renderSetup, renderConnectionBody, renderBindingSummary, PRESETS, connectionSignature });
 })();

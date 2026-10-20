@@ -169,9 +169,9 @@ def test_the_screen_routes_model_steps_through_the_connection_gate() -> None:
     assert "if (!options.connectionReady)" in summary
     assert "data-gpi-connect-open" in summary
     assert "未连接模型" in summary
-    assert "guidedPi.declare('provider', { renderSetup, renderConnectionBody, renderBindingSummary })" in provider
+    assert "guidedPi.declare('provider', { renderSetup, renderConnectionBody, renderBindingSummary," in provider
     # The protocol note speaks about a saved connection, never before one exists.
-    assert "config.connection_verified === true && transport !== 'openai-completions'" in provider
+    assert "config.connection_verified === true && values.api_transport !== 'openai-completions'" in provider
     assert "!options.apiResearchReady ? `<div class=\"gpi-config-note warn\">" not in provider
 
 

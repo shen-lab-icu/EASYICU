@@ -72,7 +72,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
     assert "css/guided-pi.css?v=20261020-connect-later1" in index
     # The connection dialog sheet reads the provider tokens the base sheet defines.
-    assert index.index("css/guided-pi.css?v=") < index.index("css/guided-pi-connect.css?v=20261020-connect-later1") < index.index("css/guided-pi-header.css?v=")
+    assert index.index("css/guided-pi.css?v=") < index.index("css/guided-pi-connect.css?v=20261020-api-models1") < index.index("css/guided-pi-header.css?v=")
     # The header's narrow-width layout is its own owner, loaded right after the base sheet.
     assert index.index("css/guided-pi.css?v=") < index.index("css/guided-pi-header.css?v=20261009-header-owner1") < index.index("css/guided-pi-composer-menus.css?v=")
     assert _read("css/guided-pi-header.css").startswith("/* Owner: Guided Copilot conversation header")
@@ -116,16 +116,16 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-run-outcome.js?v=20260922-run-answer1" in index
     assert "js/screens-guided-pi-activity.js?v=20261009-target-trial1" in index
     assert (
-        "js/screens-guided-pi-provider.js?v=20261020-connect-later1"
+        "js/screens-guided-pi-provider.js?v=20261020-api-models1"
         in index
     )
-    assert "js/screens-guided-pi-provider-control.js?v=20260830-owner-split1" in index
+    assert "js/screens-guided-pi-provider-control.js?v=20261020-api-models1" in index
     assert "js/screens-guided-pi-connect.js?v=20261020-connect-later1" in index
     assert index.index("js/screens-guided-pi-provider-control.js") < index.index(
         "js/screens-guided-pi-connect.js"
     ) < index.index("js/screens-guided-pi.js")
     assert "js/screens-guided-pi-study-workspace.js?v=20261016-session-labels1" in index
-    assert "js/screens-guided-pi-events.js?v=20261020-connect-later1" in index
+    assert "js/screens-guided-pi-events.js?v=20261020-api-models1" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261010-source-gate1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261010-source-gate1" in index
@@ -145,8 +145,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-confirmation.js?v=20261017-planning-evidence1" in index
     assert "js/screens-guided-pi-plan-actions.js?v=20261019-wording-origin1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261009-target-trial1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261017-planning-evidence1" in index
-    assert "js/screens-guided-pi.js?v=20261020-connect-later1" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261020-api-models1" in index
+    assert "js/screens-guided-pi.js?v=20261020-api-models1" in index
     assert "js/screens-guided.js?v=20261020-project-root1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -2279,7 +2279,8 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert '<form class="gpi-provider-section"' not in pi_owner
     assert "guidedPi.declare('provider'" in provider_owner
     assert "CLIProxyAPI / Local proxy" in provider_owner
-    assert "gpt-5.6-luna" in provider_owner
+    # Models are never preset: the service lists them after connecting.
+    assert "gpt-5.6-luna" not in provider_owner
     assert "gpt5.6 luna" not in provider_owner
     assert "anthropic-messages" in provider_owner
     assert "google-generative-ai" in provider_owner
@@ -2288,7 +2289,8 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "http://127.0.0.1:8765/#guided" in _read(
         "js/screens-guided-pi-error-text.js"
     )
-    assert "gpi-model-options" in provider_owner
+    assert "data-gpi-provider-rediscover" in provider_owner
+    assert "discoverPiCopilotProviderModels" in provider_control
     assert 'type="password"' in provider_owner
     assert 'name="enable_ai"' not in provider_owner
     assert 'type="checkbox"' not in provider_owner
@@ -6521,7 +6523,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20261009-target-trial1" in index
-    assert "screens-guided-pi.js?v=20261020-connect-later1" in index
+    assert "screens-guided-pi.js?v=20261020-api-models1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

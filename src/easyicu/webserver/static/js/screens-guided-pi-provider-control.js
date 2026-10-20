@@ -1,7 +1,9 @@
 /* Owner: Guided Pi provider/account control widget. */
 /* Copilot-owned provider/account event controller.
    The parent screen passes its mutable session state and narrow callbacks;
-   this owner handles only account login, model discovery, and API verification. */
+   this owner handles only account login, model discovery, and API verification.
+   An API connection is made in two steps: connect (the service lists its
+   models), then choose a model and verify-and-save. */
 (function () {
   'use strict';
 
@@ -153,53 +155,171 @@
     }
 
     function isExampleHostname(host) {
-      return !!host && ['example.com', 'example.org', 'example.net', 'example.edu']
+      // Includes the reserved .example top-level name the placeholder uses.
+      return !!host && ['example', 'example.com', 'example.org', 'example.net', 'example.edu']
         .some(root => host === root || host.endsWith('.' + root));
     }
 
-    async function configureProvider(form) {
-      if (state.setupSaving || !form) return;
+    // The credential typed into the open form lives here, in page memory,
+    // only while that form is open: never in state, storage or markup. The
+    // screen re-renders the whole form, so it is captured before and put
+    // back after each render.
+    let heldKey = '';
+
+    function presets() {
+      const owner = window.EasyICU.guidedPi.optional('provider');
+      return (owner && owner.PRESETS) || {};
+    }
+
+    function signature(values) {
+      const owner = window.EasyICU.guidedPi.optional('provider');
+      return owner && owner.connectionSignature ? owner.connectionSignature(values) : '';
+    }
+
+    function providerForm(host) {
+      return host && host.querySelector ? host.querySelector('[data-gpi-provider-form]') : null;
+    }
+
+    function connectionValues(form) {
       const data = new FormData(form);
-      const apiKey = String(data.get('api_key') || '').trim();
-      const baseUrl = String(data.get('base_url') || '').trim();
+      return {
+        provider: String(data.get('provider') || '').trim(),
+        base_url: String(data.get('base_url') || '').trim(),
+        api_transport: String(data.get('api_transport') || 'openai-completions'),
+      };
+    }
+
+    function captureForm(host) {
+      const form = providerForm(host);
+      // A closed form discards what it held; reopening shows the saved connection.
+      if (!form) { heldKey = ''; state.apiDraft = null; state.modelCatalog = null; return; }
+      const data = new FormData(form);
+      const preset = form.querySelector('[data-gpi-provider-preset]');
+      const previous = state.apiDraft || {};
+      state.apiDraft = {
+        ...connectionValues(form),
+        preset: preset ? preset.value : previous.preset,
+        model: data.has('model') ? String(data.get('model') || '') : previous.model,
+      };
+      heldKey = String(data.get('api_key') || '');
+    }
+
+    function restoreForm(host) {
+      const form = providerForm(host);
+      const input = form && form.querySelector('[name="api_key"]');
+      if (input && heldKey) input.value = heldKey;
+    }
+
+    function catalogMatches(values) {
+      return !!(state.modelCatalog && state.modelCatalog.models.length
+        && state.modelCatalog.signature === signature(values));
+    }
+
+    function forgetCredential(form) {
+      heldKey = '';
+      const keyInput = form && form.querySelector('[name="api_key"]');
+      if (keyInput) keyInput.value = '';
+    }
+
+    // A changed service clears the credential (it was typed for the other
+    // service) and the model list; a changed address or protocol clears
+    // only the list, which then belongs to another endpoint.
+    function handleChange(event) {
+      const form = event.target.closest && event.target.closest('[data-gpi-provider-form]');
+      if (!form) return false;
+      if (event.target.matches('[data-gpi-provider-preset]')) {
+        const selected = presets()[event.target.value];
+        if (!selected) return true;
+        ['provider', 'base_url', 'api_transport'].forEach(name => {
+          const field = form.elements.namedItem(name);
+          if (field) field.value = selected[name];
+        });
+        forgetCredential(form);
+        state.modelCatalog = null; state.error = '';
+        if (state.apiDraft) delete state.apiDraft.model;
+        render(); return true;
+      }
+      if (event.target.matches('[name="base_url"], [name="api_transport"], [name="provider"]')) {
+        if (state.modelCatalog && !catalogMatches(connectionValues(form))) {
+          state.modelCatalog = null; render();
+        }
+        return true;
+      }
+      return false;
+    }
+
+    function handleClick(event) {
+      const button = event.target.closest && event.target.closest('[data-gpi-provider-rediscover]');
+      if (!button) return false;
+      const form = button.closest('[data-gpi-provider-form]');
+      if (form) discoverModels(form);
+      return true;
+    }
+
+    function addressRefused(form, baseUrl) {
       // D-P2-4: the custom-openai preset leaves the address empty and the
       // example domain is placeholder text only. Refuse both here — before
-      // any verification probe could carry the API key to a stand-in host —
-      // and require the user to type a real gateway address. The backend
+      // any request could carry the API key to a stand-in host — and
+      // require the user to type a real gateway address. The backend
       // (validate_credential_endpoint) rejects example.* a second time.
-      if (!baseUrl || isExampleHostname(presetHostname(baseUrl))) {
-        const keyInput = form.querySelector('[name="api_key"]');
-        if (keyInput) keyInput.value = '';
-        state.error = tr(
-          'Enter your gateway address before verifying. The example address is only a placeholder and is never submitted.',
-          '请先填写网关地址再验证。示例地址只是占位文本，不会提交。',
-        );
-        render();
-        return;
+      if (baseUrl && !isExampleHostname(presetHostname(baseUrl))) return false;
+      forgetCredential(form);
+      state.error = tr(
+        'Enter your gateway address before connecting. The example address is only a placeholder and is never submitted.',
+        '请先填写网关地址再连接。示例地址只是占位文本，不会提交。',
+      );
+      render();
+      return true;
+    }
+
+    async function discoverModels(form) {
+      if (state.modelDiscovering || state.setupSaving || !form || !api().discoverPiCopilotProviderModels) return;
+      const values = connectionValues(form);
+      if (addressRefused(form, values.base_url)) return;
+      const apiKey = String(new FormData(form).get('api_key') || '').trim();
+      state.modelDiscovering = true; state.error = ''; state.modelCatalog = null; render();
+      try {
+        const payload = await api().discoverPiCopilotProviderModels({ ...values, api_key: apiKey, enable_ai: true });
+        const models = Array.isArray(payload && payload.models) ? payload.models.map(String) : [];
+        const recommended = String((payload && payload.recommended) || '');
+        state.modelCatalog = { signature: signature(values), models, recommended: models.includes(recommended) ? recommended : '' };
+      } catch (error) {
+        state.error = errorText(error);
+      } finally {
+        state.modelDiscovering = false; render();
       }
-      const keyInput = form.querySelector('[name="api_key"]');
-      if (keyInput) keyInput.value = '';
+    }
+
+    // Submitting the form connects first; once the service has listed its
+    // models for exactly this address, it verifies and saves the choice.
+    async function configureProvider(form) {
+      if (state.setupSaving || state.modelDiscovering || !form) return;
+      const values = connectionValues(form);
+      if (!catalogMatches(values)) { discoverModels(form); return; }
+      if (addressRefused(form, values.base_url)) return;
+      const data = new FormData(form);
+      const apiKey = String(data.get('api_key') || '').trim();
       state.setupSaving = true; state.error = '';
       const submit = form.querySelector('[type="submit"]');
       if (submit) { submit.disabled = true; submit.textContent = tr('Verifying…', '正在验证…'); }
       try {
         const payload = await api().savePiCopilotProviderConfig({
-          provider: String(data.get('provider') || '').trim(),
+          ...values,
           api_key: apiKey,
-          base_url: baseUrl,
           model: String(data.get('model') || '').trim(),
-          api_transport: String(data.get('api_transport') || 'openai-completions'),
           enable_ai: true,
         });
         state.runtime = payload && payload.runtime;
+        forgetCredential(providerForm(state.host));
+        state.apiDraft = null; state.modelCatalog = null;
         if (!runtimeReady()) {
           state.error = tr('The model connection was saved, but the Copilot runtime is not ready yet.', '模型连接已保存，但研究助手运行环境尚未就绪。');
           return;
         }
         state.error = '';
       } catch (error) {
-        state.availableModels = Array.isArray(error && error.details && error.details.available_models)
-          ? error.details.available_models.map(String) : [];
+        const reported = error && error.details && error.details.available_models;
+        if (Array.isArray(reported) && state.modelCatalog) state.modelCatalog = { ...state.modelCatalog, models: reported.map(String) };
         state.error = errorText(error);
       } finally {
         state.setupSaving = false; render();
@@ -236,6 +356,10 @@
       logoutCodex,
       configureProvider,
       finishProviderSetup,
+      captureForm,
+      restoreForm,
+      handleChange,
+      handleClick,
     });
   }
 
