@@ -1,0 +1,33 @@
+/* Owner: screens-guided-pi-connect.js — the connection dialog a model step
+   opens, and the explore-first entry on the connection page. Tokens come
+   from the provider owner's rule in guided-pi.css. */
+.gpi-connect-backdrop{
+  position:fixed;inset:0;z-index:400;display:grid;place-items:center;padding:24px 16px;
+  background:color-mix(in srgb,var(--provider-ink) 34%,transparent);backdrop-filter:blur(2px);
+  animation:gpiConnectFade .14s ease
+}
+.gpi-provider-shell.gpi-connect-dialog{
+  width:min(620px,100%);max-width:620px;max-height:calc(100dvh - 48px);overflow:auto;
+  color:var(--provider-ink);box-shadow:0 24px 60px rgba(32,33,31,.22);outline:0
+}
+.gpi-connect-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:22px 24px 2px}
+.gpi-connect-head h2{margin:0;font-size:21px;font-weight:620;letter-spacing:-.025em}
+.gpi-connect-head p{margin:6px 0 0;color:var(--ink-3);font-size:13.5px;line-height:1.55}
+.gpi-connect-close{flex:none;width:32px;height:32px;margin:-4px -8px 0 0;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--ink-3);font-size:20px;line-height:1;cursor:pointer}
+.gpi-connect-close:hover,.gpi-connect-close:focus-visible{border-color:var(--provider-line);background:var(--provider-accent-soft);color:var(--provider-ink);outline:0}
+.gpi-connect-close:disabled{opacity:.45;cursor:default}
+.gpi-connect-dialog>.gpi-error.inline{margin:0 24px 14px}
+.gpi-connect-dialog .gpi-link{color:#55564f;text-decoration:none}
+.gpi-connect-dialog .gpi-link:hover,.gpi-connect-dialog .gpi-link:focus-visible{background:var(--provider-accent-soft);color:var(--provider-ink);outline:0}
+.gpi-provider-shell>.gpi-setup-actions.gpi-setup-actions-later{flex-direction:column;align-items:stretch;gap:6px}
+/* Same specificity as the page's primary action, above the workspace skin's .btn. */
+.gpi-provider-shell>.gpi-setup-actions .btn.gpi-connect-later{width:100%;min-height:44px;justify-content:center;border-color:var(--provider-line-strong);border-radius:7px;background:transparent;color:var(--provider-ink);font-size:14px;font-weight:620}
+.gpi-provider-shell>.gpi-setup-actions .btn.gpi-connect-later:hover,.gpi-provider-shell>.gpi-setup-actions .btn.gpi-connect-later:focus-visible{border-color:var(--provider-ink);background:var(--provider-accent-soft);outline:0}
+@keyframes gpiConnectFade{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){.gpi-connect-backdrop{animation:none}}
+@media (max-width:560px){
+  .gpi-connect-backdrop{padding:16px;place-items:end center}
+  .gpi-provider-shell.gpi-connect-dialog{max-height:calc(100dvh - 32px)}
+  .gpi-connect-head{padding:18px 18px 2px}
+  .gpi-connect-dialog>.gpi-error.inline{margin:0 18px 12px}
+}

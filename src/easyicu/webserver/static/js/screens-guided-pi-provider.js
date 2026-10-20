@@ -75,12 +75,22 @@
         ${!options.staticPreview && runtimeMissing.length ? `<div class="gpi-config-note warn gpi-blockers"><div class="gpi-blocker-lead">${tr('Before connecting:', '连接前请处理：')}</div><ol class="gpi-blocker-list">${runtimeMissing.map(b => `<li><span class="gpi-blocker-title">${esc(b.title)}</span>${b.fix ? `<span class="gpi-blocker-fix">${esc(b.fix)}</span>` : ''}<details class="gpi-blocker-diagnostic"><summary>${tr('Diagnostic details', '诊断详情')}</summary><code>${esc(b.code)}</code></details></li>`).join('')}</ol></div>` : ''}
         <div class="gpi-connection-notice">${tr('After saving, conversation text and files you choose may be sent to this service.', '保存后，对话内容和你选择的文件可能发送至该服务。')}</div>
         <button class="btn ${options.connectionConfigured ? '' : 'primary'} gpi-provider-submit" type="submit" ${state.setupSaving || options.staticPreview ? 'disabled' : ''}>${state.setupSaving ? tr('Verifying…', '正在验证…') : tr('Verify and save', '验证并保存')}</button>
-        ${!options.staticPreview && !options.apiResearchReady ? `<div class="gpi-config-note warn"><span class="gpi-dot"></span>${tr('Use the OpenAI Chat Completions protocol for full research assistance.', '完整研究协助需要 OpenAI Chat Completions 兼容协议。')}</div>` : ''}
+        ${!options.staticPreview && config.connection_verified === true && transport !== 'openai-completions' ? `<div class="gpi-config-note warn"><span class="gpi-dot"></span>${tr('Use the OpenAI Chat Completions protocol for full research assistance.', '完整研究协助需要 OpenAI Chat Completions 兼容协议。')}</div>` : ''}
       </form>`;
   }
 
+  // The choice, form and error, shared by the connection page and the
+  // connection dialog that a step needing a model opens.
+  function renderConnectionBody(options) {
+    const { state, tr, esc } = options;
+    return `
+      ${connectionChoice({ state, tr, esc })}
+      ${state.researchProvider === 'api' ? apiConnectionForm(options) : ''}
+      ${state.error ? `<div class="gpi-error inline">${esc(state.error)}</div>` : ''}`;
+  }
+
   function renderSetup(options) {
-    const { state, runtime, config, tr, esc } = options;
+    const { tr } = options;
     const canCancel = options.connectionConfigured;
     const languageLabel = window.EU_LANG === 'zh' ? 'EN' : '中';
     return `
@@ -97,12 +107,12 @@
             <h2 id="gpi-connection-title">${tr('Connect EasyICU', '连接 EasyICU')}</h2>
           </div>
           <div class="gpi-setup gpi-provider-shell">
-            ${connectionChoice({ state, tr, esc })}
-            ${state.researchProvider === 'api' ? apiConnectionForm(options) : ''}
-            ${state.error ? `<div class="gpi-error inline">${esc(state.error)}</div>` : ''}
-            <div class="gpi-setup-actions">
-              ${canCancel ? `<button class="btn primary" type="button" data-gpi-provider-done>${tr('Enter research workspace', '进入研究工作区')}</button>` : `<button class="gpi-link" type="button" data-gpi-demo>${tr('View the workflow demo first (no connection needed)', '先看流程演示（无需连接）')}</button>`}
-            </div>
+            ${renderConnectionBody(options)}
+            ${canCancel ? `<div class="gpi-setup-actions"><button class="btn primary" type="button" data-gpi-provider-done>${tr('Enter research workspace', '进入研究工作区')}</button></div>` : `
+            <div class="gpi-setup-actions gpi-setup-actions-later">
+              <button class="btn gpi-connect-later" type="button" data-gpi-connect-later>${tr('Explore first — connect when a step needs a model', '先进去看看，用到模型时再连接')}</button>
+              <button class="gpi-link" type="button" data-gpi-demo>${tr('View the workflow demo first (no connection needed)', '先看流程演示（无需连接）')}</button>
+            </div>`}
           </div>
         </section>
       </div>`;
@@ -116,8 +126,11 @@
       ? [tr('ChatGPT / Codex account', 'ChatGPT / Codex 账户'), state.researchModel || tr('select a model', '请选择模型')].join(' · ')
       : tr('Verified API connection', '已验证的 API 连接');
     const ready = codex ? auth.authentication_verified === true && !!state.researchModel : options.apiResearchReady;
+    if (!options.connectionReady) {
+      return `<div class="gpi-provider-summary warn"><span class="gpi-dot"></span><div><strong>${tr('No model connected', '未连接模型')}</strong><small>${tr('Needed for conversations and research runs', '对话和研究运行需要模型')}</small></div><button class="gpi-link" type="button" data-gpi-connect-open>${tr('Connect', '连接')}</button></div>`;
+    }
     return `<div class="gpi-provider-summary ${ready ? 'ready' : 'warn'}"><span class="gpi-dot"></span><div><strong>${tr('Copilot + Research Agent', 'Copilot + Research Agent')}</strong><small>${esc(label)}</small></div><button class="gpi-link" type="button" data-gpi-config>${tr('Change', '更改')}</button></div>`;
   }
 
-  window.EasyICU.guidedPi.declare('provider', { renderSetup, renderBindingSummary });
+  window.EasyICU.guidedPi.declare('provider', { renderSetup, renderConnectionBody, renderBindingSummary });
 })();

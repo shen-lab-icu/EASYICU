@@ -20,7 +20,7 @@
       authorizeDataSource, sendText, continueAfterDataSourceConfirmation,
       governedNextChoiceGrants, sendMessage, stopMessage, stopChildJob, rebind,
       togglePresentationPin, configureProvider, rememberSession, recordHostAction,
-      HOST_JOBS, EFFORT_MENU, api,
+      HOST_JOBS, EFFORT_MENU, api, CONNECT,
     } = options;
 
     // Outside presses, Escape, and opening another menu are handled for every
@@ -125,6 +125,7 @@
     function wire() {
       if (!state.host) return;
       state.host.addEventListener('click', event => {
+        if (CONNECT && CONNECT.handleClick(event)) return;
         if (RUN_FILES && RUN_FILES.handleClick(event)) return;
         const filePill = event.target.closest('[data-gpi-file]');
         if (filePill) {
@@ -530,6 +531,7 @@
         if (modelList) modelList.replaceChildren();
       });
       state.host.addEventListener('keydown', event => {
+        if (CONNECT && CONNECT.handleKeydown(event)) return;
         if (event.key === 'Escape') {
           if (state.host.querySelector('[data-gpi-material-picker]')) {
             event.preventDefault(); STUDY_WORKSPACE.closeMaterials(state.host, true); return;

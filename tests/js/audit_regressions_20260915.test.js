@@ -13,8 +13,10 @@ function section(name, begin, end) {
 }
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 const flush = () => new Promise(resolve => setImmediate(resolve));
+// Owner sections run against a ready model connection unless a test says otherwise.
+const CONNECTED = { ask: () => true };
 function context(values = {}) {
-  const ctx = vm.createContext({ window: { t: en => en, icon: () => '' }, ...values });
+  const ctx = vm.createContext({ window: { t: en => en, icon: () => '' }, CONNECT: CONNECTED, ...values });
   vm.runInContext(read('html-escape.js'), ctx);
   ctx.esc = ctx.window.EU_HTML.esc;
   return ctx;
@@ -52,6 +54,25 @@ test('P0-2 the transport records an explicit origin and fails closed by default'
     assert.equal(sent[0].message_origin, origin || 'host_prompt');
     assert.equal(c.state.messages[0].messageOrigin, origin || 'host_prompt');
   }
+});
+
+test('a send without a model connection asks once, sends nothing and resumes the same turn', async () => {
+  const sent = [], asked = [];
+  const c = context({ state: { session: { session_id: 's' }, sessionSelectionRevision: 1, messages: [] },
+    sessionIsStale: () => false, sessionMatchesUiLanguage: () => true, projectId: () => 'p',
+    IDEA_SOURCE: null, STUDY_WORKSPACE: { consume() {}, consumeSkill() {} },
+    turnGrants: () => [], ensureActivity: () => ({}), upsertActivityStep() {}, render() {}, watchJob() {},
+    CONNECT: { ask: (reason, resume) => { asked.push({ reason, resume }); return false; } },
+    api: () => ({ sendPiCopilotMessage: async (_id, body) => { sent.push(body); return { job_id: 'job' }; } }) });
+  vm.runInContext(section('screens-guided-pi.js', '  async function sendText(', '  async function regenerateMessage('), c);
+  await c.sendText('Describe platelet counts in adults.', [], undefined, true, 'typed');
+  assert.equal(sent.length, 0);
+  assert.equal(c.state.messages.length, 0);
+  assert.deepEqual(asked.map(row => row.reason), ['send_message']);
+  c.CONNECT = CONNECTED;
+  await asked[0].resume();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].message_origin, 'typed');
 });
 
 test('P0-2 every host-composed send and manual edit fallback declares its origin', () => {

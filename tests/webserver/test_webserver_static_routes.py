@@ -914,7 +914,7 @@ def test_copilot_owns_provider_selection_and_agent_projects_do_not() -> None:
     assert provider_pos != -1 and control_pos != -1 and main_pos != -1
     assert provider_pos < control_pos < main_pos
     assert (
-        "js/screens-guided-pi-provider.js?v=20260922-demo-entry2"
+        "js/screens-guided-pi-provider.js?v=20261020-connect-later1"
         in index_html
     )
 
