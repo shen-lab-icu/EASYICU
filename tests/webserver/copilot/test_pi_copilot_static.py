@@ -141,7 +141,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-childjob.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261017-planning-evidence1" in index
     assert "js/screens-guided-pi.js?v=20261019-wording-origin1" in index
-    assert "js/screens-guided.js?v=20260922-state-menus1" in index
+    assert "js/screens-guided.js?v=20261020-project-root1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index

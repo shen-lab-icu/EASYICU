@@ -355,13 +355,13 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
     assert "打开唯一的 EasyICU 研究助手对话" in _static_js("app.js")
     assert "Page guide" not in dock_js
     assert (
-        "js/screens-guided-projects.js?v=20260922-state-menus1" in index_html
+        "js/screens-guided-projects.js?v=20261020-project-root1" in index_html
     )
     assert (
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20260922-state-menus1" in index_html
+    assert "js/screens-guided.js?v=20261020-project-root1" in index_html
     assert "js/copilot-dock.js?v=20260827-no-fab1" in index_html
 
 
@@ -553,11 +553,11 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     redesign_css = _static_css("redesign.css")
 
     assert "css/guided.css?v=20260829-readability2" in index_html
-    assert "css/guided-projects.css?v=20260923-rail-fit1" in index_html
+    assert "css/guided-projects.css?v=20261020-project-root1" in index_html
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
     assert "js/api.js?v=20261016-population-acceptance1" in index_html
     assert (
-        "js/screens-guided-projects.js?v=20260922-state-menus1" in index_html
+        "js/screens-guided-projects.js?v=20261020-project-root1" in index_html
     )
     provider_pos = index_html.find("screens-guided-idea-provider.js")
     projects_pos = index_html.find("screens-guided-projects.js")
@@ -668,7 +668,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20260922-state-menus1" in index_html
+    assert "js/screens-guided.js?v=20261020-project-root1" in index_html
 
     assert "function startGuidedIdeaFlow" in idea_js
     assert "function renderGuidedIdeaApiSetupCard" in idea_js
@@ -2412,7 +2412,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "rows.slice(0, 8)" not in projects_js
     assert "overflow-y:auto" in projects_css
     assert "scrollbar-width:thin" in projects_css
-    assert "createGuidedDraft(payload)" in guided_js
+    assert "EU_GUIDED_PROJECTS.createDraft(payload" in guided_js
     assert "function blankGuidedDraftPayload(label)" in guided_js
     assert "data_mode: 'unbound'" in guided_js
     assert "source: null" in guided_js
@@ -2485,7 +2485,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "loadAgentRunHistory({ limit: 20 })" not in guided_js
     assert "existing Agent run folder" not in guided_js
     assert ".gd-project-summary" in projects_css
-    assert "~/easyicu/projects" in guided_js
+    assert "~/easyicu/projects" not in guided_project_surface
     assert "/Users/haibo" not in guided_js
     assert "Seeded example · not a local project" not in guided_js
     assert "Seeded examples" not in guided_js
@@ -2556,7 +2556,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         in guided_js
     )
     assert "openExistingGuidedProject" in guided_js
-    assert "Creating a <strong>metadata-only local study folder</strong>" in guided_js
+    assert "Creating study folder…" in projects_js
     assert "Create new local study folder" in projects_js
     assert "Choose the parent folder first" in projects_js
     assert "data-draft-parent-dir" in projects_js
@@ -2655,14 +2655,14 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
     assert "api.js?v=20261016-population-acceptance1" in index_html
-    assert "screens-guided-projects.js?v=20260922-state-menus1" in index_html
+    assert "screens-guided-projects.js?v=20261020-project-root1" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20260922-state-menus1" in index_html
+    assert "screens-guided.js?v=20261020-project-root1" in index_html
     assert "guided.css?v=20260829-readability2" in index_html
-    assert "guided-projects.css?v=20260923-rail-fit1" in index_html
+    assert "guided-projects.css?v=20261020-project-root1" in index_html
     assert "gd-rail-heading" in projects_js
     assert "<summary title=\"${esc(t('Switch research project', '切换研究项目'))}\"><small>${t('Project', '项目')}</small><span title=\"${esc(pickerTitle)}\">${esc(pickerTitle)}</span><i aria-hidden=\"true\">⌄</i></summary>" in projects_js
     assert "${t('New / open research project', '新建 / 打开研究项目')}" in projects_js

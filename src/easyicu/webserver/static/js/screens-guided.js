@@ -85,7 +85,7 @@
   let guidedFolderDialogMode = null;
   let guidedFolderSeedTitle = 'New local study';
   let guidedDraftFolderSlug = '';
-  let guidedDraftParentDir = '~/easyicu/projects';
+  let guidedDraftParentDir = '';
   let guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
   let guidedKnownProjectsOpen = false;
   let guidedSlotSaveTimer = null;
@@ -233,7 +233,7 @@
     guidedFolderDialogMode = null;
     guidedFolderSeedTitle = 'New local study';
     guidedDraftFolderSlug = '';
-    guidedDraftParentDir = '~/easyicu/projects';
+    guidedDraftParentDir = '';
     guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
     guidedKnownProjectsOpen = false;
     PIPELINE.resetState();
@@ -2417,7 +2417,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       (session && session.project_title) || (row && row.title),
       (row && (row.question || row.study_id || row.run_label)) || t('Local project', '本地项目'),
     );
-    const path = row && row.project_dir ? compactPath(row.project_dir) : (session && session.project_dir ? compactPath(session.project_dir) : '~/easyicu/projects');
+    const path = row && row.project_dir ? compactPath(row.project_dir) : (session && session.project_dir ? compactPath(session.project_dir) : guidedProjectRenderer('parentPathLabel'));
     thread.push({ bot: true, html: bi(
       `Opened <strong>${esc(title)}</strong> as this guided draft context. Memory is scoped to <span class="mono">${esc(path)}</span>; Idea Mining and the Research Agent backend still own their artifacts.`,
       `已切换到 <strong>${esc(title)}</strong> 这个引导草稿上下文。记忆范围限定在 <span class="mono">${esc(path)}</span>；Idea Mining 和 Research Agent 后端仍各自管理其 artifacts。`,
@@ -2716,6 +2716,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       localDraftRows,
       guidedKnownProjectRows,
       slugifyDraftFolder,
+      openFolderDialog: openGuidedFolderDialog,
     };
   }
   function guidedProjectRenderer(name, fallback) {
@@ -2773,7 +2774,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const parentEl = box.querySelector('[data-draft-parent-dir]');
     if (titleEl && titleEl.value.trim()) guidedFolderSeedTitle = titleEl.value.trim();
     if (slugEl && slugEl.value.trim()) guidedDraftFolderSlug = slugifyDraftFolder(slugEl.value);
-    if (parentEl) guidedDraftParentDir = parentEl.value.trim() || guidedDraftParentDir || '~/easyicu/projects';
+    if (parentEl) guidedDraftParentDir = parentEl.value.trim();
   }
   function loadGuidedFolderBrowser(path) {
     if (guidedFolderDialogMode === 'new') {
@@ -2813,7 +2814,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     guidedFolderSeedTitle = seedTitle || guidedFolderSeedTitle || 'New local study';
     if (guidedFolderDialogMode === 'new') {
       guidedDraftFolderSlug = slugifyDraftFolder(guidedFolderSeedTitle);
-      guidedDraftParentDir = guidedDraftParentDir || '~/easyicu/projects';
+      guidedDraftParentDir = guidedDraftParentDir || guidedProjectRenderer('defaultParentDir');
     }
     guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
     guidedKnownProjectsOpen = false;
@@ -2999,31 +3000,14 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const options = opts || {};
     const text = label || 'New local study';
     const parent = String(parentDir || '').trim();
-    pushUser(parent ? `Create local study folder: ${text} in ${parent}` : `Create local study folder: ${text}`);
-    if (!window.EU_API || !window.EU_API.createGuidedDraft) {
-      pushBot(
-        `This browser can draft the conversation, but the local draft registry endpoint is not available yet.`,
-        `这个浏览器可以先记录对话，但本地草稿 registry 端点暂时不可用。`,
-      );
-      renderThread();
-      return;
-    }
-    pushBot(
-      `Creating a <strong>metadata-only local study folder</strong>. This does not create an Agent run, does not read patient rows, and does not unlock a manuscript draft.`,
-      `正在创建<strong>仅元数据的本地研究文件夹</strong>。这不会创建 Agent run、不会读取患者行，也不会解锁稿件草稿。`,
-    );
-    renderThread();
     const payload = blankGuidedDraftPayload(text);
     payload.folder_slug = folderSlug || payload.folder_slug;
-    if (parent) payload.parent_dir = parent;
-    window.EU_API.createGuidedDraft(payload).then(result => {
-      if (!result || result.ok === false || !result.draft) {
-        throw new Error((result && (result.reason || result.error)) || 'guided_draft_create_failed');
-      }
+    payload.parent_dir = parent;
+    return window.EU_GUIDED_PROJECTS.createDraft(payload, guidedProjectContext, async result => {
+      pushUser(parent ? `Create local study folder: ${text} in ${parent}` : `Create local study folder: ${text}`);
       selectedGuidedDraft = result.draft || null;
       loadGuidedDrafts(true);
-      return bindGuidedDraftMemory(selectedGuidedDraft, true).then(opened => ({ result, opened }));
-    }).then(({ result, opened }) => {
+      const opened = await bindGuidedDraftMemory(selectedGuidedDraft, true);
       const draft = (opened && opened.session) ? {
         id: opened.session.draft_id,
         title: opened.session.project_title,
@@ -3031,7 +3015,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       } : (result.draft || selectedGuidedDraft);
       selectedGuidedDraft = draft || selectedGuidedDraft;
       const title = selectedGuidedDraft && selectedGuidedDraft.title ? selectedGuidedDraft.title : text;
-      const path = selectedGuidedDraft && selectedGuidedDraft.project_dir ? compactPath(selectedGuidedDraft.project_dir) : '~/easyicu/projects';
+      const path = selectedGuidedDraft && selectedGuidedDraft.project_dir ? compactPath(selectedGuidedDraft.project_dir) : guidedProjectRenderer('parentPathLabel');
       closeGuidedFolderDialog();
       if (piProjectShellActive() && opened && opened.ok) {
         bindProjectToPi(opened, selectedGuidedDraft);
@@ -3049,17 +3033,11 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       } else {
         startFreshGuidedProjectThread(title, path);
       }
-    }).catch(err => {
-      pushBot(
-        `Could not save the guided draft: <span class="mono">${esc(err.message || String(err))}</span>`,
-        `无法保存引导草稿：<span class="mono">${esc(err.message || String(err))}</span>`,
-      );
-      renderThread();
     });
   }
   function quickCreateGuidedStarterFolder() {
     // First-run friction reducer: create a metadata-only folder at the default
-    // location in one click (no path dialog, no typing) and resume the goal the
+    // location in one click (no path selection or typing) and resume the goal the
     // user just picked. Still explicit (a button/chip), still local-only.
     // Name the folder after the chosen goal (not the button text) so it reads
     // sensibly on disk; fall back to a neutral title when no goal is pending yet.
@@ -3068,7 +3046,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const seed = meta
       ? t(meta.label_en || 'New study', meta.label_zh || meta.label_en || 'New study')
       : t('My first study', '我的第一个研究');
-    createLocalGuidedDraft(seed, slugifyDraftFolder(seed), '~/easyicu/projects', { continueGoal: !!pend });
+    guidedDraftParentDir = guidedProjectRenderer('defaultParentDir');
+    return createLocalGuidedDraft(seed, slugifyDraftFolder(seed), guidedDraftParentDir, { continueGoal: !!pend });
   }
   /* ============== conversation script ============== */
   const STATES = {
@@ -3899,14 +3878,14 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         if (e.target.closest('[data-browseprojectfolder]')) {
           const box = e.target.closest('[data-draft-setup]');
           const pathEl = box ? box.querySelector('[data-existing-project-dir]') : null;
-          loadGuidedFolderBrowser(pathEl && pathEl.value);
+          loadGuidedFolderBrowser((pathEl && pathEl.value) || guidedProjectRenderer('defaultParentDir'));
           return;
         }
         if (e.target.closest('[data-browsedraftparent]')) {
           const box = e.target.closest('[data-draft-setup]');
           captureGuidedDraftDialogState(box);
           const parentEl = box ? box.querySelector('[data-draft-parent-dir]') : null;
-          loadGuidedFolderBrowser((parentEl && parentEl.value) || guidedDraftParentDir || '~/easyicu/projects');
+          loadGuidedFolderBrowser((parentEl && parentEl.value) || guidedProjectRenderer('draftParentDir'));
           return;
         }
         if (e.target.closest('[data-folder-browser-close]')) {
@@ -3982,7 +3961,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           const parent = (parentEl && parentEl.value || '').trim();
           guidedFolderSeedTitle = title;
           guidedDraftFolderSlug = slug;
-          guidedDraftParentDir = parent || guidedDraftParentDir || '~/easyicu/projects';
+          guidedDraftParentDir = parent;
           createLocalGuidedDraft(title, slug, guidedDraftParentDir);
           return;
         }
