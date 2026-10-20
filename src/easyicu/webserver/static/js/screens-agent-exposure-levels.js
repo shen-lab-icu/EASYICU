@@ -74,7 +74,10 @@
       if (!match) return '';
       const left = levelName(variable, match[1]);
       const right = levelName(variable, match[2]);
-      return left && right ? `${left} vs ${right}` : '';
+      const row = grouping(variable);
+      const reference = row && Number(match[2]) === row.reference
+        ? tr(' (reference)', '（参照）') : '';
+      return left && right ? `${left} vs ${right}${reference}` : '';
     }
 
     // Only a whole identifier: `lact_max_group_n` is another column.

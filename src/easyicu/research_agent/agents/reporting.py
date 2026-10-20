@@ -408,7 +408,7 @@ class WriterAgent:
                     "- When the primary clinical contrast is unavailable or blocked, "
                     "state the scientific boundary once, explain its consequence, and "
                     "do not repeat the same refusal throughout the section.\n\n"
-                    + _writer_display.reader_display_label_instruction(display_labels)
+                    + _writer_display.reader_display_label_instruction(display_labels, plan=analysis_plan, context=context)
                     + "LANGUAGE POLICY:\n"
                     "- Use ONLY associational phrasing. Forbidden: 'caused by', 'causal', "
                     "'attributable to', 'effect of', 'due to', 'leads to', 'drives'.\n"

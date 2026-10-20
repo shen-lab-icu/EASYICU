@@ -109,9 +109,9 @@
         const level = String(record.exposure_level == null ? '' : record.exposure_level).trim();
         const reference = String(record.reference_level == null ? '' : record.reference_level).trim();
         const contrast = String(record.contrast || '').trim() || (level && reference ? `${level} vs ${reference}` : level);
-        const label = level && reference
+        const label = (levels && levels.contrastName(exposure, contrast)) || (level && reference
           ? `${levelLabel(exposure, level)} vs ${levelLabel(exposure, reference)}`
-          : contrast || (typeof labels[exposure] === 'string' ? labels[exposure] : (levels && levels.variableName(exposure)) || exposure);
+          : contrast || (typeof labels[exposure] === 'string' ? labels[exposure] : (levels && levels.variableName(exposure)) || exposure));
         const value = finite(record.estimate);
         const low = finite(record.ci_low);
         const high = finite(record.ci_high);

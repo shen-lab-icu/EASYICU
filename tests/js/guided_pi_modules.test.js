@@ -132,6 +132,7 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
     exposure_group_candidate_drift: [/runs only the grouping that was approved/, /EasyICU 只运行已批准的分组/],
     exposure_group_level_empty: [/does not drop or merge a group on its own/, /不会自行删除或合并分组/],
     progressive_family_spec_exposure_group_contrast_unavailable: [/reference or comparison group/, /参照组或对比组不在模板能提供的水平里/],
+    progressive_exposure_group_contrast_mismatch: [/conflicting contrasts/, /不一致的比较方向/],
   };
   Object.entries(groupingStops).forEach(([code, [en, zh]]) => {
     const text = runFailure('research_pipeline_progressive_compile_failed', { code });

@@ -149,7 +149,8 @@ def test_a_run_plans_and_resumes_on_the_groups_its_study_formed(
     assert handoff["context"]["primary_exposure"] == "lact_group_x1"
     assert "lact_group_x1" in [item["name"] for item in handoff["context"]["variables"]]
     # The plan compares the groups the study stated, as their level codes.
-    compared = [{"variable": "lact_group_x1", "reference": 1, "contrast": 2}]
+    compared = [{"variable": "lact_group_x1", "reference": 1, "contrast": 2,
+                 "stated": ["reference", "contrast"]}]
     assert handoff["context"]["cohort"]["provenance"][_CONTRASTS] == compared
     assert EvidenceStore(root=run_dir).get("exposure_groupings") is not None
 

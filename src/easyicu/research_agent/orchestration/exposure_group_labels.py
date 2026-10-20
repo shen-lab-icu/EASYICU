@@ -8,8 +8,9 @@ derivation by the grouping contract (``grouping_rule_texts``), never by a
 model.  A level without a label is shown as its code alone: nothing here
 gives a code a meaning the record does not.
 
-The rows are read from the run's grouping record (``exposure_groupings.json``)
-each time, with its digest, so every reader shows the record the run sealed.
+Labels and rules are read from the run's grouping record with its digest.
+The caller supplies the reviewed/current plan for contrast direction; without
+one, only explicit study choices are marked. A default is never a study choice.
 """
 
 from __future__ import annotations
@@ -23,8 +24,11 @@ from ..contracts.exposure_group_rules import (
     UNMEASURED_GROUP_ID,
     ExposureGroupRuleError,
     grouping_rule_texts,
+    read_group_contrast,
     read_grouping_rules,
 )
+from ..planning.exposure_group_compile import planned_exposure_contrasts
+from ..schema import AnalysisPlan
 from .exposure_grouping_phase import (
     EXPOSURE_GROUPINGS_FILENAME,
     EXPOSURE_GROUPINGS_RECORD_SCHEMA,
@@ -38,7 +42,8 @@ class ExposureGroupLabelError(ValueError):
 
 
 def exposure_group_label_rows(
-    record: Mapping[str, Any], *, record_sha256: str
+    record: Mapping[str, Any], *, record_sha256: str,
+    plan: AnalysisPlan | Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Each applied grouping of ``record``: its level codes and what each names.
 
@@ -54,14 +59,23 @@ def exposure_group_label_rows(
     groupings = compiled.get("groupings") if isinstance(compiled, Mapping) else None
     if not isinstance(groupings, list):
         raise ExposureGroupLabelError("a grouping record lists its groupings")
-    return [
-        _row(item, record_sha256=record_sha256)
+    applied = [
+        item
         for item in groupings
         if isinstance(item, Mapping) and item.get("disposition") == "applied"
     ]
+    pairs = planned_exposure_contrasts(
+        plan or {}, variables=[item.get("variable") for item in applied],
+    )
+    return [
+        _row(item, record_sha256=record_sha256, pair=pairs.get(item.get("variable")))
+        for item in applied
+    ]
 
 
-def recorded_exposure_group_labels(run_dir: Path) -> Optional[list[dict[str, Any]]]:
+def recorded_exposure_group_labels(
+    run_dir: Path, *, plan: AnalysisPlan | Mapping[str, Any] | None = None,
+) -> Optional[list[dict[str, Any]]]:
     """The label rows of the grouping record a run wrote.
 
     ``[]`` when the run wrote none: it planned no grouping.  ``None`` when its
@@ -82,13 +96,16 @@ def recorded_exposure_group_labels(run_dir: Path) -> Optional[list[dict[str, Any
         if not isinstance(record, Mapping):
             raise ExposureGroupLabelError("the grouping record is not an object")
         return exposure_group_label_rows(
-            record, record_sha256=hashlib.sha256(raw).hexdigest()
+            record, record_sha256=hashlib.sha256(raw).hexdigest(), plan=plan,
         )
     except (OSError, ValueError):
         return None
 
 
-def _row(item: Mapping[str, Any], *, record_sha256: str) -> dict[str, Any]:
+def _row(
+    item: Mapping[str, Any], *, record_sha256: str,
+    pair: tuple[str, str] | None,
+) -> dict[str, Any]:
     derivation = item.get("derivation")
     try:
         rules = read_grouping_rules(derivation)
@@ -97,12 +114,30 @@ def _row(item: Mapping[str, Any], *, record_sha256: str) -> dict[str, Any]:
         raise ExposureGroupLabelError(str(exc)) from exc
     labels = item.get("labels")
     labels = labels if isinstance(labels, Mapping) else {}
-    compared = item.get("compared")
-    if not isinstance(compared, Mapping) or set(compared) != {"reference", "contrast"}:
-        raise ExposureGroupLabelError("an applied grouping states its comparison")
     variable = item.get("variable")
     if not isinstance(variable, str) or not variable:
         raise ExposureGroupLabelError("an applied grouping names its column")
+    read_group_contrast(item.get("compared"), variable=variable, groups=len(rules.groups))
+    # The preplan default is a proposal, not a study choice. The reviewed
+    # executable plan supplies both sides when it actually reports a contrast.
+    measured_groups = {group for group, _ in rules.groups}
+    if any(
+        item.get(key) is not None and (
+            not isinstance(item[key], str) or item[key] not in measured_groups
+        )
+        for key in ("reference", "contrast")
+    ):
+        raise ExposureGroupLabelError("a stated comparison names a declared group")
+    chosen = {key: rules.codes[item[key]] if item.get(key) else None
+              for key in ("reference", "contrast")}
+    if pair is not None:
+        measured = {str(rules.codes[group]) for group in measured_groups}
+        if not set(pair) <= measured or pair[0] == pair[1]:
+            raise ExposureGroupLabelError("the plan compares two measured groups")
+        for index, key in enumerate(("reference", "contrast")):
+            if chosen[key] is not None and str(chosen[key]) != pair[index]:
+                raise ExposureGroupLabelError("the plan changes a stated grouped contrast")
+            chosen[key] = int(pair[index])
     levels = [
         {
             "code": rules.codes[level],
@@ -123,8 +158,7 @@ def _row(item: Mapping[str, Any], *, record_sha256: str) -> dict[str, Any]:
             else "codes_only"
         ),
         "levels": levels,
-        "reference": int(compared["reference"]),
-        "contrast": int(compared["contrast"]),
+        **chosen,
         "groupings_record_sha256": record_sha256,
     }
 

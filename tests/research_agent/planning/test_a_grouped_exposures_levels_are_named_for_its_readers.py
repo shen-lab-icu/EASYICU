@@ -198,9 +198,9 @@ def test_each_code_is_named_by_the_studys_words_and_the_hosts_rule(
                 "unmeasured": True,
             },
         ],
-        # Unstated: the first group and the last other one, never unmeasured.
-        "reference": 1,
-        "contrast": 3,
+        # Without a compiled plan, an unstated choice is not marked.
+        "reference": None,
+        "contrast": None,
         "groupings_record_sha256": digest,
     }
     # An ordinal grouping's codes follow its scale; each rule follows the

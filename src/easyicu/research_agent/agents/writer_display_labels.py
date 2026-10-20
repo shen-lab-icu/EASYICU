@@ -5,6 +5,37 @@ from __future__ import annotations
 import json
 from typing import Mapping
 
+from ..planning.exposure_group_compile import planned_exposure_contrasts
+from ..contracts.exposure_group_rules import EXPOSURE_GROUP_CONTRASTS_KEY
+from ..schema import AnalysisPlan, ResearchContext
+
+
+def reader_contrast_instruction(
+    plan: AnalysisPlan | None, labels: Mapping[str, str], *, context: ResearchContext,
+) -> str:
+    """Name the direction sealed in the executable plan, never a grouping default."""
+    if plan is None:
+        return ""
+    variables = [
+        item["variable"]
+        for item in context.cohort.provenance.get(EXPOSURE_GROUP_CONTRASTS_KEY) or []
+    ]
+    pairs = planned_exposure_contrasts(plan, variables=variables)
+    if not pairs:
+        return ""
+    lines = [
+        f"- {labels.get(variable, variable)}: "
+        f"{labels.get(f'{variable}={comparison}', f'level {comparison}')} vs "
+        f"{labels.get(f'{variable}={reference}', f'level {reference}')} (reference)."
+        for variable, (reference, comparison) in pairs.items()
+    ]
+    return (
+        "COMPILED CONTRAST DIRECTION:\n"
+        "Name each comparison in this direction, with the reference explicitly identified. "
+        "Risk differences subtract the reference risk from the comparison risk.\n"
+        + "\n".join(lines) + "\n\n"
+    )
+
 
 def normalise_reader_display_labels(
     labels: Mapping[str, str] | None,
@@ -18,7 +49,10 @@ def normalise_reader_display_labels(
     }
 
 
-def reader_display_label_instruction(labels: Mapping[str, str]) -> str:
+def reader_display_label_instruction(
+    labels: Mapping[str, str], *, plan: AnalysisPlan | None = None,
+    context: ResearchContext | None = None,
+) -> str:
     """Render the closed reader-label policy plus its authorized mapping."""
 
     return (
@@ -36,6 +70,7 @@ def reader_display_label_instruction(labels: Mapping[str, str]) -> str:
         "or order that its label does not state.\n"
         + json.dumps(dict(labels), ensure_ascii=False, sort_keys=True)
         + "\n\n"
+        + (reader_contrast_instruction(plan, labels, context=context) if context is not None else "")
     )
 
 
@@ -59,5 +94,6 @@ def writer_language_instruction(language: str) -> str:
 __all__ = [
     "normalise_reader_display_labels",
     "reader_display_label_instruction",
+    "reader_contrast_instruction",
     "writer_language_instruction",
 ]
