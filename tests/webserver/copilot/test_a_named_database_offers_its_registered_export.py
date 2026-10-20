@@ -209,6 +209,12 @@ def test_the_click_posts_the_exact_export_and_the_conversation_continues() -> No
           past: past.includes('已确认数据源') && past.includes('使用 EasyICU 已有的数据 · 只准备研究所需数据'),
           matches: consent.matchesSourceSelection(session, 'eICU-CRD v2.0'),
           noCard: consent.render(session, {{ ...ctx, namedDemo: null, namedDatabase: null }}) === '',
+          strip: (() => {{
+            const html = consent.renderSelectedSource(session, ctx);
+            return html.includes('已确认数据源：eICU-CRD v2.0')
+              && html.includes('这是 EasyICU 中已验证的数据，已按你的选择用于本次会话。')
+              && !html.includes('本地数据选择器') && html.includes('data-popover-menu');
+          }})(),
         }}));
       }})().catch(err => {{ console.error(err); process.exitCode = 1; }});
     """
@@ -224,6 +230,9 @@ def test_the_click_posts_the_exact_export_and_the_conversation_continues() -> No
     assert out["past"] is True
     assert out["matches"] is True
     assert out["noCard"] is True
+    # No transcript message records a card choice, so the context strip
+    # names the confirmed export, without calling it a folder pick.
+    assert out["strip"] is True
 
 
 def test_the_card_action_forwards_its_source_id() -> None:

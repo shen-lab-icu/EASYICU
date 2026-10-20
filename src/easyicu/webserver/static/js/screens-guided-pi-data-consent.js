@@ -51,7 +51,13 @@
   function renderSelectedSource(session, ctx) {
     const current = authorization(session);
     // This is current host state, not a reconstructed user message or approval.
-    if (current.status !== 'confirmed' || current.confirmation_mode !== 'select_local_source') return '';
+    // A choice made on a card (a picked folder, or an export EasyICU offered)
+    // leaves no message in the transcript, so the strip says what was chosen.
+    const how = {
+      select_local_source: ctx.tr('This source was selected in the local data picker and confirmed for this conversation.', '这份数据已在本地数据选择器中选定，并确认用于本次会话。'),
+      select_registered_source: ctx.tr('You chose this validated export EasyICU already held for this conversation.', '这是 EasyICU 中已验证的数据，已按你的选择用于本次会话。'),
+    }[current.confirmation_mode];
+    if (current.status !== 'confirmed' || !how) return '';
     const label = sourceLabel(current);
     if (!label) return '';
     // In the context strip the body floats over the conversation, so it is a
@@ -59,7 +65,7 @@
     return `<details class="gpi-data-consent" data-popover-menu aria-label="${ctx.tr('Confirmed study data source', '本研究已确认的数据源')}">
       <summary>${ctx.tr('Data source confirmed: ', '已确认数据源：')}${ctx.esc(label)}</summary>
       <div class="gpi-data-consent-body">
-        <p>${ctx.tr('This source was selected in the local data picker and confirmed for this conversation.', '这份数据已在本地数据选择器中选定，并确认用于本次会话。')}</p>
+        <p>${how}</p>
         ${current.confirmed_at ? `<p>${ctx.tr('Confirmed at: ', '确认时间：')}${ctx.esc(current.confirmed_at)}</p>` : ''}
         <p>${ctx.tr('Source confirmation does not approve analysis. The research plan and prepared data are reviewed separately.', '确认数据源不等于批准分析。研究计划和准备后的数据仍需分别审阅。')}</p>
       </div>
