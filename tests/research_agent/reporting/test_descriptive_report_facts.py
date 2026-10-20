@@ -52,8 +52,8 @@ def test_counts_and_outcomes_are_host_copied_with_separate_metric_owners():
     before = deepcopy(records)
     facts = compile_counts_only_report_facts(records, evidence=evidence, reader_display_labels={"exposure=0": "Reference category", "exposure=1": "Other category", "outcome": "Observed endpoint"})
     assert len(facts) == 4
-    assert "60 of 100 observations (60.00%)" in facts[0].scaffold
-    assert "6 of 60 observations (10.00%)" in facts[2].scaffold
+    assert "60 (60.00%) had Reference category" in facts[0].scaffold
+    assert "10.00% (6 of 60 records)" in facts[2].scaffold
     assert "Reference category" in facts[0].scaffold
     assert "Observed endpoint" in facts[2].scaffold
     assert facts[0].subsection == "Cohort characteristics"
@@ -61,12 +61,12 @@ def test_counts_and_outcomes_are_host_copied_with_separate_metric_owners():
     assert facts[2].subsection == "Primary outcome"
     assert all(fact.evidence_id == "summary" and fact.source_sha256 == "a" * 64 for fact in facts)
     assert facts[0].source_fields == tuple(
-        f"descriptive_estimates.exposure_prevalence[0].{key}"
-        for key in ("level", "n", "denominator", "estimate_pct")
+        f"descriptive_estimates.exposure_prevalence[{index}].{key}"
+        for index in range(2) for key in ("level", "n", "denominator", "estimate_pct")
     )
     assert facts[2].source_fields == tuple(
-        f"descriptive_estimates.outcome_absolute_risks[0].{key}"
-        for key in ("level", "events", "denominator", "estimate_pct")
+        f"descriptive_estimates.outcome_absolute_risks[{index}].{key}"
+        for index in range(2) for key in ("level", "events", "denominator", "estimate_pct")
     )
     assert records == before
     text = "## Results\n\n### Cohort characteristics\n\n### Primary outcome\n\n### Primary association\n\nExisting comparison boundary.\n\n## Discussion\n\nUnchanged discussion."
@@ -147,7 +147,7 @@ def test_modern_report_keeps_a_source_bound_cohort_count_after_claim_filtering()
     ).scaffold
     canonical = place_descriptive_report_facts(canonical, facts)
     canonical, _ = repair_registered_display_callouts(canonical, expected_display_labels=("Table 1", "Figure 1"))
-    assert "The analysis cohort comprised 100 observations {evidence:summary}." in canonical.split("### Descriptive results")[0]
+    assert "The analysis cohort comprised 100 records {evidence:summary}." in canonical.split("### Descriptive results")[0]
     assert not [finding for finding in audit_manuscript_quality(canonical, analysis_plan=_plan()).findings
                 if finding.section == "Results"]
     assert place_descriptive_report_facts(canonical, facts) == canonical
@@ -164,7 +164,7 @@ def test_plan_driven_report_keeps_a_source_bound_cohort_count_after_claim_filter
     placed = place_descriptive_report_facts(draft, facts)
     cohort = placed.split("### Cohort characteristics", 1)[1].split("### Primary outcome", 1)[0]
 
-    assert "The analysis cohort comprised 100 observations {evidence:summary}." in cohort
+    assert "The analysis cohort comprised 100 records {evidence:summary}." in cohort
     assert "See Table 1." in cohort
     assert place_descriptive_report_facts(placed, facts) == placed
 
@@ -307,7 +307,7 @@ def test_primary_summary_coverage_cannot_borrow_another_metric_or_section():
 
     records, evidence = _inputs()
     facts = compile_counts_only_report_facts(records, evidence=evidence, reader_display_labels={})
-    risks = "\n\n".join(fact.scaffold for fact in facts[2:])
+    risks = "\n\n".join(dict.fromkeys(fact.scaffold for fact in facts[2:]))
     text = (
         f"## Abstract\n\n**Results:**\n\n{risks}\n\n**Conclusions:**\nIndependent validation is required.\n\n"
         "## Results\n\n### Cohort characteristics\n\n### Primary outcome\n\n"
@@ -360,7 +360,7 @@ def test_hidden_or_wrong_source_metric_text_does_not_satisfy_primary_coverage():
     hidden = "\n\n".join(f"<!-- {fact.scaffold} -->" for fact in facts)
     text = f"## Abstract\n\n**Results:**\n\n{hidden}\n\n## Conclusion\n\nUnrelated prose."
     assert missing_primary_result_facts(text, facts)["Abstract"] == facts
-    wrong_metric = facts[0].scaffold.replace("Exposure prevalence", "Outcome prevalence")
+    wrong_metric = facts[0].scaffold.replace("in the analysis cohort", "in another cohort")
     assert facts[0] in missing_primary_result_facts(text.replace(hidden, wrong_metric), facts)["Abstract"]
     assert "## Discussion" not in place_primary_result_summaries(text, facts)
 
@@ -442,7 +442,7 @@ def test_conclusion_compacts_only_same_endpoint_registered_claims(heading):
     risks = facts[2:]
     text = heading + '\n\n' + '\n\n'.join('{claim:' + fact.replaces_claim_ref + '}' for fact in risks)
     result = render_descriptive_report_claims(text, facts)
-    assert '10.00% in the “Reference category” group; 20.00% in the “Other category” group' in result
+    assert '10.00% in the Reference category group; 20.00% in the Other category group' in result
     assert '6 of 60' not in result and '8 of 40' not in result
     assert 'adjusted or causal effect' in result and '{evidence:summary}' in result
     assert render_descriptive_report_claims(result, facts) == result

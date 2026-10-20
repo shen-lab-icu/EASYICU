@@ -23,7 +23,18 @@ class DescriptiveReportFact:
     group_label: str | None = None
     estimate_pct: float | None = None
     required_result_sections: tuple[str, ...] = ("Abstract", "Results")
+    supporting_evidence_ids: tuple[str, ...] = ()
+    step_id: str | None = None
+    product_id: str | None = None
+    outcome: str | None = None
+    analysis_unit: str = "records"
+    cohort_source_field: str = "cohort_n"
+    abstract_text: str | None = None
 
     @property
     def scaffold(self) -> str:
-        return f"{self.text} {{evidence:{self.evidence_id}}}."
+        citations = " ".join(
+            f"{{evidence:{key}}}"
+            for key in dict.fromkeys((self.evidence_id, *self.supporting_evidence_ids))
+        )
+        return f"{self.text} {citations}."

@@ -180,14 +180,14 @@ def test_each_code_is_named_by_the_studys_words_and_the_hosts_rule(
                 "code": 2,
                 "group": "g2",
                 "label": "high only",
-                "rule": f"{glucose}: maximum > 180 mg/dL, and none of minimum < 70 mg/dL",
+                "rule": f"{glucose}: maximum > 180 mg/dL, without minimum < 70 mg/dL",
                 "unmeasured": False,
             },
             {
                 "code": 3,
                 "group": "g3",
                 "label": "in range",
-                "rule": f"{glucose}: none of minimum < 70 mg/dL; maximum > 180 mg/dL",
+                "rule": f"{glucose}: neither minimum < 70 mg/dL nor maximum > 180 mg/dL",
                 "unmeasured": False,
             },
             {
@@ -207,8 +207,8 @@ def test_each_code_is_named_by_the_studys_words_and_the_hosts_rule(
     # order the groups are matched in.
     assert [(row["code"], row["group"], row["rule"]) for row in ordinal["levels"]] == [
         (1, "g1", f"{bmi}: value < 18.5"),
-        (2, "g2", f"{bmi}: none of value < 18.5; value ≥ 30"),
-        (3, "g3", f"{bmi}: value ≥ 30, and none of value < 18.5"),
+        (2, "g2", f"{bmi}: neither value < 18.5 nor value ≥ 30"),
+        (3, "g3", f"{bmi}: value ≥ 30, without value < 18.5"),
     ]
     assert (ordinal["scale"], ordinal["reference"], ordinal["contrast"]) == (
         "ordinal",

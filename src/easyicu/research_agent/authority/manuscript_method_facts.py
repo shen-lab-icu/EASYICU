@@ -709,7 +709,11 @@ def _grouping_facts(
     for index, item in stated:
         try:
             rules = read_grouping_rules(item["parameters"])
-            texts = grouping_rule_texts(item["parameters"])
+            # Historical Methods are rebound by exact regenerated text.
+            # Unversioned contexts must keep the wording they were issued with.
+            texts = grouping_rule_texts(
+                item["parameters"], wording_version=item.get("rule_wording_version", 1),
+            )
             values = grouping_rule_values(item["parameters"])
             levels = read_level_labels(item.get("levels"), levels=len(rules.levels))
         except ExposureGroupRuleError as exc:

@@ -64,8 +64,8 @@ def test_each_levels_rule_is_written_as_the_host_matches_it() -> None:
 
     assert grouping_rule_texts(_parameters()) == {
         "g1": f"{measure}: minimum < 70 mg/dL",
-        "g2": f"{measure}: maximum ≥ 180.5, and none of minimum < 70 mg/dL",
-        "g3": f"{measure}: none of minimum < 70 mg/dL; maximum ≥ 180.5",
+        "g2": f"{measure}: maximum ≥ 180.5, without minimum < 70 mg/dL",
+        "g3": f"{measure}: neither minimum < 70 mg/dL nor maximum ≥ 180.5",
         "gU": f"{measure}: no value recorded",
     }
 
@@ -85,7 +85,7 @@ def test_a_grouping_without_a_window_or_an_unmeasured_level_says_so() -> None:
 
     assert texts == {
         "g1": "Glucose, recorded once per stay: minimum < 70 mg/dL",
-        "g2": "Glucose, recorded once per stay: none of minimum < 70 mg/dL",
+        "g2": "Glucose, recorded once per stay: not minimum < 70 mg/dL",
     }
 
 

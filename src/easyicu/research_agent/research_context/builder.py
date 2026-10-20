@@ -46,6 +46,7 @@ from ..schema import (
 from ..contracts.exposure_group_rules import (
     EXPOSURE_GROUP_CONTRASTS_KEY,
     EXPOSURE_GROUP_LABELS_KEY,
+    GROUPING_RULE_WORDING_VERSION,
     EXPOSURE_GROUP_ORDINAL_TRANSFORM_ID,
     EXPOSURE_GROUP_TRANSFORMS,
     ExposureGroupRuleError,
@@ -219,7 +220,10 @@ def _exposure_group_projections(
         return {}
     return {
         EXPOSURE_GROUP_CONTRASTS_KEY: list(contrasts.values()),
-        **({EXPOSURE_GROUP_LABELS_KEY: list(labels.values())} if labels else {}),
+        **({EXPOSURE_GROUP_LABELS_KEY: [
+            {**label, "rule_wording_version": GROUPING_RULE_WORDING_VERSION}
+            for label in labels.values()
+        ]} if labels else {}),
     }
 
 

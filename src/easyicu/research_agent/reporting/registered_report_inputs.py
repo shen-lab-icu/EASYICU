@@ -284,6 +284,9 @@ def bind_registered_report_numbers(run_dir: Path, manuscript: str) -> tuple[str,
         method_facts=load_manuscript_method_facts(root=run_dir, records=evidence.records()),
     )
     findings = audit_manuscript_numeric_claims(bound, per_step_records=records)
+    from .descriptive_report_facts import writer_question_coverage
+
+    findings.extend(writer_question_coverage(bound, plan=plan, facts=facts, evidence=evidence))
     if untraced or any(row.severity == "error" for row in findings):
         raise WriterOnlyMigrationError(
             code="WRITER_ONLY_NUMERIC_AUDIT_FAILED",
