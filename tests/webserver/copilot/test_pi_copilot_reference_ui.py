@@ -329,7 +329,7 @@ def test_a_question_that_names_a_full_database_opens_its_source_selection() -> N
     next_actions = _read("js/screens-guided-pi-next-actions.js")
     events = _read("js/screens-guided-pi-events.js")
     assert "DATA_CONSENT.databaseFromEvent(event)" in events
-    assert "authorizeDataSource(dataSourceAction, database ? { database } : undefined);" in events
+    assert "authorizeDataSource(dataSourceAction, database || sourceId ? { database, sourceId } : undefined);" in events
     script = f"""
       global.window = global;
       window.EU_LANG = 'zh';

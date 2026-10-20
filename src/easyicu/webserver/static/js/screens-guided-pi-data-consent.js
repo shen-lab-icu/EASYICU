@@ -5,6 +5,10 @@
 (function () {
   'use strict';
 
+  // Confirmations the researcher made on a validated source EasyICU offered:
+  // the project's own, or a registered export of the database they named.
+  const CHOSEN_SOURCE_MODES = new Set(['reuse_project_source', 'select_registered_source']);
+
   function authorization(session) {
     return session && session.data_source_authorization
       ? session.data_source_authorization
@@ -30,7 +34,7 @@
 
   function matchesSourceSelection(session, text) {
     const current = authorization(session);
-    if (current.status !== 'confirmed' || current.confirmation_mode !== 'reuse_project_source') {
+    if (current.status !== 'confirmed' || !CHOSEN_SOURCE_MODES.has(current.confirmation_mode)) {
       return false;
     }
     const expected = sourceLabel(current).replace(/\s+/g, ' ').trim().toLowerCase();
@@ -74,9 +78,11 @@
         </div>
       </section>`;
     }
-    if (current.status !== 'confirmed' || current.confirmation_mode !== 'reuse_project_source') return '';
+    if (current.status !== 'confirmed' || !CHOSEN_SOURCE_MODES.has(current.confirmation_mode)) return '';
     const selected = selectedScopeAction(current);
-    const decision = selected === 'begin_full_data_selection'
+    const decision = current.confirmation_mode === 'select_registered_source'
+      ? ctx.tr('An export EasyICU already held · only study-required data', '使用 EasyICU 已有的数据 · 只准备研究所需数据')
+      : selected === 'begin_full_data_selection'
       ? ctx.tr('All supported data was selected', '已选择全部支持数据')
       : selected === 'reuse_project_source'
         ? ctx.tr('The existing project package was reused', '已使用项目中已有的数据包')
@@ -86,6 +92,27 @@
       <strong>${ctx.tr('Data source confirmed', '已确认数据源')}</strong>
       <span>${ctx.esc(sourceLabel(current) || ctx.tr('Validated project source', '已验证的项目数据源'))} · ${ctx.esc(decision)}</span>
     </section>`;
+  }
+
+  // One registered export as the researcher compares it: name, date, size.
+  function exportFacts(row, ctx) {
+    const stays = Number(row.stays);
+    const modules = Number(row.module_count);
+    return [
+      String(row.label || '').trim(),
+      row.generated_date ? ctx.tr(`generated ${row.generated_date}`, `${row.generated_date} 生成`) : '',
+      Number.isFinite(stays) && stays > 0
+        ? ctx.tr(`${stays.toLocaleString('en-US')} ICU stays`, `${stays.toLocaleString('en-US')} 例 ICU 住院`) : '',
+      Number.isFinite(modules) && modules > 0 ? ctx.tr(`${modules} modules`, `${modules} 个模块`) : '',
+    ].filter(Boolean).join(' · ');
+  }
+
+  function useExportButton(database, row, ctx, label, className) {
+    return `<button class="${className}" type="button" data-gpi-data-source-action="use_registered_source" data-gpi-data-source-database="${ctx.esc(database.key)}" data-gpi-data-source-id="${ctx.esc(row.source_id)}">${label}</button>`;
+  }
+
+  function folderButton(database, ctx, primary) {
+    return `<button class="btn${primary ? ' primary' : ''}" type="button" data-gpi-data-source-action="begin_local_selection" data-gpi-data-source-database="${ctx.esc(database.key)}">${ctx.tr('Choose a local folder', '选择本地文件夹')}</button>`;
   }
 
   function render(session, ctx) {
@@ -124,6 +151,44 @@
       </div></section>`;
     }
     const database = current.status === 'pending' && ctx.namedDatabase && ctx.namedDatabase.key ? ctx.namedDatabase : null;
+    const offer = database && database.offer ? database.offer : null;
+    if (offer && offer.state === 'loading') {
+      // Until the host answers, offer only the folder, and not as the primary
+      // action, so no button changes under the researcher's pointer.
+      return `<section class="gpi-data-consent" aria-label="${ctx.tr('Bind data source', '绑定数据源')}" aria-busy="true"><div class="gpi-data-consent-body">
+        <strong>${ctx.tr('Your question names ', '你的问题指定了 ')}${ctx.esc(database.label)}</strong>
+        <p>${ctx.tr(`Looking for ${database.label} data EasyICU already holds…`, `正在查找 EasyICU 中已有的 ${database.label} 数据…`)}</p>
+        <div class="gpi-data-consent-actions">${folderButton(database, ctx, false)}</div>
+      </div></section>`;
+    }
+    const recommended = offer && offer.state === 'ready' && offer.recommended && offer.recommended.source_id
+      ? offer.recommended : null;
+    const tied = offer && offer.state === 'ready' && !recommended
+      ? (offer.choices || []).filter(row => row && row.source_id).slice(0, 4) : [];
+    if (recommended) {
+      return `<section class="gpi-data-consent" aria-label="${ctx.tr('Bind data source', '绑定数据源')}"><div class="gpi-data-consent-body">
+        <strong>${ctx.tr('Your question names ', '你的问题指定了 ')}${ctx.esc(database.label)}</strong>
+        <p>${ctx.tr(`EasyICU already holds validated ${database.label} data:`, `EasyICU 中已有一份验证过的 ${database.label} 数据：`)}</p>
+        <p class="gpi-data-consent-facts">${ctx.esc(exportFacts(recommended, ctx))}</p>
+        <div class="gpi-data-consent-actions">
+          ${useExportButton(database, recommended, ctx, ctx.tr('Use this data', '使用这份数据'), 'btn primary')}
+          ${folderButton(database, ctx, false)}
+        </div>
+        <small>${ctx.tr('EasyICU then proposes the research plan and prepares only the data it needs. Choosing a source does not approve analysis.', '选定后，EasyICU 会拟定研究计划，只准备计划所需的数据。选择数据源不等于批准分析。')}</small>
+      </div></section>`;
+    }
+    if (tied.length) {
+      return `<section class="gpi-data-consent" aria-label="${ctx.tr('Bind data source', '绑定数据源')}"><div class="gpi-data-consent-body">
+        <strong>${ctx.tr('Your question names ', '你的问题指定了 ')}${ctx.esc(database.label)}</strong>
+        <p>${ctx.tr(`EasyICU holds ${tied.length} validated ${database.label} exports and cannot tell which one this study should use.`, `EasyICU 中有 ${tied.length} 份验证过的 ${database.label} 数据，无法替你判断这项研究该用哪一份。`)}</p>
+        <ul class="gpi-data-consent-choices">${tied.map(row => `<li>
+          <span>${ctx.esc(exportFacts(row, ctx))}</span>
+          ${useExportButton(database, row, ctx, ctx.tr('Use this one', '使用这份'), 'btn sm')}
+        </li>`).join('')}</ul>
+        <div class="gpi-data-consent-actions">${folderButton(database, ctx, false)}</div>
+        <small>${ctx.tr('Choosing a source does not approve analysis.', '选择数据源不等于批准分析。')}</small>
+      </div></section>`;
+    }
     if (database) {
       // The question already names this database: open its source selection
       // directly instead of asking which database to use.
@@ -173,6 +238,14 @@
     return target ? String(target.dataset.gpiDataSourceDatabase || '') : '';
   }
 
+  // The registered export a "use this data" action names, when it names one.
+  function sourceIdFromEvent(event) {
+    const target = event && event.target && event.target.closest
+      ? event.target.closest('[data-gpi-data-source-action]')
+      : null;
+    return target ? String(target.dataset.gpiDataSourceId || '') : '';
+  }
+
   window.EasyICU.guidedPi.declare('dataConsent', {
     authorization,
     requiresConfirmation,
@@ -183,5 +256,6 @@
     render,
     actionFromEvent,
     databaseFromEvent,
+    sourceIdFromEvent,
   });
 })();
