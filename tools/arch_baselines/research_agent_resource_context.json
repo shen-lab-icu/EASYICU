@@ -1,7 +1,6 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/agents/planner.py",
       "src/easyicu/research_agent/planning/analysis_types.py"
     ],
     "summary_changes": {}
@@ -756,9 +755,16 @@
         "src/easyicu/research_agent/planning/analysis_types.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "P0-3 study-type cue owner: analysis_types.py source digest changed (shared decline/scope/incidental masks, question-only data-quality reading, context basis); Canonical9 family readings, prompt/context sizes and limits unchanged.",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/planning/analysis_types.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "Reviewed Dev9 aggregate: explicit designs remain authoritative; the minimal E3 fixture without a declared design or recognized family now uses the descriptive fallback instead of data-quality audit. Only its Planner context grows by 2242 bytes; resource selections, Coder prompts, all nine fixtures, maximum envelopes and byte limits remain unchanged. Planner and analysis_types source digests track the integrated host routing fixes. Review: outputs/easyicu_dev9_aggregate_20261015/resource-baseline-review.json; offline engineering evidence only.",
+  "baseline_reason": "P0-3 study-type cue owner: analysis_types.py source digest changed (shared decline/scope/incidental masks, question-only data-quality reading, context basis); Canonical9 family readings, prompt/context sizes and limits unchanged.",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -777,7 +783,7 @@
     "src/easyicu/research_agent/learning/runtime.py": "87743106defc0df92c826bcc5a16e9156c89877517ce1d29ce5be9654840925a",
     "src/easyicu/research_agent/learning/store.py": "2a951e221b413c6e0c251382224acd3bba7bde8e23cca25812def65df0ef26d0",
     "src/easyicu/research_agent/planning/analysis_blueprint.py": "5330a604f9894c879ba400bee3b3ac1b617de1ce24425506139a5a29bb4020b2",
-    "src/easyicu/research_agent/planning/analysis_types.py": "04c419596a4d62c7ae630e7869a19f006a92450244ac4f2b198a07b1205dd2e9",
+    "src/easyicu/research_agent/planning/analysis_types.py": "cb34540152e5de52a90eb37e11eedc6d44c28a90250733fe1caeca3867bbc9a5",
     "src/easyicu/research_agent/planning/cohort_contract.py": "e043ca40d59f613031a1b41f9280152ac3c58cefcc86e877d466d5142496899a",
     "src/easyicu/research_agent/planning/figure_strategy.py": "42b617ad40d993c585df27598613731ceedc2e4645f197a2cb96c54645f7cec2",
     "src/easyicu/research_agent/planning/study_design.py": "84e7d9c0974ca3d1f9deadcc22de065586a9be20fcdf66f101f931469b64cad0",

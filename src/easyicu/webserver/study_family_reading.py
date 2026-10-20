@@ -36,7 +36,15 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
+from typing import Any, Dict, Mapping, Optional, Tuple
+
+from easyicu.research_agent.planning.analysis_types import (
+    INFERENTIAL_ESTIMATE,
+    PROPORTION_QUESTION,
+    RELATIONSHIP_QUESTION,
+    data_quality_question,
+    mask_non_association_phrases,
+)
 
 __all__ = [
     "FAMILY_READING_ELEMENTS",
@@ -155,78 +163,6 @@ def family_reading_rests_on(record: Mapping[str, Any], question: Any) -> bool:
     return all(str(item["evidence"]) in text for item in record["elements"])
 
 
-_CLAUSE = r"[^，。；;!?？！]"
-_EN_CLAUSE = r"[^.;!?]"
-
-# ---------------------------------------------------------------- relationship
-_RELATIONSHIP = re.compile(
-    r"\b(?:is|are|was|were)\b" + _EN_CLAUSE + r"{1,80}?\bassociated\s+with\b"
-    r"|\b(?:is|are|was|were)\b" + _EN_CLAUSE + r"{1,80}?\b(?:linked|related)\s+to\b"
-    r"|\bassociations?\s+(?:between|of)\b" + _EN_CLAUSE + r"{1,80}?\b(?:and|with)\b"
-    r"|\brelationships?\s+between\b" + _EN_CLAUSE + r"{1,80}?\band\b"
-    r"|\brisk\s+factors?\s+for\b"
-    r"|是否(?:与|和|同|跟)" + _CLAUSE + r"{1,64}?(?:相关|有关|关联)"
-    r"|(?:与|和|同|跟)" + _CLAUSE + r"{1,64}?是否(?:相关|有关|关联|存在关联)"
-    r"|(?:与|和|同|跟)" + _CLAUSE + r"{1,64}?的(?:关系|关联)"
-    r"|的危险因素",
-    re.IGNORECASE,
-)
-# An association the question declines is not asked.
-_DECLINED = re.compile(
-    r"\b(?:do\s+not|don't|not|without|no)\b" + _EN_CLAUSE + r"{0,40}?"
-    r"\b(?:associat\w*|relationships?)\b"
-    r"|(?:不(?:再)?(?:研究|分析|估计|评估|检验|探讨)|无需|不要|不必)"
-    + _CLAUSE + r"{0,48}(?:关系|关联|相关)",
-    re.IGNORECASE,
-)
-# A relationship the question asks to describe is a descriptive comparison.
-_DESCRIBED = re.compile(
-    r"\b(?:describe|summari[sz]e|show|compare)\b" + _EN_CLAUSE + r"{0,40}?"
-    r"\b(?:associations?|relationships?)\b"
-    r"|(?:描述|展示|呈现|比较)" + _CLAUSE + r"{0,48}?(?:关系|关联)",
-    re.IGNORECASE,
-)
-
-# ---------------------------------------------------------------- proportion
-_PROPORTION = re.compile(
-    r"\bwhat\s+(?:proportion|percentage|fraction|share)\b"
-    r"|\b(?:prevalence|incidence|proportion)\s+of\b"
-    r"|\bhow\s+common\b"
-    r"|多大比例|比例(?:是|为)?多少|占比(?:是|为)?多少"
-    r"|患病率|发生率|多常见",
-    re.IGNORECASE,
-)
-# A question asking for an adjusted, causal or predictive estimate is not a
-# description, whatever proportions it reports.
-_INFERENTIAL = re.compile(
-    r"\b(?:adjust(?:ed|ing|ment)?|regression|hazard|odds|causal(?:ly|ity)?|"
-    r"effects?|predict(?:s|ed|ing|ion|ive)?)\b"
-    r"|调整|校正|回归|风险比|优势比|比值比|因果|效应|预测",
-    re.IGNORECASE,
-)
-
-# ---------------------------------------------------------------- the data
-# A question about the data themselves is a data-quality question.
-_DATA_QUALITY = re.compile(
-    r"\b(?:missing(?:ness)?|completeness|data\s+quality|availability|coverage)\b"
-    r"|缺失|完整性|数据质量|可用性|覆盖率",
-    re.IGNORECASE,
-)
-
-
-def _spans(pattern: re.Pattern[str], text: str) -> Iterator[re.Match[str]]:
-    return pattern.finditer(text)
-
-
-def _first_outside(
-    pattern: re.Pattern[str], text: str, masked: Tuple[Tuple[int, int], ...]
-) -> Optional[re.Match[str]]:
-    for match in _spans(pattern, text):
-        if not any(start <= match.start() < end for start, end in masked):
-            return match
-    return None
-
-
 def _evidence(element: str, text: str, match: re.Match[str]) -> StudyFamilyEvidence:
     return StudyFamilyEvidence(
         element=element, start=match.start(), end=match.end(), evidence=text[match.start():match.end()]
@@ -237,13 +173,10 @@ def study_family_reading(question: Any) -> Optional[StudyFamilyReading]:
     """The analysis family ``question`` asks for in its own words, or ``None``."""
 
     text = str(question or "")
-    if not text.strip() or _DATA_QUALITY.search(text):
+    if not text.strip() or data_quality_question(text):
         return None
-    declined = tuple(
-        match.span() for pattern in (_DECLINED, _DESCRIBED) for match in _spans(pattern, text)
-    )
-    relationship = _first_outside(_RELATIONSHIP, text, declined)
-    proportion = _PROPORTION.search(text)
+    relationship = RELATIONSHIP_QUESTION.search(mask_non_association_phrases(text))
+    proportion = PROPORTION_QUESTION.search(text)
     if relationship is not None:
         elements = [_evidence("relationship", text, relationship)]
         if proportion is not None:
@@ -252,7 +185,7 @@ def study_family_reading(question: Any) -> Optional[StudyFamilyReading]:
             family="association_study",
             elements=tuple(sorted(elements, key=lambda item: item.start)),
         )
-    if proportion is not None and not _INFERENTIAL.search(text):
+    if proportion is not None and not INFERENTIAL_ESTIMATE.search(text):
         return StudyFamilyReading(
             family="descriptive_epidemiology",
             elements=(_evidence("proportion", text, proportion),),

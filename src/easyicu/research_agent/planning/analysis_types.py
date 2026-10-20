@@ -1384,63 +1384,236 @@ def _treatment_response_framing(text: str) -> bool:
     return has_response and has_treatment
 
 
-def _association_framing_text(text: str) -> str:
-    """Mask declined association tasks without cancelling other clauses."""
-
-    masked = re.sub(
-        r"(?:不(?:再)?(?:研究|分析|估计|评估|检验|探讨)|无需|不要|不必)"
-        r"[^，。；;!?？]{0,48}(?:关系|关联|相关性)"
-        r"|(?:关系|关联|相关性)(?:研究|分析)?[^，。；;!?？]{0,24}"
-        r"(?:与本次任务无关|不属于本次(?:研究|任务)|不在本次(?:研究|任务)范围)",
-        lambda match: " " * len(match.group(0)),
-        text,
-    )
-    return masked
-
-
-def _ordinary_relationship_question(text: str) -> bool:
-    """Recognize a paired relationship question, not a required audit note.
-
-    "X 与 Y 的关系", "X 是否与 Y 相关" and "X 与 Y 是否有关" ask it; an
-    attributive "与本研究相关的变量" qualifies a noun and asks nothing.
-    """
-
-    return re.search(
-        r"[^，。；;!?？]{1,64}(?:与|和|同)[^，。；;!?？]{1,64}"
-        r"(?:关系|是否相关|是否有关)"
-        r"|是否(?:与|和|同|跟)[^，。；;!?？]{1,64}?(?:相关|有关|关联)"
-        r"|(?:与|和|同|跟)[^，。；;!?？]{1,64}?是否(?:相关|有关|关联|存在关联)",
-        _association_framing_text(text),
-    ) is not None
-
-
-#: Words by which a question asks how common something is.  Without an
-#: adjusted, causal or predictive estimate they are descriptive epidemiology's.
-_PROPORTION_QUESTION = re.compile(
-    r"\bwhat\s+(?:proportion|percentage|fraction|share)\b"
-    r"|\bproportion\s+of\b|\bhow\s+common\b"
-    r"|多大比例|比例(?:是|为)?多少|占比",
+# Shared question-wording policy. The host imports these cues rather than
+# maintaining a second interpretation that can silently write a different design.
+_CLAUSE = r"[^，,。；;.!?？！\n]"
+_ASSOCIATION_WORD = r"(?:关系|关联|相关(?:性)?|有关)"
+_DECLINED_ASSOCIATION = re.compile(
+    r"\b(?:do\s+not|don't|not|without|no|avoid)\b" + _CLAUSE + r"{0,64}?"
+    r"\b(?:associat\w*|relationships?|linked|related)\b"
+    r"|(?:不(?:再)?(?:研究|分析|估计|评估|检验|探讨)|无需|不要|不必)"
+    + _CLAUSE + r"{0,64}?" + _ASSOCIATION_WORD,
     re.IGNORECASE,
 )
-_INFERENTIAL_ESTIMATE = re.compile(
+_OUT_OF_SCOPE_ASSOCIATION = re.compile(
+    _CLAUSE + r"{0,96}?" + _ASSOCIATION_WORD + _CLAUSE + r"{0,48}?"
+    r"(?:与本次任务无关|不属于本次(?:研究|任务)|不在本次(?:研究|任务)范围)"
+    r"|" + _CLAUSE + r"{0,96}?\b(?:associat\w*|relationships?|linked|related)\b"
+    + _CLAUSE + r"{0,64}?\b(?:outside\s+(?:the\s+)?scope|out\s+of\s+scope|"
+    r"not\s+(?:in\s+scope|part\s+of\s+(?:this|the|our)\s+study))\b",
+    re.IGNORECASE,
+)
+_DESCRIBED_ASSOCIATION = re.compile(
+    r"\b(?:describe|summari[sz]e|show|compare)\b"
+    r"(?:(?!\b(?:estimate|analy[sz]e|test|assess|evaluate|investigate)\b)"
+    + _CLAUSE + r"){0,48}?"
+    r"\b(?:associat\w*|relationships?|linked|related)\b"
+    r"|(?:描述|展示|呈现|比较)(?:(?!(?:估计|分析|评估|检验|探讨|研究))"
+    + _CLAUSE + r"){0,48}?" + _ASSOCIATION_WORD,
+    re.IGNORECASE,
+)
+_INCIDENTAL_ASSOCIATION = re.compile(
+    r"(?:关联|相关性)(?=的|于)"
+    r"|\b(?:associated\s+with|(?:linked|related)\s+to)\s+"
+    r"(?:(?:the|this|our|current)\s+)?(?:study|research|analysis|project)\b"
+    r"|\b(?:records?|information|documents?|notes?)\s+(?:about|on|regarding|concerning)\b"
+    + _CLAUSE + r"{0,96}",
+    re.IGNORECASE,
+)
+
+RELATIONSHIP_QUESTION = re.compile(
+    r"\b(?:is|are|was|were)\b" + _CLAUSE + r"{1,80}?\bassociated\s+with\b"
+    r"|\b(?:is|are|was|were)\b" + _CLAUSE + r"{1,80}?\b(?:linked|related)\s+to\b"
+    r"|\bassociations?\s+(?:between|of)\b" + _CLAUSE + r"{1,80}?\b(?:and|with)\b"
+    r"|\brelationships?\s+between\b" + _CLAUSE + r"{1,80}?\band\b"
+    r"|\brisk\s+factors?\s+for\b"
+    r"|是否(?:与|和|同|跟)" + _CLAUSE + r"{1,64}?(?:相关|有关|关联)(?!的|于)"
+    r"|(?:与|和|同|跟)" + _CLAUSE + r"{1,64}?是否(?:相关|有关|关联|存在关联)(?!的|于)"
+    r"|(?:与|和|同|跟)" + _CLAUSE + r"{1,64}?(?:的关系|的关联|有何关系|有关系)(?!的|于)"
+    r"|的危险因素",
+    re.IGNORECASE,
+)
+PROPORTION_QUESTION = re.compile(
+    r"\bwhat\s+(?:proportion|percentage|fraction|share)\b"
+    r"|\b(?:prevalence|incidence|proportion)\s+of\b|\bhow\s+common\b"
+    r"|多大比例|比例(?:是|为)?多少|占比|患病率|发生率|多常见",
+    re.IGNORECASE,
+)
+INFERENTIAL_ESTIMATE = re.compile(
     r"\b(?:adjust(?:ed|ing|ment)?|regression|hazard|odds|causal(?:ly|ity)?|"
     r"effects?|predict(?:s|ed|ing|ion|ive)?)\b"
     r"|调整|校正|回归|风险比|优势比|比值比|因果|效应|预测",
     re.IGNORECASE,
 )
-#: Cues a family's words also take beyond its catalog trigger terms, which
-#: the planner's catalog text lists: the plural an exact-token match misses,
-#: and the Chinese words by which a question asks about the data themselves.
-_EXTRA_TRIGGER_CUES = {
-    "association_study": ("risk factors",),
-    "data_quality_audit": ("缺失", "完整性", "数据质量", "可用性", "覆盖率"),
-}
+
+# Read audit requests after masking exclusion, handling and population qualifiers.
+_DATA_QUALITY_OBJECT = (
+    r"(?:\b(?:missingness|completeness|data[\s_-]+quality|quality[\s_-]+audit|"
+    r"availability|coverage|schema|unit[\s_-]+checks?|range[\s_-]+checks?|"
+    r"missing(?:[\s_-]+values?)?[\s_-]+(?:rate|proportion))\b"
+    r"|数据缺失|缺失(?:率|比例|模式|情况)|完整性|数据质量|可用性|覆盖率)"
+)
+_DATA_QUALITY_REQUEST = re.compile(
+    r"\b(?:audit|assess|evaluate|report|quantify|estimate|describe|summari[sz]e|"
+    r"check|measure|examine|profile|compare|calculate|list|tabulate|show|what|how)\b"
+    + _CLAUSE + r"{0,96}?" + _DATA_QUALITY_OBJECT
+    + r"|(?:评估|检查|审计|报告|统计|计算|描述|量化|比较|列出|汇总|展示|呈现|查看)" + _CLAUSE
+    + r"{0,64}?" + _DATA_QUALITY_OBJECT
+    + r"|" + _DATA_QUALITY_OBJECT + _CLAUSE + r"{0,48}?(?:多少|如何|怎样|哪些)",
+    re.IGNORECASE,
+)
+_DATA_QUALITY_HANDLING = re.compile(
+    r"(?:缺失|缺少)" + _CLAUSE + r"{0,32}?(?:插补|填补|处理)"
+    r"|\bmissing(?:ness)?\b" + _CLAUSE
+    + r"{0,48}?\b(?:imput(?:e|ed|ing|ation)|exclud(?:e|ed|ing)|handl(?:e|ed|ing))\b"
+    r"|(?:排除|剔除|删除|去除|插补|填补|处理)" + _CLAUSE + r"{0,96}"
+    r"|(?:不(?:再)?(?:研究|分析|评估|检查|审计|报告|统计|计算|列出|汇总|展示|呈现|查看)|无需|不要|不必)"
+    + _CLAUSE + r"{0,96}"
+    r"|\b(?:exclud(?:e|ed|ing)|drop(?:ped|ping)?|omit(?:ted|ting)?|"
+    r"imput(?:e|ed|ing|ation)|handl(?:e|ed|ing))\b" + _CLAUSE + r"{0,96}"
+    r"|\b(?:do\s+not|don't|not|without|avoid)\s+(?:audit|assess|evaluate|"
+    r"report|quantify|estimate|check|measure|examine|profile|compare|calculate|list|tabulate|show)\b"
+    + _CLAUSE + r"{0,96}",
+    re.IGNORECASE,
+)
+# Coverage/completeness can qualify the population of a clinical summary.
+_DATA_QUALITY_COHORT_QUALIFIER = re.compile(
+    r"\b(?:stays?|patients?)\s+with\b" + _CLAUSE + r"{0,48}?" + _DATA_QUALITY_OBJECT
+    + r"|" + _DATA_QUALITY_OBJECT + _CLAUSE + r"{0,16}?的(?:患者|住院|人群|队列)",
+    re.IGNORECASE,
+)
+_MEASUREMENT_CONTEXT = (
+    r"\b(?:across|among)\b"
+    r"|\b(?:in|during|within|after|before|for)\s+(?:the\s+)?"
+    r"(?:(?:first|last|past|initial|next|previous)\s+)?"
+    r"(?:\d+(?:\.\d+)?\s*(?:hours?|hrs?|h|days?|d|weeks?|months?|minutes?|mins?)"
+    r"|day|night|admission|stay|ICU|hospitalization)\b"
+)
+_MEASUREMENT_PROPORTION = re.compile(
+    r"(?:\b(?:what\s+(?:proportion|percentage|fraction|share)|how\s+many)\b"
+    + _CLAUSE + r"{0,64}?\b(?:are|is|were|was)\s+(?:missing|available|recorded|measured|documented)\b"
+    r"|\bwhat\s+(?:proportion|percentage|fraction|share)\b"
+    + _CLAUSE + r"{0,64}?\b(?:have|has|had)\s+missing\b"
+    + _CLAUSE + r"{0,32}?\b(?:values?|measurements?|records?)\b"
+    r"|\bwhat\s+(?:proportion|percentage|fraction|share)\b"
+    + _CLAUSE + r"{0,64}?\b(?:have|has|had)\b" + _CLAUSE
+    + r"{0,48}?\b(?:values?|measurements?|records?)\b"
+    r"(?=\s*(?:[?.;!]|$|(?:available|recorded|measured|documented|in|during|within)\b)))"
+    r"(?:(?!" + _MEASUREMENT_CONTEXT + r")" + _CLAUSE + r"){0,64}",
+    re.IGNORECASE,
+)
+# Qualifiers and thresholds ask about a clinical state, not whether data exist.
+# The measurement match stops before the time/population context, so a window
+# such as "in the first 24 hours" is not mistaken for a clinical threshold.
+_MEASUREMENT_CLINICAL_QUALIFIER = re.compile(
+    r"\b(?:abnormal|elevated|raised|high|low|reduced|normal|hypo[\w-]*|hyper[\w-]*|"
+    r"above|below|over|under|greater|less)\b|[<>=≤≥≠%]|\d"
+    r"|\b(?:[munpµμ]?(?:mol|g|eq)(?:\s*/\s*(?:[md]?l|kg))?|mmhg|kpa|bpm)\b",
+    re.IGNORECASE,
+)
+# Explicit predicates ask about the data themselves, even when the measured
+# concept has a clinical qualifier. Modifiers such as "documented delirium"
+# and "complete response" do not make those clinical states data-quality tasks.
+_MEASUREMENT_DATA_OBJECT = re.compile(
+    r"\b(?:data|values?|measurements?|records?|recordings?|documentation)\b",
+    re.IGNORECASE,
+)
+_DATA_QUALITY_PREDICATE = re.compile(
+    r"\b(?:have|has|had)\s+missing\b"
+    + _CLAUSE + r"{0,32}?" + _MEASUREMENT_DATA_OBJECT.pattern
+    + r"|\bhow\s+(?:complete|available|well\s+recorded)\s+(?:is|are|was|were)\b"
+    + _CLAUSE + r"{0,64}?" + _MEASUREMENT_DATA_OBJECT.pattern
+    + r"|\bhow\s+often\s+(?:is|are|was|were)\b" + _CLAUSE
+    + r"{0,64}?\b(?:recorded|documented)\b"
+    r"|\b(?:is|are|was|were)\b" + _CLAUSE
+    + r"{0,64}?(?:\b(?:recorded|documented)\b|"
+    + _MEASUREMENT_DATA_OBJECT.pattern + r"\s+available)\s+for\s+(?:all|every)\s+"
+    r"(?:stays?|patients?|admissions?)\b"
+    r"|(?:数据|记录|记载)(?:是否完整|完整吗|完整么)"
+    r"|(?:有)?多少(?:住院|患者|入住|入院)" + _CLAUSE
+    + r"{0,24}?(?:缺少|缺失)" + _CLAUSE + r"{0,24}?(?:记录|数据|记载|测量)"
+    r"|多久(?:记录|记载)一次"
+    r"|是否(?:在)?(?:所有|每(?:次|个)?)(?:住院|患者|入住)" + _CLAUSE
+    + r"{0,24}?有" + _CLAUSE + r"{0,24}?(?:记录|数据|记载)",
+    re.IGNORECASE,
+)
+
+# Missingness is a data question by default, including an unnamed measurement.
+# Only an explicit anatomical subject makes missingness a clinical state.
+_MISSINGNESS = re.compile(
+    r"(?:\b(?:missing(?:ness)?|lack(?:s|ed|ing)?|absent|(?:not|no)\s+recorded)\b"
+    r"|缺失|缺少|未记录)",
+    re.IGNORECASE,
+)
+_MISSING_CLINICAL_SUBJECT = (
+    r"(?:\b(?:teeth|tooth|limbs?|digits?|fingers?|toes?)\b|牙齿?|肢体|手指|脚趾)"
+)
+_MISSING_CLINICAL_STATE = re.compile(
+    r"(?:" + _MISSINGNESS.pattern + r"\s*(?:(?:a|an|the)\s+)?"
+    + _MISSING_CLINICAL_SUBJECT
+    + r"|(?:" + _MISSING_CLINICAL_SUBJECT + r"|指|趾)"
+    r"(?:\s+(?:is|are|was|were))?\s*(?:的)?" + _MISSINGNESS.pattern + r")"
+    r"(?!\s*" + _MEASUREMENT_DATA_OBJECT.pattern + r")",
+    re.IGNORECASE,
+)
+# A missing-data population is incidental when another predicate or a following
+# clause supplies the clinical question. A bare count of that population is
+# still a missingness audit (e.g. "乳酸缺失的患者占比是多少").
+_MISSINGNESS_COHORT_QUALIFIER = re.compile(
+    r"\b(?:stays?|patients?|admissions?)\s+(?:with|without|who)\b"
+    + _CLAUSE + r"{0,48}?" + _MISSINGNESS.pattern + _CLAUSE + r"{0,48}?"
+    r"(?=\s+(?:(?:have|has|had|develop(?:ed)?|died)\b|"
+    r"(?:are|is|were|was)\s+(?!there\b))|[,，;；])"
+    r"|" + _MISSINGNESS.pattern + _CLAUSE
+    + r"{0,32}?的(?:患者|住院|人群|队列)(?:中|内)",
+    re.IGNORECASE,
+)
+
+
+def mask_non_association_phrases(text: str) -> str:
+    """Blank declined, described and incidental relationships, preserving offsets.
+
+    Masks stop at clause boundaries so a separate requested association still
+    counts. Both the host's evidence and the kernel's catalog scoring use this.
+    """
+
+    for pattern in (
+        _OUT_OF_SCOPE_ASSOCIATION, _DECLINED_ASSOCIATION,
+        _DESCRIBED_ASSOCIATION, _INCIDENTAL_ASSOCIATION,
+    ):
+        text = pattern.sub(lambda match: " " * len(match.group(0)), text)
+    return text
+
+
+def data_quality_question(question: str) -> bool:
+    """Whether the question asks about data quality as an object of study.
+
+    Callers pass only research_question, never preferences or column metadata.
+    """
+
+    question = _DATA_QUALITY_HANDLING.sub("", question)
+    question = _MISSINGNESS_COHORT_QUALIFIER.sub("", question)
+    question = _MISSING_CLINICAL_STATE.sub("", question)
+    if _MISSINGNESS.search(question):
+        return True
+    question = _DATA_QUALITY_COHORT_QUALIFIER.sub("", question)
+    if _DATA_QUALITY_REQUEST.search(question) or _DATA_QUALITY_PREDICATE.search(question):
+        return True
+    return any(
+        _MEASUREMENT_DATA_OBJECT.search(match.group(0))
+        and not _MEASUREMENT_CLINICAL_QUALIFIER.search(match.group(0))
+        for match in _MEASUREMENT_PROPORTION.finditer(question)
+    )
+
+
+_EXTRA_TRIGGER_CUES = {"association_study": ("risk factors",)}
+
 
 #: How :func:`infer_analysis_type_with_basis` chose a family: the study's
-#: typed design, the question's words, or the rule for a question no
-#: family's words read.
+#: typed design, the question's words, supplementary context, or fallback.
 FAMILY_BASIS_STUDY_DESIGN = "study_design"
 FAMILY_BASIS_KEYWORD = "keyword"
+FAMILY_BASIS_CONTEXT = "context"
 FAMILY_BASIS_FALLBACK = "fallback"
 
 
@@ -1448,8 +1621,8 @@ def _proportion_question(text: str) -> bool:
     """Whether a question asks how common something is, and nothing inferential."""
 
     return (
-        _PROPORTION_QUESTION.search(text) is not None
-        and _INFERENTIAL_ESTIMATE.search(text) is None
+        PROPORTION_QUESTION.search(text) is not None
+        and INFERENTIAL_ESTIMATE.search(text) is None
     )
 
 
@@ -1474,19 +1647,49 @@ def infer_analysis_type_with_basis(
 
     The study's typed design decides when it states one
     (:data:`FAMILY_BASIS_STUDY_DESIGN`); otherwise the question's words
-    (:data:`FAMILY_BASIS_KEYWORD`), and for a question no family's words read,
+    (:data:`FAMILY_BASIS_KEYWORD`) or supplementary fields
+    (:data:`FAMILY_BASIS_CONTEXT`), and for a question no family's words read,
     the fallback rule (:data:`FAMILY_BASIS_FALLBACK`): a pair of outcome and
     exposure is an association, any other question is described, and only an
     empty question is a data-quality audit.
     """
 
+    spec, basis = _infer_analysis_type_with_basis(
+        context, primary_predictor=primary_predictor, target_outcome=target_outcome
+    )
+    if basis != FAMILY_BASIS_KEYWORD:
+        return spec, basis
+    # Ask the same routing policy with only the question. Metadata/preferences
+    # get a context basis when they changed the winning family or supplied all
+    # of its cues; a keyword in a losing family's score is not its provenance.
+    question_context = context.model_copy(update={
+        "user_preferences": None, "variables": [], "primary_exposure": None,
+        "target_outcome": None, "cross_database_validation": [],
+    })
+    question_spec, question_basis = _infer_analysis_type_with_basis(question_context)
+    return spec, (
+        FAMILY_BASIS_KEYWORD
+        if question_spec.key == spec.key and question_basis == FAMILY_BASIS_KEYWORD
+        else FAMILY_BASIS_CONTEXT
+    )
+
+
+def _infer_analysis_type_with_basis(
+    context: ResearchContext,
+    *,
+    primary_predictor: Optional[str] = None,
+    target_outcome: Optional[str] = None,
+) -> Tuple[AnalysisTypeSpec, str]:
     preferred = _preferred_family_key(context)
     if preferred is not None:
         return _REGISTRY[preferred], FAMILY_BASIS_STUDY_DESIGN
     text = _question_text(context)
     primary_question_text = (context.research_question or "").lower().strip()
-    association_text = _association_framing_text(text)
-    relationship_question = _ordinary_relationship_question(primary_question_text)
+    association_text = mask_non_association_phrases(text)
+    relationship_question = RELATIONSHIP_QUESTION.search(
+        mask_non_association_phrases(primary_question_text)
+    ) is not None
+    quality_question = data_quality_question(primary_question_text)
     primary_predictor = primary_predictor or context.primary_exposure
     target_outcome = target_outcome or context.target_outcome
     # Free-text preferences are supplementary design constraints, not a second
@@ -1607,6 +1810,8 @@ def infer_analysis_type_with_basis(
     )
 
     def _has_any(key: str, extras: Iterable[str] = ()) -> bool:
+        if key == "data_quality_audit":
+            return quality_question
         terms = [
             *_REGISTRY[key].trigger_terms,
             *_EXTRA_TRIGGER_CUES.get(key, ()),
@@ -1678,11 +1883,16 @@ def infer_analysis_type_with_basis(
 
     scores: Dict[str, int] = {key: 0 for key in _REGISTRY}
     for key, spec in _REGISTRY.items():
+        if key == "data_quality_audit":
+            scores[key] = int(quality_question)
+            continue
         selected_text = association_text if key == "association_study" else text
         for term in (*spec.trigger_terms, *_EXTRA_TRIGGER_CUES.get(key, ())):
             if _keyword_present(selected_text, term):
                 scores[key] += 1
-    if relationship_question:
+    if relationship_question and not scores["association_study"]:
+        # A paired-question pattern fills a catalog vocabulary gap (相关/有关,
+        # related to); it must not double-score the same English association.
         scores["association_study"] += 1
     if _proportion_question(primary_question_text):
         scores["descriptive_epidemiology"] += 1
@@ -1754,7 +1964,10 @@ def infer_analysis_type_with_basis(
         scores["validation"] += 1
         scores["cross_database_replication"] += 2
 
-    if target_outcome and _has_any("association_study") and not has_multimodal_variable:
+    if (
+        (target_outcome or relationship_question)
+        and _has_any("association_study") and not has_multimodal_variable
+    ):
         # An explicit association/effect question is stronger evidence than the
         # mere presence of an outcome column.  More specialised families have
         # already returned above, so this only prevents the generic descriptive
