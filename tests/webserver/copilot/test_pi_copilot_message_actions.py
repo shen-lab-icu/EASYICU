@@ -367,9 +367,9 @@ def test_copilot_message_owner_wires_only_latest_next_step_to_send_or_focus() ->
     assert "row === latestAssistant && !interactionLocked && !stale" in owner
     # A clicked option carries its host-set text origin so the backend never
     # mints a privileged one-turn grant from verbatim model text.
-    assert "const messageOrigin = nextChoice.dataset.gpiNextOrigin === 'model' ? 'model_option' : '';" in events
+    assert "const messageOrigin = nextChoice.dataset.gpiNextOrigin === 'model' ? 'model_option' : 'host_prompt';" in events
     assert "sendText(message, governedNextChoiceGrants(nextChoice, message), undefined, true, messageOrigin)" in events
-    assert "...(messageOrigin ? { message_origin: messageOrigin } : {})" in owner
+    assert "message_origin: messageOrigin," in owner
     assert "function governedNextChoiceGrants(element, message)" in plan_actions
     assert "nextActions.governedPlanGrants(message, workflowCode())" in plan_actions
     assert "event.target.closest('[data-gpi-next-focus]')" in events
@@ -378,7 +378,7 @@ def test_copilot_message_owner_wires_only_latest_next_step_to_send_or_focus() ->
     # choice button. It used to send `[]`, which stripped the turn's grants and
     # made "其他，我自己输入" fail authorization where the button beside it
     # succeeded.
-    assert "sendText(message, governedNextChoiceGrants(null, message))" in events
+    assert "sendText(message, governedNextChoiceGrants(null, message), undefined, true, 'typed')" in events
     assert "sendText(message, [])" not in events
     assert "dataSourceAuthorization: DATA_CONSENT && DATA_CONSENT.authorization(state.session)" in owner
     assert "event.target.closest('[data-gpi-data-source-continue]')" in events
@@ -625,7 +625,7 @@ def test_copilot_message_actions_are_host_wired_without_history_rewrite() -> Non
     # A host-generated action is replaced in place; other edits with no
     # resolvable turn identifier must still not vanish.
     assert "context.resubmitHostGenerated(row, text)" in message_owner
-    assert "context.sendText(text);" in message_owner
+    assert "context.sendText(text, undefined, undefined, true, 'typed');" in message_owner
     assert "resubmitHostGenerated: PLAN_ACTIONS.resubmitHostGenerated" in owner
     assert "regeneratePiCopilotMessage" in owner
     assert "user_entry_id: entryId" in owner

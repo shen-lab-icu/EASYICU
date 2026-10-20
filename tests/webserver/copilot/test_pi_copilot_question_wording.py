@@ -64,7 +64,7 @@ def test_a_model_rewrite_is_refused_without_spending_the_configuration_grant(mon
 
 
 @pytest.mark.parametrize("question", [
-    "成人 ICU 入住 ≥24 小时，血糖 <65 mg/dL 的比例是多少？", ORIGINAL, "如何预测死亡？",
+    "成人 ICU 入住 ≥24 小时，血糖 <65 mg/dL 的比例是多少？", ORIGINAL, "如何预测院内死亡风险？",
 ])
 def test_spacing_and_punctuation_return_the_original_words(question):
     proposal = question.replace(" ", "").replace("，", "").replace("？", "").replace(",", "")
@@ -237,3 +237,191 @@ def test_oversized_verbatim_question_is_rejected_instead_of_silently_truncated(m
     result, writes = _update(monkeypatch, context, question)
     assert result["code"] == "study_context_field_too_long"
     assert writes == [] and "configure" in context.allowed_actions
+
+
+@pytest.mark.parametrize("origin", [None, "host_prompt", "typed"])
+def test_service_requires_an_explicit_typed_origin_for_user_wording(tmp_path, study_state, origin):
+    gateway = FakeGateway()
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
+    created = service.create_session(project_id="origin-project", external_llm_opt_in=True)
+    session_id = created["session"]["session_id"]
+    allow_unrelated_message_test(service, session_id)
+    try:
+        submitted = service.send_message(
+            session_id, project_id="origin-project", message=ORIGINAL,
+            message_origin=origin, allowed_actions=[],
+        )
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            job = service_module.jobs.MANAGER.get(submitted["job_id"])
+            if job and job.status != "running":
+                break
+            time.sleep(0.01)
+        assert job is not None and job.status == "done"
+        turns = gateway.tool_contexts[-1].user_turns
+        assert turns[-1]["message_origin"] == (origin or "unknown")
+        resolved = resolve_question_wording(ORIGINAL, user_turns=turns)
+        assert (resolved is not None) == (origin == "typed")
+        params = next(p for method, p, _ in gateway.calls if method == "session.prompt")
+        assert params["message_origin"] == (origin or "unknown")
+        reopened = PiConversationReplayStore(service.replay_store.root)
+        assert reopened.question_wording_context(
+            session_id=session_id, project_id="origin-project",
+        )["user_turns"] == list(turns)
+    finally:
+        service.close()
+
+
+def test_route_accepts_host_prompt_origin_without_claiming_it_was_typed():
+    from easyicu.webserver.routes.pi_copilot import PiMessageRequest
+
+    request = PiMessageRequest(project_id="origin-project", message=ORIGINAL, message_origin="host_prompt")
+    assert request.message_origin == "host_prompt"
+    assert PiMessageRequest(project_id="origin-project", message=ORIGINAL).message_origin is None
+
+
+@pytest.mark.parametrize("origin", [None, "host_prompt", "unknown"])
+def test_non_typed_turns_break_adjacency_after_replay_reopen(tmp_path, origin):
+    store = PiConversationReplayStore(tmp_path)
+    for index, (text, source) in enumerate([
+        ("Describe platelet counts.", "typed"), ("Host-written context.", origin),
+        ("Report hospital mortality.", "typed"),
+    ]):
+        store.start_turn(session_id="s", project_id="p", job_id=str(index),
+                         allowed_actions=[], user_message=text, message_origin=source)
+    turns = PiConversationReplayStore(tmp_path).question_wording_context(
+        session_id="s", project_id="p",
+    )["user_turns"]
+    assert turns[1]["message_origin"] == (origin or "unknown")
+    assert resolve_question_wording("Host-written context", user_turns=turns) is None
+    assert resolve_question_wording(
+        "Describe platelet counts Report hospital mortality", user_turns=turns,
+    ) is None
+
+
+@pytest.mark.parametrize("cue", [
+    "不研究", "没有研究", "无需研究", "不要研究", "我们别研究", "并非研究",
+    "而非研究", "除了", "排除",
+])
+@pytest.mark.parametrize("side", ["before", "after"])
+def test_a_match_cannot_discard_a_chinese_negation_or_exclusion(cue, side):
+    question = "乳酸与死亡的关系"
+    text = f"{cue}{question}，只描述乳酸分布。" if side == "before" else f"{question}{cue}，只描述乳酸分布。"
+    assert resolve_question_wording(question, user_turns=[{"text": text, "message_origin": "typed"}]) is None
+
+
+@pytest.mark.parametrize("cue", [
+    "not", "no", "without", "rather than", "instead of", "except", "exclude",
+    "rather   than", "instead\t of",
+])
+@pytest.mark.parametrize("side", ["before", "after"])
+def test_a_match_cannot_discard_an_english_negation_or_exclusion(cue, side):
+    question = "lactate and hospital mortality"
+    text = f"{cue} {question}" if side == "before" else f"{question} {cue}"
+    assert resolve_question_wording(question, user_turns=[{"text": text, "message_origin": "typed"}]) is None
+
+
+@pytest.mark.parametrize("prefix", ["我想研究", "分别研究", "性别", "区别", "类别", "个别", "特别"])
+def test_an_affirmative_clause_can_supply_a_question_fragment(prefix):
+    question = "乳酸与死亡的关系"
+    resolved = resolve_question_wording(question, user_turns=[{"text": prefix + question, "message_origin": "typed"}])
+    assert resolved is not None and resolved[0] == question
+
+
+@pytest.mark.parametrize("separator", ["。", "！", "？", "；", "，", ",", ".", "!", "?", ";", ":", "\n"])
+def test_negation_in_a_separate_clause_does_not_block_wording(separator):
+    question = "乳酸与死亡的关系"
+    text = f"不要预测死亡{separator}我想研究{question}"
+    assert resolve_question_wording(question, user_turns=[{"text": text, "message_origin": "typed"}]) is not None
+
+
+def test_a_later_affirmative_occurrence_can_follow_a_rejected_occurrence():
+    question = "乳酸与死亡的关系"
+    text = f"不要研究{question}。更正：我想研究{question}。"
+    assert resolve_question_wording(question, user_turns=[{"text": text, "message_origin": "typed"}]) is not None
+
+
+def test_preserved_negation_and_negation_in_an_earlier_message_are_safe():
+    question = "不研究乳酸与死亡的关系，只描述乳酸分布。"
+    turns = [{"text": question, "message_origin": "typed"}]
+    assert resolve_question_wording(question, user_turns=turns)[0] == question
+    turns.append({"text": "乳酸与死亡的关系", "message_origin": "typed"})
+    assert resolve_question_wording(turns[-1]["text"], user_turns=turns) is not None
+
+
+@pytest.mark.parametrize("question", ["死亡", "院内死亡率", "研究死亡风险"])
+@pytest.mark.parametrize("origin", ["typed", "model_option", "confirmed"])
+def test_short_normalized_matches_never_receive_a_wording_record(question, origin):
+    turns = [{"text": question, "message_origin": origin}]
+    if origin == "confirmed":
+        turns = [{"text": "确认这个问题的措辞", "message_origin": "typed"}]
+    assert resolve_question_wording(question, user_turns=turns, previous_reply=question) is None
+
+
+@pytest.mark.parametrize("reply", [
+    "We could Describe platelet counts in adults before selecting a plan.",
+    "Describe platelet counts in adults before selecting a plan.",
+    "We could Describe platelet counts in adults.",
+    'You can "choose a question" Describe platelet counts in adults.',
+    "Researchers' Describe platelet counts in adults.",
+    'We could "Describe platelet counts in adults.',
+    'Describe platelet counts in adults "under a different question".',
+])
+def test_confirming_a_reply_does_not_confirm_an_arbitrary_sentence_fragment(reply):
+    assert resolve_question_wording(
+        "Describe platelet counts in adults",
+        user_turns=[{"text": "Confirm this question wording", "message_origin": "typed"}],
+        previous_reply=reply,
+    ) is None
+
+
+@pytest.mark.parametrize("reply", [
+    'I propose "Describe platelet counts in adults." for review.',
+    "I propose 'Describe platelet counts in adults.' for review.",
+    "I propose `Describe platelet counts in adults.` for review.",
+    "建议题目：「Describe platelet counts in adults.」请确认。",
+    "Proposed question:\nDescribe platelet counts in adults.\nPlease confirm.",
+])
+def test_a_whole_quoted_question_or_line_can_be_confirmed(reply):
+    resolved = resolve_question_wording(
+        "Describe platelet counts in adults",
+        user_turns=[{"text": "Confirm this question wording", "message_origin": "typed"}],
+        previous_reply=reply,
+    )
+    assert resolved is not None and resolved[1]["source"] == "confirmed_proposal"
+
+
+@pytest.mark.parametrize("multiple_messages", [False, True])
+def test_multiline_wording_survives_the_real_study_context_write(tmp_path, monkeypatch, multiple_messages):
+    monkeypatch.setattr(study_contexts, "_CONFIG_PATH", tmp_path / "studies.json")
+    current = study_contexts.upsert_context({"id": "wording-study", "question": "Old question"})
+    lines = ["Describe platelet counts in adults.", "Also report hospital mortality."]
+    original = "\n\t".join(lines)
+    turns = [{"text": line, "message_origin": "typed"} for line in lines] if multiple_messages else [
+        {"text": original, "message_origin": "typed"},
+    ]
+    context = _context(original, user_turns=turns)
+    result = update_study_context(
+        context, {"question": " ".join(lines)}, load_context=lambda _: current,
+        project_workflow=lambda *args, **kwargs: {},
+    )
+    assert result["code"] == "study_context_updated"
+    saved = study_contexts.get_context(current["id"])
+    assert saved["question"] == " ".join(lines)
+    assert saved["question_wording"] == {
+        "source": "user_message", "question_sha256": question_sha256(original),
+    }
+    assert result["details"]["question_wording"] == saved["question_wording"]
+
+
+def test_receipt_does_not_claim_wording_the_store_cleared(monkeypatch):
+    current = {"id": "wording-study", "revision": 1, "question": "Old question"}
+    monkeypatch.setattr(study_contexts, "upsert_context", lambda patch, **kwargs: {
+        **current, **patch, "revision": 2, "question_wording": None,
+    })
+    result = update_study_context(
+        _context(ORIGINAL), {"question": ORIGINAL}, load_context=lambda _: current,
+        project_workflow=lambda *args, **kwargs: {},
+    )
+    assert result["code"] == "study_context_updated"
+    assert result["details"].get("question_wording") is None

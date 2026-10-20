@@ -806,7 +806,7 @@
         await approveTargetTrial();
         return;
       }
-      await host.sendText(confirmation.message, confirmation.grants);
+      await host.sendText(confirmation.message, confirmation.grants, undefined, true, 'host_prompt');
     }
 
     // The researcher's click on an approvable target trial card, every line
@@ -842,7 +842,7 @@
         await submitReview('rejected');
         return;
       }
-      await host.sendText(confirmation.rejectMessage, confirmation.grants);
+      await host.sendText(confirmation.rejectMessage, confirmation.grants, undefined, true, 'host_prompt');
     }
 
     async function confirmDecision(selection) {

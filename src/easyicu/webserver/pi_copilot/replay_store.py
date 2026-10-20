@@ -161,7 +161,7 @@ class PiConversationReplayStore:
                     "ended_at": None,
                     "allowed_actions": sorted(set(allowed_actions))[:16],
                     "user_message": str(user_message)[:12_000],
-                    "message_origin": str(message_origin),
+                    "message_origin": str(message_origin or "unknown"),
                     "events": [],
                 }
             )
@@ -383,7 +383,7 @@ class PiConversationReplayStore:
         return {
             "user_turns": [
                 {"text": str(row.get("user_message") or ""),
-                 "message_origin": row.get("message_origin", "unknown")}
+                 "message_origin": row.get("message_origin") or "unknown"}
                 for row in active
             ],
             "previous_reply": str(active[-1].get("assistant_reply") or "") if active else "",

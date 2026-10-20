@@ -13,7 +13,7 @@ from tests.webserver.copilot.pi_copilot_contract_fixtures import FakeGateway, st
 study_state = _study_state
 
 
-@pytest.mark.parametrize("origin", [None, "model_option", "typed", "invalid"])
+@pytest.mark.parametrize("origin", [None, "model_option", "typed", "host_prompt", "unknown", "invalid"])
 @pytest.mark.parametrize("intent", [None, "user_edited_message"])
 def test_unchanged_regeneration_uses_saved_origin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, study_state: dict,
@@ -53,4 +53,4 @@ def test_unchanged_regeneration_uses_saved_origin(
         "text": "生成分析计划", "message_origin": origin or "unknown",
     }
     params = next(params for method, params, _ in gateway.calls if method == "session.regenerate")
-    assert params["message_origin"] == ("typed" if origin == "typed" else "model_option")
+    assert params["message_origin"] == (origin or "unknown")

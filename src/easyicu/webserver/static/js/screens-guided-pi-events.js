@@ -407,7 +407,7 @@
         }
         const starterAction = STARTERS && STARTERS.actionFromEvent(event, tr);
         if (starterAction && starterAction.kind === 'send') {
-          sendText(starterAction.text, [], starterAction.intent);
+          sendText(starterAction.text, [], starterAction.intent, true, 'host_prompt');
           return;
         }
         if (starterAction && starterAction.kind === 'compose') {
@@ -433,10 +433,10 @@
             return;
           }
           if (discoveryAction && discoveryAction.kind === 'send') {
-            sendText(discoveryAction.text, [], discoveryAction.intent);
+            sendText(discoveryAction.text, [], discoveryAction.intent, true, 'host_prompt');
             return;
           }
-          const messageOrigin = nextChoice.dataset.gpiNextOrigin === 'model' ? 'model_option' : '';
+          const messageOrigin = nextChoice.dataset.gpiNextOrigin === 'model' ? 'model_option' : 'host_prompt';
           sendText(message, governedNextChoiceGrants(nextChoice, message), undefined, true, messageOrigin);
           return;
         }
@@ -549,7 +549,7 @@
           event.preventDefault();
           const input = nextCustomForm.querySelector('[data-gpi-next-custom-input]');
           const message = String((input && input.value) || '').trim();
-          if (message) sendText(message, governedNextChoiceGrants(null, message));
+          if (message) sendText(message, governedNextChoiceGrants(null, message), undefined, true, 'typed');
           return;
         }
         const form = event.target.closest('[data-gpi-provider-form]');

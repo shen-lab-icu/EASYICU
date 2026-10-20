@@ -2184,7 +2184,7 @@ def update_study_context(
             **causal_receipt,
             **family_receipt,
             **variance_receipt,
-            **({"question_wording": wording_receipt} if wording_receipt else {}),
+            **({"question_wording": updated["question_wording"]} if updated.get("question_wording") else {}),
         },
     )
     context.invalidate_authority("study_context_updated")

@@ -248,12 +248,27 @@ _FAMILY_PATTERNS: Tuple[Tuple[str, str], ...] = (
 
 # "I am NOT studying death, my outcome is AKI" must not read `death`. Without
 # this, a user's correction becomes the very thing they corrected.
-_NEGATION = re.compile(
+_NEGATION_CUE = (
     r"(?:\bnot\b|\bno\b|\bnever\b|\bisn't\b|\baren't\b|\bdon't\b|\bdoesn't\b|\brather than\b|\binstead of\b|不是|不要|不想|不(?:研究|分析|考虑|比较)|并非|而非|非|无关|(?<![\u3400-\u9fff])(?:请)?别(?:研究|分析|考虑|比较|描述|把|将|选|用))"
-    r"[\s\S]{0,16}$",
+)
+_NEGATION = re.compile(
+    _NEGATION_CUE + r"[\s\S]{0,16}$",
     re.IGNORECASE,
 )
 _NEGATION_LOOKBACK = 26
+
+# Wording provenance conservatively checks *discarded* clause text, without
+# changing the scoped negation used by scientific slot reading above.
+_NEGATION_OR_EXCLUSION = re.compile(
+    _NEGATION_CUE
+    + r"|不|没有|无需|(?<![分性区类个特])别|除了|排除|\b(?:without|except|exclude)\b",
+    re.IGNORECASE,
+)
+
+
+def contains_negation_or_exclusion(text: str) -> bool:
+    """Whether dropping this text could drop a negation or exclusion cue."""
+    return bool(_NEGATION_OR_EXCLUSION.search(" ".join(text.split())))
 
 
 def _negated(text: str, start: int) -> bool:
