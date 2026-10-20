@@ -87,6 +87,7 @@ from .dependence_authority import (
 )
 from ..contracts.continuous_outcome_metadata import continuous_summary_columns
 from .exposure_group_reader_names import exposure_group_display_labels
+from .exposure_group_compile import ExposureGroupContrastError, validate_exposure_group_contrasts
 from .distribution_authority import distribution_policy_issues
 from .progressive_module_ids import descriptive_custom_module_allowed
 from .literature_contract import LiteratureDesignBinding
@@ -3313,6 +3314,17 @@ def compile_progressive_plan(
             "progressive_analysis_plan_invalid",
             str(exc),
             path="compiled_plan",
+        ) from exc
+    try:
+        validate_exposure_group_contrasts(plan, context)
+    except ExposureGroupContrastError as exc:
+        index = next(
+            (i for i, step in enumerate(skeleton.steps) if step.step_id == exc.step_id), None,
+        )
+        raise _fail(
+            exc.reason_code, str(exc),
+            step=skeleton.steps[index] if index is not None else None, step_index=index,
+            path="exposure_group_contrast",
         ) from exc
     skeleton_payload = skeleton.model_dump(mode="json")
     plan_payload = plan.model_dump(mode="json")

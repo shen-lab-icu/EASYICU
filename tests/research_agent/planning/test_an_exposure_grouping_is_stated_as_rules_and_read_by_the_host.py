@@ -400,9 +400,9 @@ def test_a_grouping_compares_two_of_its_groups_never_the_unmeasured_level() -> N
     (last_is_reference,) = _compiled(context, _glucose(reference="g3"))
 
     # Unstated: the first and the last group in code order, not gU (code 4).
-    assert glucose.record()["compared"] == {"reference": 1, "contrast": 3}
-    assert coarse.record()["compared"] == {"reference": 2, "contrast": 4}
-    assert last_is_reference.record()["compared"] == {"reference": 3, "contrast": 2}
+    assert glucose.record()["compared"] == {"reference": 1, "contrast": 3, "stated": []}
+    assert coarse.record()["compared"] == {"reference": 2, "contrast": 4, "stated": ["reference", "contrast"]}
+    assert last_is_reference.record()["compared"] == {"reference": 3, "contrast": 2, "stated": ["reference"]}
 
 
 def test_the_derivation_digest_follows_the_levels_not_the_wording() -> None:

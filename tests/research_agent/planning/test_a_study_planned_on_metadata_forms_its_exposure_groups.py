@@ -396,7 +396,7 @@ def test_a_grouping_planned_on_metadata_is_declared_on_the_empty_input(
     (declared,) = frame.attrs[_PLANNING_AUTHORITY]["exposure_groups"]
     assert declared["groupings_record_sha256"] == _sha256(phase.record_path)
     assert (declared["variable"], declared["levels"]) == ("lact_group_x1", 3)
-    assert declared["compared"] == {"reference": 1, "contrast": 2}
+    assert declared["compared"] == {"reference": 1, "contrast": 2, "stated": ["reference", "contrast"]}
     assert record["compiled"]["groupings"][0]["compared"] == declared["compared"]
     variable = phase.context.variable("lact_group_x1")
     assert declared_domain_for_variable(variable) == (
@@ -752,7 +752,7 @@ def test_a_planning_context_states_each_grouped_level_and_its_parameters(
     provenance = _context(cohort).cohort.provenance
 
     assert provenance[EXPOSURE_GROUP_CONTRASTS_KEY] == [
-        {"variable": "lact_group_x1", "reference": 1, "contrast": 2}
+        {"variable": "lact_group_x1", "reference": 1, "contrast": 2, "stated": ["reference", "contrast"]}
     ]
     assert provenance[EXPOSURE_GROUP_LABELS_KEY] == [
         {
@@ -788,7 +788,7 @@ def test_an_input_declared_before_columns_carried_their_levels_is_still_read(
     assert held is not None and held.variables == ("lact_group_x1",)
     provenance = _context(cohort).cohort.provenance
     assert provenance[EXPOSURE_GROUP_CONTRASTS_KEY] == [
-        {"variable": "lact_group_x1", "reference": 1, "contrast": 2}
+        {"variable": "lact_group_x1", "reference": 1, "contrast": 2, "stated": ["reference", "contrast"]}
     ]
     # It states no levels: no reader name or Methods rule is read from it.
     assert EXPOSURE_GROUP_LABELS_KEY not in provenance

@@ -37,13 +37,14 @@ import json
 import math
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Annotated, Any, Literal, Mapping, Optional
+from typing import Annotated, Any, Iterable, Literal, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..cohort.materializer import EVENT_SUMMARIES, summary_column_name
 from ..contracts.exposure_group_rules import (
     EXPOSURE_GROUP_CONTRASTS_KEY,
+    EXPOSURE_GROUP_LABELS_KEY,
     GroupContrast,
 )
 from ..research_context.materialization_window import (
@@ -51,7 +52,8 @@ from ..research_context.materialization_window import (
     window_anchor,
 )
 from ..research_context.stay_events import column_kind, stay_outcome_columns
-from ..schema import ResearchContext
+from ..contracts.model_terms import level_spelling
+from ..schema import AnalysisPlan, ResearchContext
 from .cohort_identity import cohort_identity_columns
 from .exposure_group_spec import (
     EXPOSURE_GROUP_SPEC_SCHEMA_VERSION,
@@ -428,8 +430,9 @@ class CandidateExposureGroupings(BaseModel):
 def group_contrast(item: CompiledGrouping) -> GroupContrast:
     """The applied grouping's reference and primary contrast, as its level codes.
 
-    Unstated, the reference is the first group in code order and the contrast
-    the last group other than the reference; the unmeasured level is neither.
+    Unstated, a template may propose the first group in code order and the last
+    other group. ``stated`` distinguishes those defaults from binding study
+    choices; the compiled plan owns the displayed pair. Never use unmeasured.
     """
 
     spec = item.grouping
@@ -444,15 +447,16 @@ def group_contrast(item: CompiledGrouping) -> GroupContrast:
         variable=str(item.variable),
         reference=codes[reference],
         contrast=codes[contrast],
+        stated=tuple(key for key in ("reference", "contrast") if getattr(spec, key) is not None),
     )
 
 
 def exposure_group_contrast(
     context: ResearchContext, variable: str
 ) -> Optional[GroupContrast]:
-    """The reference and contrast ``context`` states for ``variable``, if grouped.
+    """The grouping's template proposal and explicit choices, if grouped.
 
-    The context builder states them from the grouping's sealed declaration.
+    The context builder carries both from the grouping's sealed declaration.
     """
 
     records = context.cohort.provenance.get(EXPOSURE_GROUP_CONTRASTS_KEY) or ()
@@ -462,8 +466,87 @@ def exposure_group_contrast(
                 variable=variable,
                 reference=int(record["reference"]),
                 contrast=int(record["contrast"]),
+                stated=tuple(record["stated"]) if "stated" in record else None,
             )
     return None
+
+
+class ExposureGroupContrastError(ValueError):
+    """A plan disagrees with a stated choice or with another compiled step."""
+
+    def __init__(self, detail: str, *, step_id: str):
+        super().__init__(detail)
+        self.step_id = step_id
+        self.reason_code = "progressive_exposure_group_contrast_mismatch"
+
+
+def planned_exposure_contrasts(
+    plan: AnalysisPlan | Mapping[str, Any], *, variables: Iterable[str] | None = None,
+) -> dict[str, tuple[str, str]]:
+    """Read reference/comparison pairs from compiled executable specifications.
+
+    Restrict to ``variables`` when checking groupings; other categorical models
+    may legitimately report different contrasts in separate analyses.
+    """
+    payload = plan.model_dump(mode="json") if isinstance(plan, AnalysisPlan) else plan
+    selected = set(variables) if variables is not None else None
+    pairs: dict[str, tuple[str, str]] = {}
+    for step in payload.get("steps", []):
+        candidates = []
+        spec = step.get("exposure_outcome_distribution_spec") or {}
+        contrast = spec.get("risk_difference_contrast")
+        if contrast:
+            candidates.append((spec["exposure"], contrast["reference_exposure_level"],
+                               contrast["comparison_exposure_level"]))
+        for model in step.get("model_requirements") or []:
+            if model.get("exposure_reference_level") is not None and model.get("primary_contrast_level") is not None:
+                candidates.append((model["exposure_source"], model["exposure_reference_level"],
+                                   model["primary_contrast_level"]))
+        for variable, reference, comparison in candidates:
+            if selected is not None and variable not in selected:
+                continue
+            pair = (level_spelling(reference), level_spelling(comparison))
+            if variable in pairs and pairs[variable] != pair:
+                raise ExposureGroupContrastError(
+                    f"{variable!r} has conflicting compiled reference/comparison pairs.",
+                    step_id=step["step_id"],
+                )
+            pairs[variable] = pair
+    return pairs
+
+
+def validate_exposure_group_contrasts(plan: AnalysisPlan, context: ResearchContext) -> None:
+    """Reject a grouped contrast that changes a stated choice or uses missingness."""
+    records = context.cohort.provenance.get(EXPOSURE_GROUP_CONTRASTS_KEY) or []
+    declared = {item["variable"]: item for item in records}
+    pairs = planned_exposure_contrasts(plan, variables=declared)
+    labels = {
+        item["variable"]: item["levels"]
+        for item in context.cohort.provenance.get(EXPOSURE_GROUP_LABELS_KEY) or []
+    }
+    for variable, pair in pairs.items():
+        item = exposure_group_contrast(context, variable)
+        stated = item.stated if item.stated is not None else ("reference", "contrast")
+        mismatch = any(
+            key in stated and pair[index] != level_spelling(getattr(item, key))
+            for index, key in enumerate(("reference", "contrast"))
+        )
+        if variable in labels:
+            measured = {level_spelling(level["code"]) for level in labels[variable]
+                        if level["group"] != UNMEASURED_GROUP_ID}
+            mismatch = mismatch or not set(pair) <= measured
+        if mismatch:
+            step_id = next(
+                step.step_id for step in plan.steps
+                if variable in planned_exposure_contrasts(
+                    {"steps": [step.model_dump(mode="json")]}, variables=[variable],
+                )
+            )
+            raise ExposureGroupContrastError(
+                f"{variable!r} must keep its stated {', '.join(stated) or 'measured groups'}; "
+                f"compiled reference/comparison is {pair!r}.",
+                step_id=step_id,
+            )
 
 
 def compile_exposure_groupings(
@@ -598,6 +681,9 @@ __all__ = [
     "GroupingSource",
     "compile_exposure_groupings",
     "exposure_group_contrast",
+    "ExposureGroupContrastError",
+    "planned_exposure_contrasts",
+    "validate_exposure_group_contrasts",
     "group_contrast",
     "grouping_sources",
     "grouping_variable_name",

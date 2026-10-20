@@ -748,6 +748,11 @@ _PLANNING_STOP_SENTENCES = {
         "contrast in the question, or ask for an analysis that can compare "
         "these groups; then generate the plan again."
     ),
+    "progressive_exposure_group_contrast_mismatch": (
+        "The proposed plan changed the reference or comparison group the study stated, "
+        "or used conflicting contrasts across its steps. Planning stopped and no analysis "
+        "was run. Generate the plan again."
+    ),
 }
 
 
@@ -4137,15 +4142,6 @@ def _write_projection(
             plan_revision_source_run_id, 160
         ),
     }
-    # The run's exposure groupings, named in the study's words, for the readers
-    # that show its grouped values; a record that cannot be read says so.
-    exposure_groups = (
-        project_exposure_groups(recorded_exposure_group_labels(run_dir))
-        if run_dir is not None
-        else None
-    )
-    if exposure_groups is not None:
-        run_context["exposure_groups"] = exposure_groups
     cohort_summary = {
         "summary": run_context["summary"],
         "cohort": {
@@ -4163,6 +4159,12 @@ def _write_projection(
         if pending is not None
         else (load_current_plan_authority(run_dir) if run_dir else {})
     )
+    exposure_groups = (
+        project_exposure_groups(recorded_exposure_group_labels(run_dir, plan=plan))
+        if run_dir is not None else None
+    )
+    if exposure_groups is not None:
+        run_context["exposure_groups"] = exposure_groups
     plan_recommendation_complete = _plan_has_complete_reviewable_recommendation(plan)
     literature_evidence = (
         load_run_literature_projection(
@@ -4721,7 +4723,9 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
         **_pending_question_requirements(run_dir, pending),
         # What each level code of a grouped exposure names; ``None`` when the
         # run's grouping record cannot be read, which the card reports.
-        "exposure_group_labels": recorded_exposure_group_labels(run_dir),
+        "exposure_group_labels": recorded_exposure_group_labels(
+            run_dir, plan=_pending_plan_authority(pending),
+        ),
         "exposure_group_labels_recorded": (
             run_dir / EXPOSURE_GROUPINGS_FILENAME
         ).is_file(),

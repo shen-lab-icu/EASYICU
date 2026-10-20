@@ -128,9 +128,15 @@ class GroupContrast:
     variable: str
     reference: int
     contrast: int
+    #: Host provenance: absent on legacy declarations, otherwise the choices
+    #: actually stated by the study, rather than filled by the template default.
+    stated: Optional[tuple[str, ...]] = None
 
-    def compared(self) -> dict[str, int]:
-        return {"reference": self.reference, "contrast": self.contrast}
+    def compared(self) -> dict[str, Any]:
+        return {
+            "reference": self.reference, "contrast": self.contrast,
+            **({"stated": list(self.stated)} if self.stated is not None else {}),
+        }
 
     def record(self) -> dict[str, Any]:
         return {"variable": self.variable, **self.compared()}
@@ -143,7 +149,9 @@ def read_group_contrast(raw: Any, *, variable: str, groups: int) -> GroupContras
     unmeasured level, when it is one, after them.
     """
 
-    if not isinstance(raw, Mapping) or set(raw) != GROUP_COMPARISON_KEYS:
+    if not isinstance(raw, Mapping) or set(raw) not in (
+        GROUP_COMPARISON_KEYS, GROUP_COMPARISON_KEYS | {"stated"},
+    ):
         raise ExposureGroupRuleError(
             "a grouping's comparison holds its reference and its contrast"
         )
@@ -160,7 +168,16 @@ def read_group_contrast(raw: Any, *, variable: str, groups: int) -> GroupContras
         raise ExposureGroupRuleError(
             "a grouping compares two of its groups, never its unmeasured level"
         )
-    return GroupContrast(variable=variable, reference=reference, contrast=contrast)
+    stated = raw.get("stated")
+    if "stated" in raw and (
+        not isinstance(stated, list)
+        or stated not in ([], ["reference"], ["reference", "contrast"])
+    ):
+        raise ExposureGroupRuleError("a grouping states its reference before its contrast")
+    return GroupContrast(
+        variable=variable, reference=reference, contrast=contrast,
+        stated=tuple(stated) if stated is not None else None,
+    )
 
 
 @dataclass(frozen=True)

@@ -86,7 +86,7 @@ def test_the_review_names_the_levels_its_run_recorded(
     monkeypatch.setattr(
         agent_pipeline_runs,
         "recorded_exposure_group_labels",
-        lambda run_dir: rows if Path(run_dir) == tmp_path else None,
+        lambda run_dir, *, plan=None: rows if Path(run_dir) == tmp_path else None,
     )
     (tmp_path / EXPOSURE_GROUPINGS_FILENAME).write_text("{}", encoding="utf-8")
 

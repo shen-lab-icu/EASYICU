@@ -198,7 +198,7 @@ def _project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recorded: Any) -> 
     run_dir.mkdir(exist_ok=True)
     read: list[Path] = []
 
-    def recorded_labels(directory: Path) -> Any:
+    def recorded_labels(directory: Path, *, plan=None) -> Any:
         read.append(directory)
         return recorded
 
@@ -288,7 +288,7 @@ def test_a_grouped_value_is_named_by_its_records_label() -> None:
         "乳酸 ≥2.5", "乳酸 <2.5", "前 24 小时未测乳酸",
     ]
     assert _reader(CONTEXT, "[reader.variableName('lact_max_group'), reader.contrastName('lact_max_group', '2 vs 1')]") == [
-        "乳酸分组", "乳酸 ≥2.5 vs 乳酸 <2.5",
+        "乳酸分组", "乳酸 ≥2.5 vs 乳酸 <2.5（参照）",
     ]
     assert _reader(CONTEXT, "reader.variableName('lact_max_group')", "en") == "Lactate groups"
 
@@ -338,7 +338,7 @@ def test_a_result_table_names_its_grouped_cells() -> None:
 
     named, ungrouped_table = _reader(CONTEXT, call)
 
-    assert named[0] == ["乳酸分组", "乳酸 ≥2.5", "乳酸 <2.5", "乳酸 ≥2.5 vs 乳酸 <2.5", "前 24 小时未测乳酸", "乳酸 <2.5", "7"]
+    assert named[0] == ["乳酸分组", "乳酸 ≥2.5", "乳酸 <2.5", "乳酸 ≥2.5 vs 乳酸 <2.5（参照）", "前 24 小时未测乳酸", "乳酸 <2.5", "7"]
     # Another exposure's levels are not this grouping's codes; the grouped
     # column itself still is.
     assert named[1] == ["age", "2", "1", "2 vs 1", "9", "乳酸 <2.5", "7"]
@@ -638,7 +638,7 @@ process.stdout.write(JSON.stringify([summary.estimates[0].label, summary.groupsU
             args=(json.dumps(tables), json.dumps(context), str((JS / "screens-guided-pi-result-summary.js").resolve())),
         ))
 
-    assert summarize(CONTEXT) == ["乳酸 ≥2.5 vs 乳酸 <2.5", False]
+    assert summarize(CONTEXT) == ["乳酸 ≥2.5 vs 乳酸 <2.5（参照）", False]
     assert summarize({"exposure_groups": UNREADABLE}) == ["2 vs 1", True]
 
 

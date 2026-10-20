@@ -21,8 +21,9 @@ grouping's unmeasured stays leave it: its levels are its scale.
 
 Each group is a level the analysis models by name, so a reference is a group
 the study states, and so is the group the primary estimate compares with it
-(``contrast``); unstated, they are the first and the last group in code
-order, never the unmeasured level.  A nominal grouping has no order, so
+(``contrast``). Unstated, templates propose the first and last group in code
+order; the compiled plan supplies the displayed comparison. Neither side may
+be the unmeasured level. A nominal grouping has no order, so
 nothing may read it as a trend.
 
 A window is hours after ICU admission, ``[start_hours, end_hours)``.  A value

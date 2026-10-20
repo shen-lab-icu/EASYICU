@@ -549,4 +549,4 @@ def test_the_host_compile_states_parameters_the_kernel_reads(
         ).compared()
         == compared
     )
-    assert compared == expected
+    assert compared == {**expected, "stated": [key for key in ("reference", "contrast") if spec.get(key) is not None]}
