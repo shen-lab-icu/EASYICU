@@ -558,7 +558,8 @@ def submit_research_run(
     clock.mark("prepare_runner")
 
     start_gate = threading.Event()
-    start_abort: Dict[str, Any] = {}
+    # Non-Exception interruptions must leave the runner blocked as well.
+    start_abort: Dict[str, Any] = {"error": "agent_run_start_unconfirmed"}
 
     def runner(job: Any) -> dict:
         start_gate.wait()
@@ -594,11 +595,13 @@ def submit_research_run(
     job = _submit_job("agent-run", runner)
     synced_context = None
     authorization_error = None
+    start_error_code = "agent_run_authorization_failed"
     try:
         # Capacity has been reserved, while the runner is still behind its
         # start gate. A 429 cannot consume the turn's one-use authorization.
         if authorize is not None:
             authorize()
+        start_error_code = "study_context_active_job_sync_failed"
         clock.mark("authorize")
         synced_context = context_store.handoff_context(
             study_context_id,
@@ -607,6 +610,7 @@ def submit_research_run(
             active_job_id=job.id,
             expected_revision=int(study_context.get("revision") or 0),
         )
+        start_abort.clear()
     except ResearchRunSubmissionError as exc:
         authorization_error = exc
         start_abort.update(exc.detail)
@@ -615,7 +619,7 @@ def submit_research_run(
     except Exception as exc:
         start_abort.update(
             {
-                "error": "study_context_active_job_sync_failed",
+                "error": start_error_code,
                 "reason": type(exc).__name__,
             }
         )
