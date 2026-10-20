@@ -17,8 +17,8 @@ runs, whether the source has no grouping or this run did not bind it.
 A metadata-only planning context states what the source can provide
 (:func:`planning_patient_grouping_status`), decided by the same resolver and
 rule as the binding at execution, so planning and execution cannot disagree.
-The run states within-patient dependence only for a design whose inference
-reads the grouping (:func:`runtime_patient_dependence`).
+Descriptive stay intervals also read source grouping, without rewriting the
+study's declared variance (:func:`runtime_patient_dependence`).
 """
 
 from __future__ import annotations
@@ -84,51 +84,79 @@ def execution_patient_grouping(
     return grouping
 
 
+def _descriptive_patient_intervals(design: Mapping[str, Any]) -> bool:
+    return (
+        design.get("analysis_family") == "descriptive_epidemiology"
+        and design.get("analysis_unit") == "icu_stay"
+    )
+
+
+def planning_patient_grouping(
+    study: Mapping[str, Any],
+    *,
+    bound: Optional[PatientGroupingBinding],
+    first_icu_stay_restricted: bool = False,
+) -> tuple[Optional[PatientGroupingBinding], tuple[PatientGroupingStatus, Optional[str]]]:
+    """Bind descriptive stay intervals to the same source authority as execution.
+
+    A verified first-stay restriction needs no new binding. Long trajectories
+    still cannot carry it. Invalid authority remains a typed planning ceiling;
+    execution refuses with that same code if an accepted step needs groups.
+    """
+
+    if bound is not None:
+        return bound, ("bound", None)
+    try:
+        grouping = verified_patient_grouping(study)
+    except ResearchPipelineRunError as exc:
+        return None, ("authority_invalid", exc.code)
+    if grouping is None:
+        return None, ("source_has_none", None)
+    if declared_longitudinal_design(study) is not None:
+        return None, ("not_carried_by_trajectory", None)
+    design = study.get("analysis_design")
+    if (
+        isinstance(design, Mapping)
+        and _descriptive_patient_intervals(design)
+        and not first_icu_stay_restricted
+    ):
+        return grouping, ("bound", None)
+    return None, ("available_unbound", None)
+
+
 def planning_patient_grouping_status(
     study: Mapping[str, Any],
     *,
     bound: Optional[PatientGroupingBinding],
 ) -> tuple[PatientGroupingStatus, Optional[str]]:
-    """What a metadata-only planning context states of the source's grouping.
+    """The metadata-only planning binding's status and any typed authority error."""
 
-    ``bound`` is the grouping the planning context binds, if any.  Otherwise
-    the rule is :func:`execution_patient_grouping`'s: the source's verified
-    grouping, and whether a declared design reads the long trajectory a
-    grouped materialization does not emit.  A grouping authority that fails
-    its checks does not stop planning, which may need no groups: it is
-    ``authority_invalid``, with its typed code as the second value, and
-    execution refuses with that code if it binds.
-    """
-
-    if bound is not None:
-        return "bound", None
-    try:
-        grouping = verified_patient_grouping(study)
-    except ResearchPipelineRunError as exc:
-        return "authority_invalid", exc.code
-    if grouping is None:
-        return "source_has_none", None
-    if declared_longitudinal_design(study) is not None:
-        return "not_carried_by_trajectory", None
-    return "available_unbound", None
+    return planning_patient_grouping(study, bound=bound)[1]
 
 
 def runtime_patient_dependence(
     grouping: Optional[PatientGroupingBinding],
     validated_design: Mapping[str, Any],
+    *,
+    study: Mapping[str, Any] | None = None,
 ) -> Optional[PlannedDependenceRequirement]:
     """The within-patient dependence a run's runtime authority states, if any.
 
-    Only a design whose inference reads the grouping states it
+    A design whose inference reads the grouping states it
     (``study_contexts.analysis_design_reads_patient_grouping``: cluster-robust
-    variance, or a bootstrap that resamples patients).  A grouping bound only
-    for a step that splits by patient leaves the variance the study declares.
+    variance, or a bootstrap that resamples patients), as do descriptive stay
+    intervals. A grouping bound only for a prediction split states none.
+    Execution validation omits the family; read it from the same study as
+    planning, preserving validated coordinates and the saved design.
     """
 
+    declared = (study or {}).get("analysis_design")
+    design = {**declared, **validated_design} if isinstance(declared, Mapping) else validated_design
     if (
         grouping is None
-        or not study_context_owner.analysis_design_reads_patient_grouping(
-            validated_design
+        or not (
+            study_context_owner.analysis_design_reads_patient_grouping(design)
+            or _descriptive_patient_intervals(design)
         )
     ):
         return None
@@ -179,6 +207,7 @@ __all__ = [
     "PATIENT_GROUPING_REQUIRED",
     "PATIENT_GROUPING_TRAJECTORY_CONFLICT",
     "execution_patient_grouping",
+    "planning_patient_grouping",
     "planning_patient_grouping_status",
     "require_patient_groups_for_approval",
 ]

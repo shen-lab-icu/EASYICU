@@ -6267,15 +6267,14 @@ def make_research_pipeline_run_runner(
                     else "Selecting concepts and materializing a typed analysis universe"
                 ),
             )
-            # A metadata-only context binds no grouping unless its design reads
-            # one; it states what the source can provide, for the plan review.
-            planning_grouping_status = (
-                run_patient_grouping.planning_patient_grouping_status(
-                    study, bound=patient_grouping
+            # Descriptive intervals read source grouping even when the saved
+            # design's variance does not; planning and execution share its owner.
+            planning_grouping_status = None
+            if metadata_only_planning and execution_resume_inputs is None:
+                patient_grouping, planning_grouping_status = run_patient_grouping.planning_patient_grouping(
+                    candidate_planning_study, bound=patient_grouping,
+                    first_icu_stay_restricted=_verified_first_icu_stay_or_none(study) is not None,
                 )
-                if metadata_only_planning and execution_resume_inputs is None
-                else None
-            )
             if execution_resume_inputs is not None:
                 acquisition = _execution_resume_acquisition_projection(
                     execution_resume_inputs
@@ -6708,9 +6707,9 @@ def make_research_pipeline_run_runner(
                             == "binary"
                         )
                     ),
-                    # Only a design whose inference reads the grouping states it.
+                    # The owner states dependence for designs and descriptive intervals.
                     dependence=run_patient_grouping.runtime_patient_dependence(
-                        patient_grouping, validated_analysis_design
+                        patient_grouping, validated_analysis_design, study=candidate_planning_study
                     ),
                     universe_path=Path(acquisition.universe_path),
                     scientific_configuration_sha256=(
@@ -6984,7 +6983,7 @@ def make_research_pipeline_run_runner(
                 _register_recoverable_work_root(root)
                 put_recovery_seed(recovery_seed)
             declarations = research_context_declarations(
-                scientific, export_path=export_path
+                replace(scientific, patient_grouping=patient_grouping), export_path=export_path
             )
             _progress(
                 job,

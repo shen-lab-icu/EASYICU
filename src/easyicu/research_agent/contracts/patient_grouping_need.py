@@ -4,11 +4,12 @@ A step needs patient groups when it cannot run without them: the static
 prediction owner splits development and validation rows by patient
 (``contracts.prediction_execution``), and a model requirement that carries
 within-patient dependence fits patient clusters (``contracts.dependence``).
+A descriptive distribution with bound dependence computes patient intervals.
 The host's binding at execution, its approval check and the plan review read
 this one rule, so none of them decides it again.
 
-A metadata-only planning context binds no grouping unless its design reads
-one, so what the source can provide is stated beside it, as one of
+A metadata-only context binds grouping for designs that read it and for
+descriptive stay intervals; what the source can provide is stated as one of
 :data:`PATIENT_GROUPING_STATUSES` under :data:`PATIENT_GROUPING_STATUS_KEY`
 (the host decides it; the planning catalog carries it):
 
@@ -82,6 +83,10 @@ def steps_needing_patient_groups(plan: Any) -> tuple[str, ...]:
             step.step_id
             for step in _steps(plan)
             if static_prediction_execution_verdict(step).claimed
+            or (
+                step.exposure_outcome_distribution_spec is not None
+                and step.exposure_outcome_distribution_spec.dependence is not None
+            )
             or any(
                 getattr(requirement, "dependence", None) is not None
                 for requirement in step.model_requirements or ()

@@ -576,7 +576,7 @@ def test_the_launch_hands_its_runtime_projection_the_owners_dependence() -> None
     (dependence,) = [kw.value for kw in calls[0].keywords if kw.arg == "dependence"]
     assert ast.unparse(dependence) == (
         "run_patient_grouping.runtime_patient_dependence("
-        "patient_grouping, validated_analysis_design)"
+        "patient_grouping, validated_analysis_design, study=candidate_planning_study)"
     )
 
 
