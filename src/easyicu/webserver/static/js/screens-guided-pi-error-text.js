@@ -32,6 +32,30 @@
       if (error.code === 'pi_provider_connection_failed') {
         return tr('EasyICU could not reach the model service.', 'EasyICU 无法连接到模型服务，请检查地址和服务状态。');
       }
+      // The connect-then-choose form (pi_copilot/provider_config.py).
+      if (error.code === 'pi_provider_credential_required') {
+        return tr('Enter the API credential for this service. A saved credential is reused only for the same service and address.', '请输入这个服务的 API 凭据。已保存的凭据只用于同一服务和地址。');
+      }
+      if (error.code === 'pi_provider_request_invalid') {
+        return tr('Check the service, address and credential, then try again.', '请检查服务、地址和凭据后重试。');
+      }
+      if (error.code === 'pi_provider_verification_failed') {
+        const status = Number(error.details && error.details.status_code);
+        const suffix = Number.isFinite(status) && status > 0 ? tr(` (status ${status})`, `（状态码 ${status}）`) : '';
+        return tr('The model service did not accept the request. Check the address and protocol.', '模型服务没有接受这次请求，请检查地址和兼容协议。') + suffix;
+      }
+      if (error.code === 'pi_provider_models_response_invalid') {
+        return tr('This service did not return a model list EasyICU can read. Check the protocol under Advanced settings.', '该服务返回的模型列表无法读取，请在高级设置中检查兼容协议。');
+      }
+      if (error.code === 'pi_provider_base_url_rejected') {
+        return tr('This computer’s security policy does not allow this service address. Use another address.', '本机安全策略不允许使用这个服务地址，请换一个地址。');
+      }
+      if (error.code === 'pi_provider_api_transport_unsupported') {
+        return tr('Choose a supported protocol under Advanced settings.', '请在高级设置中选择一个支持的兼容协议。');
+      }
+      if (error.code === 'external_llm_opt_in_required') {
+        return tr('Confirm the use of an external model service before connecting.', '连接前需要你确认使用外部模型服务。');
+      }
       if (error.code === 'pi_session_project_mismatch') {
         return tr('That Copilot conversation belongs to another research project.', '该研究助手对话属于另一个研究项目，不能在当前项目中打开。');
       }

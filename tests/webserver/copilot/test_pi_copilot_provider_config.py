@@ -464,12 +464,13 @@ def test_example_placeholder_service_address_is_rejected_before_verify(
 def test_custom_openai_preset_ships_no_submittable_address() -> None:
     """D-P2-4: the preset value is empty; example.* lives in placeholder only."""
 
-    events = (
+    provider = (
         Path(__file__).resolve().parents[3]
-        / "src/easyicu/webserver/static/js/screens-guided-pi-events.js"
+        / "src/easyicu/webserver/static/js/screens-guided-pi-provider.js"
     ).read_text(encoding="utf-8")
-    assert "'custom-openai': { provider: 'custom-openai', base_url: '', " in events
-    assert "https://example.com/v1" not in events
+    presets = provider.split("const PRESETS = Object.freeze({", 1)[1].split("});", 1)[0]
+    assert "'custom-openai': { label: 'OpenAI-compatible gateway', provider: 'custom-openai', base_url: '', " in presets
+    assert "https://example.com/v1" not in provider
 
     control = (
         Path(__file__).resolve().parents[3]
@@ -477,10 +478,6 @@ def test_custom_openai_preset_ships_no_submittable_address() -> None:
     ).read_text(encoding="utf-8")
     assert "isExampleHostname(presetHostname(baseUrl))" in control
 
-    provider = (
-        Path(__file__).resolve().parents[3]
-        / "src/easyicu/webserver/static/js/screens-guided-pi-provider.js"
-    ).read_text(encoding="utf-8")
     assert 'placeholder="https://llm-gateway.example/v1"' in provider
 
 

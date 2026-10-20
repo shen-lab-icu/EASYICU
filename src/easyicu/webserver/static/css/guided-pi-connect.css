@@ -1,6 +1,7 @@
 /* Owner: screens-guided-pi-connect.js — the connection dialog a model step
-   opens, and the explore-first entry on the connection page. Tokens come
-   from the provider owner's rule in guided-pi.css. */
+   opens, and the explore-first entry on the connection page; plus the API
+   form's connect-then-choose pieces (field hints, the listed-model step).
+   Tokens come from the provider owner's rule in guided-pi.css. */
 .gpi-connect-backdrop{
   position:fixed;inset:0;z-index:400;display:grid;place-items:center;padding:24px 16px;
   background:color-mix(in srgb,var(--provider-ink) 34%,transparent);backdrop-filter:blur(2px);
@@ -23,6 +24,10 @@
 /* Same specificity as the page's primary action, above the workspace skin's .btn. */
 .gpi-provider-shell>.gpi-setup-actions .btn.gpi-connect-later{width:100%;min-height:44px;justify-content:center;border-color:var(--provider-line-strong);border-radius:7px;background:transparent;color:var(--provider-ink);font-size:14px;font-weight:620}
 .gpi-provider-shell>.gpi-setup-actions .btn.gpi-connect-later:hover,.gpi-provider-shell>.gpi-setup-actions .btn.gpi-connect-later:focus-visible{border-color:var(--provider-ink);background:var(--provider-accent-soft);outline:0}
+.gpi-provider-shell .gpi-setup-grid .gpi-field-hint{color:var(--ink-3);font-size:12.5px;line-height:1.45;overflow-wrap:anywhere}
+.gpi-api-model-step{margin-top:14px;padding-top:14px;border-top:1px solid var(--provider-line)}
+.gpi-provider-shell .gpi-link.gpi-provider-rediscover{display:block;margin:8px auto 0;padding:4px 8px;border-radius:6px;color:#55564f;font-size:13px;text-decoration:none}
+.gpi-provider-shell .gpi-link.gpi-provider-rediscover:hover,.gpi-provider-shell .gpi-link.gpi-provider-rediscover:focus-visible{background:var(--provider-accent-soft);color:var(--provider-ink);outline:0}
 @keyframes gpiConnectFade{from{opacity:0}to{opacity:1}}
 @media (prefers-reduced-motion:reduce){.gpi-connect-backdrop{animation:none}}
 @media (max-width:560px){

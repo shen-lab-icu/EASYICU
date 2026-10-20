@@ -20,7 +20,7 @@
       authorizeDataSource, sendText, continueAfterDataSourceConfirmation,
       governedNextChoiceGrants, sendMessage, stopMessage, stopChildJob, rebind,
       togglePresentationPin, configureProvider, rememberSession, recordHostAction,
-      HOST_JOBS, EFFORT_MENU, api, CONNECT,
+      HOST_JOBS, EFFORT_MENU, api, CONNECT, PROVIDER_CONTROL,
     } = options;
 
     // Outside presses, Escape, and opening another menu are handled for every
@@ -126,6 +126,7 @@
       if (!state.host) return;
       state.host.addEventListener('click', event => {
         if (CONNECT && CONNECT.handleClick(event)) return;
+        if (PROVIDER_CONTROL && PROVIDER_CONTROL.handleClick(event)) return;
         if (RUN_FILES && RUN_FILES.handleClick(event)) return;
         const filePill = event.target.closest('[data-gpi-file]');
         if (filePill) {
@@ -502,33 +503,7 @@
           state.researchModel = String(event.target.value || '');
           state.error = ''; render(); return;
         }
-        if (!event.target.matches('[data-gpi-provider-preset]')) return;
-        const form = event.target.closest('[data-gpi-provider-form]');
-        if (!form) return;
-        const presets = {
-          cliproxyapi: { provider: 'easyicu-local', base_url: 'http://127.0.0.1:8317/v1', api_transport: 'openai-completions', model: 'gpt-5.6-luna' },
-          // D-P2-4: the custom gateway ships an EMPTY address on purpose. The
-          // example domain is placeholder text only (see the input's
-          // placeholder) and must never be a submittable value: submitting it
-          // would carry the pasted API key to a stand-in host during
-          // verification. configureProvider additionally refuses empty and
-          // example.* addresses, and the backend rejects example.* outright.
-          'custom-openai': { provider: 'custom-openai', base_url: '', api_transport: 'openai-completions', model: '' },
-          openai: { provider: 'openai', base_url: 'https://api.openai.com/v1', api_transport: 'openai-responses', model: 'gpt-5.6-luna' },
-          openrouter: { provider: 'openrouter', base_url: 'https://openrouter.ai/api/v1', api_transport: 'openai-completions', model: '' },
-          deepseek: { provider: 'deepseek', base_url: 'https://api.deepseek.com/v1', api_transport: 'openai-completions', model: 'deepseek-chat' },
-          anthropic: { provider: 'anthropic', base_url: 'https://api.anthropic.com/v1', api_transport: 'anthropic-messages', model: 'claude-sonnet-4-6' },
-          google: { provider: 'google', base_url: 'https://generativelanguage.googleapis.com/v1beta', api_transport: 'google-generative-ai', model: 'gemini-3.5-flash' },
-        };
-        const selected = presets[event.target.value];
-        if (!selected) return;
-        Object.keys(selected).forEach(name => {
-          const field = form.elements.namedItem(name);
-          if (field) field.value = selected[name];
-        });
-        state.availableModels = [];
-        const modelList = form.querySelector('#gpi-model-options');
-        if (modelList) modelList.replaceChildren();
+        if (PROVIDER_CONTROL && PROVIDER_CONTROL.handleChange(event)) return;
       });
       state.host.addEventListener('keydown', event => {
         if (CONNECT && CONNECT.handleKeydown(event)) return;
