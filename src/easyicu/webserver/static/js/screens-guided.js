@@ -83,7 +83,7 @@
   });
   let guidedDraftRemoval = null;
   let guidedFolderDialogMode = null;
-  let guidedFolderSeedTitle = 'New local study';
+  let guidedFolderSeedTitle = '';
   let guidedDraftFolderSlug = '';
   let guidedDraftParentDir = '';
   let guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
@@ -231,7 +231,7 @@
       window.EU_GUIDED_PROJECTS.setProjectManagement(false);
     }
     guidedFolderDialogMode = null;
-    guidedFolderSeedTitle = 'New local study';
+    guidedFolderSeedTitle = '';
     guidedDraftFolderSlug = '';
     guidedDraftParentDir = '';
     guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
@@ -2663,7 +2663,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     });
   }
   function blankGuidedDraftPayload(label) {
-    const title = label || 'New local study';
+    const title = label || defaultStudyTitle();
     return {
       title,
       folder_slug: slugifyDraftFolder(title),
@@ -2719,6 +2719,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       openFolderDialog: openGuidedFolderDialog,
     };
   }
+  function defaultStudyTitle() { return guidedProjectRenderer('defaultStudyTitle', 'New local study'); }
   function guidedProjectRenderer(name, fallback) {
     const mod = window.EU_GUIDED_PROJECTS;
     if (!mod || typeof mod[name] !== 'function') return fallback || '';
@@ -2811,7 +2812,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function openGuidedFolderDialog(mode, seedTitle) {
     guidedFolderMenuOpen = false;
     guidedFolderDialogMode = mode === 'open' ? 'open' : 'new';
-    guidedFolderSeedTitle = seedTitle || guidedFolderSeedTitle || 'New local study';
+    guidedFolderSeedTitle = seedTitle || guidedFolderSeedTitle || defaultStudyTitle();
     if (guidedFolderDialogMode === 'new') {
       guidedDraftFolderSlug = slugifyDraftFolder(guidedFolderSeedTitle);
       guidedDraftParentDir = guidedDraftParentDir || guidedProjectRenderer('defaultParentDir');
@@ -2835,7 +2836,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     renderGuidedFolderDialog();
   }
   function showGuidedDraftSetup(seedTitle, mode) {
-    openGuidedFolderDialog(mode || 'new', seedTitle || (BRANCH[branch] && BRANCH[branch].chip) || 'New local study');
+    openGuidedFolderDialog(mode || 'new', seedTitle || (BRANCH[branch] && BRANCH[branch].chip) || defaultStudyTitle());
   }
   function latestGuidedDraftSetupBox(fallback) {
     if (fallback && fallback.matches && fallback.matches('[data-draft-setup]') && fallback.isConnected) return fallback;
@@ -2998,7 +2999,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   }
   function createLocalGuidedDraft(label, folderSlug, parentDir, opts) {
     const options = opts || {};
-    const text = label || 'New local study';
+    const text = label || defaultStudyTitle();
     const parent = String(parentDir || '').trim();
     const payload = blankGuidedDraftPayload(text);
     payload.folder_slug = folderSlug || payload.folder_slug;
@@ -3452,7 +3453,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         }
         const folderChoice = e.target.closest('[data-folder-choice]');
         if (folderChoice) {
-          openGuidedFolderDialog(folderChoice.dataset.folderChoice, guidedFolderSeedTitle || 'New local study');
+          openGuidedFolderDialog(folderChoice.dataset.folderChoice, guidedFolderSeedTitle || defaultStudyTitle());
           return;
         }
         if (e.target.closest('[data-folder-dialog-close]')) {
@@ -3956,7 +3957,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           const titleEl = box ? box.querySelector('[data-draft-title]') : null;
           const slugEl = box ? box.querySelector('[data-draft-slug]') : null;
           const parentEl = box ? box.querySelector('[data-draft-parent-dir]') : null;
-          const title = (titleEl && titleEl.value || '').trim() || 'New local study';
+          const title = (titleEl && titleEl.value || '').trim() || defaultStudyTitle();
           const slug = slugifyDraftFolder((slugEl && slugEl.value) || title);
           const parent = (parentEl && parentEl.value || '').trim();
           guidedFolderSeedTitle = title;
@@ -4024,7 +4025,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         }
         const title = e.target.closest('[data-draft-title]');
         if (!title) return;
-        guidedFolderSeedTitle = title.value.trim() || guidedFolderSeedTitle || 'New local study';
+        guidedFolderSeedTitle = title.value.trim() || guidedFolderSeedTitle || defaultStudyTitle();
         const box = title.closest('[data-draft-setup]');
         const slug = box ? box.querySelector('[data-draft-slug]') : null;
         if (slug && !slug.dataset.edited) slug.value = slugifyDraftFolder(title.value);

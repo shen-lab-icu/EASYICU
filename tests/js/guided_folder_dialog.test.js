@@ -11,7 +11,7 @@ const owner = fs.readFileSync(path.join(js, 'screens-guided-projects.js'), 'utf8
 const serverRoot = '/synthetic/isolated-home/easyicu/projects';
 const escape = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
 
-function harness({ root = serverRoot, language = 'en', create } = {}) {
+function harness({ root = serverRoot, language = 'en', create, seed = 'Synthetic study' } = {}) {
   const host = { innerHTML: '' };
   const attempts = [];
   const bots = [];
@@ -20,7 +20,7 @@ function harness({ root = serverRoot, language = 'en', create } = {}) {
     t: (en, zh) => language === 'zh' ? zh : en,
     icon: () => '', esc: escape, attr: escape, compactPath: value => value || '',
     slugifyDraftFolder: () => 'synthetic-study',
-    guidedFolderDialogMode: 'new', guidedFolderSeedTitle: 'Synthetic study',
+    guidedFolderDialogMode: 'new', guidedFolderSeedTitle: seed,
     guidedDraftParentDir: '', guidedDrafts: { data: { default_parent_dir: root } },
     guidedFolderBrowser: {},
   };
@@ -54,6 +54,7 @@ function harness({ root = serverRoot, language = 'en', create } = {}) {
   vm.createContext(sandbox);
   vm.runInContext(owner, sandbox);
   sandbox.guidedProjectRenderer = name => sandbox.EU_GUIDED_PROJECTS[name](ctx);
+  sandbox.defaultStudyTitle = () => sandbox.EU_GUIDED_PROJECTS.defaultStudyTitle(ctx);
   const start = shell.indexOf('  function createLocalGuidedDraft(');
   const end = shell.indexOf('  /* ============== conversation script', start);
   assert.ok(start >= 0 && end > start);
@@ -192,4 +193,17 @@ test('one-click starter also opens creation feedback on failure', async () => {
 test('long server reasons wrap within the folder dialog', () => {
   const css = fs.readFileSync(path.join(js, '../css/guided-projects.css'), 'utf8');
   assert.match(css, /\[data-folder-create-error\]\{[^}]*min-width:0;[^}]*overflow-wrap:anywhere/);
+});
+
+test('a study with no title starts with one in the interface language', async () => {
+  for (const [language, title] of [['zh', '新研究'], ['en', 'New local study']]) {
+    const h = harness({ language, seed: '' });
+    h.render();
+    assert.ok(h.host.innerHTML.includes(`value="${title}"`), language);
+    await h.sandbox.createLocalGuidedDraft('', 'study', serverRoot);
+    assert.equal(h.payloads[0].title, title);
+  }
+  // The shell keeps no English seed of its own.
+  assert.doesNotMatch(shell, /guidedFolderSeedTitle = 'New local study'/);
+  assert.equal((shell.match(/'New local study'/g) || []).length, 1);
 });
