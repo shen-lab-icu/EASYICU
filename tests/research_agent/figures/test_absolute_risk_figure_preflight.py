@@ -345,6 +345,7 @@ def _apply_schema_mutation(
 def _write_parent(
     run_dir: Path,
     *,
+    primary_exposure: str = "marker_value",
     planner_method: str = CONTROLLED_METHOD,
     planner_outputs: list[str] | None = None,
     schema_mutation: str | None = None,
@@ -357,6 +358,10 @@ def _write_parent(
     prevalence, incidence = _apply_schema_mutation(
         *_base_tables(), schema_mutation
     )
+    for frame in (prevalence, incidence):
+        frame["group_definition"] = frame["group_definition"].str.replace(
+            "marker_value", primary_exposure, regex=False
+        )
     prevalence_path = parent / "exposure_prevalence.csv"
     incidence_path = parent / "outcome_incidence.csv"
     prevalence.to_csv(prevalence_path, index=False)
@@ -366,7 +371,7 @@ def _write_parent(
         "method": CONTROLLED_METHOD,
         "analysis_family": "association_study",
         "analysis_status": "ok",
-        "primary_exposure": "marker_value",
+        "primary_exposure": primary_exposure,
         "target_outcome": "response_flag",
         "locked_cohort_n": 100,
         "source_status_schema": list(SOURCE_STATUSES),
@@ -460,7 +465,7 @@ def _write_parent(
                         "inputs": [
                             "artifact:locked_cohort",
                             "artifact:adult_marker_value_complete_case",
-                            "marker_value",
+                            primary_exposure,
                             "response_flag",
                         ],
                         "expected_outputs": planner_outputs
@@ -482,7 +487,7 @@ def _write_parent(
     (run_dir / "research_context.json").write_text(
         json.dumps(
             {
-                "primary_exposure": "marker_value",
+                "primary_exposure": primary_exposure,
                 "target_outcome": "response_flag",
             }
         ),
@@ -617,6 +622,17 @@ def test_host_owned_subject_identity_must_match_summary_and_tables(
         expected_primary_exposure="marker_value",
         expected_target_outcome="different_response",
     ) is None
+
+
+def test_the_execution_seal_accepts_a_context_bound_grouped_exposure(tmp_path):
+    _write_parent(tmp_path, primary_exposure="lact_group_x1")
+
+    assert _absolute_risk_parent_digest_seal(tmp_path, FIGURE_STEP) is not None
+    context_path = tmp_path / "research_context.json"
+    context = json.loads(context_path.read_text())
+    context["primary_exposure"] = "lact"
+    context_path.write_text(json.dumps(context))
+    assert _absolute_risk_parent_digest_seal(tmp_path, FIGURE_STEP) is None
 
 
 @pytest.mark.parametrize(

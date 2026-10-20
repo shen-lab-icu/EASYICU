@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -41,6 +42,8 @@ from easyicu.research_agent.intake.materialized_metadata import (
 from easyicu.research_agent.orchestration.config import PipelineConfig
 from easyicu.research_agent.orchestration.exposure_grouping_phase import (
     EXPOSURE_GROUPINGS_FILENAME,
+    bound_context_on,
+    candidate_exposure_groupings,
     planning_run_groupings,
     run_exposure_grouping_phase,
 )
@@ -49,6 +52,9 @@ from easyicu.research_agent.planning.exposure_group_compile import (
     exposure_group_contrast,
     grouping_sources,
 )
+from easyicu.research_agent.planning.capability_registry import assess_scientific_capability
+from easyicu.research_agent.planning.progressive_compiler import compile_progressive_plan
+from easyicu.research_agent.planning.scientific_review import build_plan_scientific_review
 from easyicu.research_agent.planning.family_spec.contract import FamilySpecError
 from easyicu.research_agent.planning.family_spec.request import (
     _stated_contrast,
@@ -56,6 +62,7 @@ from easyicu.research_agent.planning.family_spec.request import (
 )
 from easyicu.research_agent.planning.progressive_contract import (
     ProgressivePlanCompileError,
+    ProgressivePlanSkeleton,
 )
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.research_context.builder import (
@@ -64,6 +71,9 @@ from easyicu.research_agent.research_context.builder import (
 )
 from easyicu.research_agent.research_context.typed import declared_domain_for_variable
 from tests.support.typed_export import typed_export
+
+from .descriptive_interval_fixtures import descriptive_context
+from .progressive_planner_fixtures import _payload
 
 _QUESTION = "Compare hospital death across lactate groups in the first day."
 _ANSWER = json.dumps(
@@ -112,13 +122,16 @@ _TYPED_FACTS = (
 )
 
 
-def _context(cohort: Path, *, hours: float | None = 24):
+def _context(
+    cohort: Path, *, hours: float | None = 24, primary_exposure: str | None = None
+):
     window = {"role": "outer_observation_window", "anchor": "icu_admission"}
     return build_research_context(
         research_question=_QUESTION,
         cohort=cohort,
         cohort_name="synthetic",
         database="miiv",
+        primary_exposure=primary_exposure,
         target_outcome="death",
         id_columns=("stay_id",),
         outcome_columns=("death",),
@@ -191,6 +204,130 @@ def _phase(cohort: Path, client: Any, **changes: Any):
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _binding_phase(root: Path, *, declared=None, count=1, candidate=None):
+    cohort = _catalog(root, "lact", "age")
+    answer = json.loads(_ANSWER)
+    if count == 0:
+        answer["groupings"] = []
+    elif count == 2:
+        second = json.loads(_ANSWER)["groupings"][0]
+        second["id"] = "x2"
+        second["groups"][0]["rule"]["value"] = 4.5
+        answer["groupings"].append(second)
+    kwargs = {"primary_exposure": declared}
+    built = []
+
+    def builder(**options):
+        built.append(options)
+        return _context(**options)
+
+    original = _context(cohort, primary_exposure=declared)
+    client = ScriptedMockLLMClient([] if candidate else [json.dumps(answer)])
+    phase = _phase(
+        cohort,
+        client,
+        context=original,
+        rebuild_context=partial(
+            bound_context_on, builder, kwargs, PipelineConfig(workdir=root)
+        ),
+        candidate=candidate,
+    )
+    assert original.primary_exposure == declared
+    assert kwargs == {"primary_exposure": declared}
+    if candidate:
+        assert client.calls == []
+    return phase, built
+
+
+def test_a_sole_grouping_binds_the_primary_exposure_through_the_builder(tmp_path):
+    phase, built = _binding_phase(tmp_path)
+
+    assert phase.context.primary_exposure == "lact_group_x1"
+    assert built[-1]["primary_exposure"] == "lact_group_x1"
+    record = json.loads(phase.record_path.read_text())
+    assert record["primary_exposure_binding"] == {
+        "variable": "lact_group_x1", "basis": "sole_applied_grouping",
+    }
+    # Give the zero-row grouping a synthetic endpoint and patient-dependence
+    # contract, keeping the exposure the phase actually bound.
+    base = descriptive_context(grouped=True)
+    context = phase.context.model_copy(update={
+        "research_question": base.research_question,
+        "variables": [phase.context.variable("lact_group_x1"), *base.variables],
+        "cohort": base.cohort, "endpoint": base.endpoint,
+        "target_outcome": base.target_outcome, "user_preferences": base.user_preferences,
+    })
+    payload = json.loads(json.dumps(_payload()).replace("exposure_flag", "lact_group_x1"))
+    payload.update(analysis_type="descriptive_epidemiology", robustness_intents=[])
+    payload["steps"] = [payload["steps"][0], payload["steps"][2]]
+    payload["steps"][0]["raw_inputs"] = ["stay_id"]
+    payload["steps"][1]["planned_analysis_role"] = "primary"
+    plan, _ = compile_progressive_plan(
+        skeleton=ProgressivePlanSkeleton.model_validate(payload), context=context,
+    )
+    distribution = plan.steps[-1]
+    assert distribution.descriptive_claim.unresolved_limitations == (
+        "post_baseline_exposure_opportunity_unresolved",
+    )
+    assert distribution.descriptive_claim.claim_ceiling == "descriptive_only"
+    assert distribution.exposure_outcome_distribution_spec.interval_method == "wilson"
+    assessment = assess_scientific_capability(
+        analysis_type=plan.analysis_type, context=context, plan=plan,
+    )
+    assert assessment.capability_id == "descriptive_exposure_outcome_distribution_v1"
+    assert assessment.claim_ceiling == "reportable"
+    review = build_plan_scientific_review(
+        context=context, plan=plan, require_reportable_capability=True,
+    )
+    assert not {
+        "SCIENTIFIC_CAPABILITY_NOT_REPORTABLE", "REQUESTED_OUTCOME_COVERAGE_INCOMPLETE",
+    } & {finding.code for finding in review.findings}
+
+
+@pytest.mark.parametrize("declared", ["age", "lact"])
+@pytest.mark.parametrize("count", [1, 2])
+def test_grouping_never_replaces_a_callers_exposure(tmp_path, declared, count):
+    phase, built = _binding_phase(tmp_path, declared=declared, count=count)
+
+    assert phase.context.primary_exposure == declared
+    assert built[-1]["primary_exposure"] == declared
+
+
+def test_multiple_groupings_record_ambiguity_without_binding_an_exposure(tmp_path):
+    phase, built = _binding_phase(tmp_path, count=2)
+
+    assert phase.context.primary_exposure is None
+    assert built[-1]["primary_exposure"] is None
+    assert json.loads(phase.record_path.read_text())["primary_exposure_binding"] == {
+        "variable": None, "basis": "ambiguous_multiple_groupings",
+    }
+
+
+def test_no_grouping_does_not_bind_an_exposure(tmp_path):
+    phase, built = _binding_phase(tmp_path, count=0)
+
+    assert phase.context.primary_exposure is None
+    assert built == []
+
+
+def test_an_accepted_grouping_rebuilds_the_same_primary_exposure(tmp_path):
+    planned, _ = _binding_phase(tmp_path / "candidate")
+    record = json.loads(planned.record_path.read_text())
+    candidate = candidate_exposure_groupings(
+        record, record_sha256=_sha256(planned.record_path)
+    )
+
+    accepted, built = _binding_phase(
+        tmp_path / "accepted", candidate=candidate.model_dump(mode="json")
+    )
+
+    assert accepted.context.primary_exposure == planned.context.primary_exposure
+    assert built[-1]["primary_exposure"] == "lact_group_x1"
+    assert json.loads(accepted.record_path.read_text())["primary_exposure_binding"] == (
+        record["primary_exposure_binding"]
+    )
 
 
 def _planned(tmp_path: Path):
@@ -288,6 +425,7 @@ def test_the_prepared_data_form_the_candidates_groups_without_asking(
     phase = _phase(copy, client, candidate=accepted.candidate.model_dump(mode="json"))
 
     assert client.calls == []
+    assert phase.context.primary_exposure == planned.context.primary_exposure == "lact_group_x1"
     staged = load_verified_materialized_cohort_authority(copy)
     assert staged is not None
     assert staged.authority.producer == EXPOSURE_GROUP_STAGE_PRODUCER

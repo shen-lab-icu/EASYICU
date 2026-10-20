@@ -477,9 +477,12 @@ def model_covariate_plan_authority(
     return rationales, temporal_roles
 
 
-def post_baseline_exposure(context: ResearchContext) -> tuple[bool, Optional[str]]:
+def post_baseline_exposure(
+    context: ResearchContext, exposure: Optional[str] = None,
+) -> tuple[bool, Optional[str]]:
     """Classify post-zero exposure opportunity from owner-issued coordinates.
 
+    When no exposure is supplied, classify the context's primary exposure.
     A concept's clinical definition window remains the first authority.  The
     Web host may also bind an exact physical feature-materialization window in
     ``data_constraints`` before a concrete wide-column descriptor exists (for
@@ -491,7 +494,9 @@ def post_baseline_exposure(context: ResearchContext) -> tuple[bool, Optional[str
     it.
     """
 
-    exposure = str(context.primary_exposure or "").strip()
+    exposure = str(
+        (context.primary_exposure if exposure is None else exposure) or ""
+    ).strip()
     if not exposure:
         return False, None
     descriptor = context.variable(exposure)

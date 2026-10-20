@@ -2761,7 +2761,7 @@ def _compile_one_step(
         if (
             step.planned_analysis_role == "primary"
             or step.population_scope == STUDY_COHORT_SCOPE
-        ) and post_baseline_exposure(context)[0]:
+        ) and post_baseline_exposure(context, spec.exposure)[0]:
             kwargs["descriptive_claim"] = DescriptiveClaimContract(
                 unresolved_limitations=(
                     "post_baseline_exposure_opportunity_unresolved",
@@ -2784,7 +2784,7 @@ def _compile_one_step(
             raise _fail("progressive_continuous_outcome_invalid", str(exc),
                         step=step, step_index=step_index, path="raw_inputs") from exc
         kwargs["inputs"] = [value for value in inputs if ":" in value] + list(columns)
-        if post_baseline_exposure(context)[0]:
+        if post_baseline_exposure(context, columns[0])[0]:
             kwargs["descriptive_claim"] = DescriptiveClaimContract(
                 unresolved_limitations=("post_baseline_exposure_opportunity_unresolved",),
             )

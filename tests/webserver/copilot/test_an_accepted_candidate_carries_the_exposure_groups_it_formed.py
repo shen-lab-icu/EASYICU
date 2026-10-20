@@ -165,12 +165,13 @@ def _study(workflow_complete_study: dict) -> dict:
     return study
 
 
-def _context(cohort: Path):
+def _context(cohort: Path, *, primary_exposure: str | None = None):
     return build_research_context(
         research_question=QUESTION,
         cohort=cohort,
         cohort_name="candidate",
         database="miiv",
+        primary_exposure=primary_exposure,
         target_outcome=OUTCOME,
         id_columns=("stay_id",),
         outcome_columns=(OUTCOME,),
@@ -203,7 +204,7 @@ def _planning_run(inner_run: Path, catalog: list[str]) -> str:
     }
     cohort = inner_run / "cohort.parquet"
     frame.to_parquet(cohort, index=False)
-    run_exposure_grouping_phase(
+    phase = run_exposure_grouping_phase(
         context=_context(cohort),
         cohort_path=cohort,
         run_dir=inner_run,
@@ -213,6 +214,8 @@ def _planning_run(inner_run: Path, catalog: list[str]) -> str:
         trajectory_staged=False,
         emit_progress=lambda *_args, **_kwargs: None,
     )
+    assert phase.context.primary_exposure == _GROUPED
+    (inner_run / "research_context.json").write_text(phase.context.model_dump_json())
     return hashlib.sha256(cohort.read_bytes()).hexdigest()
 
 
@@ -325,6 +328,9 @@ def test_the_grant_carries_the_groups_the_candidate_formed(
     authority = _load(tmp_path, monkeypatch, study=_study(workflow_complete_study))
 
     assert authority is not None
+    # The caller's capsule identity stays empty; the execution phase binds
+    # the accepted grouping again after staging it.
+    assert authority.primary_exposure is None
     groupings = authority.exposure_groupings
     assert groupings is not None
     assert (groupings.variables, groupings.concepts) == ((_GROUPED,), ("lact",))
@@ -437,14 +443,24 @@ def _grouped_candidate() -> PlanningRunGroupings:
     )
 
 
+@pytest.mark.parametrize("primary_exposure", [None, "heart_rate"])
 def test_the_run_that_follows_the_candidate_forms_its_groups(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     workflow_complete_study: dict,
+    primary_exposure: str | None,
 ) -> None:
     groupings = _grouped_candidate()
+    study = {
+        **workflow_complete_study,
+        "primary_exposure": primary_exposure or "",
+        "execution_concepts": {"outcome": "death"},
+    }
+    foundation_profile = {
+        **_foundation_profile(), "primary_exposure_source_concept": primary_exposure,
+    }
     authority = agent_pipeline_runs._CandidatePlanMaterializationAuthority(
-        primary_exposure="heart_rate",
+        primary_exposure=primary_exposure,
         target_outcome="death",
         outcome_concepts=("death",),
         contract="Compare death across the candidate's lactate groups.",
@@ -460,13 +476,13 @@ def test_the_run_that_follows_the_candidate_forms_its_groups(
 
     def profile(**kwargs: Any) -> dict[str, Any]:
         profiles.append(kwargs)
-        return _foundation_profile()
+        return foundation_profile
 
     monkeypatch.setattr(agent_pipeline_runs, "_data_foundation_profile", profile)
     monkeypatch.setattr(
         research_pipeline_run_preparation,
         "_data_foundation_profile",
-        lambda **_kwargs: _foundation_profile(),
+        lambda **_kwargs: foundation_profile,
     )
     universe = tmp_path / "universe.parquet"
     universe.write_bytes(b"typed-universe-placeholder")
@@ -496,7 +512,8 @@ def test_the_run_that_follows_the_candidate_forms_its_groups(
     captured: dict[str, Any] = {}
 
     class FakePipeline:
-        def run(self, **_kwargs: Any) -> Any:
+        def run(self, **kwargs: Any) -> Any:
+            captured["run_arguments"] = kwargs
             raise _Captured()
 
     def from_config(config: Any, *, services: Any) -> FakePipeline:
@@ -508,7 +525,7 @@ def test_the_run_that_follows_the_candidate_forms_its_groups(
     )
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
         export_path=str(_export(tmp_path / "export")),
-        study_context=workflow_complete_study,
+        study_context=study,
         project_root=str(tmp_path / "projects"),
         provider={"provider": "openai", "external": True},
         provider_environment=_PROVIDER_ENVIRONMENT,
@@ -528,6 +545,7 @@ def test_the_run_that_follows_the_candidate_forms_its_groups(
     assert "lact" in prepared["analysis_inputs"]
     # ... and the run forms the candidate's groups without asking.
     config = captured["config"]
+    assert captured["run_arguments"]["primary_exposure"] == primary_exposure
     assert config.enable_exposure_grouping is True
     assert (
         CandidateExposureGroupings.model_validate(config.bound_exposure_groupings)
