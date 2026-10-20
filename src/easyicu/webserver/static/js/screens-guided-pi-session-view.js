@@ -88,6 +88,7 @@
           language: window.EU_LANG,
           disabled: state.busy || sessionIsStale(),
           dataSourceAuthorization: DATA_CONSENT && DATA_CONSENT.authorization(state.session),
+          namedDatabase: HOST_JOBS && typeof HOST_JOBS.namedDatabase === 'function' ? HOST_JOBS.namedDatabase() : null,
           workflowActionCode: String((state.workflow && state.workflow.next_action_code) || ''),
           suppressFallback: String((state.workflow && state.workflow.next_action_code) || '') === 'provider_ready_to_generate_plan',
         }) : '';

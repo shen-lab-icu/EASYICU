@@ -337,6 +337,14 @@
         : (language === 'zh' ? '查看数据准备确认' : 'Review data-preparation confirmation');
       return `<section class="gpi-next-step is-resolved" data-gpi-premature-plan-guard aria-label="${heading}"><strong>${heading}</strong><p>${esc(detail)}</p><div class="gpi-next-actions"><button type="button" data-gpi-data-source-continue ${disabled ? 'disabled' : ''}><span>${action}</span><b aria-hidden="true">→</b></button></div></section>`;
     }
+    const named = options && options.namedDatabase && options.namedDatabase.key ? options.namedDatabase : null;
+    if (named && authorization && authorization.status === 'pending' && isDataSourceStep(step)) {
+      const heading = language === 'zh' ? '在下方卡片中选择数据' : 'Choose the data in the card below';
+      const detail = language === 'zh'
+        ? `你的问题已指定 ${named.label}，请在下方卡片中选择这项研究使用的数据。`
+        : `Your question names ${named.label}; choose this study's data in the card below.`;
+      return `<section class="gpi-next-step is-resolved" data-gpi-next-named-source aria-label="${esc(heading)}"><strong>${esc(heading)}</strong><p>${esc(detail)}</p></section>`;
+    }
     if (authorization && authorization.status === 'confirmed' && isDataSourceStep(step)) {
       const source = confirmedSourceLabel(authorization);
       const heading = language === 'zh' ? '数据来源已确认' : 'Data source confirmed';
