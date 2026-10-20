@@ -80,7 +80,11 @@ from .cohort_contract import (
     validate_cohort_definition,
 )
 from .cohort_identity import cohort_identity_columns
-from .dependence_authority import descriptive_counts_only_required
+from .dependence_authority import (
+    DescriptiveIntervalDecision,
+    descriptive_counts_only_required,
+    descriptive_interval_decision,
+)
 from ..contracts.continuous_outcome_metadata import continuous_summary_columns
 from .exposure_group_reader_names import exposure_group_display_labels
 from .distribution_authority import distribution_policy_issues
@@ -1459,6 +1463,7 @@ def _compile_distribution(
     step_index: int,
     counts_only: bool = False,
     study_population: bool = False,
+    interval_decision: DescriptiveIntervalDecision | None = None,
 ) -> ExposureOutcomeDistributionSpec:
     exposure = str(step.primary_exposure or "")
     outcome = str(step.outcome or "")
@@ -1487,7 +1492,10 @@ def _compile_distribution(
         step_index=step_index,
     )
     if counts_only:
-        if step.repeated_unit_interval_method is not None or step.patient_weighted_interval_assumptions is not None:
+        if interval_decision is None and (
+            step.repeated_unit_interval_method is not None
+            or step.patient_weighted_interval_assumptions is not None
+        ):
             raise _fail(
                 "progressive_distribution_counts_only_interval_conflict",
                 "counts-only authority cannot accept a patient interval method",
@@ -1573,6 +1581,8 @@ def _compile_distribution(
             step_index=step_index,
             path=field or "exposure_outcome_distribution",
         ) from exc
+    if interval_decision is not None:
+        spec = interval_decision.compile(spec)
     issues = distribution_policy_issues(spec, variables=variables)
     if issues:
         raise _fail(
@@ -2731,6 +2741,11 @@ def _compile_one_step(
             )
         )
     elif step.module_id == "exposure_outcome_distribution":
+        interval_decision = (
+            descriptive_interval_decision(context, analysis_type=skeleton.analysis_type)
+            if canonical_analysis_family(skeleton.analysis_type) == "descriptive_epidemiology"
+            else None
+        )
         spec = _compile_distribution(
             variables=variables,
             step=step,
@@ -2739,6 +2754,7 @@ def _compile_one_step(
                 context, analysis_type=skeleton.analysis_type,
             ),
             study_population=step.population_scope == STUDY_COHORT_SCOPE,
+            interval_decision=interval_decision,
         )
         kwargs["exposure_outcome_distribution_spec"] = spec
         kwargs["scientific_capability"] = "descriptive_exposure_outcome_distribution_v1"

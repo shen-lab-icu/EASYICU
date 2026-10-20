@@ -17,6 +17,10 @@ def _study(variance):
     if variance == "cluster_robust":
         design["cluster_unit"] = "patient"
     return context.model_copy(update={
+        "cohort": context.cohort.model_copy(update={
+            "id_columns": ["stay_id", "person_key"],
+            "provenance": {"analysis_unit": "icu_stay", "patient_id_columns": ["person_key"]},
+        }),
         "user_preferences": context.user_preferences.model_copy(update={
             "data_constraints": json.dumps({"analysis_design": design}) if variance else None,
         }),
@@ -52,7 +56,7 @@ def test_counts_only_is_blocked_when_the_study_declares_uncertainty(variance):
     assert plan.model_dump() == original_plan
 
 
-@pytest.mark.parametrize("variance, counts_only", [(None, True), ("none_counts_only", True),
+@pytest.mark.parametrize("variance, counts_only", [(None, False), ("none_counts_only", True),
                                                   ("model_based", False)])
 def test_compatible_or_unstated_design_gets_no_false_conflict(variance, counts_only):
     context = _study(variance)
@@ -61,7 +65,7 @@ def test_compatible_or_unstated_design_gets_no_false_conflict(variance, counts_o
 
 
 @pytest.mark.parametrize("family, role", [("association_study", "primary"),
-                                          ("descriptive_epidemiology", "auxiliary")])
+                                          ("association_study", "auxiliary")])
 def test_a_supporting_count_table_does_not_replace_another_primary_design(family, role):
     context = _study("model_based")
     plan = _plan(context)

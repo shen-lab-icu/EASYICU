@@ -115,7 +115,10 @@ def states_a_manuscript_limitation(finding: PlanScientificFinding) -> bool:
 
     return (
         finding.severity == "major"
-        and remediation_route_for_finding(finding) == "study_authority_change"
+        and (
+            remediation_route_for_finding(finding) == "study_authority_change"
+            or finding.code == "DESCRIPTIVE_INTERVALS_WITHHELD_WITHOUT_PATIENT_GROUPING"
+        )
     )
 
 
@@ -156,7 +159,12 @@ def load_plan_review_limitations(
             if states_a_manuscript_limitation(finding)
         )
     )
-    unmapped = [code for code in codes if code not in PLAN_REVIEW_LIMITATION_SENTENCES]
+    sentences = dict(PLAN_REVIEW_LIMITATION_SENTENCES)
+    for finding in review.findings:
+        if (finding.code == "DESCRIPTIVE_INTERVALS_WITHHELD_WITHOUT_PATIENT_GROUPING"
+                and finding.descriptive_interval_limitation is not None):
+            sentences[finding.code] = finding.descriptive_interval_limitation.text
+    unmapped = [code for code in codes if code not in sentences]
     if unmapped:
         raise PlanReviewLimitationError(
             PLAN_REVIEW_LIMITATION_UNMAPPED,
@@ -167,7 +175,7 @@ def load_plan_review_limitations(
     return tuple(
         PlanReviewLimitation(
             code=code,
-            text=PLAN_REVIEW_LIMITATION_SENTENCES[code],
+            text=sentences[code],
             source_sha256=str(record.sha256),
         )
         for code in codes

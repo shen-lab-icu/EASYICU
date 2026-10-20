@@ -71,15 +71,45 @@ class PatientWeightedIntervalAssumptions(BaseModel):
     weights: Literal["fixed_observed_patient_stay_weights"]
 
 
+class DescriptiveIntervalLimitation(BaseModel):
+    """A disclosed source ceiling on the study's declared uncertainty design."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    code: Literal["descriptive_intervals_withheld_without_patient_grouping"] = (
+        "descriptive_intervals_withheld_without_patient_grouping"
+    )
+    declared_variance_estimator: Literal[
+        "model_based", "heteroskedasticity_robust", "cluster_robust", "bootstrap"
+    ]
+    reason: Literal["repeated_stays_possible_without_verified_patient_grouping"] = (
+        "repeated_stays_possible_without_verified_patient_grouping"
+    )
+
+    @property
+    def text(self) -> str:
+        estimator = self.declared_variance_estimator.replace("_", " ")
+        return (
+            f"The declared {estimator} uncertainty estimator was withheld because "
+            "the source may contain repeated ICU stays without verified patient "
+            "grouping; all stays were retained and only counts and proportions "
+            "were reported"
+        )
+
+
 class ExposureOutcomeDistributionSpec(BaseModel):
-    """Planner-owned exposure-by-outcome distribution design.
+    """Reviewed exposure-by-outcome distribution design.
 
     The host executes this declaration but never decides which column is the
     exposure, which is the outcome, which outcome value counts as the event,
-    whose rows form each denominator, or how the interval is built. Those are
-    scientific choices; an executor that infers them from column names, from
+    or whose rows form each denominator. Those are scientific choices;
+    an executor that infers them from column names, from
     input ordering, or from prose has taken a decision that belongs to the
     Planner.
+
+    For descriptive studies the host compiler binds the interval method from
+    the typed variance design and dependence authority before review, including
+    a typed limitation when the source cannot support the declared uncertainty.
 
     Three fields carry most of the scientific weight:
 
@@ -232,6 +262,10 @@ class ExposureOutcomeDistributionSpec(BaseModel):
             "the study did not choose."
         ),
     )
+    interval_limitation: Optional[DescriptiveIntervalLimitation] = Field(
+        default=None, exclude_if=lambda value: value is None,
+        description="Host-compiled, reviewable reason the declared uncertainty was withheld.",
+    )
 
     @field_validator("exposure_levels")
     @classmethod
@@ -367,6 +401,7 @@ class ExposureOutcomeDistributionSpec(BaseModel):
 
 
 __all__ = [
+    "DescriptiveIntervalLimitation",
     "ExposureOutcomeDistributionSpec",
     "ExposureOutcomeRiskDifferenceContrast",
     "typed_level_key",
