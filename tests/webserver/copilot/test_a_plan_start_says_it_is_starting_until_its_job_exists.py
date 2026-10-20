@@ -95,10 +95,11 @@ const host = {
   }),
 };
 const actions = registry.planActions.create(host);
-const started = actions.startFormalPlanGeneration('provider_ready_to_generate_plan', { automatic: true });
+const started = actions.startFormalPlanGeneration(INPUT.reasonCode || 'provider_ready_to_generate_plan', { automatic: !INPUT.reasonCode });
 await settle(); await settle();
 const during = { planStarting, busy, sessionId: planStarting && planStarting.sessionId,
-  hasStartedAt: Boolean(planStarting && Number(planStarting.startedAt) > 0) };
+  hasStartedAt: Boolean(planStarting && Number(planStarting.startedAt) > 0),
+  preparesData: Boolean(planStarting && planStarting.preparesData) };
 if (INPUT.switchSession) session = { ...session, session_id: 'session-2' };
 if (INPUT.refuse) answer.reject(Object.assign(new Error('package_invalid'), { code: 'research_pipeline_manifest_invalid' }));
 else answer.resolve({ job_id: 'plan-job' });
@@ -217,3 +218,31 @@ def test_the_start_reads_in_english() -> None:
         "Starting the research plan EasyICU checks the selected data package first; "
         "a large one takes a minute or two."
     )
+
+
+def test_approving_a_candidate_is_shown_as_preparing_its_data() -> None:
+    """The approval prepares the reviewed plan's data and replans on it.
+
+    Calling that 「正在启动研究计划生成」 reads as if the approval had been
+    discarded and a new plan were starting.
+    """
+
+    upgrade = _node(_START, _START_FILES, {"reasonCode": "plan_execution_upgrade_required"})
+    generation = _node(_START, _START_FILES)
+    assert upgrade["during"]["preparesData"] is True
+    assert generation["during"]["preparesData"] is False
+
+    preparing = _node(
+        _COMPOSER, _COMPOSER_FILES,
+        {"planStarting": {"sessionId": "session-1", "startedAt": 1, "preparesData": True}},
+    )
+    assert preparing["starting"] is True and preparing["stop"] is False
+    assert preparing["text"] == (
+        "正在准备分析数据 EasyICU 按已确认的方案准备所需数据，并据此复核计划；"
+        "数据较大时需要几分钟。分析尚未开始。 5 秒"
+    )
+    english = _node(
+        _COMPOSER, _COMPOSER_FILES,
+        {"planStarting": {"sessionId": "session-1", "startedAt": 1, "preparesData": True}}, lang="en",
+    )
+    assert english["text"].startswith("Preparing the analysis data EasyICU prepares the data this plan needs")

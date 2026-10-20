@@ -129,7 +129,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261020-registered-offer2" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261020-registered-offer1" in index
-    assert "js/screens-guided-pi-session-view.js?v=20261020-named-source1" in index
+    assert "js/screens-guided-pi-session-view.js?v=20261020-prepare-label1" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
@@ -143,7 +143,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         < index.index("js/screens-guided-pi-confirmation.js")
     )
     assert "js/screens-guided-pi-confirmation.js?v=20261017-planning-evidence1" in index
-    assert "js/screens-guided-pi-plan-actions.js?v=20261019-wording-origin1" in index
+    assert "js/screens-guided-pi-plan-actions.js?v=20261020-prepare-label1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261020-registered-offer1" in index
     assert "js/screens-guided-pi.js?v=20261020-registered-offer1" in index

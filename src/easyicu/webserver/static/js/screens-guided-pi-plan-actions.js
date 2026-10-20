@@ -312,7 +312,7 @@
       }
       // Until the host answers with a job the page has nothing to follow or
       // stop; the composer says this plan is starting (session-view).
-      const starting = { sessionId: expectedSessionId, startedAt: Date.now() };
+      const starting = { sessionId: expectedSessionId, startedAt: Date.now(), preparesData: executionUpgrade };
       const endStarting = () => {
         if (host.planStarting && host.planStarting() === starting) host.setPlanStarting(null);
       };

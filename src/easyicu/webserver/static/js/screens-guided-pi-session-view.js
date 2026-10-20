@@ -274,7 +274,7 @@
         ? state.planStarting : null;
       const startingHtml = starting ? `<div class="gpi-compose-running" role="status" aria-live="polite" aria-busy="true" data-gpi-plan-starting>
           <span class="gpi-running-spinner" aria-hidden="true"></span>
-          <span><strong>${tr('Starting the research plan', '正在启动研究计划生成')}</strong><small>${tr('EasyICU checks the selected data package first; a large one takes a minute or two.', 'EasyICU 先核对所选数据包，再开始生成；数据较大时需要一两分钟。')}</small></span>
+          <span><strong>${starting.preparesData ? tr('Preparing the analysis data', '正在准备分析数据') : tr('Starting the research plan', '正在启动研究计划生成')}</strong><small>${starting.preparesData ? tr('EasyICU prepares the data this plan needs and checks the plan against it; a large package takes a few minutes. Analysis has not started.', 'EasyICU 按已确认的方案准备所需数据，并据此复核计划；数据较大时需要几分钟。分析尚未开始。') : tr('EasyICU checks the selected data package first; a large one takes a minute or two.', 'EasyICU 先核对所选数据包，再开始生成；数据较大时需要一两分钟。')}</small></span>
           <time data-gpi-live-elapsed="${Number(starting.startedAt || Date.now())}">${esc(ACTIVITY.durationText ? ACTIVITY.durationText(starting.startedAt) : '')}</time>
         </div>` : '';
       const composerCardHtml = `<div class="gpi-compose-card${activeChild || starting ? ' is-running' : ''}">
