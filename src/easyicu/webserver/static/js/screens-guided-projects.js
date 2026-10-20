@@ -409,7 +409,7 @@
       return;
     }
     const branchCfg = ctx.BRANCH && ctx.BRANCH[ctx.branch];
-    const title = ctx.guidedFolderSeedTitle || (branchCfg && branchCfg.chip) || 'New local study';
+    const title = ctx.guidedFolderSeedTitle || (branchCfg && branchCfg.chip) || defaultStudyTitle(ctx);
     const slug = ctx.guidedDraftFolderSlug || slugifyDraftFolder(title);
     const parentDir = draftParentDir(ctx);
     const parentDisplay = parentPathLabel(ctx).replace(/\/$/, '');
@@ -508,7 +508,13 @@
       </section>`;
   }
 
+  // The title a new study starts with, in the interface language.
+  function defaultStudyTitle(ctx) {
+    return ctx.t('New local study', '新研究');
+  }
+
   window.EU_GUIDED_PROJECTS = {
+    defaultStudyTitle,
     defaultParentDir,
     draftParentDir,
     parentPathLabel,
