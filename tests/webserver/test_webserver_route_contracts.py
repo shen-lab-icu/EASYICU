@@ -269,6 +269,11 @@ EXPECTED_PI_COPILOT_ROUTES = [
         "post_pi_copilot_regenerate",
     ),
     (
+        "GET",
+        "/api/copilot/pi/sessions/{session_id}/registered-source-offer",
+        "get_pi_copilot_registered_source_offer",
+    ),
+    (
         "POST",
         "/api/copilot/pi/sessions/{session_id}/data-source-authorization",
         "post_pi_copilot_data_source_authorization",

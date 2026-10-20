@@ -70,6 +70,7 @@ from .provider_config import (
     discover_provider_models,
 )
 from .resource_lifecycle import WebMemoryAdmission
+from .registered_source_offer import bind_offered_registered_source, registered_source_offer
 from .projections import (
     project_job,
     project_pi_replay_event,
@@ -1864,6 +1865,13 @@ class PiCopilotService:
         self._save_record(record)
         return record
 
+    def get_registered_source_offer(
+        self, session_id: str, *, project_id: str, database: str,
+    ) -> Dict[str, Any]:
+        record = self._scoped_record(session_id, project_id=project_id)
+        self.project_store.assert_matches(project_id, record.binding.study_context_id)
+        return registered_source_offer(record, database)
+
     def authorize_data_source(
         self,
         session_id: str,
@@ -1871,6 +1879,7 @@ class PiCopilotService:
         project_id: str,
         action: str,
         database: Optional[str] = None,
+        source_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Confirm one path-free source choice before a research conversation."""
 
@@ -1885,6 +1894,7 @@ class PiCopilotService:
         if clean_action not in {
             "reuse_project_source",
             "use_study_required_data",
+            "use_registered_source",
             "begin_local_selection",
             "begin_full_data_selection",
             "confirm_selected_source",
@@ -1901,10 +1911,11 @@ class PiCopilotService:
             if clean_action not in {
                 "begin_local_selection",
                 "begin_full_data_selection",
+                "use_registered_source",
             }:
                 raise PiCopilotError(
                     "pi_data_source_database_not_allowed",
-                    "A database may be supplied only when local selection begins.",
+                    "A database may be supplied only for local or registered source selection.",
                     status_code=422,
                 )
             try:
@@ -1940,6 +1951,12 @@ class PiCopilotService:
                 "study_context_not_found",
                 "The project data source cannot be confirmed because its StudyContext is missing.",
                 status_code=404,
+            )
+
+        if clean_action == "use_registered_source":
+            context = bind_offered_registered_source(
+                record, context, database=expected_database, source_id=source_id,
+                stale=self._stale_details(record),
             )
 
         if clean_action == "cancel_local_selection":
@@ -1997,7 +2014,11 @@ class PiCopilotService:
                 "Select and validate a local data folder before confirming this conversation.",
                 status_code=409,
             )
-        if clean_action == "confirm_selected_source":
+        if clean_action == "use_registered_source":
+            record.binding = self._binding_for_context(context, run_id=record.binding.run_id)
+            confirmation_mode = "select_registered_source"
+            extraction_scope = "study_required"
+        elif clean_action == "confirm_selected_source":
             if record.data_source_authorization.status != "selection_in_progress":
                 raise PiCopilotError(
                     "pi_session_local_selection_not_started",

@@ -254,6 +254,7 @@ class PiSessionDataSourceAuthorization(BaseModel):
             "agent_default_study_required",
             "reuse_project_source",
             "select_local_source",
+            "select_registered_source",
             "legacy_session",
         ]
     ] = "legacy_session"
