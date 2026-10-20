@@ -7,13 +7,25 @@ import re
 import unicodedata
 from typing import Any, Mapping, Sequence
 
+from easyicu.webserver.study_intent import contains_negation_or_exclusion
+
 QUESTION_WORDING_FIELD = "question_wording"
 WORDING_SOURCES = frozenset({"user_message", "clicked_option", "confirmed_proposal"})
 _QUANTITATIVE_PUNCTUATION = frozenset("%‰‱-−/\\*")
+_CLAUSE_BOUNDARY = re.compile(r"[。！？；，,.!?;:\r\n]")
+_QUOTED_BLOCK = re.compile(
+    r'''"([^"]*)"|「([^」]*)」|『([^』]*)』|“([^”]*)”|‘([^’]*)’|(?<!\w)'([^']*)'|`([^`]*)`''',
+    re.DOTALL,
+)
+
+
+def normalize_question_text(question: str) -> str:
+    """Use the study store's whitespace normalization for wording digests."""
+    return " ".join(question.split())
 
 
 def question_sha256(question: str) -> str:
-    return hashlib.sha256(str(question).encode("utf-8")).hexdigest()
+    return hashlib.sha256(normalize_question_text(str(question)).encode("utf-8")).hexdigest()
 
 
 def _key(text: str) -> tuple[str, list[int]]:
@@ -31,24 +43,52 @@ def _key(text: str) -> tuple[str, list[int]]:
     return "".join(text[index] for index in indices), indices
 
 
-def _match(proposal: str, texts: Sequence[str]) -> str | None:
+def _safe_cut(text: str, start: int, stop: int, *, whole_clause: bool) -> bool:
+    prefix = _CLAUSE_BOUNDARY.split(text[:start])[-1]
+    suffix = _CLAUSE_BOUNDARY.split(text[stop:], maxsplit=1)[0]
+    if contains_negation_or_exclusion(prefix) or contains_negation_or_exclusion(suffix):
+        return False
+    if whole_clause:
+        if not _key(prefix)[0] and not _key(suffix)[0]:
+            return True
+        # Only paired quotes around the complete wording count. An apostrophe
+        # or an adjacent quoted phrase must not authorize a sentence fragment.
+        for match in _QUOTED_BLOCK.finditer(text):
+            for index, value in enumerate(match.groups(), 1):
+                if value is None:
+                    continue
+                left, right = match.span(index)
+                if (
+                    left <= start and stop <= right
+                    and not _key(text[left:start])[0] and not _key(text[stop:right])[0]
+                ):
+                    return True
+        return False
+    return True
+
+
+def _match(proposal: str, texts: Sequence[str], *, whole_clause: bool = False) -> str | None:
     needle, _ = _key(proposal)
-    if not needle:
+    if len(needle) < 8:
         return None
     rows = [(text, *_key(text)) for text in texts]
     haystack = "".join(key for _, key, _ in rows)
     begin = haystack.find(needle)
-    if begin < 0:
-        return None
-    end, offset, pieces = begin + len(needle), 0, []
-    for text, key, indices in rows:
-        left, right = max(0, begin - offset), min(len(key), end - offset)
-        if left < right:
-            start = 0 if left == 0 else indices[left]
-            stop = len(text) if right == len(key) else indices[right - 1] + 1
-            pieces.append(text[start:stop].strip())
-        offset += len(key)
-    return "\n".join(pieces)
+    while begin >= 0:
+        end, offset, pieces = begin + len(needle), 0, []
+        for text, key, indices in rows:
+            left, right = max(0, begin - offset), min(len(key), end - offset)
+            if left < right:
+                if not _safe_cut(text, indices[left], indices[right - 1] + 1, whole_clause=whole_clause):
+                    break
+                start = 0 if left == 0 else indices[left]
+                stop = len(text) if right == len(key) else indices[right - 1] + 1
+                pieces.append(text[start:stop].strip())
+            offset += len(key)
+        else:
+            return "\n".join(pieces)
+        begin = haystack.find(needle, begin + 1)
+    return None
 
 
 def _explicitly_confirms_wording(message: str) -> bool:
@@ -106,7 +146,7 @@ def resolve_question_wording(
         and not latest.get("superseded")
         and _explicitly_confirms_wording(str(latest.get("text") or ""))
     ):
-        wording = _match(proposal, [previous_reply])
+        wording = _match(proposal, [previous_reply], whole_clause=True)
         source = "confirmed_proposal"
     if not wording:
         return None

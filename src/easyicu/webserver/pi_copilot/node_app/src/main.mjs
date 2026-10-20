@@ -626,7 +626,7 @@ function modelPrompt(message, language, ownerContext = [], turnIntent = "", idea
 
 function appendPromptOrigin(record, origin) {
   record.sessionManager.appendCustomEntry("easyicu_message_origin_v1", {
-    message_origin: origin === "typed" ? "typed" : "model_option",
+    message_origin: ["typed", "model_option", "host_prompt"].includes(origin) ? origin : "unknown",
   });
 }
 
@@ -637,7 +637,7 @@ function userEntryMessageOrigin(branch, entryId) {
     if (entry.type === "message" && entry.message?.role === "user") break;
     if (entry.type === "custom" && entry.customType === "easyicu_message_origin_v1") {
       const origin = entry.data?.message_origin;
-      return origin === "typed" || origin === "model_option" ? origin : undefined;
+      return ["typed", "model_option", "host_prompt"].includes(origin) ? origin : "unknown";
     }
   }
   return undefined;

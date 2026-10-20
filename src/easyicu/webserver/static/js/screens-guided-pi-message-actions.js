@@ -177,7 +177,7 @@
       if (!entryId) {
         // Other projected messages still fall back to an ordinary message so
         // an edit is never silently dropped.
-        context.sendText(text);
+        context.sendText(text, undefined, undefined, true, 'typed');
         return true;
       }
       context.regenerate(entryId, text, 'user_edited_message', followingAssistantId(id));

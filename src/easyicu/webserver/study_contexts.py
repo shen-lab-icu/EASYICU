@@ -31,6 +31,7 @@ from easyicu.webserver.study_family_reading import (
     normalize_study_family_reading,
 )
 from easyicu.webserver.study_question_wording import (
+    normalize_question_text,
     normalize_question_wording,
     question_sha256,
 )
@@ -496,7 +497,7 @@ def _text(value: Any, *, field: str, max_length: int) -> str:
                 "expected": "string",
             }
         )
-    text = " ".join(value.split())
+    text = normalize_question_text(value) if field == "question" else " ".join(value.split())
     if len(text) > max_length:
         raise StudyContextError(
             {

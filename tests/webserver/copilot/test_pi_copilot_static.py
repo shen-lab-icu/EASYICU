@@ -87,7 +87,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-literature.js?v=20261017-planning-evidence1" in index
     assert "js/screens-guided-pi-markdown.js?v=20260921-turn-traces3" in index
     assert "js/screens-guided-pi-next-actions.js?v=20260922-run-answer1" in index
-    assert "js/screens-guided-pi-message-actions.js?v=20260921-fit1" in index
+    assert "js/screens-guided-pi-message-actions.js?v=20261019-wording-origin1" in index
     assert "js/screens-guided-pi-regeneration.js?v=20260830-plan-branch2" in index
     assert "js/screens-guided-pi-starters.js?v=20260922-demo-card1" in index
     assert "js/screens-guided-pi-idea-source.js?v=20260922-popover1" in index
@@ -119,7 +119,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     )
     assert "js/screens-guided-pi-provider-control.js?v=20260830-owner-split1" in index
     assert "js/screens-guided-pi-study-workspace.js?v=20261016-session-labels1" in index
-    assert "js/screens-guided-pi-events.js?v=20261009-review-fix1" in index
+    assert "js/screens-guided-pi-events.js?v=20261019-wording-origin1" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261010-source-gate1" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261010-source-gate1" in index
@@ -137,10 +137,10 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         < index.index("js/screens-guided-pi-confirmation.js")
     )
     assert "js/screens-guided-pi-confirmation.js?v=20261017-planning-evidence1" in index
-    assert "js/screens-guided-pi-plan-actions.js?v=20261016-population-acceptance1" in index
+    assert "js/screens-guided-pi-plan-actions.js?v=20261019-wording-origin1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261017-planning-evidence1" in index
-    assert "js/screens-guided-pi.js?v=20261016-session-labels1" in index
+    assert "js/screens-guided-pi.js?v=20261019-wording-origin1" in index
     assert "js/screens-guided.js?v=20260922-state-menus1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -1191,7 +1191,7 @@ def test_new_research_session_starters_minimize_interaction_cost() -> None:
     assert "STARTERS.shuffle(state.host, tr)" in events
     assert "STARTERS.actionFromDiscoveryChoice(message, tr)" in events
     assert "prepareEntryCompose(discoveryAction);" in events
-    assert "sendText(discoveryAction.text, [], discoveryAction.intent);" in events
+    assert "sendText(discoveryAction.text, [], discoveryAction.intent, true, 'host_prompt');" in events
     assert "sendText(starterAction.text, []);" not in shell
     assert "IDEA_SOURCE.suggestsIdeaMining" in shell
     assert "composer: `<div class=\"gpi-compose gpi-entry-compose\">" in shell
@@ -2396,7 +2396,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "grants: ['provider_run', 'literature']" in confirmation_owner
     assert "plan_configuration_superseded" in aside_owner
     assert "重新生成计划" in confirmation_owner
-    assert "sendText(message, governedNextChoiceGrants(null, message))" in events_owner
+    assert "sendText(message, governedNextChoiceGrants(null, message), undefined, true, 'typed')" in events_owner
     assert "operator_plan_approval_required" in aside_owner
     assert "hydrateProjectedJob" in pi_owner
     assert "visibleSteps.length} steps" in activity_owner
@@ -2437,7 +2437,7 @@ def test_existing_project_study_setup_stays_in_bound_pi_conversation() -> None:
     assert "workflow && workflow.missing_setup_fields" in owner
     assert "Preserve study_context_id and revision" in owner
     assert "const prompt = studySetupReviewPrompt(state.workflow)" in owner
-    assert "sendText(prompt, ['configure'])" in owner
+    assert "sendText(prompt, ['configure'], undefined, true, 'host_prompt')" in owner
     assert "event.target.closest('[data-gpi-study-setup]')" in events
     assert "openStudySetupInConversation();" in events
     assert "state.projectLoading = !!next" in owner
@@ -6514,7 +6514,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20261009-target-trial1" in index
-    assert "screens-guided-pi.js?v=20261016-session-labels1" in index
+    assert "screens-guided-pi.js?v=20261019-wording-origin1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

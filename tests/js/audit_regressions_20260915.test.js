@@ -20,6 +20,72 @@ function context(values = {}) {
   return ctx;
 }
 
+test('P0-2 composer marks only undecorated user text as typed', async () => {
+  for (const decoration of ['none', 'artifact', 'skill']) {
+    const sent = [];
+    const c = context({ state: { session: { session_id: 's' }, messages: [], draft: 'Describe platelet counts in adults.' },
+      sessionIsStale: () => false, projectId: () => 'p', IDEA_SOURCE: null,
+      STUDY_WORKSPACE: { hasReference: () => decoration === 'artifact',
+        decorateSkillMessage: text => decoration === 'skill' ? text + '\nHost skill instructions' : text,
+        decorateMessage: text => decoration === 'artifact' ? text + '\nHost artifact JSON' : text },
+      PLAN_ACTIONS: { continueUserRequestedSystemProgression: async () => false },
+      sendText: async (...args) => sent.push(args) });
+    c.state.host = { querySelector: () => null };
+    vm.runInContext(section('screens-guided-pi.js', '  async function sendMessage(', '  async function confirmCohortEligibility('), c);
+    await c.sendMessage();
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0][4], decoration === 'none' ? 'typed' : 'host_prompt');
+  }
+});
+
+test('P0-2 the transport records an explicit origin and fails closed by default', async () => {
+  for (const origin of [undefined, 'typed', 'host_prompt', 'model_option']) {
+    const sent = [];
+    const c = context({ state: { session: { session_id: 's' }, sessionSelectionRevision: 1, messages: [] },
+      sessionIsStale: () => false, sessionMatchesUiLanguage: () => true, projectId: () => 'p',
+      IDEA_SOURCE: null, STUDY_WORKSPACE: { consume() {}, consumeSkill() {} },
+      turnGrants: () => [], ensureActivity: () => ({}), upsertActivityStep() {}, render() {}, watchJob() {},
+      api: () => ({ sendPiCopilotMessage: async (_id, body) => { sent.push(body); return { job_id: 'job' }; } }) });
+    vm.runInContext(section('screens-guided-pi.js', '  async function sendText(', '  async function regenerateMessage('), c);
+    await c.sendText('Describe platelet counts in adults.', [], undefined, true, origin);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].message_origin, origin || 'host_prompt');
+    assert.equal(c.state.messages[0].messageOrigin, origin || 'host_prompt');
+  }
+});
+
+test('P0-2 every host-composed send and manual edit fallback declares its origin', () => {
+  const shell = read('screens-guided-pi.js'), events = read('screens-guided-pi-events.js');
+  const plans = read('screens-guided-pi-plan-actions.js'), edits = read('screens-guided-pi-message-actions.js');
+  assert.match(shell, /sendText\(prompt, \['configure'\], undefined, true, 'host_prompt'\)/);
+  assert.match(shell, /'advance_after_data_source_confirmation',\s*false,\s*'host_prompt'/);
+  for (const action of ['starterAction', 'discoveryAction']) {
+    assert.ok(events.includes(`sendText(${action}.text, [], ${action}.intent, true, 'host_prompt')`));
+  }
+  assert.ok(events.includes("nextChoice.dataset.gpiNextOrigin === 'model' ? 'model_option' : 'host_prompt'"));
+  assert.ok(events.includes("sendText(message, governedNextChoiceGrants(null, message), undefined, true, 'typed')"));
+  for (const field of ['message', 'rejectMessage']) {
+    assert.ok(plans.includes(`host.sendText(confirmation.${field}, confirmation.grants, undefined, true, 'host_prompt')`));
+  }
+  assert.ok(edits.includes("context.sendText(text, undefined, undefined, true, 'typed')"));
+});
+
+test('P0-2 Pi metadata preserves host origins and never upgrades missing metadata', () => {
+  const source = fs.readFileSync(path.join(root, '../../pi_copilot/node_app/src/main.mjs'), 'utf8');
+  const begin = source.indexOf('function appendPromptOrigin(');
+  const end = source.indexOf('function userVisiblePromptText(', begin);
+  assert.ok(begin >= 0 && end > begin);
+  const c = context();
+  vm.runInContext(source.slice(begin, end), c);
+  for (const origin of ['typed', 'model_option', 'host_prompt', undefined, 'invalid']) {
+    const branch = [];
+    const record = { sessionManager: { appendCustomEntry: (customType, data) => branch.push({ type: 'custom', customType, data }) } };
+    c.appendPromptOrigin(record, origin);
+    branch.push({ id: 'user', type: 'message', message: { role: 'user' } });
+    assert.equal(c.userEntryMessageOrigin(branch, 'user'), ['typed', 'model_option', 'host_prompt'].includes(origin) ? origin : 'unknown');
+  }
+});
+
 test('P1-2 restored study text stays literal in the question, plan and JSON preview', () => {
   const hostile = '<img src=x onerror="globalThis.pwned=1"> & "value"';
   const c = context({ studyParams: {}, IDEA: { restoreSlot() {} }, REVIEW: { restoreSlot() {} },

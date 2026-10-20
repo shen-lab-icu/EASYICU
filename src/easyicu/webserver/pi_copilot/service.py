@@ -2354,14 +2354,9 @@ class PiCopilotService:
             if unchanged_message:
                 # Read the original host metadata, not the retry request's
                 # claim about who wrote the text. Legacy turns have no proof.
-                message_origin = (
-                    "typed" if regenerate_target.get("message_origin") == "typed"
-                    else MODEL_OPTION_MESSAGE_ORIGIN
-                )
-            elif message_origin is None:
-                message_origin = "typed"
+                message_origin = str(regenerate_target.get("message_origin") or "unknown")
             inferred_actions = infer_explicit_turn_actions(provider_text)
-            if message_origin == MODEL_OPTION_MESSAGE_ORIGIN:
+            if message_origin != "typed":
                 inferred_actions = inferred_actions - PRIVILEGED_ONE_SHOT_TURN_ACTIONS
             requested_actions = (requested_actions - PRIVILEGED_ONE_SHOT_TURN_ACTIONS) | (
                 inferred_actions & PRIVILEGED_ONE_SHOT_TURN_ACTIONS
@@ -2461,7 +2456,7 @@ class PiCopilotService:
                 wording_history = self.replay_store.question_wording_context(
                     session_id=record.session_id, project_id=str(record.project_id),
                 )
-                wording_origin = message_origin or "typed"
+                wording_origin = message_origin or "unknown"
                 if regenerate_target is not None and unchanged_message:
                     wording_origin = str(regenerate_target.get("message_origin") or "unknown")
                 if message_intent == "advance_after_data_source_confirmation":
@@ -2493,7 +2488,7 @@ class PiCopilotService:
                 params = {
                     "session_id": record.session_id,
                     "message": provider_text,
-                    "message_origin": message_origin or "typed",
+                    "message_origin": message_origin or "unknown",
                 }
                 if idea_source:
                     params["idea_source"] = dict(idea_source)

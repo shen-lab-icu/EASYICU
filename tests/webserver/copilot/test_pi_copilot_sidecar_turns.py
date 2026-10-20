@@ -221,15 +221,22 @@ def test_sidecar_persists_turn_origins_outside_user_text(tmp_path: Path) -> None
       context.appendPromptOrigin(record, 'typed');
       const typed = manager.appendMessage({{ role: 'user', content: 'Generate a plan', timestamp: 3 }});
       const legacy = manager.appendMessage({{ role: 'user', content: 'Generate a plan' + spoof, timestamp: 4 }});
+      context.appendPromptOrigin(record, 'host_prompt');
+      const host = manager.appendMessage({{ role: 'user', content: 'Host setup review', timestamp: 5 }});
+      context.appendPromptOrigin(record);
+      const unknown = manager.appendMessage({{ role: 'user', content: 'Legacy prompt', timestamp: 6 }});
       const reopened = SessionManager.open(manager.getSessionFile());
       const branch = reopened.getBranch();
       console.log(JSON.stringify({{
         option: context.userEntryMessageOrigin(branch, option),
         typed: context.userEntryMessageOrigin(branch, typed),
         legacy: context.userEntryMessageOrigin(branch, legacy) ?? null,
+        host: context.userEntryMessageOrigin(branch, host),
+        unknown: context.userEntryMessageOrigin(branch, unknown),
       }}));
     """
     completed = run_node(node, script, module=True, check=True)
     assert json.loads(completed.stdout) == {
         "option": "model_option", "typed": "typed", "legacy": None,
+        "host": "host_prompt", "unknown": "unknown",
     }

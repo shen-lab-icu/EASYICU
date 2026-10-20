@@ -1415,7 +1415,7 @@
       }
     };
   }
-  async function sendText(text, grantsOverride, turnIntent, visibleUserMessage = true, messageOrigin = '', openingQuestion = '') {
+  async function sendText(text, grantsOverride, turnIntent, visibleUserMessage = true, messageOrigin = 'host_prompt', openingQuestion = '') {
     if (!state.session || state.projectLoading || state.busy || state.childJobId || sessionIsStale()) return;
     if (!sessionMatchesUiLanguage(state.session)) {
       handleLanguageChange();
@@ -1442,7 +1442,7 @@
     const grants = Array.isArray(grantsOverride) ? grantsOverride : turnGrants();
     const submittedAt = Date.now();
     state.currentTurnResources = [];
-    if (visibleUserMessage) state.messages.push({ id: 'user-' + submittedAt, role: 'user', text, complete: true, messageOrigin: messageOrigin || 'typed' });
+    if (visibleUserMessage) state.messages.push({ id: 'user-' + submittedAt, role: 'user', text, complete: true, messageOrigin: messageOrigin || 'unknown' });
     if (visibleUserMessage && openingQuestion) state.openingQuestion = { sessionId: state.session.session_id, text: openingQuestion };
     const activity = ensureActivity(new Date(submittedAt).toISOString());
     upsertActivityStep(activity, { id: 'submitted', kind: 'submitted', status: 'complete', at: submittedAt });
@@ -1453,7 +1453,7 @@
         project_id: projectId(), message: text, allowed_actions: grants,
         ...(turnIntent ? { turn_intent: turnIntent } : {}),
         ...(ideaSource ? { idea_source: ideaSource } : {}),
-        ...(messageOrigin ? { message_origin: messageOrigin } : {}),
+        message_origin: messageOrigin,
       });
       if (!isCurrent()) return;
       if (ideaSource && IDEA_SOURCE) IDEA_SOURCE.consume();
@@ -1472,7 +1472,7 @@
     if (!entryId || !text) return;
     const original = state.messages.find(row => row && row.role === 'user' && String(row.entryId || '') === entryId);
     const messageOrigin = regenerationIntent === 'user_edited_message' && original && original.text !== text
-      ? 'typed' : (original && original.messageOrigin || 'model_option');
+      ? 'typed' : (original && original.messageOrigin || 'unknown');
     const expectedSessionId = state.session.session_id;
     const expectedProjectId = projectId();
     const selectionRevision = state.sessionSelectionRevision;
@@ -1547,6 +1547,7 @@
       [],
       'advance_after_data_source_confirmation',
       false,
+      'host_prompt',
     );
     return true;
   }
@@ -1564,7 +1565,9 @@
     // The first message, typed and sent as written (no starter intent, no
     // reference or Skill around it), is the researcher's opening question.
     const opening = !intent && decorated === text && !state.messages.some(row => row && row.role === 'user') ? text : '';
-    await sendText(decorated, undefined, intent, true, '', opening);
+    // Reference/Skill decoration mixes host-authored text with the user's
+    // words. Until the transport separates them, this turn proves no wording.
+    await sendText(decorated, undefined, intent, true, decorated === text ? 'typed' : 'host_prompt', opening);
   }
   async function confirmCohortEligibility(selection) {
     if (!selection || !state.session || state.busy || state.childJobId || sessionIsStale()) return;
@@ -1671,7 +1674,7 @@
     state.error = '';
     await loadWorkflow();
     const prompt = studySetupReviewPrompt(state.workflow);
-    await sendText(prompt, ['configure']);
+    await sendText(prompt, ['configure'], undefined, true, 'host_prompt');
   }
   async function startEntry() {
     setShell('pi');

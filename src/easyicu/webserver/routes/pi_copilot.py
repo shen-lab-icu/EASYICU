@@ -246,7 +246,7 @@ class PiMessageRequest(BaseModel):
     # the model authored is `model_option`; it can continue the conversation
     # but never mints a privileged one-turn grant, which only typed user text
     # or host-authored controls may do.
-    message_origin: Literal["typed", "model_option"] | None = None
+    message_origin: Literal["typed", "model_option", "host_prompt"] | None = None
 
 
 class PiRegenerateRequest(PiMessageRequest):
