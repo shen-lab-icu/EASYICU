@@ -71,7 +71,7 @@ from .run_authority import (
     list_bound_run_history,
     research_pipeline_project_root,
 )
-from .source_recommendation import generated_date, recommend_registered_export
+from .source_recommendation import registered_source_choice, registered_sources_for_database
 from .study_context_update import update_study_context
 from .turn_authority import infer_explicit_turn_actions
 from .tool_catalog import (
@@ -560,59 +560,6 @@ def _workspace_status(
     )
 
 
-def _registered_source_projection(
-    source: Mapping[str, Any], *, active_path: Any, database_label: str
-) -> Dict[str, Any]:
-    """Return one path-free registered-export choice for conversational setup."""
-
-    summary = source.get("summary")
-    summary = summary if isinstance(summary, Mapping) else {}
-    label = str(source.get("label") or "EasyICU export").strip()[:240]
-    if "/" in label or "\\" in label:
-        label = f"{str(source.get('database') or 'EasyICU').upper()} export"
-    modules = [
-        str(item)[:120] for item in (source.get("modules") or []) if str(item).strip()
-    ][:64]
-    official_demo_specs = (
-        demo_sources.get_source(source_id)
-        for source_id in demo_sources.allowed_source_ids()
-    )
-    official_demo_labels = {
-        f"{spec.title} v{spec.version}".casefold() for spec in official_demo_specs
-    }
-    source_scope = (
-        "official_demo"
-        if label.casefold() in official_demo_labels
-        else "registered_export"
-    )
-    return {
-        "source_id": str(source.get("id") or "")[:80],
-        # Registry labels are execution identity and may contain internal run
-        # names such as "full6".  Conversational setup gets the canonical
-        # database/release label instead; exact source_id remains authoritative.
-        "label": label if source_scope == "official_demo" else database_label,
-        "database": str(source.get("database") or "")[:80],
-        "source_scope": source_scope,
-        "availability": (
-            "official_demo"
-            if source_scope == "official_demo"
-            else "available_in_easyicu"
-        ),
-        "generated": str(source.get("generated") or "")[:80] or None,
-        "active": bool(
-            str(source.get("path") or "").strip()
-            and str(source.get("path") or "").strip() == str(active_path or "").strip()
-        ),
-        "module_count": len(modules),
-        "modules": modules,
-        "aggregate": {
-            key: summary.get(key)
-            for key in ("stays", "modules", "file_count", "total_rows")
-            if isinstance(summary.get(key), (int, float))
-        },
-    }
-
-
 def _database_named_in_message(message: str) -> Optional[str]:
     for database, pattern in (
         ("miiv", r"\bmimic[\s_-]*(?:iv|4)\b"),
@@ -689,26 +636,9 @@ def _list_data_sources(
             database_label = (
                 f"{database_label} v{selected_profile.reference_release}"
             )
-        for row in (registry.get("sources") or []):
-            if not isinstance(row, Mapping) or not row.get("ok") or not row.get("id"):
-                continue
-            try:
-                row_profile = get_database_profile(str(row.get("database") or ""))
-            except KeyError:
-                continue
-            row_family = row_profile.parent_key or row_profile.key
-            if row_family != selected_profile.key:
-                continue
-            choices.append(
-                _registered_source_projection(
-                    row,
-                    active_path=registry.get("active_path"),
-                    database_label=database_label,
-                )
-            )
-            if len(choices) >= 40:
-                break
-    recommendation = recommend_registered_export(choices)
+    choices, recommendation = registered_sources_for_database(
+        registry, selected_profile.key if selected_profile is not None else None
+    )
     recommended_source = recommendation.source
     exact_database_named = bool(
         selected_profile is not None
@@ -806,14 +736,7 @@ def _list_data_sources(
             # Registered exports EasyICU cannot choose between, numbered for
             # the researcher; empty when one is recommended or none exists.
             "registered_source_choices": [
-                {
-                    "choice": index,
-                    "source_id": row.get("source_id"),
-                    "label": row.get("label"),
-                    "generated_date": generated_date(row),
-                    "stays": (row.get("aggregate") or {}).get("stays"),
-                    "module_count": row.get("module_count"),
-                }
+                {"choice": index, **registered_source_choice(row)}
                 for index, row in enumerate(recommendation.choices, start=1)
             ],
             "source_modes": (

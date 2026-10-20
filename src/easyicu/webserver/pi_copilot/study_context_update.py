@@ -1050,6 +1050,7 @@ def update_study_context(
     *,
     load_context: Callable[[AuthorityBinding], Optional[Dict[str, Any]]] = _bound_context,
     project_workflow: Callable[..., Dict[str, Any]] = _workflow_snapshot,
+    source_registry: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Persist conversational setup through the existing typed owner."""
 
@@ -1596,7 +1597,7 @@ def update_study_context(
 
     bind_source_id = str(params.get("bind_source_id") or "").strip()
     if params.get("bind_active_export") or bind_source_id:
-        registry = sources.load_registry()
+        registry = sources.load_registry() if source_registry is None else source_registry
         if bind_source_id:
             source = next(
                 (

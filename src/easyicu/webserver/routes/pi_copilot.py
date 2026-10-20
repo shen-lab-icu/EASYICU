@@ -275,12 +275,14 @@ class PiDataSourceAuthorizationRequest(BaseModel):
     action: Literal[
         "reuse_project_source",
         "use_study_required_data",
+        "use_registered_source",
         "begin_local_selection",
         "begin_full_data_selection",
         "confirm_selected_source",
         "cancel_local_selection",
     ]
     database: Literal["miiv", "mimic", "eicu", "aumc", "hirid", "sic"] | None = None
+    source_id: ShortText | None = None
 
 
 class PiAbortRequest(BaseModel):
@@ -1067,6 +1069,18 @@ def post_pi_copilot_regenerate(
         _raise_http(exc)
 
 
+@router.get("/api/copilot/pi/sessions/{session_id}/registered-source-offer")
+def get_pi_copilot_registered_source_offer(
+    session_id: ShortText, project_id: ShortText, database: ShortText,
+) -> dict:
+    try:
+        return get_pi_copilot_service().get_registered_source_offer(
+            session_id, project_id=project_id, database=database,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
 @router.post("/api/copilot/pi/sessions/{session_id}/data-source-authorization")
 def post_pi_copilot_data_source_authorization(
     session_id: ShortText,
@@ -1078,6 +1092,7 @@ def post_pi_copilot_data_source_authorization(
             project_id=body.project_id,
             action=body.action,
             database=body.database,
+            source_id=body.source_id,
         )
     except PiCopilotError as exc:
         _raise_http(exc)

@@ -361,6 +361,7 @@ def test_data_source_authorization_route_is_project_scoped_and_typed(
         "project_id": "guided-project-2",
         "action": "begin_local_selection",
         "database": "miiv",
+        "source_id": None,
     }
     assert (
         client.post(

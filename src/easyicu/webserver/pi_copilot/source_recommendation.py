@@ -15,6 +15,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Literal, Mapping, Optional, Sequence
 
+from easyicu.databases.profiles import get_database_profile
+from easyicu.webserver import demo_sources
+
 SelectionReason = Literal[
     "most_complete_local_dataset",
     "active_local_dataset",
@@ -101,9 +104,106 @@ def recommend_registered_export(
     return RegisteredExportRecommendation(choices=tuple(complete))
 
 
+def _registered_source_projection(
+    source: Mapping[str, Any], *, active_path: Any, database_label: str
+) -> Dict[str, Any]:
+    """Return one path-free registered-export choice for conversational setup."""
+
+    summary = source.get("summary")
+    summary = summary if isinstance(summary, Mapping) else {}
+    label = str(source.get("label") or "EasyICU export").strip()[:240]
+    if "/" in label or "\\" in label:
+        label = f"{str(source.get('database') or 'EasyICU').upper()} export"
+    modules = [
+        str(item)[:120] for item in (source.get("modules") or []) if str(item).strip()
+    ][:64]
+    official_demo_specs = (
+        demo_sources.get_source(source_id)
+        for source_id in demo_sources.allowed_source_ids()
+    )
+    official_demo_labels = {
+        f"{spec.title} v{spec.version}".casefold() for spec in official_demo_specs
+    }
+    source_scope = (
+        "official_demo"
+        if label.casefold() in official_demo_labels
+        else "registered_export"
+    )
+    return {
+        "source_id": str(source.get("id") or "")[:80],
+        # Registry labels are execution identity and may contain internal run
+        # names such as "full6".  Conversational setup gets the canonical
+        # database/release label instead; exact source_id remains authoritative.
+        "label": label if source_scope == "official_demo" else database_label,
+        "database": str(source.get("database") or "")[:80],
+        "source_scope": source_scope,
+        "availability": (
+            "official_demo"
+            if source_scope == "official_demo"
+            else "available_in_easyicu"
+        ),
+        "generated": str(source.get("generated") or "")[:80] or None,
+        "active": bool(
+            str(source.get("path") or "").strip()
+            and str(source.get("path") or "").strip() == str(active_path or "").strip()
+        ),
+        "module_count": len(modules),
+        "modules": modules,
+        "aggregate": {
+            key: summary.get(key)
+            for key in ("stays", "modules", "file_count", "total_rows")
+            if isinstance(summary.get(key), (int, float))
+        },
+    }
+
+
+def registered_sources_for_database(
+    registry: Mapping[str, Any], database: Optional[str],
+) -> tuple[list[Dict[str, Any]], RegisteredExportRecommendation]:
+    """One catalog policy for the Copilot tool and the session source offer."""
+
+    choices: list[Dict[str, Any]] = []
+    if database:
+        profile = get_database_profile(database)
+        if not profile.is_public:
+            raise KeyError(database)
+        label = profile.display_name
+        if profile.reference_release:
+            label = f"{label} v{profile.reference_release}"
+        for row in registry.get("sources") or []:
+            if not isinstance(row, Mapping) or not row.get("ok") or not row.get("id"):
+                continue
+            try:
+                row_profile = get_database_profile(str(row.get("database") or ""))
+            except KeyError:
+                continue
+            if (row_profile.parent_key or row_profile.key) != profile.key:
+                continue
+            choices.append(_registered_source_projection(
+                row, active_path=registry.get("active_path"), database_label=label,
+            ))
+            if len(choices) >= 40:
+                break
+    return choices, recommend_registered_export(choices)
+
+
+def registered_source_choice(row: Mapping[str, Any]) -> Dict[str, Any]:
+    """Bounded card facts, also used for the tool's numbered export choices."""
+
+    return {
+        "source_id": row.get("source_id"),
+        "label": row.get("label"),
+        "generated_date": generated_date(row),
+        "stays": (row.get("aggregate") or {}).get("stays"),
+        "module_count": row.get("module_count"),
+    }
+
+
 __all__ = [
     "RegisteredExportRecommendation",
     "SelectionReason",
     "generated_date",
     "recommend_registered_export",
+    "registered_source_choice",
+    "registered_sources_for_database",
 ]
