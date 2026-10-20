@@ -4021,6 +4021,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         const draftParent = e.target.closest('[data-draft-parent-dir]');
         if (draftParent) {
           guidedDraftParentDir = draftParent.value.trim();
+          guidedProjectRenderer('updateFolderPreview');
           return;
         }
         const title = e.target.closest('[data-draft-title]');
@@ -4029,6 +4030,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         const box = title.closest('[data-draft-setup]');
         const slug = box ? box.querySelector('[data-draft-slug]') : null;
         if (slug && !slug.dataset.edited) slug.value = slugifyDraftFolder(title.value);
+        guidedProjectRenderer('updateFolderPreview');
       });
       shell.addEventListener('change', (e) => {
         const projectOwner = window.EU_GUIDED_PROJECTS;
@@ -4074,6 +4076,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         slug.dataset.edited = 'true';
         slug.value = slugifyDraftFolder(slug.value);
         guidedDraftFolderSlug = slug.value;
+        guidedProjectRenderer('updateFolderPreview');
       });
 
       // composer
