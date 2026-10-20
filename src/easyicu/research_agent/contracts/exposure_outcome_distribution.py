@@ -82,17 +82,25 @@ class DescriptiveIntervalLimitation(BaseModel):
     declared_variance_estimator: Literal[
         "model_based", "heteroskedasticity_robust", "cluster_robust", "bootstrap"
     ]
-    reason: Literal["repeated_stays_possible_without_verified_patient_grouping"] = (
+    reason: Literal[
+        "repeated_stays_possible_without_verified_patient_grouping",
+        "repeated_stays_possible_with_invalid_patient_grouping_authority",
+    ] = (
         "repeated_stays_possible_without_verified_patient_grouping"
     )
 
     @property
     def text(self) -> str:
         estimator = self.declared_variance_estimator.replace("_", " ")
+        cause = (
+            "the source may contain repeated ICU stays and its patient-grouping "
+            "authority failed verification"
+            if self.reason == "repeated_stays_possible_with_invalid_patient_grouping_authority"
+            else "the planned data may contain repeated ICU stays without verified patient grouping"
+        )
         return (
             f"The declared {estimator} uncertainty estimator was withheld because "
-            "the source may contain repeated ICU stays without verified patient "
-            "grouping; all stays were retained and only counts and proportions "
+            f"{cause}; all stays were retained and only counts and proportions "
             "were reported"
         )
 

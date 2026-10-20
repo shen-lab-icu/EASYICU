@@ -31,6 +31,7 @@ from ..contracts.exposure_outcome_distribution import (
     DescriptiveIntervalLimitation,
     ExposureOutcomeDistributionSpec,
 )
+from ..contracts.patient_grouping_need import PATIENT_GROUPING_STATUS_KEY
 from ..intake.materialized_metadata import FIRST_ICU_STAY_RESTRICTION_SCHEMA
 from ..schema import AnalysisPlan, ResearchContext
 from .analysis_types import canonical_analysis_family
@@ -418,7 +419,15 @@ def descriptive_interval_decision(
         interval_method="none_counts_only" if counts_only else "wilson",
         dependence=None if counts_only else grouping,
         limitation=(
-            DescriptiveIntervalLimitation(declared_variance_estimator=requested)
+            DescriptiveIntervalLimitation(
+                declared_variance_estimator=requested,
+                reason=(
+                    "repeated_stays_possible_with_invalid_patient_grouping_authority"
+                    if (context.cohort.provenance or {}).get(PATIENT_GROUPING_STATUS_KEY)
+                    == "authority_invalid"
+                    else "repeated_stays_possible_without_verified_patient_grouping"
+                ),
+            )
             if source_ceiling and requested not in {None, "none_counts_only"}
             else None
         ),
