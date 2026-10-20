@@ -398,7 +398,8 @@
         const dataSourceAction = DATA_CONSENT && DATA_CONSENT.actionFromEvent(event);
         if (dataSourceAction) {
           const database = typeof DATA_CONSENT.databaseFromEvent === 'function' ? DATA_CONSENT.databaseFromEvent(event) : '';
-          authorizeDataSource(dataSourceAction, database ? { database } : undefined);
+          const sourceId = typeof DATA_CONSENT.sourceIdFromEvent === 'function' ? DATA_CONSENT.sourceIdFromEvent(event) : '';
+          authorizeDataSource(dataSourceAction, database || sourceId ? { database, sourceId } : undefined);
           return;
         }
         if (MESSAGE_ACTIONS.handleClick(event)) return;

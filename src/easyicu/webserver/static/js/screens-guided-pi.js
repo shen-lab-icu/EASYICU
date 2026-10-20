@@ -376,6 +376,7 @@
     render: () => render(),
     loadWorkflow: (...args) => loadWorkflow(...args),
     session: () => state.session,
+    projectId: () => projectId(),
     messages: () => state.messages,
     busy: () => state.busy || Boolean(state.childJobId),
     workflowReceipts: () => state.workflowReceipts,

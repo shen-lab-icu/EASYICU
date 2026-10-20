@@ -297,10 +297,47 @@
     const DATABASE_NAMES = Object.freeze({
       miiv: 'MIMIC-IV', mimic: 'MIMIC-III', eicu: 'eICU', aumc: 'AmsterdamUMCdb', hirid: 'HiRID', sic: 'SICdb',
     });
+    /* The validated export of that database EasyICU already holds, as the
+       host's path-free offer: the one it recommends, or the tied ones it
+       cannot choose between. Read once per session, project and database and
+       refreshed while the card stays open, so an export registered or
+       retired meanwhile is not offered stale. A failed read offers none and
+       the card falls back to folder selection. */
+    const OFFER_REFRESH_MS = 60000;
+    const registeredOffers = new Map();
+    function registeredOffer(key) {
+      const caller = api().loadPiCopilotRegisteredSourceOffer;
+      const project = String(host.projectId ? host.projectId() : '').trim();
+      if (typeof caller !== 'function' || !project) return { state: 'none', recommended: null, choices: [] };
+      const cacheKey = [sessionId(), project, key].join('\u0000');
+      let entry = registeredOffers.get(cacheKey);
+      if (!entry) {
+        entry = { state: 'loading', recommended: null, choices: [], loadedAt: 0, inflight: false };
+        registeredOffers.set(cacheKey, entry);
+      }
+      if (!entry.inflight && Date.now() - entry.loadedAt > OFFER_REFRESH_MS) {
+        entry.inflight = true;
+        const before = JSON.stringify([entry.state, entry.recommended, entry.choices]);
+        caller(sessionId(), project, key).then(payload => {
+          entry.state = 'ready';
+          entry.recommended = payload && payload.recommended ? payload.recommended : null;
+          entry.choices = Array.isArray(payload && payload.choices) ? payload.choices : [];
+        }, () => {
+          entry.state = 'none'; entry.recommended = null; entry.choices = [];
+        }).finally(() => {
+          entry.inflight = false;
+          entry.loadedAt = Date.now();
+          if (JSON.stringify([entry.state, entry.recommended, entry.choices]) !== before) host.render();
+        });
+      }
+      return { state: entry.state, recommended: entry.recommended, choices: entry.choices.slice() };
+    }
+
     /* The one full database the opening question names (not a demo), while
        this conversation still needs a data source; otherwise null. The card
-       then opens source selection for that database instead of asking which
-       one. Naming it still binds nothing. */
+       then offers the export EasyICU already holds, or opens source
+       selection for that database, instead of asking which one. Naming it
+       still binds nothing: the researcher's click is the source decision. */
     function namedDatabase() {
       if (!host.session() || !requiresConfirmation() || namedDemo()) return null;
       const first = host.messages().find(row => row && row.role === 'user' && String(row.text || '').trim());
@@ -308,7 +345,10 @@
       if (!text || new RegExp(DEMO_WORD, 'i').test(text)) return null;
       const next = window.EasyICU.guidedPi.optional('nextActions');
       const key = next && typeof next.databaseChoiceKey === 'function' ? next.databaseChoiceKey(text) : '';
-      return key && DATABASE_NAMES[key] ? { key, label: DATABASE_NAMES[key] } : null;
+      if (!key || !DATABASE_NAMES[key]) return null;
+      const pending = DATA_CONSENT.authorization
+        ? DATA_CONSENT.authorization(host.session()).status === 'pending' : true;
+      return { key, label: DATABASE_NAMES[key], offer: pending ? registeredOffer(key) : null };
     }
 
     async function useNamedDemo(sourceId) {

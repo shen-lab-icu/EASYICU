@@ -23,6 +23,23 @@
       if (error.code === 'pi_session_authority_stale') {
         return tr('The study binding changed after this conversation was saved. Rebind it before continuing.', '这段对话保存后研究绑定发生了变化，请先重新绑定再继续。');
       }
+      // Choosing a registered export the host offered
+      // (pi_copilot/registered_source_offer.py); nothing was bound.
+      if (error.code === 'pi_data_source_not_offered' || error.code === 'pi_data_source_not_registered') {
+        return tr('That export is no longer offered. Reload the page and choose again.', '这份数据已不在可选范围内，请刷新页面后重新选择。');
+      }
+      if (error.code === 'pi_data_source_database_mismatch') {
+        return tr('That export is not of the database your question names.', '这份数据不是你的问题指定的数据库。');
+      }
+      if (error.code === 'pi_source_id_required') {
+        return tr('Choose one of the offered exports.', '请从列出的数据中选择一份。');
+      }
+      if (error.code === 'pi_session_data_source_authorization_not_pending') {
+        return tr('This conversation’s data source was already settled. Reload the page to see it.', '本次会话的数据源已经确定，请刷新页面查看。');
+      }
+      if (error.code === 'study_context_active_job_conflict') {
+        return tr('A data job for this study is still running; choose the source after it finishes.', '这项研究还有数据任务在运行，请等它结束后再选择数据源。');
+      }
       if (error.code === 'pi_provider_auth_failed') {
         return tr('The model service rejected this API credential.', '模型服务拒绝了这个 API 凭据，请检查后重试。');
       }

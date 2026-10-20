@@ -24,6 +24,7 @@
     async function authorizeDataSource(action, options) {
       if (!host.session() || host.busy() || !api().authorizePiCopilotDataSource) return;
       const database = String(options && options.database || '').trim();
+      const sourceId = String(options && options.sourceId || '').trim();
       const expectedSessionId = host.session().session_id;
       const expectedProjectId = projectId();
       const isCurrent = () => host.session() && host.session().session_id === expectedSessionId
@@ -32,12 +33,19 @@
       try {
         const payload = await api().authorizePiCopilotDataSource(
           expectedSessionId,
-          { project_id: expectedProjectId, action, ...(database ? { database } : {}) },
+          {
+            project_id: expectedProjectId, action,
+            ...(database ? { database } : {}), ...(sourceId ? { source_id: sourceId } : {}),
+          },
         );
         if (!isCurrent()) return;
         host.setSession(payload.session || host.session());
         rememberSession(host.session().session_id);
-        if (action === 'begin_local_selection' || action === 'begin_full_data_selection') {
+        // A registered export is bound on the host, which moves the study's
+        // revision: the page's StudyContext copy must follow before anything
+        // persists it again.
+        if (action === 'begin_local_selection' || action === 'begin_full_data_selection'
+          || action === 'use_registered_source') {
           const contextId = String(
             payload.resource && payload.resource.study_context_id
             || host.session() && host.session().binding && host.session().binding.study_context_id
@@ -55,6 +63,9 @@
           const active = store && typeof store.active === 'function' ? store.active() : null;
           if (contextId && (!active || active.id !== contextId) && store && typeof store.activate === 'function') {
             await store.activate(contextId);
+          } else if (action === 'use_registered_source' && contextId && active && active.id === contextId
+            && typeof store.refreshActiveFromServer === 'function') {
+            await store.refreshActiveFromServer();
           }
         }
         if (!isCurrent()) return;
