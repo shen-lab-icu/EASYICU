@@ -12,6 +12,7 @@ from them and cites only a card that states that dimension.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal, Mapping, Optional, Sequence, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -115,6 +116,28 @@ class FamilySpecError(ValueError):
         super().__init__(f"{reason_code}: {message}")
         self.reason_code = reason_code
         self.path = path
+        self.easyicu_safe_diagnostic = {
+            "owner": "easyicu.planning.family_spec_v1",
+            "reason_code": reason_code,
+        }
+
+    @property
+    def easyicu_structured_validation_issues(self) -> list[dict[str, Any]]:
+        """Schema coordinates for the retry owner's closed-field projection.
+
+        Keep this separate from ``errors()``: adding that validator interface
+        would change the feedback the Planner already receives.
+        """
+
+        if not self.path:
+            return []
+        return [{
+            "location": [
+                int(part) if part.isdecimal() else part
+                for part in re.split(r"[.\[\]]", self.path) if part
+            ],
+            "issue_type": "value_error",
+        }]
 
 
 class AdjustmentCandidate(BaseModel):
@@ -808,6 +831,20 @@ class FamilySpecRequest(BaseModel):
         """The typed bounds a predicate-filtered cohort applies: ages, stay, prediction time."""
 
         return (self.age_min, self.age_max, self.minimum_icu_hours, self.prediction_time_hours)
+
+    @property
+    def covered_outcome_columns(self) -> tuple[str, ...]:
+        """Outcomes carried by this request, including a survival endpoint's time.
+
+        Input rosters, covariates and exposure timing do not declare outcomes.
+        This host-derived view adds no field to the Planner schema or digest.
+        """
+
+        suite = self.survival_suite
+        columns = [self.outcome, self.secondary_continuous_outcome]
+        if suite is not None:
+            columns.extend((suite.event_column, suite.followup_time_column))
+        return tuple(dict.fromkeys(column for column in columns if column))
 
     @property
     def cohort_time_zero_hours(self) -> Optional[float]:

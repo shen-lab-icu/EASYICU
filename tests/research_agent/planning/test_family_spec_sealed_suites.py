@@ -19,6 +19,7 @@ from benchmarks.figure2_canonical9.case_scientific_protocol import (
     load_default_case_protocol,
 )
 from easyicu.research_agent import pipeline as _pipeline
+from easyicu.research_agent.agents.family_spec_planner import family_spec_fallback_reason
 from easyicu.research_agent.agents.progressive_planner import (
     FAMILY_SPEC_STRATEGY,
     ProgressivePlannerAgent,
@@ -633,6 +634,34 @@ def _h2_context(
         primary_exposure="vaso_ind_max" if contrast_declared else None,
         user_preferences=UserPreferences(**preferences),
     )
+
+
+@pytest.mark.parametrize("contrast_declared", [False, True])
+def test_a_sealed_feasibility_decision_is_not_replanned_for_requested_outcomes(
+    contrast_declared: bool,
+) -> None:
+    """The fail-closed decision is the run's whole result, outcome or not.
+
+    A question that names its outcome still gets only the sealed decision:
+    the requested-outcome fallback must not hand a contrast the reviewed
+    protocol found non-identifiable to Progressive v2.
+    """
+
+    _projection, authority = _h2_authority()
+    authorities = ScientificRuntimeAuthorities(trajectory=None, current_case=authority)
+    context = _h2_context(authorities, contrast_declared=contrast_declared)
+    context = context.model_copy(update={
+        "cohort": context.cohort.model_copy(update={"requested_outcome_columns": ["death"]}),
+    })
+    disclosure = authorities.planning_contract_context()
+    types = candidate_analysis_types(context)
+    assert family_template_id_for_context(
+        context, analysis_types=types, planning_contract_context=disclosure
+    ) == SOURCE_FEASIBILITY_FAMILY_ID
+    assert family_spec_fallback_reason(
+        context, analysis_types=types, resume_checkpoint=None,
+        stop_after_outline=False, planning_contract_context=disclosure,
+    ) is None
 
 
 H2_LABELS = {
