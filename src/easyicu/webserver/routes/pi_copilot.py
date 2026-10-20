@@ -6,7 +6,9 @@ from html import escape as html_escape
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, Response
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StringConstraints
 
 from easyicu.webserver.pi_copilot import get_pi_copilot_service
@@ -15,6 +17,12 @@ from easyicu.webserver.pi_copilot.contracts import (
     PiCopilotError,
     PiProjectBindingHandoffReceipt,
     ResearchProviderBinding,
+)
+from easyicu.webserver.pi_copilot.provider_config import (
+    DEFAULT_API_TRANSPORT,
+    DEFAULT_BASE_URL,
+    DEFAULT_MODEL,
+    DEFAULT_PROVIDER,
 )
 from easyicu.webserver import codex_account_sessions
 
@@ -352,13 +360,25 @@ class PiProviderConfigRequest(BaseModel):
     provider: ProviderText = "easyicu-local"
     api_key: CredentialText
     base_url: EndpointText = "http://127.0.0.1:8317/v1"
-    model: ModelText = "gpt-5.6-luna"
+    model: ModelText = DEFAULT_MODEL
     api_transport: Literal[
         "anthropic-messages",
         "google-generative-ai",
         "openai-completions",
         "openai-responses",
     ] = "openai-completions"
+    enable_ai: StrictBool = False
+
+
+class PiProviderModelsRequest(BaseModel):
+    """Connection inputs only; the store owns credential/transport validation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: ProviderText = DEFAULT_PROVIDER
+    api_key: str = ""
+    base_url: EndpointText = DEFAULT_BASE_URL
+    api_transport: str = DEFAULT_API_TRANSPORT
     enable_ai: StrictBool = False
 
 
@@ -376,6 +396,27 @@ class PiProviderModelRequest(BaseModel):
 
 def _raise_http(error: PiCopilotError) -> None:
     raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+
+
+class _PrivateProviderModelsRoute(APIRoute):
+    """Keep FastAPI validation from echoing credential-bearing input."""
+
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def private_handler(request: Request) -> Response:
+            try:
+                return await handler(request)
+            except RequestValidationError:
+                _raise_http(
+                    PiCopilotError(
+                        "pi_provider_request_invalid",
+                        "Enter valid model-service connection inputs.",
+                        status_code=422,
+                    )
+                )
+
+        return private_handler
 
 
 def _raise_codex_http(error: codex_account_sessions.CodexAccountSessionError) -> None:
@@ -476,6 +517,27 @@ def post_pi_copilot_provider_config(body: PiProviderConfigRequest) -> dict:
         )
     except PiCopilotError as exc:
         _raise_http(exc)
+
+
+def post_pi_copilot_provider_models(body: PiProviderModelsRequest) -> dict:
+    try:
+        return get_pi_copilot_service().discover_provider_models(
+            provider=body.provider,
+            api_key=body.api_key,
+            base_url=body.base_url,
+            api_transport=body.api_transport,
+            enable_ai=body.enable_ai,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+router.add_api_route(
+    "/api/copilot/pi/provider-config/models",
+    post_pi_copilot_provider_models,
+    methods=["POST"],
+    route_class_override=_PrivateProviderModelsRoute,
+)
 
 
 @router.post("/api/copilot/pi/sessions")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -227,12 +228,22 @@ def test_model_must_be_reported_by_verified_endpoint(tmp_path: Path) -> None:
 )
 def test_native_provider_protocols_use_their_own_auth_and_catalog_shape(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     transport: str,
     base_url: str,
     payload: dict[str, Any],
     model: str,
     expected_headers: dict[str, str],
 ) -> None:
+    # The wire verifier is synthetic; keep URL security validation offline too.
+    def public_dns(host, port, **kwargs):
+        assert host in {"api.anthropic.com", "generativelanguage.googleapis.com"}
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "",
+             ("93.184.216.34", port or 443))
+        ]
+
+    monkeypatch.setattr(socket, "getaddrinfo", public_dns)
     store = PiProviderConfigStore(
         config_path=tmp_path / "pi-provider.env",
         receipt_path=tmp_path / "receipt.json",
