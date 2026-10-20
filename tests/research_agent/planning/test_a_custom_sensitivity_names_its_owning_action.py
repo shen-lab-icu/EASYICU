@@ -52,7 +52,7 @@ def _adjusted_model_with_sensitivity(parent, action=None):
 
 
 def test_a_clustering_stability_without_its_action_is_refused_at_the_outline():
-    with pytest.raises(ValidationError, match="'fit_stability' names no scientific_action_id"):
+    with pytest.raises(ValidationError, match=r"set steps\[2\].scientific_action_id to the retrieved action"):
         _outline("trajectory_clustering", _clustering_with_stability(None))
 
 
@@ -73,7 +73,7 @@ def test_an_action_less_sensitivity_on_the_primary_adjusted_model_is_accepted(an
 
 
 def test_an_action_less_sensitivity_off_the_primary_adjusted_model_is_refused():
-    with pytest.raises(ValidationError, match="'marker_form' names no scientific_action_id"):
+    with pytest.raises(ValidationError, match=r"set steps\[2\].scientific_action_id to the retrieved action"):
         _outline("descriptive_epidemiology", _adjusted_model_with_sensitivity("cohort"))
 
 

@@ -64,6 +64,7 @@ from .structured_diagnostics import (
     infer_validation_stage,
     json_eof_state,
     json_truncation_issues,
+    safe_declared_reason_code,
     safe_json_eof_state,
     safe_projected_validation_issues,
     safe_validation_issues,
@@ -288,22 +289,16 @@ class StructuredAttempt:
 
 
 def _safe_declared_reason_code(exc: BaseException) -> Optional[str]:
-    """Project only an owner-declared, closed-form diagnostic reason code."""
+    """Keep a direct owner code, or the first wrapped schema rule's code.
 
-    diagnostic = getattr(exc, "easyicu_safe_diagnostic", None)
-    if not isinstance(diagnostic, Mapping):
-        return None
-    owner = str(diagnostic.get("owner") or "").strip()
-    if owner not in {
-        "easyicu.planning.progressive_compiler_v1",
-        "easyicu.planning.family_spec_v1",
-        "easyicu.schema_validation_v1",
-    }:
-        return None
-    reason_code = str(diagnostic.get("reason_code") or "").strip()
-    if re.fullmatch(r"[a-z][a-z0-9_]{2,79}", reason_code) is None:
-        return None
-    return reason_code
+    Every wrapped rule also stays on its own validation issue, so a response
+    violating several rules loses none of their diagnostic identities.
+    """
+
+    return safe_declared_reason_code(exc) or next(
+        (issue["reason_code"] for issue in safe_validation_issues(exc) if "reason_code" in issue),
+        None,
+    )
 
 
 def safe_provider_error_category(value: Any) -> Optional[str]:

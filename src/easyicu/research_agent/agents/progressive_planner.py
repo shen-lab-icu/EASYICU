@@ -1657,7 +1657,8 @@ class ProgressivePlannerAgent:
             (
                 "Continuous secondary outcomes: use continuous_outcome_summary for the "
                 "explicitly requested numeric continuous outcomes grouped by a closed "
-                "scientific exposure. Declare one secondary step listing that grouping "
+                "scientific exposure. Declare one step with planned_analysis_role=\"secondary\" "
+                "and scientific_action_id=null; variable_names must list that grouping "
                 "and every selected continuous outcome. It reports per-outcome median, "
                 "quartiles, mean, SD, and missingness, without tests or effect estimates. "
                 "It does not replace a requested association model or uncertainty interval."

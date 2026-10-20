@@ -62,8 +62,9 @@ DESCRIPTIVE_SUMMARY_CONTRACT = (
     "During materialization declare table:cohort_summary for the "
     "summary statistics and table:distribution_summary for the "
     "empirical distribution; keep denominator and measurement_audit steps. "
-    "Do not use continuous_outcome_summary as a primary ungrouped "
-    "summary: that module requires a secondary grouped outcome."
+    "descriptive.descriptive_summary does not apply to continuous_outcome_summary: "
+    "that separate grouped-outcome module requires planned_analysis_role=\"secondary\" "
+    "and scientific_action_id=null."
 )
 
 

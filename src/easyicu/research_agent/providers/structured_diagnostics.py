@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Dict, List, Mapping, Optional
 
 _SAFE_VALIDATION_STAGES = frozenset(
@@ -445,6 +446,31 @@ def _safe_validation_issue_type(value: Any) -> str:
     return "other"
 
 
+def safe_declared_reason_code(exc: BaseException) -> Optional[str]:
+    """Read only a known owner's explicit diagnostic, never exception prose."""
+
+    diagnostic = getattr(exc, "easyicu_safe_diagnostic", None)
+    if not isinstance(diagnostic, Mapping):
+        return None
+    if str(diagnostic.get("owner") or "").strip() not in {
+        "easyicu.planning.progressive_compiler_v1",
+        "easyicu.planning.progressive_outline_v1",
+        "easyicu.planning.family_spec_v1",
+        "easyicu.schema_validation_v1",
+    }:
+        return None
+    code = str(diagnostic.get("reason_code") or "").strip()
+    return code if re.fullmatch(r"[a-z][a-z0-9_]{2,79}", code) else None
+
+
+def _validation_record_reason_code(record: Mapping[str, Any]) -> Optional[str]:
+    # Pydantic preserves a validator's ValueError in ctx.error. The input,
+    # message and arbitrary context strings are never diagnostic authorities.
+    context = record.get("ctx")
+    error = context.get("error") if isinstance(context, Mapping) else None
+    return safe_declared_reason_code(error) if isinstance(error, BaseException) else None
+
+
 def safe_validation_issues(exc: BaseException) -> List[Dict[str, Any]]:
     """Project schema coordinates and shape without prose or rejected values."""
 
@@ -467,6 +493,9 @@ def safe_validation_issues(exc: BaseException) -> List[Dict[str, Any]]:
             "location": location or ["<root>"],
             "issue_type": _safe_validation_issue_type(record.get("type")),
         }
+        reason_code = _validation_record_reason_code(record)
+        if reason_code is not None:
+            issue["reason_code"] = reason_code
         if "input" in record:
             issue["input_shape"] = _safe_input_shape(record.get("input"))
         projected.append(issue)
@@ -494,6 +523,9 @@ def safe_projected_validation_issues(value: Any) -> List[Dict[str, Any]]:
             "location": location or ["<root>"],
             "issue_type": _safe_validation_issue_type(record.get("issue_type")),
         }
+        reason_code = record.get("reason_code")
+        if isinstance(reason_code, str) and re.fullmatch(r"[a-z][a-z0-9_]{2,79}", reason_code):
+            issue["reason_code"] = reason_code
         input_shape = _safe_projected_input_shape(record.get("input_shape"))
         if input_shape is not None:
             issue["input_shape"] = input_shape
@@ -583,6 +615,7 @@ def safe_json_eof_state(value: Any) -> Optional[Dict[str, Any]]:
 
 
 __all__ = [
+    "safe_declared_reason_code",
     "infer_validation_stage",
     "json_eof_state",
     "json_truncation_issues",
