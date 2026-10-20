@@ -47,7 +47,8 @@ function harness(question, missing) {
   // never read back from the message list.
   const shell = fs.readFileSync(shellFile, 'utf8');
   assert.match(shell, /const opening = !intent && decorated === text && !state\.messages\.some\(row => row && row\.role === 'user'\) \? text : '';/);
-  assert.match(shell, /await sendText\(decorated, undefined, intent, true, '', opening\);/);
+  // The typed opening question is sent as `typed`; decorated host text is not the researcher's wording.
+  assert.match(shell, /await sendText\(decorated, undefined, intent, true, decorated === text \? 'typed' : 'host_prompt', opening\);/);
   assert.match(shell, /if \(visibleUserMessage && openingQuestion\) state\.openingQuestion = \{ sessionId: state\.session\.session_id, text: openingQuestion \};/);
   const reader = shell.slice(shell.indexOf('function conversationResearchQuestion()'), shell.indexOf('async function continueAfterDataSourceConfirmation()'));
   assert.match(reader, /state\.openingQuestion/);
