@@ -444,13 +444,29 @@
     ventilator: ['ventilation measure', '通气指标'],
     vitals: ['vital sign', '生命体征'],
   };
+  // A finding whose host record names its cause reads by that cause: the
+  // same code covers a source without patient grouping and a prepared
+  // package that did not carry the source's verified grouping.
+  const FINDING_REASONS = {
+    DESCRIPTIVE_INTERVALS_WITHHELD_WITHOUT_PATIENT_GROUPING: {
+      field: 'descriptive_interval_limitation',
+      reasons: {
+        verified_patient_grouping_not_carried_by_prepared_package: ['准备后的数据未保留患者分组', '来源已有经核实的患者分组，但准备后的数据包未携带与其住院行对应的分组凭证。恢复这一绑定前，保留全部住院，只报告计数与比例，不报告区间。'],
+      },
+    },
+  };
   function category(key) {
     const row = Object.prototype.hasOwnProperty.call(CATEGORIES, key) ? CATEGORIES[key] : null;
     return row ? pick(row) : '';
   }
 
-  function finding(code) {
-    const row = FINDINGS[String(code || '')];
+  function finding(code, record) {
+    const byReason = FINDING_REASONS[String(code || '')];
+    const cause = byReason && record && record[byReason.field] && typeof record[byReason.field] === 'object'
+      ? String(record[byReason.field].reason || '') : '';
+    const reasons = byReason ? byReason.reasons : {};
+    const row = (cause && Object.prototype.hasOwnProperty.call(reasons, cause) ? reasons[cause] : null)
+      || FINDINGS[String(code || '')];
     return row && zh() ? { title: row[0], detail: row[1] } : null;
   }
   function question(code) {
