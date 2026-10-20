@@ -296,6 +296,7 @@ def _safe_declared_reason_code(exc: BaseException) -> Optional[str]:
     owner = str(diagnostic.get("owner") or "").strip()
     if owner not in {
         "easyicu.planning.progressive_compiler_v1",
+        "easyicu.planning.family_spec_v1",
         "easyicu.schema_validation_v1",
     }:
         return None
@@ -790,8 +791,12 @@ def call_llm_with_structured_retry(
             # that was recorded.
             rendered_failure = render_parse_failure(exc)
             validation_stage = infer_validation_stage(exc)
-            validation_issues = safe_validation_issues(exc) or json_truncation_issues(
-                exc, raw
+            validation_issues = (
+                safe_validation_issues(exc)
+                or safe_projected_validation_issues(
+                    getattr(exc, "easyicu_structured_validation_issues", None)
+                )
+                or json_truncation_issues(exc, raw)
             )
             reason_code = _safe_declared_reason_code(exc)
             resend = (

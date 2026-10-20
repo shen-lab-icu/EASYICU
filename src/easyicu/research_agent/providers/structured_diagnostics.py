@@ -200,6 +200,21 @@ _SAFE_VALIDATION_FIELDS = frozenset(
         "time_zero",
         "variable_names",
         "weights",
+        # Family-spec schema fields, never the variable/label values they carry.
+        "family_id",
+        "request_sha256",
+        "adjustment_set",
+        "baseline_variables",
+        "feature_variables",
+        "cohort_membership_column",
+        "reader_display_labels",
+        "comparator_applications",
+        "roster_decision_note",
+        "population",
+        "criteria",
+        "question_requirements",
+        "kind",
+        "concepts",
     }
 )
 

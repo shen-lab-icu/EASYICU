@@ -25,7 +25,6 @@ from ..planning.family_spec import (
     build_family_spec_request,
     DESCRIPTIVE_FAMILY_ID,
     FIXED_WINDOW_TRAJECTORY_FAMILY_ID,
-    LANDMARK_CATEGORICAL_FAMILY_ID,
     LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID,
     LANDMARK_SURVIVAL_FAMILY_ID,
     PHENOTYPING_FAMILY_ID,
@@ -41,6 +40,10 @@ from ..planning.family_spec import (
     build_source_feasibility_skeleton,
     family_template_id_for_context,
     keeps_unmeasured_covariate_rows,
+    sealed_continuous_survival_suite_coordinates,
+    sealed_feasibility_coordinates,
+    sealed_survival_suite_coordinates,
+    sealed_trajectory_suite_coordinates,
 )
 from ..contracts.model_retention import MISSING_CATEGORY_SHARE_THRESHOLD
 from ..planning.family_spec.contract import (
@@ -1176,21 +1179,36 @@ def family_spec_fallback_reason(
     )
     if family_id is None:
         return "no_family_template_for_context"
-    if family_id == LANDMARK_CATEGORICAL_FAMILY_ID:
-        try:
-            request = build_family_spec_request(
-                context, analysis_types=analysis_types,
-                variable_roster=[variable.name for variable in context.variables],
-                allowed_literature_citation_keys=(),
-                planning_contract_context=planning_contract_context,
-            )
-        except FamilySpecError:
-            # Preserve the owner's typed refusal for an invalid request.
-            return None
-        covered = {request.outcome, request.secondary_continuous_outcome}
-        if set(context.cohort.requested_outcome_columns or ()) - covered:
-            return "family_template_requested_outcomes_not_supported"
+    try:
+        request = build_family_spec_request(
+            context, analysis_types=analysis_types,
+            variable_roster=[variable.name for variable in context.variables],
+            allowed_literature_citation_keys=(),
+            planning_contract_context=planning_contract_context,
+        )
+    except FamilySpecError:
+        # Preserve the owner's typed refusal for an invalid request.
+        return None
+    if _template_sealed_for_run(family_id, planning_contract_context):
+        # A host-sealed owner (a fail-closed feasibility decision, a signed
+        # suite) defines this run's result; Progressive v2 must not replan it
+        # because the question also named outcomes the sealed result omits.
+        return None
+    if set(context.cohort.requested_outcome_columns or ()) - set(request.covered_outcome_columns):
+        return "family_template_requested_outcomes_not_supported"
     return None
+
+
+def _template_sealed_for_run(family_id: str, planning_contract_context: str) -> bool:
+    """Whether the host sealed this template's owner for the current run."""
+
+    sealed = {
+        SOURCE_FEASIBILITY_FAMILY_ID: sealed_feasibility_coordinates,
+        FIXED_WINDOW_TRAJECTORY_FAMILY_ID: sealed_trajectory_suite_coordinates,
+        LANDMARK_SURVIVAL_FAMILY_ID: sealed_survival_suite_coordinates,
+        LANDMARK_CONTINUOUS_SURVIVAL_FAMILY_ID: sealed_continuous_survival_suite_coordinates,
+    }.get(family_id)
+    return sealed is not None and sealed(planning_contract_context) is not None
 
 
 def family_result_stop(
