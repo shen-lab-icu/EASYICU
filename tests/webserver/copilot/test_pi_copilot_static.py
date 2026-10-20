@@ -127,7 +127,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-study-workspace.js?v=20261016-session-labels1" in index
     assert "js/screens-guided-pi-events.js?v=20261020-registered-offer1" in index
     assert "js/screens-guided-pi-project.js?v=20260901-session-deeplink1" in index
-    assert "js/screens-guided-pi-data-consent.js?v=20261020-registered-offer1" in index
+    assert "js/screens-guided-pi-data-consent.js?v=20261020-registered-offer2" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261020-registered-offer1" in index
     assert "js/screens-guided-pi-session-view.js?v=20261010-source-gate1" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
