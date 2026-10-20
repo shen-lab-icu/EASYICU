@@ -765,6 +765,7 @@ def test_a_planning_context_states_each_grouped_level_and_its_parameters(
                 {"code": 3, "group": "gU", "label": "not measured"},
             ],
             "parameters": declared["parameters"],
+            "rule_wording_version": 2,
         }
     ]
     assert declared["parameters"]["concept"] == "lact"

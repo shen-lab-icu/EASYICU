@@ -2160,6 +2160,14 @@ def bind_numeric_values(
         if per_step_records is not None
         else None
     )
+    from .descriptive_report_facts import descriptive_table_numeric_claims
+
+    table_claims = descriptive_table_numeric_claims(evidence, per_step_records)
+    if table_claims:
+        authoritative_claims = [
+            *(authoritative_claims if authoritative_claims is not None else evidence.numeric_claims()),
+            *table_claims,
+        ]
 
     lineage = _evidence_lineage(evidence)
     skip_spans = sorted(_spans_to_skip(manuscript) + bibliographic_year_spans(manuscript, literature))

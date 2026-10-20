@@ -133,9 +133,9 @@ def test_each_level_is_copied_with_its_interval(tmp_path) -> None:
     facts = _compile_study_population_occurrence_report_facts(records, store, LABELS)
 
     assert [fact.text for fact in facts] == [
-        f"In the study cohort, 70 of 100 observations (70.00%; {_interval_text(70, 100)}) "
+        f"In the study cohort, 70 of 100 records (70.00%; {_interval_text(70, 100)}) "
         "were in the “No early injury” group",
-        f"In the study cohort, 30 of 100 observations (30.00%; {_interval_text(30, 100)}) "
+        f"In the study cohort, 30 of 100 records (30.00%; {_interval_text(30, 100)}) "
         "were in the “Early injury” group",
     ]
     assert {fact.subsection for fact in facts} == {"Cohort characteristics"}
@@ -154,7 +154,7 @@ def test_a_counts_only_occurrence_carries_no_interval(tmp_path) -> None:
     facts = _compile_study_population_occurrence_report_facts(records, store, LABELS)
 
     assert facts[0].text == (
-        "In the study cohort, 70 of 100 observations (70.00%) were in the “No early injury” group"
+        "In the study cohort, 70 of 100 records (70.00%) were in the “No early injury” group"
     )
 
 

@@ -28,6 +28,7 @@ from .bibtex import render_bibtex
 from .descriptive_report_facts import (
     compile_primary_counts_only_report_facts,
     render_descriptive_report_claims,
+    writer_question_coverage,
 )
 from ..review.causal_audit import run_causal_audit
 from ..contracts.runtime import (
@@ -2522,6 +2523,10 @@ def _bind_and_review_manuscript(
     )
     if result_claim_finding is not None:
         findings.append(result_claim_finding)
+    question_coverage_findings = writer_question_coverage(
+        bound, plan=plan, facts=primary_result_facts, evidence=evidence,
+    )
+    findings.extend(question_coverage_findings)
     side_findings = collect_side_findings(per_step_records)
     bound, language_guard_detail = enforce_writer_claim_language(
         bound,
@@ -2761,7 +2766,7 @@ def _bind_and_review_manuscript(
                 ],
             }
         )
-    if manuscript_quality_errors:
+    if manuscript_quality_errors or question_coverage_findings:
         manuscript_critique = manuscript_critique.model_copy(
             update={
                 "status": "blocked",
@@ -2771,7 +2776,7 @@ def _bind_and_review_manuscript(
                     "terminology, or cross-section consistency errors."
                 ],
                 "suggested_repairs": list(manuscript_critique.suggested_repairs)
-                + [item.message for item in manuscript_quality_errors[:8]],
+                + [item.message for item in (*manuscript_quality_errors, *question_coverage_findings)[:8]],
             }
         )
     _persist_manuscript_critique(

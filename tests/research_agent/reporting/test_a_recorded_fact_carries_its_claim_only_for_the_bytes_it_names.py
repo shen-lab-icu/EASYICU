@@ -188,13 +188,17 @@ def test_recorded_facts_carry_the_claims_whose_numbers_they_show(tmp_path) -> No
     assert [fact["status"] for fact in trace["facts"]] == ["carried", "carried"]
     assert _complete(tmp_path, store, records, manuscript)
     # The claim's 13.370998 percent is shown at two places, as 13.37%.
-    assert "(13.37%)" in facts[1].text
+    assert "13.37% (71 of 531 records)" in facts[1].text
 
 
 def test_a_fact_that_shows_other_numbers_carries_nothing(tmp_path) -> None:
     store, records, claims, facts = _study(tmp_path)
-    # The second group's sentence, offered for the first group's claim.
-    swapped = (replace(facts[1], replaces_claim_ref=facts[0].replaces_claim_ref),)
+    # Only the second group's clause, offered for the first group's claim.
+    # The complete combined sentence legitimately carries both groups.
+    swapped = (replace(
+        facts[1], replaces_claim_ref=facts[0].replaces_claim_ref,
+        text="In-hospital mortality was " + facts[1].text.split(" and ", 1)[1],
+    ),)
     manuscript = _manuscript(swapped)
     record_result_facts(manuscript, swapped, run_dir=tmp_path, evidence=store)
 

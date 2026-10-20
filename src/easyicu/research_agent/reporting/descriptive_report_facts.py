@@ -1,11 +1,15 @@
-"""Reader facts compiled from verified counts-only distribution outputs.
+"""Reader facts and question coverage from verified descriptive products.
 
 The caller must first verify the executor envelope and source-summary digest.
 This adapter copies recorded estimates; arithmetic below only checks agreement.
 It neither fits a model nor grants clinical, inferential or publication authority.
 """
 
+import csv
+from dataclasses import replace
+import io
 import json
+from pathlib import Path
 import math
 import re
 from typing import Any, Mapping, Sequence
@@ -15,6 +19,17 @@ from ..contracts.primary_cohort import STUDY_POPULATION_PRODUCTS
 from ..contracts.descriptive_execution import exposure_outcome_distribution_result_receipt_valid
 from ..authority.manuscript_claim_policy import fact_sentence_visible
 from ..authority.scientific_claims import ScientificClaim
+from ..authority.evidence_store import evidence_artifact_basename_stem
+from ..authority.numeric_claim_identity import NumericClaim
+from ..authority.runtime_artifacts import current_successful_step_records, verified_run_evidence_path
+from ..contracts.continuous_outcome_summary import CONTINUOUS_OUTCOME_OUTPUT, continuous_outcome_columns
+from ..contracts.exposure_group_rules import (
+    grouping_measure_description, grouping_rule_texts, grouping_rule_values,
+)
+from ..authority.reader_numeric_display import round_reader_numeric_display
+from ..orchestration.exposure_group_labels import exposure_group_label_rows
+from ..schema import ValidationFinding
+from .manuscript_surface import in_sentence_label
 from .report_fact import DescriptiveReportFact
 
 #: A host-issued unit a fact sentence may name after its count ("ICU stays",
@@ -51,6 +66,33 @@ def _quoted(value: str) -> str:
     return "“" + text.replace("“", "‘").replace("”", "’") + "”"
 
 
+def _reader_name(value: str) -> str:
+    return _quoted(value)[1:-1]
+
+
+def _analysis_unit(context) -> str:
+    provenance = getattr(getattr(context, "cohort", None), "provenance", {}) or {}
+    return {"icu_stay": "ICU stays", "patient": "patients"}.get(
+        provenance.get("analysis_unit"), "records",
+    )
+
+
+def _join(values):
+    return " and ".join(values) if len(values) < 3 else ", ".join(values[:-1]) + " and " + values[-1]
+
+
+def _combined_facts(facts, text):
+    """Keep each level's claim identity while sharing one source-bound sentence.
+
+    Every projection carries all cells and citations printed in that sentence.
+    Placement deduplicates the sentence, never the per-level scientific claims.
+    """
+    fields = tuple(dict.fromkeys(key for fact in facts for key in fact.source_fields))
+    citations = tuple(dict.fromkeys(key for fact in facts for key in fact.supporting_evidence_ids))
+    return [replace(fact, text=text, source_fields=fields, supporting_evidence_ids=citations)
+            for fact in facts]
+
+
 def _estimate(row: Mapping[str, Any], count: int, denominator: int) -> float:
     value = row.get("estimate_pct")
     if (
@@ -67,6 +109,30 @@ def _estimate(row: Mapping[str, Any], count: int, denominator: int) -> float:
     return float(value)
 
 
+def _writer_distribution_receipt(summary):
+    """Admit the owner's observed-exposure subset only with its closed ledger.
+
+    The execution receipt's whole-cohort policy remains unchanged; this is
+    writer admission of an explicitly reported subset, never relabelling it
+    as the full cohort.
+    """
+    if summary.get("analysis_set") != "exposure_observed_rows_within_bound_typed_cohort":
+        return exposure_outcome_distribution_result_receipt_valid(summary)
+    estimates = summary.get("descriptive_estimates", {})
+    if estimates.get("analysis_set") != summary["analysis_set"]:
+        raise ValueError("Exposure subset disagrees with its recorded estimates")
+    reconciliation = summary.get("source_row_count_reconciliation", {})
+    source = _count(reconciliation.get("source_rows"), positive=True)
+    analyzed = _count(reconciliation.get("analyzed_rows"), positive=True)
+    excluded = _count(reconciliation.get("excluded_missing_exposure_rows"))
+    if source != analyzed + excluded or analyzed != _count(summary.get("cohort_n"), positive=True):
+        raise ValueError("Observed exposure denominator does not reconcile to its source")
+    return exposure_outcome_distribution_result_receipt_valid({
+        **summary, "analysis_set": "bound_typed_cohort",
+        "descriptive_estimates": {**estimates, "analysis_set": "bound_typed_cohort"},
+    })
+
+
 def compile_counts_only_report_facts(
     verified_records: Sequence[Mapping[str, Any]],
     *,
@@ -80,13 +146,15 @@ def compile_counts_only_report_facts(
 
     from .manuscript_labels import source_bound_manuscript_labels
 
-    reader_display_labels = source_bound_manuscript_labels(
+    reader_display_labels, label_citations = manuscript_group_labels(evidence, source_bound_manuscript_labels(
         context, reader_display_labels, language=manuscript_language,
-    )
+    ), language=manuscript_language)
+    unit = _analysis_unit(context)
+    grouping_record, _grouping_rows, parameters = _groupings(evidence)
     facts: list[DescriptiveReportFact] = []
     for record in verified_records:
         summary = record.get("step_summary", {})
-        if not exposure_outcome_distribution_result_receipt_valid(summary):
+        if not _writer_distribution_receipt(summary):
             continue
         if summary.get("interval_method") != "none_counts_only":
             continue
@@ -101,6 +169,31 @@ def compile_counts_only_report_facts(
         if estimates.get("dependence") is not None or estimates.get("risk_difference") is not None:
             raise ValueError("Counts-only report facts cannot introduce an inferential contrast")
         cohort_n = _count(summary.get("cohort_n"), positive=True)
+        subset = summary.get("analysis_set") == "exposure_observed_rows_within_bound_typed_cohort"
+        ledger = summary.get("source_row_count_reconciliation", {})
+        analysis_n = ledger["source_rows"] if subset else cohort_n
+        cohort_field = "source_row_count_reconciliation.source_rows" if subset else "cohort_n"
+        exposure = summary["exposure"]
+        measure = "exposure"
+        window_phrase = ""
+        if exposure in parameters:
+            measure = in_sentence_label(_reader_name(
+                grouping_measure_description(parameters[exposure]).split(" recorded", 1)[0]
+            ))
+            window_phrase = " in that window" if parameters[exposure]["window"] is not None else ""
+            rules = grouping_rule_texts(parameters[exposure], include_measure=False)
+            definition = "; ".join(
+                _reader_name(text.replace("≤", "at most").replace("≥", "at least")
+                             .replace("<", "below").replace(">", "above"))
+                for text in rules.values()
+            )
+            facts.append(DescriptiveReportFact(
+                subsection="Cohort characteristics",
+                text=f"Groups were defined from {in_sentence_label(grouping_measure_description(parameters[exposure]))}: {definition}",
+                evidence_id=grouping_record.evidence_id, source_sha256=grouping_record.sha256,
+                source_fields=(f"compiled.{exposure}.derivation",),
+                required_result_sections=("Results",),
+            ))
         prevalence = estimates["exposure_prevalence"]
         outcomes = estimates["outcome_absolute_risks"]
         if len(prevalence) != len(outcomes):
@@ -108,6 +201,8 @@ def compile_counts_only_report_facts(
         levels: dict[int, tuple[str, str, int]] = {}
         typed_levels: set[tuple[type, str]] = set()
         cohort_count = 0
+        shares = []
+        share_parts = []
         for position, row in enumerate(prevalence):
             index = _count(row.get("level_index"))
             level = _level(row.get("level"))
@@ -121,21 +216,48 @@ def compile_counts_only_report_facts(
                 raise ValueError("Prevalence fact denominator differs from the cohort")
             estimate = _estimate(row, count, denominator)
             coordinate = f"{summary['exposure']}={level}"
-            label = _quoted(reader_display_labels.get(coordinate, coordinate))
+            label = _reader_name(reader_display_labels.get(coordinate, coordinate))
             levels[index] = (level, label, count)
             cohort_count += count
             prefix = f"descriptive_estimates.exposure_prevalence[{position}]"
-            facts.append(DescriptiveReportFact(
+            share_parts.append(f"{count:,} ({estimate:.2f}%) {'had ' if not share_parts else ''}{label}")
+            shares.append(DescriptiveReportFact(
                 subsection="Cohort characteristics",
-                text=f"Exposure prevalence in the {label} group was {count:,} of {denominator:,} observations ({estimate:.2f}%)",
+                text="",
                 evidence_id=source.evidence_id, source_sha256=source.sha256,
                 source_fields=tuple(f"{prefix}.{key}" for key in ("level", "n", "denominator", "estimate_pct")),
-                cohort_n=cohort_n,
+                cohort_n=analysis_n, cohort_source_field=cohort_field, analysis_unit=unit,
+                supporting_evidence_ids=(
+                    *label_citations.get(coordinate, ()),
+                    *((grouping_record.evidence_id,) if exposure in parameters else ()),
+                ),
+                step_id=record["step_id"], product_id="table:exposure_outcome_distribution",
+                outcome="exposure_distribution",
             ))
         if cohort_count != cohort_n:
             raise ValueError("Prevalence fact counts do not partition the cohort")
+        population = f"with {measure} recorded{window_phrase}" if subset else "in the analysis cohort"
+        share_text = f"Of the {cohort_n:,} {unit} {population}, {_join(share_parts)}"
+        if subset:
+            share_text += (
+                f"; {ledger['excluded_missing_exposure_rows']:,} of the {analysis_n:,} {unit} "
+                f"had no {measure} recorded and are excluded from these shares"
+            )
+            shares = [replace(fact, source_fields=(*fact.source_fields, *(
+                f"source_row_count_reconciliation.{key}"
+                for key in ("analyzed_rows", "excluded_missing_exposure_rows", "source_rows")
+            ))) for fact in shares]
+        abstract_share_text = share_text
+        if exposure in parameters:
+            recorded_window = grouping_measure_description(parameters[exposure]).split(" recorded", 1)[1]
+            abstract_share_text = share_text.replace(
+                f"{measure} recorded{window_phrase}", f"{measure} recorded{recorded_window}", 1,
+            )
+        facts.extend(replace(fact, abstract_text=abstract_share_text)
+                     for fact in _combined_facts(shares, share_text))
         seen_outcomes: set[int] = set()
-        outcome_label = _quoted(reader_display_labels.get(summary["outcome"], summary["outcome"]))
+        outcome_label = _reader_name(reader_display_labels.get(summary["outcome"], summary["outcome"]))
+        outcome_facts, outcome_parts = [], []
         for position, row in enumerate(outcomes):
             index = _count(row.get("level_index"))
             level = _level(row.get("level"))
@@ -158,14 +280,21 @@ def compile_counts_only_report_facts(
             )]
             if len(matching_claims) > 1:
                 raise ValueError("Ambiguous source-bound descriptive claim")
-            facts.append(DescriptiveReportFact(
+            outcome_parts.append(f"{estimate:.2f}% ({events:,} of {denominator:,} {unit}) in {label}")
+            outcome_facts.append(DescriptiveReportFact(
                 subsection="Primary outcome",
-                text=f"Observed {outcome_label} in the {label} group was {events:,} of {denominator:,} observations ({estimate:.2f}%)",
+                text="",
                 evidence_id=source.evidence_id, source_sha256=source.sha256,
                 source_fields=tuple(f"{prefix}.{key}" for key in ("level", "events", "denominator", "estimate_pct")),
                 replaces_claim_ref=matching_claims[0].claim_ref if matching_claims else None,
                 outcome_label=outcome_label, group_label=label, estimate_pct=estimate,
+                supporting_evidence_ids=label_citations.get(f"{summary['exposure']}={level}", ()),
+                step_id=record["step_id"], product_id="table:exposure_outcome_distribution",
+                outcome=summary["outcome"],
             ))
+        facts.extend(_combined_facts(
+            outcome_facts, f"{outcome_label[:1].upper() + outcome_label[1:]} was {_join(outcome_parts)}",
+        ))
     return tuple(facts)
 
 
@@ -190,7 +319,7 @@ def verified_descriptive_source_records(projected, evidence):
     return records
 
 
-def _compile_grouped_table_one_cohort_report_facts(projected, evidence):
+def _compile_grouped_table_one_cohort_report_facts(projected, evidence, *, context=None):
     """Copy the cohort count from a verified grouped Table 1 result.
 
     The sentence names the cohort Table 1 read: the closed analysis cohort when
@@ -235,7 +364,7 @@ def _compile_grouped_table_one_cohort_report_facts(projected, evidence):
         )
         facts.append(DescriptiveReportFact(
             subsection="Cohort characteristics",
-            text=f"{cohort} included {cohort_n:,} ICU stays",
+            text=f"{cohort} included {cohort_n:,} {_analysis_unit(context) if context is not None else 'ICU stays'}",
             evidence_id=record.evidence_id,
             source_sha256=record.sha256,
             source_fields=("cohort_n",),
@@ -377,7 +506,7 @@ def _recorded_share(row: Mapping[str, Any], count: int, denominator: int):
     return float(value), (low, high, level)
 
 
-def _compile_study_population_occurrence_report_facts(projected, evidence, reader_display_labels):
+def _compile_study_population_occurrence_report_facts(projected, evidence, reader_display_labels, *, context=None):
     """Copy how often each exposure level occurs in the study cohort.
 
     A plan that asks how often its exposure occurs answers it on the host's
@@ -450,7 +579,7 @@ def _compile_study_population_occurrence_report_facts(projected, evidence, reade
             facts.append(DescriptiveReportFact(
                 subsection="Cohort characteristics",
                 text=(
-                    f"In the study cohort, {count:,} of {denominator:,} observations "
+                    f"In the study cohort, {count:,} of {denominator:,} {_analysis_unit(context)} "
                     f"({recorded}) were in the {label} group"
                 ),
                 evidence_id=record.evidence_id, source_sha256=record.sha256,
@@ -485,14 +614,19 @@ def compile_primary_counts_only_report_facts(records, *, evidence, reader_displa
         scientific_claims=load_registered_scientific_claims(root=evidence.root, records=evidence.records()),
     )
     return (
-        *_compile_grouped_table_one_cohort_report_facts(projected, evidence),
+        *_compile_grouped_table_one_cohort_report_facts(projected, evidence, context=context),
         *_compile_survival_cohort_report_facts(projected, evidence),
         *descriptive_facts,
+        *compile_continuous_outcome_report_facts(
+            projected, evidence=evidence, reader_display_labels=reader_display_labels,
+            context=context, manuscript_language=manuscript_language, plan=plan,
+        ),
         *_compile_study_population_occurrence_report_facts(
             projected, evidence,
             source_bound_manuscript_labels(
                 context, reader_display_labels, language=manuscript_language,
             ),
+            context=context,
         ),
         *compile_benchmark_report_facts(
             projected, evidence=evidence, reader_display_labels=reader_display_labels,
@@ -540,7 +674,10 @@ def missing_primary_result_facts(manuscript: str, facts: Sequence[DescriptiveRep
         if (missing := tuple(
             fact for fact in facts
             if section in fact.required_result_sections
-            and not _fact_present(regions.get(section, ""), fact)
+            and not _fact_present(regions.get(section, ""), (
+                replace(fact, text=fact.abstract_text)
+                if section == "Abstract" and fact.abstract_text else fact
+            ))
         ))
     }
 
@@ -555,7 +692,8 @@ def place_primary_result_summaries(manuscript: str, facts: Sequence[DescriptiveR
     if not facts:
         return manuscript
     abstract_facts = tuple(
-        fact for fact in facts if "Abstract" in fact.required_result_sections
+        replace(fact, text=fact.abstract_text) if fact.abstract_text else fact
+        for fact in facts if "Abstract" in fact.required_result_sections
     )
     if not abstract_facts:
         return manuscript
@@ -573,10 +711,10 @@ def place_primary_result_summaries(manuscript: str, facts: Sequence[DescriptiveR
                 seen.add(line.strip())
             lines.append(line)
         body = "\n".join(lines) + ("\n" if body.endswith("\n") else "")
-        missing = [
+        missing = list(dict.fromkeys(
             fact.scaffold for fact in abstract_facts
             if not _fact_present(body, fact)
-        ]
+        ))
         if missing:
             body = "\n\n" + "\n\n".join(missing) + "\n\n" + body.lstrip()
         manuscript = manuscript[:start] + body + manuscript[end:]
@@ -608,18 +746,31 @@ def render_descriptive_report_claims(manuscript: str, facts: Sequence[Descriptiv
     for start, end in sorted(regions, reverse=True):
         body = manuscript[start:end]
         tokens = {fact.replaces_claim_ref: fact for fact in facts if fact.replaces_claim_ref}
-        pattern = r"(?:^[ \t]*\{claim:[A-Za-z0-9_.-]+\}[.!?]?[ \t]*(?:\n|$)\s*){2,}"
+        pattern = r"(?:^[ \t]*\{claim:[A-Za-z0-9_.-]+\}[.!?]?[ \t]*(?:\n|$)\s*)+"
 
         def summarize(match):
             refs = re.findall(r"\{claim:([^}]+)\}", match.group())
+            if len(refs) == 1 and "### Descriptive results" not in manuscript:
+                return match.group()
             selected = [tokens.get(ref) for ref in refs]
             if any(fact is None or fact.estimate_pct is None or not fact.group_label or not fact.outcome_label for fact in selected):
                 return match.group()
             if len(set(refs)) != len(refs) or len({(fact.evidence_id, fact.source_sha256, fact.outcome_label) for fact in selected}) != 1:
                 return match.group()
+            # A Writer may choose only one group's token for its conclusion.
+            # The same verified outcome product authorizes all its groups.
+            owner = selected[0]
+            selected = [fact for fact in tokens.values() if (
+                fact.evidence_id, fact.source_sha256, fact.outcome_label
+            ) == (owner.evidence_id, owner.source_sha256, owner.outcome_label)]
+            if len(selected) < 2:
+                return match.group()
             values = "; ".join(f"{fact.estimate_pct:.2f}% in the {fact.group_label} group" for fact in selected)
+            citations = " ".join(f"{{evidence:{key}}}" for key in dict.fromkeys(
+                key for fact in selected for key in (fact.evidence_id, *fact.supporting_evidence_ids)
+            ))
             return (f"Observed {selected[0].outcome_label} proportions were {values} "
-                    f"{{evidence:{selected[0].evidence_id}}}. "
+                    f"{citations}. "
                     "These are descriptive, unadjusted proportions; they do not establish an adjusted or causal effect.\n\n")
 
         body = re.sub(pattern, summarize, body, flags=re.M)
@@ -632,6 +783,11 @@ def render_descriptive_report_claims(manuscript: str, facts: Sequence[Descriptiv
             quantitative_regions = tuple(_primary_result_regions(manuscript))
 
             def project(match):
+                if fact.abstract_text and any(
+                    section == "Abstract" and start <= match.start() < end
+                    for section, start, end in quantitative_regions
+                ):
+                    return replace(fact, text=fact.abstract_text).scaffold
                 if any(start <= match.start() < end for _, start, end in quantitative_regions):
                     return fact.scaffold
                 # The source-bound claim authorizes both the count and its
@@ -686,11 +842,12 @@ def place_descriptive_report_facts(manuscript: str, facts: Sequence[DescriptiveR
     # same registered facts together there instead of filling a false
     # association section with a figure pointer. Legacy layouts stay readable.
     descriptive_heading = re.search(r"^### Descriptive results[ \t]*$", body, re.M)
-    destinations = (
-        {"Descriptive results": facts} if descriptive_heading is not None else
-        {name: tuple(fact for fact in facts if fact.subsection == name)
-         for name in dict.fromkeys(fact.subsection for fact in facts)}
-    )
+    destinations = {}
+    for fact in facts:
+        name = ("Descriptive results" if descriptive_heading is not None
+                and fact.subsection in {"Cohort characteristics", "Primary outcome"}
+                else fact.subsection)
+        destinations.setdefault(name, []).append(fact)
     cohort_heading = re.search(r"^### Cohort characteristics[ \t]*$", body, re.M)
     cohort_sources = tuple(fact for fact in facts if fact.cohort_n is not None)
     if (descriptive_heading is not None or cohort_heading is not None) and cohort_sources:
@@ -702,9 +859,9 @@ def place_descriptive_report_facts(manuscript: str, facts: Sequence[DescriptiveR
             source = cohort_sources[0]
             cohort_fact = DescriptiveReportFact(
                 subsection="Cohort characteristics",
-                text=f"The analysis cohort comprised {source.cohort_n:,} observations",
+                text=f"The analysis cohort comprised {source.cohort_n:,} {source.analysis_unit}",
                 evidence_id=source.evidence_id, source_sha256=source.source_sha256,
-                source_fields=("cohort_n",),
+                source_fields=(source.cohort_source_field,),
             )
             destinations["Cohort characteristics"] = (
                 *destinations.get("Cohort characteristics", ()), cohort_fact,
@@ -716,7 +873,261 @@ def place_descriptive_report_facts(manuscript: str, facts: Sequence[DescriptiveR
         next_heading = re.search(r"^###\s+", body[heading.end():], re.M)
         stop = heading.end() + next_heading.start() if next_heading else len(body)
         existing = body[heading.end():stop].splitlines()
-        missing = [fact.scaffold for fact in subsection_facts if fact.scaffold not in existing]
+        missing = list(dict.fromkeys(fact.scaffold for fact in subsection_facts if fact.scaffold not in existing))
         if missing:
             body = body[:heading.end()] + "\n\n" + "\n\n".join(missing) + "\n" + body[heading.end():]
     return manuscript[:section.end()] + body + manuscript[end:]
+
+
+_CONTINUOUS_FIELDS = ("group_n", "n_nonmissing", "missing_n", "median", "q25", "q75")
+_COUNTS = _CONTINUOUS_FIELDS[:3]
+_CJK = re.compile(r"[\u3400-\u9fff]")
+
+
+def _read(evidence, record):
+    path = verified_run_evidence_path(evidence.root, record)
+    if path is None:
+        raise ValueError("Descriptive writer source failed digest verification")
+    return path.read_text(encoding="utf-8")
+
+
+def _groupings(evidence):
+    record = evidence.get("exposure_groupings")
+    if record is None:
+        return None, [], {}
+    payload = json.loads(_read(evidence, record))
+    rows = exposure_group_label_rows(payload, record_sha256=record.sha256)
+    parameters = {
+        item["variable"]: item["derivation"]
+        for item in payload.get("compiled", {}).get("groupings", [])
+        if item.get("disposition") == "applied"
+    }
+    return record, rows, parameters
+
+
+def manuscript_group_labels(evidence, labels, *, language="en"):
+    """The grouping owner's study labels, or its English rule when needed.
+
+    Integer and float transports of the owner's integer codes name the same
+    declared level. An unlabelled level remains code-only, even when a caller
+    supplied an unsupported clinical translation.
+    """
+    named, citations = dict(labels), {}
+    inequalities = (
+        (("≤", "不高于"), ("≥", "不低于"), ("<", "低于"), (">", "高于"))
+        if str(language).lower().startswith("zh") else
+        (("≤", "at most"), ("≥", "at least"), ("<", "below"), (">", "above"))
+    )
+    record, groups, parameters = _groupings(evidence)
+    for group in groups:
+        variable = group["variable"]
+        for level in group["levels"]:
+            label = level["label"]
+            if label and str(language).lower().startswith("en") and _CJK.search(label):
+                label = grouping_rule_texts(parameters[variable], include_measure=False)[level["group"]]
+            if label:
+                # Keep inequalities readable without introducing HTML markup.
+                for op, word in inequalities:
+                    label = label.replace(op, word)
+                if re.search(r"[{}\[\]`\\*_#|\n\r]", label):
+                    raise ValueError("Grouping label cannot be carried in a result sentence")
+            for code in (str(level["code"]), f"{level['code']:.1f}"):
+                key = f"{variable}={code}"
+                named[key] = label or key
+                if label:
+                    citations[key] = (record.evidence_id,)
+    return named, citations
+
+
+def _continuous_tables(records, evidence):
+    for row in current_successful_step_records(records or ()):
+        hint = row.get("step_summary", {})
+        if not (
+            hint.get("interpretation_class") == "continuous_outcome_summary"
+            or hint.get("deterministic_standard_analysis") == "continuous_outcome_summary"
+            or CONTINUOUS_OUTCOME_OUTPUT in hint.get("output_files", {})
+        ):
+            continue
+        record = evidence.get(str(row.get("step_summary_evidence_id") or ""))
+        if (
+            record is None or record.kind != "statistic" or record.produced_by_step != row["step_id"]
+            or record.evidence_id not in row.get("evidence_ids", ())
+        ):
+            raise ValueError("Continuous summary is not active evidence of its producing step")
+        summary = json.loads(_read(evidence, record))
+        if summary.get("interpretation_class") != "continuous_outcome_summary":
+            continue
+        if not (
+            summary.get("status") == "ok" and summary.get("analysis_role") == "secondary"
+            and summary.get("interpretation_ceiling") == "descriptive_unadjusted_not_causal"
+            and summary.get("adjusted_effect") is None
+            and summary.get("uncertainty_interval") is None and not summary.get("inferential_tests")
+        ):
+            raise ValueError("Continuous descriptive source exceeds its claim ceiling")
+        filename = summary.get("output_files", {}).get(CONTINUOUS_OUTCOME_OUTPUT)
+        if not filename:
+            raise ValueError("Continuous summary names no owned table")
+        tables = [
+            item for item in evidence.records()
+            if item.kind == "table" and item.produced_by_step == row["step_id"]
+            and item.evidence_id in row.get("evidence_ids", ())
+            and evidence_artifact_basename_stem(Path(item.relative_path), item.evidence_id) == Path(filename).stem
+        ]
+        if len(tables) != 1:
+            raise ValueError("Continuous source needs exactly one active owned table")
+        table = tables[0]
+        rows = list(csv.DictReader(io.StringIO(_read(evidence, table))))
+        seen = set()
+        for position, cell in enumerate(rows):
+            if cell.get("variable") not in summary.get("outcome_variables", ()):
+                raise ValueError("Continuous table names an undeclared outcome")
+            coordinate = (cell.get("variable"), cell.get("row_role"), cell.get("group"))
+            if coordinate in seen:
+                raise ValueError("Continuous table duplicates an outcome group")
+            seen.add(coordinate)
+            for key in _CONTINUOUS_FIELDS:
+                raw = cell.get(key)
+                value = float(raw) if raw not in (None, "") else None
+                if value is not None and not math.isfinite(value):
+                    raise ValueError("Nonfinite continuous result")
+                if key in _COUNTS:
+                    if value is None or value < 0 or not value.is_integer():
+                        raise ValueError("Invalid continuous outcome count")
+                    value = int(value)
+                cell[key] = value
+            if cell["n_nonmissing"] + cell["missing_n"] != cell["group_n"]:
+                raise ValueError("Continuous outcome counts do not partition their group")
+            quantiles = [cell[key] for key in ("q25", "median", "q75")]
+            if cell["n_nonmissing"]:
+                if any(x is None for x in quantiles) or quantiles != sorted(quantiles):
+                    raise ValueError("Continuous quantiles are missing or unordered")
+            elif any(x is not None for x in quantiles):
+                raise ValueError("Unobserved outcome cannot supply quantiles")
+            yield row["step_id"], summary, table, position, cell
+
+
+def compile_continuous_outcome_report_facts(records, *, evidence, reader_display_labels,
+                                           context=None, manuscript_language="en", plan=None):
+    """Copy each declared continuous outcome's median, IQR, unit and counts."""
+    from .manuscript_labels import source_bound_manuscript_labels
+
+    labels, citations = manuscript_group_labels(evidence, source_bound_manuscript_labels(
+        context, reader_display_labels, language=manuscript_language,
+    ), language=manuscript_language)
+    variables = {v.name: v for v in getattr(context, "variables", ())}
+    planned = {step.step_id: step for step in getattr(plan, "steps", ())}
+    grouped = {}
+    unit_name = _analysis_unit(context)
+    for step_id, summary, source, position, row in _continuous_tables(records, evidence):
+        outcome = row["variable"]
+        if plan is not None and (
+            step_id not in planned or outcome not in continuous_outcome_columns(planned[step_id])[1:]
+            or summary.get("grouping_variable") != continuous_outcome_columns(planned[step_id])[0]
+        ):
+            raise ValueError("Continuous result does not answer its declared plan outcome")
+        if row["row_role"] not in {"overall", "exposure_level"}:
+            raise ValueError("Unknown continuous result row role")
+        coordinate = f"{summary['grouping_variable']}={row['group']}"
+        group = _reader_name(labels.get(coordinate, coordinate))
+        label = in_sentence_label(_reader_name(labels.get(outcome, outcome)))
+        unit = row.get("unit") or getattr(variables.get(outcome), "unit", None) or ""
+        if re.search(r"[{}\[\]`<>\\*_#|\n\r]", f"{label}{group}{unit}"):
+            raise ValueError("Unsafe continuous reader label")
+        # Use the shared reader precision, including its trailing-zero policy.
+        values = {key: round_reader_numeric_display(f"{row[key]:.12f}")[0]
+                  for key in ("median", "q25", "q75") if row[key] is not None}
+        distribution = (
+            f"{values['median']}{' ' + unit if unit else ''} (IQR {values['q25']}–{values['q75']})"
+            if row["n_nonmissing"] else "unavailable (no observed values)"
+        )
+        if row["missing_n"]:
+            distribution += (f" ({row['n_nonmissing']:,} observed; {row['missing_n']:,} missing "
+                             f"of {row['group_n']:,} {unit_name})")
+        role = "overall" if row["row_role"] == "overall" else "unmeasured" if row["group"] == "Missing" else "group"
+        part = (f"{distribution} in {group}" if role == "group" else
+                f"the overall median was {distribution}" if role == "overall" else
+                f"the median among {row['group_n']:,} {unit_name} with unmeasured exposure was {distribution}")
+        fact = DescriptiveReportFact(
+            subsection="Secondary analyses", text="",
+            evidence_id=source.evidence_id, source_sha256=source.sha256,
+            source_fields=tuple(f"rows[{position}].{key}" for key in _CONTINUOUS_FIELDS),
+            supporting_evidence_ids=citations.get(coordinate, ()),
+            step_id=step_id, product_id=CONTINUOUS_OUTCOME_OUTPUT, outcome=outcome,
+        )
+        grouped.setdefault((step_id, source.evidence_id, outcome, label), []).append((role, part, fact))
+    facts = []
+    for (_step, _source, _outcome, label), rows in grouped.items():
+        parts = [part for role, part, _fact in rows if role == "group"]
+        tails = [part for wanted in ("overall", "unmeasured") for role, part, _fact in rows if role == wanted]
+        text = f"Median {label} was {_join(parts)}" if parts else f"For {label}"
+        if tails:
+            text += ("; " if parts else ", ") + "; ".join(tails)
+        facts.extend(_combined_facts([fact for _role, _part, fact in rows], text))
+    return tuple(facts)
+
+
+def descriptive_table_numeric_claims(evidence, records):
+    """Numeric leaves from the same verified table/typed label records.
+
+    These join the ordinary binder's candidate pool; wrong citations, changed
+    values and stale/inactive products still fail the existing strict gate.
+    """
+    claims = []
+    for step_id, _summary, source, position, row in _continuous_tables(records, evidence):
+        for key in (*_CONTINUOUS_FIELDS, "group"):
+            try:
+                value = float(row[key])
+            except (TypeError, ValueError):
+                continue
+            claims.append(NumericClaim(
+                value=str(row[key]), canonical=value, evidence_id=source.evidence_id,
+                step_id=step_id, source_field=f"rows[{position}].{key}",
+            ))
+    record, groups, parameters = _groupings(evidence)
+    for group in groups:
+        values = {float(level["code"]) for level in group["levels"]}
+        values.update(value for values in grouping_rule_values(parameters[group["variable"]]).values() for value in values)
+        for value in sorted(values):
+            claims.append(NumericClaim(
+                value=str(value), canonical=value, evidence_id=record.evidence_id,
+                step_id=record.evidence_id, source_field=f"compiled.{group['variable']}.derivation",
+            ))
+    return claims
+
+
+def writer_question_coverage(manuscript, *, plan, facts, evidence):
+    """A typed finding for every planned descriptive part without a bound result."""
+    requirements = []
+    for step in getattr(plan, "steps", ()):
+        spec = step.exposure_outcome_distribution_spec
+        if spec is not None and step.planned_analysis_role in {"primary", "secondary"}:
+            for part in ("exposure_distribution", spec.outcome):
+                requirements.append((step.step_id, "table:exposure_outcome_distribution", part))
+        if CONTINUOUS_OUTCOME_OUTPUT in step.expected_outputs:
+            requirements.extend((step.step_id, CONTINUOUS_OUTCOME_OUTPUT, outcome)
+                                for outcome in continuous_outcome_columns(step)[1:])
+    visible = re.sub(r"<!--.*?-->|```.*?```", "", manuscript, flags=re.S)
+    results = re.search(r"(?ms)^## Results[ \t]*\n(.*?)(?=^## |\Z)", visible)
+    body = results[1] if results else ""
+    findings = []
+    for step_id, product, part in requirements:
+        candidates = [fact for fact in facts if
+                      (fact.step_id, fact.product_id, fact.outcome) == (step_id, product, part)]
+        covered = False
+        for fact in candidates:
+            source = evidence.get(fact.evidence_id)
+            if source is None or source.sha256 != fact.source_sha256 or source.produced_by_step != step_id:
+                continue
+            for line in body.splitlines():
+                citation = (f"{{evidence:{source.evidence_id}}}" in line or
+                            f'({source.relative_path} "sha256={source.sha256[:8]}")' in line)
+                if citation and fact_sentence_visible(line, fact.text):
+                    covered = True
+        if not covered:
+            findings.append(ValidationFinding(
+                validator="writer_question_coverage", severity="error",
+                message="A planned descriptive question part has no result sentence bound to its product.",
+                detail={"reason_code": "writer_question_part_uncovered", "step_id": step_id,
+                        "product_id": product, "outcome": part},
+            ))
+    return findings

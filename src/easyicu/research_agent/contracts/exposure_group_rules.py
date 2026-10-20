@@ -457,7 +457,13 @@ def _windowed(name: str, item: Mapping[str, Any]) -> Optional[str]:
     return f"{name} {_number_text(start)}-{_number_text(end)} h"
 
 
-def grouping_rule_texts(parameters: Mapping[str, Any]) -> dict[str, str]:
+GROUPING_RULE_WORDING_VERSION = 2
+
+
+def grouping_rule_texts(
+    parameters: Mapping[str, Any], *, wording_version: int = GROUPING_RULE_WORDING_VERSION,
+    include_measure: bool = True,
+) -> dict[str, str]:
     """Each level's rule in plain English, keyed by level id, from the
     derivation ``parameters`` -- the measure and its window, the threshold,
     and the groups matched before it -- as the host matches them: a group
@@ -468,7 +474,9 @@ def grouping_rule_texts(parameters: Mapping[str, Any]) -> dict[str, str]:
     """
 
     return {
-        level: text for level, (text, _values) in _written_rules(parameters).items()
+        level: text for level, (text, _values) in _written_rules(
+            parameters, wording_version=wording_version, include_measure=include_measure,
+        ).items()
     }
 
 
@@ -482,7 +490,10 @@ def grouping_rule_values(parameters: Mapping[str, Any]) -> dict[str, tuple[float
 
 def _written_rules(
     parameters: Mapping[str, Any],
+    *, wording_version: int = GROUPING_RULE_WORDING_VERSION, include_measure: bool = True,
 ) -> dict[str, tuple[str, tuple[float, ...]]]:
+    if wording_version not in (1, GROUPING_RULE_WORDING_VERSION):
+        raise ExposureGroupRuleError("unknown grouping rule wording version")
     rules = read_grouping_rules(parameters)
     window = parameters["window"]
     measure = _measure_text(rules.concept, window)
@@ -497,24 +508,47 @@ def _written_rules(
     for group in parameters["groups"]:
         rule = group["rule"]
         if rule == "otherwise":
-            text = (
-                f"{measure}: none of {'; '.join(earlier)}"
-                if earlier
-                else f"{measure}: any value"
-            )
+            if not earlier:
+                text = "any value"
+            elif wording_version == 1:
+                text = f"none of {'; '.join(earlier)}"
+            elif len(earlier) == 1:
+                text = f"not {earlier[0]}"
+            elif len(earlier) == 2:
+                text = f"neither {earlier[0]} nor {earlier[1]}"
+            else:
+                text = f"none of: {'; '.join(earlier)}"
             values = (*hours, *earlier_values)
         else:
             stated = _threshold_text(rule)
-            text = f"{measure}: {stated}"
+            text = stated
             if earlier:
-                text += f", and none of {'; '.join(earlier)}"
+                text += (
+                    f", and none of {'; '.join(earlier)}" if wording_version == 1
+                    else f", without {' or '.join(earlier)}"
+                )
             values = (*hours, float(rule["value"]), *earlier_values)
             earlier.append(stated)
             earlier_values.append(float(rule["value"]))
-        written[group["id"]] = (text, values)
+        written[group["id"]] = (f"{measure}: {text}" if include_measure else text, values)
     if rules.unmeasured == "own_group":
-        written[UNMEASURED_GROUP_ID] = (f"{measure}: no value recorded", hours)
+        written[UNMEASURED_GROUP_ID] = (
+            f"{measure}: no value recorded" if include_measure else "no value recorded", hours,
+        )
     return written
+
+
+def grouping_measure_description(parameters: Mapping[str, Any]) -> str:
+    """The recorded measure and window for a standalone group definition."""
+    rules = read_grouping_rules(parameters)
+    name = concept_reader_name(rules.concept)
+    window = parameters["window"]
+    if window is None:
+        return f"{name} recorded once per stay"
+    start, end = window["start_hours"], window["end_hours"]
+    if start == 0:
+        return f"{name} recorded from ICU admission to {_number_text(end)} h"
+    return f"{name} recorded from {_number_text(start)} to {_number_text(end)} h after ICU admission"
 
 
 def _measure_text(concept: str, window: Any) -> str:
@@ -803,6 +837,8 @@ __all__ = [
     "grouping_level_labels",
     "grouping_reader_labels",
     "grouping_rule_texts",
+    "GROUPING_RULE_WORDING_VERSION",
+    "grouping_measure_description",
     "grouping_rule_values",
     "planned_group_column",
     "read_group_contrast",
