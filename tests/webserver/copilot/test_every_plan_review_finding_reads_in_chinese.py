@@ -111,6 +111,21 @@ def test_withheld_intervals_do_not_claim_patient_grouping_is_absent(reason) -> N
     assert "计数与比例" in detail
 
 
+def test_a_prepared_package_missing_source_grouping_states_the_distinct_cause() -> None:
+    html = _render_zh([{
+        "code": "DESCRIPTIVE_INTERVALS_WITHHELD_WITHOUT_PATIENT_GROUPING",
+        "severity": "major",
+        "descriptive_interval_limitation": {
+            "declared_variance_estimator": "model_based",
+            "reason": "verified_patient_grouping_not_carried_by_prepared_package",
+        },
+    }])
+    assert "来源已有经核实的患者分组" in html
+    assert "准备后的数据包未携带" in html
+    assert "计数与比例" in html
+    assert "患者分组依据未经核实或未通过校验" not in html
+
+
 #: The prediction-validity round's findings.  Their rows land before the
 #: round's review owner emits them; FINDINGS then covers them as well.
 PREDICTION_FINDINGS = {

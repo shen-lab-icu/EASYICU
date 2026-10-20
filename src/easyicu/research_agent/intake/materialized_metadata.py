@@ -2597,14 +2597,17 @@ def _validate_hospital_followup_bindings(
 
 def verified_cohort_replacement_row_identity(
     verified: VerifiedMaterializedCohortAuthority,
+    *,
+    cohort_path: Optional[Path] = None,
 ) -> Optional[dict]:
     """The verified patient grouping a typed cohort's rows are keyed by, if any.
 
     An initial materialization seals it in its producer parameters; a
     hospital follow-up child restates it for its row subset in its semantic
-    provenance.  A binding that does not describe exactly this cohort's rows
-    and identity column is not returned, so no consumer can cluster a
-    different row space.
+    provenance. Run staging preserves the row space but replaces producer
+    parameters, so its verified parent snapshot owns the original receipt.
+    A binding that does not describe exactly this cohort's rows and identity
+    column is not returned.
     """
 
     identity = _thaw_json(verified.provenance).get("replacement_row_identity")
@@ -2612,6 +2615,19 @@ def verified_cohort_replacement_row_identity(
         identity = _thaw_json(verified.authority.producer_parameters).get(
             "replacement_row_identity"
         )
+    if identity is None and cohort_path is not None and verified.authority.producer in {
+        "research_agent_run_stage", EXPOSURE_GROUP_STAGE_PRODUCER,
+    }:
+        parent = _staged_parent_snapshot(Path(cohort_path), verified.authority)
+        if (
+            parent.authority.identity_column != verified.authority.identity_column
+            or parent.authority.cohort_rows != verified.authority.cohort_rows
+            or parent.authority.row_identity_sha256 != verified.authority.row_identity_sha256
+        ):
+            raise MaterializedMetadataError(
+                "staged patient grouping does not describe the prepared row space"
+            )
+        identity = verified_cohort_replacement_row_identity(parent)
     if (
         not isinstance(identity, Mapping)
         or identity.get("output_identity_column")

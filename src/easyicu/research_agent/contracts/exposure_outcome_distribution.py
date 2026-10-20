@@ -85,6 +85,7 @@ class DescriptiveIntervalLimitation(BaseModel):
     reason: Literal[
         "repeated_stays_possible_without_verified_patient_grouping",
         "repeated_stays_possible_with_invalid_patient_grouping_authority",
+        "verified_patient_grouping_not_carried_by_prepared_package",
     ] = (
         "repeated_stays_possible_without_verified_patient_grouping"
     )
@@ -93,6 +94,10 @@ class DescriptiveIntervalLimitation(BaseModel):
     def text(self) -> str:
         estimator = self.declared_variance_estimator.replace("_", " ")
         cause = (
+            "the source has verified patient grouping but the prepared package "
+            "does not carry a verified grouping receipt for its rows"
+            if self.reason == "verified_patient_grouping_not_carried_by_prepared_package"
+            else
             "the source may contain repeated ICU stays and its patient-grouping "
             "authority failed verification"
             if self.reason == "repeated_stays_possible_with_invalid_patient_grouping_authority"
