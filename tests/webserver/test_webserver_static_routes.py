@@ -189,7 +189,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/screens-extraction.js?v=20261021-readable1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261021-named-steps1" in index_html
-    assert "js/screens-help.js?v=20261021-hosted1" in index_html
+    assert "js/screens-help.js?v=20261021-hosted2" in index_html
 
 
 def test_project_monitor_run_history_has_a_dedicated_projection_owner() -> None:
@@ -337,7 +337,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert "How a study moves through EasyICU</h2>" not in help_js
 
     assert "js/app.js?v=20261021-hosted1" in index_html
-    assert "js/screens-help.js?v=20261021-hosted1" in index_html
+    assert "js/screens-help.js?v=20261021-hosted2" in index_html
 
 
 def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
@@ -2131,7 +2131,7 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
     assert "padding-right: 168px" in crossdb_css
     assert "scroll-margin-bottom: 84px" in crossdb_css
 
-    assert "js/screens-viz-crossdb-setup.js?v=20260728-one-click-raw2" in index_html
+    assert "js/screens-viz-crossdb-setup.js?v=20261021-hosted1" in index_html
     assert "js/screens-viz-crossdb-charts.js?v=20260830-viz-final1" in index_html
     assert "js/screens-viz-crossdb-results.js?v=20260830-viz-final1" in index_html
     assert "js/screens-viz.js?v=20261021-hosted2" in index_html
@@ -3283,7 +3283,7 @@ def test_visual_routes_share_source_choice_with_single_and_multi_source_contract
     assert ".official-demo-sources" in shared_css
     assert ".crossdb-offline-fallback" in crossdb_css
     assert "css/official-demo-sources.css?v=20260728-shared-source1" in index_html
-    assert "js/screens-viz-crossdb-setup.js?v=20260728-one-click-raw2" in index_html
+    assert "js/screens-viz-crossdb-setup.js?v=20261021-hosted1" in index_html
     assert "js/screens-viz-crossdb-source.js?v=20260920-fast-demo-status" in index_html
 
 

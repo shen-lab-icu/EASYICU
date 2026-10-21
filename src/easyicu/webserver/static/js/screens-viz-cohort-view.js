@@ -60,6 +60,12 @@
     if (row.kind === 'percent') return fmtPct(value);
     return fmtNum(value, 1);
   }
+  const HOSTED_TEXT = {
+    'Local export': ['Prepared data', '已准备的数据'],
+    'Local export group contrast': ['Group contrast', '分组对照'],
+    'Local export cohort review ready': ['Cohort review ready', '队列审阅已就绪'],
+    'Local export snapshot': ['Cohort snapshot', '队列概览'],
+  };
   function cohortText(value) {
     const raw = String(value == null ? '' : value);
     const map = {
@@ -93,6 +99,7 @@
       'Median SOFA': 'SOFA 中位数',
       'Sepsis-3 +': 'Sepsis-3 阳性',
       'Local export cohort review ready': '本地导出队列审阅已就绪',
+      'Local export snapshot': '本地导出队列概览',
       'Source': '来源',
       'Database': '数据库',
       'Path hash': '路径哈希',
@@ -292,6 +299,9 @@
       'Real': '真实',
       'Demo': '演示',
     };
+    // A hosted instance reviews the administrator's prepared data, not a local export.
+    const hosted = ((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true;
+    if (hosted && Object.prototype.hasOwnProperty.call(HOSTED_TEXT, raw)) return t(...HOSTED_TEXT[raw]);
     if (Object.prototype.hasOwnProperty.call(map, raw)) return t(raw, map[raw]);
     if (/^SOFA-2 <= ([^ ]+) vs > ([^ ]+)$/.test(raw)) {
       const m = raw.match(/^SOFA-2 <= ([^ ]+) vs > ([^ ]+)$/);
@@ -1093,7 +1103,7 @@
         ['Sepsis-3 %', s.sepsis_pct],
       ];
       return `
-      <div class="sec-stack"><div class="lbl">Cohort profile</div><h2>${t('Local export snapshot', '本地导出队列概览')}</h2></div>
+      <div class="sec-stack"><div class="lbl">Cohort profile</div><h2>${cohortText('Local export snapshot')}</h2></div>
       ${workspaceSamplingNote(s)}
       <div class="stat-grid">
         <div class="stat accent"><div class="label">${t('Stays', '住院数')}</div><div class="val">${fmtInt(s.stays)}</div></div>

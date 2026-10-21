@@ -2,6 +2,8 @@
 /* Cross-DB setup owner: source selection, raw-root scan, sample budget, and route setup state. */
 (function () {
   'use strict';
+  // A hosted instance browses the administrator's data folders on the server.
+  const hostedServer = () => ((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true;
 
   const DATABASES = [
     { label: 'MIMIC-IV', key: 'miiv', selected: true },
@@ -284,7 +286,7 @@
     state.rawRootDraft = root;
     if (!root) {
       invalidateScan();
-      setError(config, h.t('Choose a local ICU data root before checking Cross-DB folders.', '检查跨库文件夹前，请先选择本地 ICU 数据根目录。'));
+      setError(config, (hostedServer() ? h.t('Choose an ICU data folder before checking Cross-DB folders.', '检查跨库文件夹前，请先选择一个 ICU 数据目录。') : h.t('Choose a local ICU data root before checking Cross-DB folders.', '检查跨库文件夹前，请先选择本地 ICU 数据根目录。')));
       repaint(config, focusSelector);
       return Promise.resolve(false);
     }
@@ -554,7 +556,7 @@
           </button>
           <button class="crossdb-method-card ${state.sourceMethod === 'raw' ? 'selected' : ''}" type="button" data-crossdb-source-method="raw" aria-pressed="${state.sourceMethod === 'raw' ? 'true' : 'false'}">
             <span class="crossdb-method-icon">${h.icon('folder', 16)}</span>
-            <span><b>${h.t('Raw ICU database folder', '原始 ICU 数据库目录')}</b><small>${h.t('Check a local parent folder, then run bounded sampling.', '检查本地父目录后执行有界抽样。')}</small></span>
+            <span><b>${h.t('Raw ICU database folder', '原始 ICU 数据库目录')}</b><small>${hostedServer() ? h.t('Check a data folder on the server, then run bounded sampling.', '检查服务器上的数据目录后执行有界抽样。') : h.t('Check a local parent folder, then run bounded sampling.', '检查本地父目录后执行有界抽样。')}</small></span>
             <span class="pill ${state.sourceMethod === 'raw' ? 'ok' : 'dashed'}">${state.sourceMethod === 'raw' ? h.t('Selected', '已选择') : h.t('Choose', '选择')}</span>
           </button>
         </div>
@@ -962,7 +964,7 @@
           input.focus();
           scan(picked, config, '[data-crossdb-root]');
         },
-        helpersOf(config).t('Choose local ICU data root', '选择本地 ICU 数据根目录')
+        (hostedServer() ? helpersOf(config).t('Choose an ICU data folder', '选择 ICU 数据目录') : helpersOf(config).t('Choose local ICU data root', '选择本地 ICU 数据根目录'))
       );
     }));
 
