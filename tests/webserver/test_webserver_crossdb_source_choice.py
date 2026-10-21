@@ -98,7 +98,8 @@ def test_registered_export_host_bypasses_raw_root_scan() -> None:
 
     assert "const registeredPathOverride" in viz
     assert "window.EU_API.startCrossdbReviewSummaryJob" in viz
-    assert "deadline_seconds: 120" in viz
+    # Every row is summarized; two full databases take minutes the first time.
+    assert "deadline_seconds: 600" in viz
     registered_branch = viz.split("if (!requestedRawRoot && paths.length >= 2", 1)[1].split(
         "if (!requestedRawRoot && registeredPathOverride)", 1
     )[0]

@@ -186,6 +186,7 @@ def test_crossdb_setup_owner_executes_state_and_reset_contract() -> None:
     )
     assert json.loads(result.stdout) == {
         "bounded_profile": True,
+        "budget_error_readable": True,
         "explicit_feature_scope": True,
         "identity_resume_fail_closed": True,
         "missing_api_visible": True,

@@ -31,7 +31,7 @@ def test_crossdb_progress_has_one_explicit_owner() -> None:
     owner = _read("js/screens-viz-crossdb-progress.js")
     setup = _read("js/screens-viz-crossdb-setup.js")
     viz = _read("js/screens-viz.js")
-    owner_src = "js/screens-viz-crossdb-progress.js?v=20260812-crossdb-jobs"
+    owner_src = "js/screens-viz-crossdb-progress.js?v=20261022-hosted1"
 
     assert owner_src in index
     assert index.index("js/screens-viz-crossdb-raw.js?") < index.index(owner_src)
@@ -121,6 +121,7 @@ def test_crossdb_progress_owner_executes_behavior_contract() -> None:
     )
     assert json.loads(result.stdout) == {
         "deferred_cancel": True,
+        "hosted_summary_copy": True,
         "cancel_api_guard": True,
         "cancel_error_visible": True,
         "cancel_history_restored": True,
