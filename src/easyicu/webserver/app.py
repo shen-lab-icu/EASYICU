@@ -31,6 +31,7 @@ from easyicu.webserver.host_security import (
     public_origin,
 )
 from easyicu.webserver import hosted
+from easyicu.webserver import hosted_warmup
 from easyicu.webserver.deployment_lease import (
     acquire_single_process_lease,
     release_single_process_lease,
@@ -159,6 +160,8 @@ def _acquire_web_deployment_lease() -> None:
         # A damaged private index must not make the whole local Web UI
         # unavailable; individual recovery queries still fail closed.
         pass
+    # After the lease: a second process on the same home never warms.
+    hosted_warmup.start()
 
 
 @app.on_event("shutdown")

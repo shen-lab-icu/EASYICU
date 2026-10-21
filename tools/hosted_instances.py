@@ -321,6 +321,8 @@ def start_instance(instance: Path) -> None:
     } or key.startswith("LC_")}
     inherited.update(env)
     inherited["PYTHONPATH"] = str(checkout / "src")
+    # Summarize the prepared data once after startup (webserver/hosted_warmup.py).
+    inherited["EASYICU_HOSTED_WARMUP"] = "1"
     command = [sys.executable, "-m", "uvicorn", "easyicu.webserver.app:app", "--uds", socket,
                "--proxy-headers", "--forwarded-allow-ips", "*"]
     with (instance / "run/web.log").open("a", encoding="utf-8") as log:
