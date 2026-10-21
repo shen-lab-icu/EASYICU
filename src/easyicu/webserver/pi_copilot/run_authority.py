@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 from easyicu.webserver import agent_review_recovery, agent_runs, state_paths, study_contexts
+from easyicu.webserver.research_launch_resume import development_resume_available
 
 from .contracts import PLAN_RESUME_OFFER_GATE_REASONS, PLANNER_CHECKPOINT_GATE_REASONS
 from .workspace import ProjectWorkspace
@@ -223,11 +224,20 @@ def _updated_epoch(row: Dict[str, Any]) -> float:
 
 
 def _development_planner_checkpoint_available(row: Dict[str, Any]) -> bool:
-    """Project presence only; the run owner validates chain integrity later."""
+    """Offer a continuation only when the launch owner accepts its authority.
+
+    Other Planner failures may seed a fresh plan, but never offer a resume.
+    Their presence-only projection remains separate from that explicit offer.
+    """
 
     if not _checkpoint_can_seed_planning(row):
         return False
     project_dir = Path(str(row.get("project_dir") or "")).expanduser()
+    if str(row.get("gate_reason") or "") in PLAN_RESUME_OFFER_GATE_REASONS:
+        return development_resume_available(
+            wrapper_dir=project_dir, study_id=str(row.get("study_id") or ""),
+            scientific_configuration_sha256=str(row.get("scientific_configuration_sha256") or ""),
+        )
     pipeline_root = project_dir / "pipeline"
     try:
         run_dirs = [

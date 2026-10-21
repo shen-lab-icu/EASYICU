@@ -614,6 +614,8 @@ def _pipeline_failure_code(
         "easyicu.planning.progressive_compiler_v1",
         _TARGET_TRIAL_CONFIRMATION_OWNER,
     }:
+        if typed_failure.get("reason_code") == "development_resume_source_phase_not_replayed":
+            return "research_pipeline_development_resume_phase_not_replayed"
         return "research_pipeline_progressive_compile_failed"
     if typed_failure.get("owner") == "easyicu.schema_validation_v1":
         return "research_pipeline_schema_validation_failed"
@@ -6197,12 +6199,24 @@ def make_research_pipeline_run_runner(
             # reviewed inputs before any Provider call.
             bound_analysis_inputs = prepared_revision.analysis_inputs
         if execution.development_resume_scope is not None:
-            from easyicu.webserver.research_launch_resume import _development_resume_plan_contract
+            from easyicu.webserver.research_launch_resume import (
+                _development_resume_plan_contract,
+                development_resume_requirement,
+            )
 
             bound_plan_revision_contract = _development_resume_plan_contract(
                 scope=execution.development_resume_scope,
                 current_contract=bound_plan_revision_contract,
             )
+            restored = []
+            for name, current, model in (
+                ("bound_baseline_requirements", bound_baseline_requirements, AcceptedBaselineRequirements),
+                ("bound_population_requirements", bound_population_requirements, PlanPopulationRequirements),
+                ("bound_analysis_inputs", bound_analysis_inputs, AcceptedAnalysisInputs),
+            ):
+                raw = development_resume_requirement(execution.development_resume_scope, name, current)
+                restored.append(model.model_validate(raw) if raw is not None else None)
+            bound_baseline_requirements, bound_population_requirements, bound_analysis_inputs = restored
         _progress(job, step="provider", label="Research Agent provider authorized")
         request_timeout, request_hard_timeout = _provider_request_timeouts_for_budget(
             selected_budget_mode
@@ -6811,7 +6825,14 @@ def make_research_pipeline_run_runner(
                         "development_progressive_resume_reuse_bound_literature": True,
                     }
                 )
-            if prepared_revision is not None:
+            if (
+                execution.development_resume_scope is not None
+                and "required_primary_cohort_selection_mode" in execution.development_resume_scope.planning_requirements
+            ):
+                required_cohort_mode = execution.development_resume_scope.planning_requirements.get(
+                    "required_primary_cohort_selection_mode"
+                )
+            elif prepared_revision is not None:
                 required_cohort_mode = prepared_revision.required_primary_cohort_selection_mode
             elif candidate_authority is not None:
                 required_cohort_mode = candidate_authority.primary_cohort_selection_mode

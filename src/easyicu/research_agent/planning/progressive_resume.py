@@ -177,6 +177,12 @@ def _resume_context_projection(context: ResearchContext) -> dict[str, Any]:
     return payload
 
 
+def progressive_resume_context_sha256(context: ResearchContext) -> str:
+    """Context identity using the checkpoint's scientific-field projection."""
+
+    return canonical_sha256(_resume_context_projection(context))
+
+
 def validate_progressive_resume_runtime_dependencies(
     runtime_dependencies: Mapping[str, Any] | None,
 ) -> None:
@@ -810,6 +816,7 @@ __all__ = [
     "assemble_progressive_skeleton",
     "build_progressive_checkpoint_authorities",
     "compile_progressive_prefix",
+    "progressive_resume_context_sha256",
     "progressive_resume_dependency_sha256",
     "restore_progressive_resume_foundation",
     "restore_progressive_resume_prefix",

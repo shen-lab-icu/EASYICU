@@ -55,6 +55,26 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   // Known code maps through tr (not the fallback).
   assert.match(live({ code: 'pi_provider_auth_failed' }), /model service rejected/);
 
+  // Every launch-resume refusal is readable in both the toast and failure card.
+  const resumeSource = fs.readFileSync(path.resolve(__dirname,
+    '../../src/easyicu/webserver/research_launch_resume.py'), 'utf8');
+  const resumeCodes = new Set(resumeSource.match(/research_pipeline_development_resume_[a-z_]+/g));
+  resumeCodes.add('research_pipeline_development_resume_future_integrity_check');
+  for (const language of ['en', 'zh']) {
+    const errors = guided.require('errorText').create({
+      tr: (en, zh) => language === 'zh' ? zh : en, staticPreview: () => false,
+    });
+    for (const code of resumeCodes) {
+      const text = errors.errorText({ code, message: code });
+      assert.ok(text.length > 30, `${language}: ${code}`);
+      assert.doesNotMatch(text, /research_pipeline_development_resume_/);
+      assert.equal(errors.runFailureText(code), text);
+      assert.equal(errors.errorText(code), text);
+      assert.equal(errors.errorText({ code: 'transport_error', message: code }), text);
+      assert.match(text, language === 'zh' ? /计划|检查点/ : /plan|checkpoint/i);
+    }
+  }
+
   // Static-preview Failed-to-fetch branch (terminology preserved).
   assert.match(preview({ message: 'Failed to fetch' }), /static preview/);
 

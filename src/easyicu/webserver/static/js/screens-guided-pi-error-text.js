@@ -20,6 +20,10 @@
   function create({ tr, staticPreview }) {
     function errorText(error) {
       if (!error) return '';
+      const resumeFailure = developmentResumeFailureText(error.code)
+        || developmentResumeFailureText(error.message)
+        || developmentResumeFailureText(typeof error === 'string' ? error : '');
+      if (resumeFailure) return resumeFailure;
       if (error.code === 'pi_session_authority_stale') {
         return tr('The study binding changed after this conversation was saved. Rebind it before continuing.', '这段对话保存后研究绑定发生了变化，请先重新绑定再继续。');
       }
@@ -398,9 +402,27 @@
       return '';
     }
 
+    function developmentResumeFailureText(code) {
+      const value = String(code || '').trim();
+      if (!value.startsWith('research_pipeline_development_resume_')) return '';
+      const reason = value === 'research_pipeline_development_resume_phase_not_replayed'
+        ? tr('The saved exposure groups or their research context could not be restored exactly.', '无法原样恢复已保存的暴露分组或对应的研究上下文。')
+        : /scope_mismatch|plan_contract_mismatch|acquisition_authority_mismatch/.test(value)
+          ? tr('The saved planning checkpoint belongs to different study inputs or requirements.', '已保存的规划检查点与当前研究输入或要求不一致。')
+          : /literature_/.test(value)
+            ? tr('The literature bound to the saved planning checkpoint could not be verified.', '无法校验规划检查点绑定的文献依据。')
+            : tr('The saved planning checkpoint could not be verified for continuation.', '已保存的规划检查点未通过继续生成计划所需的校验。');
+      return reason + tr(
+        ' Use the recovery action on the study card to prepare the same candidate again or generate a new plan. Analysis has not started.',
+        '请使用研究卡片上的恢复操作，按原候选方案重新准备数据，或重新生成计划。分析尚未开始。',
+      );
+    }
+
     function runFailureText(code, detail) {
       const value = String(code || '').trim();
       if (!value) return '';
+      const resumeFailure = developmentResumeFailureText(value);
+      if (resumeFailure) return resumeFailure;
       const suffix = runFailureDetailText(detail);
       const withDetail = text => (suffix ? `${text} ${suffix}` : text);
       // A failed-closed run did not pass a check after it started. Its detail
