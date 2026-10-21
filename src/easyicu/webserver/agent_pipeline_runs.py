@@ -183,6 +183,7 @@ from easyicu.webserver.pi_copilot.contracts import (
 )
 from easyicu.webserver.pi_copilot.extraction_handoff import compile_study_cohort
 from easyicu.webserver.pi_copilot.exposure_group_notes import project_exposure_groups
+from easyicu.webserver.pi_copilot.source_recommendation import database_reader_label
 from easyicu.webserver.agent_review_recovery import (
     PendingReviewEntry as _PendingRun,
     PendingReviewRegistry,
@@ -4132,6 +4133,13 @@ def _write_projection(
             else "",
             "database": _clean_text(
                 (study.get("data_source") or {}).get("database"), 64
+            )
+            if isinstance(study.get("data_source"), Mapping)
+            else "",
+            # The database as readers know it ("eICU v2.0"); the registered
+            # label above may carry an export id or a commit.
+            "reader_label": database_reader_label(
+                (study.get("data_source") or {}).get("database")
             )
             if isinstance(study.get("data_source"), Mapping)
             else "",

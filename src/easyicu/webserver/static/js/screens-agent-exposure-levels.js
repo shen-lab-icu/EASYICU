@@ -10,9 +10,12 @@
    `unavailable` when the grouping record cannot be read.
 
    `reader(source, tr)` answers, for one grouped variable, its reader name
-   ("乳酸分组" / "Lactate groups") and the label of one of its codes.  A
-   value is named only when the record labels that variable's code; anything
-   else keeps its own text, so no code is given a meaning here.  An
+   ("乳酸分组" / "Lactate groups") and the name of one of its codes in the
+   page's language: the study's label on a Chinese page, and on an English
+   page the English name the run's figures show (the level's `reader_name`,
+   else its label).  A value is named only when the record labels that
+   variable's code; anything else keeps its own text, so no code is given a
+   meaning here.  An
    unreadable record names nothing and says why (`unreadableText`).
    `tableRows` names the grouped cells of one result table: a column that is
    a grouped variable, the level columns of a row whose exposure is one, and
@@ -51,6 +54,14 @@
       .forEach(row => groupings.set(row.variable, row));
     const grouping = variable => groupings.get(String(variable == null ? '' : variable).trim()) || null;
 
+    // The grouped concept's name ("Lactate" / "乳酸"), and the grouping's.
+    function conceptName(variable) {
+      const row = grouping(variable);
+      if (!row) return '';
+      const en = String(row.concept_label_en || row.concept || row.variable);
+      return tr(en, String(row.concept_label_zh || en));
+    }
+
     function variableName(variable) {
       const row = grouping(variable);
       if (!row) return '';
@@ -65,7 +76,9 @@
       const text = String(value == null ? '' : value).trim();
       if (!row || row.status !== 'labelled' || !CODE.test(text)) return '';
       const level = row.levels.find(item => item && item.code === Number(text));
-      return level && typeof level.label === 'string' ? level.label : '';
+      if (!level || typeof level.label !== 'string') return '';
+      const english = typeof level.reader_name === 'string' && level.reader_name.trim() ? level.reader_name : level.label;
+      return tr(english, level.label);
     }
 
     // "2 vs 1" names both sides, or neither.
@@ -115,6 +128,7 @@
       unreadable,
       has: variable => !!grouping(variable),
       names: () => Object.fromEntries([...groupings.keys()].map(variable => [variable, variableName(variable)])),
+      conceptName,
       variableName,
       levelName,
       contrastName,

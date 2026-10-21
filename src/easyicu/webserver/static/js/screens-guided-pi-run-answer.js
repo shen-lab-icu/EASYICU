@@ -208,16 +208,18 @@
       const summarizer = window.EasyICU.guidedPi.optional('resultSummary');
       const summary = summarizer && typeof summarizer.summarize === 'function'
         ? summarizer.summarize(payload('result_tables.json'), plan, context) : {};
-      // A grouped exposure is named by its grouping record where the plan
-      // registers no label (screens-agent-exposure-levels.js).
+      // A grouped exposure and its levels are named by the run's grouping
+      // record, in the page's language (screens-agent-exposure-levels.js),
+      // never by a plan label that restates the grouping's codes.
       const levels = window.AGENT_EXPOSURE_LEVELS ? window.AGENT_EXPOSURE_LEVELS.reader(context, tr) : null;
       const claims = (Array.isArray(provenance.claims) ? provenance.claims : [])
         .concat(Array.isArray(summary.claims) ? summary.claims : []);
       const claim = field => claims.find(row => row && row.source_field === field) || null;
       const spec = primarySpec(plan);
       const labels = plan.display_labels && typeof plan.display_labels === 'object' ? plan.display_labels : {};
-      const exposureLabel = spec
-        ? shortLabel(readerLabel(labels, spec.exposure)) || (levels ? levels.variableName(spec.exposure) : '') : '';
+      const grouped = !!(spec && levels && levels.has(spec.exposure));
+      const exposureLabel = !spec ? '' : grouped ? levels.variableName(spec.exposure)
+        : shortLabel(readerLabel(labels, spec.exposure)) || (levels ? levels.variableName(spec.exposure) : '');
       const outcomeLabel = shortLabel((spec && readerLabel(labels, spec.outcome)) || summary.outcomeLabel || '');
       const groups = (Array.isArray(summary.exposureLevels) ? summary.exposureLevels : [])
         .filter(row => row && row.label && finite(row.n) != null);
@@ -225,13 +227,17 @@
       const tables = Array.isArray(payload('result_tables.json').tables) ? payload('result_tables.json').tables : [];
       const total = claim('n_total');
       const overallRisk = claim('overall_outcome.risk_pct');
+      // The database as readers know it ("eICU v2.0"), which the host states
+      // beside the registered label; that label can carry an export id.
       const source = context.source && typeof context.source === 'object'
-        ? String(context.source.label || context.source.database || '') : '';
+        ? String(context.source.reader_label || context.source.label || context.source.database || '') : '';
       return {
         source,
         question: String(context.question || plan.research_question || ''),
         analysisType: String(plan.analysis_type || ''),
         exposureLabel,
+        // What a grouped exposure's groups are groups of ("Glucose" / "血糖").
+        groupedConcept: grouped ? levels.conceptName(spec.exposure) : '',
         outcomeLabel,
         groups,
         total: total && total.display_value != null ? String(total.display_value) : '',
@@ -434,6 +440,8 @@
       if (!view || PREDICTION_TYPES.has(view.analysisType) || !view.groups.length && !view.estimate) return null;
       const exposure = view.exposureLabel || tr('the exposure', '暴露');
       const outcome = view.outcomeLabel || tr('the outcome', '结局');
+      // A grouped exposure is already groups: "the Glucose groups", "血糖各组".
+      const groupsOf = view.groupedConcept || exposure;
       const list = [];
       if (view.estimate) {
         list.push(tr(
@@ -441,15 +449,20 @@
           `解释主要估计（${view.estimate.measure} ${view.estimate.value}）的临床含义和不确定性。`,
         ));
       } else if (view.covariates.length) {
-        list.push(tr(
-          `After adjusting for ${view.covariates.join(', ')}, is ${exposure} still associated with ${outcome}?`,
-          `在调整${view.covariates.join('、')}后，${exposure}与${outcome}的关联还成立吗？`,
-        ));
+        list.push(view.groupedConcept
+          ? tr(
+            `After adjusting for ${view.covariates.join(', ')}, does ${outcome} still differ across the ${groupsOf} groups?`,
+            `在调整${view.covariates.join('、')}后，${groupsOf}各组的${outcome}差别还存在吗？`,
+          )
+          : tr(
+            `After adjusting for ${view.covariates.join(', ')}, is ${exposure} still associated with ${outcome}?`,
+            `在调整${view.covariates.join('、')}后，${exposure}与${outcome}的关联还成立吗？`,
+          ));
       }
       if (view.covariates.some(name => /age|年龄/i.test(name))) {
         list.push(tr(
-          `Stratified by age, how does ${outcome} differ across the ${exposure} groups?`,
-          `按年龄分层后，${exposure}各组的${outcome}有什么差别？`,
+          `Stratified by age, how does ${outcome} differ across the ${groupsOf} groups?`,
+          `按年龄分层后，${groupsOf}各组的${outcome}有什么差别？`,
         ));
       }
       // A plan that already re-estimates on first stays has its answer.

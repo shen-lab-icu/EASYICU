@@ -10,9 +10,12 @@ in the run's context for the result readers, and beside a Table 1 the column
 it is grouped by.
 
 Every reader then names a grouped value by the record's label for that
-variable's code, and a grouped column by its reader name ("乳酸分组"); a code
-the record does not label keeps its own text, and a record that cannot be
-read is said to be unreadable, never shown as a plan without groups.
+variable's code -- on an English page by the English name the run's figures
+show (``reader_name``) -- and a grouped column by its reader name
+("乳酸分组"); a code the record does not label keeps its own text, and a
+record that cannot be read is said to be unreadable, never shown as a plan
+without groups.  The run's answer names its source as readers know the
+database ("eICU v2.0"), never by an export's registered label.
 
 Synthetic records only.
 """
@@ -50,11 +53,11 @@ def _grouping(**extra: Any) -> dict[str, Any]:
         "scale": "ordinal",
         "status": "labelled",
         "levels": [
-            {"code": 1, "group": "g1", "label": "乳酸 <2.5", "unmeasured": False,
+            {"code": 1, "group": "g1", "label": "乳酸 <2.5", "reader_name": "Maximum below 2.5 mmol/L", "unmeasured": False,
              "rule": "Lactate over 0-24 h after ICU admission: maximum < 2.5 mmol/L"},
-            {"code": 2, "group": "g2", "label": "乳酸 ≥2.5", "unmeasured": False,
+            {"code": 2, "group": "g2", "label": "乳酸 ≥2.5", "reader_name": "Maximum at least 2.5 mmol/L", "unmeasured": False,
              "rule": "Lactate over 0-24 h after ICU admission: maximum >= 2.5 mmol/L"},
-            {"code": 3, "group": "unmeasured", "label": "前 24 小时未测乳酸", "unmeasured": True,
+            {"code": 3, "group": "unmeasured", "label": "前 24 小时未测乳酸", "reader_name": "No value recorded", "unmeasured": True,
              "rule": "Lactate over 0-24 h after ICU admission: no value recorded"},
         ],
         "reference": 1,
@@ -86,6 +89,21 @@ def test_a_record_without_labels_keeps_its_codes_only() -> None:
     (row,) = project_exposure_groups([_grouping(status="codes_only")])["groupings"]
 
     assert [level["label"] for level in row["levels"]] == ["", "", ""]
+    assert [level["reader_name"] for level in row["levels"]] == ["", "", ""]
+
+
+def test_each_level_carries_the_name_the_figures_show() -> None:
+    (row,) = SHOWN["groupings"]
+
+    assert [level["reader_name"] for level in row["levels"]] == [
+        "Maximum below 2.5 mmol/L", "Maximum at least 2.5 mmol/L", "No value recorded",
+    ]
+    # A row without one carries none.
+    bare = _grouping()
+    for level in bare["levels"]:
+        del level["reader_name"]
+    (row,) = project_exposure_groups([bare])["groupings"]
+    assert [level["reader_name"] for level in row["levels"]] == ["", "", ""]
 
 
 def test_a_run_without_groupings_adds_nothing_and_an_unreadable_record_says_so() -> None:
@@ -228,6 +246,16 @@ def test_the_run_context_carries_the_groupings_its_readers_name(
     assert "exposure_groups" not in _project(tmp_path, monkeypatch, [])
 
 
+def test_the_run_context_names_its_source_as_readers_know_the_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _project(tmp_path, monkeypatch, [])["source"]
+
+    # complete_study() registers a MIMIC-IV export under the alias "mimiciv".
+    assert source["database"] == "mimiciv"
+    assert source["reader_label"] == "MIMIC-IV v3.1"
+
+
 def test_a_grouped_table_one_carries_the_column_it_is_grouped_by(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     evidence = run_dir / "evidence"
@@ -291,6 +319,22 @@ def test_a_grouped_value_is_named_by_its_records_label() -> None:
         "乳酸分组", "乳酸 ≥2.5 vs 乳酸 <2.5（参照）",
     ]
     assert _reader(CONTEXT, "reader.variableName('lact_max_group')", "en") == "Lactate groups"
+
+
+def test_an_english_page_names_a_grouped_value_as_the_figures_do() -> None:
+    names = "[reader.levelName('lact_max_group', '2'), reader.levelName('lact_max_group', '3.0'), reader.contrastName('lact_max_group', '2 vs 1')]"
+
+    assert _reader(CONTEXT, names, "en") == [
+        "Maximum at least 2.5 mmol/L", "No value recorded",
+        "Maximum at least 2.5 mmol/L vs Maximum below 2.5 mmol/L (reference)",
+    ]
+    assert _reader(CONTEXT, "reader.conceptName('lact_max_group')", "en") == "Lactate"
+    assert _reader(CONTEXT, "reader.conceptName('lact_max_group')") == "乳酸"
+    # A row that carries no English name keeps the study's label on either page.
+    bare = _grouping()
+    for level in bare["levels"]:
+        del level["reader_name"]
+    assert _reader({"exposure_groups": project_exposure_groups([bare])}, "reader.levelName('lact_max_group', '1')", "en") == "乳酸 <2.5"
 
 
 def test_a_value_the_record_does_not_label_keeps_its_own_text() -> None:
@@ -537,7 +581,17 @@ def test_the_question_requirements_name_a_grouped_column_by_its_group_name() -> 
 # --- the run answer ---------------------------------------------------------------
 
 
-def _answer(context: Mapping[str, Any]) -> str:
+def _answer(context: Mapping[str, Any], **options: Any) -> str:
+    return _answer_view(context, **options)["card"]
+
+
+def _answer_view(
+    context: Mapping[str, Any],
+    *,
+    language: str = "zh",
+    labels: Mapping[str, str] | None = None,
+    source: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
     payloads = {
         "result_tables.json": {"tables": [{
             "name": "step__exposure_outcome_distribution.csv", "label": "Table x.", "evidence_id": "t",
@@ -551,29 +605,35 @@ def _answer(context: Mapping[str, Any]) -> str:
             ],
         }]},
         "agent_plan.json": {
-            "display_labels": {"death": "院内死亡"},
+            "display_labels": dict(labels or {"death": "院内死亡"}),
             "steps": [{
                 "step_id": "distribution", "method": "descriptive", "planned_analysis_role": "primary",
                 "intent": "Compare death across lact_max_group levels.",
                 "exposure_outcome_distribution_spec": {"exposure": "lact_max_group", "outcome": "death", "exposure_levels": [1, 2, 3]},
+            }, {
+                "step_id": "baseline", "method": "table_one", "table_one_spec": {"group_by": "lact_max_group"},
+                "inputs": ["lact_max_group", "age", "sex", "artifact:analysis_cohort"],
             }],
         },
-        "run_context.json": {"question": "乳酸分组与院内死亡", "source": {"label": "eICU"}, **context},
+        "run_context.json": {"question": "乳酸分组与院内死亡", "source": dict(source or {"label": "eICU"}), **context},
         "figure_gallery.json": {"figures": []},
         "manuscript_provenance.json": {"claims": []},
     }
     script = r"""
 const path = require('node:path');
 global.window = global;
-global.EU_LANG = 'zh';
-global.t = (en, zh) => zh;
+const [language, payloadText, ...files] = process.argv.slice(1);
+const zh = language === 'zh';
+global.EU_LANG = language;
+global.t = (en, value) => (zh ? value : en);
 global.EU_HTML = { esc: value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;') };
-global.EU_CATALOG = { dict: { death: ['In-hospital Mortality', '院内死亡', 'boolean'] } };
-const [payloadText, ...files] = process.argv.slice(1);
+global.EU_CATALOG = { dict: {
+  death: ['In-hospital Mortality', '院内死亡', 'boolean'], age: ['Age', '年龄', 'years'], sex: ['Sex', '性别', ''],
+} };
 for (const file of files) require(path.resolve(file));
 const payloads = JSON.parse(payloadText);
 const modules = global.EasyICU.guidedPi;
-const tr = (en, zh) => zh;
+const tr = (en, value) => (zh ? value : en);
 const esc = global.EU_HTML.esc;
 const resources = modules.require('resources').create({ esc });
 const ref = artifact => ({ kind: 'research_artifact', run_id: 'run_g', artifact, sha256: 'a'.repeat(64) });
@@ -591,7 +651,7 @@ const outcome = modules.require('runOutcome').create({
 (async () => {
   await outcome.loadScientificReview(latest, workflow);
   for (let turn = 0; turn < 5; turn += 1) await new Promise(resolve => setImmediate(resolve));
-  process.stdout.write(outcome.render(latest, workflow));
+  process.stdout.write(JSON.stringify({ card: outcome.render(latest, workflow), followUps: outcome.followUps(latest, workflow) }));
 })().catch(error => { console.error(error); process.exit(1); });
 """
     files = (
@@ -599,7 +659,7 @@ const outcome = modules.require('runOutcome').create({
         "screens-guided-pi-result-summary.js", "screens-guided-pi-run-answer.js", "screens-guided-pi-run-outcome.js",
         "screens-guided-pi-activity.js", "screens-guided-pi-transcript.js",
     )
-    return _node(script, args=(json.dumps(payloads), *[str((JS / name).resolve()) for name in files]))
+    return json.loads(_node(script, args=(language, json.dumps(payloads), *[str((JS / name).resolve()) for name in files])))
 
 
 def test_the_run_answer_names_the_groups_in_the_studys_words() -> None:
@@ -607,6 +667,59 @@ def test_the_run_answer_names_the_groups_in_the_studys_words() -> None:
 
     assert "eICU 中按乳酸分组的院内死亡：「乳酸 &lt;2.5」10.00%（60/600）；「乳酸 ≥2.5」20.00%（60/300）；「前 24 小时未测乳酸」5.00%（5/100）。" in card
     assert "「1」" not in card and UNREADABLE_ZH not in card
+
+
+#: What a plan sealed before its grouped levels had English names can
+#: register: the grouping's code rule as the column's label, and names by
+#: place for its levels.
+CODED_PLAN_LABELS = {
+    "death": "院内死亡",
+    "lact_max_group": "Ordinal groups of lact stated by the study, as level codes: 1 = 乳酸 <2.5; 2 = 乳酸 ≥2.5",
+    "lact_max_group=1": "Lactate group 1", "lact_max_group=2": "Lactate group 2", "lact_max_group=3": "Lactate not measured",
+}
+REGISTERED_SOURCE = {"label": "eICU 全量 87da10de8（服务器）", "database": "eicu", "reader_label": "eICU v2.0"}
+
+
+def test_the_run_answer_names_groups_and_source_as_readers_know_them() -> None:
+    view = _answer_view({"exposure_groups": SHOWN}, labels=CODED_PLAN_LABELS, source=REGISTERED_SOURCE)
+    card, follow_ups = view["card"], view["followUps"]
+
+    assert "eICU v2.0 中按乳酸分组的院内死亡：「乳酸 &lt;2.5」10.00%（60/600）；「乳酸 ≥2.5」20.00%（60/300）；「前 24 小时未测乳酸」5.00%（5/100）。" in card
+    assert follow_ups[0] == "在调整年龄、性别后，乳酸各组的院内死亡差别还存在吗？"
+    assert "按年龄分层后，乳酸各组的院内死亡有什么差别？" in follow_ups
+    shown = card + "\n".join(follow_ups)
+    for leaked in ("as level codes", "Ordinal groups", "Lactate group", "87da10de8", "全量", "lact_max_group"):
+        assert leaked not in shown, leaked
+
+
+def test_an_english_run_answer_names_the_groups_as_its_figures_do() -> None:
+    labels = {**CODED_PLAN_LABELS, "death": "In-hospital death"}
+    view = _answer_view({"exposure_groups": SHOWN}, language="en", labels=labels, source=REGISTERED_SOURCE)
+    card, follow_ups = view["card"], view["followUps"]
+
+    assert (
+        "In-hospital death by Lactate groups in eICU v2.0: “Maximum below 2.5 mmol/L” 10.00% (60/600); "
+        "“Maximum at least 2.5 mmol/L” 20.00% (60/300); “No value recorded” 5.00% (5/100)."
+    ) in card
+    assert follow_ups[0] == "After adjusting for Age, Sex, does In-hospital death still differ across the Lactate groups?"
+    assert "Stratified by age, how does In-hospital death differ across the Lactate groups?" in follow_ups
+    shown = card + "\n".join(follow_ups)
+    for leaked in ("as level codes", "Lactate group 1", "乳酸 &lt;2.5", "87da10de8", "lact_max_group"):
+        assert leaked not in shown, leaked
+
+
+def test_a_run_context_without_a_reader_label_keeps_its_registered_label() -> None:
+    card = _answer({"exposure_groups": SHOWN}, source={"label": "MIMIC-IV demo", "database": "mimic_demo"})
+
+    assert "MIMIC-IV demo 中按乳酸分组的院内死亡" in card
+
+
+def test_an_ungrouped_exposure_keeps_the_plans_labels() -> None:
+    labels = {"death": "院内死亡", "lact_max_group": "最高乳酸分层", "lact_max_group=1": "低乳酸"}
+    view = _answer_view({}, labels=labels)
+
+    assert "eICU 中按最高乳酸分层的院内死亡：「低乳酸」10.00%（60/600）；「2」20.00%（60/300）" in view["card"]
+    assert view["followUps"][0] == "在调整年龄、性别后，最高乳酸分层与院内死亡的关联还成立吗？"
 
 
 def test_the_run_answer_says_when_the_grouping_record_cannot_be_read() -> None:

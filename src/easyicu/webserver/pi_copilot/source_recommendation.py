@@ -52,6 +52,24 @@ def _generated_at(row: Mapping[str, Any]) -> Optional[datetime]:
         return None
 
 
+def database_reader_label(database: Any) -> str:
+    """The name a reader knows a database by: its display name and the
+    release EasyICU's catalog references ("eICU v2.0"); ``""`` for a
+    database the catalog does not name.
+
+    An export's registered label can carry an export id or a commit; a reader
+    sentence names the database instead.
+    """
+
+    try:
+        profile = get_database_profile(str(database or "").strip())
+    except (KeyError, ValueError):
+        return ""
+    if profile.reference_release:
+        return f"{profile.display_name} v{profile.reference_release}"
+    return profile.display_name
+
+
 def generated_date(row: Mapping[str, Any]) -> Optional[str]:
     """The export's generation date (``YYYY-MM-DD``), when it states one."""
 
@@ -167,9 +185,7 @@ def registered_sources_for_database(
         profile = get_database_profile(database)
         if not profile.is_public:
             raise KeyError(database)
-        label = profile.display_name
-        if profile.reference_release:
-            label = f"{label} v{profile.reference_release}"
+        label = database_reader_label(profile.key)
         for row in registry.get("sources") or []:
             if not isinstance(row, Mapping) or not row.get("ok") or not row.get("id"):
                 continue
@@ -202,6 +218,7 @@ def registered_source_choice(row: Mapping[str, Any]) -> Dict[str, Any]:
 __all__ = [
     "RegisteredExportRecommendation",
     "SelectionReason",
+    "database_reader_label",
     "generated_date",
     "recommend_registered_export",
     "registered_source_choice",

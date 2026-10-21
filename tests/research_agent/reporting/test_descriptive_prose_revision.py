@@ -182,6 +182,22 @@ def test_definition_precedes_shares_and_rule_labels_omit_measure_window(tmp_path
     assert bindings and not untraced
 
 
+@pytest.mark.parametrize("n", [1, 2, 3])
+def test_the_figures_and_the_manuscript_name_a_level_alike(tmp_path, n):
+    """A level the study names in another language goes by its rule in both."""
+
+    store, _records = _store(tmp_path)
+    group = _group_record(n)
+    store.register_text(kind="log", filename="groups.json", evidence_id="exposure_groupings",
+                        text=json.dumps(group), description="Synthetic temperature grouping")
+    written, _ = manuscript_group_labels(store, {}, language="en")
+    (row,) = exposure_group_label_rows(group, record_sha256="a" * 64)
+
+    for level in row["levels"]:
+        sentence = written[f"temperature_group={level['code']}"]
+        assert level["reader_name"] == sentence[:1].upper() + sentence[1:]
+
+
 def test_plan_card_projection_keeps_the_complete_rule_text():
     from easyicu.webserver.pi_copilot.exposure_group_notes import project_exposure_groups
     rows = exposure_group_label_rows(_group_record(3), record_sha256="a" * 64)

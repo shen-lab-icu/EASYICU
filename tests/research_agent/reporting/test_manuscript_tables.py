@@ -65,6 +65,51 @@ def test_reader_group_labels_are_exact_authorized_coordinates(tmp_path):
     assert table.columns[1:4] == ("Overall", "Reference category", "Comparison category")
 
 
+@pytest.mark.parametrize("codes", [[1, 2, 3], [1.0, 2.0, 3.0]], ids=["integers", "floats"])
+def test_a_grouped_exposures_columns_go_by_its_level_names_whatever_type_its_codes_are(tmp_path, codes):
+    from easyicu.research_agent.reporting.manuscript_tables import build_manuscript_tables
+
+    spec = TableOneSpec(
+        schema_version="easyicu.table_one/2", p_values_required=False,
+        p_value_adjustment="not_applicable_repeated_units",
+        group_by="glu_group_x1", group_levels=codes,
+        variables=[{
+            "name": "value", "variable_kind": "continuous", "summary": "median_iqr",
+            "test": "none_descriptive_smd_only",
+        }],
+    )
+    frame = pd.DataFrame({
+        "glu_group_x1": [codes[0], codes[0], codes[1], codes[1], codes[2], codes[2]],
+        "value": [1.0, 3.0, 8.0, None, 4.0, 5.0],
+    })
+    path = tmp_path / "evidence" / "baseline_table__table_one.csv"
+    path.parent.mkdir()
+    build_grouped_table_one(frame, spec).to_csv(path, index=False)
+    record = EvidenceRecord(
+        evidence_id="baseline_table", kind="table", description="Table 1",
+        relative_path="evidence/" + path.name,
+        sha256=hashlib.sha256(path.read_bytes()).hexdigest(), produced_by_step="baseline",
+    )
+    names = ("Minimum below 70 mg/dL", "Maximum above 180 mg/dL, without minimum below 70 mg/dL",
+             "Neither minimum below 70 mg/dL nor maximum above 180 mg/dL")
+    plan = AnalysisPlan(
+        research_question="Describe baseline values by glucose group.",
+        steps=[AnalysisStep(
+            step_id="baseline", intent="Describe baseline values", inputs=["glu_group_x1", "value"],
+            expected_outputs=["table:table_one"], method="grouped_table_one", table_one_spec=spec,
+        )],
+        # The host names a grouping's levels by their integer codes.
+        display_labels={f"glu_group_x1={code}": name for code, name in zip((1, 2, 3), names)},
+    )
+
+    table = build_manuscript_tables(plan=plan, evidence_records=[record], run_dir=tmp_path)[0]
+
+    assert table.columns == ("Characteristic", "Overall", *names, "SMD")
+    assert [note for note in table.notes if note.startswith("Group ")] == [
+        f"Group {code}: {name}." for code, name in zip((1, 2, 3), names)
+    ]
+
+
 @pytest.mark.parametrize("mutation", ["wrong_owner", "drift", "missing", "schema", "contract"])
 def test_reader_table_fails_closed_at_its_source_boundary(tmp_path, mutation):
     from easyicu.research_agent.reporting.manuscript_tables import (
