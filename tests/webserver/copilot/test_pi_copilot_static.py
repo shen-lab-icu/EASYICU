@@ -3789,7 +3789,7 @@ def test_agent_handoff_project_remains_visible_without_a_guided_folder() -> None
     )
     assert result.returncode == 0, result.stderr or result.stdout
     assert result.stdout == (
-        '{"bound":true,"unbound":true,"empty":true,"allProjects":true,"multiSelect":true,"collapsibleRail":true}'
+        '{"bound":true,"unbound":true,"empty":true,"allProjects":true,"multiSelect":true,"collapsibleRail":true,"hostedRemovalKeepsFiles":true}'
     )
     guided = _read("js/screens-guided.js")
     project_owner = _read("js/screens-guided-projects.js")

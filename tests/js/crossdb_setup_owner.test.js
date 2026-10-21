@@ -331,8 +331,20 @@ function fakeButton() {
   assert.equal(setup.view(), 'idle', 'a late completion must not restore loaded state after reset');
   assert.equal(repaintCount, repaintAfterReset, 'a fenced completion must not repaint stale state');
 
+  // A summary over more rows than the budget reads as a sentence, never as its code.
+  errorMessage = 'crossdb_feature_read_budget_exceeded';
+  for (const hosted of [false, true]) {
+    context.EU_CAPABILITIES = hosted ? { deployment: { hosted: true } } : undefined;
+    const html = setup.renderReal(config);
+    assert.doesNotMatch(html, /crossdb_feature_read_budget_exceeded/);
+    assert.match(html, hosted ? /please tell the administrator/ : /use smaller exports/);
+  }
+  context.EU_CAPABILITIES = undefined;
+  errorMessage = null;
+
   process.stdout.write(JSON.stringify({
     bounded_profile: true,
+    budget_error_readable: true,
     explicit_feature_scope: true,
     identity_resume_fail_closed: true,
     missing_api_visible: true,

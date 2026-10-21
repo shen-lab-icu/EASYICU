@@ -266,6 +266,12 @@
         'One or more selected database folders were not recognized. Open Advanced settings to review detected databases.',
         '一个或多个已选数据库目录未被识别。请打开“高级设置”检查已识别数据库。'
       ),
+      // The summary reads every row or none: it never samples to fake a full result.
+      crossdb_feature_read_budget_exceeded: hostedServer()
+        ? h.t('The selected data is too large to summarize within the server\'s limits. EasyICU does not compare a subset as if it were the whole; please tell the administrator.',
+          '所选数据太大，没能在服务器的资源限制内完成汇总。EasyICU 不会用部分数据冒充全部结果；请告诉管理员。')
+        : h.t('The selected exports are too large to summarize within this computer\'s limits. EasyICU does not compare a subset as if it were the whole; use smaller exports.',
+          '所选导出太大，没能在本机的资源限制内完成汇总。EasyICU 不会用部分数据冒充全部结果；请改用较小的导出。'),
     };
     return messages[raw] || raw;
   }

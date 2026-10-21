@@ -121,6 +121,20 @@ global.EU_GUIDED_PROJECTS.renderDraftRemovalDialog(context(null, allRows, {
 }));
 assert.match(removalHost.innerHTML, /2 projects selected/);
 assert.match(removalHost.innerHTML, /Project folders remain unchanged on disk/);
+assert.match(removalHost.innerHTML, /data-remove-project-folder/);
+
+// A hosted project lives in the clinician's server workspace: removal drops the
+// list entry only, offers no system trash and names no server path.
+const hostedRow = { ...allRows[1], project_dir: '/home/clinic/instances/a/home/projects/p1' };
+global.EasyICU = { guidedPi: { optional: name => (name === 'hosted' ? { active: () => true } : null) } };
+global.EU_GUIDED_PROJECTS.renderDraftRemovalDialog(context(null, allRows, {
+  row: hostedRow, rows: [hostedRow], trashProjectFolder: true, busy: false, error: null,
+}));
+assert.doesNotMatch(removalHost.innerHTML, /data-remove-project-folder/);
+assert.doesNotMatch(removalHost.innerHTML, /system trash|\/home\//);
+assert.match(removalHost.innerHTML, /stay on the server/);
+assert.match(removalHost.innerHTML, /Remove from list/);
+delete global.EasyICU;
 global.EU_GUIDED_PROJECTS.setProjectManagement(false);
 
-process.stdout.write(JSON.stringify({ bound: true, unbound: true, empty: true, allProjects: true, multiSelect: true, collapsibleRail: true }));
+process.stdout.write(JSON.stringify({ bound: true, unbound: true, empty: true, allProjects: true, multiSelect: true, collapsibleRail: true, hostedRemovalKeepsFiles: true }));
