@@ -177,7 +177,7 @@ def test_the_page_loads_each_turn_owner_before_its_reader():
         return position
 
     assert 0 <= index.find("css/guided-pi-skin.css?") < at("css/guided-pi-turn-layout.css")
-    assert at("js/screens-guided-pi-job-narration.js") < at("js/screens-guided-pi-activity.js")
+    assert at("js/screens-guided-pi-job-narration.js") < at("js/screens-guided-pi-activity.js", "20261021-named-steps1")
     assert at("js/screens-guided-pi-run-stop.js") < at("js/screens-guided-pi-session-view.js", "20261021-where1")
     assert at("js/screens-guided-pi-session-view.js", "20261021-where1") < at("js/screens-guided-pi.js", "20261021-help1")
 

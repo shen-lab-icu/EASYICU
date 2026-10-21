@@ -237,6 +237,16 @@
       };
       const firstReport = revised ? null
         : [tr('Run report (PDF)', '运行报告（PDF）'), tr('The report this run produced, for download.', '本次运行生成的报告，可下载。')];
+      // The host's stat size (size_bytes), when it reports one.
+      const size = item => {
+        const bytes = item.size_bytes;
+        if (!Number.isInteger(bytes) || bytes < 0) return '';
+        if (bytes < 1024) return bytes ? '< 1 KB' : '0 KB';
+        const units = ['KB', 'MB', 'GB'];
+        let value = bytes / 1024, unit = 0;
+        while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
+        return `${value >= 10 ? Math.round(value) : Math.round(value * 10) / 10} ${units[unit]}`;
+      };
       const file = (item, index) => {
         const own = item.name === 'manuscript_scaffold.pdf' ? firstReport : null;
         // The resource owner titles previewable files from the shared
@@ -249,10 +259,10 @@
         const canPreview = current.projectId && review.engine === 'easyicu.research_agent.pipeline' && /\.(json|pdf|html)$/i.test(item.name);
         // A reader sees what the file is for; the exact file name stays on hover.
         const note = guided(item.name, 'purpose') || (own ? own[1] : window.AGENT_RENDER.artifactSummary(item.name, false));
-        return `<tr class="gpi-run-file"><td>${canPreview ? resourceButton(resource) : /\.json$/i.test(item.name) ? `<button type="button" data-run-files-artifact="${index}" ${disabled ? 'disabled' : ''}>${esc(resource.label)}</button>` : `<span>${esc(resource.label)}</span>`}</td><td><small title="${esc(item.name)}">${esc(note || item.name)}</small></td><td><button type="button" data-run-files-download="${index}" ${disabled ? 'disabled' : ''}>${tr('Download', '下载')}</button></td></tr>`;
+        return `<tr class="gpi-run-file"><td>${canPreview ? resourceButton(resource) : /\.json$/i.test(item.name) ? `<button type="button" data-run-files-artifact="${index}" ${disabled ? 'disabled' : ''}>${esc(resource.label)}</button>` : `<span>${esc(resource.label)}</span>`}</td><td><small title="${esc(item.name)}">${esc(note || item.name)}</small></td><td class="gpi-run-file-size">${esc(size(item))}</td><td><button type="button" data-run-files-download="${index}" ${disabled ? 'disabled' : ''}>${tr('Download', '下载')}</button></td></tr>`;
       };
       // Each file with what it is for: a 文件 | 内容 table.
-      const table = body => `<table class="gpi-run-file-list"><thead><tr><th scope="col">${tr('File', '文件')}</th><th scope="col">${tr('Contents', '内容')}</th><th scope="col"><span class="sr-only">${tr('Download', '下载')}</span></th></tr></thead><tbody>${body}</tbody></table>`;
+      const table = body => `<table class="gpi-run-file-list"><thead><tr><th scope="col">${tr('File', '文件')}</th><th scope="col">${tr('Contents', '内容')}</th><th scope="col">${tr('Size', '大小')}</th><th scope="col"><span class="sr-only">${tr('Download', '下载')}</span></th></tr></thead><tbody>${body}</tbody></table>`;
       // Before execution the result and figure files are empty shells; lead
       // with what the researcher reviews at that stage.
       const executed = !(review.readiness && rows(review.readiness.non_human_failures).includes('execution_complete'));
