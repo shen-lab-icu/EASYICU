@@ -68,8 +68,23 @@ out.ignored = help.handleClick({ target: { closest: () => null } });
 setImmediate(() => {
   out.copied = copied.length === 1 && copied[0].startsWith('EasyICU 9.0.1\n项目: draft_b2f90ee188ae');
   out.label = button.textContent;
-  process.stdout.write(JSON.stringify(out));
-  process.exit(0);
+  // A browser that refuses the clipboard: the reference is shown instead.
+  window.navigator.clipboard.writeText = async () => { throw new Error('denied'); };
+  const inserted = [];
+  const holder = { querySelector: () => null, insertBefore: node => inserted.push(node) };
+  document.createElement = tag => ({ tag, className: '', textContent: '' });
+  window.document = document;
+  const refused = { textContent: '复制问题编号', parentNode: holder, closest: () => null };
+  help.handleClick({ target: { closest: selector => (selector === '[data-gpi-help-copy]' ? refused : null) } });
+  setImmediate(() => {
+    out.refused = {
+      label: refused.textContent,
+      shown: inserted.length === 1 && inserted[0].tag === 'pre' && inserted[0].className === 'gpi-help-reference'
+        && inserted[0].textContent.startsWith('EasyICU 9.0.1\n项目: draft_b2f90ee188ae'),
+    };
+    process.stdout.write(JSON.stringify(out));
+    process.exit(0);
+  });
 });
 """
 
@@ -107,6 +122,7 @@ def test_the_problem_reference_carries_ids_and_the_administrator_only() -> None:
     assert out["handled"] is True and out["ignored"] is False
     assert out["copied"] is True
     assert out["label"] == "已复制"
+    assert out["refused"] == {"label": "请选中下方编号复制，或截图", "shown": True}
 
 
 @pytest.mark.requires_node

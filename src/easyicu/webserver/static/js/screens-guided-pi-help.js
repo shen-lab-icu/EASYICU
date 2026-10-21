@@ -10,7 +10,9 @@
 
   const COPIED_MS = 1400;
 
-  async function copyText(text) {
+  // The fallback's scratch field sits inside the menu: focus leaving the
+  // menu would close it (popover-menus.js) before the result shows.
+  async function copyText(text, button) {
     try {
       if (window.navigator && window.navigator.clipboard && window.navigator.clipboard.writeText) {
         await window.navigator.clipboard.writeText(text);
@@ -18,17 +20,20 @@
       }
     } catch (_) { /* fall back below */ }
     const doc = window.document;
-    if (!doc || !doc.body || typeof doc.execCommand !== 'function') return false;
+    const holder = button && button.parentNode;
+    if (!doc || !holder || typeof doc.execCommand !== 'function') return false;
     const area = doc.createElement('textarea');
     area.value = text;
     area.setAttribute('readonly', '');
+    area.setAttribute('aria-hidden', 'true');
     area.style.position = 'fixed';
     area.style.opacity = '0';
-    doc.body.appendChild(area);
+    holder.appendChild(area);
     area.select();
     let copied = false;
     try { copied = doc.execCommand('copy'); } catch (_) { copied = false; }
     area.remove();
+    if (typeof button.focus === 'function') button.focus();
     return copied;
   }
 
@@ -77,13 +82,28 @@
     function handleClick(event) {
       const button = event.target.closest && event.target.closest('[data-gpi-help-copy]');
       if (!button) return false;
-      void copyText(referenceText()).then(copied => {
-        button.textContent = copied ? tr('Copied', '已复制') : tr('Copy failed', '复制失败');
-        setTimeout(() => {
-          const menu = button.closest('details[open]');
-          if (menu) menu.removeAttribute('open');
-          button.textContent = tr('Copy problem reference', '复制问题编号');
-        }, COPIED_MS);
+      const text = referenceText();
+      void copyText(text, button).then(copied => {
+        if (copied) {
+          button.textContent = tr('Copied', '已复制');
+          setTimeout(() => {
+            const menu = button.closest('details[open]');
+            if (menu) menu.removeAttribute('open');
+            button.textContent = tr('Copy problem reference', '复制问题编号');
+          }, COPIED_MS);
+          return;
+        }
+        // The browser refused the clipboard: show the reference itself, to
+        // select or to photograph, in place of a bare failure.
+        button.textContent = tr('Select it below, or take a screenshot', '请选中下方编号复制，或截图');
+        const holder = button.parentNode;
+        let shown = holder && holder.querySelector('.gpi-help-reference');
+        if (holder && !shown) {
+          shown = window.document.createElement('pre');
+          shown.className = 'gpi-help-reference';
+          holder.insertBefore(shown, button.nextSibling);
+        }
+        if (shown) shown.textContent = text;
       });
       return true;
     }
