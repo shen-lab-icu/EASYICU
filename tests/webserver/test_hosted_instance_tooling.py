@@ -182,3 +182,10 @@ def test_list_status_do_not_read_provider_keys(tooling, tmp_path, monkeypatch, c
     assert "doctor" in capsys.readouterr().out
     assert not (instance / "run/instance.pid.json").exists()
     assert os.environ.get("EASYICU_HOME") != str(instance / "home")
+
+
+def test_instance_creation_never_writes_agentic_coder_backend(tooling, tmp_path, monkeypatch):
+    monkeypatch.setenv("EASYICU_AGENTIC_CODER_BACKEND", "codex")
+    _, instance = create(tooling, tmp_path)
+    assert "EASYICU_AGENTIC_CODER_BACKEND" not in tooling.instance_environment(instance)
+    assert "EASYICU_AGENTIC_CODER_BACKEND" not in (instance / "instance.env").read_text()

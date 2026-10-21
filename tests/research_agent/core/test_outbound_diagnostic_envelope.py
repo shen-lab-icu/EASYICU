@@ -99,6 +99,61 @@ def _all_prompt_text(llm: ExternalCaptureMockLLMClient) -> str:
     )
 
 
+@pytest.mark.parametrize("hosted", [False, True])
+@pytest.mark.parametrize("host", ["localhost", "127.0.0.1", "[::1]"])
+def test_hosted_loopback_repair_withholds_stdout_and_stderr(ra, monkeypatch, hosted, host):
+    import sys
+    from types import SimpleNamespace
+    from easyicu.research_agent.providers.llm import OpenAIClient
+
+    context, step = _context_and_step(ra)
+    monkeypatch.setenv("EASYICU_HOSTED", "1" if hosted else "0")
+    patch = json.dumps({
+        "format": PATCH_FORMAT,
+        "edits": [{"old": "value = 1", "new": "value = 2", "expected_count": 1}],
+    })
+    calls = []
+
+    def complete(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content=patch), finish_reason="stop",
+        )])
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(
+        OpenAI=lambda **kwargs: SimpleNamespace(chat=SimpleNamespace(
+            completions=SimpleNamespace(create=complete),
+        )),
+    ))
+    llm = OpenAIClient(model="synthetic", api_key="synthetic-test-key",
+                       base_url=f"http://{host}:8787/v1", stream_enabled=False)
+    CoderAgent(llm).repair(
+        context=context, step=step, code="import os\nvalue = 1\n",
+        run_log="stdout=SYNTHETIC_ROW_SENTINEL\nstderr=SYNTHETIC_ERROR_SENTINEL",
+        repair_authority=_authority(), current_repair_authority=_authority(),
+    )
+    prompt = json.dumps(calls)
+    assert ("SYNTHETIC_ROW_SENTINEL" in prompt) is not hosted
+    assert ("SYNTHETIC_ERROR_SENTINEL" in prompt) is not hosted
+    assert ("easyicu.diagnostic_envelope/1" in prompt) is hosted
+    if hosted:
+        assert "raw_diagnostics_unavailable_when_hosted" in prompt
+        assert RepairReason.UNBOUND_LOCAL.value in prompt
+
+
+def test_hosted_mock_repair_also_uses_typed_diagnostics(ra, monkeypatch):
+    from easyicu.research_agent.agents._support import _outbound_repair_diagnosis
+
+    monkeypatch.setenv("EASYICU_HOSTED", "1")
+    payload = json.loads(_outbound_repair_diagnosis(
+        llm=ra.MockLLMClient(), run_log="SYNTHETIC_RAW_DIAGNOSTIC",
+        repair_authority=_authority(), attempt=2, byte_limit=4000,
+    ))
+    assert "raw_diagnostics_unavailable_when_hosted" in payload["error_codes"]
+    assert RepairReason.UNBOUND_LOCAL.value in payload["error_codes"]
+    assert payload["fields"]["attempt"] == 2
+
+
 def test_external_repair_never_sends_raw_runtime_or_dataframe_values(ra):
     context, step = _context_and_step(ra)
     patch = json.dumps(

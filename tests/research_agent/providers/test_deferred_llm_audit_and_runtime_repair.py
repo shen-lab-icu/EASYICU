@@ -1229,3 +1229,40 @@ def test_resume_seals_completed_repair_after_capsule_checkpoint_crash(
         "CAPSULE_CRASH_REPAIRED",
     ]
     assert seal_calls == 2
+
+
+def test_hosted_run_records_agentic_coder_refusal(ra, tmp_path, monkeypatch):
+    from easyicu.research_agent.agents import agentic_coder
+
+    _isolate_article_suite_contract(monkeypatch)
+    monkeypatch.setenv("EASYICU_HOSTED", "1")
+    monkeypatch.setenv("EASYICU_AGENTIC_CODER_BACKEND", "codex")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("hosted run constructed an agentic backend")
+
+    monkeypatch.setattr(agentic_coder.AgenticCoderAgent, "__init__", forbidden)
+    llm = PatternScriptedMockLLMClient([
+        ("ICU-AWARE RESEARCH PLAN", [_plan()]),
+        ("WRITE THE PYTHON CODE", [_summary_script(phase="HOSTED_SYNTHETIC")]),
+        ("INTERPRET THE RESULTS", ["The synthetic cohort summary is available."]),
+    ])
+    result = ra.ResearchAgentPipeline(
+        workdir=tmp_path, llm=llm, enable_literature=False, enable_visual_qa=False,
+        enable_latex=False, enable_llm_concept_audit=False,
+        enable_deterministic_code_fallback=False, enable_deterministic_runner_repair=False,
+        runner_kind="subprocess",
+    ).run(
+        question="Summarize the synthetic cohort.",
+        cohort=pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]}),
+        cohort_name="hosted_egress_test", database="synthetic", target_outcome="death",
+        stop_after_step_id="01_summary", stop_after_analysis=True,
+    )
+    receipt = json.loads((Path(result.workdir) / "agentic_coder_refusal.json").read_text())
+    assert receipt == {
+        "schema_version": "easyicu.agentic_coder_refusal/1",
+        "reason_code": "agentic_coder_unavailable_when_hosted",
+        "cause_code": "hosted_model_egress_policy",
+        "requested_backend": "codex",
+    }
+    assert _call_count(llm, "WRITE THE PYTHON CODE") == 1

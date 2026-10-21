@@ -21,10 +21,13 @@ gives us better *code*, not unverified results. See the engine-agnostic gate in
 construction site) it falls back to the wrapped LLM ``CoderAgent`` whenever the
 CLI backend is unavailable or fails to produce a script — the same capability
 ladder as :func:`easyicu.research_agent.providers.llm.build_llm_client`.
+Hosted instances refuse this backend before construction and retain the
+ordinary LLM coder, because a CLI agent can read the cohort directly.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tempfile
@@ -58,6 +61,10 @@ class AgenticCoderAgent:
         cohort_env: str = "COHORT_PARQUET",
         timeout: float = _DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
+        if os.environ.get("EASYICU_HOSTED") == "1":
+            raise RuntimeError(
+                "agentic_coder_unavailable_when_hosted: hosted_model_egress_policy"
+            )
         self.fallback = fallback
         self.backend = str(backend or "").strip().lower()
         self.cohort_env = cohort_env
@@ -258,7 +265,10 @@ class AgenticCoderAgent:
 
 
 def maybe_wrap_coder(
-    coder: Any, *, env: "os._Environ[str] | dict[str, str] | None" = None
+    coder: Any,
+    *,
+    env: "os._Environ[str] | dict[str, str] | None" = None,
+    run_dir: Path | None = None,
 ) -> Any:
     """Return an :class:`AgenticCoderAgent` wrapping ``coder`` iff opted in.
 
@@ -266,9 +276,21 @@ def maybe_wrap_coder(
     When unset, returns ``coder`` unchanged, so the default pipeline behaviour
     and every existing test are untouched. When set but the CLI is not
     installed, the wrapper still degrades to ``coder`` at call time.
+    Hosted mode overrides this opt-in and persists a refusal when the run
+    supplies its directory. Receipt-write failures propagate unchanged.
     """
     source = os.environ if env is None else env
     backend = str(source.get("EASYICU_AGENTIC_CODER_BACKEND", "") or "").strip().lower()
     if backend not in {"codex", "claude"}:
+        return coder
+    # The host process policy cannot be disabled by a caller's environment map.
+    if os.environ.get("EASYICU_HOSTED") == "1" or source.get("EASYICU_HOSTED") == "1":
+        if run_dir is not None:
+            (run_dir / "agentic_coder_refusal.json").write_text(json.dumps({
+                "schema_version": "easyicu.agentic_coder_refusal/1",
+                "reason_code": "agentic_coder_unavailable_when_hosted",
+                "cause_code": "hosted_model_egress_policy",
+                "requested_backend": backend,
+            }, indent=2) + "\n", encoding="utf-8")
         return coder
     return AgenticCoderAgent(coder, backend=backend)

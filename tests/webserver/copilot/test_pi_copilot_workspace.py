@@ -400,3 +400,104 @@ def test_project_workspace_requires_unique_exact_edit_target(tmp_path: Path) -> 
         )
 
     assert raised.value.code == "pi_workspace_edit_target_not_unique"
+
+
+_HOSTED_DATA_FILES = [
+    "table.csv", "table.tsv", "table.csv.gz", "table.parquet", "table.feather",
+    "table.xlsx", "table.xls", "table.jsonl", "table.ndjson", "table.json",
+    "table.yaml", "table.yml", "table.CSV", "table.csv.zip", "table.arrow",
+    "exports/note.md", "export/nested/note.txt", "export_synthetic/note.md",
+    "runs/run_synthetic/data/note.md", "run_synthetic/note.md", "run/note.md",
+    "nested/RUNS/note.md", "data/note.md", "output/note.md", "outputs/note.md",
+    "nested\\exports\\note.md", "run-synthetic/note.md",
+]
+
+
+def _workspace_read_tool(tmp_path, relative, text):
+    from easyicu.webserver.pi_copilot.contracts import PiSessionRecord, ToolExecutionContext
+    from easyicu.webserver.pi_copilot.tools import execute_tool
+
+    workspace = ProjectWorkspace(tmp_path / "workspace")
+    candidate = workspace.project_root("synthetic-project") / relative.replace("\\", "/")
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    candidate.write_text(text)
+    context = ToolExecutionContext(
+        session=PiSessionRecord(
+            session_id="synthetic-session", project_id="synthetic-project", agent_mode="workspace",
+        ),
+        workspace=workspace,
+    )
+    return workspace, lambda: execute_tool("easyicu_read_project_file", {"file": relative}, context)
+
+
+@pytest.mark.parametrize("relative", _HOSTED_DATA_FILES)
+def test_hosted_workspace_data_is_refused_before_read(tmp_path, monkeypatch, relative):
+    monkeypatch.setenv("EASYICU_HOSTED", "1")
+    workspace, read = _workspace_read_tool(tmp_path, relative, "x,y\n1,2")
+    with pytest.raises(PiCopilotError) as raised:
+        read()
+    assert raised.value.code == "tabular_read_unavailable_when_hosted"
+    assert raised.value.details["cause_code"] in {"workspace_data_file", "workspace_data_directory"}
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("hosted data bytes were read")
+
+    monkeypatch.setattr(workspace, "_read_complete_file", forbidden)
+    with pytest.raises(PiCopilotError) as raised:
+        workspace.read_file("synthetic-project", relative)
+    assert raised.value.code == "tabular_read_unavailable_when_hosted"
+
+
+@pytest.mark.parametrize("suffix", [".md", ".txt", ".html", ".htm", ".css", ".js", ".mjs", ".py", ".svg"])
+def test_hosted_workspace_permitted_text_is_projected(tmp_path, monkeypatch, suffix):
+    monkeypatch.setenv("EASYICU_HOSTED", "1")
+    _, read = _workspace_read_tool(tmp_path, "notes/plan" + suffix, "Synthetic study plan.")
+    result = read()
+    assert result["code"] == "pi_workspace_file_read"
+    assert result["details"]["text"] == "Synthetic study plan."
+
+
+@pytest.mark.parametrize("text,code", [
+    ("stay_id=123456789", "pi_projection_blocked"),
+    ("x" * 2001, "pi_projection_too_large"),
+])
+def test_hosted_workspace_text_keeps_projection_refusal_cause(tmp_path, monkeypatch, text, code):
+    monkeypatch.setenv("EASYICU_HOSTED", "1")
+    _, read = _workspace_read_tool(tmp_path, "notes/plan.md", text)
+    with pytest.raises(PiCopilotError) as raised:
+        read()
+    assert raised.value.code == code
+
+
+@pytest.mark.parametrize("relative", _HOSTED_DATA_FILES)
+def test_non_hosted_workspace_read_contract_is_unchanged(tmp_path, monkeypatch, relative):
+    from easyicu.webserver.pi_copilot.workspace import TEXT_SUFFIXES
+
+    monkeypatch.setenv("EASYICU_HOSTED", "0")
+    _, read = _workspace_read_tool(tmp_path, relative, "stay_id=123456789")
+    if Path(relative).suffix.lower() in TEXT_SUFFIXES:
+        assert read()["details"]["text"] == "stay_id=123456789"
+    else:
+        with pytest.raises(PiCopilotError) as raised:
+            read()
+        assert raised.value.code == "pi_workspace_file_type_unsupported"
+
+
+@pytest.mark.parametrize("hosted", [False, True])
+def test_workspace_directory_alias_cannot_bypass_hosted_data_policy(tmp_path, monkeypatch, hosted):
+    monkeypatch.setenv("EASYICU_HOSTED", "1" if hosted else "0")
+    workspace, _ = _workspace_read_tool(tmp_path, "exports/table.md", "x,y\n1,2")
+    root = workspace.project_root("synthetic-project")
+    (root / "notes").symlink_to(root / "exports", target_is_directory=True)
+    if not hosted:
+        assert workspace.read_file("synthetic-project", "notes/table.md")["text"] == "x,y\n1,2"
+        return
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("aliased hosted data bytes were read")
+
+    monkeypatch.setattr(Path, "read_bytes", forbidden)
+    with pytest.raises(PiCopilotError) as raised:
+        workspace.read_file("synthetic-project", "notes/table.md")
+    assert raised.value.code == "tabular_read_unavailable_when_hosted"
+    assert raised.value.details["cause_code"] == "workspace_data_directory"

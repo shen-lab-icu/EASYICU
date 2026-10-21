@@ -408,3 +408,37 @@ def test_maybe_wrap_enables_for_codex():
     assert isinstance(wrapped, AgenticCoderAgent)
     assert wrapped.backend == "codex"
     assert wrapped.fallback is coder
+
+
+def test_hosted_agentic_coder_never_constructs_backend(monkeypatch):
+    monkeypatch.setenv("EASYICU_HOSTED", "1")
+    monkeypatch.setenv("EASYICU_AGENTIC_CODER_BACKEND", "codex")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("hosted backend was constructed")
+
+    monkeypatch.setattr(ac_mod, "AgenticCoderAgent", forbidden)
+    coder = _FakeCoder()
+    assert maybe_wrap_coder(coder) is coder
+
+
+def test_hosted_agentic_coder_cannot_be_enabled_by_explicit_environment(monkeypatch):
+    monkeypatch.setenv("EASYICU_HOSTED", "1")
+    coder = _FakeCoder()
+    assert maybe_wrap_coder(coder, env={"EASYICU_AGENTIC_CODER_BACKEND": "claude"}) is coder
+
+
+def test_hosted_agentic_coder_refuses_direct_construction(monkeypatch):
+    import pytest
+
+    monkeypatch.setenv("EASYICU_HOSTED", "1")
+    with pytest.raises(RuntimeError, match="agentic_coder_unavailable_when_hosted"):
+        AgenticCoderAgent(_FakeCoder())
+
+
+def test_explicit_hosted_environment_also_disables_agentic_coder(monkeypatch):
+    monkeypatch.setenv("EASYICU_HOSTED", "0")
+    coder = _FakeCoder()
+    assert maybe_wrap_coder(coder, env={
+        "EASYICU_HOSTED": "1", "EASYICU_AGENTIC_CODER_BACKEND": "claude",
+    }) is coder

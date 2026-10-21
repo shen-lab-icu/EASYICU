@@ -18,6 +18,7 @@ import inspect
 import ipaddress
 import json
 import math
+import os
 import sys
 import threading
 import weakref
@@ -187,6 +188,10 @@ def provider_transport_destination(client: Any) -> str:
     record = _trusted_client_record(client)
     if record is not None and record.kind == "offline":
         return "mock"
+    # A hosted loopback endpoint may proxy to a public model. Neither a
+    # factory attestation nor a wrapper grants it raw-diagnostic access.
+    if os.environ.get("EASYICU_HOSTED") == "1":
+        return "external"
     if record is not None and record.kind == "external_capture":
         return "external"
     if record is not None and record.kind == "wrapper" and record.children_getter:

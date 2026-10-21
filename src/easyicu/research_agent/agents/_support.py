@@ -239,15 +239,17 @@ def _outbound_repair_diagnosis(
     attempt: int,
     byte_limit: int,
 ) -> str:
-    """Return raw diagnostics only to mock or genuinely local transports."""
+    """Return raw diagnostics only to non-hosted mock or local transports."""
 
     from ..authority.diagnostic_envelope import DiagnosticEnvelope
     from ..providers.factory import provider_transport_destination
 
-    if provider_transport_destination(llm) == "external":
+    hosted = os.environ.get("EASYICU_HOSTED") == "1"
+    if hosted or provider_transport_destination(llm) == "external":
         return DiagnosticEnvelope.from_repair_authority(
             repair_authority,
             attempt=attempt,
+            hosted=hosted,
         ).render()
     return _repair_diagnosis_excerpt(run_log, byte_limit=byte_limit)
 

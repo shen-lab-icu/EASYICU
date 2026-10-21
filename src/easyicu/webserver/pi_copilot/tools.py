@@ -34,6 +34,7 @@ from easyicu.webserver import (
     study_contexts,
     target_trial_setup,
 )
+from easyicu.webserver.hosted import is_hosted
 from easyicu.webserver.copilot_data_workbench import (
     CopilotDataWorkbenchError,
     CopilotDataWorkbenchSnapshotStore,
@@ -124,6 +125,7 @@ def _workspace_result(
 ) -> Dict[str, Any]:
     """Return bounded project artifacts without applying patient projections.
 
+    Hosted file reads apply ensure_safe_projection before this envelope.
     Workspace text is either model-authored or explicitly placed in the
     isolated project artifact directory.  It never reads EasyICU source-data
     paths.  Keep the JSON-line envelope bounded while preserving useful code.
@@ -4607,6 +4609,9 @@ def _read_project_file(
         start_line=int(params.get("start_line") or 1),
         end_line=(int(params["end_line"]) if params.get("end_line") else None),
     )
+    if is_hosted():
+        # Retain the projection owner's reason and cause on refusal.
+        ensure_safe_projection(payload)
     return _workspace_result(
         context,
         status="ok",
