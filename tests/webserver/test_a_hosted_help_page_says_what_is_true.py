@@ -180,6 +180,7 @@ def test_hosted_review_names_the_prepared_data_without_paths_or_registration() -
 
     assert "const hosted = hostedServer();" in block
     assert "t('Prepared data', '已准备的数据')" in block
+    assert "'检查管理员准备的各份数据之间的概念覆盖和聚合分布。'" in viz
     # No server path, no rename/remove and no add-by-path on a hosted row.
     assert "${hosted ? '' : `<span class=\"src-path mono\">${esc(s.path)}</span>`}" in block
     assert "${hosted ? '' : `<span class=\"src-actions\">" in block
