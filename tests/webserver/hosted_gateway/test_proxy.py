@@ -131,6 +131,10 @@ def test_down_socket_is_generic_chinese_503(client, login):
     assert "你的 EasyICU 暂时不可用，请联系管理员。" in reply.text
     assert "sock" not in reply.text and "Traceback" not in reply.text
     assert reply.headers["cache-control"] == "no-store"
+    # The page a clinician meets while an instance restarts: the login page's
+    # look, a way to try again, and the same no-script policy as the login page.
+    assert '<a class="button" href="">刷新本页</a>' in reply.text
+    assert reply.headers["content-security-policy"].startswith("default-src 'none'")
 
 
 @pytest.mark.parametrize("path,first,second", [
