@@ -29,6 +29,17 @@
       if (error.code === 'login_required') {
         return tr('Your sign-in has expired. Sign in again to continue.', '登录已过期，请重新登录后继续。');
       }
+      // Hosted boundaries (webserver/hosted.py): the administrator's data is
+      // read-only and some actions belong to the administrator.
+      if (error.code === 'hosted_data_read_only') {
+        return tr('The data the administrator prepared is read-only; results are saved in your own workspace.', '管理员准备的数据是只读的；结果会保存在你自己的工作区。');
+      }
+      if (error.code === 'path_outside_data_roots') {
+        return tr('That location is outside the data the administrator prepared.', '这个位置不在管理员准备的数据范围内。');
+      }
+      if (error.code === 'unavailable_when_hosted') {
+        return tr('The administrator handles this action. Please contact them.', '这项操作由管理员负责，请联系管理员。');
+      }
       if (error.code === 'pi_session_authority_stale') {
         return tr('The study binding changed after this conversation was saved. Rebind it before continuing.', '这段对话保存后研究绑定发生了变化，请先重新绑定再继续。');
       }
