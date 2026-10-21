@@ -230,8 +230,13 @@
     if (sum.total_rows != null) parts.push(`${fmtInt(sum.total_rows)} ${t('rows', '行')}`);
     return parts.join(' · ') || t('export folder', '导出文件夹');
   }
+  // A hosted instance reviews the data its administrator prepared and
+  // registered: rows name the data, not a server path, and registration
+  // (rename, remove, add by path) stays with the administrator.
+  function hostedServer() { return ((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true; }
   function sourceRegistryBlock(mode) {
     const multi = mode === 'multi';
+    const hosted = hostedServer();
     const active = defaultExportPath();
     const selected = new Set(explicitRegistryCrossdbPaths());
     const sources = registrySources().slice().sort((a, b) => {
@@ -240,14 +245,15 @@
       if (aOn !== bOn) return aOn ? -1 : 1;
       return 0;
     });
-    const title = multi ? t('Local export sources', '本地导出来源') : t('Current local export', '当前本地导出');
+    const title = hosted ? (multi ? t('Prepared data sources', '已准备的数据来源') : t('Prepared data', '已准备的数据'))
+      : multi ? t('Local export sources', '本地导出来源') : t('Current local export', '当前本地导出');
     const empty = multi
       ? t('No registered exports yet. Add two EasyICU export folders below.', '还没有注册导出。请在下方添加两个 EasyICU 导出文件夹。')
       : t('No registered export yet. Add an EasyICU export folder below.', '还没有注册导出。请在下方添加一个 EasyICU 导出文件夹。');
     return `
       <div class="src-registry" data-src-mode="${multi ? 'multi' : 'single'}">
         <div class="src-head">
-          <div><div class="eyebrow">${title}</div><div class="src-sub">${multi ? t('Choose at least two exports for Cross-DB preview.', '请选择至少两个导出用于跨库预览。') : t('This active export is shared by Patient, Cohort, Agent, and Copilot.', '这个 active 导出会被患者审阅、队列统计、Agent 和 Copilot 共用。')}</div></div>
+          <div><div class="eyebrow">${title}</div><div class="src-sub">${multi ? t('Choose at least two exports for Cross-DB preview.', '请选择至少两个导出用于跨库预览。') : hosted ? t('The data in use is shared by Patient Review, Cohort Statistics and the research conversation.', '当前使用的数据会被患者审阅、队列统计和研究对话共用。') : t('This active export is shared by Patient, Cohort, Agent, and Copilot.', '这个 active 导出会被患者审阅、队列统计、Agent 和 Copilot 共用。')}</div></div>
           <button class="btn sm ghost" data-src-refresh>${icon('refresh', 12)} ${t('Refresh', '刷新')}</button>
         </div>
         <div class="src-list">
@@ -255,18 +261,18 @@
             const rowHtml = (s) => {
               const on = multi ? selected.has(s.path) : s.path === active;
               const attr = multi ? '' : `data-src-active="${esc(s.path)}"`;
-              const label = s.label || s.database || t('local', '本地');
+              const label = s.label || s.database || (hosted ? t('data', '数据') : t('local', '本地'));
               return `
               <div class="src-row ${on ? 'on' : ''}" ${attr}>
                 <span class="src-ico">${icon(multi && on ? 'check' : 'folder', 14, multi && on ? 2.6 : undefined)}</span>
-                <span class="src-body"><span class="src-name">${esc(label)}</span><span class="src-meta">${esc(sourceLine(s))}</span><span class="src-path mono">${esc(s.path)}</span></span>
+                <span class="src-body"><span class="src-name">${esc(label)}</span><span class="src-meta">${esc(sourceLine(s))}</span>${hosted ? '' : `<span class="src-path mono">${esc(s.path)}</span>`}</span>
                 ${multi
                   ? `<button class="btn sm ${on ? '' : 'ghost'}" type="button" data-src-cross="${esc(s.path)}" aria-pressed="${on ? 'true' : 'false'}">${on ? t('selected', '已选择') : t('add', '添加')}</button>`
                   : `<span class="pill ${on ? 'ok' : 'dashed'}" style="height:20px;">${on ? t('active', '当前') : t('use', '使用')}</span>`}
-                <span class="src-actions">
+                ${hosted ? '' : `<span class="src-actions">
                   <button class="btn icon sm ghost" data-src-action data-src-rename="${esc(s.path)}" data-src-label="${esc(label)}" title="${esc(t('Rename source', '重命名来源'))}">${icon('edit', 12)}</button>
                   <button class="btn icon sm ghost" data-src-action data-src-remove="${esc(s.path)}" title="${esc(t('Remove registration only; files stay on disk', '仅移除注册记录；磁盘文件保留'))}">${icon('close', 12)}</button>
-                </span>
+                </span>`}
               </div>`;
             };
             /* Registered exports pile up fast and near-identical rows drown the
@@ -283,12 +289,12 @@
             return head + folded;
           })() : `<div class="empty compact"><div class="glyph">${icon('folder', 20)}</div><div class="t">${empty}</div></div>`}
         </div>
-        <div class="path-field editable src-add">
+        ${hosted ? '' : `<div class="path-field editable src-add">
           <span class="pf-ico">${icon('folder', 14)}</span>
           <input class="pf-input" data-src-path-input type="text" spellcheck="false" autocomplete="off" placeholder="${esc(t('Paste a local EasyICU export folder', '粘贴本地 EasyICU 导出文件夹'))}" aria-label="${esc(t('EasyICU export path', 'EasyICU 导出路径'))}" />
           <button class="btn sm" data-src-browse>${icon('folder', 12)} ${t('Browse...', '浏览...')}</button>
           <button class="btn sm primary" data-src-add>${icon('plus', 12)} ${t('Add', '添加')}</button>
-        </div>
+        </div>`}
         <div class="note warn src-add-feedback" data-src-add-feedback hidden aria-hidden="true" role="status" style="display:none;">
           <div class="ico" data-src-add-feedback-icon>${icon('alert', 14)}</div>
           <div class="body"><div class="d" data-src-add-feedback-text style="margin:0;"></div></div>

@@ -18,6 +18,18 @@
     if (!base) return name;
     return base + (base.endsWith('/') ? '' : '/') + name;
   }
+  // A hosted instance names a folder from the administrator's data roots
+  // (the listing's shortcuts), not by its server path; '' elsewhere.
+  function displayPath(path, roots) {
+    if (((window.EU_CAPABILITIES || {}).deployment || {}).hosted !== true) return '';
+    const text = String(path || '');
+    const root = (Array.isArray(roots) ? roots : []).filter(row => row && row.path)
+      .sort((a, b) => String(b.path).length - String(a.path).length)
+      .find(row => text === String(row.path) || text.startsWith(String(row.path).replace(/\/+$/, '') + '/'));
+    if (!root) return '';
+    const rest = text.slice(String(root.path).length).split('/').filter(Boolean);
+    return [t('Data', '数据目录'), String(root.name || ''), ...rest].filter(Boolean).join(' › ');
+  }
   function open(startPath, onPick, title, options) {
     closePicker();
     const opts = options || {};
@@ -110,7 +122,7 @@
       listEl.innerHTML = `<div class="eu-pick-empty">${t('Loading…', '加载中…')}</div>`;
       window.EU_API.listDir(path).then(r => {
         cur = r.path || path || '';
-        curEl.textContent = cur || '/';
+        curEl.textContent = displayPath(cur, r.shortcuts) || cur || '/';
         const up = back.querySelector('[data-pk-up]'); up.disabled = !r.parent;
         up.onclick = () => r.parent && load(r.parent);
         scEl.innerHTML = '';
@@ -141,12 +153,14 @@
       }).catch(err => {
         listEl.innerHTML = '';
         const failure = document.createElement('div'); failure.className = 'eu-pick-empty';
-        failure.textContent = `${t('Failed to list folder', '列目录失败')}: ${String(err && err.message || err)}`;
+        failure.textContent = err && err.code === 'path_outside_data_roots'
+          ? t('This folder is outside the data folders you can use.', '这个文件夹不在你可以使用的数据目录内。')
+          : `${t('Failed to list folder', '列目录失败')}: ${String(err && err.message || err)}`;
         listEl.appendChild(failure);
       });
     }
     load(cur);
   }
 
-  window.EU_EXTRACTION_FOLDER_PICKER = Object.freeze({ open });
+  window.EU_EXTRACTION_FOLDER_PICKER = Object.freeze({ open, displayPath });
 })();

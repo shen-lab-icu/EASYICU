@@ -22,7 +22,7 @@ def test_data_and_skills_share_the_same_persistent_desktop_shell() -> None:
     extraction = _read("js", "screens-extraction.js")
     skills = _read("js", "screens-skills.js")
 
-    assert "js/desktop-module-shell.js?v=20260919-data-viz-shell1" in index
+    assert "js/desktop-module-shell.js?v=20261021-hosted1" in index
     assert index.index("js/desktop-module-shell.js?") < index.index(
         "js/screens-extraction.js?"
     )

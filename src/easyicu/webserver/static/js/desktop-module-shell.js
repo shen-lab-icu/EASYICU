@@ -62,6 +62,7 @@
     </nav>`;
   }
 
+  function hostedInstance() { return ((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true; }
   function moduleNavigation(active, options) {
     if (isDataRoute(active)) return dataNav(active, options.actions || '');
     if (active === 'skills') return `<nav class="euh-context-nav" aria-label="${tr('Skill sections', '技能分区')}">
@@ -74,14 +75,16 @@
         ['set-data-mode', 'flask', 'Data mode', '数据模式'], ['set-privacy', 'shield', 'Privacy', '隐私'],
         ['set-research-agent', 'agent', 'Research Agent', '研究代理'], ['set-language', 'globe', 'Language', '语言'],
         ['set-about', 'help', 'About', '关于'],
-      ].map(([id, iconName, en, zh], index) => `<button type="button" class="${index === 0 ? 'active' : ''}" data-settings-jump="${id}">${icon(iconName, 15)}<span>${tr(en, zh)}</span></button>`).join('')}
+      // A hosted settings page holds only the clinician's display and About
+      // (screens-settings.js hostedRender); the other sections are the administrator's.
+      ].filter(([id]) => !hostedInstance() || id === 'set-language' || id === 'set-about').map(([id, iconName, en, zh], index) => `<button type="button" class="${index === 0 ? 'active' : ''}" data-settings-jump="${id}">${icon(iconName, 15)}<span>${tr(en, zh)}</span></button>`).join('')}
     </nav>`;
     return '';
   }
 
   function contextRail(active, options) {
     const context = workspaceContext();
-    const projectTitle = text(context.projectTitle || context.projectId) || tr('Local research workspace', '本地研究工作区');
+    const projectTitle = text(context.projectTitle || context.projectId) || (hostedInstance() ? tr('Research workspace', '研究工作区') : tr('Local research workspace', '本地研究工作区'));
     const sessionTitle = text(context.sessionTitle) || tr('Open the research conversation', '打开研究对话');
     const sectionTitle = isDataRoute(active) ? tr('Data', '数据') : active === 'skills' ? tr('Skills', '技能') : tr('Settings', '设置');
     return `<aside class="euh-context" aria-label="${tr('Project context', '项目上下文')}">
