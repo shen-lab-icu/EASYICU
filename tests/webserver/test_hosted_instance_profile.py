@@ -41,6 +41,32 @@ def test_hosted_defaults_only_apply_to_explicit_flag(monkeypatch, hosted):
     assert result["ai_enabled"] is False
 
 
+@pytest.mark.parametrize("hosted", [True, False])
+@pytest.mark.parametrize("method", ["GET", "POST"])
+def test_settings_about_keeps_host_details_on_desktop_only(monkeypatch, hosted, method):
+    monkeypatch.setenv("EASYICU_HOSTED", "1" if hosted else "0")
+    export_dir = str(settings._CONFIG_DIR / "exports")
+    settings.update_settings({"export_dir": export_dir})
+    response = TestClient(app).request(
+        method, "/api/settings", **({"json": {"language": "zh"}} if method == "POST" else {}),
+    )
+    assert response.status_code == 200
+    about = response.json()["about"]
+    assert about["version"] and about["python"]
+    assert settings.load_settings()["export_dir"] == export_dir
+    if hosted:
+        assert set(about) == {"version", "python"}
+        assert "export_dir" not in response.json()
+    else:
+        assert response.json()["export_dir"] == export_dir
+        assert about == {
+            "version": settings._easyicu_version(),
+            "python": settings.about()["python"],
+            "config_path": str(settings._CONFIG_PATH),
+            "local_access": settings.local_access_policy(),
+        }
+
+
 @pytest.mark.parametrize("key", sorted(set(settings.DEFAULTS) - {"language", "density", "reduce_motion", "support_contact"}))
 def test_hosted_admin_settings_patch_is_atomic(monkeypatch, key):
     monkeypatch.setenv("EASYICU_HOSTED", "1")

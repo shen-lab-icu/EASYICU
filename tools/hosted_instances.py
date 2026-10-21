@@ -8,6 +8,8 @@ Run from the shared checkout (no server is started by create/provision):
   python tools/hosted_instances.py provision-model doctor --key-file /private/key
   python tools/hosted_instances.py add-source doctor /srv/icu/prepared --label 'ICU data'
   python tools/hosted_instances.py list-sources doctor
+  python tools/hosted_instances.py set-public-origin doctor https://clinic.example
+  python tools/hosted_instances.py set-public-origin doctor --clear
   python tools/hosted_instances.py start doctor
   python tools/hosted_instances.py status doctor
   python tools/hosted_instances.py list
@@ -18,7 +20,9 @@ and run/ (0700), instance.env (0600, parsed here, never shell-sourced), and its
 own socket. --checkout on create defaults to this shared checkout. Configure
 the authenticating HTTPS gateway to forward Host/Origin to that socket. Pass
 --public-origin on create (or set EASYICU_PUBLIC_ORIGIN for create); it must
-match the gateway exactly. Model provisioning uses the existing provider_config
+match the gateway exactly. set-public-origin updates a stopped instance; use
+--clear to remove its public origin, then start the instance to apply the change.
+Model provisioning uses the existing provider_config
 catalog + bounded inference verifier and enables the external-model opt-in
 only after it succeeds. Key files must be private regular files; keys and
 provider responses are never printed. stop/status use only the recorded PID,
@@ -39,6 +43,8 @@ import re
 import stat
 import subprocess
 import sys
+import tempfile
+from urllib.parse import urlsplit
 
 import psutil
 
@@ -93,6 +99,14 @@ def instance_environment(instance: Path) -> dict[str, str]:
     return env
 
 
+def _validate_public_origin(origin: str) -> None:
+    parsed = urlsplit(origin)
+    _ = parsed.port
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+            or parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
+        raise ValueError("public origin must be an HTTPS origin")
+
+
 def create_instance(users: Path, args: argparse.Namespace) -> None:
     name = _name(args.name)
     roots = [Path(value) for value in args.data_root]
@@ -104,13 +118,7 @@ def create_instance(users: Path, args: argparse.Namespace) -> None:
         raise ValueError("checkout does not contain EasyICU")
     origin = args.public_origin or os.environ.get("EASYICU_PUBLIC_ORIGIN", "")
     if origin:
-        from urllib.parse import urlsplit
-
-        parsed = urlsplit(origin)
-        _ = parsed.port
-        if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
-                or parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
-            raise ValueError("public origin must be an HTTPS origin")
+        _validate_public_origin(origin)
     _private_dir(users)
     instance = users / name
     instance.mkdir(mode=0o700)  # Refuse an existing instance; never overwrite it.
@@ -244,12 +252,66 @@ def _recorded_process(instance: Path):
         return None
 
 
+def set_public_origin(instance: Path, origin: str, *, clear: bool = False) -> None:
+    """Change only the origin line in a stopped instance's private env file."""
+    instance_environment(instance)
+    if _recorded_process(instance) is not None:
+        raise ValueError("stop the instance before changing its public origin")
+    if not clear:
+        _validate_public_origin(origin)
+    path = instance / "instance.env"
+    prefix = b"EASYICU_PUBLIC_ORIGIN="
+    replacement = prefix + json.dumps("" if clear else origin).encode("utf-8")
+    lines = path.read_bytes().splitlines(keepends=True)
+    found = False
+    for index, line in enumerate(lines):
+        if line.startswith(prefix):
+            ending = line[len(line.rstrip(b"\r\n")):]
+            lines[index] = replacement + ending
+            found = True
+    if not found:
+        if lines and not lines[-1].endswith(b"\n"):
+            lines.append(b"\n")
+        lines.append(replacement + b"\n")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=instance, prefix=".instance-env-", delete=False) as handle:
+            temporary = Path(handle.name)
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(b"".join(lines))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    print(f"Public origin updated. Next step: python tools/hosted_instances.py start {instance.name}")
+
+
+def _repair_private_home(home: Path) -> None:
+    """Repair only home directories and regular files, leaving symlinks alone."""
+    _private_dir(home)
+
+    def fail(exc: OSError) -> None:
+        raise exc
+
+    for root, directories, files in os.walk(home, followlinks=False, onerror=fail):
+        for name in directories + files:
+            path = Path(root) / name
+            mode = path.lstat().st_mode
+            if stat.S_ISDIR(mode):
+                path.chmod(0o700)
+            elif stat.S_ISREG(mode):
+                path.chmod(0o600)
+
+
 def start_instance(instance: Path) -> None:
     from easyicu.webserver.host_security import require_private_unix_socket_directory
 
     env = instance_environment(instance)
     if _recorded_process(instance) is not None:
         raise ValueError("instance is already running")
+    _repair_private_home(instance / "home")
     socket = env["EASYICU_WEB_UNIX_SOCKET"]
     require_private_unix_socket_directory(socket)
     checkout = Path(env["EASYICU_CODE_ROOT"])
@@ -263,7 +325,7 @@ def start_instance(instance: Path) -> None:
                "--proxy-headers", "--forwarded-allow-ips", "*"]
     with (instance / "run/web.log").open("a", encoding="utf-8") as log:
         process = subprocess.Popen(command, cwd=checkout, env=inherited, stdout=log,
-                                   stderr=subprocess.STDOUT, start_new_session=True)
+                                   stderr=subprocess.STDOUT, start_new_session=True, umask=0o077)
     identity = psutil.Process(process.pid).create_time()
     if process.poll() is not None:
         raise ValueError("instance failed to start; inspect its private log")
@@ -295,9 +357,10 @@ def main(argv=None) -> int:
     create.add_argument("--runner-image", required=True)
     create.add_argument("--checkout", type=Path, default=CHECKOUT)
     create.add_argument("--public-origin", default="")
-    for name in ("start", "stop", "status", "provision-model", "add-source", "list-sources"):
+    for name in ("start", "stop", "status", "provision-model", "add-source", "list-sources", "set-public-origin"):
         help_text = {"add-source": "Register a prepared export in this instance's data roots",
-                     "list-sources": "List source labels, databases, counts and active flags"}.get(name)
+                     "list-sources": "List source labels, databases, counts and active flags",
+                     "set-public-origin": "Set or clear the HTTPS origin of a stopped instance"}.get(name)
         command = commands.add_parser(name, help=help_text)
         command.add_argument("name")
         if name == "provision-model":
@@ -306,6 +369,9 @@ def main(argv=None) -> int:
             command.add_argument("path", type=Path)
             command.add_argument("--label")
             command.add_argument("--inactive", action="store_true", help="Keep the current active source")
+        elif name == "set-public-origin":
+            command.add_argument("origin", nargs="?", help="HTTPS origin matching the login gateway")
+            command.add_argument("--clear", action="store_true", help="Clear the public origin")
     commands.add_parser("list")
     args = parser.parse_args(argv)
     try:
@@ -327,6 +393,10 @@ def main(argv=None) -> int:
                 provision_model(instance, args.key_file)
             elif args.command in {"add-source", "list-sources"}:
                 return instance_sources(instance, args)
+            elif args.command == "set-public-origin":
+                if args.clear == (args.origin is not None):
+                    raise ValueError("supply either an HTTPS origin or --clear")
+                set_public_origin(instance, args.origin or "", clear=args.clear)
             else:
                 instance_environment(instance)
                 print(f"{instance.name}: {'running' if _recorded_process(instance) else 'stopped'}")

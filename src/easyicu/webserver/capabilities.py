@@ -23,6 +23,7 @@ from easyicu.research_agent.method_skills import (
 from easyicu.webserver import state_paths
 from easyicu.webserver import sources
 from easyicu.webserver import settings as settings_store
+from easyicu.webserver.hosted import is_hosted
 
 _STATE_DIR = state_paths.state_root()
 _AUDIT_PATH = _STATE_DIR / "capability_tool_audit.jsonl"
@@ -630,6 +631,10 @@ def prompt_contract_status(settings: Dict[str, bool] | None = None) -> Dict[str,
     }
 
 
+def _audit_location() -> Dict[str, str]:
+    return {} if is_hosted() else {"path": str(_AUDIT_PATH)}
+
+
 def record_tool_event(event_type: str, detail: Dict[str, Any] | None = None) -> Dict[str, Any]:
     settings = capability_settings()
     if not settings.get("tool_audit_enabled", True):
@@ -650,11 +655,11 @@ def record_tool_event(event_type: str, detail: Dict[str, Any] | None = None) -> 
         return {
             "recorded": False,
             "reason": "tool_audit_write_failed",
-            "path": str(_AUDIT_PATH),
+            **_audit_location(),
             "error": type(exc).__name__,
             "event": event,
         }
-    return {"recorded": True, "path": str(_AUDIT_PATH), "event": event}
+    return {"recorded": True, **_audit_location(), "event": event}
 
 
 def audit_events(limit: int = 20) -> Dict[str, Any]:
@@ -671,7 +676,7 @@ def audit_events(limit: int = 20) -> Dict[str, Any]:
             continue
         if isinstance(event, dict):
             events.append(event)
-    return {"ok": True, "path": str(_AUDIT_PATH), "count": len(events), "events": events}
+    return {"ok": True, **_audit_location(), "count": len(events), "events": events}
 
 
 def capability_status() -> Dict[str, Any]:
@@ -695,7 +700,7 @@ def capability_status() -> Dict[str, Any]:
     prompt_contracts = prompt_contract_status(settings)
     audit = {
         "enabled": bool(settings.get("tool_audit_enabled", True)),
-        "path": str(_AUDIT_PATH),
+        **_audit_location(),
         "event_count": audit_events(limit=100)["count"],
     }
     return {

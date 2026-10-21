@@ -20,7 +20,7 @@ from typing import Any, Dict, Iterable, List, Mapping
 from easyicu.webserver import state_paths
 from easyicu.webserver import dataio
 from easyicu.webserver import settings as settings_store
-from easyicu.webserver.hosted import path_allowed
+from easyicu.webserver.hosted import is_hosted, path_allowed
 
 _CONFIG_DIR = state_paths.state_root()
 _CONFIG_PATH = _CONFIG_DIR / "webserver_sources.json"
@@ -345,14 +345,16 @@ def load_registry() -> Dict[str, Any]:
     elif not crossdb_paths and active_path:
         crossdb_paths = [active_path]
 
-    return {
+    result = {
         "ok": True,
         "sources": sources,
         "active_path": active_path,
         "active_source": raw.get("active_source") or "auto_discovered",
         "crossdb_paths": crossdb_paths,
-        "config_path": str(_CONFIG_PATH),
     }
+    if not is_hosted():
+        result["config_path"] = str(_CONFIG_PATH)
+    return result
 
 
 def is_official_demo_source(source: Mapping[str, Any]) -> bool:
