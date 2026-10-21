@@ -2,6 +2,8 @@
 /* Cohort Statistics domain owner: state, effects, rendering orchestration, and route events. */
 (function () {
   const S = (window.SCREENS = window.SCREENS || {});
+  // A hosted instance names the administrator's prepared data, not a local export.
+  const hostedServer = () => ((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true;
   const state = {
     view: 'idle',
     panel: 'groups',
@@ -98,7 +100,8 @@
     };
   }
   function cohortMissingExportMessage() {
-    return t('Choose or add a local EasyICU export before loading Cohort Statistics.', '请先选择或添加本地 EasyICU 导出，再加载队列统计。');
+    return hostedServer() ? t('Choose one of the prepared datasets before loading Cohort Statistics.', '请先选择一份已准备的数据，再加载队列统计。')
+      : t('Choose or add a local EasyICU export before loading Cohort Statistics.', '请先选择或添加本地 EasyICU 导出，再加载队列统计。');
   }
   function loadRealCohort(done) {
     if (!(window.EU_API && window.EU_API.loadCohortReviewSummary)) {
@@ -363,7 +366,7 @@
               <div>
                 <div class="eyebrow">${t('Cohort Statistics', '队列统计')}</div>
                 <div class="panel-title" style="font-size:17px;">${t('Choose one cohort data source', '选择一个队列数据源')}</div>
-                <div class="panel-sub mt-4">${realMode ? t('Use one registered local EasyICU export.', '使用一个已注册的本地 EasyICU 导出。') : t('Use one official deidentified ICU demo; synthetic data remains an explicit offline fallback.', '使用一个官方去标识化 ICU 演示；合成数据仅作为明确的离线兜底。')}</div>
+                <div class="panel-sub mt-4">${realMode ? (hostedServer() ? t('Use one of the datasets the administrator prepared.', '使用管理员准备好的一份数据。') : t('Use one registered local EasyICU export.', '使用一个已注册的本地 EasyICU 导出。')) : t('Use one official deidentified ICU demo; synthetic data remains an explicit offline fallback.', '使用一个官方去标识化 ICU 演示；合成数据仅作为明确的离线兜底。')}</div>
               </div>
               <span class="pill ${realMode ? '' : 'demo'}"><span class="dot"></span>${realMode ? t('1 source required', '需要 1 个来源') : t('Official demos', '官方演示')}</span>
             </div>
@@ -372,12 +375,12 @@
             </div>
             ${state.error ? `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="d mono" style="font-size:11px;margin:0;">${esc(state.error)}</div></div></div>` : ''}
             ${realMode ? `<div class="card sunken pad mt-16">
-              <div class="eyebrow">${t('Local export', '本地导出')}</div>
+              <div class="eyebrow">${hostedServer() ? t('Prepared data', '已准备的数据') : t('Local export', '本地导出')}</div>
               <div class="panel-title mt-4">${t('Load one exported cohort snapshot', '加载一个已导出的队列快照')}</div>
               <div class="panel-sub mt-4">${t('This is the same active export contract used by Patient Review.', '这里使用与患者审阅相同的 active 导出契约。')}</div>
               ${!registryActivePath() ? `<div class="note info mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${t('No active export selected', '尚未选择 active 导出')}</div><div class="d">${cohortMissingExportMessage()}</div></div></div>` : ''}
               ${sourceRegistryBlock('single')}
-              <button class="btn primary mt-16" data-cohort-run ${!registryActivePath() ? 'aria-disabled="true"' : ''}>${icon('folder', 14)} ${t('Load local export', '加载本地导出')}</button>
+              <button class="btn primary mt-16" data-cohort-run ${!registryActivePath() ? 'aria-disabled="true"' : ''}>${icon('folder', 14)} ${hostedServer() ? t('Load this data', '加载这份数据') : t('Load local export', '加载本地导出')}</button>
             </div>` : `<div class="card sunken pad mt-16">${officialDemoSources}</div>`}
           </div>
           <div class="empty mt-16" data-cohort-empty-preview="true">

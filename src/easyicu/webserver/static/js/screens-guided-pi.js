@@ -592,7 +592,7 @@
         <button class="btn primary" type="button" data-gpi-create ${state.creating ? 'disabled' : ''}>
           ${state.creating ? tr('Starting…', '正在启动…') : tr('Start research conversation', '开始研究对话')}
         </button>
-        <div class="gpi-consent">${iconHtml('shield', 13)}<span>${tr('Study progress is saved automatically. File access can be enabled later and remains limited to this project folder — never patient rows, credentials, or arbitrary host files.', '研究进度会自动保存；文件操作可稍后开启，且只能访问当前项目目录，不包括患者行级数据、凭据或其他本机文件。')}</span></div>
+        <div class="gpi-consent">${iconHtml('shield', 13)}<span>${tr('Study progress is saved automatically. File access can be enabled later and remains limited to this project folder — never patient rows, credentials, or files outside the project.', '研究进度会自动保存；文件操作可稍后开启，且只能访问当前项目目录，不包括患者行级数据、凭据或项目以外的文件。')}</span></div>
         ${saved ? `<div class="gpi-saved"><div class="gpi-section-title">${tr('Copilot conversations in this project', '当前项目中的研究助手对话')}</div>${saved}</div>` : ''}
         <div class="gpi-secondary-actions">
           <button class="gpi-link" type="button" data-gpi-demo>${tr('View workflow demo', '查看流程演示')}</button>

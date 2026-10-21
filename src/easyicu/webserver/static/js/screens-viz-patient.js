@@ -428,7 +428,11 @@
     if (!active) return null;
     return registrySources().find(s => s.path === active) || null;
   }
+  // A hosted instance reviews the data its administrator prepared on the
+  // server: no "local export" wording, path hash or folder instructions.
+  function hostedServer() { return ((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true; }
   function patientSourceReadyCard() {
+    const hosted = hostedServer();
     const payload = patientSourcePayload();
     const active = patientActiveSourceMeta();
     const sourceCount = payload ? payload.source_count : registrySources().length;
@@ -437,9 +441,9 @@
       <div class="note warn mt-12" data-patient-source-ready="false">
         <div class="ico">${icon('alert', 14)}</div>
         <div class="body">
-          <div class="t">${t('No active local export is ready', '还没有可用的本地导出')}</div>
-          <div class="d">${t('Add or choose an EasyICU export folder below, or run Data Extraction first.', '请在下方添加或选择一个 EasyICU 导出文件夹，或先运行数据抽取。')}</div>
-          <div class="d mono" style="margin-top:4px;">registered_sources=${fmtInt(sourceCount)}</div>
+          <div class="t">${hosted ? t('No prepared data is ready yet', '还没有可用的数据') : t('No active local export is ready', '还没有可用的本地导出')}</div>
+          <div class="d">${hosted ? t('Choose one of the prepared datasets below, extract data in Data Extraction, or contact the administrator.', '请在下方选择一份已准备的数据，或在「数据抽取」里提取数据；如果没有，请联系管理员。') : t('Add or choose an EasyICU export folder below, or run Data Extraction first.', '请在下方添加或选择一个 EasyICU 导出文件夹，或先运行数据抽取。')}</div>
+          ${hosted ? '' : `<div class="d mono" style="margin-top:4px;">registered_sources=${fmtInt(sourceCount)}</div>`}
           <div class="row mt-8"><button class="btn sm" data-nav="extraction" type="button">${icon('extract', 13)} ${t('Open Data Extraction', '打开数据抽取')}</button></div>
         </div>
       </div>`;
@@ -455,9 +459,9 @@
       <div class="note ${patientReady ? 'ok' : 'warn'} mt-12" data-patient-source-ready="${patientReady ? 'true' : 'false'}">
         <div class="ico">${icon(patientReady ? 'check' : 'alert', 14)}</div>
         <div class="body">
-          <div class="t">${patientReady ? t('Ready to load local export', '本地导出已就绪，可以加载') : t('Registered export needs review', '已注册导出需要检查')}</div>
-          <div class="d"><b>${esc(active.label || active.database || t('Local export', '本地导出'))}</b> · ${esc(readyLine)}</div>
-          <div class="d mono" style="margin-top:4px;">path_hash=${esc(active.path_hash || '—')} · ${t('local-only metadata', '仅本地元数据')}</div>
+          <div class="t">${patientReady ? (hosted ? t('Ready to load', '数据已就绪，可以加载') : t('Ready to load local export', '本地导出已就绪，可以加载')) : t('Registered export needs review', '已注册导出需要检查')}</div>
+          <div class="d"><b>${esc(active.label || active.database || (hosted ? t('Prepared data', '已准备的数据') : t('Local export', '本地导出')))}</b> · ${esc(readyLine)}</div>
+          ${hosted ? '' : `<div class="d mono" style="margin-top:4px;">path_hash=${esc(active.path_hash || '—')} · ${t('local-only metadata', '仅本地元数据')}</div>`}
         </div>
       </div>`;
   }
@@ -1234,7 +1238,7 @@
                  margin-bottom is zeroed because there is no global heading
                  reset, and the UA default would otherwise add ~14px here. -->
             <h2 class="panel-title" style="margin-top:4px;margin-bottom:0;font-size:17px;">${t('Load a review workspace', '加载审阅工作区')}</h2>
-            <div class="panel-sub">${realMode ? t('Load a local EasyICU export folder. Nothing is uploaded.', '加载本地 EasyICU 导出文件夹，不上传任何数据。') : t('Choose an official deidentified ICU demo, or use the offline synthetic fallback for interaction rehearsal only.', '选择官方去标识化 ICU 演示数据，或仅在离线界面演练时使用合成兜底。')}</div>
+            <div class="panel-sub">${realMode ? (hostedServer() ? t('Load the data the administrator prepared on the server.', '加载管理员在服务器上准备好的数据。') : t('Load a local EasyICU export folder. Nothing is uploaded.', '加载本地 EasyICU 导出文件夹，不上传任何数据。')) : t('Choose an official deidentified ICU demo, or use the offline synthetic fallback for interaction rehearsal only.', '选择官方去标识化 ICU 演示数据，或仅在离线界面演练时使用合成兜底。')}</div>
           </div>
         </div>
 
@@ -1248,14 +1252,14 @@
 
         ${realMode ? `
         <div class="card sunken pad mt-16">
-          <div class="eyebrow" style="margin-bottom:4px;">${t('Local export', '本地导出')}</div>
+          <div class="eyebrow" style="margin-bottom:4px;">${hostedServer() ? t('Prepared data', '已准备的数据') : t('Local export', '本地导出')}</div>
           <div style="font-weight:600;font-size:14px;">${t('Load exported EasyICU tables', '加载已导出的 EasyICU 数据表')}</div>
-          <div class="panel-sub" style="margin-top:2px;">${t('Pick a registered local export, or add one by path.', '选择已注册的本地导出，或按路径添加一个。')}</div>
+          <div class="panel-sub" style="margin-top:2px;">${hostedServer() ? t('Pick one of the prepared datasets.', '从已准备的数据中选择一份。') : t('Pick a registered local export, or add one by path.', '选择已注册的本地导出，或按路径添加一个。')}</div>
           ${vizErr ? `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="d mono" style="font-size:11px;margin:0;">${esc(vizErr)}</div></div></div>` : ''}
           ${patientSourceReadyCard()}
           ${sourceRegistryBlock('single')}
-          <p style="font-size:11.5px;color:var(--ink-4);margin:14px 0 0;">${t('Use Data Extraction first to create or refresh this folder. The last successful export is remembered locally.', '请先用数据抽取创建或刷新该文件夹。上次成功的导出会被本地记住。')}</p>
-          <button class="btn primary block lg mt-16" data-gen>${icon('folder', 14)} ${t('Load local export', '加载本地导出')}</button>
+          ${hostedServer() ? '' : `<p style="font-size:11.5px;color:var(--ink-4);margin:14px 0 0;">${t('Use Data Extraction first to create or refresh this folder. The last successful export is remembered locally.', '请先用数据抽取创建或刷新该文件夹。上次成功的导出会被本地记住。')}</p>`}
+          <button class="btn primary block lg mt-16" data-gen>${icon('folder', 14)} ${hostedServer() ? t('Load this data', '加载这份数据') : t('Load local export', '加载本地导出')}</button>
         </div>` : `
         <div class="card sunken pad mt-16">${officialDemoSources}</div>`}
       </div>

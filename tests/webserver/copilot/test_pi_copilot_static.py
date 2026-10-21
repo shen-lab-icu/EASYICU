@@ -146,7 +146,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-plan-actions.js?v=20261021-decision-records1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261021-turn-layout1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261021-readable1" in index
-    assert "js/screens-guided-pi.js?v=20261021-readable1" in index
+    assert "js/screens-guided-pi.js?v=20261021-readable2" in index
     assert "js/screens-guided.js?v=20261021-hosted1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -2365,7 +2365,7 @@ def test_pi_owner_mounts_without_moving_scientific_workflow_logic() -> None:
     assert "const handlePiEvent = LIVE_STREAM.handlePiEvent;" in pi_owner
     assert "conversation text and files you choose may be sent" in provider_owner
     assert "gpi-connection-notice" in provider_owner
-    assert "patient rows, credentials, or arbitrary host files" in pi_owner
+    assert "patient rows, credentials, or files outside the project" in pi_owner
     assert "data-gpi-confirm-action" in confirmation_owner
     assert "data-gpi-confirm-preview-data" in confirmation_owner
     assert "data-gpi-confirm-reject" in confirmation_owner
@@ -6525,7 +6525,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration }" in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20261021-turn-layout1" in index
-    assert "screens-guided-pi.js?v=20261021-readable1" in index
+    assert "screens-guided-pi.js?v=20261021-readable2" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:

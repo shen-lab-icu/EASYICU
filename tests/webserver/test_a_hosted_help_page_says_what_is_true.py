@@ -127,3 +127,68 @@ def test_a_hosted_instance_offers_no_demo_data_switch() -> None:
         in i18n
     )
     assert "window.setDataMode('real', { force: true });" in api.split("await hydrateCapabilities();", 1)[1]
+
+
+_PICKER = r"""
+global.window = {
+  t: (en, zh) => zh, icon: () => '', EU_HTML: { esc: value => String(value) },
+  EU_CAPABILITIES: { deployment: { hosted: process.argv[2] === 'hosted' } },
+};
+require(process.argv[1]);
+const picker = window.EU_EXTRACTION_FOLDER_PICKER;
+const roots = [{ name: 'exports', path: '/srv/easyicu/exports' }];
+process.stdout.write(JSON.stringify([
+  picker.displayPath('/srv/easyicu/exports', roots),
+  picker.displayPath('/srv/easyicu/exports/eicu_v2/exports', roots),
+  picker.displayPath('/srv/easyicu/exports-other', roots),
+]));
+"""
+
+
+@pytest.mark.requires_node
+@pytest.mark.parametrize(
+    ("deployment", "expected"),
+    [
+        ("hosted", ["数据目录 › exports", "数据目录 › exports › eicu_v2 › exports", ""]),
+        ("local", ["", "", ""]),
+    ],
+)
+def test_the_hosted_folder_picker_names_folders_from_the_data_root(deployment: str, expected: list) -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable")
+    result = run_node(
+        node, _PICKER, str(STATIC / "js" / "screens-extraction-folder-picker.js"), deployment, check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    # The server path never shows in a hosted picker; a sibling folder that
+    # merely shares the root's prefix is not inside it.
+    assert json.loads(result.stdout) == expected
+
+
+def test_hosted_review_names_the_prepared_data_without_paths_or_registration() -> None:
+    viz = (STATIC / "js" / "screens-viz.js").read_text(encoding="utf-8")
+    patient = (STATIC / "js" / "screens-viz-patient.js").read_text(encoding="utf-8")
+    block = viz.split("function sourceRegistryBlock(mode) {", 1)[1].split("\n  function ", 1)[0]
+
+    assert "const hosted = hostedServer();" in block
+    assert "t('Prepared data', '已准备的数据')" in block
+    # No server path, no rename/remove and no add-by-path on a hosted row.
+    assert "${hosted ? '' : `<span class=\"src-path mono\">${esc(s.path)}</span>`}" in block
+    assert "${hosted ? '' : `<span class=\"src-actions\">" in block
+    assert "${hosted ? '' : `<div class=\"path-field editable src-add\">" in block
+    assert "t('Load the data the administrator prepared on the server.', '加载管理员在服务器上准备好的数据。')" in patient
+    assert "${hosted ? '' : `<div class=\"d mono\" style=\"margin-top:4px;\">path_hash=" in patient
+    assert "hostedServer() ? t('Load this data', '加载这份数据')" in patient
+    cohort = (STATIC / "js" / "screens-viz-cohort.js").read_text(encoding="utf-8")
+    assert "hostedServer() ? t('Prepared data', '已准备的数据') : t('Local export', '本地导出')" in cohort
+    assert "hostedServer() ? t('Load this data', '加载这份数据') : t('Load local export', '加载本地导出')" in cohort
+
+
+def test_the_hosted_settings_sidebar_lists_only_the_sections_the_page_has() -> None:
+    shell = (STATIC / "js" / "desktop-module-shell.js").read_text(encoding="utf-8")
+
+    assert (
+        "].filter(([id]) => !hostedInstance() || id === 'set-language' || id === 'set-about').map("
+        in shell
+    )
