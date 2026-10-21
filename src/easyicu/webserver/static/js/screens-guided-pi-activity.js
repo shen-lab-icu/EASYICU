@@ -419,6 +419,14 @@
 
     function pipelineEventLabel(event) {
       const type = String((event && event.type) || '');
+      if (event && event.step === 'provider_auto_resume') return tr(
+        'System action: provider recovered; automatically continuing from the verified checkpoint',
+        '系统操作：模型服务已恢复，正在从已验证的检查点自动继续',
+      );
+      if (event && event.step === 'provider_recovery_wait') return tr(
+        'System action: waiting for the model provider to recover within the job budget',
+        '系统操作：正在任务预算内等待模型服务恢复',
+      );
       if (type === 'start') return tr('EasyICU research pipeline started', 'EasyICU 科研流程已启动');
       if (type === 'cancel_requested') return tr('Cancellation requested', '已请求取消任务');
       const stage = pipelineStage(event && event.step);

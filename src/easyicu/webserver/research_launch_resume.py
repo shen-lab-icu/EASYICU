@@ -352,6 +352,23 @@ def development_resume_available(
     return True
 
 
+def development_resume_checkpoint(
+    *, wrapper_dir: Path, study_id: str, scientific_configuration_sha256: str,
+) -> Dict[str, Any] | None:
+    """The same offer/launch verdict, with its verified audit coordinates."""
+    if not development_resume_available(
+        wrapper_dir=wrapper_dir, study_id=study_id,
+        scientific_configuration_sha256=scientific_configuration_sha256,
+    ):
+        return None
+    path, digest = _development_progressive_resume_binding(
+        project_root=str(wrapper_dir.parent.parent), study_id=study_id,
+        source_job_id=wrapper_dir.name.removeprefix("run_"), budget_mode="planner_canary",
+    )
+    return {"kind": "planner", "source_job_id": wrapper_dir.name.removeprefix("run_"),
+            "path": path.relative_to(wrapper_dir).as_posix(), "sha256": digest}
+
+
 def _development_resume_literature_bundle(*, checkpoint_path: Path) -> Dict[str, Any]:
     """Load the exact literature authority hashed into a Dev checkpoint."""
 

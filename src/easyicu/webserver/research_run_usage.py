@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime
+import json
 import math
 from pathlib import Path
 import re
@@ -14,6 +15,31 @@ from easyicu.research_agent.authority.provider_hard_stop import (
     load_provider_hard_stop_ledger,
 )
 from easyicu.research_agent.canonical_json import canonical_sha256
+
+
+def bind_shared_provider_task(wrapper_dir: Path, task: Any) -> None:
+    """Retain accounting lineage after the temporary launch seed is pruned."""
+    root = wrapper_dir.resolve()
+    if any(path.exists() or path.is_symlink() for path in (
+        root / ".runtime/provider_hard_stop_ledger.json",
+        root / ".runtime/shared_provider_task.json",
+    )):
+        return
+    # Only a continuation in another wrapper imports the original ledger.
+    # A new report/retry ledger cannot stand in for missing pipeline usage.
+    if task.ledger.path.resolve().is_relative_to(root):
+        return
+    ledger = task.ledger.snapshot()
+    payload = {
+        "schema_version": "easyicu.shared-provider-task/1",
+        "ledger": task.ledger.path.resolve().relative_to(root.parent).as_posix(),
+        "task_id": task.task_id,
+        "declaration_sha256": ledger["declaration_sha256"],
+    }
+    payload["sha256"] = canonical_sha256(payload)
+    runtime = root / ".runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "shared_provider_task.json").write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
 
 def _number(value: Any, *, integer: bool = False) -> int | float:
@@ -89,6 +115,28 @@ def research_run_usage(wrapper_dir: Path) -> dict[str, Any] | None:
     bindings = []
     statuses: set[str] = set()
     try:
+        primary = paths[0][1]
+        reference = runtime / "shared_provider_task.json"
+        if not primary.exists() and (reference.exists() or reference.is_symlink()):
+            if reference.is_symlink() or runtime.is_symlink():
+                raise ValueError("symlinked shared task")
+            binding = json.loads(reference.read_text(encoding="utf-8"))
+            digest = binding.pop("sha256")
+            if digest != canonical_sha256(binding) or binding.get("schema_version") != "easyicu.shared-provider-task/1":
+                raise ValueError("invalid shared task binding")
+            relative = Path(binding["ledger"])
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError("shared ledger outside study")
+            shared = root.parent / relative
+            if shared.is_symlink() or any(p.is_symlink() for p in shared.parents if p != root.parent and root.parent in p.parents):
+                raise ValueError("invalid shared recovery ledger")
+            ledger = load_provider_hard_stop_ledger(shared)
+            if ledger.get("declaration_sha256") != binding["declaration_sha256"] or not any(
+                row.get("task_id") == binding["task_id"] for row in ledger.get("tasks", [])
+            ):
+                raise ValueError("shared recovery task mismatch")
+            paths[0] = ("pipeline", shared)
+        seen: set[Path] = set()
         for stage, path in paths:
             if stage == "pipeline" and not path.exists() and not path.is_symlink():
                 if len(paths) > 1:
@@ -102,6 +150,9 @@ def research_run_usage(wrapper_dir: Path) -> dict[str, Any] | None:
                 if p != root and root in p.parents
             ):
                 raise ValueError("symlinked usage ledger")
+            if path.resolve() in seen:
+                continue
+            seen.add(path.resolve())
             ledger = load_provider_hard_stop_ledger(path)
             rows = ledger["tasks"]
             if not isinstance(rows, list):

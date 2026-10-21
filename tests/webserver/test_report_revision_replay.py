@@ -34,6 +34,24 @@ def test_replay_reuses_exact_section_without_allowing_additional_calls(tmp_path)
         replay.section(section_name='Discussion',instruction='Fix recorded status.')
 
 
+@pytest.mark.parametrize("reason", ["WRITER_ONLY_REPAIR_FAILED_PRIOR_PRESERVED", "WRITER_ONLY_AUTHORITY_REPAIR_FAILED_PRIOR_PRESERVED"])
+def test_transient_writer_prefix_keeps_the_exact_revision_request(tmp_path, reason):
+    prepared, path = _saved(tmp_path)
+    receipt = path.parent.parent / "writer_only_migration_receipt.json"
+    payload = json.loads(receipt.read_text())
+    payload["reason_code"] = reason
+    receipt.write_text(json.dumps(payload))
+    request = path.parent.parent / "revision_request.json"
+    request.write_text(json.dumps({"request": "Clarify the limitations."}))
+    assert load_failed_writer_replay(tmp_path, prepared) is None
+    assert load_failed_writer_replay(tmp_path, prepared, revision_request="A different request") is None
+    replay = load_failed_writer_replay(tmp_path, prepared, revision_request="Clarify the limitations.")
+    assert replay.revision_id == "failed"
+    request.unlink()
+    request.symlink_to(receipt)
+    assert load_failed_writer_replay(tmp_path, prepared, revision_request="Clarify the limitations.") is None
+
+
 @pytest.mark.parametrize('change',['source','draft','digest','writer_contract'])
 def test_replay_never_reuses_another_study_or_report(tmp_path,change):
     prepared,_=_saved(tmp_path)

@@ -357,6 +357,7 @@ from ..gates.visual import (
 from ..gates.semantics import (
     blocking_validator_findings as _blocking_validator_findings,
 )
+from ..providers.clients import transient_transport_failure
 from ..providers.mocks import MockLLMClient
 from ..providers.prompt_budget import (
     budgeted_coder_clients,
@@ -4709,6 +4710,7 @@ def _step_record_step_exception(
             traceback.format_exception(type(error), error, error.__traceback__)
         ),
         **carried_coordinates,
+        "transient_provider_failure": transient_transport_failure(error),
     }
     with shared_lock:
         findings.append(
